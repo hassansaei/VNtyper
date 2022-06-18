@@ -182,3 +182,6 @@ f.write(a)
 f.close()
 
 #pdfkit.from_file('NPH770.html', 'NPH770.pdf')
+
+stop = timeit.default_timer()
+print('Run Time: ', (stop - start)/60)  
