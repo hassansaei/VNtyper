@@ -139,7 +139,7 @@ def preprocessing_insertion(df):
     df1.rename(columns={'#CHROM':'Motifs'}, inplace = True)
     df1.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
     df1 = pd.merge(df1, MUC1_ref, on='Motifs', how='left')
-    df1['Variant'] = 'Insertion'Kmer_result 
+    df1['Variant'] = 'Insertion'
     return df1
 
 def preprocessing_deletion(df):
