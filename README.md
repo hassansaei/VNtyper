@@ -1,2 +1,2 @@
 # ADTKD
-Genotyping ADTKD genes using SRS data
+Genotyping MUC1-VNTR in autosomal dominant tubulointerstitial kidney diseaseusing SRS data
