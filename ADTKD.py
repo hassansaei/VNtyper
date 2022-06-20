@@ -62,6 +62,7 @@ print (welcomeMessage)
 start = timeit.default_timer()
 
 # Kmer-based mapping free genotyping of MUC1-VNTR
+
 fastq_1 = args.fastq1
 fastq_2 = args.fastq2
 reference_VNTR = args.reference_VNTR
@@ -185,3 +186,8 @@ f.close()
 
 stop = timeit.default_timer()
 print('Run Time (min): ', (stop - start)/60)  
+
+
+# adVNTR genotyping of MUC1-VNTR
+
+
