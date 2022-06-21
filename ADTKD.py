@@ -188,6 +188,95 @@ stop = timeit.default_timer()
 print('Run Time (min): ', (stop - start)/60)  
 
 
-# adVNTR genotyping of MUC1-VNTR
+# VNTR genotyping with adVNTR
+start_advntr = timeit.default_timer()
+
+fastq_1 = args.fastq1
+fastq_2 = args.fastq2
+reference = args.reference_file
+advntr_vcf_out = output + "adVNTR/" + args.output + ".vcf"
+sam_out = output + "adVNTR/" + args.output + ".sam"
+advntr_vcf_path = Path(advntr_vcf_out)
+
+if advntr_vcf_path.is_file():
+    print ("adVNTR VCF file already exists...")
+else:
+    if None not in (fastq_1, fastq_2, reference):
+        Mapping_command = tools_path + "./minimap2 -a " + reference + " " + fastq_1 + " " +  fastq_2 + " > " + sam_out +  " && "  + "java -Xmx10g -jar " + tools_path + "picard.jar SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + "adVNTR/" + args.output + "_sorted.bam" + " SORT_ORDER=coordinate" + " && " + "samtools index " + output + "adVNTR/" + args.output + "_sorted.bam"
+        print ("Launching Mimimap2!\n")
+        print ("Minimap2 Command: " + Mapping_command  + "\n")
+        process = sp.Popen(Mapping_command , shell=True)
+        process.wait()
+        print ("Mapping reads to the Chr1 Done!\n")
+    else:
+        print (args.fastq1 + " is not an expected fastq file... skipped...")
+
+sorted_bam = output + "adVNTR/" + args.output + "_sorted.bam"
+db_file_hg19 = args.reference_vntr
+
+if None not in (sorted_bam , reference):
+    adVNTR_command = "advntr genotype -fs -aln -vid 25561 -of vcf --alignment_file " + sorted_bam + " " + "-m " + db_file_hg19 + " --working_directort " + output + "adVNTR/" + " " + args.output + ".vcf"
+    print('Launching adVNTR genotyping!\n')
+    print('adVNTR command: ' + adVNTR_command)
+    process = sp.Popen(adVNTR_command, shell=True)
+    process.wait()
+    print('adVNTR genotyping of MUC1-VNTR done!')
+else:
+    print('Input files are not expected files...skipped')
 
 
+def read_vcf(path):
+    with open(path,'r') as f:
+        for line in f:
+            if line.startswith("#VID"):
+                vcf_names = [x for x in line.split('\t')]
+                break
+    f.close()
+    return vcf_names
+
+advntr_out = output + "adVNTR/" + args.output + ".vcf"
+
+names = read_vcf(advntr_out)
+df = pd.read_csv(advntr_out, comment='#', delim_whitespace=True, header=None, names=names)
+
+def search(regex: str, df, case=False):
+    #Search all the text columns of df
+    textlikes = df.select_dtypes(include=[object, "object"])
+    return df[
+        textlikes.apply(
+            lambda column: column.str.contains(regex, regex=True, case=case, na=False)
+        ).any(axis=1)
+    ]
+
+def advntr_processing(df):
+    df_ = df.copy()
+    df_.rename(columns={'#VID':'#ID', 'State': 'Variant', 'Pvalue\n':'Pvalue'}, inplace = True)
+    df_['Deletion_length'] = df_['Variant'].str.count('D').add(0).fillna(0)
+    df_['Insertion'] = df_['Variant'].str.count('I').add(0).fillna(0)
+    df_[['D', 'I']]= df_['Variant'].str.split('I', expand=True)
+    df_.I = df_.I.fillna('LEN')
+    df_[['I', 'Insertion_len']]= df_['I'].str.split('LEN', expand=True)
+    df_.drop(['I', 'D', 'Insertion'], axis=1, inplace=True)
+        
+    return df_
+
+if df.empty:
+    print ('No variant found..')
+else:
+    df_ = advntr_processing(df)
+
+IG = search('I22_2_G_LEN1', df_)
+
+
+if IG.empty:
+    print('DataFrame is empty!')
+else:
+    IG.to_csv(args.output+'I_G.bed', sep='\t', index=False)
+    df_.to_csv(args.output+'_advntr.bed', sep='\t', index=False)
+
+
+
+print (endMessage)
+
+stop_advntr = timeit.default_timer()
+print('Run Time (min): ', (stop_advntr - start_advntr)/60)
