@@ -51,13 +51,13 @@ output = args.working_dir + args.output + "/"
 
 
 welcomeMessage = """==============================================
-Genotyping MUC1 coding VNTR using mapping-free genotyping (fast) and profile-HMM-based (slow) methods 
-v. 1.0
+VNtyper: Genotyping MUC1 coding VNTR using mapping-free genotyping (fast) and profile-HMM-based (slow) algorithms
+v. 1.0.0
 This is free non-commercial software. 
 =================================================================
 """
 endMessage = """========================
-Thanks for using our pipeline!
+Thanks for using VNtyper!
 ========================================
 """
 
