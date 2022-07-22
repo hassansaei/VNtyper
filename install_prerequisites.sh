@@ -91,6 +91,8 @@ if [ ! -d "${SCRIPT}"/kestrel-1.0.1 ]; then
     wget_download https://github.com/paudano/kestrel/releases/download/1.0.1/kestrel-1.0.1-linux.tar.gz kestrel-1.0.1-linux.tar.gz
     tar -xvzf kestrel-1.0.1-linux.tar.gz
     mv kestrel-1.0.1-linux/kestrel-1.0.1 . && rm -r kestrel-1.0.1-linux/ && rm kestrel-1.0.1-linux.tar.gz
+    wget http://opengene.org/fastp/fastp
+    chmod u+x ./fastp
 else
     echo "Kestrel already exists..."
 
