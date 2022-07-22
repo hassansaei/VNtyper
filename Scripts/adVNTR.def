@@ -28,11 +28,6 @@ From: ubuntu:latest
     pip install setuptools
     pip install matplotlib
     pip install biopython==1.76
-    wget https://github.com/samtools/htslib/releases/download/1.9/htslib-1.9.tar.bz2
-    tar -vxjf htslib-1.9.tar.bz2
-    cd htslib-1.9
-    make
-    export PATH="$PATH:/usr/bin/htslib-1.9"
     apt-get update
     pip install pysam==0.9.1.4
     pip install cython
