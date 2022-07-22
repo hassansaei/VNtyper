@@ -9,7 +9,5 @@ setup(name='VNtyper',
       license='X',
       url='https://github.com/hassansaei/VNtyper',
       test_suite='tests',
-      install_requires=['pandas', 'numpy', 'biopython', 'regex', 'argparse', 'PyVCF', '']
-      
-     )
+      install_requires=['pandas', 'numpy', 'biopython', 'regex', 'argparse', 'PyVCF', ''])
 
