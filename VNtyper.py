@@ -6,8 +6,9 @@
 #pip3 install setuptools==58
 #pip3 install PyVCF
 
-
+from concurrent.futures import thread
 import subprocess as sp
+from xml.dom.expatbuilder import theDOMImplementation
 import pandas as pd
 import numpy as np
 import sys,os,argparse,tempfile,shutil
@@ -16,6 +17,7 @@ from pathlib import Path
 import timeit
 from pysam import SamtoolsError
 import regex as re
+import logging 
 
 parser = argparse.ArgumentParser(description='Given raw fastq files, this tool genotype MUC1-VNTR using k-mer and profile-HMM based mathods')
 parser.add_argument('-ref', '--reference_file', type=str, metavar='Referense', help='FASTA-formatted reference file and indexes', required=True)
@@ -41,18 +43,18 @@ if not os.path.exists(args.working_dir + args.output + "/kmer_method"):
 
 if not os.path.exists(args.working_dir + args.output + "/adVNTR"):
     os.mkdir(args.working_dir + args.output + "/adVNTR")
-    
+
 if not os.path.exists(args.working_dir + args.output + "/temp"):
     os.mkdir(args.working_dir + args.output + "/temp")
 
 output = args.working_dir + args.output + "/"
 
 
-welcomeMessage = """=========================================================
-Genotyping MUC1-VNTR using mapping-free genotyping (fast) and profile-HMM-based (slow) methods 
+welcomeMessage = """==============================================
+Genotyping MUC1 coding VNTR using mapping-free genotyping (fast) and profile-HMM-based (slow) methods 
 v. 1.0
 This is free non-commercial software. 
-=============================================================================
+=================================================================
 """
 endMessage = """========================
 Thanks for using our pipeline!
@@ -61,30 +63,55 @@ Thanks for using our pipeline!
 
 print (welcomeMessage)
 
+log_file = args.output + ".log"
+logging.basicConfig(filename= log_file , level= logging.DEBUG , encoding= 'utf-8', format="%(asctime)s %(message)s")
+
+logging.info('Fastq file quality control: deduplication, low quality read removal, and size correction')
+
 start = timeit.default_timer()
 
-# Kmer-based mapping free genotyping of MUC1-VNTR
+# Fastq quality control (deduplication, low quality read removal, size correction...)
 fastq_1 = args.fastq1
 fastq_2 = args.fastq2
+
+# Running fastp
+if None not in (fastq_1, fastq_2):
+    QC_command = tools_path + "./fastp "+ "--thread " + args.threads + " " + "--in1 " + fastq_1 + " --in2 " + fastq_2 + " --out1 " + args.working_dir + args.output + "/kmer_method/" + args.output + "_R1.fastq.gz" + " " + "--out2 " + args.working_dir + args.output + "/kmer_method/" + args.output + "_R2.fastq.gz" + " --phred64 --compression 6 --disable_adapter_trimming --dedup --dup_calc_accuracy 3 --length_required 120 --html " + output + "temp/" + args.output + ".html"
+    print ("Quality control step!\n")
+    process = sp.Popen(QC_command , shell=True)
+    process.wait()
+    print ("QC passed!\n")
+    logging.info('Quality control passed..')
+else:
+    print (args.fastq1 + " is not an expected fastq file... skipped...")
+    logging.error('Provided raw file is not the expected fastq file...skipped...')
+
+
+# Kmer-based mapping free genotyping of MUC1-VNTR
+logging.info('Kmer-based mapping free genotyping of MUC1-VNTR...')
 reference_VNTR = args.reference_VNTR
 vcf_out = output + "kmer_method/" + args.output + ".vcf"
 sam_out = output + "kmer_method/" + args.output + ".sam"
 vcf_path = Path(vcf_out)
 
+fastq_1 = args.working_dir + args.output + "/kmer_method/" + args.output + "_R1.fastq.gz"
+fastq_2 = args.working_dir + args.output + "/kmer_method/" + args.output + "_R2.fastq.gz"
+
 if vcf_path.is_file():
     print ("VCF file already exists...")
 else:
     if None not in (fastq_1, fastq_2, reference_VNTR):
-        kmer_command = "java -Xmx10g -jar " + tools_path + "kestrel-1.0.1/" + "./kestrel.jar " +  "-k " +  args.Kmer + " -r " + reference_VNTR  + " -o " + vcf_out + " -p " + sam_out + " " + fastq_1 + " " + fastq_2 + " " + " --hapfmt " + "sam" + " && "  + "java -Xmx10g -jar " + tools_path + "picard.jar SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + "kmer_method/" + args.output + ".bam " + " SORT_ORDER=coordinate"
+        kmer_command = "java -Xmx10g -jar " + tools_path + "kestrel-1.0.1/" + "./kestrel.jar " +  "-k " +  args.Kmer + " -r " + reference_VNTR  + " -o " + vcf_out + " " + fastq_1 + " " + fastq_2 
         print ("Launching Kestrel!\n")
         print ("Kestrel Command: " + kmer_command  + "\n")
         process = sp.Popen(kmer_command , shell=True)
         process.wait()
         print ("Mapping-free genotyping of MUC1-VNTR done!\n")
+        logging.info('Mapping-free genotyping of MUC1-VNTR done!')
     else:
         print (args.fastq1 + " is not an expected fastq file... skipped...")
 
-
+logging.info('VCF file preprocessing...')
 with open(vcf_out, "r") as vcf_file, \
         open(output + "kmer_method/" + args.output + "_indel.vcf", "w") as indel_file:
     for line in vcf_file:
@@ -156,6 +183,7 @@ insertion = preprocessing_insertion(vcf_insertion)
 deletion = preprocessing_deletion(vcf_deletion)
 vertical_concat = pd.concat([insertion, deletion], axis=0)
 
+logging.info('Writing variants to the output file...')
 def final_processing(df):
     df3=df.copy()
     df3 = df3.rename(columns=lambda c: 'Depth' if c.endswith('\n') else c)
@@ -177,7 +205,7 @@ Kmer_result = final_processing(vertical_concat)
 Kmer_result.to_csv(output + "kmer_method/" + args.output + "_result.tsv", index=False, sep='\t')
 
 stop = timeit.default_timer()
-print('Run Time (min): ', (stop - start)/60)  
+print ('Run Time (min): ', (stop - start)/60)  
 #import pdfkit
 
 f = open(output + "kmer_method/" + args.output + "_result.html",'w')
@@ -185,13 +213,26 @@ a = Kmer_result.to_html()
 f.write(a)
 f.close()
 
+logging.info('Removing temporary and intermediate files...')
+# Remove temporary intermediate files
+rm_list = ["_deletion", "_indel", "_insertion"]
+for db in rm_list:
+    db_str = args.output + db + ".vcf"
+    rm_command =  "rm " + args.working_dir + args.output + "/kmer_method/" + db_str
+    process = sp.Popen(rm_command, shell=True)
+    process.wait()
+else:
+    print (db_str + " is not found!")
+
 
 # VNTR genotyping with adVNTR
 if args.ignore_advntr:
+    logging.info('MUC1 VNTR genotyping with adVNTR skippied...')
     print (endMessage)
     sys.exit()
 else:
     print('launching adVNTR (This will take a while)...')
+    logging.info('launching adVNTR (Profile-HMM based VNTR genotyping)...')
 
 start_advntr = timeit.default_timer()
 
@@ -217,16 +258,19 @@ sorted_bam = output + "adVNTR/" + args.output + "_sorted.bam"
 db_file_hg19 = args.reference_vntr
 
 if None not in (sorted_bam , reference):
-    adVNTR_command = "singularity exec " + tools_path + "code-adVNTR.sif advntr genotype -fs -aln -vid 25561 --outfmt vcf --alignment_file " + sorted_bam + " -o " + args.output + ".vcf" + " " + "-m " + db_file_hg19 + " -r " + args.reference_file + " --working_directory " + output + "adVNTR/"
+    adVNTR_command = "singularity exec " + tools_path + "code-adVNTR.sif advntr genotype -fs -vid 25561 --outfmt vcf --alignment_file " + sorted_bam + " -o " + output + "adVNTR/" + args.output + ".vcf" + " " + "-m " + db_file_hg19 + " -r " + args.reference_file + " --working_directory " + output + "adVNTR/"
     print('Launching adVNTR genotyping!\n')
     print('adVNTR command: ' + adVNTR_command)
     process = sp.Popen(adVNTR_command, shell=True)
     process.wait()
     print('adVNTR genotyping of MUC1-VNTR done!')
+    logging.info('adVNTR genotyping of MUC1-VNTR done')
 else:
     print('Input files are not expected files...skipped')
+    logging.error('Input files are not the expected files for adVNTR...skipped')
 
-
+logging.info('adVNTR result preprocessing...')
+path = output + "adVNTR/" + args.output + ".vcf"
 def read_vcf(path):
     with open(path,'r') as f:
         for line in f:
@@ -281,4 +325,4 @@ else:
 print (endMessage)
 
 stop_advntr = timeit.default_timer()
-print('Run Time (min): ', (stop_advntr - start_advntr)/60)
+print('adVNTR Run Time (min): ', (stop_advntr - start_advntr)/60)
