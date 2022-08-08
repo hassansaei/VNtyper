@@ -245,7 +245,7 @@ if advntr_vcf_path.is_file():
     print ("adVNTR VCF file already exists...")
 else:
     if None not in (fastq_1, fastq_2, reference):
-        Mapping_command = "bwa mem -t " + args.threads + " " + reference + " " + fastq_1 + " " +  fastq_2 + " -o " + sam_out +  " && "  + "java -Xmx10g -jar " + tools_path + "picard.jar SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + "adVNTR/" + args.output + "_sorted.bam" + " SORT_ORDER=coordinate" + " && " + "samtools index " + output + "adVNTR/" + args.output + "_sorted.bam"
+        Mapping_command = "bwa mem -t " + args.threads + " " + reference + " " + fastq_1 + " " +  fastq_2 + " -o " + sam_out +  " && "  + "java -Xmx10g -jar " + " /usr/local/lib/picard_2.27.4/picard.jar " + "SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + "adVNTR/" + args.output + "_sorted.bam" + " SORT_ORDER=coordinate" + " && " + "samtools index " + output + "adVNTR/" + args.output + "_sorted.bam"
         print ("Launching BWA!\n")
         print ("BWA Command: " + Mapping_command  + "\n")
         process = sp.Popen(Mapping_command , shell=True)
