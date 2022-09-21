@@ -320,7 +320,24 @@ else:
     IG.to_csv(args.output+'I_G.bed', sep='\t', index=False)
     df_.to_csv(args.output+'_advntr.bed', sep='\t', index=False)
 
+# Remove temporary intermediate files
+rm_list = ["_deletion", "_indel", "_insertion"]
+rm_list_1 = ["_R1", "_R2"]
+for db in rm_list:
+    db_str = args.output + db + ".vcf"
+    rm_command =  "rm " + args.working_dir + args.output + "/kmer_method/" + db_str
+    process = sp.Popen(rm_command, shell=True)
+    process.wait()
+else:
+    print (db_str + " is not found!")
 
+for db1 in rm_list_1:
+    db1_str = args.output + db1 + ".fastq.gz"
+    rm_command =  "rm " + args.working_dir + args.output + "/kmer_method/" + db1_str
+    process = sp.Popen(rm_command, shell=True)
+    process.wait()
+else:
+    print (db1_str + " is not found!")
 
 print (endMessage)
 
