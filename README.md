@@ -4,6 +4,10 @@ Genotyping MUC1-VNTR in autosomal dominant tubulointerstitial kidney disease (MU
 - Profile-HMM based method [(code-adVNTR)](https://github.com/mehrdadbakhtiari/adVNTR/tree/enhanced_hmm)
 
 ## Installation
+The tool can be downloaded by cloning from github:
+'''
+https://github.com/hassansaei/VNtyper.git
+'''
 
 
 ## Data Requirements
