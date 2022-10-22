@@ -9,7 +9,7 @@ The tool can be downloaded by cloning from github:
 ```bashscript
 # Make a directory that you want to download VNtyper
 mkdir vntyper
-https://github.com/hassansaei/VNtyper.git
+git clone https://github.com/hassansaei/VNtyper.git
 # Go to the directory that you downloaded the source code
 cd VNtyper
 ```
