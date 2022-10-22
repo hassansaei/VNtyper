@@ -3,6 +3,17 @@ Genotyping MUC1-VNTR in autosomal dominant tubulointerstitial kidney disease (MU
 - Mapping free genotyping using kmer frequencies [(Kestrel)](https://github.com/paudano/kestrel)
 - Profile-HMM based method [(code-adVNTR)](https://github.com/mehrdadbakhtiari/adVNTR/tree/enhanced_hmm)
 
-## Requirement
+## Instalation 
+
+
+## Execute VNtyper
+
+
+
+## Output
+
+
+
+## Citation
 
 
