@@ -4,7 +4,7 @@ Genotyping MUC1 coding-VNTR in autosomal dominant tubulointerstitial kidney dise
 - Profile-HMM based method [(code-adVNTR)](https://github.com/mehrdadbakhtiari/adVNTR/tree/enhanced_hmm)
 
 ## Installation & Requirements
-The tool can be downloaded by cloning from github:
+The tool can be downloaded by cloning from the github page:
 
 ```bashscript
 # Make a directory that you want to download VNtyper
@@ -13,7 +13,12 @@ git clone https://github.com/hassansaei/VNtyper.git
 # Go to the directory that you downloaded the source code
 cd VNtyper
 ```
-In order to 
+The following command will donwload and install all prerequestics:
+```bashscrip
+chmod u+x install_prerequisites.sh
+bash install_prerequisites.sh or ./install_prerequisites.sh
+```
+The requeirments are as follows:
 
 
 
