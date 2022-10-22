@@ -5,9 +5,10 @@ Genotyping MUC1-VNTR in autosomal dominant tubulointerstitial kidney disease (MU
 
 ## Installation
 The tool can be downloaded by cloning from github:
-'''
+
+```bashscript
 https://github.com/hassansaei/VNtyper.git
-'''
+```
 
 
 ## Data Requirements
