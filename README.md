@@ -20,10 +20,11 @@ bash install_prerequisites.sh or ./install_prerequisites.sh
 ```
 The requeirments are as follows:
 1. Download and index chr1.fa file form UCSC genome browser using [(BWA)](https://bio-bwa.sourceforge.net/)
-2. Download, build and install Singularity
-3. Download Kestrel
+2. Install Singularity
+3. Download [(Kestrel)](https://github.com/paudano/kestrel)
 4. Building singularity image for code-adVNTR
-5. Download [(hg19 VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR 
+5. Download [(VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR
+6. The MUC1 VNTR motif dictionary and index files are provided in the File directory
 
 
 ## Execution
