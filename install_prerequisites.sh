@@ -8,6 +8,13 @@ echo "Update and install dependecies"
 sudo apt-get install make
 sudo apt-get install -y build-essential libssl-dev uuid-dev libgpgme11-dev \
     squashfs-tools libseccomp-dev wget pkg-config git cryptsetup debootstrap
+sudo apt install python3.9
+sudo apt install python3-pip
+pip3 install pandas
+pip3 install numpy
+pip3 install biopython
+pip3 install regex
+pip3 install pysam
 sudo apt-get install bwa
 sudo apt-get install 
 
