@@ -64,9 +64,9 @@ options:
                         adVNTR VNTR database
   --ignore_advntr       Skip code-adVNTR genotyping of MUC1-VNTR
 ```
-[Note] Since the program uses python3.9 logging system, it can not be executed using lower version of the python.
+[Note] Since the program uses python3.9 logging system, it can not be executed using lower versions of the python.
 
-__Running only mapping-free genotyping:__
+__Running only kmer-based genotyping:__
 ```bashscript
 python3 VNtyper.py -ref Files/chr1.fa -r1 FASTQ1  -r2 FASTQ2 -k 20 -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p Scripts/ -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db --ignore_advntr
 ```
