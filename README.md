@@ -33,6 +33,8 @@ The requeirments are as follows:
 ## Execution
 Use following command to see the help for running the tool.
 ```bashscript
+python3 VNtyper.py --help 
+
 usage: VNtyper.py [-h] -ref Referense -r1 FASTQ1 -r2 FASTQ2 -k KMER -o OUTPUT
                   -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w
                   WORKING_DIR -m REFERENCE_VNTR [--ignore_advntr]
@@ -52,7 +54,7 @@ options:
   -o OUTPUT, --output OUTPUT
                         Output file name
   -ref_VNTR Referense, --reference_VNTR Referense
-                        MUC1-specific reference file
+                        MUC1 VNTR reference file
   -t THREADS, --threads THREADS
                         Number of threads (CPU)
   -p TOOLS_PATH, --tools_path TOOLS_PATH
@@ -60,8 +62,8 @@ options:
   -w WORKING_DIR, --working_dir WORKING_DIR
                         the path to the output
   -m REFERENCE_VNTR, --reference_vntr REFERENCE_VNTR
-                        adVNTR reference vntr database
-  --ignore_advntr       Skip adVNTR genotyping of MUC1-VNTR
+                        adVNTR VNTR database
+  --ignore_advntr       Skip code-adVNTR genotyping of MUC1-VNTR
 ```
 [Note] Since the program uses python3.9 logging system, it can not be executed using lower version of the python.
 
