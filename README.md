@@ -13,7 +13,7 @@ git clone https://github.com/hassansaei/VNtyper.git
 # Go to the directory that you downloaded the source code
 cd VNtyper
 ```
-The following command will donwload and install all prerequestics:
+The following command will automatically download and install all prerequisites:
 ```bashscrip
 chmod u+x install_prerequisites.sh
 bash install_prerequisites.sh or ./install_prerequisites.sh
