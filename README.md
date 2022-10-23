@@ -39,8 +39,7 @@ usage: VNtyper.py [-h] -ref Referense -r1 FASTQ1 -r2 FASTQ2 -k KMER -o OUTPUT
                   -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w
                   WORKING_DIR -m REFERENCE_VNTR [--ignore_advntr]
 
-Given raw fastq files, this tool genotype MUC1-VNTR using k-mer and profile-
-HMM based mathods
+Given raw fastq files, this tool call frameshift variants in MUC1-VNTR using Kestrel and code-adVNTR algorithms
 
 options:
   -h, --help            show this help message and exit
