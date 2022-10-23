@@ -35,7 +35,7 @@ Use following command to see the help for running the tool.
 ```bashscript
 python3 VNtyper.py --help
 ```
-
+[Note] Since the program uses python3.9 logging system, it can not be executed using lower version of the python.
 
 ## Output
 
