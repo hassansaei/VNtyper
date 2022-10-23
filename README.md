@@ -19,15 +19,21 @@ chmod u+x install_prerequisites.sh
 bash install_prerequisites.sh or ./install_prerequisites.sh
 ```
 The requeirments are as follows:
-1. Python >= 3.9
-2. Install [(BWA)](https://bio-bwa.sourceforge.net/)
-3. Download chr1.fa file form [(UCSC genome browser)](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz)
-4. Index fasta file with BWA
-5. Install Singularity
-6. Download [(Kestrel)](https://github.com/paudano/kestrel)
-7. Building singularity image for code-adVNTR
-8. Download [(VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR
-9. The MUC1 VNTR motif dictionary and index files are provided in the File directory
+1. Python >= 3.9 and libraries
+    - Pandas
+    - numpy
+    - regex
+    - biopython
+    - setuptools==58
+    - pysam
+3. Install [(BWA)](https://bio-bwa.sourceforge.net/)
+4. Download chr1.fa file form [(UCSC genome browser)](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz)
+5. Index fasta file with BWA
+6. Install Singularity
+7. Download [(Kestrel)](https://github.com/paudano/kestrel)
+8. Building singularity image for code-adVNTR
+9. Download [(VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR
+10. The MUC1 VNTR motif dictionary and index files are provided in the File directory
 
 
 ## Execution
