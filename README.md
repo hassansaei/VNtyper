@@ -20,12 +20,13 @@ bash install_prerequisites.sh or ./install_prerequisites.sh
 ```
 The requeirments are as follows:
 1. Python >= 3.9 and libraries
-    - Pandas
-    - numpy
-    - regex
-    - biopython
-    - setuptools==58
-    - pysam
+    - Pandas ``` pip3 install pandas```
+    - numpy ``` pip3 install numpy```
+    - regex ``` pip3 install regex```
+    - biopython ``` pip3 install biopython ```
+    - setuptools==58 ``` pip3 install setuptools```
+    - pysam ``` pip3 install pysam ```
+
 3. Install [(BWA)](https://bio-bwa.sourceforge.net/)
 4. Download chr1.fa file form [(UCSC genome browser)](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz)
 5. Index fasta file with BWA
