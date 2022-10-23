@@ -66,13 +66,13 @@ options:
 ```
 [Note] Since the program uses python3.9 logging system, it can not be executed using lower version of the python.
 
-Running only mapping-free genotyping:
+__Running only mapping-free genotyping:__
 ```bashscript
 python3 VNtyper.py -ref Files/chr1.fa -r1 FASTQ1  -r2 FASTQ2 -k 20 -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p Scripts/ -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db --ignore_advntr
 ```
 [Note] This algorithm is far more faster than the second method. 
 
-Running both genotyping methods:
+__Running both genotyping methods:__
 ```bashscript
 python3 VNtyper.py -ref Files/chr1.fa -r1 FASTQ1  -r2 FASTQ2 -k 20 -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p Scripts/ -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db
 ```
