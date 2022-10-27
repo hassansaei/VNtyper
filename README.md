@@ -36,6 +36,11 @@ The requeirments are as follows:
 9. Download [(VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR
 10. The MUC1 VNTR motif dictionary and index files are provided in the File directory
 
+__Docker files for VNtyper:
+Docker file is also provided. 
+
+```bashscript
+```
 
 ## Execution
 Use following command to see the help for running the tool.
