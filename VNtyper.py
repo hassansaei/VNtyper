@@ -537,7 +537,7 @@ else:
 advntr_concat = pd.concat([df_del, df_ins], axis=0)
 advntr_concat = advntr_concat[['#VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 
                               'Pvalue']]
-advntr_concat.drop_duplicates(subset=['POS', 'REF', 'ALT'], inplace=True)
+advntr_concat.drop_duplicates(subset=['Pvalue', 'Variant', 'NumberOfSupportingReads'], inplace=True)
 
 advntr_concat.to_csv(output + args.output + '_adVNTR_result.tsv', sep='\t', index=False)
 
