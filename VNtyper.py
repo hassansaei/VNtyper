@@ -566,6 +566,7 @@ if dupC_in_frame.empty:
                 process.wait()
 
     print (endMessage)
+    logging.info('The final result is saved in *_Final_result.tsv')
     sys.exit() 
 
 else:
@@ -596,6 +597,7 @@ else:
                 process.wait()
 
     print (endMessage)
+    logging.info('The final result is saved in *_Final_result.tsv')
     sys.exit()
 
-logging.info('The final result is saved in *_Final_result.tsv')
+
