@@ -459,7 +459,7 @@ del_frame = np.arange(100) * 3 + 2
 del_frame = del_frame.astype(str)
 
 def advntr_processing_del(df):
-
+    
     df1 = df.copy()
     df1.rename(columns={'State': 'Variant', 'Pvalue\n':'Pvalue'}, inplace = True)
     df1['Deletion_length'] = df1['Variant'].str.count('D').add(0).fillna(0)
@@ -473,11 +473,9 @@ def advntr_processing_del(df):
     df1.Insertion_len = df1.Insertion_len.astype(int)
     df1['frame'] = abs(df1.Insertion_len - df1.Deletion_length)
     df1.frame = df1['frame'].astype(str)
-    if (df1.Deletion_length > 0).any() and (df1.Insertion_len > 0).any():
-        
-        if (df1.Deletion_length > df1.Insertion_len).any():
-            
-            df1 = df1[df1['frame'].isin(del_frame)]
+    df1 = df1.loc[(df1['Deletion_length'] >= 1)]
+    df1 = df1[df1['frame'].isin(del_frame)]
+
             
     return df1
 
@@ -496,11 +494,9 @@ def advntr_processing_ins(df):
     dff.Insertion_len = dff.Insertion_len.astype(int)
     dff['frame'] = abs(dff.Insertion_len - dff.Deletion_length)
     dff.frame = dff['frame'].astype(str)
-    if (dff.Deletion_length > 0).any() and (dff.Insertion_len > 0).any():
-            
-        if (dff.Insertion_len > dff.Deletion_length).any():
-            
-            dff = dff[dff['frame'].isin(ins_frame)]
+    dff = dff.loc[(dff['Insertion_len'] >= 1)]
+    dff = dff[dff['frame'].isin(ins_frame)]
+    
             
     return dff
 
