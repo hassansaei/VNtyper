@@ -84,24 +84,24 @@ optional arguments:
 
 __Running only kmer-based genotyping:__
 ```bashscript
-python3 VNtyper.py -ref Files/chr1.fa -r1 FASTQ1  -r2 FASTQ2 -k 20 -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p Scripts/ -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db --ignore_advntr
+python3 VNtyper.py --bam -ref Files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p VNtyper/ -w WORKING_DIRECTORY --ignore_advntr
 ```
 [Note] This algorithm is far more faster than the second method. 
 
 __Running both genotyping methods:__
 ```bashscript
-python3 VNtyper.py -ref Files/chr1.fa -r1 FASTQ1  -r2 FASTQ2 -k 20 -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p Scripts/ -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db
+python3 VNtyper.py --bam -ref Files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p VNtyper/  -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db
 ```
-[Note] To decrease the chance of missing any postive cases it is prefered to run both methods.
+[Note] This algorithm is far more slower than the first method.
 
 
 ## Output
-The tool creates a folder for each case in the working directory which is assigned by the user. Inside the folder there are directories for temporary files and log files, Kmer result, and  the code-adVNTR output.
+The tool creates a folder for each case in the working directory which is assigned by the user. Inside the folder there is directory for temporary files and log files, and the final output:
 - Temp folder: Fastp QC report (.html) and log file for VNtyper
-- Kmer: The output of VNtyper for Kestrel algorithm
-- adVNTR: The output for code-adVNTR algorithm
+- The output of VNtyper '*_Final_result.tsv'
 
-The Kestrel output is a VCF file, which is proceessed by VNtyper and final result is stored in SAMPLE_NAME_result.tsv. The result file contains information for the motifs, varinant types, position of the varinat and its corresponding depth. The output for code-adVNTR is a bed or vcf file with varinat information and Pvalue. 
+
+The Kestrel output is a VCF file, which is proceessed by VNtyper and final result is stored in *_Final_result.tsv. The result file contains information for the motifs, varinant types, position of the varinat and its corresponding depth. The output for code-adVNTR is a bed or vcf file with varinat information and Pvalue. 
 
 ## Citation
 
