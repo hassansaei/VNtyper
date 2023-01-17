@@ -1,5 +1,5 @@
 ## VNtyper - A pipeline to genotype MUC1-VNTR 
-Genotyping MUC1 coding-VNTR in medullary-cystic kidney disease type 1  (MCKD1) using short-read seqeuncing (SRS) data. Vntyper pipeline embeded two different varinat calling algorithms:
+Genotyping MUC1 coding-VNTR in ADTKD-MUC1 using short-read seqeuncing (SRS) data. Vntyper pipeline embeded two different varinat calling algorithms:
 - Mapping free genotyping using kmer frequencies [(Kestrel)](https://github.com/paudano/kestrel)
 - Profile-HMM based method [(code-adVNTR)](https://github.com/mehrdadbakhtiari/adVNTR/tree/enhanced_hmm)
 
@@ -47,15 +47,12 @@ Use following command to see the help for running the tool.
 ```bashscript
 python3 VNtyper.py --help 
 
-usage: VNtyper.py [-h] -ref Referense -r1 FASTQ1 -r2 FASTQ2 -k KMER -o OUTPUT
-                  -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w
-                  WORKING_DIR -m REFERENCE_VNTR [--ignore_advntr]
-                  [-a ALIGNMENT]
+usage: VNtyper_FV.py [-h] -ref Referense [-r1 FASTQ1] [-r2 FASTQ2] -o OUTPUT -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w WORKING_DIR [-m REFERENCE_VNTR]
+                     [--ignore_advntr] [--bam] [--fastq] [-a ALIGNMENT]
 
-Given raw fastq files, this pipeline genotype MUC1-VNTR using kestrel
-(Mapping-free genotyping) and Code-adVNTR mathods
+Given raw fastq files, this pipeline genotype MUC1-VNTR using kestrel (Mapping-free genotyping) and Code-adVNTR mathods
 
-options:
+optional arguments:
   -h, --help            show this help message and exit
   -ref Referense, --reference_file Referense
                         FASTA-formatted reference file and indexes
@@ -63,7 +60,6 @@ options:
                         Fastq file first pair
   -r2 FASTQ2, --fastq2 FASTQ2
                         Fastq file second pair
-  -k KMER, --Kmer KMER  Kmer size
   -o OUTPUT, --output OUTPUT
                         Output file name
   -ref_VNTR Referense, --reference_VNTR Referense
@@ -71,14 +67,17 @@ options:
   -t THREADS, --threads THREADS
                         Number of threads (CPU)
   -p TOOLS_PATH, --tools_path TOOLS_PATH
-                        Path to the scripts directory
+                        Path to the VNtyper directory
   -w WORKING_DIR, --working_dir WORKING_DIR
                         the path to the output
   -m REFERENCE_VNTR, --reference_vntr REFERENCE_VNTR
                         adVNTR reference vntr database
   --ignore_advntr       Skip adVNTR genotyping of MUC1-VNTR
+  --bam                 BAM file as an input
+  --fastq               Paired-end fastq files as an input
   -a ALIGNMENT, --alignment ALIGNMENT
-                        Alignment File (Indexed BAM file)
+                        Alignment File (with an index file .bai)
+
 
 ```
 [Note] Since the program uses python3.9 logging system, it can not be executed using lower versions of the python.
