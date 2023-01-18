@@ -37,20 +37,25 @@ The requeirments are as follows:
 10. The MUC1 VNTR motif dictionary and index files are provided in the File directory
 
 __Docker files for VNtyper:__
+
 Docker images is also provided and can be pulled from docker hub. 
 You have to make a directory to store both you inputs and outputs in the host machine.
 
-Run VNtyper with only the kmer method:
 ```bashscript
 mkdir shared
 sudo docker pull vntyper:1.0.0
+```
 
+__Run VNtyper with only the kmer method:__
+
+```bashscript
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
 -t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa \
 -a /SOFT/shared/HYP864.bam -t 8 -w /SOFT/shared/ -o HYP864 --ignore_advntr
 ```
-Run Vntyper with both methods:
+__Run Vntyper with both methods:__
+
 ```bashscript
 
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
