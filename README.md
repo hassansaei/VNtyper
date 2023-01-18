@@ -46,12 +46,12 @@ The instructions for installing docker on linux can be found [(here)](https://do
 mkdir shared
 sudo docker pull saei/vntyper:1.0.0
 ```
-The image file can also be [(downloaded)]() and loaded via ```bashscript sudo docker load vntyper_1.0.0_docker.tar ```.
+The image file can also be [(downloaded)]() and loaded via ``` Sudo docker load vntyper_1.0.0_docker.tar ```.
 
 __Run docker with only the kmer method:__
 
 ```bashscript
-sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
+sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
 -t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa \
 -a /SOFT/shared/SAAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME --ignore_advntr
@@ -60,7 +60,7 @@ __Run docker with both methods:__
 
 ```bashscript
 
-sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
+sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
 -t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa  -m /SOFT/VNtyper/Files/hg19_genic_VNTRs.db \
 -a /SOFT/shared/SAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME
