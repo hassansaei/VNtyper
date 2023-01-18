@@ -46,7 +46,7 @@ mkdir shared
 sudo docker pull vntyper:1.0.0
 ```
 
-__Run VNtyper with only the kmer method:__
+__Run docker with only the kmer method:__
 
 ```bashscript
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
@@ -54,7 +54,7 @@ sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vn
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa \
 -a /SOFT/shared/HYP864.bam -t 8 -w /SOFT/shared/ -o HYP864 --ignore_advntr
 ```
-__Run Vntyper with both methods:__
+__Run dcoker with both methods:__
 
 ```bashscript
 
