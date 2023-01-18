@@ -52,16 +52,16 @@ __Run docker with only the kmer method:__
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
 -t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa \
--a /SOFT/shared/HYP864.bam -t 8 -w /SOFT/shared/ -o HYP864 --ignore_advntr
+-a /SOFT/shared/SAAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME --ignore_advntr
 ```
-__Run dcoker with both methods:__
+__Run docker with both methods:__
 
 ```bashscript
 
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared vntyper:1.0.0 \
 -t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa  -m /SOFT/VNtyper/Files/hg19_genic_VNTRs.db \
--a /SOFT/shared/HYP864.bam -t 8 -w /SOFT/shared/ -o HYP864
+-a /SOFT/shared/SAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME
 
 ```
 
