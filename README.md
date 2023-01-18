@@ -40,6 +40,7 @@ __Docker files for VNtyper:__
 
 Docker images is also provided and can be pulled from docker hub. 
 You have to make a directory to store both you inputs and outputs in the host machine.
+The instructions for installing docker on linux can be found [(here)](https://docs.docker.com/desktop/install/linux-install/)
 
 ```bashscript
 mkdir shared
