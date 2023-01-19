@@ -105,13 +105,27 @@ else
 
 fi
 
+# Installing Sambamba 
+if [ ! -d "${SCRIPT}"/sambamba-0.6.8 ]; then
+    cd ${SCRIPT}
+    echo "Downloading Sambamba v0.6.8 ..."
+    wget_download https://github.com/biod/sambamba/releases/download/v0.6.8/sambamba-0.6.8-linux-static.gz
+    gunzip sambamba-0.6.8-linux-static.gz
+    mv sambamba-0.6.8-linux-static sambamba-0.6.8
+    chmod +x sambamba-0.6.8
+    ln -s /opt/sambamba-0.6.8 /usr/local/bin
+else
+    echo "Kestrel already exists..."
+
+fi
+
 # Building singularity image for code-adVNTR
 if [ ! -f "${SCRIPT}"/code-adVNTR.sif ]; then
     cd ${SCRIPT}
     echo "Building singularity image file for code-adVNTR..."
     sudo singularity build code-adVNTR.sif adVNTR.def
 else
-    echo "adVNTR signularity image already exists..."
+    echo "Sambamba already exists..."
 
 fi
 
