@@ -141,10 +141,10 @@ if args.fastq:
 if args.bam:
     in_bam = args.alignment
     #out_bam = output + args.output + "__mkdup.bam"
-    #command_mkdup = "/WORKSPACE/VNtyper/Scripts/./sambamba-0.6.8 markdup -t " + args.threads + " " +  in_bam + " " + out_bam
-    command_slice = "/SOFT/./sambamba-0.6.8 slice " + in_bam + " chr1 " + " -o " + output + args.output + "_chr1.bam"
+    #command_mkdup = args.tools_path + "Scripts/./sambamba-0.6.8 markdup -t " + args.threads + " " +  in_bam + " " + out_bam
+    command_slice = args.tools_path + "Scripts/./sambamba-0.6.8 slice " + in_bam + " chr1 " + " -o " + output + args.output + "_chr1.bam"
     command_flag = "samtools view -u -f 4 -F264 " + in_bam +  " > " + output + args.output + "_unmapped1.bam"  + " && " + "samtools view -u -f 8 -F260 " + in_bam +  " > " + output + args.output + "_unmapped2.bam" + " && " +  "samtools view -u -f 12 -F256 " + in_bam +  " > " + output + args.output + "_unmapped3.bam" 
-    command_merge = "/SOFT/./sambamba-0.6.8 merge -t " + args.threads + " " + output + args.output + "_vntyper.bam" + " " + output + args.output + "_chr1.bam" + " " + output + args.output + "_unmapped1.bam" + " " + output + args.output + "_unmapped2.bam" + " " + output + args.output + "_unmapped3.bam"
+    command_merge = args.tools_path + "Scripts/./sambamba-0.6.8 merge -t " + args.threads + " " + output + args.output + "_vntyper.bam" + " " + output + args.output + "_chr1.bam" + " " + output + args.output + "_unmapped1.bam" + " " + output + args.output + "_unmapped2.bam" + " " + output + args.output + "_unmapped3.bam"
     command_sort_fastq = "samtools sort -n " + " -@ " + args.threads + " " + output + args.output + "_vntyper.bam" +  " -o " + output + args.output + "_VN.bam" + " && " + "samtools fastq " + " -@ " + args.threads + " " +  output + args.output + "_VN.bam" +  " -1 " + output + args.output + "_R1.fastq.gz" + " -2 " + output + args.output + "_R2.fastq.gz"
     print ('BAM cleanup and converting to fastq...')
     logging.info('BAM file cleanup and converting to fastq...')
