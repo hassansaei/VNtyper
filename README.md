@@ -119,6 +119,11 @@ python3 VNtyper.py --bam -ref Files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VN
 ```
 [Note] This algorithm is far more slower than the first method.
 
+## Results from high-coverage 1000G project
+We analyzed MUC1 region in 2505 samples from 1000G 30X project. The results from this analysis could be found here. 
+
+## Sample bam files MUC1 8C positive 
+Here we provided three MUC1 8C positive read-name replaced bam files to check.
 
 ## Output
 The tool creates a folder for each case in the working directory which is assigned by the user. Inside the folder there is directory for temporary files and log files, and the final output:
