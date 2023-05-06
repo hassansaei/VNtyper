@@ -126,7 +126,7 @@ We analyzed MUC1 region in 2300 samples from 1000G 30X project. The results from
 ```bashscript
 for f in *.bam; do  samtools depth -b MUC_hg19.bed $f | awk '{sum+=$3} END { print sum/NR}' > $f.coverage; done
 ```
-MUC_hg19.bed is provide. MUC1_hg19.bed could also be replaced by : chr1:155160500-155162000
+MUC_hg19.bed is provide. MUC1_hg19.bed could also be replaced by : -r chr1:155160500-155162000
 
 ## Sample bam files MUC1 8C positive 
 Here we provided five (example_1.bam to example_5.bam) MUC1 8C positive bam files for evaluation. Link to bam files: [(Bam)](https://e.pcloud.link/publink/show?code=kZGSejZWTuXKX6IQnzyD5yxpUJMNpiONMXk)
