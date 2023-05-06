@@ -137,7 +137,8 @@ for f in *.bam; do  samtools depth -b MUC_hg19.bed $f | awk '{sum+=$3} END { pri
 MUC_hg19.bed is provide. MUC1_hg19.bed could also be replaced by : -r chr1:155160500-155162000
 
 ## Sample bam files MUC1 8C positive 
-Here we provided five (example_1.bam to example_5.bam) MUC1 8C positive bam files for evaluation. Link to bam files: [(Bam)](https://e.pcloud.link/publink/show?code=kZGSejZWTuXKX6IQnzyD5yxpUJMNpiONMXk)
+Here we provided five (example_1.bam to example_5.bam) MUC1 8C positive bam files for evaluation.
+Link to bam files: [(Bam)](https://e.pcloud.link/publink/show?code=kZGSejZWTuXKX6IQnzyD5yxpUJMNpiONMXk)
 Example_1 to 3 from NTI cohort and example_4 and 5 from renome cohort.
 
 ## Output
