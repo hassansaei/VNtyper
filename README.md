@@ -48,8 +48,8 @@ sudo docker pull saei/vntyper:1.0.0
 ```
 The image files can also be downloaded and loaded via:
 
-[(VNtyper_1.1.0)](https://e1.pcloud.link/publink/show?code=XZM7lmZAF70unah0p8hVA4E9krbemNgvm9k)
-[(VNtyper_1.0.0)](https://e1.pcloud.link/publink/show?code=XZM7lmZAF70unah0p8hVA4E9krbemNgvm9k)
+1. [(VNtyper_1.1.0)](https://e.pcloud.link/publink/show?code=XZ4LnjZ9joe8S7NGEj7RyB7RUpiEJ6t45Ik)
+2. [(VNtyper_1.0.0)](https://e1.pcloud.link/publink/show?code=XZM7lmZAF70unah0p8hVA4E9krbemNgvm9k)
 
 ```bashscript
 Sudo docker load vntyper_1.0.0_docker.tar
