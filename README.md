@@ -53,6 +53,7 @@ The image files can also be downloaded and loaded via:
 
 ```bashscript
 Sudo docker load vntyper_1.0.0_docker.tar
+Sudo docker load vntyper_1.1.0_docker.tar
 ```
 
 __Run docker with only the kmer method:__
