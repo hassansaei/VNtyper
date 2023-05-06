@@ -1,0 +1,4 @@
+## VNtyper_Analysis_for_example_3 
+# Kestrel_Result 
+Motif	Variant	POS	REF	ALT	Motif_sequence	Estimated_Depth_AlternateVariant	Estimated_Depth_Variant_ActiveRegion	Depth_Score	Confidence	Kmer_Size
+S	Insertion	7	G	GG	TGCGGGGGCGGTGGAGCCCGGGGCCGGCCTGCTCTCCGGGGCTGAGGTGACACCGTGGGC	1230	68609	0.01793	High_Precision	20
