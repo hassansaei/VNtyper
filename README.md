@@ -44,7 +44,7 @@ The instructions for installing docker on linux can be found [(here)](https://do
 
 ```bashscript
 mkdir shared
-sudo docker pull saei/vntyper:1.0.0
+sudo docker pull saei/vntyper:1.1.0
 ```
 The image files can also be downloaded and loaded via:
 
@@ -52,8 +52,7 @@ The image files can also be downloaded and loaded via:
 2. [(VNtyper_1.0.0)](https://e1.pcloud.link/publink/show?code=XZM7lmZAF70unah0p8hVA4E9krbemNgvm9k)
 
 ```bashscript
-Sudo docker load vntyper_1.0.0_docker.tar
-Sudo docker load vntyper_1.1.0_docker.tar
+Sudo docker load Docker_VNtyper_1.1.0.tar
 ```
 
 __Run docker with only the kmer method:__
