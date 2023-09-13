@@ -178,7 +178,7 @@ vcf_path = Path(vcf_out)
 #fastq_2 = args.working_dir + args.output + "_R2.fastq.gz"
 
 kmer_command_17 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  17  "  + " -r " + reference_VNTR  + " -o " + vcf_out + " " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
-kmer_command_20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
+kmer_command_20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/"  + " --hapfmt " + " sam " +  " -p " +  args.working_dir + args.output + ".sam"
 kmer_command_25 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  25  "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
 kmer_command_41 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  41  "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
 
@@ -300,8 +300,11 @@ def process_kmer(Kmer_A):
         Kestrel_concat['Depth_Score'] = round(Kestrel_concat.Estimated_Depth_AlternateVariant / Kestrel_concat.Estimated_Depth_Variant_ActiveRegion, 5)
         Kestrel_concat['Depth_Score'] = Kestrel_concat['Depth_Score'].astype(float)
         Kestrel_concat['Confidence'] = Kestrel_concat.apply(conditions, axis=1)
-        if Kestrel_concat['ALT'].str.contains('GG').any():
-            Kestrel_concat = Kestrel_concat[Kestrel_concat['Depth_Score'] >= 0.00469]
+        if Kestrel_concat['ALT'].str.contains(r'\bGG\b').any():
+            Kestrel_concat = pd.concat([
+                Kestrel_concat[Kestrel_concat['ALT'] != 'GG'],
+                Kestrel_concat[Kestrel_concat['ALT'] == 'GG'].loc[Kestrel_concat['Depth_Score'] >= 0.00469]
+            ])
         Kestrel_concat = Kestrel_concat[Kestrel_concat['Confidence'] != 'Red_Zone']
         Kestrel_concat.drop(['left', 'Right'], axis=1, inplace=True)
         
@@ -408,7 +411,7 @@ else:
     motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
     motif_right = motif_right.merge(Merged_motifs, on='Motif')
     motif_right = motif_right[['Motif', 'Variant', 'POS', 'REF', 'ALT','Motif_sequence', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion', 'Depth_Score', 'Confidence']]
-    if motif_right['ALT'].str.contains('GG').any():
+    if motif_right['ALT'].str.contains(r'\bGG\b').any():
         motif_right = motif_right.loc[(motif_right['Motif'] != 'Q') & (motif_right['Motif'] != '8') & (motif_right['Motif'] != '9') &
              (motif_right['Motif'] != '7') & (motif_right['Motif'] != '6p') & (motif_right['Motif'] != '6') & (motif_right['Motif'] != 'V') &
               (motif_right['Motif'] != 'J') & (motif_right['Motif'] != 'I') & (motif_right['Motif'] != 'G') & (motif_right['Motif'] != 'E') & (motif_right['Motif'] != 'A')]
@@ -417,6 +420,9 @@ else:
         motif_right = motif_right.drop_duplicates('ALT', keep='first')
         if motif_right['Motif'].str.contains('X').any():
             motif_right = motif_right[motif_right['Motif'] == 'X']
+    else:
+        motif_right = motif_right.sort_values('Depth_Score', ascending=False)
+        motif_right = motif_right.drop_duplicates('ALT', keep='first')
     motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
     Kestrel_concat = pd.concat([motif_right, motif_left])
     Kestrel_concat = Kestrel_concat.loc[(Kestrel_concat['ALT'] != 'CCGCC') & (Kestrel_concat['ALT'] != 'CGGCG') & (Kestrel_concat['ALT'] != 'CGGCC')]
