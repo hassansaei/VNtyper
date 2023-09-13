@@ -305,8 +305,8 @@ def process_kmer(Kmer_A):
                 Kestrel_concat[Kestrel_concat['ALT'] != 'GG'],
                 Kestrel_concat[Kestrel_concat['ALT'] == 'GG'].loc[Kestrel_concat['Depth_Score'] >= 0.00469]
             ])
-        cg_exists = Kestrel_concat['ALT'].str.contains('CG').sum() >= 2
-        tg_exists = Kestrel_concat['ALT'].str.contains('TG').sum() >= 2
+        cg_exists = Kestrel_concat['ALT'].str.contains(r'\bCG\b').any()
+        tg_exists = Kestrel_concat['ALT'].str.contains(r'\bTG\b').any()
         if cg_exists and tg_exists:
             Kestrel_concat = Kestrel_concat[~Kestrel_concat['ALT'].isin(['CG', 'TG'])]
         Kestrel_concat = Kestrel_concat[Kestrel_concat['Confidence'] != 'Red_Zone']
