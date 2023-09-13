@@ -178,7 +178,7 @@ vcf_path = Path(vcf_out)
 #fastq_2 = args.working_dir + args.output + "_R2.fastq.gz"
 
 kmer_command_17 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  17  "  + " -r " + reference_VNTR  + " -o " + vcf_out + " " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
-kmer_command_20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/"  + " --hapfmt " + " sam " +  " -p " +  args.working_dir + args.output + ".sam"
+kmer_command_20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/"  + " --hapfmt " + " sam " +  " -p " +  args.working_dir + args.output + "/temp/" + args.output + ".sam"
 kmer_command_25 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  25  "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
 kmer_command_41 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  41  "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
 
@@ -305,6 +305,10 @@ def process_kmer(Kmer_A):
                 Kestrel_concat[Kestrel_concat['ALT'] != 'GG'],
                 Kestrel_concat[Kestrel_concat['ALT'] == 'GG'].loc[Kestrel_concat['Depth_Score'] >= 0.00469]
             ])
+        cg_exists = Kestrel_concat['ALT'].str.contains('CG').sum() >= 2
+        tg_exists = Kestrel_concat['ALT'].str.contains('TG').sum() >= 2
+        if cg_exists and tg_exists:
+            Kestrel_concat = Kestrel_concat[~Kestrel_concat['ALT'].isin(['CG', 'TG'])]
         Kestrel_concat = Kestrel_concat[Kestrel_concat['Confidence'] != 'Red_Zone']
         Kestrel_concat.drop(['left', 'Right'], axis=1, inplace=True)
         
