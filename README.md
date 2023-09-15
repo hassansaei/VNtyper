@@ -48,10 +48,13 @@ sudo docker pull saei/vntyper:1.2.0
 ```
 The image files can also be downloaded and loaded via:
 
-1. [(VNtyper_1.2.0)](https://e.pcloud.link/publink/show?code=XZ4LnjZ9joe8S7NGEj7RyB7RUpiEJ6t45Ik)
+1. [(VNtyper_1.2.0)](https://e.pcloud.link/publink/show?code=XZy1c2ZD1zvUV3wVcjm3Mi1coutBReA7vvX)
 
 ```bashscript
 Sudo docker load Docker_VNtyper_1.2.0.tar
+# Or use the scripts below:
+cat Docker_vntyper_v1.2.0.tar | docker import - vntyper:1.2.0
+
 ```
 
 __Run docker with only the kmer method:__
