@@ -151,7 +151,10 @@ The tool creates a folder for each case in the working directory which is assign
 The Kestrel output is a VCF file, which is proceessed by VNtyper and final result is stored in *_Final_result.tsv. The result file contains information for the motifs, varinant types, position of the varinat and its corresponding depth. The output for code-adVNTR is a bed or vcf file with varinat information and Pvalue.
 
 ##__NOTE: This tool is for research use only.__
+##__NOTE: This tool is for research use only.__
 
-## Citation
-
+## Citations
+1. Saei H, Morinière V, Heidet L, Gribouval O, Lebbah S, Tores F, Mautret-Godefroy M, Knebelmann B, Burtey S, Vuiblet V, Antignac C, Nitschké P, Dorval G. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data in autosomal dominant tubulointerstitial kidney disease. iScience. 2023 Jun 17;26(7):107171. doi: 10.1016/j.isci.2023.107171. PMID: 37456840; PMCID: PMC10338300.
+2. Peter A Audano, Shashidhar Ravishankar, Fredrik O Vannberg, Mapping-free variant calling using haplotype reconstruction from k-mer frequencies, Bioinformatics, Volume 34, Issue 10, May 2018, Pages 1659–1665, https://doi.org/10.1093/bioinformatics/btx753
+3. Park J, Bakhtiari M, Popp B, Wiesener M, Bafna V. Detecting tandem repeat variants in coding regions using code-adVNTR. iScience. 2022 Jul 19;25(8):104785. doi: 10.1016/j.isci.2022.104785. PMID: 35982790; PMCID: PMC9379575.
 
