@@ -149,7 +149,8 @@ The tool creates a folder for each case in the working directory which is assign
 
 
 The Kestrel output is a VCF file, which is proceessed by VNtyper and final result is stored in *_Final_result.tsv. The result file contains information for the motifs, varinant types, position of the varinat and its corresponding depth. The output for code-adVNTR is a bed or vcf file with varinat information and Pvalue.
-__NOTE: This tool is for research use only.__
+
+##__NOTE: This tool is for research use only.__
 
 ## Citation
 
