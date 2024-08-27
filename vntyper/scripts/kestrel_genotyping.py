@@ -1,7 +1,10 @@
 import subprocess as sp
 import logging
+import os
 import pandas as pd
 from pathlib import Path
+from Bio import SeqIO
+from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf, read_vcf
 
 # Construct the Kestrel command based on kmer size and config settings
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, temp_dir, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
@@ -16,45 +19,6 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         f"--temploc {temp_dir} "
         f"--hapfmt sam -p {temp_dir}/output.sam"
     )
-
-# Filter VCF for indels
-def filter_vcf(input_path, output_path):
-    with open(input_path, "r") as vcf_file, open(output_path, "w") as indel_file:
-        for line in vcf_file:
-            if line[:2] == "##":
-                indel_file.write(line)
-            else:
-                [_, _, _, ref, alt, *_] = line.split("\t")
-                if len(ref) == 1 and len(alt) != 1 or len(ref) != 1 and len(alt) == 1:
-                    indel_file.write(line)
-
-# Further filter the indel VCF into insertion and deletion files
-def filter_indel_vcf(indel_vcf, output_ins, output_del):
-    with open(indel_vcf, "r") as vcf_file, open(output_ins, "w") as insertion_file, open(output_del, "w") as deletion_file:
-        for line in vcf_file:
-            if line[:2] == "##":
-                insertion_file.write(line)
-                deletion_file.write(line)
-            else:
-                [_, _, _, ref, alt, *_] = line.split("\t")
-                if len(ref) == 1 and len(alt) > 1:
-                    insertion_file.write(line)
-                else:
-                    deletion_file.write(line)
-
-# Read VCF headers
-def read_vcf(path):
-    vcf_names = None
-    with open(path, 'r') as f:
-        for line in f:
-            if line.startswith("#CHROM"):
-                vcf_names = [x for x in line.split('\t')]
-                break
-    
-    if not vcf_names:
-        raise ValueError(f"No valid VCF headers found in {path}")
-    
-    return vcf_names
 
 # Kestrel processing logic
 def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, temp_dir, kestrel_settings):
@@ -95,10 +59,11 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
 
             # Process the VCF if Kestrel run was successful
             if vcf_path.is_file():
-                process_vcf_results(output_dir, vcf_path)
+                process_kestrel_output(output_dir, vcf_path, reference_vntr)
                 break  # If successful, break out of the loop and stop trying other kmer sizes
 
-def process_vcf_results(output_dir, vcf_path):
+# Process Kestrel VCF results to generate the final output format
+def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     logging.info("Processing Kestrel VCF results...")
     indel_vcf = f"{output_dir}/output_indel.vcf"
     output_ins = f"{output_dir}/output_insertion.vcf"
@@ -108,10 +73,67 @@ def process_vcf_results(output_dir, vcf_path):
     filter_vcf(vcf_path, indel_vcf)
     filter_indel_vcf(indel_vcf, output_ins, output_del)
     
-    # Read the filtered VCF files into dataframes using sep='\s+' to handle whitespace
+    # Read the filtered VCF files into dataframes
     names = read_vcf(vcf_path)
     vcf_insertion = pd.read_csv(output_ins, comment='#', sep='\s+', header=None, names=names)
     vcf_deletion = pd.read_csv(output_del, comment='#', sep='\s+', header=None, names=names)
     
-    # Further processing logic can go here...
-    logging.info("VCF processing completed.")
+    # Load MUC1 VNTR reference motifs
+    MUC1_ref = load_muc1_reference(reference_vntr)
+
+    # Preprocess insertion and deletion dataframes
+    insertion_df = preprocessing_insertion(vcf_insertion, MUC1_ref)
+    deletion_df = preprocessing_deletion(vcf_deletion, MUC1_ref)
+    
+    # Combine insertion and deletion dataframes
+    combined_df = pd.concat([insertion_df, deletion_df], axis=0)
+
+    # Process and filter results based on frameshifts and confidence scores
+    processed_df = process_kmer_results(combined_df)
+
+    # Save the processed dataframe to a TSV file
+    final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
+    processed_df.to_csv(final_output_path, sep='\t', index=False)
+    
+    logging.info("Kestrel VCF processing completed.")
+    return processed_df
+
+def load_muc1_reference(reference_file):
+    identifiers = []
+    sequences = []
+    with open(reference_file) as fasta_file:
+        for seq_record in SeqIO.parse(fasta_file, 'fasta'):
+            identifiers.append(seq_record.id)
+            sequences.append(seq_record.seq)
+    
+    return pd.DataFrame({"Motifs": identifiers, "Motif_sequence": sequences})
+
+def preprocessing_insertion(df, muc1_ref):
+    df1 = df.copy()
+    df1.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    df1.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    df1 = pd.merge(df1, muc1_ref, on='Motifs', how='left')
+    df1['Variant'] = 'Insertion'
+    return df1
+
+def preprocessing_deletion(df, muc1_ref):
+    df2 = df.copy()
+    df2.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    df2.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    df2 = pd.merge(df2, muc1_ref, on='Motifs', how='left')
+    df2['Variant'] = 'Deletion'
+    return df2
+
+def process_kmer_results(combined_df):
+    # Split and filter based on frameshifts and confidence criteria
+    combined_df["ref_len"] = combined_df["REF"].str.len()
+    combined_df["alt_len"] = combined_df["ALT"].str.len()
+    combined_df["Frame_Score"] = round((combined_df.alt_len - combined_df.ref_len) / 3, 2)
+    combined_df['Frame_Score'] = combined_df['Frame_Score'].astype(str).apply(lambda x: x.replace('.0', 'C'))
+    combined_df["TrueFalse"] = combined_df['Frame_Score'].str.contains('C', regex=True)
+    combined_df["TrueFalse"] = combined_df["TrueFalse"].astype(str)
+    combined_df = combined_df[combined_df['TrueFalse'].str.contains("False")]
+
+    # More processing, filtering, and labeling steps can be added here
+
+    return combined_df
