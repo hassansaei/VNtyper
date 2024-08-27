@@ -3,6 +3,7 @@
 import timeit
 import os
 import sys
+import logging 
 from pathlib import Path
 
 from vntyper.scripts.utils import setup_logging, create_output_directories, load_config
