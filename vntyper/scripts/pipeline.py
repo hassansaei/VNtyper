@@ -3,13 +3,13 @@
 import timeit
 import os
 import sys
-import logging 
+import logging
 from pathlib import Path
 
 from vntyper.scripts.utils import setup_logging, create_output_directories, load_config
 from vntyper.scripts.file_processing import read_vcf, filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
-from vntyper.scripts.kestrel_genotyping import run_kestrel, process_kmer
+from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.motif_processing import process_motifs, preprocessing_insertion, preprocessing_deletion
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
@@ -54,10 +54,13 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         # Kestrel Genotyping
         vcf_out = os.path.join(output_dir, "output.vcf")
         vcf_path = Path(vcf_out)
-        run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_file)
+        reference_vntr = config["reference_data"]["muc1_reference_vntr"]  # Extract reference VNTR from config
+        kestrel_path = config["tools"]["kestrel"]  # Extract Kestrel tool path from config
+        kestrel_settings = config["kestrel_settings"]  # Extract Kestrel-specific settings from config
+        
+        run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_vntr, kestrel_path, temp_dir, kestrel_settings)  # Pass necessary arguments to run_kestrel
         
         # Motif and VNTR Processing (Add processing logic if needed)
-        # This is where motif processing would go if applicable
         
         # adVNTR Genotyping if not skipped
         if not ignore_advntr and sorted_bam:
