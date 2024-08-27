@@ -65,13 +65,6 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
             if not fastq1 or not fastq2:
                 raise ValueError("Failed to generate FASTQ files from BAM. Exiting pipeline.")
 
-        # Alignment step
-        sorted_bam = None
-        if fastq1 and fastq2:
-            sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, output_dir, "output", threads, config)
-        elif bam:
-            sorted_bam = bam
-        
         # Kestrel Genotyping
         vcf_out = os.path.join(output_dir, "output.vcf")
         vcf_path = Path(vcf_out)
@@ -84,14 +77,22 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         else:
             raise ValueError("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
 
-        # Motif and VNTR Processing (Add processing logic if needed)
-        
         # adVNTR Genotyping if not skipped
-        if not ignore_advntr and sorted_bam:
-            run_advntr(reference_file, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output")
+        if not ignore_advntr:
+            # Perform alignment only when adVNTR genotyping is not skipped
+            sorted_bam = None
+            if fastq1 and fastq2:
+                sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, output_dir, "output", threads, config)
+            elif bam:
+                sorted_bam = bam
+
+            if sorted_bam:
+                run_advntr(reference_file, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output")
+            else:
+                raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
 
         # Final processing and output generation
-        # This includes merging results from Kestrel and adVNTR genotyping
+        # This includes merging results from Kestrel and adVNTR genotyping if applicable
 
     except Exception as e:
         logging.error(f"An error occurred: {e}")
