@@ -7,13 +7,15 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.advntr_genotyping import run_advntr
 from vntyper.scripts.utils import load_config, setup_logging
 from vntyper.version import __version__ as VERSION
+import sys
 
 def main():
-    parser = argparse.ArgumentParser(description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.")
+    parser = argparse.ArgumentParser(description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.", add_help=False)
     
     default_config_path = Path(__file__).parent / "config.json"
 
     # Adding global flags with short and long options
+    parser.add_argument('-h', '--help', action='store_true', help="Show this help message and exit")
     parser.add_argument('-l', '--log-level', help="Set the logging level", default="INFO")
     parser.add_argument('-f', '--log-file', help="Set the log output file", default=None)
     parser.add_argument('--config-path', type=Path, help="Path to the config.json file", default=default_config_path)
@@ -61,20 +63,27 @@ def main():
     # Parse arguments
     args = parser.parse_args()
 
-    # Setup logging
-    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    setup_logging(log_level=log_level, log_file=args.log_file)
-
     # Load config with error handling
+    config = None
     try:
         if args.config_path and args.config_path.exists():
             config = load_config(args.config_path)
         else:
             logging.error(f"Configuration file not found at {args.config_path}. Using default values where applicable.")
-            config = None
     except Exception as e:
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
+
+    # Display welcome message if --help is called
+    if args.help:
+        if config and "welcome_message" in config:
+            print(config["welcome_message"])
+        parser.print_help()
+        sys.exit(0)
+
+    # Setup logging
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    setup_logging(log_level=log_level, log_file=args.log_file)
 
     # Handle subcommands
     if args.command == "pipeline":
