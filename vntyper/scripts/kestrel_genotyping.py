@@ -93,6 +93,10 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     # Process and filter results based on frameshifts and confidence scores
     processed_df = process_kmer_results(combined_df)
 
+    # Clean column names to remove any unwanted characters like newlines
+    combined_df.columns = combined_df.columns.str.replace(r'[\n\r]', '', regex=True)
+    processed_df.columns = processed_df.columns.str.replace(r'[\n\r]', '', regex=True)
+
     # Save the intermediate pre-result as `_pre_result.tsv`
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
     combined_df.to_csv(pre_result_path, sep='\t', index=False)
