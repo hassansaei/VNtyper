@@ -1,5 +1,6 @@
 import subprocess as sp
 import logging
+import os
 
 def align_and_sort_fastq(fastq1, fastq2, reference, output_dir, output_name, threads, config):
     """
@@ -17,38 +18,66 @@ def align_and_sort_fastq(fastq1, fastq2, reference, output_dir, output_name, thr
     # Extract paths from the config
     samtools_path = config["tools"]["samtools"]
 
-    sam_out = f"{output_dir}{output_name}.sam"
-    bam_out = f"{output_dir}{output_name}.bam"
-    sorted_bam_out = f"{output_dir}{output_name}_sorted.bam"
-    
+    sam_out = os.path.join(output_dir, f"{output_name}.sam")
+    bam_out = os.path.join(output_dir, f"{output_name}.bam")
+    sorted_bam_out = os.path.join(output_dir, f"{output_name}_sorted.bam")
+
     # BWA MEM command
     bwa_command = f"bwa mem -t {threads} {reference} {fastq1} {fastq2} -o {sam_out}"
-    
-    # Samtools view and sort commands to convert SAM to BAM and sort the BAM file
-    samtools_view_command = f"{samtools_path} view -@ {threads} -bS {sam_out} -o {bam_out}"
-    samtools_sort_command = f"{samtools_path} sort -@ {threads} -o {sorted_bam_out} {bam_out}"
-    
-    # Samtools index command
-    samtools_index_command = f"{samtools_path} index {sorted_bam_out}"
-    
+
     logging.info("Starting BWA alignment...")
-    process = sp.Popen(bwa_command, shell=True)
-    process.wait()
+    process = sp.Popen(bwa_command, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        logging.error(f"BWA alignment failed: {stderr.decode().strip()}")
+        return None
+
+    if not os.path.exists(sam_out):
+        logging.error(f"SAM file {sam_out} not created. BWA alignment might have failed.")
+        return None
+
     logging.info("BWA alignment completed.")
 
     logging.info("Converting SAM to BAM with Samtools...")
-    process = sp.Popen(samtools_view_command, shell=True)
-    process.wait()
+    samtools_view_command = f"{samtools_path} view -@ {threads} -bS {sam_out} -o {bam_out}"
+    process = sp.Popen(samtools_view_command, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        logging.error(f"SAM to BAM conversion failed: {stderr.decode().strip()}")
+        return None
+
+    if not os.path.exists(bam_out):
+        logging.error(f"BAM file {bam_out} not created. SAM to BAM conversion might have failed.")
+        return None
+
     logging.info("SAM to BAM conversion completed.")
 
     logging.info("Sorting BAM file with Samtools...")
-    process = sp.Popen(samtools_sort_command, shell=True)
-    process.wait()
+    samtools_sort_command = f"{samtools_path} sort -@ {threads} -o {sorted_bam_out} {bam_out}"
+    process = sp.Popen(samtools_sort_command, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        logging.error(f"BAM sorting failed: {stderr.decode().strip()}")
+        return None
+
+    if not os.path.exists(sorted_bam_out):
+        logging.error(f"Sorted BAM file {sorted_bam_out} not created. BAM sorting might have failed.")
+        return None
+
     logging.info("BAM sorting completed.")
 
     logging.info("Indexing sorted BAM file with Samtools...")
-    process = sp.Popen(samtools_index_command, shell=True)
-    process.wait()
+    samtools_index_command = f"{samtools_path} index {sorted_bam_out}"
+    process = sp.Popen(samtools_index_command, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        logging.error(f"BAM indexing failed: {stderr.decode().strip()}")
+        return None
+
+    if not os.path.exists(f"{sorted_bam_out}.bai"):
+        logging.error(f"BAM index file {sorted_bam_out}.bai not created. BAM indexing might have failed.")
+        return None
+
     logging.info("Samtools indexing completed.")
     
     return sorted_bam_out
