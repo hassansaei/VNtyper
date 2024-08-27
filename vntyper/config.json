@@ -20,7 +20,8 @@
     "max_hap_states": 30
   },
   "bam_processing": {
-    "bam_region": "chr1:155158000-155163000",
+    "bam_region_hg19": "chr1:155158000-155163000",
+    "bam_region_hg38": "chr1:155183823-155194915",
     "compression_level": 6,
     "disable_adapter_trimming": true,
     "deduplication": true,

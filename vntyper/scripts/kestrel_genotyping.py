@@ -5,6 +5,9 @@ from pathlib import Path
 
 # Construct the Kestrel command based on kmer size and config settings
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, temp_dir, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
+    if not fastq_1 or not fastq_2:
+        raise ValueError("FASTQ input files are missing or invalid.")
+    
     return (
         f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
@@ -41,11 +44,16 @@ def filter_indel_vcf(indel_vcf, output_ins, output_del):
 
 # Read VCF headers
 def read_vcf(path):
+    vcf_names = None
     with open(path, 'r') as f:
         for line in f:
             if line.startswith("#CHROM"):
                 vcf_names = [x for x in line.split('\t')]
                 break
+    
+    if not vcf_names:
+        raise ValueError(f"No valid VCF headers found in {path}")
+    
     return vcf_names
 
 # Kestrel processing logic
@@ -57,6 +65,9 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
     
+    if not fastq_1 or not fastq_2:
+        raise ValueError("FASTQ files are not provided for Kestrel.")
+
     for kmer_size in kmer_sizes:
         kmer_command = construct_kestrel_command(
             kmer_size=kmer_size,
