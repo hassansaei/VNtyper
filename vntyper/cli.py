@@ -84,6 +84,12 @@ def main():
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
 
+    # Determine the appropriate BWA reference based on the assembly
+    if args.reference_assembly == "hg19":
+        bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+    else:
+        bwa_reference = config["reference_data"]["bwa_reference_hg38"]
+
     # Display welcome message if --help is called
     if args.help:
         if config and "welcome_message" in config:
@@ -98,7 +104,7 @@ def main():
     # Handle subcommands
     if args.command == "pipeline":
         run_pipeline(
-            reference_file=args.reference_file,
+            reference_file=bwa_reference,
             output_dir=Path(args.output_dir),
             ignore_advntr=args.ignore_advntr,
             config=config,
@@ -128,10 +134,24 @@ def main():
         )
     
     elif args.command == "kestrel":
-        run_kestrel(args.reference_vntr, args.fastq1, args.fastq2, Path(args.output_dir))
+        run_kestrel(
+            vcf_path=Path(args.output_dir) / "output.vcf",
+            output_dir=Path(args.output_dir),
+            fastq_1=args.fastq1,
+            fastq_2=args.fastq2,
+            reference_vntr=args.reference_vntr,
+            kestrel_path=config["tools"]["kestrel"],
+            temp_dir=config["temp_directory"],
+            kestrel_settings=config["kestrel_settings"]
+        )
     
     elif args.command == "advntr":
-        run_advntr(args.alignment, args.reference_file, args.reference_vntr, Path(args.output_dir))
+        run_advntr(
+            alignment=args.alignment,
+            reference_file=args.reference_file,
+            reference_vntr=args.reference_vntr,
+            output_dir=Path(args.output_dir)
+        )
 
 if __name__ == "__main__":
     main()
