@@ -108,10 +108,10 @@ def process_vcf_results(output_dir, vcf_path):
     filter_vcf(vcf_path, indel_vcf)
     filter_indel_vcf(indel_vcf, output_ins, output_del)
     
-    # Read the filtered VCF files into dataframes
+    # Read the filtered VCF files into dataframes using sep='\s+' to handle whitespace
     names = read_vcf(vcf_path)
-    vcf_insertion = pd.read_csv(output_ins, comment='#', delim_whitespace=True, header=None, names=names)
-    vcf_deletion = pd.read_csv(output_del, comment='#', delim_whitespace=True, header=None, names=names)
+    vcf_insertion = pd.read_csv(output_ins, comment='#', sep='\s+', header=None, names=names)
+    vcf_deletion = pd.read_csv(output_del, comment='#', sep='\s+', header=None, names=names)
     
     # Further processing logic can go here...
     logging.info("VCF processing completed.")
