@@ -82,6 +82,7 @@ def main():
             reference_file=args.reference_file,
             output_dir=Path(args.output_dir),
             ignore_advntr=args.ignore_advntr,
+            config=config,
             fastq1=args.fastq1,
             fastq2=args.fastq2,
             bam=args.bam,
@@ -89,10 +90,10 @@ def main():
         )
     
     elif args.command == "fastq":
-        process_fastq(args.fastq1, args.fastq2, args.threads, Path(args.output_dir))
+        process_fastq(args.fastq1, args.fastq2, args.threads, Path(args.output_dir), config=config)
     
     elif args.command == "bam":
-        process_bam_to_fastq(args.alignment, Path(args.output_dir), args.threads)
+        process_bam_to_fastq(args.alignment, Path(args.output_dir), args.threads, config=config)
     
     elif args.command == "kestrel":
         run_kestrel(args.reference_vntr, args.fastq1, args.fastq2, Path(args.output_dir))
