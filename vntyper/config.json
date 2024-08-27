@@ -3,7 +3,9 @@
   "log_level": "INFO",
   "reference_data": {
     "muc1_reference_vntr": "files/MUC1-VNTR.fa",
-    "advntr_reference_vntr": "path/to/advntr_reference_vntr.db"
+    "advntr_reference_vntr": "path/to/advntr_reference_vntr.db",
+    "bwa_reference_hg19": "reference/chr1.hg19.fa.gz",
+    "bwa_reference_hg38": "reference/chr1.hg38.fa.gz"
   },
   "tools": {
     "fastp": "fastp",
