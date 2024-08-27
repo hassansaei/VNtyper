@@ -4,7 +4,7 @@ import os
 import pandas as pd
 from pathlib import Path
 from Bio import SeqIO
-from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf, read_vcf
+from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 
 # Construct the Kestrel command based on kmer size and config settings
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, temp_dir, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
@@ -63,10 +63,9 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
                 process_kestrel_output(output_dir, vcf_path, reference_vntr)
                 break  # If successful, break out of the loop and stop trying other kmer sizes
 
-# Process Kestrel VCF results to generate the final output format
 def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     logging.info("Processing Kestrel VCF results...")
-    
+
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
     output_ins = os.path.join(output_dir, "output_insertion.vcf")
     output_del = os.path.join(output_dir, "output_deletion.vcf")
@@ -74,19 +73,30 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     # Filter the VCF to extract indels, insertions, and deletions
     filter_vcf(vcf_path, indel_vcf)
     filter_indel_vcf(indel_vcf, output_ins, output_del)
-    
-    # Read the filtered VCF files into dataframes
-    names = read_vcf(vcf_path)
-    vcf_insertion = pd.read_csv(output_ins, comment='#', sep='\s+', header=None, names=names)
-    vcf_deletion = pd.read_csv(output_del, comment='#', sep='\s+', header=None, names=names)
-    
+
+    # Manually read the VCF file to remove '##' comments and retain the header
+    def read_vcf_without_comments(vcf_file):
+        data = []
+        header = None
+        with open(vcf_file, 'r') as f:
+            for line in f:
+                if line.startswith("#CHROM"):
+                    header = line.strip().split('\t')
+                elif not line.startswith("##"):
+                    data.append(line.strip().split('\t'))
+        return pd.DataFrame(data, columns=header)
+
+    # Load the filtered VCF files into DataFrames
+    vcf_insertion = read_vcf_without_comments(output_ins)
+    vcf_deletion = read_vcf_without_comments(output_del)
+
     # Load MUC1 VNTR reference motifs
     MUC1_ref = load_muc1_reference(reference_vntr)
 
     # Preprocess insertion and deletion dataframes
     insertion_df = preprocessing_insertion(vcf_insertion, MUC1_ref)
     deletion_df = preprocessing_deletion(vcf_deletion, MUC1_ref)
-    
+        
     # Combine insertion and deletion dataframes
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
 
