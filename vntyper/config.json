@@ -9,7 +9,8 @@
       "fastp": "fastp",
       "samtools": "samtools",
       "bwa": "bwa",
-      "advntr": "advntr"
+      "advntr": "advntr",
+      "kestrel": "/home/bernt/tools/kestrel/kestrel-1.0.1/kestrel.jar"
     },
     "bam_processing": {
       "bam_region": "chr1:155158000-155163000",
