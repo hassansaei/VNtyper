@@ -25,10 +25,10 @@ function wget_download() {
 }
 
 WORKDIR=${PWD}
-WORKFLOW_INPUT_DIR=${WORKDIR}/Files
+WORKFLOW_INPUT_DIR=${WORKDIR}/files
 
 if [ -d ${WORKFLOW_INPUT_DIR} ]; then
-    echo "Directory Files exists..."
+    echo "Directory files exists..."
 else
     mkdir -p "${WORKDIR}" "${WORKFLOW_INPUT_DIR}"
     cd ${WORKFLOW_INPUT_DIR}
@@ -89,7 +89,7 @@ else
     echo "Singularity is already instaled..."
 fi
 
-SCRIPT=${WORKDIR}/Scripts
+SCRIPT=${WORKDIR}/scripts
 
 # Installing Kestrel 
 if [ ! -d "${SCRIPT}"/kestrel-1.0.1 ]; then
