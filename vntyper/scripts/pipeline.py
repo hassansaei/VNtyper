@@ -14,7 +14,7 @@ from vntyper.scripts.motif_processing import process_motifs, preprocessing_inser
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 
-def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4):
+def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False):
     """
     Main pipeline function that orchestrates the genotyping process.
     
@@ -27,6 +27,8 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         fastq2: Path to the second FASTQ file.
         bam: Path to the BAM file.
         threads: Number of threads to use.
+        reference_assembly: Reference assembly to use ("hg19" or "hg38").
+        fast_mode: Boolean indicating whether to enable fast mode (skip filtering of unmapped and partially mapped reads).
     """
     # Create output directories
     output_dir, temp_dir = create_output_directories(output_dir, config["temp_directory"])
@@ -38,12 +40,22 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
     start = timeit.default_timer()
 
     try:
+        # Select the appropriate BAM region based on the reference assembly
+        if reference_assembly == "hg38":
+            bam_region = config["bam_processing"]["bam_region_hg38"]
+        else:
+            bam_region = config["bam_processing"]["bam_region_hg19"]
+
         # FASTQ Quality Control or BAM Processing
         if fastq1 and fastq2:
             process_fastq(fastq1, fastq2, threads, output_dir, "output", config)
         elif bam:
-            process_bam_to_fastq(bam, output_dir, "output", threads, config)
-        
+            # Convert BAM to FASTQ
+            fastq1, fastq2 = process_bam_to_fastq(bam, output_dir, "output", threads, config, reference_assembly, fast_mode)
+
+            if not fastq1 or not fastq2:
+                raise ValueError("Failed to generate FASTQ files from BAM. Exiting pipeline.")
+
         # Alignment step
         sorted_bam = None
         if fastq1 and fastq2:
@@ -58,8 +70,11 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         kestrel_path = config["tools"]["kestrel"]  # Extract Kestrel tool path from config
         kestrel_settings = config["kestrel_settings"]  # Extract Kestrel-specific settings from config
         
-        run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_vntr, kestrel_path, temp_dir, kestrel_settings)  # Pass necessary arguments to run_kestrel
-        
+        if fastq1 and fastq2:
+            run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_vntr, kestrel_path, temp_dir, kestrel_settings)  # Pass necessary arguments to run_kestrel
+        else:
+            raise ValueError("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
+
         # Motif and VNTR Processing (Add processing logic if needed)
         
         # adVNTR Genotyping if not skipped

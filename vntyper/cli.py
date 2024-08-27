@@ -32,6 +32,9 @@ def main():
     parser_pipeline.add_argument('--fastq2', type=str, help="Path to the second FASTQ file.")
     parser_pipeline.add_argument('--bam', type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument('--threads', type=int, default=4, help="Number of threads to use.")
+    parser_pipeline.add_argument('--reference-assembly', type=str, choices=["hg19", "hg38"], default="hg19",
+                                 help="Specify the reference assembly to use (hg19 or hg38). Default is hg19.")
+    parser_pipeline.add_argument('--fast-mode', action='store_true', help="Enable fast mode (skips filtering for unmapped and partially mapped reads).")
 
     # Subcommand for FASTQ processing
     parser_fastq = subparsers.add_parser("fastq", help="Process FASTQ files.")
@@ -45,7 +48,10 @@ def main():
     parser_bam.add_argument('-a', '--alignment', type=str, required=True, help="Path to the BAM file.")
     parser_bam.add_argument('-t', '--threads', type=int, default=4, help="Number of threads to use.")
     parser_bam.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for processed BAM files.")
-    
+    parser_bam.add_argument('--reference-assembly', type=str, choices=["hg19", "hg38"], default="hg19",
+                            help="Specify the reference assembly to use (hg19 or hg38). Default is hg19.")
+    parser_bam.add_argument('--fast-mode', action='store_true', help="Enable fast mode (skips filtering for unmapped and partially mapped reads).")
+
     # Subcommand for Kestrel genotyping
     parser_kestrel = subparsers.add_parser("kestrel", help="Run Kestrel genotyping.")
     parser_kestrel.add_argument('-r', '--reference-vntr', type=str, required=True, help="Path to the MUC1-specific reference VNTR file.")
@@ -95,14 +101,16 @@ def main():
             fastq1=args.fastq1,
             fastq2=args.fastq2,
             bam=args.bam,
-            threads=args.threads
+            threads=args.threads,
+            reference_assembly=args.reference_assembly,  # Pass the selected reference assembly
+            fast_mode=args.fast_mode  # Pass the fast mode option
         )
     
     elif args.command == "fastq":
         process_fastq(args.fastq1, args.fastq2, args.threads, Path(args.output_dir), config=config)
     
     elif args.command == "bam":
-        process_bam_to_fastq(args.alignment, Path(args.output_dir), args.threads, config=config)
+        process_bam_to_fastq(args.alignment, Path(args.output_dir), args.threads, config=config, reference_assembly=args.reference_assembly, fast_mode=args.fast_mode)
     
     elif args.command == "kestrel":
         run_kestrel(args.reference_vntr, args.fastq1, args.fastq2, Path(args.output_dir))
