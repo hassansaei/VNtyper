@@ -23,10 +23,10 @@ def setup_logging(log_level=logging.INFO, log_file=None):
 def create_output_directories(working_dir, output):
     output_dir = os.path.join(working_dir, output)
     if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
+        os.makedirs(output_dir)  # Changed to makedirs to create intermediate directories if they don't exist
     temp_dir = os.path.join(output_dir, "temp")
     if not os.path.exists(temp_dir):
-        os.mkdir(temp_dir)
+        os.makedirs(temp_dir)  # Changed to makedirs to ensure full directory creation
     return output_dir, temp_dir
 
 def search(regex: str, df, case=False):
