@@ -14,7 +14,7 @@ from vntyper.scripts.motif_processing import process_motifs, preprocessing_inser
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 
-def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False):
+def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False):
     """
     Main pipeline function that orchestrates the genotyping process.
     
@@ -29,6 +29,8 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         threads: Number of threads to use.
         reference_assembly: Reference assembly to use ("hg19" or "hg38").
         fast_mode: Boolean indicating whether to enable fast mode (skip filtering of unmapped and partially mapped reads).
+        keep_intermediates: Boolean indicating whether to keep intermediate files.
+        delete_intermediates: Boolean indicating whether to delete intermediate files after processing.
     """
     # Create output directories
     output_dir, temp_dir = create_output_directories(output_dir, config["temp_directory"])
@@ -46,12 +48,17 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         else:
             bam_region = config["bam_processing"]["bam_region_hg19"]
 
+        # Determine if intermediates should be deleted (delete_intermediates takes precedence over keep_intermediates)
+        delete_intermediates = delete_intermediates or not keep_intermediates
+
         # FASTQ Quality Control or BAM Processing
         if fastq1 and fastq2:
             process_fastq(fastq1, fastq2, threads, output_dir, "output", config)
         elif bam:
             # Convert BAM to FASTQ
-            fastq1, fastq2 = process_bam_to_fastq(bam, output_dir, "output", threads, config, reference_assembly, fast_mode)
+            fastq1, fastq2 = process_bam_to_fastq(
+                bam, output_dir, "output", threads, config, reference_assembly, fast_mode, delete_intermediates, keep_intermediates
+            )
 
             if not fastq1 or not fastq2:
                 raise ValueError("Failed to generate FASTQ files from BAM. Exiting pipeline.")
