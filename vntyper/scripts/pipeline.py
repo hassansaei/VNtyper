@@ -35,18 +35,6 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
     log_file = os.path.join(temp_dir, f"pipeline.log")
     setup_logging(log_file)
 
-    # Log welcome message
-    welcome_message = """
-    ==========================================================================================================
-    Given alignment (BAM) or raw file (FASTQ), this tool genotypes MUC1 coding-VNTR 
-    -- For rapid genotyping, BAM files are preferred!
-    -- User can Skip code-adVNTR genotyping step using --ignore_advntr option (This step will take a while..)
-    v. 1.0.0
-    This is free non-commercial software. 
-    ==========================================================================================================
-    """
-    logging.info(welcome_message)
-
     start = timeit.default_timer()
 
     try:
