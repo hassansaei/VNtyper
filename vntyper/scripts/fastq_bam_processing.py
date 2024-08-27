@@ -46,15 +46,36 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         if sp.call(command_slice, shell=True) != 0:
             logging.error('BAM region slicing failed.')
             return None, None
+        command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_vntyper.bam {final_bam}"
         logging.info('BAM region slicing completed.')
 
     if fast_mode:
         logging.info('Fast mode enabled: Skipping filtering of unmapped and partially mapped reads.')
     else:
-        if not keep_intermediates or not os.path.exists(final_bam):
-            # Filtering and merging logic remains the same, with similar reuse checks
-            # This is omitted for brevity, but you'd need to implement similar logic to reuse the filtered/merged BAM
-            pass
+        # Filtering step
+        command_filter = (
+            f"{samtools_path} view -@ {threads} -h {in_bam} | tee "
+            f">(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}{output_name}_unmapped1.bam) "
+            f">(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}{output_name}_unmapped2.bam) "
+            f">(samtools view -b -f 12 -F 256 -@ {threads} - -o {output}{output_name}_unmapped3.bam) "
+            f"> /dev/null"
+        )
+        logging.info('Starting BAM filtering for unmapped and partially mapped reads...')
+        if sp.call(command_filter, shell=True, executable='/bin/bash') != 0:
+            logging.error('BAM filtering failed.')
+            return None, None
+        command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_vntyper.bam {final_bam} " \
+                f"{output}{output_name}_unmapped1.bam {output}{output_name}_unmapped2.bam {output}{output_name}_unmapped3.bam"
+        logging.info('BAM filtering completed.')
+
+        # Merging BAM files
+        logging.info('Merging BAM files...')
+        if sp.call(command_merge, shell=True) != 0:
+            logging.error('BAM merging failed.')
+            return None, None
+        logging.info('BAM merging completed.')
+
+        final_bam = f"{output}{output_name}_vntyper.bam"
 
     # Sorting and converting BAM to FASTQ
     final_fastq_1 = f"{output}{output_name}_R1.fastq.gz"
@@ -80,4 +101,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
                 logging.warning(f"Failed to remove {ext} files (if they existed).")
         logging.info(f"Removed intermediate files.")
 
-    return final_fastq_1, final_fastq_2
+    # Return the paths to the generated FASTQ files
+    fastq_1 = f"{output}{output_name}_R1.fastq.gz"
+    fastq_2 = f"{output}{output_name}_R2.fastq.gz"
+    return fastq_1, fastq_2
