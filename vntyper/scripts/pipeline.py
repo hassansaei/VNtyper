@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 from vntyper.scripts.utils import setup_logging, create_output_directories, load_config
-from vntyper.scripts.file_processing import read_vcf, filter_vcf, filter_indel_vcf
+from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.motif_processing import process_motifs, preprocessing_insertion, preprocessing_deletion
