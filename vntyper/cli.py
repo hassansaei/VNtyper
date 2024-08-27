@@ -23,7 +23,7 @@ def main():
 
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
-    parser_pipeline.add_argument('-r', '--reference-file', type=str, required=True, help="The reference FASTA file.")
+    parser_pipeline.add_argument('-r', '--reference-file', type=str, required=False, help="The reference FASTA file.")
     parser_pipeline.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for the results.")
     parser_pipeline.add_argument('--ignore-advntr', action='store_true', help="Skip adVNTR genotyping of MUC1-VNTR.")
     parser_pipeline.add_argument('--fastq1', type=str, help="Path to the first FASTQ file.")
