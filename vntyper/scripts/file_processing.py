@@ -1,14 +1,19 @@
 import pandas as pd
 
 def read_vcf(path):
+    """
+    Reads the VCF file headers to extract column names.
+    """
     with open(path, 'r') as f:
         for line in f:
             if line.startswith("#CHROM"):
-                vcf_names = [x for x in line.split('\t')]
-                break
-    return vcf_names
+                return [x for x in line.split('\t')]
+    return None
 
 def filter_vcf(input_path, output_path):
+    """
+    Filters a VCF file to extract indels and writes them to a new file.
+    """
     with open(input_path, "r") as vcf_file, open(output_path, "w") as indel_file:
         for line in vcf_file:
             if line.startswith("##"):
@@ -19,6 +24,9 @@ def filter_vcf(input_path, output_path):
                     indel_file.write(line)
 
 def filter_indel_vcf(indel_vcf, output_ins, output_del):
+    """
+    Further filters the indel VCF file into separate insertion and deletion files.
+    """
     with open(indel_vcf, "r") as vcf_file, open(output_ins, "w") as insertion_file, open(output_del, "w") as deletion_file:
         for line in vcf_file:
             if line.startswith("##"):
