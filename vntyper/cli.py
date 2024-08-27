@@ -35,6 +35,8 @@ def main():
     parser_pipeline.add_argument('--reference-assembly', type=str, choices=["hg19", "hg38"], default="hg19",
                                  help="Specify the reference assembly to use (hg19 or hg38). Default is hg19.")
     parser_pipeline.add_argument('--fast-mode', action='store_true', help="Enable fast mode (skips filtering for unmapped and partially mapped reads).")
+    parser_pipeline.add_argument('--keep-intermediates', action='store_true', help="Keep intermediate files (e.g., BAM slices, temporary files).")
+    parser_pipeline.add_argument('--delete-intermediates', action='store_true', help="Delete intermediate files after processing (overrides --keep-intermediates).")
 
     # Subcommand for FASTQ processing
     parser_fastq = subparsers.add_parser("fastq", help="Process FASTQ files.")
@@ -51,6 +53,8 @@ def main():
     parser_bam.add_argument('--reference-assembly', type=str, choices=["hg19", "hg38"], default="hg19",
                             help="Specify the reference assembly to use (hg19 or hg38). Default is hg19.")
     parser_bam.add_argument('--fast-mode', action='store_true', help="Enable fast mode (skips filtering for unmapped and partially mapped reads).")
+    parser_bam.add_argument('--keep-intermediates', action='store_true', help="Keep intermediate files (e.g., BAM slices, temporary files).")
+    parser_bam.add_argument('--delete-intermediates', action='store_true', help="Delete intermediate files after processing (overrides --keep-intermediates).")
 
     # Subcommand for Kestrel genotyping
     parser_kestrel = subparsers.add_parser("kestrel", help="Run Kestrel genotyping.")
@@ -103,14 +107,25 @@ def main():
             bam=args.bam,
             threads=args.threads,
             reference_assembly=args.reference_assembly,  # Pass the selected reference assembly
-            fast_mode=args.fast_mode  # Pass the fast mode option
+            fast_mode=args.fast_mode,  # Pass the fast mode option
+            keep_intermediates=args.keep_intermediates,  # Pass the keep_intermediates flag
+            delete_intermediates=args.delete_intermediates  # Pass the delete_intermediates flag
         )
     
     elif args.command == "fastq":
         process_fastq(args.fastq1, args.fastq2, args.threads, Path(args.output_dir), config=config)
     
     elif args.command == "bam":
-        process_bam_to_fastq(args.alignment, Path(args.output_dir), args.threads, config=config, reference_assembly=args.reference_assembly, fast_mode=args.fast_mode)
+        process_bam_to_fastq(
+            args.alignment, 
+            Path(args.output_dir), 
+            args.threads, 
+            config=config, 
+            reference_assembly=args.reference_assembly, 
+            fast_mode=args.fast_mode, 
+            delete_intermediates=args.delete_intermediates, 
+            keep_intermediates=args.keep_intermediates
+        )
     
     elif args.command == "kestrel":
         run_kestrel(args.reference_vntr, args.fastq1, args.fastq2, Path(args.output_dir))
