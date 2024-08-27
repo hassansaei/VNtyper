@@ -10,15 +10,17 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         log_level: The logging level (default: logging.INFO).
         log_file: The log file path. If None, logs to stdout.
     """
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        filename=log_file,
-        filemode='a',  # Append mode for logging to a file
-    )
-    
-    if log_file is None:  # If no log file is specified, also log to stdout
-        logging.getLogger().addHandler(logging.StreamHandler())
+    logger = logging.getLogger()  # Get the root logger
+    if not logger.handlers:  # Check if the logger already has handlers
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            filename=log_file,
+            filemode='a',  # Append mode for logging to a file
+        )
+        
+        if log_file is None:  # If no log file is specified, also log to stdout
+            logger.addHandler(logging.StreamHandler())
 
 def create_output_directories(working_dir, output):
     output_dir = os.path.join(working_dir, output)

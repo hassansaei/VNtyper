@@ -1,5 +1,6 @@
 import subprocess as sp
 import logging
+import os
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     # Extract paths and parameters from the config
@@ -31,52 +32,53 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config):
     # Extract paths and parameters from the config
     samtools_path = config["tools"]["samtools"]
     bam_region = config["bam_processing"]["bam_region"]
-    
+
     # Use samtools to slice the BAM region (e.g., extracting a specific region of the genome)
     command_slice = f"{samtools_path} view -b {in_bam} {bam_region} -o {output}{output_name}_chr1.bam"
     
-    # Use samtools for flag-based filtering
-    # The goal here is to create multiple BAM files by filtering reads based on specific flags:
-    # - '-f' indicates we want reads with a particular flag set.
-    # - '-F' indicates we want reads where a particular flag is NOT set.
-    # 
-    # Specifically, this is what each command does:
-    # 1. `-f 4 -F 264`: Extract unmapped reads (flag 4) that are NOT part of a properly paired alignment (flag 264).
-    # 2. `-f 8 -F 260`: Extract reads where the mate is unmapped (flag 8) and NOT part of a properly paired alignment (flag 260).
-    # 3. `-f 12 -F 256`: Extract reads where both the read and its mate are unmapped (flags 4 and 8 combined = 12) and NOT supplementary alignments (flag 256).
-    command_flag = f"{samtools_path} view -b -f 4 -F 264 -@ {threads} {in_bam} -o {output}{output_name}_unmapped1.bam && " \
-                   f"{samtools_path} view -b -f 8 -F 260 -@ {threads} {in_bam} -o {output}{output_name}_unmapped2.bam && " \
-                   f"{samtools_path} view -b -f 12 -F 256 -@ {threads} {in_bam} -o {output}{output_name}_unmapped3.bam"
-    
-    # Use samtools to merge the sliced BAM file and the filtered unmapped BAM files into one
-    command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_vntyper.bam {output}{output_name}_chr1.bam " \
-                    f"{output}{output_name}_unmapped1.bam {output}{output_name}_unmapped2.bam {output}{output_name}_unmapped3.bam"
-    
-    # Sort the merged BAM file by read name (-n) and then convert it to paired-end FASTQ files
-    command_sort_fastq = f"{samtools_path} sort -n -@ {threads} {output}{output_name}_vntyper.bam -o {output}{output_name}_VN.bam && " \
-                         f"{samtools_path} fastq -@ {threads} {output}{output_name}_VN.bam -1 {output}{output_name}_R1.fastq.gz -2 {output}{output_name}_R2.fastq.gz"
-
-    logging.info('Starting BAM file cleanup and conversion to FASTQ...')
-    
-    # Execute the commands
+    # Execute BAM slicing
+    logging.info('Starting BAM region slicing...')
     process = sp.Popen(command_slice, shell=True)
     process.wait()
     logging.info('BAM region slicing completed.')
 
-    process = sp.Popen(command_flag, shell=True)
-    process.wait()
-    logging.info('BAM flag-based filtering completed.')
+    # Use tee with process substitution to pipe the BAM to multiple samtools view processes concurrently
+    command_filter = (
+        f"{samtools_path} view -@ {threads} -h {in_bam} | tee "
+        f">(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}{output_name}_unmapped1.bam) "
+        f">(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}{output_name}_unmapped2.bam) "
+        f">(samtools view -b -f 12 -F 256 -@ {threads} - -o {output}{output_name}_unmapped3.bam) "
+        f"> /dev/null"
+    )
 
+    logging.info('Starting BAM filtering for unmapped and partially mapped reads...')
+    process = sp.Popen(command_filter, shell=True, executable='/bin/bash')  # Use bash to interpret process substitution
+    process.wait()
+    logging.info('BAM filtering completed.')
+
+    # Use samtools to merge the sliced BAM file and the filtered unmapped BAM files into one
+    command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_vntyper.bam {output}{output_name}_chr1.bam " \
+                    f"{output}{output_name}_unmapped1.bam {output}{output_name}_unmapped2.bam {output}{output_name}_unmapped3.bam"
+
+    logging.info('Merging BAM files...')
     process = sp.Popen(command_merge, shell=True)
     process.wait()
     logging.info('BAM merging completed.')
 
+    # Sort the merged BAM file by read name (-n) and then convert it to paired-end FASTQ files
+    command_sort_fastq = f"{samtools_path} sort -n -@ {threads} {output}{output_name}_vntyper.bam -o {output}{output_name}_VN.bam && " \
+                         f"{samtools_path} fastq -@ {threads} {output}{output_name}_VN.bam -1 {output}{output_name}_R1.fastq.gz -2 {output}{output_name}_R2.fastq.gz"
+
+    logging.info('Sorting and converting BAM to FASTQ...')
     process = sp.Popen(command_sort_fastq, shell=True)
     process.wait()
     logging.info('BAM to FASTQ conversion completed.')
 
     # Remove intermediate BAM files after successful conversion
-    command_rm = f"rm {output}{output_name}*.bam && rm {output}{output_name}*.bai"
-    process = sp.Popen(command_rm, shell=True)
-    process.wait()
-    logging.info('Intermediate BAM files removed.')
+    logging.info('Removing intermediate BAM files...')
+    for ext in ["*.bam", "*.bai"]:
+        files_to_remove = f"{output}{output_name}{ext}"
+        command_rm = f"rm -f {files_to_remove}"  # Using -f flag to force remove and ignore nonexistent files
+        process = sp.Popen(command_rm, shell=True)
+        process.wait()
+        logging.info(f"Removed {ext} files (if they existed).")
