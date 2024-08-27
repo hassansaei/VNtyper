@@ -172,44 +172,76 @@ def preprocessing_deletion(df, muc1_ref):
     
     return df
 
-def process_kmer_results(combined_df):
+# Function 1: Split Depth and Calculate Frame Score
+def split_depth_and_calculate_frame_score(df):
     """
-    Processes and filters Kestrel results based on frameshifts and confidence criteria.
+    Splits the Depth column (Sample) into Del, Estimated_Depth_AlternateVariant, and Estimated_Depth_Variant_ActiveRegion.
+    Calculates the frame score and filters out non-frameshift variants.
     """
-    # Rename 'Sample' column to 'Depth' (since we are treating it similarly to the old 'Depth' column)
-    combined_df = combined_df.rename(columns={'Sample': 'Depth'})
+    # Rename 'Sample' column to 'Depth'
+    df = df.rename(columns={'Sample': 'Depth'})
 
-    # Split the 'Depth' column (formerly 'Sample') into 'Del', 'Estimated_Depth_AlternateVariant', and 'Estimated_Depth_Variant_ActiveRegion'
-    combined_df[['Del', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']] = combined_df['Depth'].str.split(':', expand=True)
+    # Split the 'Depth' column into components
+    df[['Del', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']] = df['Depth'].str.split(':', expand=True)
 
-    # Select the relevant columns using .loc to avoid the SettingWithCopyWarning
-    combined_df = combined_df.loc[:, ['Motifs', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']]
+    # Select relevant columns
+    df = df[['Motifs', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']]
 
     # Calculate reference and alternate allele lengths
-    combined_df.loc[:, "ref_len"] = combined_df["REF"].str.len()
-    combined_df.loc[:, "alt_len"] = combined_df["ALT"].str.len()
+    df["ref_len"] = df["REF"].str.len()
+    df["alt_len"] = df["ALT"].str.len()
 
     # Calculate frame score
-    combined_df.loc[:, "Frame_Score"] = round((combined_df["alt_len"] - combined_df["ref_len"]) / 3, 2).astype(str).str.replace('.0', 'C')
+    df["Frame_Score"] = round((df["alt_len"] - df["ref_len"]) / 3, 2)
+    df['Frame_Score'] = df['Frame_Score'].astype(str).apply(lambda x: x.replace('.0', 'C'))
 
     # Filter out non-frameshift variants
-    combined_df.loc[:, "TrueFalse"] = combined_df["Frame_Score"].str.contains('C', regex=True)
-    combined_df = combined_df.loc[~combined_df["TrueFalse"]].copy()
-    # log the combined_df
-    logging.info(f"combined_df: {combined_df}")
+    df["TrueFalse"] = df['Frame_Score'].str.contains('C', regex=True)
+    df = df[df["TrueFalse"] == False].copy()
 
-    # Split Frame_Score into left and right parts using .loc
-    combined_df[['left', 'right']] = combined_df['Frame_Score'].str.split('.', expand=True)
+    return df
+
+# Function 2: Split Frame Score
+def split_frame_score(df):
+    """
+    Splits the Frame_Score column into left and right parts. Adjusts the left column values.
+    """
+    # Split Frame_Score into left and right parts
+    df[['left', 'right']] = df['Frame_Score'].str.split('.', expand=True)
 
     # Replace '-0' with '-1' in the 'left' column
-    combined_df.loc[:, 'left'] = combined_df['left'].replace('-0', '-1')
+    df['left'] = df['left'].replace('-0', '-1')
 
-    # Convert depth-related columns to integers for further calculations
-    combined_df.loc[:, 'Estimated_Depth_AlternateVariant'] = combined_df['Estimated_Depth_AlternateVariant'].astype(int)
-    combined_df.loc[:, 'Estimated_Depth_Variant_ActiveRegion'] = combined_df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
+    # Drop unnecessary columns
+    df.drop(['TrueFalse', 'ref_len', 'alt_len'], axis=1, inplace=True)
+
+    return df
+
+# Function 3: Extract Frameshifts
+def extract_frameshifts(df):
+    """
+    Extracts insertion and deletion frameshifts based on the left and right parts of the Frame_Score.
+    """
+    # Extract good frameshifts (3n+1 for insertion and 3n+2 for deletion)
+    ins = df[df["left"].apply(lambda x: '-' not in x) & df["right"].apply(lambda y: '33' in y)]
+    del_ = df[df["left"].apply(lambda x: '-' in x) & df["right"].apply(lambda y: '67' in y)]
+    
+    # Concatenate insertions and deletions
+    frameshifts_df = pd.concat([ins, del_], axis=0)
+
+    return frameshifts_df
+
+# Function 4: Calculate Depth Score and Assign Confidence
+def calculate_depth_score_and_assign_confidence(df):
+    """
+    Calculates depth score and assigns confidence based on depth and variant region conditions.
+    """
+    # Convert depth-related columns to integers
+    df['Estimated_Depth_AlternateVariant'] = df['Estimated_Depth_AlternateVariant'].astype(int)
+    df['Estimated_Depth_Variant_ActiveRegion'] = df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
 
     # Calculate depth score
-    combined_df.loc[:, 'Depth_Score'] = combined_df['Estimated_Depth_AlternateVariant'] / combined_df['Estimated_Depth_Variant_ActiveRegion']
+    df['Depth_Score'] = df['Estimated_Depth_AlternateVariant'] / df['Estimated_Depth_Variant_ActiveRegion']
 
     # Define conditions for assigning confidence scores
     def assign_confidence(row):
@@ -232,25 +264,55 @@ def process_kmer_results(combined_df):
         else:
             return 'Low_Precision'
 
-    # Apply confidence score assignment using .loc
-    combined_df.loc[:, 'Confidence'] = combined_df.apply(assign_confidence, axis=1)
+    # Apply confidence score assignment
+    df['Confidence'] = df.apply(assign_confidence, axis=1)
 
+    return df
+
+# Function 5: Filter by ALT Values and Finalize Data
+def filter_by_alt_values_and_finalize(df):
+    """
+    Filters based on specific ALT values and finalizes the dataframe.
+    """
     # Filter based on specific ALT values (e.g., 'GG')
-    if combined_df['ALT'].str.contains(r'\bGG\b').any():
-        gg_condition = combined_df['ALT'] == 'GG'
-        combined_df = pd.concat([
-            combined_df.loc[~gg_condition],
-            combined_df.loc[gg_condition & (combined_df['Depth_Score'] >= 0.00469)]
+    if df['ALT'].str.contains(r'\bGG\b').any():
+        gg_condition = df['ALT'] == 'GG'
+        df = pd.concat([
+            df[~gg_condition],
+            df[gg_condition & (df['Depth_Score'] >= 0.00469)]
         ])
 
     # Filter out specific ALT sequences (CG, TG)
-    combined_df = combined_df.loc[~combined_df['ALT'].isin(['CG', 'TG'])]
+    df = df[~df['ALT'].isin(['CG', 'TG'])]
 
-    # Drop unnecessary columns using .loc
-    combined_df = combined_df.drop(['left', 'right', 'TrueFalse'], axis=1)
+    # Drop unnecessary columns
+    df.drop(['left', 'right'], axis=1, inplace=True)
 
     # Keep only high precision results
-    if 'Confidence' in combined_df.columns:
-        combined_df = combined_df.loc[combined_df['Confidence'] != 'Low_Precision']
+    if 'Confidence' in df.columns:
+        df = df[df['Confidence'] != 'Low_Precision']
 
-    return combined_df
+    return df
+
+# Main Function: Process Kmer Results
+def process_kmer_results(combined_df):
+    """
+    Processes and filters Kestrel results by applying several steps including frame score calculation,
+    depth score assignment, and filtering based on ALT values and confidence scores.
+    """
+    # Step 1: Split Depth and Calculate Frame Score
+    df = split_depth_and_calculate_frame_score(combined_df)
+
+    # Step 2: Split Frame Score
+    df = split_frame_score(df)
+
+    # Step 3: Extract Frameshifts
+    df = extract_frameshifts(df)
+
+    # Step 4: Calculate Depth Score and Assign Confidence
+    df = calculate_depth_score_and_assign_confidence(df)
+
+    # Step 5: Filter by ALT Values and Finalize Data
+    df = filter_by_alt_values_and_finalize(df)
+
+    return df
