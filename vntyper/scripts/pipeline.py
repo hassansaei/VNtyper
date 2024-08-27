@@ -42,11 +42,13 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
     start = timeit.default_timer()
 
     try:
-        # Select the appropriate BAM region based on the reference assembly
+        # Select the appropriate BAM region and BWA reference file based on the reference assembly
         if reference_assembly == "hg38":
             bam_region = config["bam_processing"]["bam_region_hg38"]
+            bwa_reference = config["reference_data"]["bwa_reference_hg38"]
         else:
             bam_region = config["bam_processing"]["bam_region_hg19"]
+            bwa_reference = config["reference_data"]["bwa_reference_hg19"]
 
         # Determine if intermediates should be deleted (delete_intermediates takes precedence over keep_intermediates)
         delete_intermediates = delete_intermediates or not keep_intermediates
@@ -66,7 +68,7 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         # Alignment step
         sorted_bam = None
         if fastq1 and fastq2:
-            sorted_bam = align_and_sort_fastq(fastq1, fastq2, reference_file, output_dir, "output", threads, config)
+            sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, output_dir, "output", threads, config)
         elif bam:
             sorted_bam = bam
         

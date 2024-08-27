@@ -2,6 +2,17 @@ import subprocess as sp
 import logging
 import os
 
+def check_bwa_index(reference):
+    """
+    Check if the BWA index files exist for the given reference genome.
+    The index files should have extensions: .amb, .ann, .bwt, .pac, and .sa
+    """
+    required_extensions = [".amb", ".ann", ".bwt", ".pac", ".sa"]
+    for ext in required_extensions:
+        if not os.path.exists(f"{reference}{ext}"):
+            return False
+    return True
+
 def align_and_sort_fastq(fastq1, fastq2, reference, output_dir, output_name, threads, config):
     """
     Align FASTQ files to the reference genome using BWA, sort the SAM file, and convert to BAM using Samtools.
@@ -21,6 +32,11 @@ def align_and_sort_fastq(fastq1, fastq2, reference, output_dir, output_name, thr
     sam_out = os.path.join(output_dir, f"{output_name}.sam")
     bam_out = os.path.join(output_dir, f"{output_name}.bam")
     sorted_bam_out = os.path.join(output_dir, f"{output_name}_sorted.bam")
+
+    # Check if the BWA index files exist
+    if not check_bwa_index(reference):
+        logging.error(f"BWA index files not found for reference: {reference}. Please run 'bwa index' on the reference file.")
+        return None
 
     # BWA MEM command
     bwa_command = f"bwa mem -t {threads} {reference} {fastq1} {fastq2} -o {sam_out}"
