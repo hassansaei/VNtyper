@@ -103,10 +103,6 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     # Process and filter results based on frameshifts and confidence scores
     processed_df = process_kmer_results(combined_df)
 
-    # Clean column names to remove any unwanted characters like newlines
-    combined_df.columns = combined_df.columns.str.replace(r'[\n\r]', '', regex=True)
-    processed_df.columns = processed_df.columns.str.replace(r'[\n\r]', '', regex=True)
-
     # Save the intermediate pre-result as `_pre_result.tsv`
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
     combined_df.to_csv(pre_result_path, sep='\t', index=False)
@@ -136,92 +132,125 @@ def preprocessing_insertion(df, muc1_ref):
     """
     Preprocesses insertion variants by merging with the reference motifs.
     """
+    # Rename the '#CHROM' column to 'Motifs'
     df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    
+    # Drop unwanted columns
     df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    
+    # Rename the last column to 'Sample'
+    last_column_name = df.columns[-1]
+    df.rename(columns={last_column_name: 'Sample'}, inplace=True)
+    
+    # Merge with the MUC1 reference motifs
     df = pd.merge(df, muc1_ref, on='Motifs', how='left')
+    
+    # Add a 'Variant' column to indicate this is an insertion
     df['Variant'] = 'Insertion'
+    
     return df
 
 def preprocessing_deletion(df, muc1_ref):
     """
     Preprocesses deletion variants by merging with the reference motifs.
     """
+    # Rename the '#CHROM' column to 'Motifs'
     df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    
+    # Drop unwanted columns
     df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    
+    # Rename the last column to 'Sample'
+    last_column_name = df.columns[-1]
+    df.rename(columns={last_column_name: 'Sample'}, inplace=True)
+    
+    # Merge with the MUC1 reference motifs
     df = pd.merge(df, muc1_ref, on='Motifs', how='left')
+    
+    # Add a 'Variant' column to indicate this is a deletion
     df['Variant'] = 'Deletion'
+    
     return df
 
 def process_kmer_results(combined_df):
     """
     Processes and filters Kestrel results based on frameshifts and confidence criteria.
     """
+    # Rename 'Sample' column to 'Depth' (since we are treating it similarly to the old 'Depth' column)
+    combined_df = combined_df.rename(columns={'Sample': 'Depth'})
+
+    # Split the 'Depth' column (formerly 'Sample') into 'Del', 'Estimated_Depth_AlternateVariant', and 'Estimated_Depth_Variant_ActiveRegion'
+    combined_df[['Del', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']] = combined_df['Depth'].str.split(':', expand=True)
+
+    # Select the relevant columns using .loc to avoid the SettingWithCopyWarning
+    combined_df = combined_df.loc[:, ['Motifs', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']]
+
     # Calculate reference and alternate allele lengths
-    combined_df["ref_len"] = combined_df["REF"].str.len()
-    combined_df["alt_len"] = combined_df["ALT"].str.len()
-    
+    combined_df.loc[:, "ref_len"] = combined_df["REF"].str.len()
+    combined_df.loc[:, "alt_len"] = combined_df["ALT"].str.len()
+
     # Calculate frame score
-    combined_df["Frame_Score"] = round((combined_df["alt_len"] - combined_df["ref_len"]) / 3, 2).astype(str).str.replace('.0', 'C')
-    
+    combined_df.loc[:, "Frame_Score"] = round((combined_df["alt_len"] - combined_df["ref_len"]) / 3, 2).astype(str).str.replace('.0', 'C')
+
     # Filter out non-frameshift variants
-    combined_df["TrueFalse"] = combined_df["Frame_Score"].str.contains('C', regex=True)
-    combined_df = combined_df[~combined_df["TrueFalse"]].copy()
+    combined_df.loc[:, "TrueFalse"] = combined_df["Frame_Score"].str.contains('C', regex=True)
+    combined_df = combined_df.loc[~combined_df["TrueFalse"]].copy()
+    # log the combined_df
+    logging.info(f"combined_df: {combined_df}")
 
-    # Split Frame_Score into left and right parts
+    # Split Frame_Score into left and right parts using .loc
     combined_df[['left', 'right']] = combined_df['Frame_Score'].str.split('.', expand=True)
-    
+
     # Replace '-0' with '-1' in the 'left' column
-    combined_df['left'] = combined_df['left'].replace('-0', '-1')
+    combined_df.loc[:, 'left'] = combined_df['left'].replace('-0', '-1')
 
-    # Check for required columns and provide a fallback mechanism if they are missing
-    if 'Estimated_Depth_AlternateVariant' not in combined_df.columns or 'Estimated_Depth_Variant_ActiveRegion' not in combined_df.columns:
-        logging.warning("Required columns 'Estimated_Depth_AlternateVariant' or 'Estimated_Depth_Variant_ActiveRegion' are missing. Skipping depth-based processing.")
-        combined_df['Depth_Score'] = None
-        combined_df['Confidence'] = 'Unknown'
-    else:
-        # Calculate depth score
-        combined_df['Depth_Score'] = combined_df['Estimated_Depth_AlternateVariant'].astype(int) / combined_df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
-        
-        # Define conditions for assigning confidence scores
-        def assign_confidence(row):
-            depth_score = row['Depth_Score']
-            alt_depth = row['Estimated_Depth_AlternateVariant']
-            var_active_region = row['Estimated_Depth_Variant_ActiveRegion']
+    # Convert depth-related columns to integers for further calculations
+    combined_df.loc[:, 'Estimated_Depth_AlternateVariant'] = combined_df['Estimated_Depth_AlternateVariant'].astype(int)
+    combined_df.loc[:, 'Estimated_Depth_Variant_ActiveRegion'] = combined_df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
 
-            if depth_score <= 0.00469 or var_active_region <= 200:
-                return 'Low_Precision'
-            elif 21 <= alt_depth <= 100 and 0.00469 <= depth_score <= 0.00515:
-                return 'Low_Precision'
-            elif alt_depth > 100:
-                return 'High_Precision'
-            elif alt_depth <= 20:
-                return 'Low_Precision'
-            elif 21 <= alt_depth < 100 and depth_score >= 0.00515:
-                return 'High_Precision'
-            elif alt_depth >= 100 and depth_score >= 0.00515:
-                return 'High_Precision*'
-            else:
-                return 'Low_Precision'
+    # Calculate depth score
+    combined_df.loc[:, 'Depth_Score'] = combined_df['Estimated_Depth_AlternateVariant'] / combined_df['Estimated_Depth_Variant_ActiveRegion']
 
-        # Apply confidence score assignment
-        combined_df['Confidence'] = combined_df.apply(assign_confidence, axis=1)
+    # Define conditions for assigning confidence scores
+    def assign_confidence(row):
+        depth_score = row['Depth_Score']
+        alt_depth = row['Estimated_Depth_AlternateVariant']
+        var_active_region = row['Estimated_Depth_Variant_ActiveRegion']
 
-    # Filter based on specific ALT values
+        if depth_score <= 0.00469 or var_active_region <= 200:
+            return 'Low_Precision'
+        elif 21 <= alt_depth <= 100 and 0.00469 <= depth_score <= 0.00515:
+            return 'Low_Precision'
+        elif alt_depth > 100:
+            return 'High_Precision'
+        elif alt_depth <= 20:
+            return 'Low_Precision'
+        elif 21 <= alt_depth < 100 and depth_score >= 0.00515:
+            return 'High_Precision'
+        elif alt_depth >= 100 and depth_score >= 0.00515:
+            return 'High_Precision*'
+        else:
+            return 'Low_Precision'
+
+    # Apply confidence score assignment using .loc
+    combined_df.loc[:, 'Confidence'] = combined_df.apply(assign_confidence, axis=1)
+
+    # Filter based on specific ALT values (e.g., 'GG')
     if combined_df['ALT'].str.contains(r'\bGG\b').any():
         gg_condition = combined_df['ALT'] == 'GG'
         combined_df = pd.concat([
-            combined_df[~gg_condition],
-            combined_df[gg_condition & (combined_df['Depth_Score'] >= 0.00469)]
+            combined_df.loc[~gg_condition],
+            combined_df.loc[gg_condition & (combined_df['Depth_Score'] >= 0.00469)]
         ])
 
     # Filter out specific ALT sequences (CG, TG)
-    combined_df = combined_df[~combined_df['ALT'].isin(['CG', 'TG'])]
+    combined_df = combined_df.loc[~combined_df['ALT'].isin(['CG', 'TG'])]
 
-    # Drop unnecessary columns
-    combined_df.drop(['left', 'right', 'TrueFalse'], axis=1, inplace=True)
+    # Drop unnecessary columns using .loc
+    combined_df = combined_df.drop(['left', 'right', 'TrueFalse'], axis=1)
 
     # Keep only high precision results
     if 'Confidence' in combined_df.columns:
-        combined_df = combined_df[combined_df['Confidence'] != 'Low_Precision']
+        combined_df = combined_df.loc[combined_df['Confidence'] != 'Low_Precision']
 
     return combined_df
