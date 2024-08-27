@@ -8,6 +8,9 @@ from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf, read_v
 
 # Construct the Kestrel command based on kmer size and config settings
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, temp_dir, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
+    """
+    Constructs the command for running Kestrel based on various settings.
+    """
     if not fastq_1 or not fastq_2:
         raise ValueError("FASTQ input files are missing or invalid.")
     
@@ -22,16 +25,15 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
 
 # Kestrel processing logic
 def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, temp_dir, kestrel_settings):
-    # Extract kestrel settings from the config
+    """
+    Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
+    """
     java_path = kestrel_settings.get("java_path", "java")
     java_memory = kestrel_settings.get("java_memory", "15g")
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20, 17, 25, 41])
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
     
-    if not fastq_1 or not fastq_2:
-        raise ValueError("FASTQ files are not provided for Kestrel.")
-
     for kmer_size in kmer_sizes:
         kmer_command = construct_kestrel_command(
             kmer_size=kmer_size,
@@ -57,7 +59,6 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             process.wait()
             logging.info(f"Mapping-free genotyping of MUC1-VNTR with kmer size {kmer_size} done!")
 
-            # Process the VCF if Kestrel run was successful
             if vcf_path.is_file():
                 process_kestrel_output(output_dir, vcf_path, reference_vntr)
                 break  # If successful, break out of the loop and stop trying other kmer sizes
@@ -65,9 +66,10 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
 # Process Kestrel VCF results to generate the final output format
 def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     logging.info("Processing Kestrel VCF results...")
-    indel_vcf = f"{output_dir}/output_indel.vcf"
-    output_ins = f"{output_dir}/output_insertion.vcf"
-    output_del = f"{output_dir}/output_deletion.vcf"
+    
+    indel_vcf = os.path.join(output_dir, "output_indel.vcf")
+    output_ins = os.path.join(output_dir, "output_insertion.vcf")
+    output_del = os.path.join(output_dir, "output_deletion.vcf")
     
     # Filter the VCF to extract indels, insertions, and deletions
     filter_vcf(vcf_path, indel_vcf)
@@ -91,7 +93,12 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     # Process and filter results based on frameshifts and confidence scores
     processed_df = process_kmer_results(combined_df)
 
-    # Save the processed dataframe to a TSV file
+    # Save the intermediate pre-result as `_pre_result.tsv`
+    pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
+    combined_df.to_csv(pre_result_path, sep='\t', index=False)
+    logging.info(f"Intermediate results saved as {pre_result_path}")
+    
+    # Save the final processed dataframe as `kestrel_result.tsv`
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
     processed_df.to_csv(final_output_path, sep='\t', index=False)
     
@@ -99,6 +106,9 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     return processed_df
 
 def load_muc1_reference(reference_file):
+    """
+    Loads the MUC1 VNTR reference motifs from a FASTA file.
+    """
     identifiers = []
     sequences = []
     with open(reference_file) as fasta_file:
@@ -109,31 +119,95 @@ def load_muc1_reference(reference_file):
     return pd.DataFrame({"Motifs": identifiers, "Motif_sequence": sequences})
 
 def preprocessing_insertion(df, muc1_ref):
-    df1 = df.copy()
-    df1.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
-    df1.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
-    df1 = pd.merge(df1, muc1_ref, on='Motifs', how='left')
-    df1['Variant'] = 'Insertion'
-    return df1
+    """
+    Preprocesses insertion variants by merging with the reference motifs.
+    """
+    df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    df = pd.merge(df, muc1_ref, on='Motifs', how='left')
+    df['Variant'] = 'Insertion'
+    return df
 
 def preprocessing_deletion(df, muc1_ref):
-    df2 = df.copy()
-    df2.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
-    df2.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
-    df2 = pd.merge(df2, muc1_ref, on='Motifs', how='left')
-    df2['Variant'] = 'Deletion'
-    return df2
+    """
+    Preprocesses deletion variants by merging with the reference motifs.
+    """
+    df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    df = pd.merge(df, muc1_ref, on='Motifs', how='left')
+    df['Variant'] = 'Deletion'
+    return df
 
 def process_kmer_results(combined_df):
-    # Split and filter based on frameshifts and confidence criteria
+    """
+    Processes and filters Kestrel results based on frameshifts and confidence criteria.
+    """
+    # Calculate reference and alternate allele lengths
     combined_df["ref_len"] = combined_df["REF"].str.len()
     combined_df["alt_len"] = combined_df["ALT"].str.len()
-    combined_df["Frame_Score"] = round((combined_df.alt_len - combined_df.ref_len) / 3, 2)
-    combined_df['Frame_Score'] = combined_df['Frame_Score'].astype(str).apply(lambda x: x.replace('.0', 'C'))
-    combined_df["TrueFalse"] = combined_df['Frame_Score'].str.contains('C', regex=True)
-    combined_df["TrueFalse"] = combined_df["TrueFalse"].astype(str)
-    combined_df = combined_df[combined_df['TrueFalse'].str.contains("False")]
+    
+    # Calculate frame score
+    combined_df["Frame_Score"] = round((combined_df["alt_len"] - combined_df["ref_len"]) / 3, 2).astype(str).str.replace('.0', 'C')
+    
+    # Filter out non-frameshift variants
+    combined_df["TrueFalse"] = combined_df["Frame_Score"].str.contains('C', regex=True)
+    combined_df = combined_df[~combined_df["TrueFalse"]].copy()
 
-    # More processing, filtering, and labeling steps can be added here
+    # Split Frame_Score into left and right parts
+    combined_df[['left', 'right']] = combined_df['Frame_Score'].str.split('.', expand=True)
+    
+    # Replace '-0' with '-1' in the 'left' column
+    combined_df['left'] = combined_df['left'].replace('-0', '-1')
+
+    # Check for required columns and provide a fallback mechanism if they are missing
+    if 'Estimated_Depth_AlternateVariant' not in combined_df.columns or 'Estimated_Depth_Variant_ActiveRegion' not in combined_df.columns:
+        logging.warning("Required columns 'Estimated_Depth_AlternateVariant' or 'Estimated_Depth_Variant_ActiveRegion' are missing. Skipping depth-based processing.")
+        combined_df['Depth_Score'] = None
+        combined_df['Confidence'] = 'Unknown'
+    else:
+        # Calculate depth score
+        combined_df['Depth_Score'] = combined_df['Estimated_Depth_AlternateVariant'].astype(int) / combined_df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
+        
+        # Define conditions for assigning confidence scores
+        def assign_confidence(row):
+            depth_score = row['Depth_Score']
+            alt_depth = row['Estimated_Depth_AlternateVariant']
+            var_active_region = row['Estimated_Depth_Variant_ActiveRegion']
+
+            if depth_score <= 0.00469 or var_active_region <= 200:
+                return 'Low_Precision'
+            elif 21 <= alt_depth <= 100 and 0.00469 <= depth_score <= 0.00515:
+                return 'Low_Precision'
+            elif alt_depth > 100:
+                return 'High_Precision'
+            elif alt_depth <= 20:
+                return 'Low_Precision'
+            elif 21 <= alt_depth < 100 and depth_score >= 0.00515:
+                return 'High_Precision'
+            elif alt_depth >= 100 and depth_score >= 0.00515:
+                return 'High_Precision*'
+            else:
+                return 'Low_Precision'
+
+        # Apply confidence score assignment
+        combined_df['Confidence'] = combined_df.apply(assign_confidence, axis=1)
+
+    # Filter based on specific ALT values
+    if combined_df['ALT'].str.contains(r'\bGG\b').any():
+        gg_condition = combined_df['ALT'] == 'GG'
+        combined_df = pd.concat([
+            combined_df[~gg_condition],
+            combined_df[gg_condition & (combined_df['Depth_Score'] >= 0.00469)]
+        ])
+
+    # Filter out specific ALT sequences (CG, TG)
+    combined_df = combined_df[~combined_df['ALT'].isin(['CG', 'TG'])]
+
+    # Drop unnecessary columns
+    combined_df.drop(['left', 'right', 'TrueFalse'], axis=1, inplace=True)
+
+    # Keep only high precision results
+    if 'Confidence' in combined_df.columns:
+        combined_df = combined_df[combined_df['Confidence'] != 'Low_Precision']
 
     return combined_df
