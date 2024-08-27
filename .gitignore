@@ -166,6 +166,7 @@ cython_debug/
 /out/
 /tmp/
 /download/
+/reference/
 
 # ignore any pdb files
 *.pdb
