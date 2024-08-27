@@ -1,0 +1,1 @@
+conda create -n vntyper python=3.9 bioconda::bwa bioconda:picard bioconda:samtools bioconda:sambamba bioconda::advntr bioconda::fastp
