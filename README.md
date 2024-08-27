@@ -61,8 +61,8 @@ __Run docker with only the kmer method:__
 
 ```bashscript
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
--t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
--ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa \
+-t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/files/chr1.fa  \
+-ref_VNTR /SOFT/VNtyper/files/MUC1-VNTR.fa \
 -a /SOFT/shared/SAAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME --ignore_advntr
 ```
 __Run docker with both methods:__
@@ -70,8 +70,8 @@ __Run docker with both methods:__
 ```bashscript
 
 sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
--t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
--ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa  -m /SOFT/VNtyper/Files/hg19_genic_VNTRs.db \
+-t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/files/chr1.fa  \
+-ref_VNTR /SOFT/VNtyper/files/MUC1-VNTR.fa  -m /SOFT/VNtyper/files/hg19_genic_VNTRs.db \
 -a /SOFT/shared/SAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME
 
 ```
@@ -118,13 +118,13 @@ optional arguments:
 
 __Running only kmer-based genotyping:__
 ```bashscript
-python3 VNtyper.py --bam -ref Files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p VNtyper/ -w WORKING_DIRECTORY --ignore_advntr
+python3 VNtyper.py --bam -ref files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR files/MUC1-VNTR.fa -t Threads -p VNtyper/ -w WORKING_DIRECTORY --ignore_advntr
 ```
 [Note] This algorithm is far more faster than the second method. 
 
 __Running both genotyping methods:__
 ```bashscript
-python3 VNtyper.py --bam -ref Files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR Files/MUC1-VNTR.fa -t Threads -p VNtyper/  -w WORKING_DIRECTORY -m Files/vntr_data/hg19_genic_VNTRs.db
+python3 VNtyper.py --bam -ref files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR files/MUC1-VNTR.fa -t Threads -p VNtyper/  -w WORKING_DIRECTORY -m files/vntr_data/hg19_genic_VNTRs.db
 ```
 [Note] This algorithm is far more slower than the first method.
 
