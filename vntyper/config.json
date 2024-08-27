@@ -6,10 +6,18 @@
       "advntr_reference_vntr": "path/to/advntr_reference_vntr.db"
     },
     "tools": {
-      "fastp": "path/to/fastp",
-      "samtools": "path/to/samtools",
-      "sambamba": "path/to/sambamba",
-      "advntr": "path/to/advntr"
-    }
+      "fastp": "fastp",
+      "samtools": "samtools",
+      "advntr": "advntr"
+    },
+    "bam_processing": {
+      "bam_region": "chr1:155158000-155163000",
+      "compression_level": 6,
+      "disable_adapter_trimming": true,
+      "deduplication": true,
+      "dup_calc_accuracy": 3,
+      "length_required": 40
+    },
+    "temp_directory": "temp/"
   }
   

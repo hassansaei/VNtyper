@@ -67,9 +67,10 @@ def main():
 
     # Load config with error handling
     try:
-        if args.config_path:
+        if args.config_path and args.config_path.exists():
             config = load_config(args.config_path)
         else:
+            logging.error(f"Configuration file not found at {args.config_path}. Using default values where applicable.")
             config = None
     except Exception as e:
         logging.critical(f"Failed to load configuration: {e}")
