@@ -59,7 +59,9 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
         # FASTQ Quality Control or BAM Processing
         if fastq1 and fastq2:
             # Process raw FASTQ files if provided
+            logging.info("Starting FASTQ quality control.")
             process_fastq(fastq1, fastq2, threads, dirs['fastq_bam_processing'], "output", config)
+            logging.info("FASTQ quality control completed.")
         elif bam:
             # Convert BAM to FASTQ
             fastq1, fastq2 = process_bam_to_fastq(
