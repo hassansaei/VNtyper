@@ -1,0 +1,37 @@
+{
+  "output_directory": "out",
+  "log_level": "INFO",
+  "reference_data": {
+    "muc1_reference_vntr": "files/MUC1-VNTR.fa",
+    "advntr_reference_vntr": "path/to/advntr_reference_vntr.db",
+    "bwa_reference_hg19": "reference/chr1.hg19.fa.gz",
+    "bwa_reference_hg38": "reference/chr1.hg38.fa.gz",
+    "code_adVNTR_RUs": "files/code-adVNTR_RUs.fa",
+    "muc1_motifs_rev_com": "files/MUC1_motifs_Rev_com.fa"
+  },
+  "tools": {
+    "fastp": "fastp",
+    "samtools": "samtools",
+    "bwa": "bwa",
+    "advntr": "advntr",
+    "kestrel": "/home/bernt/tools/kestrel/kestrel-1.0.1/kestrel.jar",
+    "java_path": "/usr/bin/java"
+  },
+  "kestrel_settings": {
+    "java_memory": "15g",
+    "kmer_sizes": [20, 17, 25, 41],
+    "max_align_states": 30,
+    "max_hap_states": 30
+  },
+  "bam_processing": {
+    "bam_region_hg19": "chr1:155158000-155163000",
+    "bam_region_hg38": "chr1:155183823-155194915",
+    "compression_level": 6,
+    "disable_adapter_trimming": true,
+    "deduplication": true,
+    "dup_calc_accuracy": 3,
+    "length_required": 40
+  },
+  "temp_directory": "temp/",
+  "welcome_message": "==========================================================================================================\nGiven alignment (BAM) or raw file (FASTQ), this tool genotypes MUC1 coding-VNTR \n-- For rapid genotyping, BAM files are preferred!\n-- User can Skip code-adVNTR genotyping step using --ignore_advntr option (This step will take a while..)\nThis is free non-commercial software.\n=========================================================================================================="
+}

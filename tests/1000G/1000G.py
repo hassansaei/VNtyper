@@ -39,7 +39,7 @@ for i in range(length):
 		#process = sp.Popen(extract_chr1 , shell=True)
 		#process.wait()
 		#print ("Cram to bam conversion done!\n")
-		run_vntyper = "python /WORKSPACE/1000G/crams/VNtyper_1.1.py  -ref /WORKSPACE/hg19/chr1.fa --bam -a " + "/WORKSPACE/1000G/crams/" +  list_final_2[i] + "_chr1.bam " + " -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa -t 12 -p /SOFT/VNtyper/ -w " +  "/WORKSPACE/1000G/vntyper/" + " -o " +  list_final_2[i] + " --ignore_advntr" 
+		run_vntyper = "python /WORKSPACE/1000G/crams/VNtyper_1.1.py  -ref /WORKSPACE/hg19/chr1.fa --bam -a " + "/WORKSPACE/1000G/crams/" +  list_final_2[i] + "_chr1.bam " + " -ref_VNTR /SOFT/VNtyper/files/MUC1-VNTR.fa -t 12 -p /SOFT/VNtyper/ -w " +  "/WORKSPACE/1000G/vntyper/" + " -o " +  list_final_2[i] + " --ignore_advntr" 
 		process = sp.Popen(run_vntyper , shell=True)
 		process.wait()
 		print ("VNtyper analysis done!\n")
@@ -52,7 +52,7 @@ for i in range(length):
 		process = sp.Popen(extract_chr1 , shell=True)
 		process.wait()
 		print ("Cram to bam conversion done!\n")
-		run_vntyper = "python /WORKSPACE/1000G/crams/VNtyper_1.1.py  -ref /WORKSPACE/hg19/chr1.fa --bam -a " + "/WORKSPACE/1000G/crams/" +  list_final_2[i] + "_chr1.bam " + " -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa -t 12 -p /SOFT/VNtyper/ -w " +  "/WORKSPACE/1000G/vntyper/" + " -o " +  list_final_2[i] + " --ignore_advntr" + " && " + " rm " + " /WORKSPACE/1000G/crams/" + list_final_2[i] + ".final.cram"
+		run_vntyper = "python /WORKSPACE/1000G/crams/VNtyper_1.1.py  -ref /WORKSPACE/hg19/chr1.fa --bam -a " + "/WORKSPACE/1000G/crams/" +  list_final_2[i] + "_chr1.bam " + " -ref_VNTR /SOFT/VNtyper/files/MUC1-VNTR.fa -t 12 -p /SOFT/VNtyper/ -w " +  "/WORKSPACE/1000G/vntyper/" + " -o " +  list_final_2[i] + " --ignore_advntr" + " && " + " rm " + " /WORKSPACE/1000G/crams/" + list_final_2[i] + ".final.cram"
 		process = sp.Popen(run_vntyper , shell=True)
 		process.wait()
 		print ("VNtyper analysis done!\n")

@@ -142,7 +142,7 @@ if args.fastq:
 if args.bam:
     in_bam = args.alignment
     #out_bam = output + args.output + "__mkdup.bam"
-    #command_mkdup = "/WORKSPACE/VNtyper/Scripts/./sambamba-0.6.8 markdup -t " + args.threads + " " +  in_bam + " " + out_bam
+    #command_mkdup = "/WORKSPACE/VNtyper/scripts/./sambamba-0.6.8 markdup -t " + args.threads + " " +  in_bam + " " + out_bam
     command_slice = "/SOFT/./sambamba-0.6.8 slice " + in_bam + " chr1:155158000-155163000 " + " -o " + output + args.output + "_chr1.bam"
     command_flag = "samtools view -u -f 4 -F264 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + "_unmapped1.bam"  + " && " + "samtools view -u -f 8 -F260 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + "_unmapped2.bam" + " && " +  "samtools view -u -f 12 -F256 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + "_unmapped3.bam" 
     command_merge = "/SOFT/./sambamba-0.6.8 merge -t " + args.threads + " " + output + args.output + "_vntyper.bam" + " " + output + args.output + "_chr1.bam" + " " + output + args.output + "_unmapped1.bam" + " " + output + args.output + "_unmapped2.bam" + " " + output + args.output + "_unmapped3.bam"
@@ -378,7 +378,7 @@ if Kestrel_concat.empty:
 
 # MUC1 VNTR motif and RU processing
 from Bio import SeqIO
-with open(args.tools_path + 'Files/code-adVNTR_RUs.fa') as RU_file, open(args.tools_path + 'Files/MUC1_motifs_Rev_com.fa') as Motif_file: 
+with open(args.tools_path + 'files/code-adVNTR_RUs.fa') as RU_file, open(args.tools_path + 'files/MUC1_motifs_Rev_com.fa') as Motif_file: 
     identifiers = []
     seq = []
     for seq_record1 in SeqIO.parse(RU_file, 'fasta'):  # (generator)
