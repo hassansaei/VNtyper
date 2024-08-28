@@ -21,14 +21,16 @@ def run_advntr(reference, db_file_hg19, sorted_bam, output, output_name, config)
     advntr_settings = config["advntr_settings"]
     
     advntr_command = (
-        f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} --outfmt {advntr_settings['output_format']} "
+        f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} "
         f"--alignment_file {sorted_bam} -o {output}{output_name}_adVNTR.vcf "
         f"-m {db_file_hg19} -r {reference} --working_directory {output}"
     )
     
-    logging.info("Launching adVNTR genotyping!")
-    process = sp.Popen(advntr_command, shell=True)
-    process.wait()
+    # Redirect stdout and stderr to log files
+    with open(f"{output}{output_name}_advntr_stdout.log", "w") as stdout_log, open(f"{output}{output_name}_advntr_stderr.log", "w") as stderr_log:
+        logging.info("Launching adVNTR genotyping!")
+        process = sp.Popen(advntr_command, shell=True, stdout=stdout_log, stderr=stderr_log)
+        process.wait()
     
     if process.returncode != 0:
         logging.error("adVNTR genotyping failed. Please check the logs.")
@@ -47,6 +49,10 @@ def read_vcf(path):
         list: A list of column names from the VCF file, or an empty list if no header found.
     """
     vcf_names = []
+    if not os.path.exists(path):
+        logging.error(f"VCF file {path} does not exist.")
+        return vcf_names
+    
     with open(path, 'r') as f:
         for line in f:
             if line.startswith("#VID"):
@@ -149,7 +155,7 @@ def process_advntr_output(vcf_path, output, output_name, config):
     logging.info('Processing code-adVNTR result...')
     
     names = read_vcf(vcf_path)
-    df = pd.read_csv(vcf_path, comment='#', delim_whitespace=True, header=None, names=names)
+    df = pd.read_csv(vcf_path, comment='#', sep='\s+', header=None, names=names)
 
     # Define frameshift patterns for both insertions and deletions using config settings.
     max_frameshift = config["advntr_settings"]["max_frameshift"]
@@ -159,8 +165,13 @@ def process_advntr_output(vcf_path, output, output_name, config):
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
 
     if df.empty:
-        print('No pathogenic variant was found with code-adVNTR!')
-        with open(output + output_name + '_pre_result.tsv', 'r') as f:
+        logging.warning('No pathogenic variant was found with code-adVNTR!')
+        pre_result_path = output + output_name + '_pre_result.tsv'
+        if not os.path.exists(pre_result_path):
+            logging.error(f"Pre-result file {pre_result_path} not found!")
+            return
+
+        with open(pre_result_path, 'r') as f:
             with open(output + output_name + '_Final_result.tsv', 'w') as f1:
                 f1.write(f'## VNtyper_Analysis_for_{output_name} \n')
                 f1.write('# Kestrel_Result \n')
@@ -170,6 +181,7 @@ def process_advntr_output(vcf_path, output, output_name, config):
                     f1.write(line)
 
         # Clean up intermediate files.
+        rm_list_4 = config.get("advntr_cleanup_files", [])
         for db in rm_list_4:
             db_str = output + output_name + db
             rm_command = "rm " + db_str
@@ -193,5 +205,18 @@ def process_advntr_output(vcf_path, output, output_name, config):
     advntr_concat.drop_duplicates(subset=['#VID', 'Variant', 'NumberOfSupportingReads'], inplace=True)
 
     # Save the processed adVNTR results to a TSV file.
-    advntr_concat.to_csv(output + output_name + '_adVNTR_result.tsv', sep='\t', index=False)
-    logging.info(f"Processed adVNTR results saved to {output + output_name + '_adVNTR_result.tsv'}")
+    output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
+    advntr_concat.to_csv(output_result_path, sep='\t', index=False)
+    logging.info(f"Processed adVNTR results saved to {output_result_path}")
+
+    # Clean up intermediate files, if configured
+    rm_list_4 = config.get("advntr_cleanup_files", [])
+    for db in rm_list_4:
+        db_str = os.path.join(output, f"{output_name}{db}")
+        if os.path.exists(db_str):
+            rm_command = f"rm {db_str}"
+            process = sp.Popen(rm_command, shell=True)
+            process.wait()
+
+    logging.info('The final result is saved and intermediate files cleaned up.')
+   
