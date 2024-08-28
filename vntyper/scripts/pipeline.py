@@ -13,7 +13,6 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.motif_processing import process_motifs, preprocessing_insertion, preprocessing_deletion
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
-from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 
 def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False):
     """
@@ -94,7 +93,7 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
             if sorted_bam:
                 # Run adVNTR genotyping with the sorted BAM file
                 logging.info(f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}")
-                run_advntr(reference_file, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output")
+                run_advntr(reference_file, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output", config)
 
                 # Process adVNTR output
                 vcf_path = os.path.join(output_dir, "output_adVNTR.vcf")
