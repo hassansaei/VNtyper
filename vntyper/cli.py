@@ -25,7 +25,8 @@ def main():
 
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
-    parser_pipeline.add_argument('-r', '--reference-file', type=str, required=False, help="The reference FASTA file.")
+    parser_pipeline.add_argument('-r', '--reference-file', type=str, required=False, help="The reference FASTA file for Kestrel.")
+    parser_pipeline.add_argument('--advntr-reference', type=str, required=True, help="The hg19 reference FASTA file for adVNTR genotyping.")
     parser_pipeline.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for the results.")
     parser_pipeline.add_argument('--ignore-advntr', action='store_true', help="Skip adVNTR genotyping of MUC1-VNTR.")
     parser_pipeline.add_argument('--fastq1', type=str, help="Path to the first FASTQ file.")
@@ -33,7 +34,7 @@ def main():
     parser_pipeline.add_argument('--bam', type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument('--threads', type=int, default=4, help="Number of threads to use.")
     parser_pipeline.add_argument('--reference-assembly', type=str, choices=["hg19", "hg38"], default="hg19",
-                                 help="Specify the reference assembly to use (hg19 or hg38). Default is hg19.")
+                                help="Specify the reference assembly used for the input BAM file alignment.")
     parser_pipeline.add_argument('--fast-mode', action='store_true', help="Enable fast mode (skips filtering for unmapped and partially mapped reads).")
     parser_pipeline.add_argument('--keep-intermediates', action='store_true', help="Keep intermediate files (e.g., BAM slices, temporary files).")
     parser_pipeline.add_argument('--delete-intermediates', action='store_true', help="Delete intermediate files after processing (overrides --keep-intermediates).")

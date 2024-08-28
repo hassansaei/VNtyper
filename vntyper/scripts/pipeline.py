@@ -14,12 +14,13 @@ from vntyper.scripts.motif_processing import process_motifs, preprocessing_inser
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 
-def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False):
+def run_pipeline(reference_file, advntr_reference, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False):
     """
     Main pipeline function that orchestrates the genotyping process.
     
     Args:
-        reference_file: Path to the reference FASTA file.
+        reference_file: Path to the reference FASTA file for Kestrel.
+        advntr_reference: Path to the hg19 reference FASTA file for adVNTR genotyping.
         output_dir: Path to the output directory.
         ignore_advntr: Boolean indicating whether to skip adVNTR genotyping.
         config: Configuration dictionary.
@@ -27,7 +28,7 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         fastq2: Path to the second FASTQ file.
         bam: Path to the BAM file.
         threads: Number of threads to use.
-        reference_assembly: Reference assembly to use ("hg19" or "hg38").
+        reference_assembly: Reference assembly used for the input BAM file alignment ("hg19" or "hg38").
         fast_mode: Boolean indicating whether to enable fast mode (skip filtering of unmapped and partially mapped reads).
         keep_intermediates: Boolean indicating whether to keep intermediate files.
         delete_intermediates: Boolean indicating whether to delete intermediate files after processing.
@@ -42,13 +43,11 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
     start = timeit.default_timer()
 
     try:
-        # Select the appropriate BAM region and BWA reference file based on the reference assembly
+        # Select the appropriate BAM region based on the reference assembly used for input BAM alignment
         if reference_assembly == "hg38":
             bam_region = config["bam_processing"]["bam_region_hg38"]
-            bwa_reference = config["reference_data"]["bwa_reference_hg38"]
         else:
             bam_region = config["bam_processing"]["bam_region_hg19"]
-            bwa_reference = config["reference_data"]["bwa_reference_hg19"]
 
         # Determine if intermediates should be deleted (delete_intermediates takes precedence over keep_intermediates)
         delete_intermediates = delete_intermediates or not keep_intermediates
@@ -84,25 +83,24 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
             # Perform alignment only when adVNTR genotyping is not skipped
             sorted_bam = None
             if fastq1 and fastq2:
-                # Align and sort the FASTQ files to generate a BAM file for adVNTR
-                sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, output_dir, "output", threads, config)
+                # Align and sort the FASTQ files to generate a BAM file for adVNTR using the hg19 reference
+                sorted_bam = align_and_sort_fastq(fastq1, fastq2, advntr_reference, output_dir, "output", threads, config)
             elif bam:
-                # Use the provided BAM file directly
+                # Use the provided BAM file directly for adVNTR
                 sorted_bam = bam
 
             if sorted_bam:
                 # Run adVNTR genotyping with the sorted BAM file
                 logging.info(f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}")
-                run_advntr(reference_file, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output", config)
+                run_advntr(advntr_reference, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output", config)
 
                 # Process adVNTR output
                 vcf_path = os.path.join(output_dir, "output_adVNTR.vcf")
-                process_advntr_output(vcf_path, output_dir, "output")
+                process_advntr_output(vcf_path, output_dir, "output", config)
             else:
                 raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
 
         # Final processing and output generation
-        # This includes merging results from Kestrel and adVNTR genotyping if applicable
 
     except Exception as e:
         logging.error(f"An error occurred: {e}")
