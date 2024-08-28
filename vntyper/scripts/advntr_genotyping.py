@@ -5,12 +5,11 @@ import numpy as np
 import os
 from pathlib import Path
 
-def run_advntr(reference, db_file_hg19, sorted_bam, output, output_name, config):
+def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     """
-    Run adVNTR genotyping using the specified reference and BAM file, fetching settings from the config.
+    Run adVNTR genotyping using the specified database file and BAM file, fetching settings from the config.
 
     Args:
-        reference (str): Path to the reference FASTA file.
         db_file_hg19 (str): Path to the adVNTR VNTR database file.
         sorted_bam (str): Path to the sorted BAM file.
         output (str): Directory where the results will be saved.
@@ -20,10 +19,16 @@ def run_advntr(reference, db_file_hg19, sorted_bam, output, output_name, config)
     advntr_path = config["tools"]["advntr"]
     advntr_settings = config["advntr_settings"]
     
+    # Set the number of threads from the config or default to 8
+    threads = advntr_settings.get("threads", 8)
+    
+    # Retrieve additional command parts from the config, if available
+    additional_commands = advntr_settings.get("additional_commands", "-aln")
+    
     advntr_command = (
         f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} "
         f"--alignment_file {sorted_bam} -o {output}{output_name}_adVNTR.vcf "
-        f"-m {db_file_hg19} -r {reference} --working_directory {output}"
+        f"-m {db_file_hg19} --working_directory {output} -t {threads} {additional_commands}"
     )
     
     # Redirect stdout and stderr to log files
@@ -37,6 +42,7 @@ def run_advntr(reference, db_file_hg19, sorted_bam, output, output_name, config)
         raise RuntimeError("adVNTR genotyping failed.")
     
     logging.info("adVNTR genotyping of MUC1-VNTR done!")
+
 
 def read_vcf(path):
     """

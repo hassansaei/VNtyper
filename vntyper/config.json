@@ -3,7 +3,8 @@
   "log_level": "INFO",
   "reference_data": {
     "muc1_reference_vntr": "files/MUC1-VNTR.fa",
-    "advntr_reference_vntr": "reference/vntr_data_genic_loci/vntr_data/hg19_genic_VNTRs.db",
+    "advntr_reference_vntr_hg19": "reference/vntr_data_genic_loci/vntr_data/hg19_genic_VNTRs.db",
+    "advntr_reference_vntr_hg38": "reference/vntr_data_recommended_loci_hg38/vntr_data/hg38_selected_VNTRs_Illumina.db",
     "bwa_reference_hg19": "reference/chr1.hg19.fa.gz",
     "bwa_reference_hg38": "reference/chr1.hg38.fa.gz",
     "code_adVNTR_RUs": "files/code-adVNTR_RUs.fa",
@@ -21,7 +22,9 @@
     "max_frameshift": 100,
     "frameshift_multiplier": 3,
     "vid": 25561,
-    "output_format": "vcf"
+    "output_format": "vcf",
+    "threads": 12,
+    "additional_commands": "-aln"
   },
   "kestrel_settings": {
     "java_memory": "15g",
