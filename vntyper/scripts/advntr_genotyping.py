@@ -1,9 +1,9 @@
-import subprocess as sp
 import logging
 import pandas as pd
 import numpy as np
 import os
 from pathlib import Path
+from vntyper.scripts.utils import run_command
 
 def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     """
@@ -31,18 +31,17 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
         f"-m {db_file_hg19} --working_directory {output} -t {threads} {additional_commands}"
     )
     
-    # Redirect stdout and stderr to log files
-    with open(f"{output}/{output_name}_advntr_stdout.log", "w") as stdout_log, open(f"{output}/{output_name}_advntr_stderr.log", "w") as stderr_log:
-        logging.info("Launching adVNTR genotyping!")
-        process = sp.Popen(advntr_command, shell=True, stdout=stdout_log, stderr=stderr_log)
-        process.wait()
-    
-    if process.returncode != 0:
-        logging.error("adVNTR genotyping failed. Please check the logs.")
+    # Define log files for stdout and stderr
+    log_file = os.path.join(output, f"{output_name}_advntr.log")
+
+    logging.info("Launching adVNTR genotyping!")
+
+    # Run the adVNTR command and log output to the specified log file
+    if not run_command(advntr_command, log_file, critical=True):
+        logging.error("adVNTR genotyping failed. Check the log for details.")
         raise RuntimeError("adVNTR genotyping failed.")
     
     logging.info("adVNTR genotyping of MUC1-VNTR done!")
-
 
 def read_vcf(path):
     """
@@ -225,4 +224,3 @@ def process_advntr_output(vcf_path, output, output_name, config):
             process.wait()
 
     logging.info('The final result is saved and intermediate files cleaned up.')
-   
