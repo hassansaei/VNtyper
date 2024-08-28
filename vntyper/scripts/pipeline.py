@@ -103,15 +103,6 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         logging.error(f"An error occurred: {e}")
         sys.exit(1)
 
-    # Log end message
-    end_message = """
-    ==============================
-    Thanks for using VNtyper pipeline!
-    Contact: hassan.saei@inserm.fr
-    ==============================
-    """
-    logging.info(end_message)
-
     stop = timeit.default_timer()
     elapsed_time = (stop - start) / 60
     logging.info(f"Pipeline completed in {elapsed_time:.2f} minutes.")
