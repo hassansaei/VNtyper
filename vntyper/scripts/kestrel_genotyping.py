@@ -24,7 +24,7 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
     )
 
 # Kestrel processing logic
-def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, temp_dir, kestrel_settings):
+def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, temp_dir, kestrel_settings, config):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
     """
@@ -60,10 +60,10 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             logging.info(f"Mapping-free genotyping of MUC1-VNTR with kmer size {kmer_size} done!")
 
             if vcf_path.is_file():
-                process_kestrel_output(output_dir, vcf_path, reference_vntr)
+                process_kestrel_output(output_dir, vcf_path, reference_vntr, config)  # Pass config here
                 break  # If successful, break out of the loop and stop trying other kmer sizes
 
-def process_kestrel_output(output_dir, vcf_path, reference_vntr):
+def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Processing Kestrel VCF results...")
 
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
@@ -100,8 +100,11 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr):
     # Combine insertion and deletion dataframes
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
 
-    # Process and filter results based on frameshifts and confidence scores
-    processed_df = process_kmer_results(combined_df)
+    # Load additional motifs from the configuration
+    merged_motifs = load_additional_motifs(config)
+
+    # Process and filter results based on frameshifts and confidence scores, with motif correction
+    processed_df = process_kmer_results(combined_df, merged_motifs)
 
     # Save the intermediate pre-result as `_pre_result.tsv`
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
@@ -289,17 +292,77 @@ def filter_by_alt_values_and_finalize(df):
     df.drop(['left', 'right'], axis=1, inplace=True)
 
     # Keep only high precision results not in the red zone
-    # Note the Red_Zone is not defined in the current implementation and in the original code
     if 'Confidence' in df.columns:
         df = df[df['Confidence'] != 'Red_Zone']
 
     return df
 
+# Function 6: Motif Correction and Annotation
+def motif_correction_and_annotation(df, merged_motifs):
+    """
+    Performs motif correction and annotation based on the position (POS) and merges with the additional motif information.
+    """
+    df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
+    df['POS'] = df['POS'].astype(int)
+
+    # Split into left and right motifs based on position
+    motif_left = df[df['POS'] < 60].copy()  # Explicitly create a copy
+    motif_right = df[df['POS'] >= 60].copy()  # Explicitly create a copy
+
+    # Process the left motifs
+    motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
+    motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
+    motif_left = motif_left.merge(merged_motifs, on='Motif')
+    motif_left = motif_left[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
+                             'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
+                             'Depth_Score', 'Confidence']]
+    motif_left = motif_left.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+    motif_left = motif_left.sort_values('POS', ascending=False).tail(1)
+
+    # Process the right motifs
+    motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
+    motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
+    motif_right = motif_right.merge(merged_motifs, on='Motif')
+    motif_right = motif_right[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
+                               'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
+                               'Depth_Score', 'Confidence']]
+
+    if motif_right['ALT'].str.contains(r'\bGG\b').any():
+        motif_right = motif_right.loc[(motif_right['Motif'] != 'Q') & (motif_right['Motif'] != '8') &
+                                      (motif_right['Motif'] != '9') & (motif_right['Motif'] != '7') &
+                                      (motif_right['Motif'] != '6p') & (motif_right['Motif'] != '6') &
+                                      (motif_right['Motif'] != 'V') & (motif_right['Motif'] != 'J') &
+                                      (motif_right['Motif'] != 'I') & (motif_right['Motif'] != 'G') &
+                                      (motif_right['Motif'] != 'E') & (motif_right['Motif'] != 'A')]
+        motif_right = motif_right.loc[motif_right['ALT'] == 'GG']
+        motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+        if motif_right['Motif'].str.contains('X').any():
+            motif_right = motif_right[motif_right['Motif'] == 'X']
+    else:
+        motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+
+    motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
+
+    # Combine the processed left and right motifs
+    combined_df = pd.concat([motif_right, motif_left])
+
+    # Additional filtering
+    combined_df = combined_df.loc[(combined_df['ALT'] != 'CCGCC') & (combined_df['ALT'] != 'CGGCG') &
+                                  (combined_df['ALT'] != 'CGGCC')]
+    combined_df = combined_df[(combined_df['Motif'] != '6') & (combined_df['Motif'] != '6p') & 
+                              (combined_df['Motif'] != '7')]
+    combined_df['POS'] = combined_df['POS'].astype(int)
+
+    # Adjust positions where necessary
+    combined_df.update(combined_df['POS'].mask(combined_df['POS'] >= 60, lambda x: x - 60))
+    
+    return combined_df
+
 # Main Function: Process Kmer Results
-def process_kmer_results(combined_df):
+def process_kmer_results(combined_df, merged_motifs):
     """
     Processes and filters Kestrel results by applying several steps including frame score calculation,
-    depth score assignment, and filtering based on ALT values and confidence scores.
+    depth score assignment, filtering based on ALT values and confidence scores, and final motif correction.
     """
     # Step 1: Split Depth and Calculate Frame Score
     df = split_depth_and_calculate_frame_score(combined_df)
@@ -316,4 +379,34 @@ def process_kmer_results(combined_df):
     # Step 5: Filter by ALT Values and Finalize Data
     df = filter_by_alt_values_and_finalize(df)
 
+    # Step 6: Motif Correction and Annotation
+    df = motif_correction_and_annotation(df, merged_motifs)
+
     return df
+
+# Load the additional motifs for final processing
+def load_additional_motifs(config):
+    """
+    Loads additional motifs from the code-adVNTR_RUs.fa and MUC1_motifs_Rev_com.fa files for final annotation.
+    """
+    identifiers = []
+    sequences = []
+    
+    # Get the file paths from the config
+    code_advntr_file = config["reference_data"]["code_adVNTR_RUs"]
+    muc1_motifs_rev_com_file = config["reference_data"]["muc1_motifs_rev_com"]
+
+    with open(code_advntr_file) as RU_file, open(muc1_motifs_rev_com_file) as Motif_file:
+        for seq_record in SeqIO.parse(RU_file, 'fasta'):
+            identifiers.append(seq_record.id)
+            sequences.append(seq_record.seq.upper())
+
+        for seq_record in SeqIO.parse(Motif_file, 'fasta'):
+            identifiers.append(seq_record.id)
+            sequences.append(seq_record.seq.upper())
+
+    s1 = pd.Series(identifiers, name='ID')
+    s2 = pd.Series(sequences, name='Sequence')
+    merged_motifs = pd.DataFrame(dict(Motif=s1, Motif_sequence=s2))
+
+    return merged_motifs
