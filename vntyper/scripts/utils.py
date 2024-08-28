@@ -3,6 +3,34 @@ import json
 import logging
 import subprocess
 import shlex
+import subprocess as sp
+
+def run_command(command, log_file, critical=False):
+    """
+    Helper function to run a shell command and log its output.
+
+    Args:
+        command (str): The command to run.
+        log_file (str): The path to the log file where stdout and stderr will be logged.
+        critical (bool): If True, the pipeline will stop if the command fails.
+
+    Returns:
+        bool: True if the command succeeded, False otherwise.
+    """
+    logging.info(f"Running command: {command}")
+    with open(log_file, "w") as lf:
+        process = sp.Popen(command, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        for line in process.stdout:
+            lf.write(line.decode())
+            logging.info(line.decode().strip())
+        process.wait()
+
+        if process.returncode != 0:
+            logging.error(f"Command failed: {command}")
+            if critical:
+                raise RuntimeError(f"Critical command failed: {command}")
+            return False
+    return True
 
 def setup_logging(log_level=logging.INFO, log_file=None):
     logger = logging.getLogger()  # Get the root logger
