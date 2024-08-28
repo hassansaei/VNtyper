@@ -27,12 +27,12 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     
     advntr_command = (
         f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} "
-        f"--alignment_file {sorted_bam} -o {output}{output_name}_adVNTR.vcf "
+        f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR.vcf "
         f"-m {db_file_hg19} --working_directory {output} -t {threads} {additional_commands}"
     )
     
     # Redirect stdout and stderr to log files
-    with open(f"{output}{output_name}_advntr_stdout.log", "w") as stdout_log, open(f"{output}{output_name}_advntr_stderr.log", "w") as stderr_log:
+    with open(f"{output}/{output_name}_advntr_stdout.log", "w") as stdout_log, open(f"{output}/{output_name}_advntr_stderr.log", "w") as stderr_log:
         logging.info("Launching adVNTR genotyping!")
         process = sp.Popen(advntr_command, shell=True, stdout=stdout_log, stderr=stderr_log)
         process.wait()

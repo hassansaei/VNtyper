@@ -7,7 +7,7 @@ from Bio import SeqIO
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 
 # Construct the Kestrel command based on kmer size and config settings
-def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, temp_dir, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
+def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
     """
     Constructs the command for running Kestrel based on various settings.
     """
@@ -19,12 +19,11 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
         f"{fastq_1} {fastq_2} "
-        f"--temploc {temp_dir} "
-        f"--hapfmt sam -p {temp_dir}/output.sam"
+        f"--hapfmt sam -p {output_dir}/output.sam"
     )
 
 # Kestrel processing logic
-def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, temp_dir, kestrel_settings, config):
+def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, kestrel_settings, config):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
     """
@@ -42,7 +41,6 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             output_dir=output_dir,
             fastq_1=fastq_1,
             fastq_2=fastq_2,
-            temp_dir=temp_dir,
             vcf_out=vcf_path,
             java_path=java_path,
             java_memory=java_memory,

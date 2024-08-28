@@ -157,7 +157,6 @@ def main():
             fastq_2=args.fastq2,
             reference_vntr=args.reference_vntr,
             kestrel_path=config["tools"]["kestrel"],
-            temp_dir=config["temp_directory"],
             kestrel_settings=config["kestrel_settings"]
         )
     

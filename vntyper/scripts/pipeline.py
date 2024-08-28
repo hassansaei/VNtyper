@@ -6,7 +6,7 @@ import sys
 import logging
 from pathlib import Path
 
-from vntyper.scripts.utils import setup_logging, create_output_directories, load_config
+from vntyper.scripts.utils import setup_logging, create_output_directories
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
@@ -37,11 +37,11 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
     if not bwa_reference:
         raise ValueError("BWA reference not provided or determined from configuration.")
     
-    # Create output directories
-    output_dir, temp_dir = create_output_directories(output_dir, config["temp_directory"])
+    # Create output directories for different analysis steps
+    dirs = create_output_directories(output_dir)
 
     # Setup logging
-    log_file = os.path.join(temp_dir, f"pipeline.log")
+    log_file = os.path.join(dirs['base'], "pipeline.log")
     setup_logging(log_file)
 
     start = timeit.default_timer()
@@ -59,26 +59,26 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
         # FASTQ Quality Control or BAM Processing
         if fastq1 and fastq2:
             # Process raw FASTQ files if provided
-            process_fastq(fastq1, fastq2, threads, output_dir, "output", config)
+            process_fastq(fastq1, fastq2, threads, dirs['fastq_bam_processing'], "output", config)
         elif bam:
             # Convert BAM to FASTQ
             fastq1, fastq2 = process_bam_to_fastq(
-                bam, output_dir, "output", threads, config, reference_assembly, fast_mode, delete_intermediates, keep_intermediates
+                bam, dirs['fastq_bam_processing'], "output", threads, config, reference_assembly, fast_mode, delete_intermediates, keep_intermediates
             )
 
             if not fastq1 or not fastq2:
                 raise ValueError("Failed to generate FASTQ files from BAM. Exiting pipeline.")
 
         # Kestrel Genotyping
-        vcf_out = os.path.join(output_dir, "output.vcf")
+        vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
         vcf_path = Path(vcf_out)
         reference_vntr = config["reference_data"]["muc1_reference_vntr"]  # Extract reference VNTR from config
         kestrel_path = config["tools"]["kestrel"]  # Extract Kestrel tool path from config
         kestrel_settings = config["kestrel_settings"]  # Extract Kestrel-specific settings from config
-        
+
         if fastq1 and fastq2:
             # Run Kestrel genotyping with the provided FASTQ files
-            run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_vntr, kestrel_path, temp_dir, kestrel_settings, config)
+            run_kestrel(vcf_path, dirs['kestrel'], fastq1, fastq2, reference_vntr, kestrel_path, kestrel_settings, config)
         else:
             raise ValueError("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
 
@@ -88,7 +88,7 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
             sorted_bam = None
             if fastq1 and fastq2:
                 # Align and sort the FASTQ files to generate a BAM file for adVNTR using the hg19 reference
-                sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, output_dir, "output", threads, config)
+                sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, dirs['alignment_processing'], "output", threads, config)
             elif bam:
                 # Use the provided BAM file directly for adVNTR
                 sorted_bam = bam
@@ -96,11 +96,11 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
             if sorted_bam:
                 # Run adVNTR genotyping with the sorted BAM file
                 logging.info(f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}")
-                run_advntr(advntr_reference, sorted_bam, output_dir, "output", config)
+                run_advntr(advntr_reference, sorted_bam, dirs['advntr'], "output", config)
 
                 # Process adVNTR output
-                vcf_path = os.path.join(output_dir, "output_adVNTR.vcf")
-                process_advntr_output(vcf_path, output_dir, "output", config)
+                vcf_path = os.path.join(dirs['advntr'], "output_adVNTR.vcf")
+                process_advntr_output(vcf_path, dirs['advntr'], "output", config)
             else:
                 raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
 
