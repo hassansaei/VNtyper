@@ -17,19 +17,25 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         None
     """
     logger = logging.getLogger()  # Get the root logger
-    if not logger.handlers:  # Ensure no duplicate handlers are added
-        # Configure the logger
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            filename=log_file,
-            filemode='a',  # Append mode for logging to a file
-        )
-        
-        if log_file is None:  # If no log file is specified, add a StreamHandler for stdout
-            logger.addHandler(logging.StreamHandler())
-
-import os
+    logger.setLevel(log_level)  # Set the overall logging level
+    
+    # Clear existing handlers to avoid duplicate logs
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    
+    # Create formatter for log messages
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    
+    if log_file:
+        # Create file handler if log_file is specified
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    # Always add a single stream handler (console output)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 def create_output_directories(base_output_dir):
     """
@@ -54,9 +60,16 @@ def create_output_directories(base_output_dir):
     
     # Create each directory if it doesn't exist
     for dir_path in dirs.values():
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path)
-    
+        try:
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path)
+                logging.info(f"Created directory: {dir_path}")
+            else:
+                logging.info(f"Directory already exists: {dir_path}")
+        except Exception as e:
+            logging.error(f"Failed to create directory {dir_path}: {e}")
+            raise
+
     return dirs
 
 def search(regex: str, df, case=False):
@@ -74,15 +87,22 @@ def search(regex: str, df, case=False):
     Returns:
         pd.DataFrame: A filtered DataFrame containing rows that match the regex.
     """
-    # Select only text-like columns (object dtype) for searching
-    textlikes = df.select_dtypes(include=[object, "object"])
-    
-    # Apply the regex search across the DataFrame and filter rows that match in any column
-    return df[
-        textlikes.apply(
-            lambda column: column.str.contains(regex, regex=True, case=case, na=False)
-        ).any(axis=1)
-    ]
+    logging.debug("Starting regex search in DataFrame.")
+    try:
+        # Select only text-like columns (object dtype) for searching
+        textlikes = df.select_dtypes(include=[object, "object"])
+        
+        # Apply the regex search across the DataFrame and filter rows that match in any column
+        result_df = df[
+            textlikes.apply(
+                lambda column: column.str.contains(regex, regex=True, case=case, na=False)
+            ).any(axis=1)
+        ]
+        logging.debug("Regex search completed.")
+        return result_df
+    except Exception as e:
+        logging.error(f"Error during regex search: {e}")
+        raise
 
 def load_config(config_path=None):
     """
@@ -107,12 +127,17 @@ def load_config(config_path=None):
         return None
     
     if not os.path.exists(config_path):
+        logging.error(f"Config file not found: {config_path}")
         raise FileNotFoundError(f"Config file not found: {config_path}")
     
     try:
         with open(config_path, 'r') as config_file:
             config = json.load(config_file)
-        return config
+            logging.info(f"Configuration loaded from {config_path}")
+            return config
     except json.JSONDecodeError as e:
         logging.error(f"Error decoding JSON from the config file: {e}")
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error loading config file {config_path}: {e}")
         raise
