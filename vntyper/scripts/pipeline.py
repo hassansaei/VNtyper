@@ -55,6 +55,7 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
 
         # FASTQ Quality Control or BAM Processing
         if fastq1 and fastq2:
+            # Process raw FASTQ files if provided
             process_fastq(fastq1, fastq2, threads, output_dir, "output", config)
         elif bam:
             # Convert BAM to FASTQ
@@ -73,7 +74,8 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
         kestrel_settings = config["kestrel_settings"]  # Extract Kestrel-specific settings from config
         
         if fastq1 and fastq2:
-            run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_vntr, kestrel_path, temp_dir, kestrel_settings)  # Pass necessary arguments to run_kestrel
+            # Run Kestrel genotyping with the provided FASTQ files
+            run_kestrel(vcf_path, output_dir, fastq1, fastq2, reference_vntr, kestrel_path, temp_dir, kestrel_settings, config)
         else:
             raise ValueError("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
 
@@ -82,11 +84,14 @@ def run_pipeline(reference_file, output_dir, ignore_advntr, config, fastq1=None,
             # Perform alignment only when adVNTR genotyping is not skipped
             sorted_bam = None
             if fastq1 and fastq2:
+                # Align and sort the FASTQ files to generate a BAM file for adVNTR
                 sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, output_dir, "output", threads, config)
             elif bam:
+                # Use the provided BAM file directly
                 sorted_bam = bam
 
             if sorted_bam:
+                # Run adVNTR genotyping with the sorted BAM file
                 run_advntr(reference_file, config["reference_data"]["advntr_reference_vntr"], sorted_bam, output_dir, "output")
             else:
                 raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
