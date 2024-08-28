@@ -4,7 +4,7 @@ from pathlib import Path
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
-from vntyper.scripts.advntr_genotyping import run_advntr
+from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.utils import load_config, setup_logging
 from vntyper.version import __version__ as VERSION
 import sys
@@ -85,10 +85,13 @@ def main():
         sys.exit(1)
 
     # Determine the appropriate BWA reference based on the assembly
-    if args.reference_assembly == "hg19":
-        bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+    if hasattr(args, 'reference_assembly'):  # Ensure that reference_assembly is present
+        if args.reference_assembly == "hg19":
+            bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+        else:
+            bwa_reference = config["reference_data"]["bwa_reference_hg38"]
     else:
-        bwa_reference = config["reference_data"]["bwa_reference_hg38"]
+        bwa_reference = None
 
     # Display welcome message if --help is called
     if args.help:
@@ -119,13 +122,19 @@ def main():
         )
     
     elif args.command == "fastq":
-        process_fastq(args.fastq1, args.fastq2, args.threads, Path(args.output_dir), config=config)
+        process_fastq(
+            fastq1=args.fastq1, 
+            fastq2=args.fastq2, 
+            threads=args.threads, 
+            output_dir=Path(args.output_dir), 
+            config=config
+        )
     
     elif args.command == "bam":
         process_bam_to_fastq(
-            args.alignment, 
-            Path(args.output_dir), 
-            args.threads, 
+            bam=args.alignment, 
+            output_dir=Path(args.output_dir), 
+            threads=args.threads, 
             config=config, 
             reference_assembly=args.reference_assembly, 
             fast_mode=args.fast_mode, 
@@ -147,10 +156,19 @@ def main():
     
     elif args.command == "advntr":
         run_advntr(
-            alignment=args.alignment,
-            reference_file=args.reference_file,
-            reference_vntr=args.reference_vntr,
-            output_dir=Path(args.output_dir)
+            reference=args.reference_file,
+            db_file_hg19=args.reference_vntr,
+            sorted_bam=args.alignment,
+            output=args.output_dir,
+            output_name="output"
+        )
+
+        # After running adVNTR, process the output
+        advntr_vcf_path = Path(args.output_dir) / "output_adVNTR.vcf"
+        process_advntr_output(
+            vcf_path=advntr_vcf_path,
+            output=args.output_dir,
+            output_name="output"
         )
 
 if __name__ == "__main__":
