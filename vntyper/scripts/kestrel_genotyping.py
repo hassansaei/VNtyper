@@ -84,21 +84,32 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
                     header = line.strip().split('\t')
                 elif not line.startswith("##"):
                     data.append(line.strip().split('\t'))
-        return pd.DataFrame(data, columns=header)
+        if data:  # Ensure that there is data before creating a DataFrame
+            return pd.DataFrame(data, columns=header)
+        else:
+            return pd.DataFrame()  # Return an empty DataFrame if no data is found
 
     # Load the filtered VCF files into DataFrames
     vcf_insertion = read_vcf_without_comments(output_ins)
     vcf_deletion = read_vcf_without_comments(output_del)
 
+    if vcf_insertion.empty and vcf_deletion.empty:
+        logging.warning("No insertion or deletion variants found in the VCF. Skipping Kestrel processing.")
+        return None  # Early exit if no data
+
     # Load MUC1 VNTR reference motifs
     MUC1_ref = load_muc1_reference(reference_vntr)
 
     # Preprocess insertion and deletion dataframes
-    insertion_df = preprocessing_insertion(vcf_insertion, MUC1_ref)
-    deletion_df = preprocessing_deletion(vcf_deletion, MUC1_ref)
+    insertion_df = preprocessing_insertion(vcf_insertion, MUC1_ref) if not vcf_insertion.empty else pd.DataFrame()
+    deletion_df = preprocessing_deletion(vcf_deletion, MUC1_ref) if not vcf_deletion.empty else pd.DataFrame()
         
     # Combine insertion and deletion dataframes
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
+
+    if combined_df.empty:
+        logging.warning("Combined DataFrame of insertions and deletions is empty. Skipping further processing.")
+        return None  # Early exit if no data
 
     # Load additional motifs from the configuration
     merged_motifs = load_additional_motifs(config)
@@ -299,10 +310,13 @@ def filter_by_alt_values_and_finalize(df):
 
 # Function 6: Motif Correction and Annotation
 def motif_correction_and_annotation(df, merged_motifs):
-    """
-    Performs motif correction and annotation based on the position (POS) and merges with the additional motif information.
-    """
-    df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
+    # Ensure that splitting will result in exactly two columns
+    if df['Motifs'].str.count('-').max() == 1:
+        df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
+    else:
+        logging.error("Unexpected format in 'Motifs' column during splitting.")
+        return pd.DataFrame()  # Return an empty DataFrame or handle appropriately
+    
     df['POS'] = df['POS'].astype(int)
 
     # Split into left and right motifs based on position
@@ -310,38 +324,40 @@ def motif_correction_and_annotation(df, merged_motifs):
     motif_right = df[df['POS'] >= 60].copy()  # Explicitly create a copy
 
     # Process the left motifs
-    motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
-    motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
-    motif_left = motif_left.merge(merged_motifs, on='Motif')
-    motif_left = motif_left[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
-                             'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
-                             'Depth_Score', 'Confidence']]
-    motif_left = motif_left.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
-    motif_left = motif_left.sort_values('POS', ascending=False).tail(1)
+    if not motif_left.empty:
+        motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
+        motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
+        motif_left = motif_left.merge(merged_motifs, on='Motif', how='left')
+        motif_left = motif_left[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
+                                 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
+                                 'Depth_Score', 'Confidence']]
+        motif_left = motif_left.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+        motif_left = motif_left.sort_values('POS', ascending=False).tail(1)
 
     # Process the right motifs
-    motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
-    motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
-    motif_right = motif_right.merge(merged_motifs, on='Motif')
-    motif_right = motif_right[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
-                               'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
-                               'Depth_Score', 'Confidence']]
+    if not motif_right.empty:
+        motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
+        motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
+        motif_right = motif_right.merge(merged_motifs, on='Motif', how='left')
+        motif_right = motif_right[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
+                                   'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
+                                   'Depth_Score', 'Confidence']]
 
-    if motif_right['ALT'].str.contains(r'\bGG\b').any():
-        motif_right = motif_right.loc[(motif_right['Motif'] != 'Q') & (motif_right['Motif'] != '8') &
-                                      (motif_right['Motif'] != '9') & (motif_right['Motif'] != '7') &
-                                      (motif_right['Motif'] != '6p') & (motif_right['Motif'] != '6') &
-                                      (motif_right['Motif'] != 'V') & (motif_right['Motif'] != 'J') &
-                                      (motif_right['Motif'] != 'I') & (motif_right['Motif'] != 'G') &
-                                      (motif_right['Motif'] != 'E') & (motif_right['Motif'] != 'A')]
-        motif_right = motif_right.loc[motif_right['ALT'] == 'GG']
-        motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
-        if motif_right['Motif'].str.contains('X').any():
-            motif_right = motif_right[motif_right['Motif'] == 'X']
-    else:
-        motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+        if motif_right['ALT'].str.contains(r'\bGG\b').any():
+            motif_right = motif_right.loc[(motif_right['Motif'] != 'Q') & (motif_right['Motif'] != '8') &
+                                          (motif_right['Motif'] != '9') & (motif_right['Motif'] != '7') &
+                                          (motif_right['Motif'] != '6p') & (motif_right['Motif'] != '6') &
+                                          (motif_right['Motif'] != 'V') & (motif_right['Motif'] != 'J') &
+                                          (motif_right['Motif'] != 'I') & (motif_right['Motif'] != 'G') &
+                                          (motif_right['Motif'] != 'E') & (motif_right['Motif'] != 'A')]
+            motif_right = motif_right.loc[motif_right['ALT'] == 'GG']
+            motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+            if motif_right['Motif'].str.contains('X').any():
+                motif_right = motif_right[motif_right['Motif'] == 'X']
+        else:
+            motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
 
-    motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
+        motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
 
     # Combine the processed left and right motifs
     combined_df = pd.concat([motif_right, motif_left])
