@@ -1,15 +1,31 @@
-import subprocess as sp
 import logging
 import os
 import pandas as pd
 from pathlib import Path
 from Bio import SeqIO
+from vntyper.scripts.utils import run_command
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 
 # Construct the Kestrel command based on kmer size and config settings
-def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, temp_dir, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
+def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
     """
     Constructs the command for running Kestrel based on various settings.
+    
+    Args:
+        kmer_size (int): Size of the kmer to use.
+        kestrel_path (str): Path to the Kestrel jar file.
+        reference_vntr (str): Path to the reference VNTR file.
+        output_dir (str): Directory for the output files.
+        fastq_1 (str): Path to the first FASTQ file.
+        fastq_2 (str): Path to the second FASTQ file.
+        vcf_out (str): Path to the VCF output file.
+        java_path (str): Path to the Java executable.
+        java_memory (str): Amount of memory to allocate to the JVM.
+        max_align_states (int): Maximum alignment states.
+        max_hap_states (int): Maximum haplotype states.
+    
+    Returns:
+        str: The constructed Kestrel command.
     """
     if not fastq_1 or not fastq_2:
         raise ValueError("FASTQ input files are missing or invalid.")
@@ -19,14 +35,23 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
         f"{fastq_1} {fastq_2} "
-        f"--temploc {temp_dir} "
-        f"--hapfmt sam -p {temp_dir}/output.sam"
+        f"--hapfmt sam -p {output_dir}/output.sam"
     )
 
 # Kestrel processing logic
-def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, temp_dir, kestrel_settings, config):
+def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, kestrel_settings, config):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
+
+    Args:
+        vcf_path (Path): Path to the output VCF file.
+        output_dir (str): Directory where Kestrel outputs will be saved.
+        fastq_1 (str): Path to the first FASTQ file.
+        fastq_2 (str): Path to the second FASTQ file.
+        reference_vntr (str): Path to the reference VNTR file.
+        kestrel_path (str): Path to the Kestrel jar file.
+        kestrel_settings (dict): Settings for Kestrel.
+        config (dict): Overall configuration dictionary.
     """
     java_path = kestrel_settings.get("java_path", "java")
     java_memory = kestrel_settings.get("java_memory", "15g")
@@ -42,21 +67,26 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             output_dir=output_dir,
             fastq_1=fastq_1,
             fastq_2=fastq_2,
-            temp_dir=temp_dir,
             vcf_out=vcf_path,
             java_path=java_path,
             java_memory=java_memory,
             max_align_states=max_align_states,
             max_hap_states=max_hap_states
         )
-        
+
+        log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
+
         if vcf_path.is_file():
             logging.info("VCF file already exists, skipping Kestrel run...")
             return
         else:
             logging.info(f"Launching Kestrel with kmer size {kmer_size}...")
-            process = sp.Popen(kmer_command, shell=True)
-            process.wait()
+            
+            # Run the command and log output to the specified log file
+            if not run_command(kmer_command, log_file, critical=True):
+                logging.error(f"Kestrel failed for kmer size {kmer_size}. Check {log_file} for details.")
+                raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+            
             logging.info(f"Mapping-free genotyping of MUC1-VNTR with kmer size {kmer_size} done!")
 
             if vcf_path.is_file():
