@@ -288,9 +288,10 @@ def filter_by_alt_values_and_finalize(df):
     # Drop unnecessary columns
     df.drop(['left', 'right'], axis=1, inplace=True)
 
-    # Keep only high precision results
+    # Keep only high precision results not in the red zone
+    # Note the Red_Zone is not defined in the current implementation and in the original code
     if 'Confidence' in df.columns:
-        df = df[df['Confidence'] != 'Low_Precision']
+        df = df[df['Confidence'] != 'Red_Zone']
 
     return df
 
