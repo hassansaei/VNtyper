@@ -29,31 +29,35 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         if log_file is None:  # If no log file is specified, add a StreamHandler for stdout
             logger.addHandler(logging.StreamHandler())
 
-def create_output_directories(working_dir, output):
+import os
+
+def create_output_directories(base_output_dir):
     """
-    Create the necessary output and temporary directories for the pipeline.
-
-    This function ensures that both the main output directory and the 
-    corresponding 'temp' subdirectory are created.
-
+    Create the necessary output directories for different analyses within the pipeline.
+    
+    This function ensures that directories are created for Kestrel, adVNTR, FASTQ/BAM processing, and alignment processing.
+    
     Args:
-        working_dir (str): The base working directory.
-        output (str): The name of the output directory to create.
-
+        base_output_dir (str): The base output directory.
+    
     Returns:
-        tuple: A tuple containing the paths to the output directory and temp directory.
+        dict: A dictionary containing paths to the specific subdirectories for each analysis.
     """
-    # Define the output directory path
-    output_dir = os.path.join(working_dir, output)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)  # Create the output directory if it doesn't exist
+    # Define subdirectory paths
+    dirs = {
+        "base": base_output_dir,
+        "kestrel": os.path.join(base_output_dir, "kestrel"),
+        "advntr": os.path.join(base_output_dir, "advntr"),
+        "fastq_bam_processing": os.path.join(base_output_dir, "fastq_bam_processing"),
+        "alignment_processing": os.path.join(base_output_dir, "alignment_processing"),
+    }
     
-    # Define the temp subdirectory path within the output directory
-    temp_dir = os.path.join(output_dir, "temp")
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)  # Create the temp directory if it doesn't exist
+    # Create each directory if it doesn't exist
+    for dir_path in dirs.values():
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
     
-    return output_dir, temp_dir
+    return dirs
 
 def search(regex: str, df, case=False):
     """
