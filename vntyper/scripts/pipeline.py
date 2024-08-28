@@ -6,7 +6,7 @@ import sys
 import logging
 from pathlib import Path
 
-from vntyper.scripts.utils import setup_logging, create_output_directories
+from vntyper.scripts.utils import setup_logging, create_output_directories, get_tool_versions
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
@@ -53,10 +53,9 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
     setup_logging(log_level=log_level, log_file=log_file)
     logging.info(f"Logging to file: {log_file}")
 
-    # Log versions of the tools being used
-    kestrel_version = config["tools"].get("kestrel_version", "unknown")
-    advntr_version = config["tools"].get("advntr_version", "unknown")
-    logging.info(f"VNtyper pipeline {VERSION} started with Kestrel version: {kestrel_version}, adVNTR version: {advntr_version}")
+    # Retrieve and log versions of the tools being used
+    tool_versions = get_tool_versions(config)
+    logging.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
     start = timeit.default_timer()
     logging.info("Pipeline execution started.")
