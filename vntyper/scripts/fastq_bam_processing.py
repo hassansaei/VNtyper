@@ -41,7 +41,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
     if keep_intermediates and os.path.exists(final_bam):
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
-        command_slice = f"{samtools_path} view -b {in_bam} {bam_region} -o {final_bam}"
+        command_slice = f"{samtools_path} view -P -b {in_bam} {bam_region} -o {final_bam}"
         logging.info(f'Starting BAM region slicing for {reference_assembly}...')
         if sp.call(command_slice, shell=True) != 0:
             logging.error('BAM region slicing failed.')
@@ -85,7 +85,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         logging.info(f"Reusing existing FASTQ files: {final_fastq_1} and {final_fastq_2}")
     else:
         command_sort_fastq = f"{samtools_path} sort -n -@ {threads} {final_bam} -o {output}{output_name}_VN.bam && " \
-                             f"{samtools_path} fastq -@ {threads} {output}{output_name}_VN.bam -1 {final_fastq_1} -2 {final_fastq_2}"
+                             f"{samtools_path} fastq -@ {threads} {output}{output_name}_VN.bam -1 {final_fastq_1} -2 {final_fastq_2} -0 /dev/null -s /dev/null"
         logging.info('Sorting and converting BAM to FASTQ...')
         if sp.call(command_sort_fastq, shell=True) != 0:
             logging.error('BAM to FASTQ conversion failed.')
