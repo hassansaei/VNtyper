@@ -26,7 +26,7 @@ def main():
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
     parser_pipeline.add_argument('-r', '--reference-file', type=str, required=False, help="The reference FASTA file for Kestrel.")
-    parser_pipeline.add_argument('--advntr-reference', type=str, required=True, help="The hg19 reference FASTA file for adVNTR genotyping.")
+    parser_pipeline.add_argument('--advntr-reference', type=str, required=False, help="The hg19 reference FASTA file for adVNTR genotyping.")
     parser_pipeline.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for the results.")
     parser_pipeline.add_argument('--ignore-advntr', action='store_true', help="Skip adVNTR genotyping of MUC1-VNTR.")
     parser_pipeline.add_argument('--fastq1', type=str, help="Path to the first FASTQ file.")
@@ -109,6 +109,7 @@ def main():
     if args.command == "pipeline":
         run_pipeline(
             reference_file=bwa_reference,
+            advntr_reference=args.advntr_reference,  # Pass the adVNTR-specific reference (hg19)
             output_dir=Path(args.output_dir),
             ignore_advntr=args.ignore_advntr,
             config=config,
@@ -116,7 +117,7 @@ def main():
             fastq2=args.fastq2,
             bam=args.bam,
             threads=args.threads,
-            reference_assembly=args.reference_assembly,  # Pass the selected reference assembly
+            reference_assembly=args.reference_assembly,  # Pass the selected reference assembly for BAM
             fast_mode=args.fast_mode,  # Pass the fast mode option
             keep_intermediates=args.keep_intermediates,  # Pass the keep_intermediates flag
             delete_intermediates=args.delete_intermediates  # Pass the delete_intermediates flag
@@ -161,7 +162,8 @@ def main():
             db_file_hg19=args.reference_vntr,
             sorted_bam=args.alignment,
             output=args.output_dir,
-            output_name="output"
+            output_name="output",
+            config=config
         )
 
         # After running adVNTR, process the output
