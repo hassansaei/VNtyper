@@ -25,8 +25,7 @@ def main():
 
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
-    parser_pipeline.add_argument('-r', '--reference-file', type=str, required=False, help="The reference FASTA file for Kestrel.")
-    parser_pipeline.add_argument('--advntr-reference', type=str, required=False, help="The hg19 reference FASTA file for adVNTR genotyping.")
+    parser_pipeline.add_argument('--advntr-reference', type=str, choices=["hg19", "hg38"], required=False, help="Override reference assembly for adVNTR genotyping (hg19 or hg38).")
     parser_pipeline.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for the results.")
     parser_pipeline.add_argument('--ignore-advntr', action='store_true', help="Skip adVNTR genotyping of MUC1-VNTR.")
     parser_pipeline.add_argument('--fastq1', type=str, help="Path to the first FASTQ file.")
@@ -67,7 +66,6 @@ def main():
     # Subcommand for adVNTR genotyping
     parser_advntr = subparsers.add_parser("advntr", help="Run adVNTR genotyping.")
     parser_advntr.add_argument('-a', '--alignment', type=str, required=True, help="Path to the BAM file.")
-    parser_advntr.add_argument('-r', '--reference-file', type=str, required=True, help="Path to the reference FASTA file.")
     parser_advntr.add_argument('-m', '--reference-vntr', type=str, required=True, help="Path to the adVNTR reference VNTR database.")
     parser_advntr.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for adVNTR results.")
 
@@ -85,14 +83,21 @@ def main():
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
 
-    # Determine the appropriate BWA reference based on the assembly
-    if hasattr(args, 'reference_assembly'):  # Ensure that reference_assembly is present
+    # Determine the appropriate BWA reference and adVNTR reference based on the assembly or advntr_reference
+    if args.advntr_reference:  # If --advntr-reference is provided, override the references
+        if args.advntr_reference == "hg19":
+            bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
+        elif args.advntr_reference == "hg38":
+            bwa_reference = config["reference_data"]["bwa_reference_hg38"]
+            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
+    else:  # Use reference-assembly if --advntr-reference is not provided
         if args.reference_assembly == "hg19":
             bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
         else:
             bwa_reference = config["reference_data"]["bwa_reference_hg38"]
-    else:
-        bwa_reference = None
+            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
 
     # Display welcome message if --help is called
     if args.help:
@@ -108,8 +113,8 @@ def main():
     # Handle subcommands
     if args.command == "pipeline":
         run_pipeline(
-            reference_file=bwa_reference,
-            advntr_reference=args.advntr_reference,  # Pass the adVNTR-specific reference (hg19)
+            bwa_reference=bwa_reference,
+            advntr_reference=advntr_reference,
             output_dir=Path(args.output_dir),
             ignore_advntr=args.ignore_advntr,
             config=config,
@@ -117,10 +122,10 @@ def main():
             fastq2=args.fastq2,
             bam=args.bam,
             threads=args.threads,
-            reference_assembly=args.reference_assembly,  # Pass the selected reference assembly for BAM
-            fast_mode=args.fast_mode,  # Pass the fast mode option
-            keep_intermediates=args.keep_intermediates,  # Pass the keep_intermediates flag
-            delete_intermediates=args.delete_intermediates  # Pass the delete_intermediates flag
+            reference_assembly=args.reference_assembly,
+            fast_mode=args.fast_mode,
+            keep_intermediates=args.keep_intermediates,
+            delete_intermediates=args.delete_intermediates
         )
     
     elif args.command == "fastq":
@@ -158,7 +163,6 @@ def main():
     
     elif args.command == "advntr":
         run_advntr(
-            reference=args.reference_file,
             db_file_hg19=args.reference_vntr,
             sorted_bam=args.alignment,
             output=args.output_dir,
@@ -171,7 +175,8 @@ def main():
         process_advntr_output(
             vcf_path=advntr_vcf_path,
             output=args.output_dir,
-            output_name="output"
+            output_name="output",
+            config=config
         )
 
 if __name__ == "__main__":
