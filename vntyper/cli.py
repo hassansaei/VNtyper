@@ -16,8 +16,8 @@ def main():
 
     # Adding global flags with short and long options
     parser.add_argument('-h', '--help', action='store_true', help="Show this help message and exit")
-    parser.add_argument('-l', '--log-level', help="Set the logging level", default="INFO")
-    parser.add_argument('-f', '--log-file', help="Set the log output file", default=None)
+    parser.add_argument('-l', '--log-level', help="Set the logging level (e.g., DEBUG, INFO, WARNING, ERROR)", default="INFO")
+    parser.add_argument('-f', '--log-file', help="Set the log output file (default is stdout)", default=None)
     parser.add_argument('--config-path', type=Path, help="Path to the config.json file", default=default_config_path)
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {VERSION}')
 
