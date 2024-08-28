@@ -37,7 +37,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         bam_region = config["bam_processing"]["bam_region_hg19"]
 
     # Slicing BAM region
-    final_bam = f"{output}{output_name}_chr1.bam"
+    final_bam = f"{output}{output_name}_sliced.bam"
     if keep_intermediates and os.path.exists(final_bam):
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
@@ -46,7 +46,6 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         if sp.call(command_slice, shell=True) != 0:
             logging.error('BAM region slicing failed.')
             return None, None
-        command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_vntyper.bam {final_bam}"
         logging.info('BAM region slicing completed.')
 
     if fast_mode:
@@ -64,8 +63,8 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         if sp.call(command_filter, shell=True, executable='/bin/bash') != 0:
             logging.error('BAM filtering failed.')
             return None, None
-        command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_vntyper.bam {final_bam} " \
-                f"{output}{output_name}_unmapped1.bam {output}{output_name}_unmapped2.bam {output}{output_name}_unmapped3.bam"
+        command_merge = f"{samtools_path} merge -@ {threads} {output}{output_name}_sliced_unmapped.bam {final_bam} " \
+                        f"{output}{output_name}_unmapped1.bam {output}{output_name}_unmapped2.bam {output}{output_name}_unmapped3.bam"
         logging.info('BAM filtering completed.')
 
         # Merging BAM files
@@ -75,18 +74,20 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
             return None, None
         logging.info('BAM merging completed.')
 
-        final_bam = f"{output}{output_name}_vntyper.bam"
+        final_bam = f"{output}{output_name}_sliced_unmapped.bam"
 
-    # Sorting and converting BAM to FASTQ
+    # Sorting and converting BAM to FASTQ using pipes
     final_fastq_1 = f"{output}{output_name}_R1.fastq.gz"
     final_fastq_2 = f"{output}{output_name}_R2.fastq.gz"
     
     if keep_intermediates and os.path.exists(final_fastq_1) and os.path.exists(final_fastq_2):
         logging.info(f"Reusing existing FASTQ files: {final_fastq_1} and {final_fastq_2}")
     else:
-        command_sort_fastq = f"{samtools_path} sort -n -@ {threads} {final_bam} -o {output}{output_name}_VN.bam && " \
-                             f"{samtools_path} fastq -@ {threads} {output}{output_name}_VN.bam -1 {final_fastq_1} -2 {final_fastq_2} -0 /dev/null -s /dev/null"
-        logging.info('Sorting and converting BAM to FASTQ...')
+        command_sort_fastq = (
+            f"{samtools_path} sort -n -@ {threads} {final_bam} | "
+            f"{samtools_path} fastq -@ {threads} - -1 {final_fastq_1} -2 {final_fastq_2} -0 /dev/null -s /dev/null"
+        )
+        logging.info('Sorting and converting BAM to FASTQ using pipes...')
         if sp.call(command_sort_fastq, shell=True) != 0:
             logging.error('BAM to FASTQ conversion failed.')
             return None, None
@@ -95,13 +96,15 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
     # Remove intermediate BAM files if required
     if delete_intermediates and not keep_intermediates:
         logging.info('Removing intermediate BAM files...')
-        for ext in ["*.bam", "*.bai"]:
-            files_to_remove = f"{output}{output_name}{ext}"
-            if sp.call(f"rm -f {files_to_remove}", shell=True) != 0:
-                logging.warning(f"Failed to remove {ext} files (if they existed).")
-        logging.info(f"Removed intermediate files.")
+        intermediate_files = [
+            f"{output}{output_name}_unmapped1.bam",
+            f"{output}{output_name}_unmapped2.bam",
+            f"{output}{output_name}_unmapped3.bam",
+        ]
+        for file in intermediate_files:
+            if os.path.exists(file):
+                os.remove(file)
+        logging.info('Intermediate files removed.')
 
     # Return the paths to the generated FASTQ files
-    fastq_1 = f"{output}{output_name}_R1.fastq.gz"
-    fastq_2 = f"{output}{output_name}_R2.fastq.gz"
-    return fastq_1, fastq_2
+    return final_fastq_1, final_fastq_2
