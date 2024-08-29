@@ -10,12 +10,12 @@ from vntyper.version import __version__ as VERSION
 import sys
 
 def main():
-    parser = argparse.ArgumentParser(description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.", add_help=False)
+    # Create the main parser and add global arguments
+    parser = argparse.ArgumentParser(description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.", add_help=True)
     
     default_config_path = Path(__file__).parent / "config.json"
 
     # Adding global flags with short and long options
-    parser.add_argument('-h', '--help', action='store_true', help="Show this help message and exit")
     parser.add_argument('-l', '--log-level', help="Set the logging level (e.g., DEBUG, INFO, WARNING, ERROR)", default="INFO")
     parser.add_argument('-f', '--log-file', help="Set the log output file (default is stdout)", default=None)
     parser.add_argument('--config-path', type=Path, help="Path to the config.json file", default=default_config_path)
@@ -72,6 +72,17 @@ def main():
     # Parse arguments
     args = parser.parse_args()
 
+    # Display help if no command is provided
+    if args.command is None:
+        parser.print_help()
+        sys.exit(0)
+
+    # Display help and exit if no input files are provided for the pipeline
+    if args.command == "pipeline" and not (args.fastq1 and args.fastq2 or args.bam):
+        print("Error: The pipeline requires either FASTQ files or a BAM file.")
+        parser_pipeline.print_help()
+        sys.exit(1)
+
     # Load config with error handling
     config = None
     try:
@@ -84,27 +95,21 @@ def main():
         sys.exit(1)
 
     # Determine the appropriate BWA reference and adVNTR reference based on the assembly or advntr_reference
-    if args.advntr_reference:  # If --advntr-reference is provided, override the references
-        if args.advntr_reference == "hg19":
-            bwa_reference = config["reference_data"]["bwa_reference_hg19"]
-            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
-        elif args.advntr_reference == "hg38":
-            bwa_reference = config["reference_data"]["bwa_reference_hg38"]
-            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
-    else:  # Use reference-assembly if --advntr-reference is not provided
-        if args.reference_assembly == "hg19":
-            bwa_reference = config["reference_data"]["bwa_reference_hg19"]
-            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
-        else:
-            bwa_reference = config["reference_data"]["bwa_reference_hg38"]
-            advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
-
-    # Display welcome message if --help is called
-    if args.help:
-        if config and "welcome_message" in config:
-            print(config["welcome_message"])
-        parser.print_help()
-        sys.exit(0)
+    if args.command == "pipeline":
+        if args.advntr_reference:  # If --advntr-reference is provided, override the references
+            if args.advntr_reference == "hg19":
+                bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
+            elif args.advntr_reference == "hg38":
+                bwa_reference = config["reference_data"]["bwa_reference_hg38"]
+                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
+        else:  # Use reference-assembly if --advntr-reference is not provided
+            if args.reference_assembly == "hg19":
+                bwa_reference = config["reference_data"]["bwa_reference_hg19"]
+                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
+            else:
+                bwa_reference = config["reference_data"]["bwa_reference_hg38"]
+                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
 
     # Setup logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
