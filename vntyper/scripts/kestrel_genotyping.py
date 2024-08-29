@@ -35,7 +35,7 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
         f"{fastq_1} {fastq_2} "
-        f"--hapfmt sam -p {output_dir}/output.sam"
+        f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout --temploc {output_dir}"
     )
 
 # Kestrel processing logic
