@@ -12,19 +12,17 @@ import sys
 def main():
     # Create the main parser and add global arguments
     parser = argparse.ArgumentParser(description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.", add_help=True)
-    
-    default_config_path = Path(__file__).parent / "config.json"
 
     # Adding global flags with short and long options
     parser.add_argument('-l', '--log-level', help="Set the logging level (e.g., DEBUG, INFO, WARNING, ERROR)", default="INFO")
     parser.add_argument('-f', '--log-file', help="Set the log output file (default is stdout)", default=None)
-    parser.add_argument('--config-path', type=Path, help="Path to the config.json file", default=default_config_path)
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {VERSION}')
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
+    parser_pipeline.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
     parser_pipeline.add_argument('--advntr-reference', type=str, choices=["hg19", "hg38"], required=False, help="Override reference assembly for adVNTR genotyping (hg19 or hg38).")
     parser_pipeline.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for the results.")
     parser_pipeline.add_argument('--ignore-advntr', action='store_true', help="Skip adVNTR genotyping of MUC1-VNTR.")
@@ -40,6 +38,7 @@ def main():
 
     # Subcommand for FASTQ processing
     parser_fastq = subparsers.add_parser("fastq", help="Process FASTQ files.")
+    parser_fastq.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
     parser_fastq.add_argument('-r1', '--fastq1', type=str, required=True, help="Path to the first FASTQ file.")
     parser_fastq.add_argument('-r2', '--fastq2', type=str, help="Path to the second FASTQ file.")
     parser_fastq.add_argument('-t', '--threads', type=int, default=4, help="Number of threads to use.")
@@ -47,6 +46,7 @@ def main():
     
     # Subcommand for BAM processing
     parser_bam = subparsers.add_parser("bam", help="Process BAM files.")
+    parser_bam.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
     parser_bam.add_argument('-a', '--alignment', type=str, required=True, help="Path to the BAM file.")
     parser_bam.add_argument('-t', '--threads', type=int, default=4, help="Number of threads to use.")
     parser_bam.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for processed BAM files.")
@@ -58,6 +58,7 @@ def main():
 
     # Subcommand for Kestrel genotyping
     parser_kestrel = subparsers.add_parser("kestrel", help="Run Kestrel genotyping.")
+    parser_kestrel.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
     parser_kestrel.add_argument('-r', '--reference-vntr', type=str, required=True, help="Path to the MUC1-specific reference VNTR file.")
     parser_kestrel.add_argument('-f1', '--fastq1', type=str, required=True, help="Path to the first FASTQ file.")
     parser_kestrel.add_argument('-f2', '--fastq2', type=str, help="Path to the second FASTQ file.")
@@ -65,6 +66,7 @@ def main():
     
     # Subcommand for adVNTR genotyping
     parser_advntr = subparsers.add_parser("advntr", help="Run adVNTR genotyping.")
+    parser_advntr.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
     parser_advntr.add_argument('-a', '--alignment', type=str, required=True, help="Path to the BAM file.")
     parser_advntr.add_argument('-m', '--reference-vntr', type=str, required=True, help="Path to the adVNTR reference VNTR database.")
     parser_advntr.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for adVNTR results.")
@@ -90,6 +92,7 @@ def main():
             config = load_config(args.config_path)
         else:
             logging.error(f"Configuration file not found at {args.config_path}. Using default values where applicable.")
+            config = {}  # Provide a default empty config to avoid NoneType issues
     except Exception as e:
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
@@ -98,18 +101,18 @@ def main():
     if args.command == "pipeline":
         if args.advntr_reference:  # If --advntr-reference is provided, override the references
             if args.advntr_reference == "hg19":
-                bwa_reference = config["reference_data"]["bwa_reference_hg19"]
-                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
+                bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
+                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
             elif args.advntr_reference == "hg38":
-                bwa_reference = config["reference_data"]["bwa_reference_hg38"]
-                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
+                bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
+                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
         else:  # Use reference-assembly if --advntr-reference is not provided
             if args.reference_assembly == "hg19":
-                bwa_reference = config["reference_data"]["bwa_reference_hg19"]
-                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg19"]
+                bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
+                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
             else:
-                bwa_reference = config["reference_data"]["bwa_reference_hg38"]
-                advntr_reference = config["reference_data"]["advntr_reference_vntr_hg38"]
+                bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
+                advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
 
     # Setup logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
@@ -161,8 +164,8 @@ def main():
             fastq_1=args.fastq1,
             fastq_2=args.fastq2,
             reference_vntr=args.reference_vntr,
-            kestrel_path=config["tools"]["kestrel"],
-            kestrel_settings=config["kestrel_settings"]
+            kestrel_path=config.get("tools", {}).get("kestrel"),
+            kestrel_settings=config.get("kestrel_settings", {})
         )
     
     elif args.command == "advntr":
