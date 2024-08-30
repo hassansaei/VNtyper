@@ -1,86 +1,87 @@
 import pandas as pd
 from Bio import SeqIO
 
-def process_motifs(reference_VNTR, tools_path):
+def load_muc1_reference(reference_file):
     """
-    Placeholder function for processing motifs from reference files.
-
-    This function is intended to handle the processing of motif sequences 
-    from the provided reference VNTR files and tools path. Currently, it 
-    serves as a placeholder.
-
-    Args:
-        reference_VNTR (str): Path to the reference VNTR file.
-        tools_path (str): Path to the directory containing necessary tools.
-
-    Returns:
-        None
+    Loads the MUC1 VNTR reference motifs from a FASTA file.
     """
-    # Placeholder for future implementation of motif processing logic
-    pass
+    identifiers = []
+    sequences = []
+    with open(reference_file) as fasta_file:
+        for seq_record in SeqIO.parse(fasta_file, 'fasta'):
+            identifiers.append(seq_record.id)
+            sequences.append(seq_record.seq)
+    
+    return pd.DataFrame({"Motifs": identifiers, "Motif_sequence": sequences})
 
-def preprocessing_insertion(df, motif_ref):
+def preprocessing_insertion(df, muc1_ref):
     """
-    Preprocess insertion variants by merging with the reference motifs.
-
-    This function renames the '#CHROM' column to 'Motifs', drops unnecessary 
-    columns, and merges the input DataFrame with the motif reference DataFrame 
-    to associate motifs with insertions.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing insertion variant information.
-        motif_ref (pd.DataFrame): DataFrame containing reference motifs.
-
-    Returns:
-        pd.DataFrame: Preprocessed DataFrame with insertion variants and 
-                      associated motifs.
+    Preprocesses insertion variants by merging with the reference motifs.
     """
-    # Create a copy of the input DataFrame to avoid modifying the original
-    df1 = df.copy()
+    # Rename the '#CHROM' column to 'Motifs'
+    df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    
+    # Drop unwanted columns
+    df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    
+    # Rename the last column to 'Sample'
+    last_column_name = df.columns[-1]
+    df.rename(columns={last_column_name: 'Sample'}, inplace=True)
+    
+    # Merge with the MUC1 reference motifs
+    df = pd.merge(df, muc1_ref, on='Motifs', how='left')
+    
+    # Add a 'Variant' column to indicate this is an insertion
+    df['Variant'] = 'Insertion'
+    
+    return df
 
-    # Rename the '#CHROM' column to 'Motifs' to match the motif reference DataFrame
-    df1.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
-
-    # Drop unnecessary columns that are not needed for further processing
-    df1.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
-
-    # Merge the DataFrame with the reference motifs based on the 'Motifs' column
-    df1 = pd.merge(df1, motif_ref, on='Motifs', how='left')
-
-    # Add a new column to indicate that these are insertion variants
-    df1['Variant'] = 'Insertion'
-
-    return df1
-
-def preprocessing_deletion(df, motif_ref):
+def preprocessing_deletion(df, muc1_ref):
     """
-    Preprocess deletion variants by merging with the reference motifs.
-
-    This function renames the '#CHROM' column to 'Motifs', drops unnecessary 
-    columns, and merges the input DataFrame with the motif reference DataFrame 
-    to associate motifs with deletions.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing deletion variant information.
-        motif_ref (pd.DataFrame): DataFrame containing reference motifs.
-
-    Returns:
-        pd.DataFrame: Preprocessed DataFrame with deletion variants and 
-                      associated motifs.
+    Preprocesses deletion variants by merging with the reference motifs.
     """
-    # Create a copy of the input DataFrame to avoid modifying the original
-    df2 = df.copy()
+    # Rename the '#CHROM' column to 'Motifs'
+    df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+    
+    # Drop unwanted columns
+    df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    
+    # Rename the last column to 'Sample'
+    last_column_name = df.columns[-1]
+    df.rename(columns={last_column_name: 'Sample'}, inplace=True)
+    
+    # Merge with the MUC1 reference motifs
+    df = pd.merge(df, muc1_ref, on='Motifs', how='left')
+    
+    # Add a 'Variant' column to indicate this is a deletion
+    df['Variant'] = 'Deletion'
+    
+    return df
 
-    # Rename the '#CHROM' column to 'Motifs' to match the motif reference DataFrame
-    df2.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
+# Load the additional motifs for final processing
+def load_additional_motifs(config):
+    """
+    Loads additional motifs from the code-adVNTR_RUs.fa and MUC1_motifs_Rev_com.fa files for final annotation.
+    """
+    identifiers = []
+    sequences = []
+    
+    # Get the file paths from the config
+    code_advntr_file = config["reference_data"]["code_adVNTR_RUs"]
+    muc1_motifs_rev_com_file = config["reference_data"]["muc1_motifs_rev_com"]
 
-    # Drop unnecessary columns that are not needed for further processing
-    df2.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
+    with open(code_advntr_file) as RU_file, open(muc1_motifs_rev_com_file) as Motif_file:
+        for seq_record in SeqIO.parse(RU_file, 'fasta'):
+            identifiers.append(seq_record.id)
+            sequences.append(seq_record.seq.upper())
 
-    # Merge the DataFrame with the reference motifs based on the 'Motifs' column
-    df2 = pd.merge(df2, motif_ref, on='Motifs', how='left')
+        for seq_record in SeqIO.parse(Motif_file, 'fasta'):
+            identifiers.append(seq_record.id)
+            sequences.append(seq_record.seq.upper())
 
-    # Add a new column to indicate that these are deletion variants
-    df2['Variant'] = 'Deletion'
+    s1 = pd.Series(identifiers, name='ID')
+    s2 = pd.Series(sequences, name='Sequence')
+    merged_motifs = pd.DataFrame(dict(Motif=s1, Motif_sequence=s2))
 
-    return df2
+    return merged_motifs
+    

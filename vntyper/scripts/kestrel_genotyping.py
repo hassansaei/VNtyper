@@ -5,6 +5,7 @@ from pathlib import Path
 from Bio import SeqIO
 from vntyper.scripts.utils import run_command
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
+from vntyper.scripts.motif_processing import load_muc1_reference, load_additional_motifs, preprocessing_insertion, preprocessing_deletion
 
 # Construct the Kestrel command based on kmer size and config settings
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
@@ -125,6 +126,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
 
     if vcf_insertion.empty and vcf_deletion.empty:
         logging.warning("No insertion or deletion variants found in the VCF. Skipping Kestrel processing.")
+        output_empty_result(output_dir)
         return None  # Early exit if no data
 
     # Load MUC1 VNTR reference motifs
@@ -139,6 +141,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
 
     if combined_df.empty:
         logging.warning("Combined DataFrame of insertions and deletions is empty. Skipping further processing.")
+        output_empty_result(output_dir)
         return None  # Early exit if no data
 
     # Load additional motifs from the configuration
@@ -146,6 +149,11 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
 
     # Process and filter results based on frameshifts and confidence scores, with motif correction
     processed_df = process_kmer_results(combined_df, merged_motifs)
+
+    if processed_df.empty:
+        logging.warning("Final processed DataFrame is empty. Outputting empty results.")
+        output_empty_result(output_dir)
+        return None  # Early exit if no data
 
     # Save the intermediate pre-result as `_pre_result.tsv`
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
@@ -159,62 +167,18 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Kestrel VCF processing completed.")
     return processed_df
 
-def load_muc1_reference(reference_file):
+def output_empty_result(output_dir):
     """
-    Loads the MUC1 VNTR reference motifs from a FASTA file.
+    Creates an empty result file with the correct headers.
     """
-    identifiers = []
-    sequences = []
-    with open(reference_file) as fasta_file:
-        for seq_record in SeqIO.parse(fasta_file, 'fasta'):
-            identifiers.append(seq_record.id)
-            sequences.append(seq_record.seq)
-    
-    return pd.DataFrame({"Motifs": identifiers, "Motif_sequence": sequences})
-
-def preprocessing_insertion(df, muc1_ref):
-    """
-    Preprocesses insertion variants by merging with the reference motifs.
-    """
-    # Rename the '#CHROM' column to 'Motifs'
-    df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
-    
-    # Drop unwanted columns
-    df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
-    
-    # Rename the last column to 'Sample'
-    last_column_name = df.columns[-1]
-    df.rename(columns={last_column_name: 'Sample'}, inplace=True)
-    
-    # Merge with the MUC1 reference motifs
-    df = pd.merge(df, muc1_ref, on='Motifs', how='left')
-    
-    # Add a 'Variant' column to indicate this is an insertion
-    df['Variant'] = 'Insertion'
-    
-    return df
-
-def preprocessing_deletion(df, muc1_ref):
-    """
-    Preprocesses deletion variants by merging with the reference motifs.
-    """
-    # Rename the '#CHROM' column to 'Motifs'
-    df.rename(columns={'#CHROM': 'Motifs'}, inplace=True)
-    
-    # Drop unwanted columns
-    df.drop(['ID', 'QUAL', 'FILTER', 'INFO', 'FORMAT'], axis=1, inplace=True)
-    
-    # Rename the last column to 'Sample'
-    last_column_name = df.columns[-1]
-    df.rename(columns={last_column_name: 'Sample'}, inplace=True)
-    
-    # Merge with the MUC1 reference motifs
-    df = pd.merge(df, muc1_ref, on='Motifs', how='left')
-    
-    # Add a 'Variant' column to indicate this is a deletion
-    df['Variant'] = 'Deletion'
-    
-    return df
+    final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
+    empty_df = pd.DataFrame(columns=[
+        'Motifs', 'POS', 'REF', 'ALT', 'Variant', 'Motif_sequence', 
+        'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion', 
+        'Depth_Score', 'Confidence'
+    ])
+    empty_df.to_csv(final_output_path, sep='\t', index=False)
+    logging.info(f"Empty result file saved as {final_output_path}")
 
 # Function 1: Split Depth and Calculate Frame Score
 def split_depth_and_calculate_frame_score(df):
@@ -222,6 +186,9 @@ def split_depth_and_calculate_frame_score(df):
     Splits the Depth column (Sample) into Del, Estimated_Depth_AlternateVariant, and Estimated_Depth_Variant_ActiveRegion.
     Calculates the frame score and filters out non-frameshift variants.
     """
+    if df.empty:
+        return df
+
     # Rename 'Sample' column to 'Depth'
     df = df.rename(columns={'Sample': 'Depth'})
 
@@ -250,6 +217,9 @@ def split_frame_score(df):
     """
     Splits the Frame_Score column into left and right parts. Adjusts the left column values.
     """
+    if df.empty:
+        return df
+
     # Split Frame_Score into left and right parts
     df[['left', 'right']] = df['Frame_Score'].str.split('.', expand=True)
 
@@ -266,6 +236,9 @@ def extract_frameshifts(df):
     """
     Extracts insertion and deletion frameshifts based on the left and right parts of the Frame_Score.
     """
+    if df.empty:
+        return df
+
     # Extract good frameshifts (3n+1 for insertion and 3n+2 for deletion)
     ins = df[df["left"].apply(lambda x: '-' not in x) & df["right"].apply(lambda y: '33' in y)]
     del_ = df[df["left"].apply(lambda x: '-' in x) & df["right"].apply(lambda y: '67' in y)]
@@ -280,6 +253,9 @@ def calculate_depth_score_and_assign_confidence(df):
     """
     Calculates depth score and assigns confidence based on depth and variant region conditions.
     """
+    if df.empty:
+        return df
+
     # Convert depth-related columns to integers
     df['Estimated_Depth_AlternateVariant'] = df['Estimated_Depth_AlternateVariant'].astype(int)
     df['Estimated_Depth_Variant_ActiveRegion'] = df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
@@ -318,6 +294,9 @@ def filter_by_alt_values_and_finalize(df):
     """
     Filters based on specific ALT values and finalizes the dataframe.
     """
+    if df.empty:
+        return df
+
     # Filter based on specific ALT values (e.g., 'GG')
     if df['ALT'].str.contains(r'\bGG\b').any():
         gg_condition = df['ALT'] == 'GG'
@@ -340,6 +319,9 @@ def filter_by_alt_values_and_finalize(df):
 
 # Function 6: Motif Correction and Annotation
 def motif_correction_and_annotation(df, merged_motifs):
+    if df.empty:
+        return df
+
     # Ensure that splitting will result in exactly two columns
     if df['Motifs'].str.count('-').max() == 1:
         df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
@@ -410,49 +392,35 @@ def process_kmer_results(combined_df, merged_motifs):
     Processes and filters Kestrel results by applying several steps including frame score calculation,
     depth score assignment, filtering based on ALT values and confidence scores, and final motif correction.
     """
+    if combined_df.empty:
+        return combined_df
+
     # Step 1: Split Depth and Calculate Frame Score
     df = split_depth_and_calculate_frame_score(combined_df)
+    if df.empty:
+        return df
 
     # Step 2: Split Frame Score
     df = split_frame_score(df)
+    if df.empty:
+        return df
 
     # Step 3: Extract Frameshifts
     df = extract_frameshifts(df)
+    if df.empty:
+        return df
 
     # Step 4: Calculate Depth Score and Assign Confidence
     df = calculate_depth_score_and_assign_confidence(df)
+    if df.empty:
+        return df
 
     # Step 5: Filter by ALT Values and Finalize Data
     df = filter_by_alt_values_and_finalize(df)
+    if df.empty:
+        return df
 
     # Step 6: Motif Correction and Annotation
     df = motif_correction_and_annotation(df, merged_motifs)
 
     return df
-
-# Load the additional motifs for final processing
-def load_additional_motifs(config):
-    """
-    Loads additional motifs from the code-adVNTR_RUs.fa and MUC1_motifs_Rev_com.fa files for final annotation.
-    """
-    identifiers = []
-    sequences = []
-    
-    # Get the file paths from the config
-    code_advntr_file = config["reference_data"]["code_adVNTR_RUs"]
-    muc1_motifs_rev_com_file = config["reference_data"]["muc1_motifs_rev_com"]
-
-    with open(code_advntr_file) as RU_file, open(muc1_motifs_rev_com_file) as Motif_file:
-        for seq_record in SeqIO.parse(RU_file, 'fasta'):
-            identifiers.append(seq_record.id)
-            sequences.append(seq_record.seq.upper())
-
-        for seq_record in SeqIO.parse(Motif_file, 'fasta'):
-            identifiers.append(seq_record.id)
-            sequences.append(seq_record.seq.upper())
-
-    s1 = pd.Series(identifiers, name='ID')
-    s2 = pd.Series(sequences, name='Sequence')
-    merged_motifs = pd.DataFrame(dict(Motif=s1, Motif_sequence=s2))
-
-    return merged_motifs
