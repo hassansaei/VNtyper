@@ -33,7 +33,7 @@ rule run_vntyper_pipeline:
     params:
         output_dir="results/{bam_basename}/",
         config_path="vntyper/config.json"
-    threads: 12
+    threads: 8
     resources:
         mem_mb=get_mem_from_threads,
         time="72:00:00",
