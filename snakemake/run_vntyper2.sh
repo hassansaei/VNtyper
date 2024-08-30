@@ -24,7 +24,7 @@ export SBATCH_DEFAULTS=" --output=slurm_logs/%x-%j.log"
 date
 
 # Run the Snakemake workflow with the specified Snakefile
-srun snakemake -s vntyper2.smk --use-conda -j150
+srun snakemake -s vntyper2.smk --use-conda --profile=cubi-v1 -j10
 
 # End date and time logging
 date
