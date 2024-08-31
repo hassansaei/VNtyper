@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cohort Summary Report</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Cohort Summary Report</h1>
+        <p><strong>Report Date:</strong> {{ report_date }}</p>
+
+        <h2>Kestrel Positive Cases</h2>
+        {{ kestrel_positive | safe }}
+
+        <h2>adVNTR Positive Cases</h2>
+        {{ advntr_positive | safe }}
+
+        <h2>Cohort Summary Plot</h2>
+        <img src="{{ plot_base64 }}" alt="Cohort Summary Plot" class="img-fluid">
+
+    </div>
+</body>
+</html>
