@@ -3,15 +3,17 @@ import os
 import pandas as pd
 from pathlib import Path
 from Bio import SeqIO
+from datetime import datetime
 from vntyper.scripts.utils import run_command
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.motif_processing import load_muc1_reference, load_additional_motifs, preprocessing_insertion, preprocessing_deletion
+from vntyper.version import __version__ as VERSION
 
-# Construct the Kestrel command based on kmer size and config settings
+
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
     """
     Constructs the command for running Kestrel based on various settings.
-    
+
     Args:
         kmer_size (int): Size of the kmer to use.
         kestrel_path (str): Path to the Kestrel jar file.
@@ -24,13 +26,13 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         java_memory (str): Amount of memory to allocate to the JVM.
         max_align_states (int): Maximum alignment states.
         max_hap_states (int): Maximum haplotype states.
-    
+
     Returns:
         str: The constructed Kestrel command.
     """
     if not fastq_1 or not fastq_2:
         raise ValueError("FASTQ input files are missing or invalid.")
-    
+
     return (
         f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
@@ -39,7 +41,27 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout --temploc {output_dir}"
     )
 
-# Kestrel processing logic
+
+def generate_header(reference_vntr, version=VERSION):
+    """
+    Generates a header for the output files with analysis information.
+
+    Args:
+        reference_vntr (str): Path to the reference VNTR file.
+        version (str): Version of the tool being used.
+
+    Returns:
+        list: A list of header lines to be written at the top of the output file.
+    """
+    header = [
+        "## VNtyper Kestrel result",
+        f"## VNtyper Version: {version}",
+        f"## Analysis date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"## Reference file: {reference_vntr}"
+    ]
+    return header
+
+
 def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, kestrel_settings, config):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
@@ -59,7 +81,7 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20, 17, 25, 41])
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
-    
+
     for kmer_size in kmer_sizes:
         kmer_command = construct_kestrel_command(
             kmer_size=kmer_size,
@@ -82,17 +104,18 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             return
         else:
             logging.info(f"Launching Kestrel with kmer size {kmer_size}...")
-            
+
             # Run the command and log output to the specified log file
             if not run_command(kmer_command, log_file, critical=True):
                 logging.error(f"Kestrel failed for kmer size {kmer_size}. Check {log_file} for details.")
                 raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
-            
+
             logging.info(f"Mapping-free genotyping of MUC1-VNTR with kmer size {kmer_size} done!")
 
             if vcf_path.is_file():
                 process_kestrel_output(output_dir, vcf_path, reference_vntr, config)  # Pass config here
                 break  # If successful, break out of the loop and stop trying other kmer sizes
+
 
 def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Processing Kestrel VCF results...")
@@ -100,10 +123,13 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
     output_ins = os.path.join(output_dir, "output_insertion.vcf")
     output_del = os.path.join(output_dir, "output_deletion.vcf")
-    
+
     # Filter the VCF to extract indels, insertions, and deletions
     filter_vcf(vcf_path, indel_vcf)
     filter_indel_vcf(indel_vcf, output_ins, output_del)
+
+    # Generate the header
+    header = generate_header(reference_vntr)
 
     # Manually read the VCF file to remove '##' comments and retain the header
     def read_vcf_without_comments(vcf_file):
@@ -126,7 +152,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
 
     if vcf_insertion.empty and vcf_deletion.empty:
         logging.warning("No insertion or deletion variants found in the VCF. Skipping Kestrel processing.")
-        output_empty_result(output_dir)
+        output_empty_result(output_dir, header)
         return None  # Early exit if no data
 
     # Load MUC1 VNTR reference motifs
@@ -135,13 +161,13 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     # Preprocess insertion and deletion dataframes
     insertion_df = preprocessing_insertion(vcf_insertion, MUC1_ref) if not vcf_insertion.empty else pd.DataFrame()
     deletion_df = preprocessing_deletion(vcf_deletion, MUC1_ref) if not vcf_deletion.empty else pd.DataFrame()
-        
+
     # Combine insertion and deletion dataframes
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
 
     if combined_df.empty:
         logging.warning("Combined DataFrame of insertions and deletions is empty. Skipping further processing.")
-        output_empty_result(output_dir)
+        output_empty_result(output_dir, header)
         return None  # Early exit if no data
 
     # Load additional motifs from the configuration
@@ -152,33 +178,41 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
 
     if processed_df.empty:
         logging.warning("Final processed DataFrame is empty. Outputting empty results.")
-        output_empty_result(output_dir)
+        output_empty_result(output_dir, header)
         return None  # Early exit if no data
 
     # Save the intermediate pre-result as `_pre_result.tsv`
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
-    combined_df.to_csv(pre_result_path, sep='\t', index=False)
+    with open(pre_result_path, 'w') as f:
+        f.write("\n".join(header) + "\n")
+        combined_df.to_csv(f, sep='\t', index=False)
     logging.info(f"Intermediate results saved as {pre_result_path}")
-    
+
     # Save the final processed dataframe as `kestrel_result.tsv`
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
-    processed_df.to_csv(final_output_path, sep='\t', index=False)
-    
+    with open(final_output_path, 'w') as f:
+        f.write("\n".join(header) + "\n")
+        processed_df.to_csv(f, sep='\t', index=False)
+
     logging.info("Kestrel VCF processing completed.")
     return processed_df
 
-def output_empty_result(output_dir):
+
+def output_empty_result(output_dir, header):
     """
     Creates an empty result file with the correct headers.
     """
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
     empty_df = pd.DataFrame(columns=[
-        'Motifs', 'POS', 'REF', 'ALT', 'Variant', 'Motif_sequence', 
-        'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion', 
+        'Motifs', 'POS', 'REF', 'ALT', 'Variant', 'Motif_sequence',
+        'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
         'Depth_Score', 'Confidence'
     ])
-    empty_df.to_csv(final_output_path, sep='\t', index=False)
+    with open(final_output_path, 'w') as f:
+        f.write("\n".join(header) + "\n")
+        empty_df.to_csv(f, sep='\t', index=False)
     logging.info(f"Empty result file saved as {final_output_path}")
+
 
 # Function 1: Split Depth and Calculate Frame Score
 def split_depth_and_calculate_frame_score(df):
@@ -212,6 +246,7 @@ def split_depth_and_calculate_frame_score(df):
 
     return df
 
+
 # Function 2: Split Frame Score
 def split_frame_score(df):
     """
@@ -231,6 +266,7 @@ def split_frame_score(df):
 
     return df
 
+
 # Function 3: Extract Frameshifts
 def extract_frameshifts(df):
     """
@@ -242,11 +278,12 @@ def extract_frameshifts(df):
     # Extract good frameshifts (3n+1 for insertion and 3n+2 for deletion)
     ins = df[df["left"].apply(lambda x: '-' not in x) & df["right"].apply(lambda y: '33' in y)]
     del_ = df[df["left"].apply(lambda x: '-' in x) & df["right"].apply(lambda y: '67' in y)]
-    
+
     # Concatenate insertions and deletions
     frameshifts_df = pd.concat([ins, del_], axis=0)
 
     return frameshifts_df
+
 
 # Function 4: Calculate Depth Score and Assign Confidence
 def calculate_depth_score_and_assign_confidence(df):
@@ -289,6 +326,7 @@ def calculate_depth_score_and_assign_confidence(df):
 
     return df
 
+
 # Function 5: Filter by ALT Values and Finalize Data
 def filter_by_alt_values_and_finalize(df):
     """
@@ -317,6 +355,7 @@ def filter_by_alt_values_and_finalize(df):
 
     return df
 
+
 # Function 6: Motif Correction and Annotation
 def motif_correction_and_annotation(df, merged_motifs):
     if df.empty:
@@ -328,7 +367,7 @@ def motif_correction_and_annotation(df, merged_motifs):
     else:
         logging.error("Unexpected format in 'Motifs' column during splitting.")
         return pd.DataFrame()  # Return an empty DataFrame or handle appropriately
-    
+
     df['POS'] = df['POS'].astype(int)
 
     # Split into left and right motifs based on position
@@ -377,14 +416,15 @@ def motif_correction_and_annotation(df, merged_motifs):
     # Additional filtering
     combined_df = combined_df.loc[(combined_df['ALT'] != 'CCGCC') & (combined_df['ALT'] != 'CGGCG') &
                                   (combined_df['ALT'] != 'CGGCC')]
-    combined_df = combined_df[(combined_df['Motif'] != '6') & (combined_df['Motif'] != '6p') & 
+    combined_df = combined_df[(combined_df['Motif'] != '6') & (combined_df['Motif'] != '6p') &
                               (combined_df['Motif'] != '7')]
     combined_df['POS'] = combined_df['POS'].astype(int)
 
     # Adjust positions where necessary
     combined_df.update(combined_df['POS'].mask(combined_df['POS'] >= 60, lambda x: x - 60))
-    
+
     return combined_df
+
 
 # Main Function: Process Kmer Results
 def process_kmer_results(combined_df, merged_motifs):
