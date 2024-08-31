@@ -9,7 +9,6 @@ from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.motif_processing import load_muc1_reference, load_additional_motifs, preprocessing_insertion, preprocessing_deletion
 from vntyper.version import __version__ as VERSION
 
-
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
     """
     Constructs the command for running Kestrel based on various settings.
@@ -62,6 +61,35 @@ def generate_header(reference_vntr, version=VERSION):
     return header
 
 
+def convert_sam_to_bam_and_index(sam_file, output_dir):
+    """
+    Converts the SAM file to BAM format, indexes the BAM file, and deletes the SAM file.
+
+    Args:
+        sam_file (str): Path to the SAM file to be converted.
+        output_dir (str): Directory where the BAM and BAM index files will be saved.
+
+    Returns:
+        str: Path to the indexed BAM file.
+    """
+    bam_file = os.path.join(output_dir, "output.bam")
+    bam_index = bam_file + ".bai"
+
+    # Convert SAM to BAM
+    logging.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
+    run_command(f"samtools view -Sb {sam_file} > {bam_file}", log_file=os.path.join(output_dir, "samtools_view.log"))
+
+    # Index the BAM file
+    logging.info(f"Indexing BAM file: {bam_file}")
+    run_command(f"samtools index {bam_file}", log_file=os.path.join(output_dir, "samtools_index.log"))
+
+    # Delete the SAM file
+    if os.path.exists(bam_file) and os.path.exists(bam_index):
+        os.remove(sam_file)
+        logging.info(f"Deleted SAM file: {sam_file}")
+
+    return bam_file
+
 def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, kestrel_settings, config):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
@@ -113,9 +141,12 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             logging.info(f"Mapping-free genotyping of MUC1-VNTR with kmer size {kmer_size} done!")
 
             if vcf_path.is_file():
-                process_kestrel_output(output_dir, vcf_path, reference_vntr, config)  # Pass config here
-                break  # If successful, break out of the loop and stop trying other kmer sizes
+                # Convert the SAM to BAM and index it
+                sam_file = os.path.join(output_dir, "output.sam")
+                bam_file = convert_sam_to_bam_and_index(sam_file, output_dir)
 
+                process_kestrel_output(output_dir, vcf_path, reference_vntr, config)
+                break
 
 def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Processing Kestrel VCF results...")
@@ -197,7 +228,6 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Kestrel VCF processing completed.")
     return processed_df
 
-
 def output_empty_result(output_dir, header):
     """
     Creates an empty result file with the correct headers.
@@ -212,7 +242,6 @@ def output_empty_result(output_dir, header):
         f.write("\n".join(header) + "\n")
         empty_df.to_csv(f, sep='\t', index=False)
     logging.info(f"Empty result file saved as {final_output_path}")
-
 
 # Function 1: Split Depth and Calculate Frame Score
 def split_depth_and_calculate_frame_score(df):
@@ -246,7 +275,6 @@ def split_depth_and_calculate_frame_score(df):
 
     return df
 
-
 # Function 2: Split Frame Score
 def split_frame_score(df):
     """
@@ -266,7 +294,6 @@ def split_frame_score(df):
 
     return df
 
-
 # Function 3: Extract Frameshifts
 def extract_frameshifts(df):
     """
@@ -283,7 +310,6 @@ def extract_frameshifts(df):
     frameshifts_df = pd.concat([ins, del_], axis=0)
 
     return frameshifts_df
-
 
 # Function 4: Calculate Depth Score and Assign Confidence
 def calculate_depth_score_and_assign_confidence(df):
@@ -326,7 +352,6 @@ def calculate_depth_score_and_assign_confidence(df):
 
     return df
 
-
 # Function 5: Filter by ALT Values and Finalize Data
 def filter_by_alt_values_and_finalize(df):
     """
@@ -354,7 +379,6 @@ def filter_by_alt_values_and_finalize(df):
         df = df[df['Confidence'] != 'Red_Zone']
 
     return df
-
 
 # Function 6: Motif Correction and Annotation
 def motif_correction_and_annotation(df, merged_motifs):
@@ -424,7 +448,6 @@ def motif_correction_and_annotation(df, merged_motifs):
     combined_df.update(combined_df['POS'].mask(combined_df['POS'] >= 60, lambda x: x - 60))
 
     return combined_df
-
 
 # Main Function: Process Kmer Results
 def process_kmer_results(combined_df, merged_motifs):
