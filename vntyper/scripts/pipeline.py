@@ -11,7 +11,8 @@ from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
-from vntyper.scripts.generate_report import generate_summary_report  # Import the report generation function
+from vntyper.scripts.alignment_processing import align_and_sort_fastq
+from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.version import __version__ as VERSION
 
 def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False, log_level=logging.INFO):
