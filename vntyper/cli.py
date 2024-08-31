@@ -7,6 +7,7 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.utils import load_config, setup_logging
 from vntyper.scripts.generate_report import generate_summary_report
+from vntyper.scripts.cohort_summary import aggregate_cohort  # Import the new module for cohort summary
 from vntyper.version import __version__ as VERSION
 import sys
 
@@ -32,7 +33,7 @@ def main():
     parser_pipeline.add_argument('--bam', type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument('--threads', type=int, default=4, help="Number of threads to use.")
     parser_pipeline.add_argument('--reference-assembly', type=str, choices=["hg19", "hg38"], default="hg19",
-                                help="Specify the reference assembly used for the input BAM file alignment.")
+                                 help="Specify the reference assembly used for the input BAM file alignment.")
     parser_pipeline.add_argument('--fast-mode', action='store_true', help="Enable fast mode (skips filtering for unmapped and partially mapped reads).")
     parser_pipeline.add_argument('--keep-intermediates', action='store_true', help="Keep intermediate files (e.g., BAM slices, temporary files).")
     parser_pipeline.add_argument('--delete-intermediates', action='store_true', help="Delete intermediate files after processing (overrides --keep-intermediates).")
@@ -72,12 +73,19 @@ def main():
     parser_advntr.add_argument('-m', '--reference-vntr', type=str, required=True, help="Path to the adVNTR reference VNTR database.")
     parser_advntr.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for adVNTR results.")
 
-    # Add the new subcommand for generating reports
+    # Subcommand for generating reports
     parser_report = subparsers.add_parser("report", help="Generate a summary report and visualizations from output data.")
     parser_report.add_argument('-o', '--output-dir', type=str, required=True, help="Output directory containing pipeline results.")
     parser_report.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
     parser_report.add_argument('--report-file', type=str, default="summary_report.html", help="Name of the output report file.")
     parser_report.add_argument('--log-file', type=str, default="pipeline.log", help="Pipeline log file to include in the report.")
+
+    # Subcommand for cohort analysis
+    parser_cohort = subparsers.add_parser("cohort", help="Aggregate outputs from multiple runs into a single summary file.")
+    parser_cohort.add_argument('-i', '--input-dirs', nargs='+', required=True, help="List of directories containing output files to aggregate.")
+    parser_cohort.add_argument('-o', '--output-dir', type=str, required=True, help="Output directory for the aggregated summary.")
+    parser_cohort.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
+    parser_cohort.add_argument('--summary-file', type=str, default="cohort_summary.html", help="Name of the cohort summary report file.")
 
     # Parse arguments
     args = parser.parse_args()
@@ -200,6 +208,14 @@ def main():
             config_path=args.config_path,
             report_file=args.report_file,
             log_file=args.log_file
+        )
+
+    elif args.command == "cohort":
+        aggregate_cohort(
+            input_dirs=args.input_dirs,
+            output_dir=Path(args.output_dir),
+            config_path=args.config_path,
+            summary_file=args.summary_file
         )
 
 if __name__ == "__main__":
