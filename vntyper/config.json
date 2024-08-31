@@ -41,5 +41,8 @@
     "dup_calc_accuracy": 3,
     "length_required": 40
   },
+  "paths": {
+    "template_dir": "vntyper/templates"
+  },
   "welcome_message": "==========================================================================================================\nGiven alignment (BAM) or raw file (FASTQ), this tool genotypes MUC1 coding-VNTR \n-- For rapid genotyping, BAM files are preferred!\n-- User can Skip code-adVNTR genotyping step using --ignore_advntr option (This step will take a while..)\nThis is free non-commercial software.\n=========================================================================================================="
 }

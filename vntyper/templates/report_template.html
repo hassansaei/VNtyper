@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Summary Report</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Summary Report</h1>
+        <p><strong>Report Date:</strong> {{ report_date }}</p>
+
+        <h2>Kestrel Identified Variants</h2>
+        {% if not kestrel_highlight.empty %}
+            {% for index, row in kestrel_highlight.iterrows() %}
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h5 class="card-title">Variant {{ loop.index + 1 }}</h5>
+                        <ul class="list-group list-group-flush">
+                            {% for key, value in row.items() %}
+                                <li class="list-group-item"><strong>{{ key }}:</strong> {{ value }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>No variants found.</p>
+        {% endif %}
+
+        <h2>adVNTR Significant Variants (P-value < 0.05)</h2>
+        {{ advntr_highlight | safe }}
+
+        <h2>Pipeline Log</h2>
+        <pre>{{ log_content }}</pre>
+    </div>
+</body>
+</html>
