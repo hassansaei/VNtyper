@@ -2,11 +2,11 @@ import logging
 import pandas as pd
 import numpy as np
 import os
+import subprocess as sp
 from pathlib import Path
 from vntyper.scripts.utils import run_command
 
-
-def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
+def run_advntr(db_file_hg19, sorted_bam, output, output_name, config, output_format="tsv"):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from the config.
 
@@ -16,6 +16,7 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
         output (str): Directory where the results will be saved.
         output_name (str): Base name for the output files.
         config (dict): Configuration dictionary.
+        output_format (str): The format of the output file (e.g., "vcf", "tsv").
     """
     advntr_path = config["tools"]["advntr"]
     advntr_settings = config["advntr_settings"]
@@ -26,9 +27,12 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     # Retrieve additional command parts from the config, if available
     additional_commands = advntr_settings.get("additional_commands", "-aln")
 
+    # Determine the output file extension based on the specified format
+    output_ext = ".vcf" if output_format == "vcf" else ".tsv"
+    
     advntr_command = (
         f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} "
-        f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR.vcf "
+        f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR{output_ext} "
         f"-m {db_file_hg19} --working_directory {output} -t {threads} {additional_commands}"
     )
 
@@ -44,31 +48,30 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
 
     logging.info("adVNTR genotyping of MUC1-VNTR done!")
 
-
-def read_vcf(path):
+def read_output(path, file_format="tsv"):
     """
-    Read the header from a VCF file to extract column names.
+    Read the header from a TSV or VCF file to extract column names.
 
     Args:
-        path (str): Path to the VCF file.
+        path (str): Path to the output file.
+        file_format (str): Format of the output file ("vcf" or "tsv").
 
     Returns:
-        list: A list of column names from the VCF file, or an empty list if no header found.
+        list: A list of column names from the file, or an empty list if no header found.
     """
-    vcf_names = []
+    col_names = []
     if not os.path.exists(path):
-        logging.error(f"VCF file {path} does not exist.")
-        return vcf_names
+        logging.error(f"Output file {path} does not exist.")
+        return col_names
 
     with open(path, 'r') as f:
         for line in f:
-            if line.startswith("#VID"):
-                vcf_names = [x.strip() for x in line.split('\t')]
+            if line.startswith("#VID") or (file_format == "vcf" and line.startswith("#CHROM")):
+                col_names = [x.strip() for x in line.split('\t')]
                 break
-    if not vcf_names:
-        logging.error(f"No header found in VCF file: {path}")
-    return vcf_names
-
+    if not col_names:
+        logging.error(f"No header found in output file: {path}")
+    return col_names
 
 def advntr_processing_del(df, config):
     """
@@ -108,7 +111,6 @@ def advntr_processing_del(df, config):
 
     return df1
 
-
 def advntr_processing_ins(df, config):
     """
     Process adVNTR insertions by calculating insertion length and filtering by frameshift.
@@ -147,42 +149,34 @@ def advntr_processing_ins(df, config):
 
     return df1
 
-
-def process_advntr_output(vcf_path, output, output_name, config):
+def process_advntr_output(output_path, output, output_name, config, file_format="tsv"):
     """
-    Process the adVNTR output VCF to extract relevant information and generate final results.
+    Process the adVNTR output TSV/VCF to extract relevant information and generate final results.
 
     Args:
-        vcf_path (str): Path to the adVNTR VCF file.
+        output_path (str): Path to the adVNTR output file.
         output (str): Directory where the final results will be saved.
         output_name (str): Base name for the output files.
         config (dict): Configuration dictionary.
+        file_format (str): The format of the output file ("vcf" or "tsv").
     """
-    if not os.path.exists(vcf_path):
-        logging.error(f"adVNTR VCF file {vcf_path} not found!")
+    if not os.path.exists(output_path):
+        logging.error(f"adVNTR output file {output_path} not found!")
         return
 
     logging.info('Processing code-adVNTR result...')
-
-    names = read_vcf(vcf_path)
-    df = pd.read_csv(vcf_path, comment='#', sep='\s+', header=None, names=names)
-
-    # Define frameshift patterns for both insertions and deletions using config settings.
-    max_frameshift = config["advntr_settings"]["max_frameshift"]
-    frameshift_multiplier = config["advntr_settings"]["frameshift_multiplier"]
-
-    ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
-    del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
+    names = read_output(output_path, file_format=file_format)
+    df = pd.read_csv(output_path, comment='#', sep='\t', header=None, names=names)
 
     if df.empty:
         logging.warning('No pathogenic variant was found with code-adVNTR!')
-        pre_result_path = output + output_name + '_pre_result.tsv'
+        pre_result_path = os.path.join(output, f"{output_name}_pre_result.tsv")
         if not os.path.exists(pre_result_path):
             logging.error(f"Pre-result file {pre_result_path} not found!")
             return
 
         with open(pre_result_path, 'r') as f:
-            with open(output + output_name + '_Final_result.tsv', 'w') as f1:
+            with open(os.path.join(output, f"{output_name}_Final_result.tsv"), 'w') as f1:
                 f1.write(f'## VNtyper_Analysis_for_{output_name} \n')
                 f1.write('# Kestrel_Result \n')
                 f1.write('\t'.join(columns_kmer) + '\n')
@@ -190,16 +184,9 @@ def process_advntr_output(vcf_path, output, output_name, config):
                 for line in f:
                     f1.write(line)
 
-        # Clean up intermediate files.
-        rm_list_4 = config.get("advntr_cleanup_files", [])
-        for db in rm_list_4:
-            db_str = output + output_name + db
-            rm_command = "rm " + db_str
-            process = sp.Popen(rm_command, shell=True)
-            process.wait()
-
+        cleanup_files(output, output_name, config.get("advntr_cleanup_files", []))
         logging.info('The final result is saved in *_Final_result.tsv')
-        return  # Replaced sys.exit() with return to avoid abrupt script termination
+        return
     else:
         # Process deletions and insertions using the respective functions.
         df_del = advntr_processing_del(df, config)
@@ -219,13 +206,22 @@ def process_advntr_output(vcf_path, output, output_name, config):
     advntr_concat.to_csv(output_result_path, sep='\t', index=False)
     logging.info(f"Processed adVNTR results saved to {output_result_path}")
 
-    # Clean up intermediate files, if configured
-    rm_list_4 = config.get("advntr_cleanup_files", [])
-    for db in rm_list_4:
+    cleanup_files(output, output_name, config.get("advntr_cleanup_files", []))
+
+def cleanup_files(output, output_name, files_to_remove):
+    """
+    Clean up intermediate files as specified in the configuration.
+
+    Args:
+        output (str): The output directory.
+        output_name (str): The base name for the output files.
+        files_to_remove (list): List of files to remove.
+    """
+    for db in files_to_remove:
         db_str = os.path.join(output, f"{output_name}{db}")
         if os.path.exists(db_str):
             rm_command = f"rm {db_str}"
             process = sp.Popen(rm_command, shell=True)
             process.wait()
 
-    logging.info('The final result is saved and intermediate files cleaned up.')
+    logging.info('Intermediate files cleaned up.')
