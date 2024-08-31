@@ -4,21 +4,49 @@
     <meta charset="UTF-8">
     <title>Cohort Summary Report</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+    <style>
+        body { margin: 20px; }
+        h1, h2, h3 { text-align: center; margin-top: 20px; }
+        .container { margin-top: 20px; }
+        .table-container { width: 90%; margin: 20px auto; }
+        .plot { margin: 20px auto; display: block; width: 90%; }
+        .table td { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    </style>
 </head>
 <body>
     <div class="container">
         <h1>Cohort Summary Report</h1>
         <p><strong>Report Date:</strong> {{ report_date }}</p>
 
-        <h2>Kestrel Positive Cases</h2>
-        {{ kestrel_positive | safe }}
+        <h2>Kestrel Results</h2>
+        <div class="table-container">
+            {{ kestrel_positive | safe }}
+        </div>
 
-        <h2>adVNTR Positive Cases</h2>
-        {{ advntr_positive | safe }}
+        <h2>adVNTR Results</h2>
+        <div class="table-container">
+            {{ advntr_positive | safe }}
+        </div>
 
         <h2>Cohort Summary Plot</h2>
-        <img src="{{ plot_base64 }}" alt="Cohort Summary Plot" class="img-fluid">
+        <img src="{{ plot_base64 }}" alt="Cohort Summary Plot" class="img-fluid plot">
 
     </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+    <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            $('table').DataTable({
+                "paging": true,
+                "searching": true,
+                "info": true,
+                "columnDefs": [
+                    { "width": "150px", "targets": "_all" }
+                ]
+            });
+        });
+    </script>
 </body>
 </html>
