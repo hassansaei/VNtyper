@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from vntyper.scripts.utils import run_command
 
+
 def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from the config.
@@ -18,19 +19,19 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     """
     advntr_path = config["tools"]["advntr"]
     advntr_settings = config["advntr_settings"]
-    
+
     # Set the number of threads from the config or default to 8
     threads = advntr_settings.get("threads", 8)
-    
+
     # Retrieve additional command parts from the config, if available
     additional_commands = advntr_settings.get("additional_commands", "-aln")
-    
+
     advntr_command = (
         f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} "
         f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR.vcf "
         f"-m {db_file_hg19} --working_directory {output} -t {threads} {additional_commands}"
     )
-    
+
     # Define log files for stdout and stderr
     log_file = os.path.join(output, f"{output_name}_advntr.log")
 
@@ -40,16 +41,17 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config):
     if not run_command(advntr_command, log_file, critical=True):
         logging.error("adVNTR genotyping failed. Check the log for details.")
         raise RuntimeError("adVNTR genotyping failed.")
-    
+
     logging.info("adVNTR genotyping of MUC1-VNTR done!")
+
 
 def read_vcf(path):
     """
     Read the header from a VCF file to extract column names.
-    
+
     Args:
         path (str): Path to the VCF file.
-    
+
     Returns:
         list: A list of column names from the VCF file, or an empty list if no header found.
     """
@@ -57,7 +59,7 @@ def read_vcf(path):
     if not os.path.exists(path):
         logging.error(f"VCF file {path} does not exist.")
         return vcf_names
-    
+
     with open(path, 'r') as f:
         for line in f:
             if line.startswith("#VID"):
@@ -67,86 +69,89 @@ def read_vcf(path):
         logging.error(f"No header found in VCF file: {path}")
     return vcf_names
 
+
 def advntr_processing_del(df, config):
     """
     Process adVNTR deletions by calculating deletion length and filtering by frameshift.
-    
+
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
         config (dict): Configuration dictionary containing advntr settings.
-    
+
     Returns:
         pd.DataFrame: Filtered DataFrame containing deletions.
     """
     df1 = df.copy()
     df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
-    
+
     # Calculate deletion and insertion lengths in the variant sequences.
     df1['Deletion_length'] = df1['Variant'].str.count('D')
     df1['Insertion'] = df1['Variant'].str.count('I')
-    
+
     # Extract insertion length and handle missing values.
     df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')
     df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
     df1.Insertion_len = df1.Insertion_len.replace('', 0).astype(int)
     df1.Deletion_length = df1.Deletion_length.astype(int)
-    
+
     # Calculate the frameshift value as the difference between insertion and deletion lengths.
     df1['frame'] = abs(df1.Insertion_len - df1.Deletion_length).astype(str)
-    
+
     # Define frameshift patterns using config settings.
     max_frameshift = config["advntr_settings"]["max_frameshift"]
     frameshift_multiplier = config["advntr_settings"]["frameshift_multiplier"]
-    
+
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
-    
+
     # Filter for valid deletions with matching frameshift values.
     df1 = df1[(df1['Deletion_length'] >= 1) & df1['frame'].isin(del_frame)]
-    
+
     return df1
+
 
 def advntr_processing_ins(df, config):
     """
     Process adVNTR insertions by calculating insertion length and filtering by frameshift.
-    
+
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
         config (dict): Configuration dictionary containing advntr settings.
-    
+
     Returns:
         pd.DataFrame: Filtered DataFrame containing insertions.
     """
     df1 = df.copy()
     df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
-    
+
     # Calculate deletion and insertion lengths in the variant sequences.
     df1['Deletion_length'] = df1['Variant'].str.count('D')
     df1['Insertion'] = df1['Variant'].str.count('I')
-    
+
     # Extract insertion length and handle missing values.
     df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')
     df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
     df1.Insertion_len = df1.Insertion_len.replace('', 0).astype(int)
     df1.Deletion_length = df1.Deletion_length.astype(int)
-    
+
     # Calculate the frameshift value as the difference between insertion and deletion lengths.
     df1['frame'] = abs(df1.Insertion_len - df1.Deletion_length).astype(str)
-    
+
     # Define frameshift patterns using config settings.
     max_frameshift = config["advntr_settings"]["max_frameshift"]
     frameshift_multiplier = config["advntr_settings"]["frameshift_multiplier"]
-    
+
     ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
-    
+
     # Filter for valid insertions with matching frameshift values.
     df1 = df1[(df1['Insertion_len'] >= 1) & df1['frame'].isin(ins_frame)]
-    
+
     return df1
+
 
 def process_advntr_output(vcf_path, output, output_name, config):
     """
     Process the adVNTR output VCF to extract relevant information and generate final results.
-    
+
     Args:
         vcf_path (str): Path to the adVNTR VCF file.
         output (str): Directory where the final results will be saved.
@@ -158,14 +163,14 @@ def process_advntr_output(vcf_path, output, output_name, config):
         return
 
     logging.info('Processing code-adVNTR result...')
-    
+
     names = read_vcf(vcf_path)
     df = pd.read_csv(vcf_path, comment='#', sep='\s+', header=None, names=names)
 
     # Define frameshift patterns for both insertions and deletions using config settings.
     max_frameshift = config["advntr_settings"]["max_frameshift"]
     frameshift_multiplier = config["advntr_settings"]["frameshift_multiplier"]
-    
+
     ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
 
@@ -192,7 +197,7 @@ def process_advntr_output(vcf_path, output, output_name, config):
             rm_command = "rm " + db_str
             process = sp.Popen(rm_command, shell=True)
             process.wait()
-        
+
         logging.info('The final result is saved in *_Final_result.tsv')
         return  # Replaced sys.exit() with return to avoid abrupt script termination
     else:
@@ -202,7 +207,7 @@ def process_advntr_output(vcf_path, output, output_name, config):
 
     # Concatenate the processed results for deletions and insertions.
     advntr_concat = pd.concat([df_del, df_ins], axis=0)
-    
+
     # Keep only the relevant columns.
     advntr_concat = advntr_concat[['#VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']]
 
