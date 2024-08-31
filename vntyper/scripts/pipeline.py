@@ -11,7 +11,7 @@ from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
-from vntyper.scripts.alignment_processing import align_and_sort_fastq
+from vntyper.scripts.generate_report import generate_summary_report  # Import the report generation function
 from vntyper.version import __version__ as VERSION
 
 def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False, log_level=logging.INFO):
@@ -48,7 +48,7 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
     logging.info(f"Created output directories in: {output_dir}")
 
     # Setup logging
-    log_file = os.path.join(dirs['base'], "pipeline.log")
+    log_file = os.path.join("pipeline.log")
     setup_logging(log_level=log_level, log_file=log_file)
     logging.info(f"Logging to file: {log_file}")
 
@@ -133,6 +133,13 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
             else:
                 logging.error("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
                 raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
+
+        # Generate the summary report as the final step
+        logging.info("Generating summary report.")
+        report_file = "summary_report.html"
+        template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')  # Get template directory from config
+        generate_summary_report(output_dir, template_dir, report_file, log_file)
+        logging.info(f"Summary report generated: {report_file}")
 
         # Final processing and output generation
         logging.info("Pipeline finished successfully.")

@@ -6,6 +6,7 @@ from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_f
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.utils import load_config, setup_logging
+from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.version import __version__ as VERSION
 import sys
 
@@ -22,7 +23,7 @@ def main():
 
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
-    parser_pipeline.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
+    parser_pipeline.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
     parser_pipeline.add_argument('--advntr-reference', type=str, choices=["hg19", "hg38"], required=False, help="Override reference assembly for adVNTR genotyping (hg19 or hg38).")
     parser_pipeline.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for the results.")
     parser_pipeline.add_argument('--ignore-advntr', action='store_true', help="Skip adVNTR genotyping of MUC1-VNTR.")
@@ -38,7 +39,7 @@ def main():
 
     # Subcommand for FASTQ processing
     parser_fastq = subparsers.add_parser("fastq", help="Process FASTQ files.")
-    parser_fastq.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
+    parser_fastq.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
     parser_fastq.add_argument('-r1', '--fastq1', type=str, required=True, help="Path to the first FASTQ file.")
     parser_fastq.add_argument('-r2', '--fastq2', type=str, help="Path to the second FASTQ file.")
     parser_fastq.add_argument('-t', '--threads', type=int, default=4, help="Number of threads to use.")
@@ -46,7 +47,7 @@ def main():
     
     # Subcommand for BAM processing
     parser_bam = subparsers.add_parser("bam", help="Process BAM files.")
-    parser_bam.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
+    parser_bam.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
     parser_bam.add_argument('-a', '--alignment', type=str, required=True, help="Path to the BAM file.")
     parser_bam.add_argument('-t', '--threads', type=int, default=4, help="Number of threads to use.")
     parser_bam.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for processed BAM files.")
@@ -58,7 +59,7 @@ def main():
 
     # Subcommand for Kestrel genotyping
     parser_kestrel = subparsers.add_parser("kestrel", help="Run Kestrel genotyping.")
-    parser_kestrel.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
+    parser_kestrel.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
     parser_kestrel.add_argument('-r', '--reference-vntr', type=str, required=True, help="Path to the MUC1-specific reference VNTR file.")
     parser_kestrel.add_argument('-f1', '--fastq1', type=str, required=True, help="Path to the first FASTQ file.")
     parser_kestrel.add_argument('-f2', '--fastq2', type=str, help="Path to the second FASTQ file.")
@@ -66,10 +67,17 @@ def main():
     
     # Subcommand for adVNTR genotyping
     parser_advntr = subparsers.add_parser("advntr", help="Run adVNTR genotyping.")
-    parser_advntr.add_argument('--config-path', type=Path, help="Path to the config.json file", required=True)
+    parser_advntr.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
     parser_advntr.add_argument('-a', '--alignment', type=str, required=True, help="Path to the BAM file.")
     parser_advntr.add_argument('-m', '--reference-vntr', type=str, required=True, help="Path to the adVNTR reference VNTR database.")
     parser_advntr.add_argument('-o', '--output-dir', type=str, default="out", help="Output directory for adVNTR results.")
+
+    # Add the new subcommand for generating reports
+    parser_report = subparsers.add_parser("report", help="Generate a summary report and visualizations from output data.")
+    parser_report.add_argument('-o', '--output-dir', type=str, required=True, help="Output directory containing pipeline results.")
+    parser_report.add_argument('--config-path', type=Path, default="vntyper/config.json", help="Path to the vntyper/config.json file", required=False)
+    parser_report.add_argument('--report-file', type=str, default="summary_report.html", help="Name of the output report file.")
+    parser_report.add_argument('--log-file', type=str, default="pipeline.log", help="Pipeline log file to include in the report.")
 
     # Parse arguments
     args = parser.parse_args()
@@ -184,6 +192,14 @@ def main():
             output=args.output_dir,
             output_name="output",
             config=config
+        )
+    
+    elif args.command == "report":
+        generate_summary_report(
+            output_dir=Path(args.output_dir),
+            config_path=args.config_path,
+            report_file=args.report_file,
+            log_file=args.log_file
         )
 
 if __name__ == "__main__":
