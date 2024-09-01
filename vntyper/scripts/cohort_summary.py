@@ -32,8 +32,8 @@ def load_kestrel_results(kestrel_result_file):
             'REF': 'REF',
             'ALT': 'ALT',
             'Motif_sequence': 'Motif\nSequence',
-            'Estimated_Depth_AlternateVariant': 'Depth\n(Alternate Variant)',
-            'Estimated_Depth_Variant_ActiveRegion': 'Depth\n(Active Region)',
+            'Estimated_Depth_AlternateVariant': 'Depth\n(Variant)',
+            'Estimated_Depth_Variant_ActiveRegion': 'Depth\n(Region)',
             'Depth_Score': 'Depth\nScore',
             'Confidence': 'Confidence'
         }
@@ -157,8 +157,8 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     # Render the HTML report
     rendered_html = template.render(
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        kestrel_positive=kestrel_df.to_html(classes='table table-striped table-bordered', index=False),
-        advntr_positive=advntr_df.to_html(classes='table table-striped table-bordered', index=False),
+        kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
+        advntr_positive=advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
         plot_base64=plot_base64
     )
 
