@@ -234,7 +234,7 @@ def output_empty_result(output_dir, header):
     """
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
     empty_df = pd.DataFrame(columns=[
-        'Motifs', 'POS', 'REF', 'ALT', 'Variant', 'Motif_sequence',
+        'Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
         'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
         'Depth_Score', 'Confidence'
     ])
