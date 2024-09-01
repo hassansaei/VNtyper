@@ -230,18 +230,31 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
 
 def output_empty_result(output_dir, header):
     """
-    Creates an empty result file with the correct headers.
+    Creates an empty result file with the correct headers and a placeholder 'Negative' result row.
     """
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
-    empty_df = pd.DataFrame(columns=[
-        'Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
-        'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
-        'Depth_Score', 'Confidence'
-    ])
+    
+    # Create a DataFrame with one row containing "None" values and "Negative" in the Confidence column
+    empty_result_data = {
+        'Motif': ['None'], 
+        'Variant': ['None'], 
+        'POS': ['None'], 
+        'REF': ['None'], 
+        'ALT': ['None'], 
+        'Motif_sequence': ['None'], 
+        'Estimated_Depth_AlternateVariant': ['None'], 
+        'Estimated_Depth_Variant_ActiveRegion': ['None'], 
+        'Depth_Score': ['None'], 
+        'Confidence': ['Negative']
+    }
+    empty_df = pd.DataFrame(empty_result_data)
+    
+    # Write the header and the empty DataFrame to the output file
     with open(final_output_path, 'w') as f:
         f.write("\n".join(header) + "\n")
         empty_df.to_csv(f, sep='\t', index=False)
-    logging.info(f"Empty result file saved as {final_output_path}")
+    
+    logging.info(f"Empty result file with placeholder saved as {final_output_path}")
 
 # Function 1: Split Depth and Calculate Frame Score
 def split_depth_and_calculate_frame_score(df):
