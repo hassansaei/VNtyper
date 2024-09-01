@@ -9,9 +9,10 @@
         body { margin: 20px; }
         h1, h2, h3 { text-align: center; margin-top: 20px; }
         .container { margin-top: 20px; }
-        .table-container { width: 90%; margin: 20px auto; }
+        .table-container { width: 90%; margin: 0 auto; text-align: center; }
         .plot { margin: 20px auto; display: block; width: 90%; }
-        .table td { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .table td, .table th { text-align: center; }
+        th { white-space: pre-wrap; }  /* Allow line breaks in header cells */
     </style>
 </head>
 <body>
@@ -42,6 +43,7 @@
                 "paging": true,
                 "searching": true,
                 "info": true,
+                "autoWidth": false,
                 "columnDefs": [
                     { "width": "150px", "targets": "_all" }
                 ]

@@ -23,22 +23,33 @@ def load_kestrel_results(kestrel_result_file):
         df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
         df['Sample'] = sample_id  # Add sample ID column
 
-        # Define the required columns
-        columns_to_display = [
-            'Sample', 'Motif', 'Variant', 'POS', 'REF', 'ALT',
-            'Motif_sequence', 'Estimated_Depth_AlternateVariant',
-            'Estimated_Depth_Variant_ActiveRegion', 'Depth_Score', 'Confidence'
-        ]
+        # Define the required columns and their human-readable headers
+        columns_to_display = {
+            'Sample': 'Sample',
+            'Motif': 'Motif',
+            'Variant': 'Variant',
+            'POS': 'Position',
+            'REF': 'REF',
+            'ALT': 'ALT',
+            'Motif_sequence': 'Motif\nSequence',
+            'Estimated_Depth_AlternateVariant': 'Depth\n(Alternate Variant)',
+            'Estimated_Depth_Variant_ActiveRegion': 'Depth\n(Active Region)',
+            'Depth_Score': 'Depth\nScore',
+            'Confidence': 'Confidence'
+        }
 
         # Select only the columns that are present in the DataFrame
-        available_columns = [col for col in columns_to_display if col in df.columns]
+        available_columns = {col: columns_to_display[col] for col in columns_to_display if col in df.columns}
         missing_columns = set(columns_to_display) - set(available_columns)
 
         if missing_columns:
             logging.warning(f"Missing columns in {kestrel_result_file}: {missing_columns}")
 
-        # Return the DataFrame with the available columns
-        return df[available_columns]
+        # Rename the columns to human-readable names
+        df = df[list(available_columns.keys())]
+        df = df.rename(columns=available_columns)
+
+        return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
         return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
@@ -54,7 +65,9 @@ def load_advntr_results(advntr_result_file):
     try:
         df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
         df['Sample'] = sample_id  # Add sample ID column
-        return df
+
+        # Return only the sample column and any relevant data (if present)
+        return df[['Sample'] + [col for col in df.columns if col != 'Sample']]
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
         return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
@@ -80,6 +93,8 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
             for file in result_files:
                 df = file_loader(file)
                 dfs.append(df)
+        # log the final df
+        logging.info(f"Loaded {len(dfs)} results from {input_dir}")
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 # Helper function to encode image as base64
@@ -94,6 +109,10 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config_path=None):
     kestrel_df = load_results_from_dirs(input_dirs, "kestrel_result.tsv", load_kestrel_results)
     advntr_df = load_results_from_dirs(input_dirs, "output_adVNTR.tsv", load_advntr_results)
 
+    # log the kesrel and advntr df
+    logging.info(f"Kestrel results: {kestrel_df}")
+    logging.info(f"adVNTR results: {advntr_df}")
+
     # Generate summary report and plot
     generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file)
 
@@ -104,12 +123,25 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate summary statistics
-    total_kestrel = len(kestrel_df)
+    kestrel_positive = kestrel_df[kestrel_df['Confidence'] != 'Negative']
+    kestrel_negative = kestrel_df[kestrel_df['Confidence'] == 'Negative']
+
+    total_kestrel_positive = len(kestrel_positive)
+    total_kestrel_negative = len(kestrel_negative)
     total_advntr = len(advntr_df)
 
     # Plot summary and save the plot
     fig, ax = plt.subplots(figsize=(10, 6))
-    sns.barplot(x=['Kestrel Results', 'adVNTR Results'], y=[total_kestrel, total_advntr], ax=ax)
+    
+    # Stacked bar plot
+    ax.bar('Kestrel Results', total_kestrel_positive, label='Non-Negative', color='skyblue')
+    ax.bar('Kestrel Results', total_kestrel_negative, bottom=total_kestrel_positive, label='Negative', color='lightcoral')
+
+    ax.bar('adVNTR Results', total_advntr, color='skyblue')
+
+    ax.set_ylabel('Sample Count')
+    ax.legend()
+
     plot_path = plots_dir / "cohort_summary_plot.png"
     plt.savefig(plot_path)
     plt.close()
