@@ -13,6 +13,25 @@
         .plot { margin: 20px auto; display: block; width: 90%; }
         .table td, .table th { text-align: center; word-break: break-word; } /* Allow line breaks in table cells */
         th { white-space: pre-wrap; }  /* Allow line breaks in header cells */
+        
+        /* New CSS for truncating text and showing full text on hover */
+        .table td {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px; /* Adjust this value based on your needs */
+            cursor: pointer;
+        }
+    
+        .table td:hover {
+            overflow: visible;
+            white-space: normal;
+            max-width: none;
+            position: relative;
+            z-index: 10;
+            background-color: #fff;
+            border: 1px solid #ddd;
+        }
     </style>
 </head>
 <body>
