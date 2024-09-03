@@ -88,32 +88,40 @@ def advntr_processing_del(df, config):
     Returns:
         pd.DataFrame: Filtered DataFrame containing deletions.
     """
+    # Create a copy of the original DataFrame to avoid modifying it directly
     df1 = df.copy()
+
+    # Rename the 'State' column to 'Variant' and 'Pvalue\n' to 'Pvalue' for clarity
     df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
 
-    # Calculate deletion and insertion lengths in the variant sequences.
+    # Calculate the length of deletions in the 'Variant' column by counting occurrences of 'D'
     df1['Deletion_length'] = df1['Variant'].str.count('D')
+
+    # Calculate the length of insertions in the 'Variant' column by counting occurrences of 'I'
     df1['Insertion'] = df1['Variant'].str.count('I')
 
-    # Extract insertion length and handle missing values.
+    # Extract the insertion length from the 'Variant' column, handling cases with missing values
     df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')
     df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
-    df1.Insertion_len = df1.Insertion_len.replace('', 0).astype(int)
-    df1.Deletion_length = df1.Deletion_length.astype(int)
+    df1['Insertion_len'] = df1['Insertion_len'].replace('', 0).astype(int)
 
-    # Calculate the frameshift value as the difference between insertion and deletion lengths.
-    df1['frame'] = abs(df1.Insertion_len - df1.Deletion_length).astype(str)
+    # Convert the 'Deletion_length' column to integer type
+    df1['Deletion_length'] = df1['Deletion_length'].astype(int)
 
-    # Define frameshift patterns using config settings.
+    # Calculate the frameshift value as the absolute difference between insertion and deletion lengths
+    df1['frame'] = abs(df1['Insertion_len'] - df1['Deletion_length']).astype(str)
+
+    # Define valid frameshift patterns based on settings from the config file
     max_frameshift = config["advntr_settings"]["max_frameshift"]
     frameshift_multiplier = config["advntr_settings"]["frameshift_multiplier"]
-
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
 
-    # Filter for valid deletions with matching frameshift values.
+    # Filter the DataFrame to keep only rows with valid deletions and frameshift values
     df1 = df1[(df1['Deletion_length'] >= 1) & df1['frame'].isin(del_frame)]
 
+    # Return the filtered DataFrame containing deletions
     return df1
+
 
 def advntr_processing_ins(df, config):
     """
@@ -126,32 +134,40 @@ def advntr_processing_ins(df, config):
     Returns:
         pd.DataFrame: Filtered DataFrame containing insertions.
     """
+    # Create a copy of the original DataFrame to avoid modifying it directly
     df1 = df.copy()
+
+    # Rename the 'State' column to 'Variant' and 'Pvalue\n' to 'Pvalue' for clarity
     df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
 
-    # Calculate deletion and insertion lengths in the variant sequences.
+    # Calculate the length of deletions in the 'Variant' column by counting occurrences of 'D'
     df1['Deletion_length'] = df1['Variant'].str.count('D')
+
+    # Calculate the length of insertions in the 'Variant' column by counting occurrences of 'I'
     df1['Insertion'] = df1['Variant'].str.count('I')
 
-    # Extract insertion length and handle missing values.
+    # Extract the insertion length from the 'Variant' column, handling cases with missing values
     df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')
     df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
-    df1.Insertion_len = df1.Insertion_len.replace('', 0).astype(int)
-    df1.Deletion_length = df1.Deletion_length.astype(int)
+    df1['Insertion_len'] = df1['Insertion_len'].replace('', 0).astype(int)
 
-    # Calculate the frameshift value as the difference between insertion and deletion lengths.
-    df1['frame'] = abs(df1.Insertion_len - df1.Deletion_length).astype(str)
+    # Convert the 'Deletion_length' column to integer type
+    df1['Deletion_length'] = df1['Deletion_length'].astype(int)
 
-    # Define frameshift patterns using config settings.
+    # Calculate the frameshift value as the absolute difference between insertion and deletion lengths
+    df1['frame'] = abs(df1['Insertion_len'] - df1['Deletion_length']).astype(str)
+
+    # Define valid frameshift patterns based on settings from the config file
     max_frameshift = config["advntr_settings"]["max_frameshift"]
     frameshift_multiplier = config["advntr_settings"]["frameshift_multiplier"]
-
     ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
 
-    # Filter for valid insertions with matching frameshift values.
+    # Filter the DataFrame to keep only rows with valid insertions and frameshift values
     df1 = df1[(df1['Insertion_len'] >= 1) & df1['frame'].isin(ins_frame)]
 
+    # Return the filtered DataFrame containing insertions
     return df1
+
 
 def process_advntr_output(output_path, output, output_name, config, file_format="tsv"):
     """
@@ -169,15 +185,16 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
         return
 
     logging.info('Processing adVNTR result...')
-    
-    # Read the output file and extract column names
+
+    # Read the output file
     with open(output_path, 'r') as file:
         content = file.readlines()
 
-    # Define default column names if not present
+    # Define default column names that match the expected structure
     default_columns = ['#VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
 
-    if not content or content[0].startswith('#'):
+    # Check if the file is empty or only contains comments
+    if not content or all(line.startswith('#') for line in content):
         logging.warning('No pathogenic variant was found with adVNTR!')
 
         # Write the header and the Negative line if the file is empty or only contains comments
@@ -189,36 +206,68 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
 
         logging.info(f'Empty or comment-only output found, written header and negative line to {output_path}')
         return
-    else:
-        # Proceed to process the data
-        df = pd.read_csv(output_path, comment='#', sep='\t', header=None, names=default_columns)
 
-    # If the DataFrame is empty, output the negative line
-    if df.empty:
-        with open(output_path, 'a') as f:
-            f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns) - 1)) + '\n')
-        logging.info(f'No variants found, written negative line to {output_path}')
+    # Read the output file again to update the header
+    with open(output_path, 'r') as file:
+        content = file.readlines()
+
+    # Replace #VID with VID in the header line to prevent it from being treated as a comment
+    content = [line.replace('#VID', 'VID') if line.startswith('#VID') else line for line in content]
+
+    # Write the modified content back to the file
+    with open(output_path, 'w') as file:
+        file.writelines(content)
+
+    try:
+        # Load the data using pandas, ensuring the correct header is used and ignoring comments
+        logging.info('Loading data into DataFrame...')
+        df = pd.read_csv(output_path, sep='\t', comment='#')
+        logging.info(f"Data loaded successfully with shape: {df.shape}")
+
+        # Log the first few rows of the DataFrame to verify the data
+        logging.debug(f"First few rows of the DataFrame:\n{df.head()}")
+
+    except Exception as e:
+        logging.error(f"Error loading data into DataFrame: {e}")
         return
-    
-    # Process deletions and insertions using the respective functions
-    df_del = advntr_processing_del(df, config)
-    df_ins = advntr_processing_ins(df, config)
 
-    # Concatenate the processed results for deletions and insertions
-    advntr_concat = pd.concat([df_del, df_ins], axis=0)
+    try:
+        # Process deletions and insertions using the respective functions
+        logging.info('Processing deletions...')
+        df_del = advntr_processing_del(df, config)
+        logging.info(f"Deletions processed with resulting shape: {df_del.shape}")
 
-    # Keep only the relevant columns
-    advntr_concat = advntr_concat[default_columns]
+        logging.info('Processing insertions...')
+        df_ins = advntr_processing_ins(df, config)
+        logging.info(f"Insertions processed with resulting shape: {df_ins.shape}")
 
-    # Remove duplicate records based on specific columns
-    advntr_concat.drop_duplicates(subset=['#VID', 'Variant', 'NumberOfSupportingReads'], inplace=True)
+        # Concatenate the processed results for deletions and insertions
+        logging.info('Concatenating deletions and insertions...')
+        advntr_concat = pd.concat([df_del, df_ins], axis=0)
+        logging.info(f"Concatenated DataFrame shape: {advntr_concat.shape}")
 
-    # Save the processed adVNTR results to a TSV file
-    output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
-    advntr_concat.to_csv(output_result_path, sep='\t', index=False)
-    logging.info(f"Processed adVNTR results saved to {output_result_path}")
+        # Ensure only the relevant columns are kept and processed
+        advntr_concat = advntr_concat[default_columns]
+
+        # Log the first few rows of the concatenated DataFrame
+        logging.debug(f"First few rows of the concatenated DataFrame:\n{advntr_concat.head()}")
+
+        # Remove duplicate records based on specific columns
+        logging.info('Removing duplicates...')
+        advntr_concat.drop_duplicates(subset=['VID', 'Variant', 'NumberOfSupportingReads'], inplace=True)
+        logging.info(f"DataFrame shape after removing duplicates: {advntr_concat.shape}")
+
+        # Save the processed adVNTR results to a TSV file
+        output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
+        advntr_concat.to_csv(output_result_path, sep='\t', index=False)
+        logging.info(f"Processed adVNTR results saved to {output_result_path}")
+
+    except Exception as e:
+        logging.error(f"Error during processing of deletions and insertions: {e}")
+        return
 
     cleanup_files(output, output_name, config.get("advntr_cleanup_files", []))
+
 
 def cleanup_files(output, output_name, files_to_remove):
     """
