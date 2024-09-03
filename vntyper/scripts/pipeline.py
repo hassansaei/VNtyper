@@ -82,7 +82,7 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
         elif bam:
             # Convert BAM to FASTQ
             logging.info("Starting BAM to FASTQ conversion.")
-            fastq1, fastq2 = process_bam_to_fastq(
+            fastq1, fastq2, fastq_other, fastq_single = process_bam_to_fastq(
                 bam, dirs['fastq_bam_processing'], "output", threads, config, reference_assembly, fast_mode, delete_intermediates, keep_intermediates
             )
 

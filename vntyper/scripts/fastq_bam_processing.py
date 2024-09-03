@@ -2,6 +2,7 @@ import os
 import logging
 from vntyper.scripts.utils import run_command
 
+
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     """
     Process FASTQ files using fastp for quality control.
@@ -20,14 +21,14 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     deduplication = config["bam_processing"]["deduplication"]
     dup_calc_accuracy = config["bam_processing"]["dup_calc_accuracy"]
     length_required = config["bam_processing"]["length_required"]
-    
+
     QC_command = (
         f"{fastp_path} --thread {threads} --in1 {fastq_1} --in2 {fastq_2} "
         f"--out1 {output}/{output_name}_R1.fastq.gz --out2 {output}/{output_name}_R2.fastq.gz "
         f"--compression {compression_level} --dup_calc_accuracy {dup_calc_accuracy} --length_required {length_required} "
         f"--html {output}/{output_name}.html"
     )
-    
+
     if disable_adapter_trimming:
         QC_command += " --disable_adapter_trimming"
     if deduplication:
@@ -37,8 +38,9 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     if not run_command(QC_command, log_file, critical=True):
         logging.error("FASTQ quality control failed.")
         raise RuntimeError("FASTQ quality control failed.")
-    
+
     logging.info('Quality control passed for FASTQ files.')
+
 
 def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference_assembly="hg19", fast_mode=False, delete_intermediates=True, keep_intermediates=False):
     """
@@ -56,10 +58,10 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         keep_intermediates (bool): If True, keeps intermediate files for later use.
 
     Returns:
-        Tuple[str, str]: Paths to the generated FASTQ files.
+        Tuple[str, str, str]: Paths to the generated FASTQ files (R1, R2, and other).
     """
     samtools_path = config["tools"]["samtools"]
-    
+
     if reference_assembly == "hg38":
         bam_region = config["bam_processing"]["bam_region_hg38"]
     else:
@@ -74,7 +76,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         log_file = os.path.join(output, f"{output_name}_slice.log")
         if not run_command(command_slice, log_file, critical=True):
             logging.error("BAM region slicing failed.")
-            return None, None
+            return None, None, None
         logging.info("BAM region slicing completed.")
 
     if fast_mode:
@@ -91,7 +93,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         log_file = os.path.join(output, f"{output_name}_filter.log")
         if not run_command(command_filter, log_file, critical=True):
             logging.error("BAM filtering failed.")
-            return None, None
+            return None, None, None
 
         command_merge = (
             f"{samtools_path} merge -@ {threads} {output}/{output_name}_sliced_unmapped.bam "
@@ -100,7 +102,7 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         log_file = os.path.join(output, f"{output_name}_merge.log")
         if not run_command(command_merge, log_file, critical=True):
             logging.error("BAM merging failed.")
-            return None, None
+            return None, None, None
 
         final_bam = f"{output}/{output_name}_sliced_unmapped.bam"
         logging.info("BAM filtering and merging completed.")
@@ -108,18 +110,21 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
     # Sorting and converting BAM to FASTQ using pipes
     final_fastq_1 = f"{output}/{output_name}_R1.fastq.gz"
     final_fastq_2 = f"{output}/{output_name}_R2.fastq.gz"
-    
-    if keep_intermediates and os.path.exists(final_fastq_1) and os.path.exists(final_fastq_2):
-        logging.info(f"Reusing existing FASTQ files: {final_fastq_1} and {final_fastq_2}")
+    final_fastq_other = f"{output}/{output_name}_other.fastq.gz"
+    final_fastq_single = f"{output}/{output_name}_single.fastq.gz"
+
+    if keep_intermediates and os.path.exists(final_fastq_1) and os.path.exists(final_fastq_2) and os.path.exists(final_fastq_other):
+        logging.info(f"Reusing existing FASTQ files: {final_fastq_1}, {final_fastq_2}, {final_fastq_other} and {final_fastq_single}")
     else:
+        # FUTURE: Check if the single and other FASTQ files are required
         command_sort_fastq = (
             f"{samtools_path} sort -n -@ {threads} {final_bam} | "
-            f"{samtools_path} fastq -@ {threads} - -1 {final_fastq_1} -2 {final_fastq_2} -0 /dev/null -s /dev/null"
+            f"{samtools_path} fastq -@ {threads} - -1 {final_fastq_1} -2 {final_fastq_2} -0 {final_fastq_other} -s {final_fastq_single}"
         )
         log_file = os.path.join(output, f"{output_name}_sort_fastq.log")
         if not run_command(command_sort_fastq, log_file, critical=True):
             logging.error("BAM to FASTQ conversion failed.")
-            return None, None
+            return None, None, None
         logging.info("BAM to FASTQ conversion completed.")
 
     # Remove intermediate BAM files if required
@@ -136,4 +141,4 @@ def process_bam_to_fastq(in_bam, output, output_name, threads, config, reference
         logging.info("Intermediate files removed.")
 
     # Return the paths to the generated FASTQ files
-    return final_fastq_1, final_fastq_2
+    return final_fastq_1, final_fastq_2, final_fastq_other, final_fastq_single
