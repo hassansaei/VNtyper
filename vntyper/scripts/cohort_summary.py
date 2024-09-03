@@ -78,26 +78,36 @@ def load_advntr_results(advntr_result_file):
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
         return pd.DataFrame({'Sample': [sample_id], 'Message': ['Failed to parse adVNTR results']})
+    except Exception as e:
+        logging.error(f"Unexpected error occurred while loading adVNTR results: {e}")
+        return pd.DataFrame({'Sample': [sample_id], 'Message': ['Error loading adVNTR results']})
 
 # Function to recursively find all files with a specific name in a directory tree
 def find_results_files(root_dir, filename):
+    logging.info(f"Searching for {filename} in directory {root_dir}")
     result_files = []
     for root, dirs, files in os.walk(root_dir):
+        logging.debug(f"Checking directory: {root}")
         if filename in files:
-            result_files.append(Path(root) / filename)
+            file_path = Path(root) / filename
+            logging.info(f"Found {filename} in {file_path}")
+            result_files.append(file_path)
     return result_files
 
 # Function to load results from all matching files across all subdirectories
 def load_results_from_dirs(input_dirs, filename, file_loader):
     dfs = []
     for input_dir in input_dirs:
+        logging.info(f"Processing input directory: {input_dir}")
         result_files = find_results_files(input_dir, filename)
         if not result_files:
             # Handle cases where there are no result files in the directory
             sample_id = Path(input_dir).name
+            logging.warning(f"No result files found in {input_dir}")
             dfs.append(pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']}))  # Append DataFrame with Sample ID and message
         else:
             for file in result_files:
+                logging.info(f"Attempting to load file: {file}")
                 df = file_loader(file)
                 dfs.append(df)
         # log the final df
@@ -129,22 +139,40 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate summary statistics
+    # Generate summary statistics for Kestrel
     kestrel_positive = kestrel_df[kestrel_df['Confidence'] != 'Negative']
     kestrel_negative = kestrel_df[kestrel_df['Confidence'] == 'Negative']
 
     total_kestrel_positive = len(kestrel_positive)
     total_kestrel_negative = len(kestrel_negative)
-    total_advntr = len(advntr_df)
+
+    # Generate summary statistics for adVNTR
+    advntr_positive = advntr_df[(advntr_df['VID'].notna()) & (advntr_df['VID'] != 'Negative') & (advntr_df['Message'].isna())]
+    advntr_negative = advntr_df[(advntr_df['VID'] == 'Negative')]
+    advntr_no_data = advntr_df[advntr_df['Message'].notna()]
+
+    total_advntr_positive = len(advntr_positive)
+    total_advntr_negative = len(advntr_negative)
+    total_advntr_no_data = len(advntr_no_data)
 
     # Plot summary and save the plot
     fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Stacked bar plot
-    ax.bar('Kestrel Results', total_kestrel_positive, label='Non-Negative', color='skyblue')
-    ax.bar('Kestrel Results', total_kestrel_negative, bottom=total_kestrel_positive, label='Negative', color='lightcoral')
 
-    ax.bar('adVNTR Results', total_advntr, color='skyblue')
+    # Use color-blind-safe colors
+    colors = {
+        'positive': '#56B4E9',  # Sky blue
+        'negative': '#D55E00',  # Vermillion
+        'no_data': '#999999'    # Grey
+    }
+
+    # Stacked bar plot for Kestrel results
+    ax.bar('Kestrel Results', total_kestrel_positive, label='Positive', color=colors['positive'])
+    ax.bar('Kestrel Results', total_kestrel_negative, bottom=total_kestrel_positive, label='Negative', color=colors['negative'])
+
+    # Stacked bar plot for adVNTR results
+    ax.bar('adVNTR Results', total_advntr_positive, color=colors['positive'])
+    ax.bar('adVNTR Results', total_advntr_negative, bottom=total_advntr_positive, color=colors['negative'])
+    ax.bar('adVNTR Results', total_advntr_no_data, bottom=total_advntr_positive + total_advntr_negative, label='No Data', color=colors['no_data'])
 
     ax.set_ylabel('Sample Count')
     ax.legend()
@@ -175,6 +203,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         f.write(rendered_html)
 
     logging.info(f"Cohort summary report generated and saved to {report_file_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cohort Summary Report Generator")
