@@ -132,7 +132,12 @@ def main():
 
     # Setup logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    setup_logging(log_level=log_level, log_file=args.log_file)
+    log_file = Path(args.output_dir) / "pipeline.log"
+
+    # Ensure the output directory exists
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    setup_logging(log_level=log_level, log_file=str(log_file))
 
     # Handle subcommands
     if args.command == "pipeline":
@@ -183,7 +188,7 @@ def main():
             kestrel_path=config.get("tools", {}).get("kestrel"),
             kestrel_settings=config.get("kestrel_settings", {})
         )
-    
+
     elif args.command == "advntr":
         run_advntr(
             db_file_hg19=args.reference_vntr,
@@ -194,12 +199,13 @@ def main():
         )
 
         # After running adVNTR, process the output
-        advntr_vcf_path = Path(args.output_dir) / "output_adVNTR.vcf"
+        advntr_tsv_path = Path(args.output_dir) / "output_adVNTR.tsv"
         process_advntr_output(
-            vcf_path=advntr_vcf_path,
+            output_path=advntr_tsv_path,
             output=args.output_dir,
             output_name="output",
-            config=config
+            config=config,
+            file_format="tsv"
         )
     
     elif args.command == "report":
