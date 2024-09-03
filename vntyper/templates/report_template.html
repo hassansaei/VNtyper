@@ -4,6 +4,34 @@
     <meta charset="UTF-8">
     <title>Summary Report</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+    <style>
+        body { margin: 20px; }
+        h1, h2, h3 { text-align: center; margin-top: 20px; }
+        .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
+        .table-container { width: 90%; margin: 0 auto; text-align: center; }
+        .plot { margin: 20px auto; display: block; width: 50%; max-width: 500px; }
+        .table td, .table th { text-align: center; word-break: break-word; } 
+        th { white-space: pre-wrap; }
+
+        .table td {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+            cursor: pointer;
+        }
+
+        .table td:hover {
+            overflow: visible;
+            white-space: normal;
+            max-width: none;
+            position: relative;
+            z-index: 10;
+            background-color: #fff;
+            border: 1px solid #ddd;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -11,13 +39,33 @@
         <p><strong>Report Date:</strong> {{ report_date }}</p>
 
         <h2>Kestrel Identified Variants</h2>
-        {{ kestrel_highlight | safe }}
+        <div class="table-container">
+            {{ kestrel_highlight | safe }}
+        </div>
 
         <h2>adVNTR Identified Variants</h2>
-        {{ advntr_highlight | safe }}
+        <div class="table-container">
+            {{ advntr_highlight | safe }}
+        </div>
 
         <h2>Pipeline Log</h2>
         <pre>{{ log_content }}</pre>
     </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+    <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            $('table').DataTable({
+                "paging": true,
+                "searching": true,
+                "info": true,
+                "autoWidth": false,
+                "columnDefs": [
+                    { "width": "150px", "targets": "_all" }
+                ]
+            });
+        });
+    </script>
 </body>
 </html>
