@@ -151,8 +151,8 @@ def advntr_processing_ins(df, config):
 
 def process_advntr_output(output_path, output, output_name, config, file_format="tsv"):
     """
-    Process the adVNTR output TSV/VCF to extract relevant information and generate final results.
-
+    Process the adVNTR output TSV to extract relevant information and generate final results.
+    
     Args:
         output_path (str): Path to the adVNTR output file.
         output (str): Directory where the final results will be saved.
@@ -164,44 +164,52 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
         logging.error(f"adVNTR output file {output_path} not found!")
         return
 
-    logging.info('Processing code-adVNTR result...')
-    names = read_output(output_path, file_format=file_format)
-    df = pd.read_csv(output_path, comment='#', sep='\t', header=None, names=names)
+    logging.info('Processing adVNTR result...')
+    
+    # Read the output file and extract column names
+    with open(output_path, 'r') as file:
+        content = file.readlines()
 
-    if df.empty:
-        logging.warning('No pathogenic variant was found with code-adVNTR!')
-        pre_result_path = os.path.join(output, f"{output_name}_pre_result.tsv")
-        if not os.path.exists(pre_result_path):
-            logging.error(f"Pre-result file {pre_result_path} not found!")
-            return
+    # Define default column names if not present
+    default_columns = ['#VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
 
-        with open(pre_result_path, 'r') as f:
-            with open(os.path.join(output, f"{output_name}_Final_result.tsv"), 'w') as f1:
-                f1.write(f'## VNtyper_Analysis_for_{output_name} \n')
-                f1.write('# Kestrel_Result \n')
-                f1.write('\t'.join(columns_kmer) + '\n')
-                next(f)
-                for line in f:
-                    f1.write(line)
+    if not content or content[0].startswith('#'):
+        logging.warning('No pathogenic variant was found with adVNTR!')
 
-        cleanup_files(output, output_name, config.get("advntr_cleanup_files", []))
-        logging.info('The final result is saved in *_Final_result.tsv')
+        # Write the header and the Negative line if the file is empty or only contains comments
+        with open(output_path, 'w') as f:
+            f.write(f'## VNtyper_Analysis_for_{output_name} \n')
+            f.write('# Kestrel_Result \n')
+            f.write('\t'.join(default_columns) + '\n')
+            f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns) - 1)) + '\n')
+
+        logging.info(f'Empty or comment-only output found, written header and negative line to {output_path}')
         return
     else:
-        # Process deletions and insertions using the respective functions.
-        df_del = advntr_processing_del(df, config)
-        df_ins = advntr_processing_ins(df, config)
+        # Proceed to process the data
+        df = pd.read_csv(output_path, comment='#', sep='\t', header=None, names=default_columns)
 
-    # Concatenate the processed results for deletions and insertions.
+    # If the DataFrame is empty, output the negative line
+    if df.empty:
+        with open(output_path, 'a') as f:
+            f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns) - 1)) + '\n')
+        logging.info(f'No variants found, written negative line to {output_path}')
+        return
+    
+    # Process deletions and insertions using the respective functions
+    df_del = advntr_processing_del(df, config)
+    df_ins = advntr_processing_ins(df, config)
+
+    # Concatenate the processed results for deletions and insertions
     advntr_concat = pd.concat([df_del, df_ins], axis=0)
 
-    # Keep only the relevant columns.
-    advntr_concat = advntr_concat[['#VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']]
+    # Keep only the relevant columns
+    advntr_concat = advntr_concat[default_columns]
 
-    # Remove duplicate records based on specific columns.
+    # Remove duplicate records based on specific columns
     advntr_concat.drop_duplicates(subset=['#VID', 'Variant', 'NumberOfSupportingReads'], inplace=True)
 
-    # Save the processed adVNTR results to a TSV file.
+    # Save the processed adVNTR results to a TSV file
     output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
     advntr_concat.to_csv(output_result_path, sep='\t', index=False)
     logging.info(f"Processed adVNTR results saved to {output_result_path}")
