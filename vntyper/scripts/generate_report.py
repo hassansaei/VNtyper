@@ -53,13 +53,21 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file):
     advntr_df = load_advntr_results(advntr_result_file)
     log_content = load_pipeline_log(log_file_path)
 
+    # Filter the Kestrel DataFrame to keep only specific columns
+    kestrel_columns = ['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence', 'Estimated_Depth_AlternateVariant', 
+                       'Estimated_Depth_Variant_ActiveRegion', 'Depth_Score', 'Confidence']
+    kestrel_df = kestrel_df[kestrel_columns]
+
+    # Convert the Kestrel DataFrame to an HTML table
+    kestrel_html = kestrel_df.to_html(classes='table table-striped', index=False)
+
     # Load the template
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template('report_template.html')
 
     # Render the HTML report
     rendered_html = template.render(
-        kestrel_highlight=kestrel_df,  # Pass the full DataFrame
+        kestrel_highlight=kestrel_html,
         advntr_highlight=advntr_df.to_html(classes='table table-striped') if not advntr_df.empty else "No significant adVNTR variants found.",
         log_content=log_content,
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
