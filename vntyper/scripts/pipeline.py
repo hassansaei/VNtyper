@@ -49,7 +49,7 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
     logging.info(f"Created output directories in: {output_dir}")
 
     # Setup logging
-    log_file = os.path.join("pipeline.log")
+    log_file = os.path.join(output_dir, "pipeline.log")
     setup_logging(log_level=log_level, log_file=log_file)
     logging.info(f"Logging to file: {log_file}")
 
@@ -128,8 +128,8 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
                 run_advntr(advntr_reference, sorted_bam, dirs['advntr'], "output", config)
 
                 # Process adVNTR output
-                vcf_path = os.path.join(dirs['advntr'], "output_adVNTR.vcf")
-                process_advntr_output(vcf_path, dirs['advntr'], "output", config)
+                tsv_path = os.path.join(dirs['advntr'], "output_adVNTR.tsv")  # Updated to .tsv
+                process_advntr_output(tsv_path, dirs['advntr'], "output", config)  # Updated path variable
                 logging.info("adVNTR genotyping completed.")
             else:
                 logging.error("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
