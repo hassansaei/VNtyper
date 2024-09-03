@@ -41,12 +41,16 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config, output_for
 
     logging.info("Launching adVNTR genotyping!")
 
-    # Run the adVNTR command and log output to the specified log file
-    if not run_command(advntr_command, log_file, critical=True):
-        logging.error("adVNTR genotyping failed. Check the log for details.")
-        raise RuntimeError("adVNTR genotyping failed.")
+    try:
+        # Run the adVNTR command and log output to the specified log file
+        if not run_command(advntr_command, log_file, critical=True):
+            logging.error("adVNTR genotyping failed. Check the log for details.")
+            # Do not raise an exception here, allowing the pipeline to continue
+    except Exception as e:
+        logging.error(f"adVNTR genotyping encountered an error: {e}")
+        # Continue without raising an exception
 
-    logging.info("adVNTR genotyping of MUC1-VNTR done!")
+    logging.info("adVNTR genotyping of MUC1-VNTR completed!")
 
 def read_output(path, file_format="tsv"):
     """
