@@ -28,6 +28,10 @@ def load_kestrel_results(kestrel_result_file):
         }
         df = df[list(columns_to_display.keys())]
         df = df.rename(columns=columns_to_display)
+        
+        # Apply conditional styling to the Confidence column
+        df['Confidence'] = df['Confidence'].apply(lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision' else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision' else x)
+        
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
@@ -67,7 +71,8 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file):
     advntr_df = load_advntr_results(advntr_result_file)
     log_content = load_pipeline_log(log_file_path)
 
-    kestrel_html = kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False)
+    # Convert DataFrames to HTML tables with safe argument to allow HTML content in cells
+    kestrel_html = kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False, escape=False)
     advntr_html = advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False)
 
     env = Environment(loader=FileSystemLoader(template_dir))
