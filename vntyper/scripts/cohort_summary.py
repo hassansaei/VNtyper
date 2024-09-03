@@ -49,10 +49,14 @@ def load_kestrel_results(kestrel_result_file):
         df = df[list(available_columns.keys())]
         df = df.rename(columns=available_columns)
 
+        # Apply conditional styling to the Confidence column
+        df['Confidence'] = df['Confidence'].apply(lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision' else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision' else f'<span style="color:blue;font-weight:bold;">{x}</span>' if x == 'Negative' else x)
+
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
         return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
+
 
 # Function to load adVNTR results
 def load_advntr_results(advntr_result_file):
@@ -148,6 +152,7 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config_path=None):
     # Generate summary report and plot
     generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file)
 
+
 # Function to generate the cohort summary report
 def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file):
     # Create plots directory within the output directory
@@ -155,8 +160,8 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate summary statistics for Kestrel
-    kestrel_positive = len(kestrel_df[kestrel_df['Confidence'] != 'Negative'])
-    kestrel_negative = len(kestrel_df[kestrel_df['Confidence'] == 'Negative'])
+    kestrel_positive = len(kestrel_df[kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
+    kestrel_negative = len(kestrel_df[~kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
     total_kestrel = kestrel_positive + kestrel_negative
 
     # Generate summary statistics for adVNTR
@@ -202,7 +207,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     # Render the HTML report
     rendered_html = template.render(
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
+        kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False, escape=False),
         advntr_positive=advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
         kestrel_plot_base64=kestrel_plot_base64,
         advntr_plot_base64=advntr_plot_base64
