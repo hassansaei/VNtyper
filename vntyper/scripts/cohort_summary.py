@@ -60,17 +60,24 @@ def load_advntr_results(advntr_result_file):
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
-        return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
+        return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']})
     
     try:
         df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
+        if df.empty:
+            logging.warning(f"adVNTR result file {advntr_result_file} is empty.")
+            return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']})
+        
         df['Sample'] = sample_id  # Add sample ID column
 
         # Return only the sample column and any relevant data (if present)
         return df[['Sample'] + [col for col in df.columns if col != 'Sample']]
+    except pd.errors.EmptyDataError as e:
+        logging.error(f"adVNTR result file {advntr_result_file} is empty: {e}")
+        return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']})
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
-        return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
+        return pd.DataFrame({'Sample': [sample_id], 'Message': ['Failed to parse adVNTR results']})
 
 # Function to recursively find all files with a specific name in a directory tree
 def find_results_files(root_dir, filename):
@@ -88,7 +95,7 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
         if not result_files:
             # Handle cases where there are no result files in the directory
             sample_id = Path(input_dir).name
-            dfs.append(pd.DataFrame({'Sample': [sample_id]}))  # Append empty DataFrame with Sample ID
+            dfs.append(pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']}))  # Append DataFrame with Sample ID and message
         else:
             for file in result_files:
                 df = file_loader(file)
@@ -109,7 +116,7 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config_path=None):
     kestrel_df = load_results_from_dirs(input_dirs, "kestrel_result.tsv", load_kestrel_results)
     advntr_df = load_results_from_dirs(input_dirs, "output_adVNTR.tsv", load_advntr_results)
 
-    # log the kesrel and advntr df
+    # log the kestrel and advntr df
     logging.info(f"Kestrel results: {kestrel_df}")
     logging.info(f"adVNTR results: {advntr_df}")
 
