@@ -199,8 +199,9 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
 
         # Write the header and the Negative line if the file is empty or only contains comments
         with open(output_path, 'w') as f:
-            f.write(f'## VNtyper_Analysis_for_{output_name} \n')
-            f.write('# Kestrel_Result \n')
+            f.write(f'#Input File: {output_name} \n')
+            f.write('#Reference file: None\n')
+            f.write('#P-value cutoff: 0.001\n')
             f.write('\t'.join(default_columns) + '\n')
             f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns) - 1)) + '\n')
 
