@@ -46,7 +46,7 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file):
     # Define paths to the Kestrel and adVNTR results
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
-    log_file_path = Path(output_dir) / log_file
+    log_file_path = log_file
 
     # Load results and logs
     kestrel_df = load_kestrel_results(kestrel_result_file)
