@@ -120,15 +120,30 @@ def encode_image_to_base64(image_path):
         encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
     return f"data:image/png;base64,{encoded_string}"
 
+# Function to generate and save donut charts
+def generate_donut_chart(values, labels, total, title, colors, plot_path):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
+
+    ax.pie(values, 
+           wedgeprops=wedgeprops, 
+           startangle=90, 
+           colors=colors, 
+           labels=labels)
+
+    ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
+    ax.set_title(title)
+
+    plt.savefig(plot_path)
+    plt.close()
+
+    return encode_image_to_base64(plot_path)
+
 # Main function to aggregate cohort results
 def aggregate_cohort(input_dirs, output_dir, summary_file, config_path=None):
     # Load results using the individual functions
     kestrel_df = load_results_from_dirs(input_dirs, "kestrel_result.tsv", load_kestrel_results)
     advntr_df = load_results_from_dirs(input_dirs, "output_adVNTR.tsv", load_advntr_results)
-
-    # log the kestrel and advntr df
-    logging.info(f"Kestrel results: {kestrel_df}")
-    logging.info(f"adVNTR results: {advntr_df}")
 
     # Generate summary report and plot
     generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file)
@@ -140,23 +155,15 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate summary statistics for Kestrel
-    kestrel_positive = kestrel_df[kestrel_df['Confidence'] != 'Negative']
-    kestrel_negative = kestrel_df[kestrel_df['Confidence'] == 'Negative']
-
-    total_kestrel_positive = len(kestrel_positive)
-    total_kestrel_negative = len(kestrel_negative)
+    kestrel_positive = len(kestrel_df[kestrel_df['Confidence'] != 'Negative'])
+    kestrel_negative = len(kestrel_df[kestrel_df['Confidence'] == 'Negative'])
+    total_kestrel = kestrel_positive + kestrel_negative
 
     # Generate summary statistics for adVNTR
-    advntr_positive = advntr_df[(advntr_df['VID'].notna()) & (advntr_df['VID'] != 'Negative') & (advntr_df['Message'].isna())]
-    advntr_negative = advntr_df[(advntr_df['VID'] == 'Negative')]
-    advntr_no_data = advntr_df[advntr_df['Message'].notna()]
-
-    total_advntr_positive = len(advntr_positive)
-    total_advntr_negative = len(advntr_negative)
-    total_advntr_no_data = len(advntr_no_data)
-
-    # Plot summary and save the plot
-    fig, ax = plt.subplots(figsize=(10, 6))
+    advntr_positive = len(advntr_df[(advntr_df['VID'].notna()) & (advntr_df['VID'] != 'Negative') & (advntr_df['Message'].isna())])
+    advntr_negative = len(advntr_df[(advntr_df['VID'] == 'Negative')])
+    advntr_no_data = len(advntr_df[advntr_df['Message'].notna()])
+    total_advntr = advntr_positive + advntr_negative + advntr_no_data
 
     # Use color-blind-safe colors
     colors = {
@@ -165,24 +172,27 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         'no_data': '#999999'    # Grey
     }
 
-    # Stacked bar plot for Kestrel results
-    ax.bar('Kestrel Results', total_kestrel_positive, label='Positive', color=colors['positive'])
-    ax.bar('Kestrel Results', total_kestrel_negative, bottom=total_kestrel_positive, label='Negative', color=colors['negative'])
+    # Generate the donut chart for Kestrel Results
+    kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
+    kestrel_plot_base64 = generate_donut_chart(
+        values=[kestrel_positive, kestrel_negative],
+        labels=['Positive', 'Negative'],
+        total=total_kestrel,
+        title='Kestrel Results',
+        colors=[colors['positive'], colors['negative']],
+        plot_path=kestrel_plot_path
+    )
 
-    # Stacked bar plot for adVNTR results
-    ax.bar('adVNTR Results', total_advntr_positive, color=colors['positive'])
-    ax.bar('adVNTR Results', total_advntr_negative, bottom=total_advntr_positive, color=colors['negative'])
-    ax.bar('adVNTR Results', total_advntr_no_data, bottom=total_advntr_positive + total_advntr_negative, label='No Data', color=colors['no_data'])
-
-    ax.set_ylabel('Sample Count')
-    ax.legend()
-
-    plot_path = plots_dir / "cohort_summary_plot.png"
-    plt.savefig(plot_path)
-    plt.close()
-
-    # Convert plot to base64
-    plot_base64 = encode_image_to_base64(plot_path)
+    # Generate the donut chart for adVNTR Results
+    advntr_plot_path = plots_dir / "advntr_summary_plot.png"
+    advntr_plot_base64 = generate_donut_chart(
+        values=[advntr_positive, advntr_negative, advntr_no_data],
+        labels=['Positive', 'Negative', 'No Data'],
+        total=total_advntr,
+        title='adVNTR Results',
+        colors=[colors['positive'], colors['negative'], colors['no_data']],
+        plot_path=advntr_plot_path
+    )
 
     # Load the template
     template_dir = "vntyper/templates"
@@ -194,7 +204,8 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
         advntr_positive=advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
-        plot_base64=plot_base64
+        kestrel_plot_base64=kestrel_plot_base64,
+        advntr_plot_base64=advntr_plot_base64
     )
 
     # Save the HTML report
