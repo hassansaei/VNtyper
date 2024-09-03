@@ -402,6 +402,10 @@ def motif_correction_and_annotation(df, merged_motifs):
     if df.empty:
         return df
 
+    # Make a copy of the 'Motifs' column and rename it to 'Motif_fasta'
+    if 'Motifs' in df.columns:
+        df['Motif_fasta'] = df['Motifs']
+
     # Ensure that splitting will result in exactly two columns
     if df['Motifs'].str.count('-').max() == 1:
         df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
@@ -420,7 +424,7 @@ def motif_correction_and_annotation(df, merged_motifs):
         motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
         motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
         motif_left = motif_left.merge(merged_motifs, on='Motif', how='left')
-        motif_left = motif_left[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
+        motif_left = motif_left[['Motif', 'Motif_fasta', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
                                  'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
                                  'Depth_Score', 'Confidence']]
         motif_left = motif_left.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
@@ -431,7 +435,7 @@ def motif_correction_and_annotation(df, merged_motifs):
         motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
         motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
         motif_right = motif_right.merge(merged_motifs, on='Motif', how='left')
-        motif_right = motif_right[['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
+        motif_right = motif_right[['Motif', 'Motif_fasta', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence',
                                    'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
                                    'Depth_Score', 'Confidence']]
 
