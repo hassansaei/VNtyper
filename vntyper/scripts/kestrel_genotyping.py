@@ -9,7 +9,7 @@ from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.motif_processing import load_muc1_reference, load_additional_motifs, preprocessing_insertion, preprocessing_deletion
 from vntyper.version import __version__ as VERSION
 
-def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states):
+def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states, log_level):
     """
     Constructs the command for running Kestrel based on various settings.
 
@@ -25,6 +25,7 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         java_memory (str): Amount of memory to allocate to the JVM.
         max_align_states (int): Maximum alignment states.
         max_hap_states (int): Maximum haplotype states.
+        log_level (str): Log level to use for Kestrel.
 
     Returns:
         str: The constructed Kestrel command.
@@ -37,7 +38,7 @@ def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_di
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
         f"{fastq_1} {fastq_2} "
-        f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout --temploc {output_dir}"
+        f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout --loglevel {log_level.upper()} --temploc {output_dir}"
     )
 
 
@@ -109,6 +110,7 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20, 17, 25, 41])
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
+    log_level = logging.getLevelName(logging.getLogger().level)  # Get the current log level as a string
 
     for kmer_size in kmer_sizes:
         kmer_command = construct_kestrel_command(
@@ -122,7 +124,8 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             java_path=java_path,
             java_memory=java_memory,
             max_align_states=max_align_states,
-            max_hap_states=max_hap_states
+            max_hap_states=max_hap_states,
+            log_level=log_level  # Pass the log level here
         )
 
         log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
@@ -147,6 +150,7 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
 
                 process_kestrel_output(output_dir, vcf_path, reference_vntr, config)
                 break
+
 
 def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Processing Kestrel VCF results...")
