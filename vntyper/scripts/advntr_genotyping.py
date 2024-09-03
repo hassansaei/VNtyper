@@ -6,6 +6,7 @@ import subprocess as sp
 from pathlib import Path
 from vntyper.scripts.utils import run_command
 
+
 def run_advntr(db_file_hg19, sorted_bam, output, output_name, config, output_format="tsv"):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from the config.
@@ -52,30 +53,6 @@ def run_advntr(db_file_hg19, sorted_bam, output, output_name, config, output_for
 
     logging.info("adVNTR genotyping of MUC1-VNTR completed!")
 
-def read_output(path, file_format="tsv"):
-    """
-    Read the header from a TSV or VCF file to extract column names.
-
-    Args:
-        path (str): Path to the output file.
-        file_format (str): Format of the output file ("vcf" or "tsv").
-
-    Returns:
-        list: A list of column names from the file, or an empty list if no header found.
-    """
-    col_names = []
-    if not os.path.exists(path):
-        logging.error(f"Output file {path} does not exist.")
-        return col_names
-
-    with open(path, 'r') as f:
-        for line in f:
-            if line.startswith("#VID") or (file_format == "vcf" and line.startswith("#CHROM")):
-                col_names = [x.strip() for x in line.split('\t')]
-                break
-    if not col_names:
-        logging.error(f"No header found in output file: {path}")
-    return col_names
 
 def advntr_processing_del(df, config):
     """
@@ -190,8 +167,8 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
     with open(output_path, 'r') as file:
         content = file.readlines()
 
-    # Define default column names that match the expected structure
-    default_columns = ['#VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
+    # Define default column names that match the expected structure of the adVNTR output
+    default_columns_advntr_output = ['#VID', 'State', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
 
     # Check if the file is empty or only contains comments
     if not content or all(line.startswith('#') for line in content):
@@ -202,8 +179,8 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
             f.write(f'#Input File: {output_name} \n')
             f.write('#Reference file: None\n')
             f.write('#P-value cutoff: 0.001\n')
-            f.write('\t'.join(default_columns) + '\n')
-            f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns) - 1)) + '\n')
+            f.write('\t'.join(default_columns_advntr_output) + '\n')
+            f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns_advntr_output) - 1)) + '\n')
 
         logging.info(f'Empty or comment-only output found, written header and negative line to {output_path}')
         return
@@ -236,27 +213,21 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
         # Process deletions and insertions using the respective functions
         logging.info('Processing deletions...')
         df_del = advntr_processing_del(df, config)
-        logging.info(f"Deletions processed with resulting shape: {df_del.shape}")
 
         logging.info('Processing insertions...')
         df_ins = advntr_processing_ins(df, config)
-        logging.info(f"Insertions processed with resulting shape: {df_ins.shape}")
 
         # Concatenate the processed results for deletions and insertions
         logging.info('Concatenating deletions and insertions...')
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
-        logging.info(f"Concatenated DataFrame shape: {advntr_concat.shape}")
 
-        # Ensure only the relevant columns are kept and processed
-        advntr_concat = advntr_concat[default_columns]
-
-        # Log the first few rows of the concatenated DataFrame
-        logging.debug(f"First few rows of the concatenated DataFrame:\n{advntr_concat.head()}")
+        # Ensure only the relevant columns are kept and processed for the final output
+        default_columns_advntr_final = ['VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
+        advntr_concat = advntr_concat[default_columns_advntr_final]
 
         # Remove duplicate records based on specific columns
         logging.info('Removing duplicates...')
         advntr_concat.drop_duplicates(subset=['VID', 'Variant', 'NumberOfSupportingReads'], inplace=True)
-        logging.info(f"DataFrame shape after removing duplicates: {advntr_concat.shape}")
 
         # Save the processed adVNTR results to a TSV file
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
@@ -267,6 +238,8 @@ def process_advntr_output(output_path, output, output_name, config, file_format=
         logging.error(f"Error during processing of deletions and insertions: {e}")
         return
 
+    # CLean up intermediate files as specified in the configuration
+    # currently this is not used
     cleanup_files(output, output_name, config.get("advntr_cleanup_files", []))
 
 
