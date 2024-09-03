@@ -12,22 +12,38 @@ def load_kestrel_results(kestrel_result_file):
         return pd.DataFrame()  # Return an empty DataFrame if the file is missing
     
     try:
-        return pd.read_csv(kestrel_result_file, sep='\t', comment='#')
+        df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
+        # Filter and rename columns
+        columns_to_display = {
+            'Motif': 'Motif',
+            'Variant': 'Variant',
+            'POS': 'Position',
+            'REF': 'REF',
+            'ALT': 'ALT',
+            'Motif_sequence': 'Motif Sequence',
+            'Estimated_Depth_AlternateVariant': 'Depth (Variant)',
+            'Estimated_Depth_Variant_ActiveRegion': 'Depth (Region)',
+            'Depth_Score': 'Depth Score',
+            'Confidence': 'Confidence'
+        }
+        df = df[list(columns_to_display.keys())]
+        df = df.rename(columns=columns_to_display)
+        return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
-        return pd.DataFrame()  # Return an empty DataFrame if parsing fails
+        return pd.DataFrame()
 
 def load_advntr_results(advntr_result_file):
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
-        return pd.DataFrame()  # Return an empty DataFrame if the file is missing
+        return pd.DataFrame()
     
     try:
         return pd.read_csv(advntr_result_file, sep='\t', comment='#')
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
-        return pd.DataFrame()  # Return an empty DataFrame if parsing fails
+        return pd.DataFrame()
 
 def load_pipeline_log(log_file):
     logging.info(f"Loading pipeline log from {log_file}")
@@ -43,37 +59,27 @@ def load_pipeline_log(log_file):
         return "Failed to load pipeline log."
 
 def generate_summary_report(output_dir, template_dir, report_file, log_file):
-    # Define paths to the Kestrel and adVNTR results
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
     log_file_path = log_file
 
-    # Load results and logs
     kestrel_df = load_kestrel_results(kestrel_result_file)
     advntr_df = load_advntr_results(advntr_result_file)
     log_content = load_pipeline_log(log_file_path)
 
-    # Filter the Kestrel DataFrame to keep only specific columns
-    kestrel_columns = ['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence', 'Estimated_Depth_AlternateVariant', 
-                       'Estimated_Depth_Variant_ActiveRegion', 'Depth_Score', 'Confidence']
-    kestrel_df = kestrel_df[kestrel_columns]
+    kestrel_html = kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False)
+    advntr_html = advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False)
 
-    # Convert the Kestrel DataFrame to an HTML table
-    kestrel_html = kestrel_df.to_html(classes='table table-striped', index=False)
-
-    # Load the template
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template('report_template.html')
 
-    # Render the HTML report
     rendered_html = template.render(
         kestrel_highlight=kestrel_html,
-        advntr_highlight=advntr_df.to_html(classes='table table-striped') if not advntr_df.empty else "No significant adVNTR variants found.",
+        advntr_highlight=advntr_html if not advntr_df.empty else "No significant adVNTR variants found.",
         log_content=log_content,
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
-    # Save the HTML report
     report_file_path = Path(output_dir) / report_file
     with open(report_file_path, 'w') as f:
         f.write(rendered_html)
