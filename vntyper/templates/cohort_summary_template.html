@@ -10,9 +10,9 @@
         h1, h2, h3 { text-align: center; margin-top: 20px; }
         .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
         .table-container { width: 90%; margin: 0 auto; text-align: center; }
-        .plot { margin: 20px auto; display: block; width: 50%; max-width: 500px; } /* Adjusted width for smaller plots */
-        .table td, .table th { text-align: center; word-break: break-word; } /* Allow line breaks in table cells */
-        th { white-space: pre-wrap; }  /* Allow line breaks in header cells */
+        .plot { margin: 20px auto; display: block; max-width: 500px; }
+        .table td, .table th { text-align: center; word-break: break-word; }
+        th { white-space: pre-wrap; }
         
         /* New CSS for truncating text and showing full text on hover */
         .table td {
@@ -45,7 +45,13 @@
         </div>
 
         <h2>Kestrel Summary Plot</h2>
-        <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
+        <div class="plot">
+            {% if interactive %}
+                {{ kestrel_plot_base64 | safe }}
+            {% else %}
+                <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
+            {% endif %}
+        </div>
 
         <h2>adVNTR Results</h2>
         <div class="table-container">
@@ -53,7 +59,13 @@
         </div>
 
         <h2>adVNTR Summary Plot</h2>
-        <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
+        <div class="plot">
+            {% if interactive %}
+                {{ advntr_plot_base64 | safe }}
+            {% else %}
+                <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
+            {% endif %}
+        </div>
 
     </div>
 

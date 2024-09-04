@@ -1,6 +1,3 @@
-import matplotlib
-matplotlib.use('Agg')  # Use the Agg backend to avoid Qt-related warnings
-
 import pandas as pd
 import os
 import logging
@@ -10,6 +7,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 import base64
+import plotly.express as px
+import plotly.io as pio
+import matplotlib
+matplotlib.use('Agg')  # Use the Agg backend to avoid Qt-related warnings
 
 # Function to load Kestrel results
 def load_kestrel_results(kestrel_result_file):
@@ -65,13 +66,13 @@ def load_advntr_results(advntr_result_file):
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
         return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']})
-    
+
     try:
         df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
         if df.empty:
             logging.warning(f"adVNTR result file {advntr_result_file} is empty.")
             return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']})
-        
+
         df['Sample'] = sample_id  # Add sample ID column
 
         # Return only the sample column and any relevant data (if present)
@@ -86,6 +87,7 @@ def load_advntr_results(advntr_result_file):
         logging.error(f"Unexpected error occurred while loading adVNTR results: {e}")
         return pd.DataFrame({'Sample': [sample_id], 'Message': ['Error loading adVNTR results']})
 
+
 # Function to recursively find all files with a specific name in a directory tree
 def find_results_files(root_dir, filename):
     logging.info(f"Searching for {filename} in directory {root_dir}")
@@ -97,6 +99,7 @@ def find_results_files(root_dir, filename):
             logging.info(f"Found {filename} in {file_path}")
             result_files.append(file_path)
     return result_files
+
 
 # Function to load results from all matching files across all subdirectories
 def load_results_from_dirs(input_dirs, filename, file_loader):
@@ -118,30 +121,74 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
         logging.info(f"Loaded {len(dfs)} results from {input_dir}")
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
+
 # Helper function to encode image as base64
 def encode_image_to_base64(image_path):
     with open(image_path, "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
     return f"data:image/png;base64,{encoded_string}"
 
+
 # Function to generate and save donut charts
-def generate_donut_chart(values, labels, total, title, colors, plot_path):
-    fig, ax = plt.subplots(figsize=(6, 6))
-    wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
+import plotly.graph_objects as go
 
-    ax.pie(values, 
-           wedgeprops=wedgeprops, 
-           startangle=90, 
-           colors=colors, 
-           labels=labels)
+# Function to generate and save donut charts
+def generate_donut_chart(values, labels, total, title, colors, plot_path, interactive=False):
+    if interactive:
+        # Generate an interactive donut chart using Plotly
+        fig = go.Figure(go.Pie(
+            labels=labels, 
+            values=values, 
+            hole=0.6,  # Create the donut shape
+            marker=dict(colors=colors, line=dict(color='black', width=2)),  # Add black border
+            textinfo='none'  # Disable percentage display inside the chart
+        ))
 
-    ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
-    ax.set_title(title)
+        # Add title and central number inside the donut chart
+        fig.update_layout(
+            title={
+                'text': title,
+                'y': 0.95,  # Adjust the vertical positioning of the title
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top'
+            },
+            annotations=[
+                dict(
+                    text=f'<b>{total}</b>', 
+                    x=0.5, y=0.5, 
+                    font_size=40, showarrow=False
+                ),  # Centralized total number
+                dict(
+                    text=labels[0], 
+                    x=0.15, y=0.5, 
+                    font_size=14, showarrow=False
+                ),  # Place 'Positive' label to the left
+                dict(
+                    text=labels[1], 
+                    x=0.85, y=0.5, 
+                    font_size=14, showarrow=False
+                )   # Place 'Negative' label to the right
+            ],
+            showlegend=False,  # Disable the default legend
+            margin=dict(t=50, b=50, l=50, r=50),  # Adjust margins
+            height=500, width=500  # Set dimensions
+        )
+        
+        # Return the interactive plot HTML
+        return pio.to_html(fig, full_html=False)
 
-    plt.savefig(plot_path)
-    plt.close()
+    else:
+        # Static chart using matplotlib
+        fig, ax = plt.subplots(figsize=(6, 6))
+        wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
+        ax.pie(values, wedgeprops=wedgeprops, startangle=90, colors=colors, labels=labels)
+        ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
+        ax.set_title(title)
+        plt.savefig(plot_path)
+        plt.close()
+        return encode_image_to_base64(plot_path)
 
-    return encode_image_to_base64(plot_path)
 
 # Main function to aggregate cohort results
 def aggregate_cohort(input_dirs, output_dir, summary_file, config_path=None):
@@ -153,31 +200,29 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config_path=None):
     generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file)
 
 
-# Function to generate the cohort summary report
+# Function to generate the cohort summary report (static and interactive)
 def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file):
-    # Create plots directory within the output directory
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate summary statistics for Kestrel
+    # Summary statistics for Kestrel
     kestrel_positive = len(kestrel_df[kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
     kestrel_negative = len(kestrel_df[~kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
     total_kestrel = kestrel_positive + kestrel_negative
 
-    # Generate summary statistics for adVNTR
+    # Summary statistics for adVNTR
     advntr_positive = len(advntr_df[(advntr_df['VID'].notna()) & (advntr_df['VID'] != 'Negative') & (advntr_df['Message'].isna())])
-    advntr_negative = len(advntr_df[(advntr_df['VID'] == 'Negative')])
+    advntr_negative = len(advntr_df[advntr_df['VID'] == 'Negative'])
     advntr_no_data = len(advntr_df[advntr_df['Message'].notna()])
     total_advntr = advntr_positive + advntr_negative + advntr_no_data
 
-    # Use color-blind-safe colors
     colors = {
         'positive': '#56B4E9',  # Sky blue
         'negative': '#D55E00',  # Vermillion
         'no_data': '#999999'    # Grey
     }
 
-    # Generate the donut chart for Kestrel Results
+    # Static Kestrel plot (matplotlib)
     kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
     kestrel_plot_base64 = generate_donut_chart(
         values=[kestrel_positive, kestrel_negative],
@@ -188,7 +233,18 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         plot_path=kestrel_plot_path
     )
 
-    # Generate the donut chart for adVNTR Results
+    # Interactive Kestrel plot (Plotly)
+    kestrel_plot_html = generate_donut_chart(
+        values=[kestrel_positive, kestrel_negative],
+        labels=['Positive', 'Negative'],
+        total=total_kestrel,
+        title='Kestrel Results',
+        colors=[colors['positive'], colors['negative']],
+        plot_path=None,
+        interactive=True
+    )
+
+    # Static adVNTR plot (matplotlib)
     advntr_plot_path = plots_dir / "advntr_summary_plot.png"
     advntr_plot_base64 = generate_donut_chart(
         values=[advntr_positive, advntr_negative, advntr_no_data],
@@ -199,26 +255,54 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         plot_path=advntr_plot_path
     )
 
+    # Interactive adVNTR plot (Plotly)
+    advntr_plot_html = generate_donut_chart(
+        values=[advntr_positive, advntr_negative, advntr_no_data],
+        labels=['Positive', 'Negative', 'No Data'],
+        total=total_advntr,
+        title='adVNTR Results',
+        colors=[colors['positive'], colors['negative'], colors['no_data']],
+        plot_path=None,
+        interactive=True
+    )
+
     # Load the template
     template_dir = "vntyper/templates"
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template('cohort_summary_template.html')
 
-    # Render the HTML report
-    rendered_html = template.render(
+    # Static HTML report
+    rendered_static_html = template.render(
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False, escape=False),
-        advntr_positive=advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False),
+        kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped', index=False, escape=False),
+        advntr_positive=advntr_df.to_html(classes='table table-bordered table-striped', index=False),
         kestrel_plot_base64=kestrel_plot_base64,
-        advntr_plot_base64=advntr_plot_base64
+        advntr_plot_base64=advntr_plot_base64,
+        interactive=False
     )
 
-    # Save the HTML report
-    report_file_path = Path(output_dir) / summary_file
-    with open(report_file_path, 'w') as f:
-        f.write(rendered_html)
+    # Interactive HTML report
+    rendered_interactive_html = template.render(
+        report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        kestrel_positive=kestrel_df.to_html(classes='table table-bordered table-striped', index=False, escape=False),
+        advntr_positive=advntr_df.to_html(classes='table table-bordered table-striped', index=False),
+        kestrel_plot_base64=kestrel_plot_html,
+        advntr_plot_base64=advntr_plot_html,
+        interactive=True
+    )
 
-    logging.info(f"Cohort summary report generated and saved to {report_file_path}")
+    # Save the static HTML report
+    static_report_path = Path(output_dir) / f"{summary_file}_static.html"
+    with open(static_report_path, 'w') as f:
+        f.write(rendered_static_html)
+
+    # Save the interactive HTML report
+    interactive_report_path = Path(output_dir) / f"{summary_file}_interactive.html"
+    with open(interactive_report_path, 'w') as f:
+        f.write(rendered_interactive_html)
+
+    logging.info(f"Static cohort summary report saved to {static_report_path}")
+    logging.info(f"Interactive cohort summary report saved to {interactive_report_path}")
 
 
 if __name__ == "__main__":
