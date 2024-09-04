@@ -153,16 +153,25 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
     igv_report_file = Path(output_dir) / "igv_report.html"  # Generated IGV report file
 
-    # Run IGV Report
-    run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking)
+    # Only run IGV report if the BED file exists
+    if bed_file and os.path.exists(bed_file):
+        logging.info(f"Running IGV report for BED file: {bed_file}")
+        run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking)
+    else:
+        logging.warning("BED file does not exist. Skipping IGV report generation.")
+        igv_report_file = None  # No IGV report will be created
 
     # Load Kestrel, adVNTR results, and pipeline log
     kestrel_df = load_kestrel_results(kestrel_result_file)
     advntr_df = load_advntr_results(advntr_result_file)
     log_content = load_pipeline_log(log_file)
 
-    # Extract IGV content, tableJson, and sessionDictionary for embedding
-    igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
+    # Extract IGV content, tableJson, and sessionDictionary for embedding, if IGV report exists
+    if igv_report_file and os.path.exists(igv_report_file):
+        igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
+    else:
+        logging.warning("IGV report file not found. Skipping IGV content.")
+        igv_content, table_json, session_dictionary = "", "", ""
 
     # Convert DataFrames to HTML tables with safe argument to allow HTML content in cells
     kestrel_html = kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False, escape=False)
