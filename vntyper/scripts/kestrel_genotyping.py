@@ -468,7 +468,7 @@ def motif_correction_and_annotation(df, merged_motifs):
 
     # Make a copy of the 'POS' column and rename it to 'POS_fasta'
     if 'POS' in combined_df.columns:
-        combined_df['POS_fasta'] = df['POS']
+        combined_df['POS_fasta'] = combined_df['POS']
 
     # Adjust positions where necessary
     # changes the position to the correct position in the VNTR if the position is greater than 60
