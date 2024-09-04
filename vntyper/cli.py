@@ -80,6 +80,12 @@ def main():
     parser_report.add_argument('--report-file', type=str, default="summary_report.html", help="Name of the output report file.")
     parser_report.add_argument('--log-file', type=str, default="pipeline.log", help="Pipeline log file to include in the report.")
 
+    # Subcommand for generating IGV reports
+    parser_report.add_argument('--bed-file', type=Path, help="Path to the BED file for IGV reports.")
+    parser_report.add_argument('--bam-file', type=Path, help="Path to the BAM file for IGV reports.")
+    parser_report.add_argument('--reference-fasta', type=Path, help="Path to the reference FASTA file for IGV reports.")
+    parser_report.add_argument('--flanking', type=int, default=50, help="Flanking region size for IGV reports.")
+
     # Subcommand for cohort analysis
     parser_cohort = subparsers.add_parser("cohort", help="Aggregate outputs from multiple runs into a single summary file.")
     parser_cohort.add_argument('-i', '--input-dirs', nargs='+', required=True, help="List of directories containing output files to aggregate.")
