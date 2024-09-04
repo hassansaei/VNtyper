@@ -209,7 +209,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     merged_motifs = load_additional_motifs(config)
 
     # Process and filter results based on frameshifts and confidence scores, with motif correction
-    processed_df = process_kmer_results(combined_df, merged_motifs)
+    processed_df = process_kmer_results(combined_df, merged_motifs, output_dir)
 
     if processed_df.empty:
         logging.warning("Final processed DataFrame is empty. Outputting empty results.")
@@ -232,12 +232,13 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     logging.info("Kestrel VCF processing completed.")
     return processed_df
 
+
 def output_empty_result(output_dir, header):
     """
     Creates an empty result file with the correct headers and a placeholder 'Negative' result row.
     """
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
-    
+
     # Create a DataFrame with one row containing "None" values and "Negative" in the Confidence column
     empty_result_data = {
         'Motif': ['None'], 
@@ -252,12 +253,12 @@ def output_empty_result(output_dir, header):
         'Confidence': ['Negative']
     }
     empty_df = pd.DataFrame(empty_result_data)
-    
+
     # Write the header and the empty DataFrame to the output file
     with open(final_output_path, 'w') as f:
         f.write("\n".join(header) + "\n")
         empty_df.to_csv(f, sep='\t', index=False)
-    
+
     logging.info(f"Empty result file with placeholder saved as {final_output_path}")
 
 # Function 1: Split Depth and Calculate Frame Score
@@ -447,7 +448,7 @@ def motif_correction_and_annotation(df, merged_motifs):
                                           (motif_right['Motif'] != 'I') & (motif_right['Motif'] != 'G') &
                                           (motif_right['Motif'] != 'E') & (motif_right['Motif'] != 'A')]
             motif_right = motif_right.loc[motif_right['ALT'] == 'GG']
-            motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+            motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')  # this and similar sorts could cause non deterministic behaviour
             if motif_right['Motif'].str.contains('X').any():
                 motif_right = motif_right[motif_right['Motif'] == 'X']
         else:
@@ -465,13 +466,50 @@ def motif_correction_and_annotation(df, merged_motifs):
                               (combined_df['Motif'] != '7')]
     combined_df['POS'] = combined_df['POS'].astype(int)
 
+    # Make a copy of the 'POS' column and rename it to 'POS_fasta'
+    if 'POS' in combined_df.columns:
+        combined_df['POS_fasta'] = df['POS']
+
     # Adjust positions where necessary
+    # changes the position to the correct position in the VNTR if the position is greater than 60
     combined_df.update(combined_df['POS'].mask(combined_df['POS'] >= 60, lambda x: x - 60))
 
     return combined_df
 
+# Function 7: Generate BED File
+def generate_bed_file(df, output_dir):
+    """
+    Generates a BED file from the processed Kestrel output DataFrame.
+
+    Args:
+        df (pd.DataFrame): Processed Kestrel output DataFrame with 'Motif_fasta' and 'POS' columns.
+        output_dir (str): Directory to save the generated BED file.
+
+    Returns:
+        str: Path to the generated BED file.
+    """
+    # Ensure the required columns are present
+    if 'Motif_fasta' not in df.columns or 'POS_fasta' not in df.columns:
+        logging.error("Missing 'Motif_fasta' or 'POS_fasta' columns in the DataFrame.")
+        return None
+
+    # Create the output BED file path
+    bed_file_path = os.path.join(output_dir, "output.bed")
+
+    # Open the file for writing
+    with open(bed_file_path, 'w') as bed_file:
+        for _, row in df.iterrows():
+            motif_fasta = row['Motif_fasta']
+            pos = row['POS_fasta']
+            # Write the BED format (Motif_fasta, POS_fasta, POS_fasta) as tab-delimited
+            bed_file.write(f"{motif_fasta}\t{pos}\t{pos+1}\n")
+
+    logging.info(f"BED file generated at: {bed_file_path}")
+    return bed_file_path
+
+
 # Main Function: Process Kmer Results
-def process_kmer_results(combined_df, merged_motifs):
+def process_kmer_results(combined_df, merged_motifs, output_dir):
     """
     Processes and filters Kestrel results by applying several steps including frame score calculation,
     depth score assignment, filtering based on ALT values and confidence scores, and final motif correction.
@@ -506,5 +544,8 @@ def process_kmer_results(combined_df, merged_motifs):
 
     # Step 6: Motif Correction and Annotation
     df = motif_correction_and_annotation(df, merged_motifs)
+
+    # Call generate_bed_file to output the BED file with Motif_fasta and POS
+    generate_bed_file(df, output_dir)
 
     return df
