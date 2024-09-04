@@ -1,9 +1,12 @@
 import pandas as pd
 import os
 import logging
+import json
+import subprocess
 from jinja2 import Environment, FileSystemLoader
 from datetime import datetime
 from pathlib import Path
+
 
 def load_kestrel_results(kestrel_result_file):
     logging.info(f"Loading Kestrel results from {kestrel_result_file}")
@@ -42,7 +45,7 @@ def load_advntr_results(advntr_result_file):
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
         return pd.DataFrame()
-    
+
     try:
         return pd.read_csv(advntr_result_file, sep='\t', comment='#')
     except pd.errors.ParserError as e:
@@ -54,7 +57,7 @@ def load_pipeline_log(log_file):
     if not os.path.exists(log_file):
         logging.warning(f"Pipeline log file not found: {log_file}")
         return "Pipeline log file not found."
-    
+
     try:
         with open(log_file, 'r') as f:
             return f.read()
@@ -62,14 +65,104 @@ def load_pipeline_log(log_file):
         logging.error(f"Failed to read pipeline log file: {e}")
         return "Failed to load pipeline log."
 
-def generate_summary_report(output_dir, template_dir, report_file, log_file):
+
+def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
+    """
+    Runs the IGV report generation command using the provided BED, BAM, and FASTA files.
+
+    Args:
+        bed_file (str or Path): Path to the BED file.
+        bam_file (str or Path): Path to the BAM file.
+        fasta_file (str or Path): Path to the reference FASTA file.
+        output_html (str or Path): Path to the output HTML file for the IGV report.
+        flanking (int): Flanking region for IGV reports.
+    """
+    # Convert Path objects to strings if needed
+    bed_file = str(bed_file)
+    bam_file = str(bam_file)
+    fasta_file = str(fasta_file)
+    output_html = str(output_html)
+
+    igv_report_cmd = [
+        'create_report',
+        bed_file,
+        '--flanking', str(flanking),  # Use the flanking argument here
+        '--fasta', fasta_file,
+        '--tracks', bam_file,
+        '--output', output_html
+    ]
+    try:
+        logging.info(f"Running IGV report: {' '.join(igv_report_cmd)}")
+        subprocess.run(igv_report_cmd, check=True)
+        logging.info(f"IGV report successfully generated at {output_html}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error generating IGV report: {e}")
+        raise
+
+
+def extract_igv_content(igv_report_html):
+    """
+    Extracts the relevant content (variant table and IGV div) as well as the tableJson and sessionDictionary from the IGV report.
+    """
+    try:
+        with open(igv_report_html, 'r') as f:
+            content = f.read()
+
+        # Extract the necessary parts: container for IGV visualization and variant table
+        igv_start = content.find('<div id="container"')
+        igv_end = content.find('</body>')
+
+        if igv_start == -1 or igv_end == -1:
+            logging.error("Failed to extract IGV content from report.")
+            return "", "", ""
+
+        igv_content = content[igv_start:igv_end].strip()
+
+        # Extract tableJson and sessionDictionary
+        table_json_start = content.find('const tableJson = ') + len('const tableJson = ')
+        table_json_end = content.find('\n', table_json_start)
+        table_json = content[table_json_start:table_json_end].strip()
+
+        session_dict_start = content.find('const sessionDictionary = ') + len('const sessionDictionary = ')
+        session_dict_end = content.find('\n', session_dict_start)
+        session_dictionary = content[session_dict_start:session_dict_end]
+
+        logging.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
+        return igv_content, table_json, session_dictionary
+    except FileNotFoundError:
+        logging.error(f"IGV report file not found: {igv_report_html}")
+        return "", "", ""
+
+
+def generate_summary_report(output_dir, template_dir, report_file, log_file, bed_file, bam_file, fasta_file, flanking=50):
+    """
+    Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
+    and IGV alignment visualizations.
+    
+    Args:
+        output_dir (str): Output directory for the report.
+        template_dir (str): Directory containing the report template.
+        report_file (str): Name of the report file.
+        log_file (str): Path to the pipeline log file.
+        bed_file (str): Path to the BED file for IGV reports.
+        bam_file (str): Path to the BAM file for IGV reports.
+        fasta_file (str): Path to the reference FASTA file for IGV reports.
+        flanking (int): Size of the flanking region for IGV reports.
+    """
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
-    log_file_path = log_file
+    igv_report_file = Path(output_dir) / "igv_report.html"  # Generated IGV report file
 
+    # Run IGV Report
+    run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking)
+
+    # Load Kestrel, adVNTR results, and pipeline log
     kestrel_df = load_kestrel_results(kestrel_result_file)
     advntr_df = load_advntr_results(advntr_result_file)
-    log_content = load_pipeline_log(log_file_path)
+    log_content = load_pipeline_log(log_file)
+
+    # Extract IGV content, tableJson, and sessionDictionary for embedding
+    igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
 
     # Convert DataFrames to HTML tables with safe argument to allow HTML content in cells
     kestrel_html = kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False, escape=False)
@@ -78,10 +171,14 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file):
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template('report_template.html')
 
+    # Directly pass table_json and session_dictionary as raw strings
     rendered_html = template.render(
         kestrel_highlight=kestrel_html,
         advntr_highlight=advntr_html if not advntr_df.empty else "No significant adVNTR variants found.",
         log_content=log_content,
+        igv_content=igv_content,  # Insert IGV content into the template
+        table_json=table_json,  # Directly insert the raw tableJson
+        session_dictionary=session_dictionary,  # Directly insert the raw sessionDictionary
         report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 

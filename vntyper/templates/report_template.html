@@ -5,14 +5,50 @@
     <title>Summary Report</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+    
+    <!-- IGV-specific styles -->
+    <style type="text/css">
+        body {
+            font-size: 80%;
+            font-family: 'Lucida Grande', Verdana, Arial, Sans-Serif;
+        }
+    </style>
+
+    <!-- IGV selector table style -->
     <style>
-        body { margin: 20px; }
-        h1, h2, h3 { text-align: center; margin-top: 20px; }
-        .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
-        .table-container { width: 90%; margin: 0 auto; text-align: center; }
-        .plot { margin: 20px auto; display: block; width: 50%; max-width: 500px; }
-        .table td, .table th { text-align: center; word-break: break-word; } 
-        th { white-space: pre-wrap; }
+        thead {
+            position: sticky;
+            top: 0;
+        }
+
+        tr {
+            cursor: default;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        tr:hover {
+            background-color: lightblue;
+        }
+
+        th {
+            background-color: lightskyblue;
+            color: white;
+            cursor: pointer;
+        }
+
+        .selected {
+            background-color: lightblue !important;
+            outline: solid thin darkblue !important;
+        }
+
+        /* Custom table cell style with character limit */
+        .table td, .table th {
+            text-align: center;
+            word-break: break-word;
+        }
 
         .table td {
             white-space: nowrap;
@@ -32,10 +68,80 @@
             border: 1px solid #ddd;
         }
 
-        /* Custom classes for confidence highlighting */
-        .confidence-low { background-color: orange; color: black; }
-        .confidence-high { background-color: red; color: white; }
+        th {
+            white-space: pre-wrap;
+        }
+
+        /* Accordion style */
+        .wrap-collabsible {
+            margin-bottom: 1.2rem;
+        }
+
+        input[type='checkbox'] {
+            display: none;
+        }
+
+        .lbl-toggle {
+            display: block;
+            font-weight: bold;
+            font-family: monospace;
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            text-align: left;
+            padding: 1rem;
+            color: black;
+            background: #dddddd;
+            cursor: pointer;
+            border-radius: 7px;
+            transition: all 0.25s ease-out;
+        }
+
+        .lbl-toggle:hover {
+            color: blue;
+        }
+
+        .lbl-toggle::before {
+            content: ' ';
+            display: inline-block;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+            border-left: 5px solid currentColor;
+            vertical-align: middle;
+            margin-right: .7rem;
+            transform: translateY(-2px);
+            transition: transform .2s ease-out;
+        }
+
+        .toggle:checked + .lbl-toggle::before {
+            transform: rotate(90deg) translateX(-3px);
+        }
+
+        .collapsible-content {
+            max-height: 0px;
+            overflow: auto;
+            transition: max-height .25s ease-in-out;
+        }
+
+        .toggle:checked + .lbl-toggle + .collapsible-content {
+            max-height: 350px;
+        }
+
+        .toggle:checked + .lbl-toggle {
+            border-bottom-right-radius: 0;
+            border-bottom-left-radius: 0;
+        }
+
+        .collapsible-content .content-inner {
+            background: rgba(250, 224, 66, .2);
+            border-bottom: 1px solid rgba(250, 224, 66, .45);
+            border-bottom-left-radius: 7px;
+            border-bottom-right-radius: 7px;
+            padding: .5rem 1rem;
+        }
     </style>
+
+    <!-- IGV.js script -->
+    <script src="https://cdn.jsdelivr.net/npm/igv@3.0.2/dist/igv.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -52,12 +158,30 @@
             {{ advntr_highlight | safe }}
         </div>
 
+        <h2>IGV Alignment Visualization</h2>
+        <div id="container" style="display: flex; flex-direction: column">
+            <div id="tableContainer" class="wrap-collabsible">
+                <input id="collapsible" class="toggle" type="checkbox" checked>
+                <label for="collapsible" class="lbl-toggle">Variants</label>
+                <div class="collapsible-content">
+                    <div id="tableSelectorDiv"></div>
+                </div>
+            </div>
+            <div id="igvContainer">
+                <div id="igvDiv"></div>
+            </div>
+        </div>
+
         <h2>Pipeline Log</h2>
         <pre>{{ log_content }}</pre>
+
     </div>
 
+    <!-- jQuery and DataTables script -->
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
+    
+    <!-- Custom JavaScript to initialize DataTables and IGV -->
     <script>
         $(document).ready(function() {
             $('table').DataTable({
@@ -70,6 +194,81 @@
                 ]
             });
         });
+
+        const tableJson = {{ table_json | safe }};
+        const sessionDictionary = {{ session_dictionary | safe }};
+
+        let igvBrowser;
+
+        document.addEventListener("DOMContentLoaded", function () {
+            initIGV();
+        });
+
+        function initIGV() {
+            const igvDiv = document.getElementById("igvDiv");
+            const options = {
+                sessionURL: sessionDictionary["0"],
+                showChromosomeWidget: false,
+                showCenterGuide: true,
+                search: false
+            };
+
+            igv.createBrowser(igvDiv, options).then(function (browser) {
+                igvBrowser = browser;
+                initTable();
+            });
+        }
+
+        function initTable() {
+            const table = document.createElement("table");
+            table.id = "variant_table";
+            table.style.width = "100%";
+            document.getElementById("tableSelectorDiv").appendChild(table);
+
+            const thead = document.createElement('thead');
+            table.appendChild(thead);
+            const headerRow = thead.insertRow(0);
+            const headers = tableJson.headers;
+            for (let j = 1; j < headers.length; j++) {
+                const cell = document.createElement("th");
+                headerRow.appendChild(cell);
+                cell.innerHTML = headers[j];
+            }
+
+            const tbody = document.createElement('tbody');
+            table.appendChild(tbody);
+            const tableRows = tableJson.rows;
+            for (let i = 0; i < tableRows.length; i++) {
+                const rowData = tableRows[i];
+                const unique_id = rowData[0];
+                const row = document.createElement("tr");
+                row.id = "row_" + unique_id;
+                tbody.appendChild(row);
+
+                if (i === 0) row.classList.add("selected");
+
+                row.onclick = function (event) {
+                    const list = document.getElementById("variant_table").getElementsByTagName("tr");
+                    for (let i = 0; i < list.length; i++) {
+                        list[i].classList.remove("selected");
+                    }
+                    const rowID = event.target.parentElement.id;
+                    const row = document.getElementById(rowID);
+                    row.classList.add("selected");
+                    const uniqueId = rowID.substring(4);
+                    const session = sessionDictionary[uniqueId];
+                    igvBrowser.loadSession({
+                        url: session
+                    });
+                }
+
+                for (let j = 1; j < headers.length; j++) {
+                    const cell = document.createElement("td");
+                    row.appendChild(cell);
+                    cell.innerHTML = rowData[j];
+                }
+            }
+        }
     </script>
 </body>
 </html>
