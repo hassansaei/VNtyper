@@ -210,6 +210,10 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     kestrel_negative = len(kestrel_df[~kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
     total_kestrel = kestrel_positive + kestrel_negative
 
+    # Handle missing 'Message' column in adVNTR results
+    if 'Message' not in advntr_df.columns:
+        advntr_df['Message'] = None  # Add a default 'Message' column with None values if it's missing
+    
     # Summary statistics for adVNTR
     advntr_positive = len(advntr_df[(advntr_df['VID'].notna()) & (advntr_df['VID'] != 'Negative') & (advntr_df['Message'].isna())])
     advntr_negative = len(advntr_df[advntr_df['VID'] == 'Negative'])
@@ -303,21 +307,3 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
 
     logging.info(f"Static cohort summary report saved to {static_report_path}")
     logging.info(f"Interactive cohort summary report saved to {interactive_report_path}")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Cohort Summary Report Generator")
-    parser.add_argument("-i", "--input_dirs", nargs='+', required=True, help="List of input directories or a text file with directories")
-    parser.add_argument("-o", "--output_dir", required=True, help="Output directory for the summary report")
-    parser.add_argument("-s", "--summary_file", default="cohort_summary.html", help="Name of the summary report file")
-    args = parser.parse_args()
-
-    input_dirs = []
-    for i in args.input_dirs:
-        if os.path.isfile(i) and i.endswith('.txt'):
-            with open(i, 'r') as f:
-                input_dirs.extend([line.strip() for line in f])
-        else:
-            input_dirs.append(i)
-
-    aggregate_cohort(input_dirs, args.output_dir, args.summary_file)
