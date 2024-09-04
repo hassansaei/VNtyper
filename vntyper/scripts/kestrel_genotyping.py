@@ -486,11 +486,16 @@ def generate_bed_file(df, output_dir):
         output_dir (str): Directory to save the generated BED file.
 
     Returns:
-        str: Path to the generated BED file.
+        str or None: Path to the generated BED file, or None if the file wasn't created.
     """
     # Ensure the required columns are present
     if 'Motif_fasta' not in df.columns or 'POS_fasta' not in df.columns:
-        logging.error("Missing 'Motif_fasta' or 'POS_fasta' columns in the DataFrame.")
+        logging.warning("Missing 'Motif_fasta' or 'POS_fasta' columns in the DataFrame. Skipping BED file generation.")
+        return None
+
+    # Check if the DataFrame is empty (no rows)
+    if df.empty:
+        logging.warning("DataFrame is empty. No variants to generate a BED file.")
         return None
 
     # Create the output BED file path
@@ -501,8 +506,8 @@ def generate_bed_file(df, output_dir):
         for _, row in df.iterrows():
             motif_fasta = row['Motif_fasta']
             pos = row['POS_fasta']
-            # Write the BED format (Motif_fasta, POS_fasta, POS_fasta) as tab-delimited
-            bed_file.write(f"{motif_fasta}\t{pos}\t{pos+1}\n")
+            # Write the BED format (Motif_fasta, POS_fasta, POS_fasta+1) as tab-delimited
+            bed_file.write(f"{motif_fasta}\t{pos}\t{pos + 1}\n")
 
     logging.info(f"BED file generated at: {bed_file_path}")
     return bed_file_path
