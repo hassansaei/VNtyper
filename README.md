@@ -72,19 +72,20 @@ Use the following command to see the help for running the tool.
 ```bashscript
 python3 VNtyper.py --help 
 
-usage: VNtyper.py [-h] -ref Referense [-r1 FASTQ1] [-r2 FASTQ2] -o OUTPUT -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w WORKING_DIR [-m REFERENCE_VNTR]
-                     [--ignore_advntr] [--bam] [--fastq] [-a ALIGNMENT]
+usage: VNtyper.py [-h] [--version] -ref Referense [-r1 FASTQ1] [-r2 FASTQ2] -o OUTPUT -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w WORKING_DIR [-m REFERENCE_VNTR]
+                  [--ignore_advntr] [--bam] [--hg19] [--hg38] [--fastq] [-a ALIGNMENT] [-c CUSTOM_REGION]
 
-Given raw fastq files, this pipeline genotype MUC1-VNTR using kestrel (Mapping-free genotyping) and Code-adVNTR mathods
+Given raw fastq files or BAM files, this pipeline genotype MUC1-VNTR using two independent genotyping methods (Kestrel and code-adVNTR)
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
+  --version             show program's version number and exit
   -ref Referense, --reference_file Referense
-                        FASTA-formatted reference file and indexes
+                        FASTA-formatted reference file and indexes for read alignment
   -r1 FASTQ1, --fastq1 FASTQ1
-                        Fastq file the first pair
+                        Fastq file first pair
   -r2 FASTQ2, --fastq2 FASTQ2
-                        Fastq file the second pair
+                        Fastq file second pair
   -o OUTPUT, --output OUTPUT
                         Output file name
   -ref_VNTR Referense, --reference_VNTR Referense
@@ -99,10 +100,13 @@ optional arguments:
                         adVNTR reference vntr database
   --ignore_advntr       Skip adVNTR genotyping of MUC1-VNTR
   --bam                 BAM file as an input
+  --hg19                Input bam is from hg19 alignment
+  --hg38                Input bam is from hg38 alignment
   --fastq               Paired-end fastq files as an input
   -a ALIGNMENT, --alignment ALIGNMENT
                         Alignment File (with an index file .bai)
-
+  -c CUSTOM_REGION, --custom_region CUSTOM_REGION
+                        Custom region for MUC1 gene to be subseted in the provided BAM file
 
 ```
 [Note] Since the program uses python3.9 logging system, it can not be executed using lower versions of the python.
