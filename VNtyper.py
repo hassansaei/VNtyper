@@ -1,32 +1,29 @@
 #!/usr/bin/env python3.9 or Above
 # coding: utf-8
 
-#Python >= 3.9
-#pip3 install regex
-#pip3 install pandas
-#pip3 install numpy
-#pip3 install biopython
-#pip3 install setuptools==58
-#pip3 install pysam
+# Versioning information
+__version__ = "1.3.0" 
+__release_date__ = "2024-09-27" 
 
 from concurrent.futures import thread
 import subprocess as sp
 from xml.dom.expatbuilder import theDOMImplementation
 import pandas as pd
 import numpy as np
+from Bio import SeqIO
 import sys,os,argparse,tempfile,shutil
 from os.path import isfile, join
 from pathlib import Path
 import timeit
-from pysam import SamtoolsError
 import regex as re
 import logging
 import warnings
 warnings.filterwarnings("ignore")
 
 # Parse Arguments 
-parser = argparse.ArgumentParser(description='Given raw fastq files, this pipeline genotype MUC1-VNTR using kestrel (Mapping-free genotyping) and Code-adVNTR mathods')
-parser.add_argument('-ref', '--reference_file', type=str, metavar='Referense', help='FASTA-formatted reference file and indexes', required=True)
+parser = argparse.ArgumentParser(description='Given raw fastq files or BAM files, this pipeline genotype MUC1-VNTR using two independent genotyping methods (Kestrel and code-adVNTR)')
+parser.add_argument('--version', action='version', version=f'VNtyper {__version__} (Released: {__release_date__})')
+parser.add_argument('-ref', '--reference_file', type=str, metavar='Referense', help='FASTA-formatted reference file and indexes for read alignment', required=True)
 parser.add_argument('-r1', '--fastq1', type=str, default=None, help='Fastq file first pair', required=False)
 parser.add_argument('-r2', '--fastq2', type=str, default=None, help='Fastq file second pair', required=False)
 parser.add_argument('-o', '--output', type=str, default=None, help='Output file name', required=True)
@@ -37,8 +34,11 @@ parser.add_argument('-w', '--working_dir', type=str, default=None, help='the pat
 parser.add_argument('-m', '--reference_vntr', type=str, default=None, help='adVNTR reference vntr database', required=False)
 parser.add_argument("--ignore_advntr", action="store_true", help="Skip adVNTR genotyping of MUC1-VNTR")
 parser.add_argument("--bam", action="store_true", help="BAM file as an input")
+parser.add_argument("--hg19", action="store_true", help="Input bam is from hg19 alignment")
+parser.add_argument("--hg38", action="store_true", help="Input bam is from hg38 alignment")
 parser.add_argument("--fastq", action="store_true", help="Paired-end fastq files as an input")
 parser.add_argument('-a', '--alignment', type=str, default=None, help='Alignment File (with an index file .bai)', required=False)
+parser.add_argument('-c', '--custom_region', type=str, default=None, help='Custom region for MUC1 gene to be subseted in the provided BAM file', required=False)
 
 
 args = parser.parse_args()
@@ -52,27 +52,41 @@ if not os.path.exists(args.working_dir + args.output + "/temp"):
 
 output = args.working_dir + args.output + "/"
 
+# Setup logging configuration
+log_file = os.path.join(output + "temp/", 'VNtyper.logfile.log')
+logging.basicConfig(filename=log_file, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def log_and_print(message, level="info"):
+    # Print the message to the console
+    print(message)
+    # Log the message at the appropriate level
+    if level == "info":
+        logging.info(message)
+    elif level == "warning":
+        logging.warning(message)
+    elif level == "error":
+        logging.error(message)
+    elif level == "critical":
+        logging.critical(message)
+
 
 welcomeMessage = """
 ==========================================================================================================
 Given alignment (BAM) or raw file (FASTQ), this tool genotypes MUC1 coding-VNTR 
--- For rapid genotyping, BAM files are preferred!
+-- For rapid genotyping provide BAM file (hg19 or hg38)
 -- User can Skip code-adVNTR genotyping step using --ignore_advntr option (This step will take a while..)
-v. 1.0.0
-This is free non-commercial software. 
+This is free non-commercial software.
+Author: Hassan Saei
+Contact: hassan.saeiahan@gmail.com
 ==========================================================================================================
 """
-endMessage = """
-==============================
-Thanks for using VNtyper pipeline!
-Contact: hassan.saei@inserm.fr
-==============================
-"""
-start = timeit.default_timer()
-print (welcomeMessage)
+## Log version at runtime
+log_and_print(welcomeMessage)
+log_and_print(f"Running VNtyper version {__version__} (Released: {__release_date__})")
 
 
-# General Functions 
+## General Functions 
+# Search within the dataframe
 def search(regex: str, df, case=False):
     textlikes = df.select_dtypes(include=[object, "object"])
     return df[
@@ -80,7 +94,8 @@ def search(regex: str, df, case=False):
             lambda column: column.str.contains(regex, regex=True, case=case, na=False)
         ).any(axis=1)
     ]
-    
+
+# Read vcf and extract column header from the file      
 def read_vcf(path):
     with open(path,'r') as f:
         for line in f:
@@ -90,6 +105,7 @@ def read_vcf(path):
     f.close()
     return vcf_names
 
+# Filter vcf file for indels and write them to a new file
 def filter_vcf(input_path, output_path):
 
     with open(input_path, "r") as vcf_file, open(output_path, "w") as indel_file:
@@ -100,7 +116,7 @@ def filter_vcf(input_path, output_path):
                 [_, _, _, ref, alt, *_] = line.split("\t")  
                 if len(ref) == 1 and len(alt) != 1 or len(ref) != 1 and len(alt) == 1:
                     indel_file.write(line)
-
+# Filter vcf file with seperating insertions from deletions
 def filter_indel_vcf(indel_vcf, output_ins, output_del):
 
     with open(indel_vcf, "r") as vcf_file, open(output_ins, "w") as insertion_file, open(output_del, "w") as deletion_file:
@@ -115,88 +131,168 @@ def filter_indel_vcf(indel_vcf, output_ins, output_del):
                 else:
                     deletion_file.write(line)
 
+# Function to validate BAM file existence and extension
+def validate_bam_file(file_path):
+    if not file_path:
+        log_and_print(f"Error: Missing required BAM file.", level="error")
+        sys.exit(1)
+    # Check if the BAM file exists
+    if not os.path.isfile(file_path):
+        log_and_print(f"Error: BAM file {file_path} does not exist.", level="error")
+        sys.exit(1)
+    # Ensure the file has the correct extension
+    if not file_path.endswith(".bam"):
+        log_and_print(f"Error: File {file_path} must be a .bam file.", level="error")
+        sys.exit(1)
+    log_and_print(f"BAM file {file_path} passed validation.")
 
-# Saving log file in temp/ directory
-log_file = args.working_dir + args.output + "/temp/" + args.output + ".log"
-logging.basicConfig(filename= log_file , level= logging.DEBUG , encoding= 'utf-8', format="%(asctime)s %(message)s")
+# Function to validate FASTQ files (support for both .fastq, .fastq.gz, .fq, and .fq.gz)
+def validate_fastq_file(file_path):
+    if not file_path:
+        log_and_print(f"Error: Missing required FASTQ file.", level="error")
+        sys.exit(1)
+    # Check if the file exists
+    if not os.path.isfile(file_path):
+        log_and_print(f"Error: File {file_path} does not exist.", level="error")
+        sys.exit(1)
+    # Check if the file has a supported FASTQ extension
+    if not (file_path.endswith(".fastq") or file_path.endswith(".fastq.gz") or 
+            file_path.endswith(".fq") or file_path.endswith(".fq.gz")):
+        log_and_print(f"Error: File {file_path} must be a .fastq, .fastq.gz, .fq, or .fq.gz file.", level="error")
+        sys.exit(1)
+    log_and_print(f"File {file_path} passed validation (FASTQ or FASTQ.gz).")
 
-# Fastq input - Fastq quality control (deduplication, low quality read removal, size correction...)
+
+
+# Ensure either BAM or FASTQ is provided and they are intact
+# Define the default regions for hg19 and hg38
+hg19_region = "chr1:155158000-155163000"
+hg38_region = "chr1:155184000-155194000"
+if args.bam:
+    # Validate BAM input
+    if not args.alignment:
+        log_and_print("Error: BAM file must be provided with the --alignment argument.", level="error")
+        sys.exit(1)
+    if args.hg19:
+        log_and_print(f"Using predefined hg19 MUC1 region: {hg19_region}")
+        region = hg19_region
+        coverage_region = "chr1:155160500-155162000"
+    if args.hg38:
+        log_and_print(f"Using predefined hg38 MUC1 region: {hg38_region}")
+        region = hg38_region
+        coverage_region = "chr1:155188000-155192500"
+    if args.custom_region:
+        log_and_print(f"Using custom region provided by the user: {args.custom_region}")
+        region = args.custom_region
+        coverage_region = args.custom_region
+    elif not args.hg19 and not args.hg38:
+        log_and_print("Error: Please specify the genome alignment version (hg19 or hg38).", level="error")
+        sys.exit(1)
+    validate_bam_file(args.alignment)
+    # Check that no FASTQ files are provided if BAM is chosen
+    if args.fastq1 or args.fastq2:
+        log_and_print("Error: You cannot provide both BAM and FASTQ files simultaneously.", level="error")
+        sys.exit(1)
+else:
+    # If BAM is not provided, validate the FASTQ input
+    if args.fastq:
+        if not args.fastq1 or not args.fastq2:
+            log_and_print("Error: Both FASTQ files must be provided for paired-end sequencing.", level="error")
+            sys.exit(1)
+        validate_fastq_file(args.fastq1)
+        validate_fastq_file(args.fastq2)
+
+
+# Parsing fastq as an input - Mapping, QC, MUC1 gene subsetting
 if args.fastq:
     fastq_1 = args.fastq1
     fastq_2 = args.fastq2
-    # Running fastp
+    reference = args.reference_file
+    sam_out = output  + args.output + ".sam"
+    # Running BWA, Sambamba, BAM to FASTQ conversion and Quality check (read length (50) and phread score (20))
     if None not in (fastq_1, fastq_2):
-        QC_command = "fastp "+ "--thread " + args.threads + " " + "--in1 " + fastq_1 + " --in2 " + fastq_2 + " --out1 " + output + args.output + "_R1.fastq.gz" + " " + "--out2 " + output + args.output + "_R2.fastq.gz" + " --compression 6 --disable_adapter_trimming --dedup --dup_calc_accuracy 3 --length_required 40 --html " + output + "temp/" + args.output + ".html"
-        logging.info('Fastq file quality control: deduplication, low quality read removal, and size correction...')
-        print ("Quality control step!\n")
-        process = sp.Popen(QC_command , shell=True)
+        log_and_print("Launching BWA!\n")
+        aligment_command= "bwa mem -t " + args.threads + " " + reference + " " + fastq_1 + " " +  fastq_2 + " -o " + sam_out +  " && "  + "java -Xmx10g -jar /usr/local/lib/picard_2.27.4/picard.jar SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + args.output + "_sorted.bam" + " SORT_ORDER=coordinate" + " && " + "samtools index " + output + args.output + "_sorted.bam"
+        process = sp.Popen(aligment_command, shell=True)
         process.wait()
-        print ("QC passed!\n")
-        logging.info('Quality control passed..')
+        log_and_print("Alignment to the reference genome (hg19 assembly) Done!\n")
+        input_bam = output + args.output + "_sorted.bam"
+        command_slice = "/SOFT/./sambamba-0.6.8 slice " + input_bam + " " + "chr1:155158000-155163000" + " -o " + output + args.output + "_chr1.bam"
+        coverage_VNTR = "samtools depth -r  chr1:155160500-155162000 " + input_bam + "| awk '{sum+=$3} END { print sum/NR}' > " + output + args.output +  ".coverage"
+        command_bam2_fastq = "samtools fastq " + " -@ " + args.threads + " " + input_bam +  " -1 " + output + args.output + "_R1.fastq.gz" + " -2 " + output + args.output + "_R2.fastq.gz"
+        command_QC_fastq = "fastp -q 20 -l 50 -h " + output + args.output + ".html " + " -i "  + output + args.output + "_R1.fastq.gz" + " -I " +  output + args.output + "_R2.fastq.gz" + " -o " + output + args.output + "_QC_R1.fastq.gz" + " -O " + output + args.output + "_QC_R2.fastq.gz"
+        process = sp.Popen(command_slice , shell=True)
+        process.wait()
+        process = sp.Popen(coverage_VNTR , shell=True)
+        process.wait()
+        process = sp.Popen(command_bam2_fastq, shell=True)
+        process.wait()
+        log_and_print('BAM to Fastq conversion finished!')
+        command_rm = "rm " + output + args.output + "*.bam" + " && " + "rm " + output + args.output + "*.bai"
+        process = sp.Popen(command_rm , shell=True)
+        process.wait()
+        fastq_1 = output + args.output + "_QC_R1.fastq.gz"
+        fastq_2 = output + args.output + "_QC_R2.fastq.gz"
+        log_and_print("Fastq files ready to be used for genotyping!\n")
     else:
-        print (args.fastq1 + " is not an expected fastq file... skipped...")
-        logging.error('Provided raw file is not the expected fastq file...skipped...')
+        log_and_print("Inout file is not an expected fastq file... skipped...")
+        sys.exit(1)
 
-# BAM input (BAM clean up and BAM to Fastq conversion...)
-# hg19 MUC1 region chr1:155158000-155163000
+
+# Parsing BAM file as an input (BAM clean up, subseting and BAM to Fastq conversion...)
 if args.bam:
     in_bam = args.alignment
-    #out_bam = output + args.output + "__mkdup.bam"
-    #command_mkdup = "/WORKSPACE/VNtyper/Scripts/./sambamba-0.6.8 markdup -t " + args.threads + " " +  in_bam + " " + out_bam
-    command_slice = "/SOFT/./sambamba-0.6.8 slice " + in_bam + " chr1:155158000-155163000 " + " -o " + output + args.output + "_chr1.bam"
-    command_flag = "samtools view -u -f 4 -F264 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + "_unmapped1.bam"  + " && " + "samtools view -u -f 8 -F260 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + "_unmapped2.bam" + " && " +  "samtools view -u -f 12 -F256 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + "_unmapped3.bam" 
-    command_merge = "/SOFT/./sambamba-0.6.8 merge -t " + args.threads + " " + output + args.output + "_vntyper.bam" + " " + output + args.output + "_chr1.bam" + " " + output + args.output + "_unmapped1.bam" + " " + output + args.output + "_unmapped2.bam" + " " + output + args.output + "_unmapped3.bam"
-    command_sort_fastq = "samtools sort -n " + " -@ " + args.threads + " " + output + args.output + "_vntyper.bam" +  " -o " + output + args.output + "_VN.bam" + " && " + "samtools fastq " + " -@ " + args.threads + " " +  output + args.output + "_VN.bam" +  " -1 " + output + args.output + "_R1.fastq.gz" + " -2 " + output + args.output + "_R2.fastq.gz"
-    print ('BAM cleanup and converting to fastq...')
-    logging.info('BAM file cleanup and converting to fastq...')
-    #process = sp.Popen(command_mkdup , shell=True)
-    #process.wait()
+    command_slice = "/SOFT/./sambamba-0.6.8 slice " + in_bam + " " + region + " -o " + output + args.output + "_chr1.bam"
+    coverage_VNTR = "samtools depth -r  " + coverage_region + " " + in_bam + "| awk '{sum+=$3} END { print sum/NR}' > " + output + args.output +  ".coverage"
     process = sp.Popen(command_slice , shell=True)
     process.wait()
+    process = sp.Popen(coverage_VNTR , shell=True)
+    process.wait()
+    log_and_print('Reads aligned to the MUC1 gene were extracted, and the coverage of the VNTR region was calculated!')
+    command_flag = "samtools view -u -f 12 -F256 -@ " + args.threads + " " + in_bam +  " > " + output + args.output + ".sec.alignment.bam" 
+    command_merge = "/SOFT/./sambamba-0.6.8 merge -t " + args.threads + " " + output + args.output + "_vntyper.bam" + " " + output + args.output + "_chr1.bam" + " " + output + args.output + ".sec.alignment.bam" 
+    command_sort_fastq = "samtools sort -n " + " -@ " + args.threads + " " + output + args.output + "_vntyper.bam" +  " -o " + output + args.output + "_VN.bam" + " && " + "samtools fastq " + " -@ " + args.threads + " " +  output + args.output + "_VN.bam" +  " -1 " + output + args.output + "_R1.fastq.gz" + " -2 " + output + args.output + "_R2.fastq.gz"
+    command_QC_fastq = "fastp -q 20 -l 50 -h " + output + args.output + ".html " + " -i "  + output + args.output + "_R1.fastq.gz" + " -I " +  output + args.output + "_R2.fastq.gz" + " -o " + output + args.output + "_QC_R1.fastq.gz" + " -O " + output + args.output + "_QC_R2.fastq.gz"
+    log_and_print('BAM cleanup and converting to fastq...')
     process = sp.Popen(command_flag , shell=True)
     process.wait()
     process = sp.Popen(command_merge , shell=True)
     process.wait()
     process = sp.Popen(command_sort_fastq, shell=True)
     process.wait()
-    logging.info('BAM to Fastq conversion finished!')
-    print ('BAM to Fastq conversion finished!')
+    process = sp.Popen(command_QC_fastq, shell=True)
+    process.wait()
+    log_and_print('BAM to Fastq conversion finished!')
     command_rm = "rm " + output + args.output + "*.bam" + " && " + "rm " + output + args.output + "*.bai"
     process = sp.Popen(command_rm , shell=True)
     process.wait()
-    fastq_1 = output + args.output + "_R1.fastq.gz"
-    fastq_2 = output + args.output + "_R2.fastq.gz"
+    fastq_1 = output + args.output + "_QC_R1.fastq.gz"
+    fastq_2 = output + args.output + "_QC_R2.fastq.gz"
 
 
 # Kestrel algorithm (Kmer frequency-based genotyping of MUC1-VNTR)
-logging.info('Kmer-based mapping free genotyping of MUC1-VNTR (Kestrel)...')
+log_and_print('Kmer-based mapping free genotyping of MUC1-VNTR (Kestrel) started...')
 reference_VNTR = args.reference_VNTR
 vcf_out = output + args.output + ".vcf"
 vcf_path = Path(vcf_out)
+coverage = output + args.output + ".coverage"
+# Kestrel command for genotyping
+kmer_command_k20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/"  + " --hapfmt " + " sam " +  " -p " +  args.working_dir + args.output + "/temp/" + args.output + ".sam"
 
-#fastq_1 = args.working_dir + args.output + "_R1.fastq.gz"
-#fastq_2 = args.working_dir + args.output + "_R2.fastq.gz"
 
-kmer_command_17 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  17  "  + " -r " + reference_VNTR  + " -o " + vcf_out + " " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
-kmer_command_20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/"  + " --hapfmt " + " sam " +  " -p " +  args.working_dir + args.output + "/temp/" + args.output + ".sam"
-kmer_command_25 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  25  "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
-kmer_command_41 = "#java -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  41  "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/" 
 
-# Run Kestrel algorithm
-if vcf_path.is_file():
-    print ("VCF file already exists...")
-    sys.exit()
+# Run mapping-free genotyping algorithm (Kestrel)
+if None not in (fastq_1, fastq_2, reference_VNTR):
+    log_and_print("Launching Kestrel...with Kmer size 20!\n")
+    process = sp.Popen(kmer_command_k20 , shell=True)
+    process.wait()
+    log_and_print('Mapping-free genotyping of MUC1-VNTR with kmer size 20 done!\n')
 else:
-    if None not in (fastq_1, fastq_2, reference_VNTR):
-        print ("Launching Kestrel...with Kmer size 20!\n")
-        process = sp.Popen(kmer_command_20 , shell=True)
-        process.wait()
-        logging.info('Mapping-free genotyping of MUC1-VNTR with kmer size 20 done!')
-    else:
-        print (args.fastq1 + " is not an expected fastq file... skipped...")
+    log_and_print("Iput files for mapping-free genotyping is not supported... skipped!\n", level="error")
+    sys.exit(1)
 
 # Kestrel output file processing
-logging.info('VCF file preprocessing...')
+log_and_print('VCF file processing...')
 input_path = vcf_out
 output_path = output + args.output + "_indel.vcf"
 indel_vcf = output + args.output + "_indel.vcf"
@@ -211,7 +307,6 @@ vcf_insertion = pd.read_csv(output + args.output + "_insertion.vcf", comment='#'
 vcf_deletion = pd.read_csv(output + args.output + "_deletion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
 
 # MUC1 VNTR motif dictionary processing
-from Bio import SeqIO
 with open(reference_VNTR) as fasta_file: 
     identifiers = []
     seq = []
@@ -223,6 +318,7 @@ s1 = pd.Series(identifiers, name='ID')
 s2 = pd.Series(seq, name='Sequence')
 MUC1_ref = pd.DataFrame(dict(Motifs=s1, Motif_sequence=s2))
 
+# Processing indels seperatley and merging them together
 def preprocessing_insertion(df):
     df1=df.copy()
     df1.rename(columns={'#CHROM':'Motifs'}, inplace = True)
@@ -243,8 +339,9 @@ insertion = preprocessing_insertion(vcf_insertion)
 deletion = preprocessing_deletion(vcf_deletion)
 vertical_concat = pd.concat([insertion, deletion], axis=0)
 
-logging.info('Writing variants to the output file...')
+log_and_print('Writing variants to the output file!')
 
+# Defining inframe and out of frame variants and calculating depth score
 def StepA_processing(df):
     df3=df.copy()
     df3 = df3.rename(columns=lambda c: 'Depth' if c.endswith('\n') else c)
@@ -270,7 +367,7 @@ def StepB_proccessing(df):
 
     return df4
 
-# Label function 
+# Label function (Annotating each variant based of the confidence score - hardcoded threshold)
 def conditions(Kestrel_concat):
     if (Kestrel_concat['Depth_Score'] <= 0.00469) or (Kestrel_concat['Estimated_Depth_Variant_ActiveRegion'] <= 200):
         return 'Low_Precision'
@@ -285,10 +382,10 @@ def conditions(Kestrel_concat):
     elif (Kestrel_concat['Estimated_Depth_AlternateVariant'] >= 100) and (Kestrel_concat['Depth_Score'] >= 0.00515):
         return 'High_Precision*'
 
-# Extract good frameshitfs (3n+1 for insertion and 3n+2 for deletion)
+# Extract pathogenic frameshitfs (3n+1 for insertion and 3n+2 for deletion)
 def process_kmer(Kmer_A):
     if Kmer_A.empty:
-        print ('Proceeding to the next Kmer size...')
+        log_and_print('No pathogenic frameshift varinat was found!')
         Kestrel_concat = Kmer_A
     else:
         Kmer_B = StepB_proccessing(Kmer_A)
@@ -316,68 +413,7 @@ def process_kmer(Kmer_A):
 
 Kestrel_concat = process_kmer(Kmer_A)
 
-# Running Kmer size 17 and variant processing...
-if Kestrel_concat.empty:
-    #logging.info('Running Kestrel with Kmer size 17...')
-    #print ('Running Kestrel with kmer size 17...')
-    process = sp.Popen(kmer_command_17 , shell=True)
-    process.wait()
-    logging.info('Mapping-free genotyping of MUC1-VNTR with kmer size 20 done!')
-    filter_vcf(output + args.output + ".vcf", output + args.output + "_indel.vcf")
-    filter_indel_vcf(output + args.output + "_indel.vcf", output + args.output + "_insertion.vcf", output + args.output + "_deletion.vcf")
-    names = read_vcf(output + args.output + ".vcf")
-    vcf_insertion = pd.read_csv(output + args.output + "_insertion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
-    vcf_deletion = pd.read_csv(output + args.output + "_deletion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
-    insertion = preprocessing_insertion(vcf_insertion)
-    deletion = preprocessing_deletion(vcf_deletion)
-    vertical_concat = pd.concat([insertion, deletion], axis=0)
-    Kmer_A = StepA_processing(vertical_concat)
-    Kestrel_concat = process_kmer(Kmer_A)
-    which_kmer = '17'
-else:
-    which_kmer = '20'
-
-# Running Kmer size 25 and variant processing...
-if Kestrel_concat.empty:
-    #logging.info('Running Kestrel with kmer size 25...')
-    #print ('Running Kestrel with kmer size 25...')
-    process = sp.Popen(kmer_command_25 , shell=True)
-    process.wait()
-    logging.info('Mapping-free genotyping of MUC1-VNTR with kmer size 25 done!')
-    filter_vcf(output + args.output + ".vcf", output + args.output + "_indel.vcf")
-    filter_indel_vcf(output + args.output + "_indel.vcf", output + args.output + "_insertion.vcf", output + args.output + "_deletion.vcf")
-    names = read_vcf(output + args.output + ".vcf")
-    vcf_insertion = pd.read_csv(output + args.output + "_insertion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
-    vcf_deletion = pd.read_csv(output + args.output + "_deletion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
-    insertion = preprocessing_insertion(vcf_insertion)
-    deletion = preprocessing_deletion(vcf_deletion)
-    vertical_concat = pd.concat([insertion, deletion], axis=0)
-    Kmer_A = StepA_processing(vertical_concat)
-    Kestrel_concat = process_kmer(Kmer_A)
-    which_kmer = '25'
-
-# Running Kmer size 41 and variant processing...
-if Kestrel_concat.empty:
-    #logging.info('Running Kestrel with kmer size 41...')
-    #print ('Running Kestrel with kmer size 41...')
-    process = sp.Popen(kmer_command_41 , shell=True)
-    process.wait()
-    logging.info('Mapping-free genotyping of MUC1-VNTR with kmer size 41 done!')
-    filter_vcf(output + args.output + ".vcf", output + args.output + "_indel.vcf")
-    filter_indel_vcf(output + args.output + "_indel.vcf", output + args.output + "_insertion.vcf", output + args.output + "_deletion.vcf")
-    names = read_vcf(output + args.output + ".vcf")
-    vcf_insertion = pd.read_csv(output + args.output + "_insertion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
-    vcf_deletion = pd.read_csv(output + args.output + "_deletion.vcf", comment='#', delim_whitespace=True, header=None, names=names)
-    insertion = preprocessing_insertion(vcf_insertion)
-    deletion = preprocessing_deletion(vcf_deletion)
-    vertical_concat = pd.concat([insertion, deletion], axis=0)
-    Kmer_A = StepA_processing(vertical_concat)
-    Kestrel_concat = process_kmer(Kmer_A)
-    which_kmer = '41'
-
-
 # MUC1 VNTR motif and RU processing
-from Bio import SeqIO
 with open(args.tools_path + 'Files/code-adVNTR_RUs.fa') as RU_file, open(args.tools_path + 'Files/MUC1_motifs_Rev_com.fa') as Motif_file: 
     identifiers = []
     seq = []
@@ -394,8 +430,7 @@ Merged_motifs = pd.DataFrame(dict(Motif=s1, Motif_sequence=s2))
 
 # Motif correction and annotation
 if Kestrel_concat.empty:
-    print('No pathogenic variant was found!')
-    logging.info('No pathogenic variant was found...')
+    log_and_print('No pathogenic variant was found!')
     which_kmer = ''
 else:
     Kestrel_concat[['Motif_left', 'Motif_right']] = Kestrel_concat['Motifs'].str.split('-', expand= True)
@@ -433,33 +468,28 @@ else:
     Kestrel_concat = Kestrel_concat[(Kestrel_concat['Motif'] != '6') & (Kestrel_concat['Motif'] != '6p') & (Kestrel_concat['Motif'] != '7')]
     Kestrel_concat['POS'] = Kestrel_concat['POS'].astype(int)
     Kestrel_concat.update(Kestrel_concat['POS'].mask(Kestrel_concat['POS'] >= 60, lambda x: x-60))
-    Kestrel_concat['Kmer_Size'] = which_kmer
+    Kestrel_concat['Kmer_Size'] = "20"
 
 
 # Save Kestrel processed result
 Kestrel_concat.to_csv(output + args.output + '_pre_result.tsv', sep='\t', index=False)
-logging.info('Kestrel output processing done...')
-
-stop = timeit.default_timer()
-time = (stop - start)/60
-print('-------- %s minutes -------' % time)
-logging.info('Running time for Kestrel %s minutes.' % time)
+log_and_print('Kestrel output processing done...')
 
 # VNTR genotyping with code-adVNTR
 columns_kmer = ['Motif', 'Variant', 'POS', 'REF', 'ALT', 'Motif_sequence', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion', 'Depth_Score', 'Confidence', 'Kmer_Size']
-
 columns_adVNTR = ['#VID', 'Variant','NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
 
-rm_list_1 = ['_pre_result.tsv', '_insertion.vcf', '_deletion.vcf', '_indel.vcf']
-rm_list_3 = ["_R1.fastq.gz", "_R2.fastq.gz"]
+rm_list_1 = ['_pre_result.tsv', '_insertion.vcf', '_deletion.vcf', '_indel.vcf', ".coverage"]
+rm_list_3 = ["_R1.fastq.gz", "_R2.fastq.gz", "_QC_R2.fastq.gz", "_QC_R1.fastq.gz"]
 
 # Writing output to a file
 if args.ignore_advntr:
-    logging.info('MUC1 VNTR genotyping with adVNTR skippied...')
+    log_and_print('MUC1 VNTR genotyping with adVNTR skippied...')
     if Kestrel_concat.empty:
         with open(output + args.output + '_Final_result.tsv', 'w') as f3:
             f3.write('## VNtyper_Analysis_for_%s \n' % args.output )
             f3.write('# Kestrel_Result version 1.1.1 \n')
+            f3.write('# Mean VNTR coverage: %s ' % coverage)
             f3.write('\t'.join(columns_kmer) + '\n') 
         for db in rm_list_1:
             db_str = args.output + db
@@ -471,13 +501,13 @@ if args.ignore_advntr:
             rm_command =  "rm " + output + db_str
             process = sp.Popen(rm_command, shell=True)
             process.wait()
-        print (endMessage)
         sys.exit()
     else:
         with open (output + args.output  + '_pre_result.tsv','r') as f2:
             with open(output + args.output + '_Final_result.tsv', 'w') as f3:
                 f3.write('## VNtyper_Analysis_for_%s \n' % args.output )
                 f3.write('# Kestrel_Result \n')
+                f3.write('# Mean VNTR coverage: %s ' % coverage)
                 f3.write('\t'.join(columns_kmer) + '\n') 
                 next(f2)
                 for line in f2:
@@ -492,62 +522,55 @@ if args.ignore_advntr:
             rm_command =  "rm " + output + db_str
             process = sp.Popen(rm_command, shell=True)
             process.wait()
-        logging.info('The final result is saved in *_Final_result.tsv')
-        print (endMessage)
+        log_and_print('The final result is saved in *_Final_result.tsv')
         sys.exit()
 else:
     if not os.path.exists(args.working_dir + args.output + "/adVNTR"):
         os.mkdir(args.working_dir + args.output + "/adVNTR")
     if args.alignment is not None:
-        print('launching adVNTR (This will take a while)...')
-        logging.info('launching code-adVNTR (Profile-HMM based VNTR genotyping)...')
-        sorted_bam = args.alignment
-        reference = args.reference_file
-        db_file_hg19 = args.reference_vntr
-        if None not in (sorted_bam , reference):
-            adVNTR_command = "advntr genotype -fs -vid 25561 --outfmt vcf --alignment_file " + sorted_bam + " -o " + output + args.output + "_adVNTR.vcf" + " " + "-m " + db_file_hg19 + " -r " + args.reference_file + " --working_directory " + output
-            print('Launching adVNTR genotyping!\n')
-            process = sp.Popen(adVNTR_command, shell=True)
-            process.wait()
-            print('adVNTR genotyping of MUC1-VNTR done!')
-            logging.info('adVNTR genotyping of MUC1-VNTR done')
-        else:
-            print('Input files are not expected files...skipped')
-            logging.error('Input files are not the expected files for code-adVNTR...skipped')
-    else:
-        reference = args.reference_file
-        advntr_vcf_out = output  + args.output + "_adVNTR.vcf"
-        sam_out = output  + args.output + ".sam"
-        advntr_vcf_path = Path(advntr_vcf_out)
-
-        if advntr_vcf_path.is_file():
-            print ("adVNTR VCF file already exists...")
-        else:
-            if None not in (fastq_1, fastq_2, reference):
-                Mapping_command = "bwa mem -t " + args.threads + " " + reference + " " + fastq_1 + " " +  fastq_2 + " -o " + sam_out +  " && "  + "java -Xmx10g -jar /usr/local/lib/picard_2.27.4/picard.jar SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + args.output + "_sorted.bam" + " SORT_ORDER=coordinate" + " && " + "samtools index " + output + args.output + "_sorted.bam"
-                print ("Launching BWA!\n")
-                process = sp.Popen(Mapping_command , shell=True)
+        log_and_print('launching adVNTR (This will take a while)...')
+        if args.hg19:
+            sorted_bam = args.alignment
+            reference = args.reference_file
+            db_file_hg19 = args.reference_vntr
+            if None not in (sorted_bam , reference):
+                adVNTR_command = "advntr genotype -fs -vid 25561 --outfmt vcf --alignment_file " + sorted_bam + " -o " + output + args.output + "_adVNTR.vcf" + " " + "-m " + db_file_hg19 + " -r " + args.reference_file + " --working_directory " + output
+                log_and_print('Launching adVNTR genotyping!\n')
+                process = sp.Popen(adVNTR_command, shell=True)
                 process.wait()
-                print ("Alignment to the Chr1 Done!\n")
+                log_and_print('adVNTR genotyping of MUC1-VNTR done')
             else:
-                print (args.fastq1 + " is not an expected fastq file... skipped...")
-                logging.info('launching code-adVNTR (Profile-HMM based VNTR genotyping)...')
+                log_and_print('Input files are not the expected files for code-adVNTR...skipped')
+                sys.exit(1)
+        elif args.hg38:
+            sorted_bam = args.alignment
+            reference = args.reference_file
+            db_file_hg19 = args.reference_vntr
+            sam_out = output  + args.output + ".sam"
+            if None not in (sorted_bam , reference):
+                aligment_command= "bwa mem -t " + args.threads + " " + reference + " " + fastq_1 + " " +  fastq_2 + " -o " + sam_out +  " && "  + "java -Xmx10g -jar /usr/local/lib/picard_2.27.4/picard.jar SortSam VALIDATION_STRINGENCY=SILENT " + "I=" + sam_out  + " " + "O=" + output + args.output + "_sorted.bam" + " SORT_ORDER=coordinate" + " && " + "samtools index " + output + args.output + "_sorted.bam"
+                log_and_print("Launching BWA!\n")
+                process = sp.Popen(aligment_command, shell=True)
+                process.wait()
+                log_and_print("Alignment to the hg19 genome Done!\n")
+            else:
+                log_and_print(args.fastq1 + " is not an expected fastq file... skipped...")
+            advntr_vcf_out = output  + args.output + "_adVNTR.vcf"
+            sam_out = output  + args.output + ".sam"
+            advntr_vcf_path = Path(advntr_vcf_out)
+            sorted_bam = output + args.output + "_sorted.bam"
+            reference = args.reference_file
+            db_file_hg19 = args.reference_vntr
+            if None not in (sorted_bam , reference):
+                log_and_print('Launching code-adVNTR genotyping!\n')
+                adVNTR_command = "advntr genotype -fs -vid 25561 --outfmt vcf --alignment_file " + sorted_bam + " -o " + output + args.output + "_adVNTR.vcf" + " " + "-m " + db_file_hg19 + " -r " + args.reference_file + " --working_directory " + output
+                process = sp.Popen(adVNTR_command, shell=True)
+                process.wait()
+                log_and_print('code-adVNTR genotyping of MUC1-VNTR done!')
+            else:
+                log_and_print('Input files are not the expected files for code-adVNTR...skipped')
 
-        sorted_bam = output + args.output + "_sorted.bam"
-        reference = args.reference_file
-        db_file_hg19 = args.reference_vntr
-        if None not in (sorted_bam , reference):
-            print('Launching code-adVNTR genotyping!\n')
-            adVNTR_command = "advntr genotype -fs -vid 25561 --outfmt vcf --alignment_file " + sorted_bam + " -o " + output + args.output + "_adVNTR.vcf" + " " + "-m " + db_file_hg19 + " -r " + args.reference_file + " --working_directory " + output
-            process = sp.Popen(adVNTR_command, shell=True)
-            process.wait()
-            print('code-adVNTR genotyping of MUC1-VNTR done!')
-            logging.info('code-adVNTR genotyping of MUC1-VNTR done')
-        else:
-           print('Input files are not expected files...skipped') 
-           logging.error('Input files are not the expected files for code-adVNTR...skipped')
-
-logging.info('code-adVNTR result preprocessing...')
+log_and_print('code-adVNTR result preprocessing...')
 path = output + args.output + "_adVNTR.vcf"
 
 def read_vcf(path):
@@ -611,15 +634,16 @@ def advntr_processing_ins(df):
          
     return dff
 
-rm_list_4 = ['_pre_result.tsv', '_insertion.vcf', '_deletion.vcf', '_indel.vcf', '.sam', '_sorted.bam', '_sorted.bam.bai', '_R1.fastq.gz', '_R2.fastq.gz', '_adVNTR.vcf', '_adVNTR_result.tsv', '.vcf']
-rm_list_5 = ['_pre_result.tsv', '_insertion.vcf', '_deletion.vcf', '_indel.vcf', '_R1.fastq.gz', '_R2.fastq.gz', '_adVNTR.vcf', '_adVNTR_result.tsv', '.vcf']
+rm_list_4 = ['_pre_result.tsv', '_insertion.vcf', '_deletion.vcf', '_indel.vcf', '.sam', '_sorted.bam', '_sorted.bam.bai', '_R1.fastq.gz', '_R2.fastq.gz', '_QC_R1.fastq.gz','_QC_R2.fastq.gz', '_adVNTR.vcf', '_adVNTR_result.tsv', '.vcf', '.coverage']
+rm_list_5 = ['_pre_result.tsv', '_insertion.vcf', '_deletion.vcf', '_indel.vcf', '_R1.fastq.gz', '_QC_R1.fastq.gz','_QC_R2.fastq.gz', '_R2.fastq.gz', '_adVNTR.vcf', '_adVNTR_result.tsv', '.vcf', '.coverage']
 
 if df.empty:
-    print('No pathogenic varinat was found with code-adVNTR!')
+    log_and_print('No pathogenic varinat was found with code-adVNTR!')
     with open(output + args.output  + '_pre_result.tsv','r') as f:
         with open(output  + args.output + '_Final_result.tsv', 'w') as f1:
             f1.write('## VNtyper_Analysis_for_%s \n' % args.output )
             f1.write('# Kestrel_Result \n')
+            f1.write('# Mean VNTR coverage: %s ' % coverage)
             f1.write('\t'.join(columns_kmer) + '\n') 
             next(f)
             for line in f:
@@ -629,7 +653,7 @@ if df.empty:
         rm_command =  "rm " + output + db_str
         process = sp.Popen(rm_command, shell=True)
         process.wait()
-    logging.info('The final result is saved in *_Final_result.tsv')
+    log_and_print('The final result is saved in *_Final_result.tsv')
     sys.exit()
 else:
     df_del = advntr_processing_del(df)
@@ -648,6 +672,7 @@ with open(output + args.output  + '_pre_result.tsv' ,'r') as f, open(output + ar
     with open(output + args.output + '_Final_result.tsv', 'w') as f1:
         f1.write('## VNtyper_Analysis_for_%s \n' % args.output )
         f1.write('# Kestrel_Result \n')
+        f1.write('# Mean VNTR coverage: %s ' % coverage)
         f1.write('\t'.join(columns_kmer) + '\n') 
         next(f)
         for line in f:
@@ -670,6 +695,5 @@ with open(output + args.output  + '_pre_result.tsv' ,'r') as f, open(output + ar
             process = sp.Popen(rm_command, shell=True)
             process.wait()
 
-print (endMessage)
-logging.info('The final result is saved in *_Final_result.tsv')
-sys.exit() 
+log_and_print('The final result is saved in *_Final_result.tsv')
+sys.exit()
