@@ -4,13 +4,13 @@ Genotyping MUC1 coding-VNTR in ADTKD-MUC1 using short-read sequencing (SRS) data
 - Profile-HMM based method [(code-adVNTR)](https://github.com/mehrdadbakhtiari/adVNTR/tree/enhanced_hmm)
 
 ## Installation & Requirements
-The tool can be downloaded by cloning from the github page:
+The tool can be downloaded by cloning from the GitHub page (You should have sudo access to the server, otherwise you can use docker/singularity image):
 
 ```bashscript
 # Make a directory that you want to download VNtyper
 mkdir vntyper
 git clone https://github.com/hassansaei/VNtyper.git
-# Go to the directory that you downloaded the source code
+# Go to the directory in which you downloaded the source code
 cd VNtyper
 ```
 The following command will automatically download and install all prerequisites:
@@ -18,7 +18,7 @@ The following command will automatically download and install all prerequisites:
 chmod u+x install_prerequisites.sh
 bash install_prerequisites.sh or ./install_prerequisites.sh
 ```
-The requeirments are as follows:
+The requirements are as follows:
 1. Python >= 3.9 and libraries
     - Pandas ``` pip3 install pandas```
     - numpy ``` pip3 install numpy```
@@ -38,30 +38,20 @@ The requeirments are as follows:
 
 ## VNtyper docker image
 
-Docker images is also provided and can be pulled from docker hub. 
+Docker image is also provided and can be pulled from the docker hub. 
 You have to make a directory to store both you inputs and outputs in the host machine.
-The instructions for installing docker on linux can be found [(here)](https://docs.docker.com/desktop/install/linux-install/)
+The instructions for installing docker on Linux can be found [(here)](https://docs.docker.com/desktop/install/linux-install/)
 
 ```bashscript
 mkdir shared
-sudo docker pull saei/vntyper:1.2.0
-```
-The image files can also be downloaded and loaded via:
-
-1. [(VNtyper_1.2.0)](https://e.pcloud.link/publink/show?code=XZy1c2ZD1zvUV3wVcjm3Mi1coutBReA7vvX)
-
-```bashscript
-Sudo docker load Docker_VNtyper_1.2.0.tar
-# Or use the scripts below:
-cat Docker_vntyper_v1.2.0.tar | docker import - vntyper:1.2.0
-
+sudo docker pull saei/vntyper:1.3.0
 ```
 
 __Run docker with only the kmer method:__
 
 ```bashscript
-sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
--t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
+sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.3.0 \
+-t 8 --bam  --hg19 -p /SOFT/VNtyper/ -ref  /SOFT/VNtyper/Files/hg19.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa \
 -a /SOFT/shared/SAAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME --ignore_advntr
 ```
@@ -69,19 +59,20 @@ __Run docker with both methods:__
 
 ```bashscript
 
-sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
--t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/chr1.fa  \
+sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.3.0 \
+-t 8 --bam  --hg19 -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/Files/hg19.fa  \
 -ref_VNTR /SOFT/VNtyper/Files/MUC1-VNTR.fa  -m /SOFT/VNtyper/Files/hg19_genic_VNTRs.db \
 -a /SOFT/shared/SAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME
 
 ```
 
 ## Execution
-Use following command to see the help for running the tool.
+Use the following command to see the help for running the tool.
+
 ```bashscript
 python3 VNtyper.py --help 
 
-usage: VNtyper_FV.py [-h] -ref Referense [-r1 FASTQ1] [-r2 FASTQ2] -o OUTPUT -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w WORKING_DIR [-m REFERENCE_VNTR]
+usage: VNtyper.py [-h] -ref Referense [-r1 FASTQ1] [-r2 FASTQ2] -o OUTPUT -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w WORKING_DIR [-m REFERENCE_VNTR]
                      [--ignore_advntr] [--bam] [--fastq] [-a ALIGNMENT]
 
 Given raw fastq files, this pipeline genotype MUC1-VNTR using kestrel (Mapping-free genotyping) and Code-adVNTR mathods
@@ -91,9 +82,9 @@ optional arguments:
   -ref Referense, --reference_file Referense
                         FASTA-formatted reference file and indexes
   -r1 FASTQ1, --fastq1 FASTQ1
-                        Fastq file first pair
+                        Fastq file the first pair
   -r2 FASTQ2, --fastq2 FASTQ2
-                        Fastq file second pair
+                        Fastq file the second pair
   -o OUTPUT, --output OUTPUT
                         Output file name
   -ref_VNTR Referense, --reference_VNTR Referense
@@ -143,19 +134,19 @@ Link to bam files: [(Bam)](https://e.pcloud.link/publink/show?code=kZGSejZWTuXKX
 Example_1 to 3 from NTI cohort and example_4 and 5 from renome cohort.
 
 ## Output
-The tool creates a folder for each case in the working directory which is assigned by the user. Inside the folder there is directory for temporary files and log files, and the final output:
+The tool creates a folder for each case in the working directory which is assigned by the user. Inside the folder there is a directory for temporary files and log files, and the final output:
 - Temp folder: Fastp QC report (.html) and log file for VNtyper
 - The output of VNtyper '*_Final_result.tsv'
 
 
-The Kestrel output is a VCF file, which is proceessed by VNtyper and final result is stored in *_Final_result.tsv. The result file contains information for the motifs, varinant types, position of the varinat and its corresponding depth. The output for code-adVNTR is a bed or vcf file with varinat information and Pvalue.
+The Kestrel output is a VCF file, which is processed by VNtyper and the final result is stored in *_Final_result.tsv. The resulting file contains information for the motifs, varinant types, position of the variant, and its corresponding depth. The output for code-adVNTR is a bed or vcf file with variant information and P-value.
 
-##__NOTE: This tool is for research use only.__
 
-##__NOTE: Clinically boosted WES data should be used to genotype MUC1 VNTR using WES data.__
 
 ## Citations
-1. Saei H, Morinière V, Heidet L, Gribouval O, Lebbah S, Tores F, Mautret-Godefroy M, Knebelmann B, Burtey S, Vuiblet V, Antignac C, Nitschké P, Dorval G. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data in autosomal dominant tubulointerstitial kidney disease. iScience. 2023 Jun 17;26(7):107171. https://doi.org/10.1016/j.isci.2023.107171 
+1. Saei H, Morinière V, Heidet L, Gribouval O, Lebbah S, Tores F, Mautret-Godefroy M, Knebelmann B, Burtey S, Vuiblet V, Antignac C, Nitschké P, Dorval G. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data in autosomal dominant tubulointerstitial kidney disease. iScience. 2023 Jun 17;26(7):107171. https://doi.org/10.1016/j.isci.2023.107171
+   
 2. Peter A Audano, Shashidhar Ravishankar, Fredrik O Vannberg, Mapping-free variant calling using haplotype reconstruction from k-mer frequencies, Bioinformatics, Volume 34, Issue 10, May 2018, Pages 1659–1665, https://doi.org/10.1093/bioinformatics/btx753
+   
 3. Park J, Bakhtiari M, Popp B, Wiesener M, Bafna V. Detecting tandem repeat variants in coding regions using code-adVNTR. iScience. 2022 Jul 19;25(8):104785. https://doi.org/10.1016/j.isci.2022.104785 
 
