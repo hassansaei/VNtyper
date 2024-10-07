@@ -279,7 +279,8 @@ coverage = output + args.output + ".coverage"
 # Kestrel command for genotyping
 kmer_command_k20 = "java  -Xmx15g -jar  /usr/local/lib/kestrel-1.0.1/kestrel.jar -k  20  --maxalignstates 30  --maxhapstates 30 "  + " -r " + reference_VNTR  + " -o " + vcf_out + "  " + fastq_1 + " " + fastq_2 + " " + " --temploc " + args.working_dir + args.output + "/temp/"  + " --hapfmt " + " sam " +  " -p " +  args.working_dir + args.output + "/temp/" + args.output + ".sam"
 
-
+with open(coverage, "r") as file:
+    coverage = file.read()
 
 # Run mapping-free genotyping algorithm (Kestrel)
 if None not in (fastq_1, fastq_2, reference_VNTR):
