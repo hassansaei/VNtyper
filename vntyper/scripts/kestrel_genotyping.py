@@ -107,7 +107,7 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
     """
     java_path = kestrel_settings.get("java_path", "java")
     java_memory = kestrel_settings.get("java_memory", "15g")
-    kmer_sizes = kestrel_settings.get("kmer_sizes", [20, 17, 25, 41])
+    kmer_sizes = kestrel_settings.get("kmer_sizes", [20])
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
     log_level = logging.getLevelName(logging.getLogger().level)  # Get the current log level as a string
@@ -391,10 +391,6 @@ def filter_by_alt_values_and_finalize(df):
 
     # Drop unnecessary columns
     df.drop(['left', 'right'], axis=1, inplace=True)
-
-    # Keep only high precision results not in the red zone
-    if 'Confidence' in df.columns:
-        df = df[df['Confidence'] != 'Red_Zone']
 
     return df
 
