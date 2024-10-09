@@ -1,5 +1,3 @@
 mamba create -n vntyper python=3.9 bioconda::bwa bioconda:samtools bioconda::fastp pandas numpy regex biopython setuptools pysam jinja2 matplotlib seaborn igv-reports plotly
 
-mamba create -n advntr advntr=1.5.0 mkl-service
-
 mamba create --name envadvntr python=2.7 setuptools matplotlib biopython pysam cython networkx==1.11 scipy joblib scikit-learn numpy tk pip zlib samtools muscle=3.8.1551
