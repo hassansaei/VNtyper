@@ -10,20 +10,22 @@ from vntyper.scripts.utils import setup_logging, create_output_directories, get_
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
 from vntyper.scripts.kestrel_genotyping import run_kestrel
-from vntyper.scripts.advntr_genotyping import run_advntr, process_advntr_output
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.version import __version__ as VERSION
 
-def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, config, fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19", fast_mode=False, keep_intermediates=False, delete_intermediates=False, log_level=logging.INFO):
+def run_pipeline(bwa_reference, output_dir, extra_modules, module_args, config,
+                 fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19",
+                 fast_mode=False, keep_intermediates=False, delete_intermediates=False,
+                 log_level=logging.INFO):
     """
     Main pipeline function that orchestrates the genotyping process.
-    
+
     Args:
         bwa_reference: Path to the genome reference FASTA file for BWA alignment.
-        advntr_reference: Path to the adVNTR database file for adVNTR genotyping.
         output_dir: Path to the output directory.
-        ignore_advntr: Boolean indicating whether to skip adVNTR genotyping.
+        extra_modules: List of optional modules to include (e.g., ['advntr']).
+        module_args: Dictionary containing module-specific arguments.
         config: Configuration dictionary.
         fastq1: Path to the first FASTQ file.
         fastq2: Path to the second FASTQ file.
@@ -39,11 +41,10 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
     if not bwa_reference:
         logging.error("BWA reference not provided or determined from configuration.")
         raise ValueError("BWA reference not provided or determined from configuration.")
-    
+
     logging.debug(f"BWA reference set to: {bwa_reference}")
-    logging.debug(f"adVNTR reference set to: {advntr_reference}")
     logging.debug(f"Output directory set to: {output_dir}")
-    
+
     # Create output directories for different analysis steps
     dirs = create_output_directories(output_dir)
     logging.info(f"Created output directories in: {output_dir}")
@@ -83,7 +84,8 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
             # Convert BAM to FASTQ
             logging.info("Starting BAM to FASTQ conversion.")
             fastq1, fastq2, fastq_other, fastq_single = process_bam_to_fastq(
-                bam, dirs['fastq_bam_processing'], "output", threads, config, reference_assembly, fast_mode, delete_intermediates, keep_intermediates
+                bam, dirs['fastq_bam_processing'], "output", threads, config, reference_assembly,
+                fast_mode, delete_intermediates, keep_intermediates
             )
 
             if not fastq1 or not fastq2:
@@ -108,20 +110,53 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
 
         if fastq1 and fastq2:
             # Run Kestrel genotyping with the provided FASTQ files
-            run_kestrel(vcf_path, dirs['kestrel'], fastq1, fastq2, reference_vntr, kestrel_path, kestrel_settings, config)
+            run_kestrel(vcf_path, dirs['kestrel'], fastq1, fastq2, reference_vntr,
+                        kestrel_path, kestrel_settings, config)
         else:
             logging.error("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
             raise ValueError("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
-        
+
         logging.info("Kestrel genotyping completed.")
 
-        # adVNTR Genotyping if not skipped
-        if not ignore_advntr:
-            logging.info("Starting adVNTR genotyping.")
+        # adVNTR Genotyping if 'advntr' is in extra_modules
+        if 'advntr' in extra_modules:
+            logging.info("adVNTR module included. Starting adVNTR genotyping.")
+            try:
+                from vntyper.modules.advntr import run_advntr, process_advntr_output
+            except ImportError as e:
+                logging.error("adVNTR module is not installed. Please install it to use this feature.")
+                sys.exit(1)
+
+            # Get advntr_reference from module_args
+            advntr_reference = module_args['advntr'].get('advntr_reference')
+
+            if not advntr_reference:
+                # Use default based on reference assembly
+                if reference_assembly == "hg19":
+                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
+                else:
+                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
+            else:
+                # Fetch the advntr reference file path from config based on the specified assembly
+                if advntr_reference == "hg19":
+                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
+                elif advntr_reference == "hg38":
+                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
+                else:
+                    logging.error(f"Invalid advntr_reference specified: {advntr_reference}")
+                    raise ValueError(f"Invalid advntr_reference specified: {advntr_reference}")
+
+            if not advntr_reference:
+                logging.error("adVNTR reference path not found in configuration.")
+                raise ValueError("adVNTR reference path not found in configuration.")
+
+            logging.debug(f"adVNTR reference set to: {advntr_reference}")
+
             sorted_bam = None
             if fastq1 and fastq2:
-                # Align and sort the FASTQ files to generate a BAM file for adVNTR using the hg19 reference
-                sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference, dirs['alignment_processing'], "output", threads, config)
+                # Align and sort the FASTQ files to generate a BAM file for adVNTR
+                sorted_bam = align_and_sort_fastq(fastq1, fastq2, bwa_reference,
+                                                  dirs['alignment_processing'], "output", threads, config)
                 logging.debug(f"Sorted BAM path: {sorted_bam}")
             elif bam:
                 # Use the provided BAM file directly for adVNTR
@@ -140,6 +175,8 @@ def run_pipeline(bwa_reference, advntr_reference, output_dir, ignore_advntr, con
             else:
                 logging.error("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
                 raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
+        else:
+            logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
         # Generate the summary report as the final step
         logging.info("Generating summary report.")
