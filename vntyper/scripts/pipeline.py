@@ -61,6 +61,17 @@ def run_pipeline(bwa_reference, output_dir, extra_modules, module_args, config,
     start = timeit.default_timer()
     logging.info("Pipeline execution started.")
 
+    # Collect input filenames
+    input_files = {}
+    if fastq1 and fastq2:
+        input_files['fastq1'] = os.path.basename(fastq1)
+        input_files['fastq2'] = os.path.basename(fastq2)
+    elif bam:
+        input_files['bam'] = os.path.basename(bam)
+    else:
+        logging.error("No input files provided.")
+        raise ValueError("No input files provided.")
+
     try:
         # Select the appropriate BAM region based on the reference assembly used for input BAM alignment
         if reference_assembly == "hg38":
@@ -190,7 +201,9 @@ def run_pipeline(bwa_reference, output_dir, extra_modules, module_args, config,
             bed_file=bed_out,
             bam_file=bam_out,
             fasta_file=fasta_reference,
-            flanking=50
+            flanking=50,
+            input_files=input_files,
+            pipeline_version=VERSION
         )
         logging.info(f"Summary report generated: {report_file}")
 

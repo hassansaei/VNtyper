@@ -149,6 +149,17 @@
     <div class="container">
         <h1>Summary Report</h1>
         <p><strong>Report Date:</strong> {{ report_date }}</p>
+        <p><strong>VNtyper Version:</strong> {{ pipeline_version }}</p>
+        <!-- Display Input Files -->
+        {% if input_files %}
+            <p><strong>Input Files:</strong>
+                {% if input_files.fastq1 and input_files.fastq2 %}
+                    {{ input_files.fastq1 }}, {{ input_files.fastq2 }}
+                {% elif input_files.bam %}
+                    {{ input_files.bam }}
+                {% endif %}
+            </p>
+        {% endif %}
 
         <h2>Kestrel Identified Variants</h2>
         <div class="table-container">
