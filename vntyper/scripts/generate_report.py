@@ -33,8 +33,8 @@ def load_kestrel_results(kestrel_result_file):
 
         # Apply conditional styling to the Confidence column
         df['Confidence'] = df['Confidence'].apply(
-            lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision' 
-            else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision' 
+            lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision'
+            else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision'
             else x
         )
 
@@ -135,7 +135,8 @@ def extract_igv_content(igv_report_html):
         logging.error(f"IGV report file not found: {igv_report_html}")
         return "", "", ""
 
-def generate_summary_report(output_dir, template_dir, report_file, log_file, bed_file, bam_file, fasta_file, flanking=50):
+def generate_summary_report(output_dir, template_dir, report_file, log_file, bed_file, bam_file,
+                            fasta_file, flanking=50, input_files=None, pipeline_version=None):
     """
     Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
     and IGV alignment visualizations.
@@ -149,6 +150,8 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
         bam_file (str): Path to the BAM file for IGV reports.
         fasta_file (str): Path to the reference FASTA file for IGV reports.
         flanking (int): Size of the flanking region for IGV reports.
+        input_files (dict): Dictionary of input filenames (e.g., {'fastq1': 'sample_R1.fastq', 'fastq2': 'sample_R2.fastq'}).
+        pipeline_version (str): The version of the VNtyper pipeline.
     """
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
@@ -197,17 +200,22 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template('report_template.html')
 
-    # Render the template with the data
-    rendered_html = template.render(
-        kestrel_highlight=kestrel_html,
-        advntr_highlight=advntr_html,
-        advntr_available=advntr_available,  # Pass the availability flag
-        log_content=log_content,
-        igv_content=igv_content,  # Insert IGV content into the template
-        table_json=table_json,  # Directly insert the raw tableJson
-        session_dictionary=session_dictionary,  # Directly insert the raw sessionDictionary
-        report_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+    # Prepare context for the template
+    context = {
+        'kestrel_highlight': kestrel_html,
+        'advntr_highlight': advntr_html,
+        'advntr_available': advntr_available,
+        'log_content': log_content,
+        'igv_content': igv_content,
+        'table_json': table_json,
+        'session_dictionary': session_dictionary,
+        'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'input_files': input_files,               # New
+        'pipeline_version': pipeline_version      # New
+    }
+
+    # Render the template with the context
+    rendered_html = template.render(context)
 
     report_file_path = Path(output_dir) / report_file
     with open(report_file_path, 'w') as f:
