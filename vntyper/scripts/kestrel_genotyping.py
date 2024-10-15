@@ -8,6 +8,25 @@ from vntyper.scripts.utils import run_command
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
 from vntyper.scripts.motif_processing import load_muc1_reference, load_additional_motifs, preprocessing_insertion, preprocessing_deletion
 from vntyper.version import __version__ as VERSION
+import json
+import importlib.resources as pkg_resources
+
+
+def load_kestrel_config():
+    """
+    Loads the Kestrel configuration file from the package resources.
+    """
+    config_name = 'kestrel_filter_config.json'
+    
+    # Use __package__ to reference the current package
+    with pkg_resources.open_text(__package__, config_name) as f:
+        kestrel_config = json.load(f)
+    return kestrel_config
+
+
+# Load the Kestrel configuration
+kestrel_config = load_kestrel_config()
+
 
 def construct_kestrel_command(kmer_size, kestrel_path, reference_vntr, output_dir, fastq_1, fastq_2, vcf_out, java_path, java_memory, max_align_states, max_hap_states, log_level):
     """
@@ -91,6 +110,7 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
 
     return bam_file
 
+
 def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, kestrel_settings, config):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
@@ -148,11 +168,11 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
                 sam_file = os.path.join(output_dir, "output.sam")
                 bam_file = convert_sam_to_bam_and_index(sam_file, output_dir)
 
-                process_kestrel_output(output_dir, vcf_path, reference_vntr, config)
+                process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
                 break
 
 
-def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
+def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config):
     logging.info("Processing Kestrel VCF results...")
 
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
@@ -169,15 +189,15 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     # Manually read the VCF file to remove '##' comments and retain the header
     def read_vcf_without_comments(vcf_file):
         data = []
-        header = None
+        header_line = None
         with open(vcf_file, 'r') as f:
             for line in f:
                 if line.startswith("#CHROM"):
-                    header = line.strip().split('\t')
+                    header_line = line.strip().split('\t')
                 elif not line.startswith("##"):
                     data.append(line.strip().split('\t'))
         if data:  # Ensure that there is data before creating a DataFrame
-            return pd.DataFrame(data, columns=header)
+            return pd.DataFrame(data, columns=header_line)
         else:
             return pd.DataFrame()  # Return an empty DataFrame if no data is found
 
@@ -209,7 +229,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, config):
     merged_motifs = load_additional_motifs(config)
 
     # Process and filter results based on frameshifts and confidence scores, with motif correction
-    processed_df = process_kmer_results(combined_df, merged_motifs, output_dir)
+    processed_df = process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
 
     if processed_df.empty:
         logging.warning("Final processed DataFrame is empty. Outputting empty results.")
@@ -260,6 +280,7 @@ def output_empty_result(output_dir, header):
         empty_df.to_csv(f, sep='\t', index=False)
 
     logging.info(f"Empty result file with placeholder saved as {final_output_path}")
+
 
 # Function 1: Split Depth and Calculate Frame Score
 def split_depth_and_calculate_frame_score(df):
@@ -330,10 +351,7 @@ def extract_frameshifts(df):
     return frameshifts_df
 
 # Function 4: Calculate Depth Score and Assign Confidence
-def calculate_depth_score_and_assign_confidence(df):
-    """
-    Calculates depth score and assigns confidence based on depth and variant region conditions.
-    """
+def calculate_depth_score_and_assign_confidence(df, kestrel_config):
     if df.empty:
         return df
 
@@ -344,60 +362,82 @@ def calculate_depth_score_and_assign_confidence(df):
     # Calculate depth score
     df['Depth_Score'] = df['Estimated_Depth_AlternateVariant'] / df['Estimated_Depth_Variant_ActiveRegion']
 
+    # Extract thresholds and confidence levels from kestrel_config
+    depth_score_thresholds = kestrel_config['confidence_assignment']['depth_score_thresholds']
+    alt_depth_thresholds = kestrel_config['confidence_assignment']['alt_depth_thresholds']
+    var_active_region_threshold = kestrel_config['confidence_assignment']['var_active_region_threshold']
+    confidence_levels = kestrel_config['confidence_assignment']['confidence_levels']
+
     # Define conditions for assigning confidence scores
     def assign_confidence(row):
         depth_score = row['Depth_Score']
         alt_depth = row['Estimated_Depth_AlternateVariant']
         var_active_region = row['Estimated_Depth_Variant_ActiveRegion']
 
-        if depth_score <= 0.00469 or var_active_region <= 200:
-            return 'Low_Precision'
-        elif 21 <= alt_depth <= 100 and 0.00469 <= depth_score <= 0.00515:
-            return 'Low_Precision'
-        elif alt_depth > 100:
-            return 'High_Precision'
-        elif alt_depth <= 20:
-            return 'Low_Precision'
-        elif 21 <= alt_depth < 100 and depth_score >= 0.00515:
-            return 'High_Precision'
-        elif alt_depth >= 100 and depth_score >= 0.00515:
-            return 'High_Precision*'
+        if depth_score <= depth_score_thresholds['low'] or var_active_region <= var_active_region_threshold:
+            return confidence_levels['low_precision']
+        elif (alt_depth_thresholds['mid_low'] <= alt_depth <= alt_depth_thresholds['mid_high'] and
+              depth_score_thresholds['low'] <= depth_score <= depth_score_thresholds['high']):
+            return confidence_levels['low_precision']
+        elif alt_depth > alt_depth_thresholds['mid_high']:
+            return confidence_levels['high_precision']
+        elif alt_depth <= alt_depth_thresholds['low']:
+            return confidence_levels['low_precision']
+        elif (alt_depth_thresholds['mid_low'] <= alt_depth < alt_depth_thresholds['mid_high'] and
+              depth_score >= depth_score_thresholds['high']):
+            return confidence_levels['high_precision']
+        elif (alt_depth >= alt_depth_thresholds['mid_high'] and
+              depth_score >= depth_score_thresholds['high']):
+            return confidence_levels['high_precision_star']
         else:
-            return 'Low_Precision'
+            return confidence_levels['low_precision']
 
     # Apply confidence score assignment
     df['Confidence'] = df.apply(assign_confidence, axis=1)
 
     return df
 
+
 # Function 5: Filter by ALT Values and Finalize Data
-def filter_by_alt_values_and_finalize(df):
-    """
-    Filters based on specific ALT values and finalizes the dataframe.
-    """
+def filter_by_alt_values_and_finalize(df, kestrel_config):
+    # Use kestrel_config parameter instead of config
     if df.empty:
         return df
 
+    # Extract parameters from kestrel_config
+    gg_alt_value = kestrel_config['alt_filtering']['gg_alt_value']
+    gg_depth_score_threshold = kestrel_config['alt_filtering']['gg_depth_score_threshold']
+    exclude_alts = kestrel_config['alt_filtering']['exclude_alts']
+
     # Filter based on specific ALT values (e.g., 'GG')
-    if df['ALT'].str.contains(r'\bGG\b').any():
-        gg_condition = df['ALT'] == 'GG'
+    if df['ALT'].str.contains(r'\b' + gg_alt_value + r'\b').any():
+        gg_condition = df['ALT'] == gg_alt_value
         df = pd.concat([
             df[~gg_condition],
-            df[gg_condition & (df['Depth_Score'] >= 0.00469)]
+            df[gg_condition & (df['Depth_Score'] >= gg_depth_score_threshold)]
         ])
 
-    # Filter out specific ALT sequences (CG, TG)
-    df = df[~df['ALT'].isin(['CG', 'TG'])]
+    # Exclude specified ALT values
+    df = df[~df['ALT'].isin(exclude_alts)]
 
     # Drop unnecessary columns
     df.drop(['left', 'right'], axis=1, inplace=True)
 
     return df
 
+
 # Function 6: Motif Correction and Annotation
-def motif_correction_and_annotation(df, merged_motifs):
+def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     if df.empty:
         return df
+
+    # Extract parameters from kestrel_config
+    position_threshold = kestrel_config['motif_filtering']['position_threshold']
+    exclude_motifs_right = kestrel_config['motif_filtering']['exclude_motifs_right']
+    alt_for_motif_right_gg = kestrel_config['motif_filtering']['alt_for_motif_right_gg']
+    motifs_for_alt_gg = kestrel_config['motif_filtering']['motifs_for_alt_gg']
+    exclude_alts_combined = kestrel_config['motif_filtering']['exclude_alts_combined']
+    exclude_motifs_combined = kestrel_config['motif_filtering']['exclude_motifs_combined']
 
     # Make a copy of the 'Motifs' column and rename it to 'Motif_fasta'
     if 'Motifs' in df.columns:
@@ -413,8 +453,8 @@ def motif_correction_and_annotation(df, merged_motifs):
     df['POS'] = df['POS'].astype(int)
 
     # Split into left and right motifs based on position
-    motif_left = df[df['POS'] < 60].copy()  # Explicitly create a copy
-    motif_right = df[df['POS'] >= 60].copy()  # Explicitly create a copy
+    motif_left = df[df['POS'] < position_threshold].copy()  # Use position_threshold from config
+    motif_right = df[df['POS'] >= position_threshold].copy()
 
     # Process the left motifs
     if not motif_left.empty:
@@ -436,17 +476,12 @@ def motif_correction_and_annotation(df, merged_motifs):
                                    'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion',
                                    'Depth_Score', 'Confidence']]
 
-        if motif_right['ALT'].str.contains(r'\bGG\b').any():
-            motif_right = motif_right.loc[(motif_right['Motif'] != 'Q') & (motif_right['Motif'] != '8') &
-                                          (motif_right['Motif'] != '9') & (motif_right['Motif'] != '7') &
-                                          (motif_right['Motif'] != '6p') & (motif_right['Motif'] != '6') &
-                                          (motif_right['Motif'] != 'V') & (motif_right['Motif'] != 'J') &
-                                          (motif_right['Motif'] != 'I') & (motif_right['Motif'] != 'G') &
-                                          (motif_right['Motif'] != 'E') & (motif_right['Motif'] != 'A')]
-            motif_right = motif_right.loc[motif_right['ALT'] == 'GG']
-            motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')  # this and similar sorts could cause non deterministic behaviour
-            if motif_right['Motif'].str.contains('X').any():
-                motif_right = motif_right[motif_right['Motif'] == 'X']
+        if motif_right['ALT'].str.contains(r'\b' + alt_for_motif_right_gg + r'\b').any():
+            motif_right = motif_right.loc[~motif_right['Motif'].isin(exclude_motifs_right)]
+            motif_right = motif_right.loc[motif_right['ALT'] == alt_for_motif_right_gg]
+            motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
+            if motif_right['Motif'].isin(motifs_for_alt_gg).any():
+                motif_right = motif_right[motif_right['Motif'].isin(motifs_for_alt_gg)]
         else:
             motif_right = motif_right.sort_values('Depth_Score', ascending=False).drop_duplicates('ALT', keep='first')
 
@@ -456,10 +491,8 @@ def motif_correction_and_annotation(df, merged_motifs):
     combined_df = pd.concat([motif_right, motif_left])
 
     # Additional filtering
-    combined_df = combined_df.loc[(combined_df['ALT'] != 'CCGCC') & (combined_df['ALT'] != 'CGGCG') &
-                                  (combined_df['ALT'] != 'CGGCC')]
-    combined_df = combined_df[(combined_df['Motif'] != '6') & (combined_df['Motif'] != '6p') &
-                              (combined_df['Motif'] != '7')]
+    combined_df = combined_df.loc[~combined_df['ALT'].isin(exclude_alts_combined)]
+    combined_df = combined_df[~combined_df['Motif'].isin(exclude_motifs_combined)]
     combined_df['POS'] = combined_df['POS'].astype(int)
 
     # Make a copy of the 'POS' column and rename it to 'POS_fasta'
@@ -467,10 +500,10 @@ def motif_correction_and_annotation(df, merged_motifs):
         combined_df['POS_fasta'] = combined_df['POS']
 
     # Adjust positions where necessary
-    # changes the position to the correct position in the VNTR if the position is greater than 60
-    combined_df.update(combined_df['POS'].mask(combined_df['POS'] >= 60, lambda x: x - 60))
+    combined_df.update(combined_df['POS'].mask(combined_df['POS'] >= position_threshold, lambda x: x - position_threshold))
 
     return combined_df
+
 
 # Function 7: Generate BED File
 def generate_bed_file(df, output_dir):
@@ -510,7 +543,7 @@ def generate_bed_file(df, output_dir):
 
 
 # Main Function: Process Kmer Results
-def process_kmer_results(combined_df, merged_motifs, output_dir):
+def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config):
     """
     Processes and filters Kestrel results by applying several steps including frame score calculation,
     depth score assignment, filtering based on ALT values and confidence scores, and final motif correction.
@@ -534,17 +567,17 @@ def process_kmer_results(combined_df, merged_motifs, output_dir):
         return df
 
     # Step 4: Calculate Depth Score and Assign Confidence
-    df = calculate_depth_score_and_assign_confidence(df)
+    df = calculate_depth_score_and_assign_confidence(df, kestrel_config)
     if df.empty:
         return df
 
     # Step 5: Filter by ALT Values and Finalize Data
-    df = filter_by_alt_values_and_finalize(df)
+    df = filter_by_alt_values_and_finalize(df, kestrel_config)
     if df.empty:
         return df
 
     # Step 6: Motif Correction and Annotation
-    df = motif_correction_and_annotation(df, merged_motifs)
+    df = motif_correction_and_annotation(df, merged_motifs, kestrel_config)
 
     # Call generate_bed_file to output the BED file with Motif_fasta and POS
     generate_bed_file(df, output_dir)
