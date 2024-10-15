@@ -10,7 +10,7 @@ setup(
     name="vntyper",
     version=version['__version__'],
     packages=find_packages(),
-    include_package_data=True,
+    include_package_data=True,  # Include package data as specified in MANIFEST.in or package_data
     install_requires=[
         "pandas>=2.2.0",
         "numpy>=2.0.2",
@@ -42,5 +42,8 @@ setup(
             "black",
             "flake8",
         ],
+    },
+    package_data={
+        'vntyper.scripts': ['kestrel_filter_config.json'],  # Include kestrel_filter_config.json in vntyper.scripts
     },
 )
