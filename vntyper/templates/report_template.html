@@ -3,9 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <title>Summary Report</title>
+    <!-- Include Bootstrap CSS for styling -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Include DataTables CSS for table styling -->
     <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
-    
+
     <!-- IGV-specific styles -->
     <style type="text/css">
         body {
@@ -153,10 +155,16 @@
             {{ kestrel_highlight | safe }}
         </div>
 
-        <h2>adVNTR Identified Variants</h2>
-        <div class="table-container">
-            {{ advntr_highlight | safe }}
-        </div>
+        <!-- Conditionally display the adVNTR section -->
+        {% if advntr_available and advntr_highlight %}
+            <h2>adVNTR Identified Variants</h2>
+            <div class="table-container">
+                {{ advntr_highlight | safe }}
+            </div>
+        {% else %}
+            <!-- Optionally, you can include a message if adVNTR was not run -->
+            <p><em>adVNTR genotyping was not performed or no adVNTR results are available.</em></p>
+        {% endif %}
 
         <h2>IGV Alignment Visualization</h2>
         <div id="container" style="display: flex; flex-direction: column">
@@ -180,7 +188,7 @@
     <!-- jQuery and DataTables script -->
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
-    
+
     <!-- Custom JavaScript to initialize DataTables and IGV -->
     <script>
         $(document).ready(function() {

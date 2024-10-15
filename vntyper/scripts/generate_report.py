@@ -7,13 +7,12 @@ from jinja2 import Environment, FileSystemLoader
 from datetime import datetime
 from pathlib import Path
 
-
 def load_kestrel_results(kestrel_result_file):
     logging.info(f"Loading Kestrel results from {kestrel_result_file}")
     if not os.path.exists(kestrel_result_file):
         logging.warning(f"Kestrel result file not found: {kestrel_result_file}")
         return pd.DataFrame()  # Return an empty DataFrame if the file is missing
-    
+
     try:
         df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
         # Filter and rename columns
@@ -31,10 +30,14 @@ def load_kestrel_results(kestrel_result_file):
         }
         df = df[list(columns_to_display.keys())]
         df = df.rename(columns=columns_to_display)
-        
+
         # Apply conditional styling to the Confidence column
-        df['Confidence'] = df['Confidence'].apply(lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision' else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision' else x)
-        
+        df['Confidence'] = df['Confidence'].apply(
+            lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision' 
+            else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision' 
+            else x
+        )
+
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
@@ -44,13 +47,14 @@ def load_advntr_results(advntr_result_file):
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
-        return pd.DataFrame()
+        return pd.DataFrame(), False  # Return empty DataFrame and False flag
 
     try:
-        return pd.read_csv(advntr_result_file, sep='\t', comment='#')
+        df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
+        return df, True  # Return DataFrame and True flag
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), False  # Return empty DataFrame and False flag
 
 def load_pipeline_log(log_file):
     logging.info(f"Loading pipeline log from {log_file}")
@@ -64,7 +68,6 @@ def load_pipeline_log(log_file):
     except Exception as e:
         logging.error(f"Failed to read pipeline log file: {e}")
         return "Failed to load pipeline log."
-
 
 def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
     """
@@ -86,7 +89,7 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
     igv_report_cmd = [
         'create_report',
         bed_file,
-        '--flanking', str(flanking),  # Use the flanking argument here
+        '--flanking', str(flanking),
         '--fasta', fasta_file,
         '--tracks', bam_file,
         '--output', output_html
@@ -98,7 +101,6 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
     except subprocess.CalledProcessError as e:
         logging.error(f"Error generating IGV report: {e}")
         raise
-
 
 def extract_igv_content(igv_report_html):
     """
@@ -125,7 +127,7 @@ def extract_igv_content(igv_report_html):
 
         session_dict_start = content.find('const sessionDictionary = ') + len('const sessionDictionary = ')
         session_dict_end = content.find('\n', session_dict_start)
-        session_dictionary = content[session_dict_start:session_dict_end]
+        session_dictionary = content[session_dict_start:session_dict_end].strip()
 
         logging.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
         return igv_content, table_json, session_dictionary
@@ -133,12 +135,11 @@ def extract_igv_content(igv_report_html):
         logging.error(f"IGV report file not found: {igv_report_html}")
         return "", "", ""
 
-
 def generate_summary_report(output_dir, template_dir, report_file, log_file, bed_file, bam_file, fasta_file, flanking=50):
     """
     Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
     and IGV alignment visualizations.
-    
+
     Args:
         output_dir (str): Output directory for the report.
         template_dir (str): Directory containing the report template.
@@ -158,12 +159,16 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
         logging.info(f"Running IGV report for BED file: {bed_file}")
         run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking)
     else:
-        logging.warning("BED file does not exist. Skipping IGV report generation.")
+        logging.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None  # No IGV report will be created
 
-    # Load Kestrel, adVNTR results, and pipeline log
+    # Load Kestrel results
     kestrel_df = load_kestrel_results(kestrel_result_file)
-    advntr_df = load_advntr_results(advntr_result_file)
+
+    # Load adVNTR results and get availability flag
+    advntr_df, advntr_available = load_advntr_results(advntr_result_file)
+
+    # Load pipeline log
     log_content = load_pipeline_log(log_file)
 
     # Extract IGV content, tableJson, and sessionDictionary for embedding, if IGV report exists
@@ -174,16 +179,29 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
         igv_content, table_json, session_dictionary = "", "", ""
 
     # Convert DataFrames to HTML tables with safe argument to allow HTML content in cells
-    kestrel_html = kestrel_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False, escape=False)
-    advntr_html = advntr_df.to_html(classes='table table-bordered table-striped hover compact order-column table-sm', index=False)
+    kestrel_html = kestrel_df.to_html(
+        classes='table table-bordered table-striped hover compact order-column table-sm',
+        index=False,
+        escape=False
+    )
+
+    # Only convert advntr_html if advntr_available is True and DataFrame is not empty
+    if advntr_available and not advntr_df.empty:
+        advntr_html = advntr_df.to_html(
+            classes='table table-bordered table-striped hover compact order-column table-sm',
+            index=False
+        )
+    else:
+        advntr_html = None  # Set to None if not available
 
     env = Environment(loader=FileSystemLoader(template_dir))
     template = env.get_template('report_template.html')
 
-    # Directly pass table_json and session_dictionary as raw strings
+    # Render the template with the data
     rendered_html = template.render(
         kestrel_highlight=kestrel_html,
-        advntr_highlight=advntr_html if not advntr_df.empty else "No significant adVNTR variants found.",
+        advntr_highlight=advntr_html,
+        advntr_available=advntr_available,  # Pass the availability flag
         log_content=log_content,
         igv_content=igv_content,  # Insert IGV content into the template
         table_json=table_json,  # Directly insert the raw tableJson
