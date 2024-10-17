@@ -1,161 +1,222 @@
-## VNtyper - A pipeline to genotype MUC1-VNTR 
-Genotyping MUC1 coding-VNTR in ADTKD-MUC1 using short-read sequencing (SRS) data. Vntyper pipeline embedded two different variant calling algorithms:
-- Mapping free genotyping using kmer frequencies [(Kestrel)](https://github.com/paudano/kestrel)
-- Profile-HMM based method [(code-adVNTR)](https://github.com/mehrdadbakhtiari/adVNTR/tree/enhanced_hmm)
+# VNtyper 2.0 - A Comprehensive Pipeline to Genotype MUC1-VNTR
 
-## Installation & Requirements
-The tool can be downloaded by cloning from the github page:
+**VNtyper 2.0** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This version integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
 
-```bashscript
-# Make a directory that you want to download VNtyper
-mkdir vntyper
-git clone https://github.com/hassansaei/VNtyper.git
-# Go to the directory that you downloaded the source code
-cd VNtyper
+---
+
+## Table of Contents
+
+1. [Features](#features)
+2. [Installation](#installation)
+3. [Usage](#usage)
+4. [Pipeline Overview](#pipeline-overview)
+5. [Dependencies](#dependencies)
+6. [Pipeline Logic Diagram](#pipeline-logic-diagram)
+7. [Results](#results)
+8. [Notes](#notes)
+9. [Citations](#citations)
+10. [Contributing](#contributing)
+11. [License](#license)
+12. [Contact](#contact)
+
+---
+
+## Features
+
+- **Variant Calling Algorithms:**
+  - **Kestrel:** Mapping-free genotyping using k-mer frequencies.
+  - **code-adVNTR (optional):** Profile-HMM based method for VNTR genotyping.
+
+- **Comprehensive Logging:**
+  - Logs both to the console and a dedicated log file.
+  - Generates MD5 checksums for all downloaded and processed files.
+
+- **Flexible Installation:**
+  - Supports installation via `pip` using `setup.py`.
+  - Provides Conda environment setup for easy dependency management.
+
+- **Subcommands:**
+  - `install-references`
+  - `pipeline`
+  - `fastq`
+  - `bam`
+  - `kestrel`
+  - `report`
+  - `cohort`
+
+---
+
+## Installation
+
+VNtyper 2.0 can be installed using either `pip` with `setup.py` or via Conda environments for streamlined dependency management.
+
+### Using `setup.py` and `pip`
+
+1. **Clone the Repository:**
+
+   ```bash
+   mkdir vntyper
+   git clone https://github.com/hassansaei/vntyper.git
+   cd vntyper
+   pip install .
+   ```
+
+---
+
+## Usage
+
+VNtyper 2.0 offers multiple subcommands that can be used depending on your input data and requirements. Below are the main subcommands available:
+
+### 1. Running the Full Pipeline
+
+To run the entire pipeline on paired-end FASTQ files or BAM files:
+
+```bash
+vntyper pipeline \
+    --config-path /path/to/config.json \
+    --fastq1 /path/to/sample_R1.fastq.gz \
+    --fastq2 /path/to/sample_R2.fastq.gz \
+    --output-dir /path/to/output/dir \
+    --threads 4
 ```
-The following command will automatically download and install all prerequisites:
-```bashscrip
-chmod u+x install_prerequisites.sh
-bash install_prerequisites.sh or ./install_prerequisites.sh
-```
-The requeirments are as follows:
-1. Python >= 3.9 and libraries
-    - Pandas ``` pip3 install pandas```
-    - numpy ``` pip3 install numpy```
-    - regex ``` pip3 install regex```
-    - biopython ``` pip3 install biopython ```
-    - setuptools==58 ``` pip3 install setuptools```
-    - pysam ``` pip3 install pysam ```
 
-3. Install [(BWA)](https://bio-bwa.sourceforge.net/)
-4. Download chr1.fa file form [(UCSC genome browser)](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz)
-5. Index fasta file with BWA
-6. Install Singularity
-7. Download [(Kestrel)](https://github.com/paudano/kestrel)
-8. Building singularity image for code-adVNTR
-9. Download [(VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR
-10. The MUC1 VNTR motif dictionary and index files are provided in the File directory
+Alternatively, using a BAM file:
 
-## VNtyper docker image
-
-Docker images is also provided and can be pulled from docker hub. 
-You have to make a directory to store both you inputs and outputs in the host machine.
-The instructions for installing docker on linux can be found [(here)](https://docs.docker.com/desktop/install/linux-install/)
-
-```bashscript
-mkdir shared
-sudo docker pull saei/vntyper:1.2.0
-```
-The image files can also be downloaded and loaded via:
-
-1. [(VNtyper_1.2.0)](https://e.pcloud.link/publink/show?code=XZy1c2ZD1zvUV3wVcjm3Mi1coutBReA7vvX)
-
-```bashscript
-Sudo docker load Docker_VNtyper_1.2.0.tar
-# Or use the scripts below:
-cat Docker_vntyper_v1.2.0.tar | docker import - vntyper:1.2.0
-
+```bash
+vntyper pipeline \
+    --config-path /path/to/config.json \
+    --bam /path/to/sample.bam \
+    --output-dir /path/to/output/dir \
+    --threads 4
 ```
 
-__Run docker with only the kmer method:__
+### 2. Installing References
 
-```bashscript
-sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
--t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/files/chr1.fa  \
--ref_VNTR /SOFT/VNtyper/files/MUC1-VNTR.fa \
--a /SOFT/shared/SAAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME --ignore_advntr
-```
-__Run docker with both methods:__
-
-```bashscript
-
-sudo docker run --rm -it -v /PATH to the shared directory/shared:/SOFT/shared saei/vntyper:1.0.0 \
--t 8 --bam  -p /SOFT/VNtyper/  -ref  /SOFT/VNtyper/files/chr1.fa  \
--ref_VNTR /SOFT/VNtyper/files/MUC1-VNTR.fa  -m /SOFT/VNtyper/files/hg19_genic_VNTRs.db \
--a /SOFT/shared/SAMPLE.bam -t 8 -w /SOFT/shared/ -o SAMPLE_NAME
-
+```bash
+vntyper install-references \
+    --output-dir /path/to/reference/install \
+    --config-path /path/to/config.json \
+    --skip-indexing  # Optional: skip BWA indexing if needed
 ```
 
-## Execution
-Use following command to see the help for running the tool.
-```bashscript
-python3 VNtyper.py --help 
+### 3. Generating Reports
 
-usage: VNtyper_FV.py [-h] -ref Referense [-r1 FASTQ1] [-r2 FASTQ2] -o OUTPUT -ref_VNTR Referense [-t THREADS] -p TOOLS_PATH -w WORKING_DIR [-m REFERENCE_VNTR]
-                     [--ignore_advntr] [--bam] [--fastq] [-a ALIGNMENT]
+Generate a summary report for your VNTR genotyping analysis:
 
-Given raw fastq files, this pipeline genotype MUC1-VNTR using kestrel (Mapping-free genotyping) and Code-adVNTR mathods
-
-optional arguments:
-  -h, --help            show this help message and exit
-  -ref Referense, --reference_file Referense
-                        FASTA-formatted reference file and indexes
-  -r1 FASTQ1, --fastq1 FASTQ1
-                        Fastq file first pair
-  -r2 FASTQ2, --fastq2 FASTQ2
-                        Fastq file second pair
-  -o OUTPUT, --output OUTPUT
-                        Output file name
-  -ref_VNTR Referense, --reference_VNTR Referense
-                        MUC1-specific reference file
-  -t THREADS, --threads THREADS
-                        Number of threads (CPU)
-  -p TOOLS_PATH, --tools_path TOOLS_PATH
-                        Path to the VNtyper directory
-  -w WORKING_DIR, --working_dir WORKING_DIR
-                        the path to the output
-  -m REFERENCE_VNTR, --reference_vntr REFERENCE_VNTR
-                        adVNTR reference vntr database
-  --ignore_advntr       Skip adVNTR genotyping of MUC1-VNTR
-  --bam                 BAM file as an input
-  --fastq               Paired-end fastq files as an input
-  -a ALIGNMENT, --alignment ALIGNMENT
-                        Alignment File (with an index file .bai)
-
-
+```bash
+vntyper report \
+    --output-dir /path/to/output/dir \
+    --config-path /path/to/config.json
 ```
-[Note] Since the program uses python3.9 logging system, it can not be executed using lower versions of the python.
 
-__Running only kmer-based genotyping:__
-```bashscript
-python3 VNtyper.py --bam -ref files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR files/MUC1-VNTR.fa -t Threads -p VNtyper/ -w WORKING_DIRECTORY --ignore_advntr
+### 4. Processing FASTQ Files
+
+Process raw FASTQ files to prepare them for genotyping:
+
+```bash
+vntyper fastq \
+    --fastq1 /path/to/sample_R1.fastq.gz \
+    --fastq2 /path/to/sample_R2.fastq.gz \
+    --output-dir /path/to/output/dir
 ```
-[Note] This algorithm is far more faster than the second method. 
 
-__Running both genotyping methods:__
-```bashscript
-python3 VNtyper.py --bam -ref files/chr1.fa -a SAMPLE.bam -o SAMPLE_NAME -ref_VNTR files/MUC1-VNTR.fa -t Threads -p VNtyper/  -w WORKING_DIRECTORY -m files/vntr_data/hg19_genic_VNTRs.db
+### 5. Processing BAM Files
+
+Process BAM files and convert them to FASTQ files for genotyping:
+
+```bash
+vntyper bam \
+    --alignment /path/to/sample.bam \
+    --output-dir /path/to/output/dir \
+    --threads 4
 ```
-[Note] This algorithm is far more slower than the first method.
 
-## Results from high-coverage 1000G project
-We analyzed MUC1 region in 2300 samples from 1000G 30X project. The results from this analysis could be found [(here)](https://e.pcloud.link/publink/show?code=kZxlpjZEVQGRPuTSgRyYq3xOrs9hkWENpRX) 
+---
 
-## Evaluating MUC1 VNTR region coverage using samtools
-```bashscript
-for f in *.bam; do  samtools depth -b MUC_hg19.bed $f | awk '{sum+=$3} END { print sum/NR}' > $f.coverage; done
+## Pipeline Overview
+
+VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
+
+1. **FASTQ Quality Control**: Raw FASTQ files are checked for quality.
+2. **Alignment**: Reads are aligned using BWA (if FASTQ files are provided).
+3. **Kestrel Genotyping**: Mapping-free genotyping of VNTRs.
+4. **(Optional) adVNTR Genotyping**: Profile-HMM based method for VNTR genotyping (requires additional setup).
+5. **Summary Report Generation**: A final HTML report is generated to summarize the results.
+
+---
+
+## Dependencies
+
+VNtyper 2.0 relies on several tools and Python libraries. Ensure that the following dependencies are available in your environment:
+
+- Python >= 3.9
+- BWA
+- Samtools
+- Fastp
+- Pandas
+- Numpy
+- Biopython
+- Pysam
+- Jinja2
+- Matplotlib
+- Seaborn
+- IGV-Reports
+
+You can easily set up these dependencies via the provided Conda environment file.
+
+---
+
+## Pipeline Logic Diagram
+
+Below is a logical overview of the VNtyper pipeline:
+
+```mermaid
+graph TD
+  A[Input: FASTQ/BAM] -->|Quality Control| B[Alignment BWA]
+  B -->|Genotyping| C[Kestrel]
+  C --> D[Optional: adVNTR]
+  D --> E[Generate Summary Report]
+  E --> F[Output: VCF, Summary HTML]
 ```
-MUC_hg19.bed is provide. MUC1_hg19.bed could also be replaced by : -r chr1:155160500-155162000
 
-## Sample bam files MUC1 8C positive 
-Here we provided five (example_1.bam to example_5.bam) MUC1 8C positive bam files for evaluation.
-Link to bam files: [(Bam)](https://e.pcloud.link/publink/show?code=kZGSejZWTuXKX6IQnzyD5yxpUJMNpiONMXk)
-Example_1 to 3 from NTI cohort and example_4 and 5 from renome cohort.
+---
 
-## Output
-The tool creates a folder for each case in the working directory which is assigned by the user. Inside the folder there is directory for temporary files and log files, and the final output:
-- Temp folder: Fastp QC report (.html) and log file for VNtyper
-- The output of VNtyper '*_Final_result.tsv'
+## Results
 
+The final output of the VNtyper pipeline is stored in the specified output directory and includes:
 
-The Kestrel output is a VCF file, which is proceessed by VNtyper and final result is stored in *_Final_result.tsv. The result file contains information for the motifs, varinant types, position of the varinat and its corresponding depth. The output for code-adVNTR is a bed or vcf file with varinat information and Pvalue.
+- **VCF File**: Contains variant information.
+- **HTML Summary Report**: A detailed summary of the results.
+- **Log Files**: Logs all steps and potential issues during the pipeline run.
 
-##__NOTE: This tool is for research use only.__
+---
 
-##__NOTE: Clinically boosted WES data should be used to genotype MUC1 VNTR using WES data.__
+## Notes
+
+1. This tool is for **research use only**.
+2. Ensure **high-coverage WES data** is used to genotype MUC1 VNTR accurately.
+3. For questions or issues, refer to the GitHub repository for support.
+
+---
 
 ## Citations
-1. Saei H, Morinière V, Heidet L, Gribouval O, Lebbah S, Tores F, Mautret-Godefroy M, Knebelmann B, Burtey S, Vuiblet V, Antignac C, Nitschké P, Dorval G. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data in autosomal dominant tubulointerstitial kidney disease. iScience. 2023 Jun 17;26(7):107171. doi: 10.1016/j.isci.2023.107171. PMID: 37456840; PMCID: PMC10338300.
-2. Peter A Audano, Shashidhar Ravishankar, Fredrik O Vannberg, Mapping-free variant calling using haplotype reconstruction from k-mer frequencies, Bioinformatics, Volume 34, Issue 10, May 2018, Pages 1659–1665, https://doi.org/10.1093/bioinformatics/btx753
-3. Park J, Bakhtiari M, Popp B, Wiesener M, Bafna V. Detecting tandem repeat variants in coding regions using code-adVNTR. iScience. 2022 Jul 19;25(8):104785. doi: 10.1016/j.isci.2022.104785. PMID: 35982790; PMCID: PMC9379575.
 
+If you use VNtyper 2.0 in your research, please cite the following:
+
+1. Saei H, Morinière V, Heidet L, et al. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data. iScience. 2023.
+2. Audano PA, Ravishankar S, et al. Mapping-free variant calling using haplotype reconstruction from k-mer frequencies. Bioinformatics. 2018.
+3. Park J, Bakhtiari M, et al. Detecting tandem repeat variants in coding regions using code-adVNTR. iScience. 2022.
+
+---
+
+## Contributing
+
+We welcome contributions to VNtyper. Please refer to the [CONTRIBUTING.md](CONTRIBUTING.md) file for guidelines.
+
+---
+
+## License
+
+VNtyper is licensed under the MIT License. See the LICENSE file for more details.
+
+---
