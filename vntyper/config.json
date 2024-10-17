@@ -27,8 +27,8 @@
     "additional_commands": "-aln"
   },
   "kestrel_settings": {
-    "java_memory": "15g",
-    "kmer_sizes": [20, 17, 25, 41],
+    "java_memory": "12g",
+    "kmer_sizes": [20],
     "max_align_states": 30,
     "max_hap_states": 30
   },
