@@ -1,3 +1,34 @@
-mamba create -n vntyper python=3.9 bioconda::bwa bioconda:samtools bioconda::fastp pandas numpy regex biopython setuptools pysam jinja2 matplotlib seaborn igv-reports plotly
+# Create 'vntyper' environment with explicit package versions
+mamba create -n vntyper python=3.9.19 \
+    bioconda::bwa=0.7.18 \
+    bioconda::samtools=1.20 \
+    bioconda::fastp=0.23.4 \
+    pandas=2.2.2 \
+    numpy=2.0.2 \
+    regex=2024.7.24 \
+    biopython=1.84 \
+    setuptools=72.2.0 \
+    pysam=0.22.1 \
+    jinja2=3.1.4 \
+    matplotlib=3.9.2 \
+    seaborn=0.13.2 \
+    igv-reports=1.13.0 \
+    plotly=5.24.0
 
-mamba create --name envadvntr python=2.7 setuptools matplotlib biopython pysam cython networkx==1.11 scipy joblib scikit-learn numpy tk pip zlib samtools muscle=3.8.1551
+# Create 'envadvntr' environment with explicit package versions
+mamba create --name envadvntr python=2.7.15 \
+    setuptools=44.0.0 \
+    matplotlib=2.2.5 \
+    biopython=1.78 \
+    pysam=0.15.0 \
+    cython=0.29.15 \
+    networkx=1.11 \
+    scipy=1.5.4 \
+    joblib=0.14.1 \
+    scikit-learn=0.20.4 \
+    numpy=1.16.5 \
+    tk=8.6.13 \
+    pip=20.1.1 \
+    zlib=1.2.13 \
+    samtools=1.18 \
+    muscle=3.8.1551
