@@ -1,3 +1,4 @@
+# setup.py
 import os
 from setuptools import setup, find_packages
 
@@ -44,6 +45,11 @@ setup(
         ],
     },
     package_data={
-        'vntyper.scripts': ['kestrel_filter_config.json'],  # Include kestrel_filter_config.json in vntyper.scripts
+        'vntyper.scripts': ['kestrel_filter_config.json'],
+        'vntyper': [
+            'config.json',  # Include config.json in the vntyper package
+            'templates/report_template.html',  # Include report_template.html
+            'templates/cohort_summary_template.html',  # Include cohort_summary_template.html
+        ],
     },
 )
