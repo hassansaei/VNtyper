@@ -13,7 +13,8 @@ mamba create -n vntyper python=3.9.19 \
     matplotlib=3.9.2 \
     seaborn=0.13.2 \
     igv-reports=1.13.0 \
-    plotly=5.24.0
+    plotly=5.24.0 \
+    openjdk=11.0.23
 
 # Create 'envadvntr' environment with explicit package versions
 mamba create --name envadvntr python=2.7.15 \
