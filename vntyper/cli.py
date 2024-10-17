@@ -1,3 +1,5 @@
+# vntyper/cli.py
+
 import argparse
 import logging
 import sys
@@ -8,13 +10,19 @@ from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_f
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.utils import load_config, setup_logging
 from vntyper.scripts.generate_report import generate_summary_report
-from vntyper.scripts.cohort_summary import aggregate_cohort  # Import the new module for cohort summary
+from vntyper.scripts.cohort_summary import aggregate_cohort
+from vntyper.scripts.install_references import main as install_references_main
 from vntyper.version import __version__ as VERSION
 
+
 def main():
+    """
+    Main function to parse arguments and execute corresponding subcommands.
+    """
     # Create the main parser and add global arguments
     parser = argparse.ArgumentParser(
-        description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.", add_help=True
+        description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.",
+        add_help=True
     )
 
     # Adding global flags with short and long options
@@ -37,7 +45,10 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Subcommand for running the full pipeline
-    parser_pipeline = subparsers.add_parser("pipeline", help="Run the full VNtyper pipeline.")
+    parser_pipeline = subparsers.add_parser(
+        "pipeline",
+        help="Run the full VNtyper pipeline."
+    )
     parser_pipeline.add_argument(
         '--config-path',
         type=Path,
@@ -45,7 +56,6 @@ def main():
         help="Path to the vntyper/config.json file",
         required=False
     )
-
     parser_pipeline.add_argument(
         '-o', '--output-dir',
         type=str,
@@ -105,7 +115,9 @@ def main():
 
     # Module-specific argument groups (Option 1 implementation)
     module_parsers = {}
-    module_parsers['advntr'] = parser_pipeline.add_argument_group('adVNTR Module Options')
+    module_parsers['advntr'] = parser_pipeline.add_argument_group(
+        'adVNTR Module Options'
+    )
     module_parsers['advntr'].add_argument(
         '--advntr-reference',
         type=str,
@@ -115,7 +127,10 @@ def main():
     )
 
     # Subcommand for FASTQ processing
-    parser_fastq = subparsers.add_parser("fastq", help="Process FASTQ files.")
+    parser_fastq = subparsers.add_parser(
+        "fastq",
+        help="Process FASTQ files."
+    )
     parser_fastq.add_argument(
         '--config-path',
         type=Path,
@@ -148,7 +163,10 @@ def main():
     )
 
     # Subcommand for BAM processing
-    parser_bam = subparsers.add_parser("bam", help="Process BAM files.")
+    parser_bam = subparsers.add_parser(
+        "bam",
+        help="Process BAM files."
+    )
     parser_bam.add_argument(
         '--config-path',
         type=Path,
@@ -198,7 +216,10 @@ def main():
     )
 
     # Subcommand for Kestrel genotyping
-    parser_kestrel = subparsers.add_parser("kestrel", help="Run Kestrel genotyping.")
+    parser_kestrel = subparsers.add_parser(
+        "kestrel",
+        help="Run Kestrel genotyping."
+    )
     parser_kestrel.add_argument(
         '--config-path',
         type=Path,
@@ -230,10 +251,11 @@ def main():
         help="Output directory for Kestrel results."
     )
 
-    # Removed the 'advntr' subcommand
-
     # Subcommand for generating reports
-    parser_report = subparsers.add_parser("report", help="Generate a summary report and visualizations from output data.")
+    parser_report = subparsers.add_parser(
+        "report",
+        help="Generate a summary report and visualizations from output data."
+    )
     parser_report.add_argument(
         '-o', '--output-dir',
         type=str,
@@ -283,7 +305,10 @@ def main():
     )
 
     # Subcommand for cohort analysis
-    parser_cohort = subparsers.add_parser("cohort", help="Aggregate outputs from multiple runs into a single summary file.")
+    parser_cohort = subparsers.add_parser(
+        "cohort",
+        help="Aggregate outputs from multiple runs into a single summary file."
+    )
     parser_cohort.add_argument(
         '-i', '--input-dirs',
         nargs='+',
@@ -310,6 +335,29 @@ def main():
         help="Name of the cohort summary report file."
     )
 
+    # Subcommand for installing references
+    parser_install = subparsers.add_parser(
+        "install-references",
+        help="Download and set up necessary reference files."
+    )
+    parser_install.add_argument(
+        '-d', '--output-dir',
+        type=Path,
+        required=True,
+        help="Directory where references will be installed."
+    )
+    parser_install.add_argument(
+        '-c', '--config-path',
+        type=Path,
+        default=None,
+        help="Path to the main config.json file to update. If not provided, config update is skipped."
+    )
+    parser_install.add_argument(
+        '--skip-indexing',
+        action='store_true',
+        help="Skip the bwa indexing step."
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -318,34 +366,47 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    # Display help and exit if no input files are provided for the pipeline
-    if args.command == "pipeline" and not ((args.fastq1 and args.fastq2) or args.bam):
-        print("Error: The pipeline requires either FASTQ files or a BAM file.")
-        parser_pipeline.print_help()
-        sys.exit(1)
+    # Handle install-references subcommand
+    if args.command == "install-references":
+        # Setup logging for install-references
+        log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+        if args.log_file:
+            log_file_path = Path(args.log_file)
+            log_file_path.parent.mkdir(parents=True, exist_ok=True)
+            setup_logging(log_level=log_level, log_file=str(log_file_path))
+        else:
+            setup_logging(log_level=log_level, log_file=None)
 
+        # Execute the install_references_main function with arguments
+        install_references_main(
+            output_dir=args.output_dir,
+            config_path=args.config_path,
+            skip_indexing=args.skip_indexing
+        )
+        sys.exit(0)
+
+    # Handle other subcommands
     # Load config with error handling
-    config = None
+    config = {}
     try:
         if args.config_path and args.config_path.exists():
             config = load_config(args.config_path)
         else:
-            logging.error(f"Configuration file not found at {args.config_path}. Using default values where applicable.")
-            config = {}  # Provide a default empty config to avoid NoneType issues
+            logging.error(
+                f"Configuration file not found at {args.config_path}. Using default values where applicable."
+            )
     except Exception as e:
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
 
-    # Setup logging
+    # Setup logging for other commands
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    log_file = Path(args.output_dir) / "pipeline.log"
+    if args.command != "install-references":
+        log_file = Path(args.output_dir) / "pipeline.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        setup_logging(log_level=log_level, log_file=str(log_file))
 
-    # Ensure the output directory exists
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-
-    setup_logging(log_level=log_level, log_file=str(log_file))
-
-    # Handle subcommands
+    # Execute the corresponding subcommand
     if args.command == "pipeline":
         # Collect module-specific arguments
         module_args = {}
@@ -354,15 +415,15 @@ def main():
                 'advntr_reference': args.advntr_reference
             }
             # Remove module-specific args from args to avoid conflicts
-            del args.advntr_reference
+            delattr(args, 'advntr_reference')
         else:
             module_args['advntr'] = {}
 
         # Determine bwa_reference based on reference_assembly
         if args.reference_assembly == "hg19":
-            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
+            bwa_reference = config.get("reference_data", {}).get("ucsc_hg19")
         else:
-            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
+            bwa_reference = config.get("reference_data", {}).get("ucsc_hg38")
 
         # Pass module_args to run_pipeline
         run_pipeline(
@@ -433,6 +494,7 @@ def main():
         logging.error(f"Unknown command: {args.command}")
         parser.print_help()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
