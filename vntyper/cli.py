@@ -1,17 +1,19 @@
-# vntyper/cli.py
+#!/usr/bin/env python3
 
 import argparse
 import logging
 import sys
 from pathlib import Path
 
-from vntyper.scripts.pipeline import run_pipeline
-from vntyper.scripts.fastq_bam_processing import process_fastq, process_bam_to_fastq
-from vntyper.scripts.kestrel_genotyping import run_kestrel
-from vntyper.scripts.utils import load_config, setup_logging
-from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.cohort_summary import aggregate_cohort
+from vntyper.scripts.fastq_bam_processing import (
+    process_bam_to_fastq, process_fastq
+)
+from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.install_references import main as install_references_main
+from vntyper.scripts.kestrel_genotyping import run_kestrel
+from vntyper.scripts.pipeline import run_pipeline
+from vntyper.scripts.utils import load_config, setup_logging
 from vntyper.version import __version__ as VERSION
 
 
@@ -404,9 +406,14 @@ def main():
         if args.config_path and args.config_path.exists():
             config = load_config(args.config_path)
         else:
-            logging.error(
-                f"Configuration file not found at {args.config_path}. Using default values where applicable."
-            )
+            default_config_path = Path(__file__).parent / 'config.json'
+            if default_config_path.exists():
+                config = load_config(default_config_path)
+            else:
+                logging.error(
+                    f"Configuration file not found at {args.config_path}. "
+                    "Using default values where applicable."
+                )
     except Exception as e:
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
@@ -488,8 +495,8 @@ def main():
             fastq_2=args.fastq2,
             reference_vntr=args.reference_vntr,
             kestrel_path=config.get("tools", {}).get("kestrel"),
-            kestrel_settings=config.get("kestrel_settings", {}),
-            config=config
+            config=config,
+            log_level=log_level
         )
 
     elif args.command == "report":

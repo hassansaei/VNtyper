@@ -1,27 +1,30 @@
+#!/usr/bin/env python3
+
 import logging
 import os
 import pandas as pd
 from pathlib import Path
 from Bio import SeqIO
 from datetime import datetime
-from vntyper.scripts.utils import run_command
+from vntyper.scripts.utils import run_command, load_config
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
-from vntyper.scripts.motif_processing import load_muc1_reference, load_additional_motifs, preprocessing_insertion, preprocessing_deletion
+from vntyper.scripts.motif_processing import (
+    load_muc1_reference,
+    load_additional_motifs,
+    preprocessing_insertion,
+    preprocessing_deletion
+)
 from vntyper.version import __version__ as VERSION
-import json
-import importlib.resources as pkg_resources
 
 
-def load_kestrel_config():
+def load_kestrel_config(config_path=None):
     """
-    Loads the Kestrel configuration file from the package resources.
+    Loads the Kestrel configuration file.
     """
-    config_name = 'kestrel_filter_config.json'
-    
-    # Use __package__ to reference the current package
-    with pkg_resources.open_text(__package__, config_name) as f:
-        kestrel_config = json.load(f)
-    return kestrel_config
+    if config_path is None:
+        # Default path to kestrel_config.json
+        config_path = os.path.join(os.path.dirname(__file__), 'kestrel_config.json')
+    return load_config(config_path)
 
 
 # Load the Kestrel configuration
@@ -111,7 +114,7 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     return bam_file
 
 
-def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, kestrel_settings, config):
+def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_path, config, log_level=logging.INFO):
     """
     Orchestrates the Kestrel genotyping process by iterating through kmer sizes and processing the VCF output.
 
@@ -122,15 +125,18 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
         fastq_2 (str): Path to the second FASTQ file.
         reference_vntr (str): Path to the reference VNTR file.
         kestrel_path (str): Path to the Kestrel jar file.
-        kestrel_settings (dict): Settings for Kestrel.
         config (dict): Overall configuration dictionary.
+        log_level (int): Logging level.
     """
+    global kestrel_config  # Ensure we use the global kestrel_config
+
+    kestrel_settings = kestrel_config.get("kestrel_settings", {})
     java_path = kestrel_settings.get("java_path", "java")
     java_memory = kestrel_settings.get("java_memory", "15g")
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20])
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
-    log_level = logging.getLevelName(logging.getLogger().level)  # Get the current log level as a string
+    log_level_str = logging.getLevelName(log_level)  # Get the current log level as a string
 
     for kmer_size in kmer_sizes:
         kmer_command = construct_kestrel_command(
@@ -145,7 +151,7 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
             java_memory=java_memory,
             max_align_states=max_align_states,
             max_hap_states=max_hap_states,
-            log_level=log_level  # Pass the log level here
+            log_level=log_level_str  # Pass the log level here
         )
 
         log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
@@ -261,15 +267,15 @@ def output_empty_result(output_dir, header):
 
     # Create a DataFrame with one row containing "None" values and "Negative" in the Confidence column
     empty_result_data = {
-        'Motif': ['None'], 
-        'Variant': ['None'], 
-        'POS': ['None'], 
-        'REF': ['None'], 
-        'ALT': ['None'], 
-        'Motif_sequence': ['None'], 
-        'Estimated_Depth_AlternateVariant': ['None'], 
-        'Estimated_Depth_Variant_ActiveRegion': ['None'], 
-        'Depth_Score': ['None'], 
+        'Motif': ['None'],
+        'Variant': ['None'],
+        'POS': ['None'],
+        'REF': ['None'],
+        'ALT': ['None'],
+        'Motif_sequence': ['None'],
+        'Estimated_Depth_AlternateVariant': ['None'],
+        'Estimated_Depth_Variant_ActiveRegion': ['None'],
+        'Depth_Score': ['None'],
         'Confidence': ['Negative']
     }
     empty_df = pd.DataFrame(empty_result_data)
