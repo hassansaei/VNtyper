@@ -153,11 +153,11 @@ def run_pipeline(
         if 'advntr' in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
-                from vntyper.modules.advntr_genotyping import (
+                from vntyper.modules.advntr.advntr_genotyping import (
                     load_advntr_config, process_advntr_output, run_advntr
                 )
-            except ImportError:
-                logging.error("adVNTR module is not installed. Please install it to use this feature.")
+            except ImportError as e:
+                logging.error(f"adVNTR module is not installed or failed to import: {e}")
                 sys.exit(1)
 
             # Load adVNTR settings
