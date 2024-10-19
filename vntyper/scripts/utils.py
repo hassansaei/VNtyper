@@ -177,11 +177,11 @@ def load_config(config_path=None):
     if config_path is None:
         logging.info("No config file path provided, proceeding without configuration.")
         return None
-    
+
     if not os.path.exists(config_path):
         logging.error(f"Config file not found: {config_path}")
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    
+
     try:
         with open(config_path, 'r') as config_file:
             config = json.load(config_file)

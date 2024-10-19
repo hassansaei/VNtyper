@@ -112,8 +112,21 @@ def main():
         action='store_true',
         help="Delete intermediate files after processing (overrides --keep-intermediates)."
     )
+    # New arguments for archiving results
+    parser_pipeline.add_argument(
+        '--archive-results',
+        action='store_true',
+        help="Create an archive of the results folder after pipeline completion."
+    )
+    parser_pipeline.add_argument(
+        '--archive-format',
+        type=str,
+        choices=['zip', 'tar.gz'],
+        default='zip',
+        help="Format of the archive: 'zip' or 'tar.gz'. Default is 'zip'."
+    )
 
-    # Module-specific argument groups (Option 1 implementation)
+    # Module-specific argument groups
     module_parsers = {}
     module_parsers['advntr'] = parser_pipeline.add_argument_group(
         'adVNTR Module Options'
@@ -366,17 +379,17 @@ def main():
         parser.print_help()
         sys.exit(0)
 
+    # Setup logging
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    if args.log_file:
+        log_file_path = Path(args.log_file)
+        log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        setup_logging(log_level=log_level, log_file=str(log_file_path))
+    else:
+        setup_logging(log_level=log_level, log_file=None)
+
     # Handle install-references subcommand
     if args.command == "install-references":
-        # Setup logging for install-references
-        log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-        if args.log_file:
-            log_file_path = Path(args.log_file)
-            log_file_path.parent.mkdir(parents=True, exist_ok=True)
-            setup_logging(log_level=log_level, log_file=str(log_file_path))
-        else:
-            setup_logging(log_level=log_level, log_file=None)
-
         # Execute the install_references_main function with arguments
         install_references_main(
             output_dir=args.output_dir,
@@ -385,7 +398,6 @@ def main():
         )
         sys.exit(0)
 
-    # Handle other subcommands
     # Load config with error handling
     config = {}
     try:
@@ -399,10 +411,12 @@ def main():
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
 
-    # Setup logging for other commands
-    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    # Handle other subcommands
     if args.command != "install-references":
-        log_file = Path(args.output_dir) / "pipeline.log"
+        if args.log_file:
+            log_file = args.log_file
+        else:
+            log_file = Path(args.output_dir) / "pipeline.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         setup_logging(log_level=log_level, log_file=str(log_file))
 
@@ -421,9 +435,9 @@ def main():
 
         # Determine bwa_reference based on reference_assembly
         if args.reference_assembly == "hg19":
-            bwa_reference = config.get("reference_data", {}).get("ucsc_hg19")
+            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
         else:
-            bwa_reference = config.get("reference_data", {}).get("ucsc_hg38")
+            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
 
         # Pass module_args to run_pipeline
         run_pipeline(
@@ -439,7 +453,10 @@ def main():
             reference_assembly=args.reference_assembly,
             fast_mode=args.fast_mode,
             keep_intermediates=args.keep_intermediates,
-            delete_intermediates=args.delete_intermediates
+            delete_intermediates=args.delete_intermediates,
+            archive_results=args.archive_results,
+            archive_format=args.archive_format,
+            log_level=log_level
         )
 
     elif args.command == "fastq":
@@ -471,15 +488,21 @@ def main():
             fastq_2=args.fastq2,
             reference_vntr=args.reference_vntr,
             kestrel_path=config.get("tools", {}).get("kestrel"),
-            kestrel_settings=config.get("kestrel_settings", {})
+            kestrel_settings=config.get("kestrel_settings", {}),
+            config=config
         )
 
     elif args.command == "report":
         generate_summary_report(
             output_dir=Path(args.output_dir),
-            config_path=args.config_path,
+            template_dir=config.get('paths', {}).get('template_dir', 'vntyper/templates'),
             report_file=args.report_file,
-            log_file=args.log_file
+            log_file=args.log_file,
+            bed_file=args.bed_file,
+            bam_file=args.bam_file,
+            fasta_file=args.reference_fasta,
+            flanking=args.flanking,
+            pipeline_version=VERSION
         )
 
     elif args.command == "cohort":

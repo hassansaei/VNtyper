@@ -5,6 +5,7 @@ import os
 import sys
 import logging
 from pathlib import Path
+import shutil  # For archiving
 
 from vntyper.scripts.utils import setup_logging, create_output_directories, get_tool_versions
 from vntyper.scripts.file_processing import filter_vcf, filter_indel_vcf
@@ -14,28 +15,32 @@ from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.version import __version__ as VERSION
 
+
 def run_pipeline(bwa_reference, output_dir, extra_modules, module_args, config,
                  fastq1=None, fastq2=None, bam=None, threads=4, reference_assembly="hg19",
                  fast_mode=False, keep_intermediates=False, delete_intermediates=False,
+                 archive_results=False, archive_format='zip',
                  log_level=logging.INFO):
     """
     Main pipeline function that orchestrates the genotyping process.
 
     Args:
-        bwa_reference: Path to the genome reference FASTA file for BWA alignment.
-        output_dir: Path to the output directory.
-        extra_modules: List of optional modules to include (e.g., ['advntr']).
-        module_args: Dictionary containing module-specific arguments.
-        config: Configuration dictionary.
-        fastq1: Path to the first FASTQ file.
-        fastq2: Path to the second FASTQ file.
-        bam: Path to the BAM file.
-        threads: Number of threads to use.
-        reference_assembly: Reference assembly used for the input BAM file alignment ("hg19" or "hg38").
-        fast_mode: Boolean indicating whether to enable fast mode (skip filtering of unmapped and partially mapped reads).
-        keep_intermediates: Boolean indicating whether to keep intermediate files.
-        delete_intermediates: Boolean indicating whether to delete intermediate files after processing.
-        log_level: Logging level to be set for the pipeline.
+        bwa_reference (str): Path to the genome reference FASTA file for BWA alignment.
+        output_dir (str): Path to the output directory.
+        extra_modules (list): List of optional modules to include (e.g., ['advntr']).
+        module_args (dict): Dictionary containing module-specific arguments.
+        config (dict): Configuration dictionary.
+        fastq1 (str, optional): Path to the first FASTQ file.
+        fastq2 (str, optional): Path to the second FASTQ file.
+        bam (str, optional): Path to the BAM file.
+        threads (int, optional): Number of threads to use. Default is 4.
+        reference_assembly (str, optional): Reference assembly used for the input BAM file alignment ("hg19" or "hg38").
+        fast_mode (bool, optional): Enable fast mode (skip filtering of unmapped and partially mapped reads).
+        keep_intermediates (bool, optional): Keep intermediate files.
+        delete_intermediates (bool, optional): Delete intermediate files after processing.
+        archive_results (bool, optional): Create an archive of the results folder after pipeline completion.
+        archive_format (str, optional): Format of the archive: 'zip' or 'tar.gz'. Default is 'zip'.
+        log_level (int, optional): Logging level to be set for the pipeline.
     """
     # Ensure the appropriate BWA reference is used for alignment
     if not bwa_reference:
@@ -206,6 +211,30 @@ def run_pipeline(bwa_reference, output_dir, extra_modules, module_args, config,
             pipeline_version=VERSION
         )
         logging.info(f"Summary report generated: {report_file}")
+
+        # Archiving the results folder if the option is enabled
+        if archive_results:
+            logging.info("Archiving the results folder.")
+            # Determine the format
+            if archive_format == 'zip':
+                format = 'zip'
+            elif archive_format == 'tar.gz':
+                format = 'gztar'
+            else:
+                logging.error(f"Unsupported archive format: {archive_format}")
+                raise ValueError(f"Unsupported archive format: {archive_format}")
+
+            archive_name = f"{output_dir}"
+            try:
+                archive_path = shutil.make_archive(
+                    base_name=archive_name,
+                    format=format,
+                    root_dir=output_dir,
+                    base_dir='.'
+                )
+                logging.info(f"Results folder archived at: {archive_path}")
+            except Exception as e:
+                logging.error(f"Failed to archive results folder: {e}")
 
         # Final processing and output generation
         logging.info("Pipeline finished successfully.")
