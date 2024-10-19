@@ -18,20 +18,6 @@
     "kestrel": "/home/bernt/tools/kestrel/kestrel-1.0.1/kestrel.jar",
     "java_path": "/usr/bin/java"
   },
-  "advntr_settings": {
-    "max_frameshift": 100,
-    "frameshift_multiplier": 3,
-    "vid": 25561,
-    "output_format": "vcf",
-    "threads": 12,
-    "additional_commands": "-aln"
-  },
-  "kestrel_settings": {
-    "java_memory": "12g",
-    "kmer_sizes": [20],
-    "max_align_states": 30,
-    "max_hap_states": 30
-  },
   "bam_processing": {
     "bam_region_hg19": "chr1:155158000-155163000",
     "bam_region_hg38": "chr1:155184000-155194000",

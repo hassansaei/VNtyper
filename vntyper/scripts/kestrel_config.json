@@ -1,0 +1,43 @@
+{
+  "kestrel_settings": {
+    "java_memory": "12g",
+    "kmer_sizes": [20],
+    "max_align_states": 30,
+    "max_hap_states": 30,
+    "java_path": "/usr/bin/java"
+  },
+  "frame_score_filtering": {
+    "replace_value": "C",
+    "filter_condition": true
+  },
+  "confidence_assignment": {
+    "depth_score_thresholds": {
+      "low": 0.00469,
+      "high": 0.00515
+    },
+    "alt_depth_thresholds": {
+      "low": 20,
+      "mid_low": 21,
+      "mid_high": 100
+    },
+    "var_active_region_threshold": 200,
+    "confidence_levels": {
+      "low_precision": "Low_Precision",
+      "high_precision": "High_Precision",
+      "high_precision_star": "High_Precision*"
+    }
+  },
+  "alt_filtering": {
+    "gg_alt_value": "GG",
+    "gg_depth_score_threshold": 0.00469,
+    "exclude_alts": ["CG", "TG"]
+  },
+  "motif_filtering": {
+    "position_threshold": 60,
+    "exclude_motifs_right": ["Q", "8", "9", "7", "6p", "6", "V", "J", "I", "G", "E", "A"],
+    "alt_for_motif_right_gg": "GG",
+    "motifs_for_alt_gg": ["X"],
+    "exclude_alts_combined": ["CCGCC", "CGGCG", "CGGCC"],
+    "exclude_motifs_combined": ["6", "6p", "7"]
+  }
+}
