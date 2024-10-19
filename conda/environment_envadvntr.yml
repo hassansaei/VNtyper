@@ -20,4 +20,3 @@ dependencies:
   - zlib=1.2.13
   - samtools=1.18
   - muscle=3.8.1551
-prefix: /home/bernt/miniforge3/envs/envadvntr
