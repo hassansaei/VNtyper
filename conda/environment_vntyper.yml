@@ -2,7 +2,7 @@ name: vntyper
 channels:
   - conda-forge
   - bioconda
-  - defaults
+  - nodefaults
 dependencies:
   - python=3.9.19
   - bioconda::bwa=0.7.18
@@ -23,4 +23,3 @@ dependencies:
   - igv-reports=1.13.0
   - plotly=5.24.0
   - openjdk=11.0.23
-prefix: /home/bernt/miniforge3/envs/vntyper

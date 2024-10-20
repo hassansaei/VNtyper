@@ -2,7 +2,7 @@ name: envadvntr
 channels:
   - conda-forge
   - bioconda
-  - defaults
+  - nodefaults
 dependencies:
   - python=2.7.15
   - setuptools=44.0.0
