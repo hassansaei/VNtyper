@@ -39,16 +39,13 @@ RUN conda run -n vntyper pip install .
 RUN mamba env create -f conda/environment_envadvntr.yml && \
     conda clean -afy
 
-# Install adVNTR in the envadvntr environment
-RUN source /opt/conda/etc/profile.d/conda.sh && \
-    conda activate envadvntr && \
-    bash dependencies/install_advntr.sh -d /opt/vntyper/dependencies/adVNTR -o
-
 # Make the adVNTR installation script executable
-RUN chmod +x /opt/vntyper/dependencies/install_advntr.sh
+RUN chmod +x vntyper/dependencies/advntr/install_advntr.sh
 
-# Clean up conda caches to reduce image size
-RUN conda clean -afy
+# Install adVNTR in the envadvntr environment
+RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
+    conda activate envadvntr && \
+    bash vntyper/dependencies/advntr/install_advntr.sh"
 
 # Create a non-root user for running the application
 RUN useradd -m appuser
