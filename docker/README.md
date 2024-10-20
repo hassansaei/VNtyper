@@ -22,10 +22,9 @@ If you wish to use a configuration file, save the provided JSON content into con
 4. **Build the Docker Image:**
 
    ```bash
-    docker build --build-arg REPO_URL=https://github.com/berntpopp/VNtyper.git \
+    docker build --pull --no-cache --build-arg REPO_URL=https://github.com/berntpopp/VNtyper.git \
                 --build-arg REPO_DIR=/opt/vntyper \
-                -t vntyper:2.0.0-alpha.5 . \
-                --no-cache
+                -t vntyper:2.0.0-alpha.5 .
    ```
 
 ## **Running the Docker Container**
@@ -34,5 +33,5 @@ If you wish to use a configuration file, save the provided JSON content into con
 Display VNtyper help:
 
    ```bash
-   docker run --rm vntyper:2.0.0-alpha.5 --help
+   docker run --rm vntyper:2.0.0-alpha.6 --help
    ```

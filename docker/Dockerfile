@@ -1,5 +1,5 @@
-# Use Miniforge3 as the base image from conda-forge
-FROM condaforge/miniforge3:latest
+# Use a specific Miniforge3 version for reproducibility
+FROM condaforge/miniforge3:4.12.0-0
 
 # Set environment variables to prevent interactive prompts during installations
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -53,3 +53,7 @@ USER appuser
 
 # Define the entry point to use vntyper as the default command
 ENTRYPOINT ["/opt/conda/bin/conda", "run", "-n", "vntyper", "vntyper"]
+
+# Add HEALTHCHECK to ensure the container is running correctly
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD ["vntyper", "--version"] || exit 1
