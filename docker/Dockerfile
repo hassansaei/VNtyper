@@ -29,7 +29,7 @@ RUN git clone ${REPO_URL} ${REPO_DIR}
 WORKDIR ${REPO_DIR}
 
 # Create the vntyper environment from the environment.yml
-RUN mamba env update --name base --file conda/environment_vntyper.yml --prune && \
+RUN mamba env create -f conda/environment_vntyper.yml && \
     conda clean -afy
 
 # Install vntyper using setup.py within the vntyper environment
