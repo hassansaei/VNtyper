@@ -101,12 +101,6 @@ cd "$INSTALL_DIR"
 echo "Installing adVNTR..."
 python setup.py install
 
-# Download the reference VNTRs
-echo "Downloading reference VNTRs..."
-wget -O vntr_data_recommended_loci.zip "$REFERENCE_VNTR_URL"
-unzip -o vntr_data_recommended_loci.zip
-rm vntr_data_recommended_loci.zip
-
 echo "adVNTR installation completed successfully in $INSTALL_DIR."
 
 # Provide usage instructions
