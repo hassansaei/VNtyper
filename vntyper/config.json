@@ -15,7 +15,7 @@
     "samtools": "samtools",
     "bwa": "bwa",
     "advntr": "mamba run -n envadvntr advntr",
-    "kestrel": "/home/bernt/tools/kestrel/kestrel-1.0.1/kestrel.jar",
+    "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
     "java_path": "/usr/bin/java"
   },
   "bam_processing": {

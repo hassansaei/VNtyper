@@ -132,7 +132,7 @@ def run_kestrel(vcf_path, output_dir, fastq_1, fastq_2, reference_vntr, kestrel_
 
     kestrel_settings = kestrel_config.get("kestrel_settings", {})
     java_path = kestrel_settings.get("java_path", "java")
-    java_memory = kestrel_settings.get("java_memory", "15g")
+    java_memory = kestrel_settings.get("java_memory", "12g")
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20])
     max_align_states = kestrel_settings.get("max_align_states", 30)
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
