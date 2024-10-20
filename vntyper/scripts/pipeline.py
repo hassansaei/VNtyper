@@ -9,11 +9,13 @@ from pathlib import Path
 
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.fastq_bam_processing import process_bam_to_fastq, process_fastq
-from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
-from vntyper.scripts.utils import (create_output_directories, get_tool_versions,
-                                   load_config, setup_logging)
+from vntyper.scripts.utils import (
+    create_output_directories,
+    get_tool_versions,
+    setup_logging,
+)
 from vntyper.version import __version__ as VERSION
 
 
@@ -33,7 +35,7 @@ def run_pipeline(
     delete_intermediates=False,
     archive_results=False,
     archive_format='zip',
-    log_level=logging.INFO
+    log_level=logging.INFO,
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -102,20 +104,36 @@ def run_pipeline(
 
         # Determine if intermediates should be deleted
         delete_intermediates = delete_intermediates or not keep_intermediates
-        logging.debug(f"delete_intermediates: {delete_intermediates}, keep_intermediates: {keep_intermediates}")
+        logging.debug(
+            f"delete_intermediates: {delete_intermediates}, keep_intermediates: {keep_intermediates}"
+        )
 
         # FASTQ Quality Control or BAM Processing
         if fastq1 and fastq2:
             # Process raw FASTQ files if provided
             logging.info("Starting FASTQ quality control.")
-            process_fastq(fastq1, fastq2, threads, dirs['fastq_bam_processing'], "output", config)
+            process_fastq(
+                fastq1,
+                fastq2,
+                threads,
+                dirs['fastq_bam_processing'],
+                "output",
+                config,
+            )
             logging.info("FASTQ quality control completed.")
         elif bam:
             # Convert BAM to FASTQ
             logging.info("Starting BAM to FASTQ conversion.")
-            fastq1, fastq2, fastq_other, fastq_single = process_bam_to_fastq(
-                bam, dirs['fastq_bam_processing'], "output", threads, config, reference_assembly,
-                fast_mode, delete_intermediates, keep_intermediates
+            fastq1, fastq2, _, _ = process_bam_to_fastq(
+                bam,
+                dirs['fastq_bam_processing'],
+                "output",
+                threads,
+                config,
+                reference_assembly,
+                fast_mode,
+                delete_intermediates,
+                keep_intermediates,
             )
 
             if not fastq1 or not fastq2:
@@ -140,12 +158,22 @@ def run_pipeline(
         if fastq1 and fastq2:
             # Run Kestrel genotyping with the provided FASTQ files
             run_kestrel(
-                vcf_path, dirs['kestrel'], fastq1, fastq2, reference_vntr,
-                kestrel_path, config, log_level=log_level
+                vcf_path,
+                dirs['kestrel'],
+                fastq1,
+                fastq2,
+                reference_vntr,
+                kestrel_path,
+                config,
+                log_level=log_level,
             )
         else:
-            logging.error("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
-            raise ValueError("FASTQ files are required for Kestrel genotyping, but none were provided or generated.")
+            logging.error(
+                "FASTQ files are required for Kestrel genotyping, but none were provided or generated."
+            )
+            raise ValueError(
+                "FASTQ files are required for Kestrel genotyping, but none were provided or generated."
+            )
 
         logging.info("Kestrel genotyping completed.")
 
@@ -154,7 +182,9 @@ def run_pipeline(
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
                 from vntyper.modules.advntr.advntr_genotyping import (
-                    load_advntr_config, process_advntr_output, run_advntr
+                    load_advntr_config,
+                    process_advntr_output,
+                    run_advntr,
                 )
             except ImportError as e:
                 logging.error(f"adVNTR module is not installed or failed to import: {e}")
@@ -168,15 +198,23 @@ def run_pipeline(
             advntr_reference = module_args['advntr'].get('advntr_reference')
             if not advntr_reference:
                 if reference_assembly == "hg19":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
+                    advntr_reference = config.get("reference_data", {}).get(
+                        "advntr_reference_vntr_hg19"
+                    )
                 else:
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
+                    advntr_reference = config.get("reference_data", {}).get(
+                        "advntr_reference_vntr_hg38"
+                    )
             else:
                 # Fetch the advntr reference file path from config based on the specified assembly
                 if advntr_reference == "hg19":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
+                    advntr_reference = config.get("reference_data", {}).get(
+                        "advntr_reference_vntr_hg19"
+                    )
                 elif advntr_reference == "hg38":
-                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
+                    advntr_reference = config.get("reference_data", {}).get(
+                        "advntr_reference_vntr_hg38"
+                    )
                 else:
                     logging.error(f"Invalid advntr_reference specified: {advntr_reference}")
                     raise ValueError(f"Invalid advntr_reference specified: {advntr_reference}")
@@ -191,8 +229,13 @@ def run_pipeline(
             if fastq1 and fastq2:
                 # Align and sort the FASTQ files to generate a BAM file for adVNTR
                 sorted_bam = align_and_sort_fastq(
-                    fastq1, fastq2, bwa_reference,
-                    dirs['alignment_processing'], "output", threads, config
+                    fastq1,
+                    fastq2,
+                    bwa_reference,
+                    dirs['alignment_processing'],
+                    "output",
+                    threads,
+                    config,
                 )
                 logging.debug(f"Sorted BAM path: {sorted_bam}")
             elif bam:
@@ -203,7 +246,13 @@ def run_pipeline(
             if sorted_bam:
                 # Run adVNTR genotyping with the sorted BAM file
                 logging.info(f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}")
-                run_advntr(advntr_reference, sorted_bam, dirs['advntr'], "output", config)
+                run_advntr(
+                    advntr_reference,
+                    sorted_bam,
+                    dirs['advntr'],
+                    "output",
+                    config,
+                )
 
                 # Process adVNTR output
                 output_format = advntr_settings.get("output_format", "tsv")
@@ -212,8 +261,12 @@ def run_pipeline(
                 process_advntr_output(output_path, dirs['advntr'], "output")
                 logging.info("adVNTR genotyping completed.")
             else:
-                logging.error("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
-                raise ValueError("Sorted BAM file required for adVNTR genotyping was not generated or provided.")
+                logging.error(
+                    "Sorted BAM file required for adVNTR genotyping was not generated or provided."
+                )
+                raise ValueError(
+                    "Sorted BAM file required for adVNTR genotyping was not generated or provided."
+                )
         else:
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
@@ -231,7 +284,7 @@ def run_pipeline(
             fasta_file=fasta_reference,
             flanking=50,
             input_files=input_files,
-            pipeline_version=VERSION
+            pipeline_version=VERSION,
         )
         logging.info(f"Summary report generated: {report_file}")
 
@@ -253,7 +306,7 @@ def run_pipeline(
                     base_name=archive_name,
                     format=fmt,
                     root_dir=output_dir,
-                    base_dir='.'
+                    base_dir='.',
                 )
                 logging.info(f"Results folder archived at: {archive_path}")
             except Exception as e:
