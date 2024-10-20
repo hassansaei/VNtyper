@@ -1,9 +1,12 @@
+# vntyper/scripts/utils.py
+
 import os
 import json
 import logging
-import subprocess
 import shlex
-import subprocess as sp
+import subprocess
+import importlib.resources as pkg_resources
+
 
 def run_command(command, log_file, critical=False):
     """
@@ -19,10 +22,13 @@ def run_command(command, log_file, critical=False):
     """
     logging.info(f"Running command: {command}")
     with open(log_file, "w") as lf:
-        process = sp.Popen(command, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        process = subprocess.Popen(
+            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        )
         for line in process.stdout:
-            lf.write(line.decode())
-            logging.info(line.decode().strip())
+            decoded_line = line.decode()
+            lf.write(decoded_line)
+            logging.info(decoded_line.strip())
         process.wait()
 
         if process.returncode != 0:
@@ -32,25 +38,45 @@ def run_command(command, log_file, critical=False):
             return False
     return True
 
+
 def setup_logging(log_level=logging.INFO, log_file=None):
+    """
+    Sets up logging for the application.
+
+    Args:
+        log_level (int): Logging level (e.g., logging.INFO).
+        log_file (str, optional): Path to a log file. If None, logs are printed to console.
+    """
     logger = logging.getLogger()  # Get the root logger
     logger.setLevel(log_level)  # Set the overall logging level
-    
+
     if logger.hasHandlers():
         logger.handlers.clear()
-    
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    
+
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-    
+
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
+
 def create_output_directories(base_output_dir):
+    """
+    Creates necessary output directories for the pipeline.
+
+    Args:
+        base_output_dir (str): Base directory for output files.
+
+    Returns:
+        dict: A dictionary mapping directory names to their paths.
+    """
     dirs = {
         "base": base_output_dir,
         "kestrel": os.path.join(base_output_dir, "kestrel"),
@@ -58,7 +84,7 @@ def create_output_directories(base_output_dir):
         "fastq_bam_processing": os.path.join(base_output_dir, "fastq_bam_processing"),
         "alignment_processing": os.path.join(base_output_dir, "alignment_processing"),
     }
-    
+
     for dir_path in dirs.values():
         try:
             if not os.path.exists(dir_path):
@@ -72,14 +98,15 @@ def create_output_directories(base_output_dir):
 
     return dirs
 
+
 def get_tool_version(command, version_flag):
     """
     Runs a command to get the version of a tool and returns the parsed version string.
-    
+
     Args:
         command (str): The command to run (e.g., "fastp").
         version_flag (str): The flag or argument to pass to the command to get its version (e.g., "-v").
-    
+
     Returns:
         str: The parsed version string or 'unknown' if parsing fails.
     """
@@ -88,29 +115,42 @@ def get_tool_version(command, version_flag):
         full_command = shlex.split(command) + shlex.split(version_flag)
         result = subprocess.run(full_command, capture_output=True, text=True)
         output = result.stdout.strip() or result.stderr.strip()
-        
+
         # Parse version from the output based on the command
         if command.startswith("fastp"):
-            return output.split("\n")[1].split(" ")[1] if "fastp" in output else "unknown"
+            if "fastp" in output:
+                return output.split("\n")[1].split(" ")[1]
+            else:
+                return "unknown"
         elif command.startswith("samtools"):
-            return output.split("\n")[1].split(" ")[1] if "samtools" in output else "unknown"
+            if "samtools" in output:
+                return output.split("\n")[1].split(" ")[1]
+            else:
+                return "unknown"
         elif command.startswith("bwa"):
-            # Capture the third line which contains the version info
+            # Capture the second line which contains the version info
             lines = output.split("\n")
-            return lines[1].split(": ")[1] if len(lines) >= 3 and "Version" in lines[1] else "unknown"
+            if len(lines) >= 2 and "Version" in lines[1]:
+                return lines[1].split(": ")[1]
+            else:
+                return "unknown"
         elif "advntr" in command:
-            # Capture the third line which contains the version info
             lines = output.split("\n")
-            return lines[2].split(": ")[0].split(" ")[1] if len(lines) >= 3 and "adVNTR" in lines[2] else "unknown"
+            if len(lines) >= 3 and "adVNTR" in lines[2]:
+                return lines[2].split(": ")[0].split(" ")[1]
+            else:
+                return "unknown"
         elif "java" in command and "kestrel" in command:
             # Handle Kestrel version parsing (Java + JAR execution)
-            # get the last line of the output
-            return output.split("\n")[-1].split(": ")[1] if "kestrel" in output else "unknown"
+            if "kestrel" in output:
+                return output.split("\n")[-1].split(": ")[1]
+            else:
+                return "unknown"
         elif command.startswith("/usr/bin/java"):  # Handling java_path case
             return output.split("\n")[0]  # Return the first line of the Java version output
         else:
             return "unknown"
-    
+
     except FileNotFoundError:
         logging.error(f"Command not found: {command}")
         return "unknown"
@@ -123,6 +163,7 @@ def get_tool_version(command, version_flag):
     except Exception as e:
         logging.error(f"Failed to get version for {command}: {e}")
         return "unknown"
+
 
 def get_tool_versions(config):
     """
@@ -144,21 +185,33 @@ def get_tool_versions(config):
         "bwa": "",
         "advntr": "",
         "java_path": "--version",
-        "kestrel": "-jar \"{kestrel_path}\" -h".format(
-            kestrel_path=config["tools"]["kestrel"],
-        )
+        "kestrel": '-jar "{kestrel_path}" -h'.format(
+            kestrel_path=config["tools"].get("kestrel", ""),
+        ),
     }
 
     for tool, command in tools.items():
         version_flag = version_commands.get(tool, "")
         # Special handling for kestrel as it needs the java_path in front
         if tool == "kestrel":
-            command = f"{tools['java_path']} {version_flag}"
+            command = f'{tools.get("java_path", "java")} {version_flag}'
         versions[tool] = get_tool_version(command, version_flag)
 
     return versions
 
+
 def search(regex: str, df, case=False):
+    """
+    Searches for a regex pattern in a DataFrame.
+
+    Args:
+        regex (str): The regex pattern to search for.
+        df (DataFrame): The pandas DataFrame to search.
+        case (bool): Whether the search should be case-sensitive.
+
+    Returns:
+        DataFrame: A DataFrame containing the rows where the pattern was found.
+    """
     logging.debug("Starting regex search in DataFrame.")
     try:
         textlikes = df.select_dtypes(include=[object, "object"])
@@ -173,23 +226,38 @@ def search(regex: str, df, case=False):
         logging.error(f"Error during regex search: {e}")
         raise
 
+
 def load_config(config_path=None):
-    if config_path is None:
-        logging.info("No config file path provided, proceeding without configuration.")
-        return None
+    """
+    Load the configuration file with fallback to the default package config.
 
-    if not os.path.exists(config_path):
-        logging.error(f"Config file not found: {config_path}")
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+    Args:
+        config_path (str or None): Path to the user-provided config file.
 
-    try:
-        with open(config_path, 'r') as config_file:
-            config = json.load(config_file)
-            logging.info(f"Configuration loaded from {config_path}")
-            return config
-    except json.JSONDecodeError as e:
-        logging.error(f"Error decoding JSON from the config file: {e}")
-        raise
-    except Exception as e:
-        logging.error(f"Unexpected error loading config file {config_path}: {e}")
-        raise
+    Returns:
+        dict: The loaded configuration dictionary.
+    """
+    if config_path is not None and os.path.exists(config_path):
+        # User provided a config path
+        try:
+            with open(config_path, 'r') as config_file:
+                config = json.load(config_file)
+                logging.info(f"Configuration loaded from {config_path}")
+                return config
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding JSON from the config file: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error loading config file {config_path}: {e}")
+            raise
+    else:
+        # No config path provided or file does not exist; use default config from package data
+        try:
+            with pkg_resources.open_text('vntyper', 'config.json') as f:
+                config = json.load(f)
+                logging.info("Loaded default config from package data.")
+                return config
+        except Exception as e:
+            logging.error("Error: Default config file not found in package data.")
+            logging.error(e)
+            sys.exit(1)

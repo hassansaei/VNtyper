@@ -47,7 +47,7 @@
         <h2>Kestrel Summary Plot</h2>
         <div class="plot">
             {% if interactive %}
-                {{ kestrel_plot_base64 | safe }}
+                {{ kestrel_plot_interactive | safe }}
             {% else %}
                 <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
             {% endif %}
@@ -61,7 +61,7 @@
         <h2>adVNTR Summary Plot</h2>
         <div class="plot">
             {% if interactive %}
-                {{ advntr_plot_base64 | safe }}
+                {{ advntr_plot_interactive | safe }}
             {% else %}
                 <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
             {% endif %}

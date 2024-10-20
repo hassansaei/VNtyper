@@ -4,6 +4,8 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+import json
+import importlib.resources as pkg_resources  # For accessing package data
 
 from vntyper.scripts.cohort_summary import aggregate_cohort
 from vntyper.scripts.fastq_bam_processing import (
@@ -13,8 +15,34 @@ from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.install_references import main as install_references_main
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.pipeline import run_pipeline
-from vntyper.scripts.utils import load_config, setup_logging
+from vntyper.scripts.utils import setup_logging
 from vntyper.version import __version__ as VERSION
+
+
+def load_config(config_path=None):
+    """
+    Load the configuration file with fallback to the default package config.
+
+    Args:
+        config_path (Path or None): Path to the user-provided config file.
+
+    Returns:
+        dict: The loaded configuration dictionary.
+    """
+    if config_path is not None and Path(config_path).exists():
+        # User provided a config path
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+    else:
+        # No config path provided or file does not exist; use default config from package data
+        try:
+            with pkg_resources.open_text('vntyper', 'config.json') as f:
+                config = json.load(f)
+        except Exception as e:
+            logging.error("Error: Default config file not found in package data.")
+            logging.error(e)
+            sys.exit(1)
+    return config
 
 
 def main():
@@ -43,6 +71,13 @@ def main():
         action='version',
         version=f'%(prog)s {VERSION}'
     )
+    parser.add_argument(
+        '--config-path',
+        type=Path,
+        default=None,
+        help="Path to the configuration file (config.json). If not provided, the default config will be used.",
+        required=False
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -50,13 +85,6 @@ def main():
     parser_pipeline = subparsers.add_parser(
         "pipeline",
         help="Run the full VNtyper pipeline."
-    )
-    parser_pipeline.add_argument(
-        '--config-path',
-        type=Path,
-        default="vntyper/config.json",
-        help="Path to the vntyper/config.json file",
-        required=False
     )
     parser_pipeline.add_argument(
         '-o', '--output-dir',
@@ -127,31 +155,32 @@ def main():
         default='zip',
         help="Format of the archive: 'zip' or 'tar.gz'. Default is 'zip'."
     )
+    # Added output_name argument
+    parser_pipeline.add_argument(
+        '-n', '--output-name',
+        type=str,
+        default="processed",
+        help="Base name for the output files."
+    )
 
     # Module-specific argument groups
     module_parsers = {}
-    module_parsers['advntr'] = parser_pipeline.add_argument_group(
-        'adVNTR Module Options'
-    )
-    module_parsers['advntr'].add_argument(
-        '--advntr-reference',
-        type=str,
-        choices=["hg19", "hg38"],
-        required=False,
-        help="Reference assembly for adVNTR genotyping (hg19 or hg38)."
-    )
+    if 'advntr' in sys.argv:
+        module_parsers['advntr'] = parser_pipeline.add_argument_group(
+            'adVNTR Module Options'
+        )
+        module_parsers['advntr'].add_argument(
+            '--advntr-reference',
+            type=str,
+            choices=["hg19", "hg38"],
+            required=False,
+            help="Reference assembly for adVNTR genotyping (hg19 or hg38)."
+        )
 
     # Subcommand for FASTQ processing
     parser_fastq = subparsers.add_parser(
         "fastq",
         help="Process FASTQ files."
-    )
-    parser_fastq.add_argument(
-        '--config-path',
-        type=Path,
-        default="vntyper/config.json",
-        help="Path to the vntyper/config.json file",
-        required=False
     )
     parser_fastq.add_argument(
         '-r1', '--fastq1',
@@ -176,18 +205,17 @@ def main():
         default="out",
         help="Output directory for processed FASTQ files."
     )
+    parser_fastq.add_argument(
+        '-n', '--output-name',
+        type=str,
+        default="processed",
+        help="Base name for the output FASTQ files."
+    )
 
     # Subcommand for BAM processing
     parser_bam = subparsers.add_parser(
         "bam",
         help="Process BAM files."
-    )
-    parser_bam.add_argument(
-        '--config-path',
-        type=Path,
-        default="vntyper/config.json",
-        help="Path to the vntyper/config.json file",
-        required=False
     )
     parser_bam.add_argument(
         '-a', '--alignment',
@@ -229,18 +257,17 @@ def main():
         action='store_true',
         help="Delete intermediate files after processing (overrides --keep-intermediates)."
     )
+    parser_bam.add_argument(
+        '-n', '--output-name',
+        type=str,
+        default="processed",
+        help="Base name for the output FASTQ files."
+    )
 
     # Subcommand for Kestrel genotyping
     parser_kestrel = subparsers.add_parser(
         "kestrel",
         help="Run Kestrel genotyping."
-    )
-    parser_kestrel.add_argument(
-        '--config-path',
-        type=Path,
-        default="vntyper/config.json",
-        help="Path to the vntyper/config.json file",
-        required=False
     )
     parser_kestrel.add_argument(
         '-r', '--reference-vntr',
@@ -276,13 +303,6 @@ def main():
         type=str,
         required=True,
         help="Output directory containing pipeline results."
-    )
-    parser_report.add_argument(
-        '--config-path',
-        type=Path,
-        default="vntyper/config.json",
-        help="Path to the vntyper/config.json file",
-        required=False
     )
     parser_report.add_argument(
         '--report-file',
@@ -335,13 +355,6 @@ def main():
         type=str,
         required=True,
         help="Output directory for the aggregated summary."
-    )
-    parser_cohort.add_argument(
-        '--config-path',
-        type=Path,
-        default="vntyper/config.json",
-        help="Path to the vntyper/config.json file",
-        required=False
     )
     parser_cohort.add_argument(
         '--summary-file',
@@ -400,20 +413,9 @@ def main():
         )
         sys.exit(0)
 
-    # Load config with error handling
-    config = {}
+    # Load configuration
     try:
-        if args.config_path and args.config_path.exists():
-            config = load_config(args.config_path)
-        else:
-            default_config_path = Path(__file__).parent / 'config.json'
-            if default_config_path.exists():
-                config = load_config(default_config_path)
-            else:
-                logging.error(
-                    f"Configuration file not found at {args.config_path}. "
-                    "Using default values where applicable."
-                )
+        config = load_config(args.config_path)
     except Exception as e:
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
@@ -468,17 +470,19 @@ def main():
 
     elif args.command == "fastq":
         process_fastq(
-            fastq1=args.fastq1,
-            fastq2=args.fastq2,
+            fastq_1=args.fastq1,
+            fastq_2=args.fastq2,
             threads=args.threads,
-            output_dir=Path(args.output_dir),
+            output=Path(args.output_dir),
+            output_name=args.output_name,
             config=config
         )
 
     elif args.command == "bam":
         process_bam_to_fastq(
-            bam=args.alignment,
-            output_dir=Path(args.output_dir),
+            in_bam=args.alignment,
+            output=Path(args.output_dir),
+            output_name=args.output_name,
             threads=args.threads,
             config=config,
             reference_assembly=args.reference_assembly,
@@ -509,6 +513,7 @@ def main():
             bam_file=args.bam_file,
             fasta_file=args.reference_fasta,
             flanking=args.flanking,
+            input_files={},  # You may need to populate this based on your pipeline
             pipeline_version=VERSION
         )
 
@@ -516,8 +521,8 @@ def main():
         aggregate_cohort(
             input_dirs=args.input_dirs,
             output_dir=Path(args.output_dir),
-            config_path=args.config_path,
-            summary_file=args.summary_file
+            summary_file=args.summary_file,
+            config=config
         )
 
     else:

@@ -1,13 +1,25 @@
-import pandas as pd
+# vntyper/scripts/generate_report.py
+
 import os
 import logging
-import json
 import subprocess
-from jinja2 import Environment, FileSystemLoader
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+from jinja2 import Environment, FileSystemLoader
+
+
 def load_kestrel_results(kestrel_result_file):
+    """
+    Load and process Kestrel genotyping results.
+
+    Args:
+        kestrel_result_file (str or Path): Path to the Kestrel result TSV file.
+
+    Returns:
+        pandas.DataFrame: Processed Kestrel results.
+    """
     logging.info(f"Loading Kestrel results from {kestrel_result_file}")
     if not os.path.exists(kestrel_result_file):
         logging.warning(f"Kestrel result file not found: {kestrel_result_file}")
@@ -33,17 +45,34 @@ def load_kestrel_results(kestrel_result_file):
 
         # Apply conditional styling to the Confidence column
         df['Confidence'] = df['Confidence'].apply(
-            lambda x: f'<span style="color:orange;font-weight:bold;">{x}</span>' if x == 'Low_Precision'
-            else f'<span style="color:red;font-weight:bold;">{x}</span>' if x == 'High_Precision'
-            else x
+            lambda x: (
+                f'<span style="color:orange;font-weight:bold;">{x}</span>'
+                if x == 'Low_Precision'
+                else f'<span style="color:red;font-weight:bold;">{x}</span>'
+                if x == 'High_Precision'
+                else x
+            )
         )
 
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
         return pd.DataFrame()
+    except Exception as e:
+        logging.error(f"Unexpected error loading Kestrel results: {e}")
+        return pd.DataFrame()
+
 
 def load_advntr_results(advntr_result_file):
+    """
+    Load and process adVNTR genotyping results.
+
+    Args:
+        advntr_result_file (str or Path): Path to the adVNTR result TSV file.
+
+    Returns:
+        tuple: (pandas.DataFrame, bool) Processed adVNTR results and availability flag.
+    """
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
@@ -55,8 +84,21 @@ def load_advntr_results(advntr_result_file):
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
         return pd.DataFrame(), False  # Return empty DataFrame and False flag
+    except Exception as e:
+        logging.error(f"Unexpected error loading adVNTR results: {e}")
+        return pd.DataFrame(), False  # Return empty DataFrame and False flag
+
 
 def load_pipeline_log(log_file):
+    """
+    Load the pipeline log content.
+
+    Args:
+        log_file (str or Path): Path to the pipeline log file.
+
+    Returns:
+        str: Content of the pipeline log or an error message.
+    """
     logging.info(f"Loading pipeline log from {log_file}")
     if not os.path.exists(log_file):
         logging.warning(f"Pipeline log file not found: {log_file}")
@@ -68,6 +110,7 @@ def load_pipeline_log(log_file):
     except Exception as e:
         logging.error(f"Failed to read pipeline log file: {e}")
         return "Failed to load pipeline log."
+
 
 def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
     """
@@ -101,10 +144,21 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
     except subprocess.CalledProcessError as e:
         logging.error(f"Error generating IGV report: {e}")
         raise
+    except Exception as e:
+        logging.error(f"Unexpected error generating IGV report: {e}")
+        raise
+
 
 def extract_igv_content(igv_report_html):
     """
-    Extracts the relevant content (variant table and IGV div) as well as the tableJson and sessionDictionary from the IGV report.
+    Extracts the relevant content (variant table and IGV div) as well as the tableJson and sessionDictionary
+    from the IGV report.
+
+    Args:
+        igv_report_html (str or Path): Path to the IGV report HTML file.
+
+    Returns:
+        tuple: (str, str, str) IGV content, tableJson, and sessionDictionary.
     """
     try:
         with open(igv_report_html, 'r') as f:
@@ -134,9 +188,23 @@ def extract_igv_content(igv_report_html):
     except FileNotFoundError:
         logging.error(f"IGV report file not found: {igv_report_html}")
         return "", "", ""
+    except Exception as e:
+        logging.error(f"Unexpected error extracting IGV content: {e}")
+        return "", "", ""
 
-def generate_summary_report(output_dir, template_dir, report_file, log_file, bed_file, bam_file,
-                            fasta_file, flanking=50, input_files=None, pipeline_version=None):
+
+def generate_summary_report(
+    output_dir,
+    template_dir,
+    report_file,
+    log_file,
+    bed_file,
+    bam_file,
+    fasta_file,
+    flanking=50,
+    input_files=None,
+    pipeline_version=None,
+):
     """
     Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
     and IGV alignment visualizations.
@@ -150,8 +218,9 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
         bam_file (str): Path to the BAM file for IGV reports.
         fasta_file (str): Path to the reference FASTA file for IGV reports.
         flanking (int): Size of the flanking region for IGV reports.
-        input_files (dict): Dictionary of input filenames (e.g., {'fastq1': 'sample_R1.fastq', 'fastq2': 'sample_R2.fastq'}).
-        pipeline_version (str): The version of the VNtyper pipeline.
+        input_files (dict, optional): Dictionary of input filenames
+            (e.g., {'fastq1': 'sample_R1.fastq', 'fastq2': 'sample_R2.fastq'}).
+        pipeline_version (str, optional): The version of the VNtyper pipeline.
     """
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
@@ -197,8 +266,13 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
     else:
         advntr_html = None  # Set to None if not available
 
+    # Set up Jinja2 environment
     env = Environment(loader=FileSystemLoader(template_dir))
-    template = env.get_template('report_template.html')
+    try:
+        template = env.get_template('report_template.html')
+    except Exception as e:
+        logging.error(f"Failed to load Jinja2 template: {e}")
+        raise
 
     # Prepare context for the template
     context = {
@@ -210,15 +284,23 @@ def generate_summary_report(output_dir, template_dir, report_file, log_file, bed
         'table_json': table_json,
         'session_dictionary': session_dictionary,
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'input_files': input_files,               # New
-        'pipeline_version': pipeline_version      # New
+        'input_files': input_files or {},         # Ensure it's a dict
+        'pipeline_version': pipeline_version or "unknown",  # Default if not provided
     }
 
     # Render the template with the context
-    rendered_html = template.render(context)
+    try:
+        rendered_html = template.render(context)
+    except Exception as e:
+        logging.error(f"Failed to render the report template: {e}")
+        raise
 
+    # Write the rendered HTML to the report file
     report_file_path = Path(output_dir) / report_file
-    with open(report_file_path, 'w') as f:
-        f.write(rendered_html)
-
-    logging.info(f"Summary report generated and saved to {report_file_path}")
+    try:
+        with open(report_file_path, 'w') as f:
+            f.write(rendered_html)
+        logging.info(f"Summary report generated and saved to {report_file_path}")
+    except Exception as e:
+        logging.error(f"Failed to write the summary report: {e}")
+        raise
