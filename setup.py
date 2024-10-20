@@ -30,7 +30,6 @@ setup(
         "regex>=2024.7.24",
         "biopython>=1.84",
         "setuptools>=72.2.0",
-        "pysam>=0.22.1",
     ],
     entry_points={
         "console_scripts": [
