@@ -16,7 +16,7 @@
     "bwa": "bwa",
     "advntr": "mamba run -n envadvntr advntr",
     "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
-    "java_path": "/usr/bin/java"
+    "java_path": "java"
   },
   "bam_processing": {
     "bam_region_hg19": "chr1:155158000-155163000",
