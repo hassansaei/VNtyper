@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Update and install necessary system packages
 RUN apt-get update && \
-    apt-get install -y build-essential git jq wget unzip && \
+    apt-get install -y build-essential git jq wget unzip zip && \
     rm -rf /var/lib/apt/lists/*
 
 # Install mamba for faster conda package installation
@@ -32,8 +32,8 @@ RUN git clone ${REPO_URL} ${REPO_DIR}
 WORKDIR ${REPO_DIR}
 
 # Copy VNtyper core code and environment files
-COPY conda/environment_vntyper.yml /tmp/environment_vntyper.yml
-COPY conda/environment_envadvntr.yml /tmp/environment_envadvntr.yml
+RUN cp conda/environment_vntyper.yml /tmp/environment_vntyper.yml && \
+    cp conda/environment_envadvntr.yml /tmp/environment_envadvntr.yml
 
 # Create and install conda environments
 RUN mamba env create -f /tmp/environment_vntyper.yml && \
@@ -59,23 +59,28 @@ RUN conda run -n vntyper vntyper install-references \
     --skip-indexing
 
 # Install FastAPI and Uvicorn for web service
-RUN conda run -n vntyper pip install fastapi uvicorn[standard] redis celery
+RUN conda run -n vntyper pip install fastapi uvicorn[standard] redis celery python-multipart
 
-# Set up default input and output directories
-RUN mkdir -p /opt/vntyper/input /opt/vntyper/output
+# Set up default input, output, and reference directories
+RUN mkdir -p $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR
+
+# Create a non-root user for running the application
+RUN useradd -m appuser
 
 # Set up entrypoint
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN cp docker/entrypoint.sh /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
 
 # Copy FastAPI app code to the container
-COPY docker/app /opt/vntyper/app
+RUN cp -r docker/app /opt/vntyper/app
+
+# Set ownership of directories and app to appuser
+RUN chown -R appuser:appuser $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR /opt/vntyper/app
 
 # Expose FastAPI port
 EXPOSE 8000
 
 # Switch to a non-root user
-RUN useradd -m appuser
 USER appuser
 
 # Define the entry point to either run VNtyper or start the FastAPI server
