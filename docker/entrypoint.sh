@@ -1,19 +1,10 @@
 #!/bin/bash
 set -e
 
-# Initialize conda
-source /opt/conda/etc/profile.d/conda.sh
-
-# Determine which command to run based on the first argument
+# If the first argument is 'vntyper', execute VNtyper locally
 if [ "$1" = "vntyper" ]; then
-    # Activate the vntyper environment and execute the command
-    conda activate vntyper
-    exec vntyper "${@:2}"
-elif [ "$1" = "advntr" ]; then
-    # Activate the envadvntr environment and execute the command
-    conda activate envadvntr
-    exec advntr "${@:2}"
+  exec conda run -n vntyper "$@"
 else
-    # If the command is not recognized, execute it directly
-    exec "$@"
+  # Otherwise, start the FastAPI web service
+  exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 fi

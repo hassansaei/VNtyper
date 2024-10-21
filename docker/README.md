@@ -24,7 +24,7 @@ If you wish to use a configuration file, save the provided JSON content into con
    ```bash
     docker build --pull --no-cache --build-arg REPO_URL=https://github.com/berntpopp/VNtyper.git \
                 --build-arg REPO_DIR=/opt/vntyper \
-                -t vntyper:2.0.0-alpha.5 .
+                -t vntyper:2.0.0-alpha.6 .
    ```
 
 ## **Running the Docker Container**
