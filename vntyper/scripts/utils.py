@@ -146,7 +146,7 @@ def get_tool_version(command, version_flag):
                 return output.split("\n")[-1].split(": ")[1]
             else:
                 return "unknown"
-        elif command.startswith("/usr/bin/java"):  # Handling java_path case
+        elif command.startswith("java"):  # Handling java_path case
             return output.split("\n")[0]  # Return the first line of the Java version output
         else:
             return "unknown"
