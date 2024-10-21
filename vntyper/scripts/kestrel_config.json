@@ -4,7 +4,7 @@
     "kmer_sizes": [20],
     "max_align_states": 30,
     "max_hap_states": 30,
-    "java_path": "/usr/bin/java"
+    "java_path": "java"
   },
   "frame_score_filtering": {
     "replace_value": "C",
