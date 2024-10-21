@@ -1,7 +1,0 @@
-{
-    "repo_url": "https://github.com/berntpopp/VNtyper.git",
-    "repo_dir": "/opt/vntyper",
-    "input_dir": "/data/input",
-    "output_dir": "/data/output",
-    "config_path": "/data/config/config.json"
-}
