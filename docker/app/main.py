@@ -17,6 +17,11 @@ app = FastAPI(
 
 logger = logging.getLogger(__name__)
 
+# Environment variables for default directories
+DEFAULT_INPUT_DIR = os.getenv("DEFAULT_INPUT_DIR", "/opt/vntyper/input")
+DEFAULT_OUTPUT_DIR = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
+
+
 @app.post("/run-job/")
 async def run_vntyper(
     file: UploadFile = File(...),
@@ -61,6 +66,7 @@ async def run_vntyper(
     logger.info(f"Enqueued job {job_id}")
 
     return {"message": "Job submitted", "job_id": job_id}
+
 
 @app.get("/download/{job_id}")
 def download_result(job_id: str):
