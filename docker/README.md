@@ -22,9 +22,9 @@ A Docker container for **VNtyper**, enabling easy execution of the tool with cus
 4. **Build the Docker Image:**
 
    ```bash
-   docker build --build-arg REPO_URL=https://github.com/berntpopp/VNtyper.git \
+   docker build --no-cache --build-arg REPO_URL=https://github.com/berntpopp/VNtyper.git \
                --build-arg REPO_DIR=/opt/vntyper \
-               -t vntyper:2.0.0-alpha.6 .
+               -t vntyper:2.0.0-alpha.7 .
    ```
 
 ## **Running the Docker Container**
@@ -52,7 +52,7 @@ Start the FastAPI server by running the container:
 docker run -d -p 8000:8000 \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:2.0.0-alpha.6
+    vntyper:2.0.0-alpha.7
 ```
 
 #### **2. Submit a Job via API**
