@@ -1,4 +1,4 @@
-# VNtyper 2.0 - A Comprehensive Pipeline to Genotype MUC1-VNTR
+# VNtyper 2.0 - A Pipeline to genotype the MUC1-VNTR
 
 **VNtyper 2.0** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This version integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
 

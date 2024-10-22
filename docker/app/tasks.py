@@ -1,6 +1,6 @@
 # docker/app/tasks.py
 
-from celery_worker import celery_app
+from .celery_app import celery_app
 import subprocess
 import os
 import shutil
