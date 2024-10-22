@@ -24,7 +24,8 @@ DEFAULT_OUTPUT_DIR = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 
 @app.post("/run-job/")
 async def run_vntyper(
-    file: UploadFile = File(...),
+    bam_file: UploadFile = File(..., description="BAM file to process"),
+    bai_file: UploadFile = File(None, description="Optional BAI index file"),
     thread: int = Form(4),
     reference_assembly: str = Form("hg38"),
     fast_mode: bool = Form(False),
@@ -33,6 +34,7 @@ async def run_vntyper(
 ):
     """
     Endpoint to run VNtyper job with additional parameters.
+    Accepts a BAM file and an optional BAI index file.
     """
     logger.info("Received job submission")
     # Ensure input and output directories exist
@@ -47,15 +49,24 @@ async def run_vntyper(
     os.makedirs(job_input_dir, exist_ok=True)
     os.makedirs(job_output_dir, exist_ok=True)
 
-    # Save the uploaded file
-    file_path = os.path.join(job_input_dir, file.filename)
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    logger.info(f"Saved uploaded file to {file_path}")
+    # Save the uploaded BAM file
+    bam_path = os.path.join(job_input_dir, bam_file.filename)
+    with open(bam_path, "wb") as f:
+        shutil.copyfileobj(bam_file.file, f)
+    logger.info(f"Saved uploaded BAM file to {bam_path}")
+
+    # Save the uploaded BAI file if provided
+    if bai_file:
+        bai_path = os.path.join(job_input_dir, bai_file.filename)
+        with open(bai_path, "wb") as f:
+            shutil.copyfileobj(bai_file.file, f)
+        logger.info(f"Saved uploaded BAI file to {bai_path}")
+    else:
+        bai_path = None
 
     # Enqueue the Celery task
     run_vntyper_job.delay(
-        bam_path=file_path,
+        bam_path=bam_path,
         output_dir=job_output_dir,
         thread=thread,
         reference_assembly=reference_assembly,
@@ -84,3 +95,10 @@ def download_result(job_id: str):
         )
     logger.warning(f"File not found: {zip_path}")
     return {"error": "File not found"}
+
+@app.get("/health")
+def health_check():
+    """
+    Simple health check endpoint.
+    """
+    return {"status": "ok"}

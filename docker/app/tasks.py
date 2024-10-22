@@ -22,6 +22,21 @@ def run_vntyper_job(
     Celery task to run VNtyper pipeline with parameters.
     """
     logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
+
+    # Ensure the BAM index (.bai) exists
+    bai_path = f"{bam_path}.bai"
+    if not os.path.exists(bai_path):
+        logger.info(f"BAI index not found for {bam_path}. Generating index.")
+        try:
+            subprocess.run(
+                ["samtools", "index", bam_path],
+                check=True
+            )
+            logger.info(f"Successfully generated BAI index at {bai_path}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error generating BAI index: {e}")
+            raise
+
     command = [
         "conda",
         "run",
