@@ -19,6 +19,7 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MAX_RESULT_AGE_DAYS=7  # Maximum age for result files in days
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
       - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
@@ -39,6 +40,26 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MAX_RESULT_AGE_DAYS=7
+    volumes:
+      - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
+      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
+    depends_on:
+      - redis
+    networks:
+      - vntyper_network
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vntyper_beat:2.0.0-alpha.7
+    container_name: vntyper_beat
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MAX_RESULT_AGE_DAYS=7
     volumes:
       - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
       - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output

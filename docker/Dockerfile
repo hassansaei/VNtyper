@@ -63,8 +63,8 @@ RUN conda run -n vntyper vntyper install-references \
     --config-path /opt/vntyper/config/config.json \
     --skip-indexing
 
-# Install FastAPI and Uvicorn for web service
-RUN conda run -n vntyper pip install fastapi uvicorn[standard] redis celery python-multipart
+# Install FastAPI, Uvicorn, Celery, Redis, and other dependencies
+RUN conda run -n vntyper pip install fastapi uvicorn[standard] redis celery python-multipart samtools
 
 # Set up default input, output, and reference directories
 RUN mkdir -p $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR
@@ -88,9 +88,9 @@ EXPOSE 8000
 # Switch to a non-root user
 USER appuser
 
-# Define the entry point to either run VNtyper or start the FastAPI server
+# Define the entry point to either run VNtyper, Celery worker, Celery Beat, or start the FastAPI server
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Add HEALTHCHECK to ensure the container is running correctly
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD ["vntyper", "--version"] || exit 1
+  CMD ["samtools", "--version"] || exit 1
