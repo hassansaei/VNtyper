@@ -64,7 +64,7 @@ RUN conda run -n vntyper vntyper install-references \
     --skip-indexing
 
 # Install FastAPI, Uvicorn, Celery, Redis, and other dependencies
-RUN conda run -n vntyper pip install fastapi uvicorn[standard] redis celery python-multipart samtools
+RUN conda run -n vntyper pip install fastapi uvicorn[standard] redis celery python-multipart
 
 # Set up default input, output, and reference directories
 RUN mkdir -p $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR
