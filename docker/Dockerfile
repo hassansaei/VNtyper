@@ -9,10 +9,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DEFAULT_OUTPUT_DIR=/opt/vntyper/output \
     REFERENCE_DIR=/opt/vntyper/references
 
-# Update and install necessary system packages
+# Update and install necessary system packages in a single RUN command to reduce layers
 RUN apt-get update && \
-    apt-get install -y build-essential git jq wget unzip zip && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        wget \
+        unzip \
+        zip \
+        && rm -rf /var/lib/apt/lists/*
 
 # Install mamba for faster conda package installation
 RUN conda install -y mamba -n base -c conda-forge
@@ -31,7 +36,7 @@ RUN git clone ${REPO_URL} ${REPO_DIR}
 # Set the working directory
 WORKDIR ${REPO_DIR}
 
-# Copy VNtyper core code and environment files
+# Copy VNtyper environment files using RUN cp
 RUN cp conda/environment_vntyper.yml /tmp/environment_vntyper.yml && \
     cp conda/environment_envadvntr.yml /tmp/environment_envadvntr.yml
 
@@ -67,11 +72,11 @@ RUN mkdir -p $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR
 # Create a non-root user for running the application
 RUN useradd -m appuser
 
-# Set up entrypoint
+# Set up entrypoint using RUN cp commands instead of COPY
 RUN cp docker/entrypoint.sh /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
-# Copy FastAPI app code to the container
+# Copy FastAPI app code to the container using RUN cp
 RUN cp -r docker/app /opt/vntyper/app
 
 # Set ownership of directories and app to appuser
