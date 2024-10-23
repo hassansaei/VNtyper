@@ -1,6 +1,6 @@
-# docker/app/main.py
+# backend/docker/app/main.py
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from uuid import uuid4
 import os
@@ -9,6 +9,9 @@ import shutil
 import logging
 
 from .config import settings
+
+from celery.result import AsyncResult
+import redis
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,6 +24,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_INPUT_DIR = os.getenv("DEFAULT_INPUT_DIR", "/opt/vntyper/input")
 DEFAULT_OUTPUT_DIR = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 
+# Redis configuration for job_id to task_id mapping
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Use a separate DB to avoid conflicts
+
+# Initialize Redis client
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
 @app.post("/run-job/")
 async def run_vntyper(
@@ -65,7 +75,7 @@ async def run_vntyper(
         bai_path = None
 
     # Enqueue the Celery task
-    run_vntyper_job.delay(
+    task = run_vntyper_job.delay(
         bam_path=bam_path,
         output_dir=job_output_dir,
         thread=thread,
@@ -74,10 +84,40 @@ async def run_vntyper(
         keep_intermediates=keep_intermediates,
         archive_results=archive_results
     )
-    logger.info(f"Enqueued job {job_id}")
+    logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+
+    # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
+    redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
 
     return {"message": "Job submitted", "job_id": job_id}
 
+@app.get("/job-status/{job_id}/")
+def get_job_status(job_id: str):
+    """
+    Endpoint to get the status of a job.
+    """
+    # Retrieve task ID from Redis using job_id
+    task_id = redis_client.get(job_id)
+    if not task_id:
+        logger.warning(f"Job ID {job_id} not found in Redis")
+        raise HTTPException(status_code=404, detail="Job ID not found")
+
+    # Get the task result using Celery's AsyncResult
+    task_result = AsyncResult(task_id)
+
+    status = task_result.status
+    logger.info(f"Job {job_id} (Task ID: {task_id}) status queried: {status}")
+
+    if status == 'PENDING':
+        return {"job_id": job_id, "status": "pending"}
+    elif status == 'STARTED':
+        return {"job_id": job_id, "status": "started"}
+    elif status == 'SUCCESS':
+        return {"job_id": job_id, "status": "completed"}
+    elif status == 'FAILURE':
+        return {"job_id": job_id, "status": "failed", "error": str(task_result.info)}
+    else:
+        return {"job_id": job_id, "status": status}
 
 @app.get("/download/{job_id}")
 def download_result(job_id: str):
@@ -94,7 +134,7 @@ def download_result(job_id: str):
             filename=f"{job_id}.zip"
         )
     logger.warning(f"File not found: {zip_path}")
-    return {"error": "File not found"}
+    raise HTTPException(status_code=404, detail="File not found")
 
 @app.get("/health")
 def health_check():
