@@ -93,5 +93,5 @@ USER appuser
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Add HEALTHCHECK to ensure the container is running correctly
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl -f http://localhost:8000/health/ || exit 1
+# HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+#   CMD curl -f http://localhost:8000/health/ || exit 1
