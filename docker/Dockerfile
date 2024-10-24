@@ -47,7 +47,7 @@ RUN mamba env create -f /tmp/environment_vntyper.yml && \
     rm /tmp/environment_vntyper.yml /tmp/environment_envadvntr.yml
 
 # Install VNtyper using setup.py within the vntyper environment
-RUN conda run -n vntyper pip install .
+RUN conda run -n vntyper pip install .(vntyper), so it would be best to repalce it with another available check 
 
 # Make adVNTR installation script executable
 RUN chmod +x vntyper/dependencies/advntr/install_advntr.sh
@@ -93,4 +93,4 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Add HEALTHCHECK to ensure the container is running correctly
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD ["samtools", "--version"] || exit 1
+  CMD ["conda", "--version"] || exit 1
