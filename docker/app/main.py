@@ -1,6 +1,6 @@
 # backend/docker/app/main.py
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from uuid import uuid4
 import os
@@ -27,12 +27,15 @@ DEFAULT_OUTPUT_DIR = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 # Redis configuration for job_id to task_id mapping
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Use a separate DB to avoid conflicts
+REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Use DB 1 for job mappings
 
 # Initialize Redis client
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
-@app.post("/run-job/")
+# Initialize APIRouter with /api prefix
+router = APIRouter(prefix="/api")
+
+@router.post("/run-job/")
 async def run_vntyper(
     bam_file: UploadFile = File(..., description="BAM file to process"),
     bai_file: UploadFile = File(None, description="Optional BAI index file"),
@@ -91,7 +94,7 @@ async def run_vntyper(
 
     return {"message": "Job submitted", "job_id": job_id}
 
-@app.get("/job-status/{job_id}/")
+@router.get("/job-status/{job_id}/")
 def get_job_status(job_id: str):
     """
     Endpoint to get the status of a job.
@@ -119,7 +122,7 @@ def get_job_status(job_id: str):
     else:
         return {"job_id": job_id, "status": status}
 
-@app.get("/download/{job_id}")
+@router.get("/download/{job_id}/")
 def download_result(job_id: str):
     """
     Endpoint to download the result (zipped file).
@@ -136,9 +139,12 @@ def download_result(job_id: str):
     logger.warning(f"File not found: {zip_path}")
     raise HTTPException(status_code=404, detail="File not found")
 
-@app.get("/health")
+@router.get("/health/")
 def health_check():
     """
     Simple health check endpoint.
     """
     return {"status": "ok"}
+
+# Include the router in the FastAPI app
+app.include_router(router)
