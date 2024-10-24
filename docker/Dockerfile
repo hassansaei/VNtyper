@@ -17,6 +17,7 @@ RUN apt-get update && \
         wget \
         unzip \
         zip \
+        curl \
         && rm -rf /var/lib/apt/lists/*
 
 # Install mamba for faster conda package installation
