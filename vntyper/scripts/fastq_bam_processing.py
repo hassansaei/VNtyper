@@ -247,3 +247,52 @@ def process_bam_to_fastq(
         str(final_fastq_other),
         str(final_fastq_single),
     )
+
+
+def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, output_name):
+    """
+    Calculate the mean coverage over the VNTR region using samtools depth.
+
+    Args:
+        bam_file (str or Path): Path to the BAM file.
+        region (str): Genomic region in 'chr:start-end' format.
+        threads (int): Number of threads to use.
+        config (dict): Configuration dictionary containing tool paths.
+        output_dir (str or Path): Directory to store the coverage log.
+        output_name (str): Base name for the coverage log file.
+
+    Returns:
+        float: Mean coverage over the VNTR region.
+
+    Raises:
+        RuntimeError: If coverage calculation fails.
+    """
+    samtools_path = config["tools"]["samtools"]
+
+    # Define coverage output file
+    coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
+
+    # Construct the samtools depth command
+    depth_command = (
+        f"{samtools_path} depth -@ {threads} -r {region} {bam_file} > {coverage_output}"
+    )
+
+    logging.info(f"Calculating VNTR coverage with command: {depth_command}")
+
+    success = run_command(
+        str(depth_command), str(coverage_output.with_suffix('.depth.log')), critical=True
+    )
+    if not success:
+        logging.error("VNTR coverage calculation failed.")
+        raise RuntimeError("VNTR coverage calculation failed.")
+
+    # Read the coverage output and calculate mean coverage
+    try:
+        with open(coverage_output, 'r') as f:
+            coverage_values = [int(line.strip().split('\t')[2]) for line in f if line.strip()]
+        mean_coverage = sum(coverage_values) / len(coverage_values) if coverage_values else 0
+        logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
+        return mean_coverage
+    except Exception as e:
+        logging.error(f"Error calculating mean coverage: {e}")
+        raise RuntimeError(f"Error calculating mean coverage: {e}")

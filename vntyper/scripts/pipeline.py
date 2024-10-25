@@ -10,7 +10,8 @@ from pathlib import Path
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.fastq_bam_processing import (
     process_bam_to_fastq,
-    process_fastq
+    process_fastq,
+    calculate_vntr_coverage  # Newly added import
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
@@ -223,6 +224,32 @@ def run_pipeline(
                 )
 
         # ----------------------------
+        # Calculate VNTR Coverage
+        # ----------------------------
+        logging.info("Calculating mean coverage over the VNTR region.")
+        if bam:
+            input_bam = Path(bam)
+        else:
+            # Assuming the sliced BAM is stored as 'output_sliced.bam' in fastq_bam_processing directory
+            input_bam = dirs['fastq_bam_processing'] / "output_sliced.bam"
+
+        # Determine VNTR region based on reference assembly
+        if reference_assembly == "hg38":
+            vntr_region = config["bam_processing"]["vntr_region_hg38"]
+        else:
+            vntr_region = config["bam_processing"]["vntr_region_hg19"]
+
+        # Calculate mean coverage
+        mean_coverage = calculate_vntr_coverage(
+            bam_file=str(input_bam),
+            region=vntr_region,
+            threads=threads,
+            config=config,
+            output_dir=dirs['coverage'],
+            output_name="coverage"
+        )
+
+        # ----------------------------
         # Kestrel Genotyping
         # ----------------------------
         vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
@@ -369,6 +396,12 @@ def run_pipeline(
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
         # ----------------------------
+        # Calculate VNTR Coverage
+        # ----------------------------
+        # This section is now moved before Kestrel Genotyping in the above code
+        # If you prefer it after, you can relocate accordingly
+
+        # ----------------------------
         # Generate Summary Report
         # ----------------------------
         logging.info("Generating summary report.")
@@ -385,6 +418,7 @@ def run_pipeline(
             flanking=50,
             input_files=input_files,
             pipeline_version=VERSION,
+            mean_vntr_coverage=mean_coverage  # New argument
         )
         logging.info(f"Summary report generated: {report_file}")
 
