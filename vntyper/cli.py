@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
+import importlib.resources as pkg_resources  # For accessing package data
+import json
 import logging
 import sys
 from pathlib import Path
-import json
-import importlib.resources as pkg_resources  # For accessing package data
 
 from vntyper.scripts.cohort_summary import aggregate_cohort
 from vntyper.scripts.fastq_bam_processing import (
@@ -161,6 +161,22 @@ def main():
         type=str,
         default="processed",
         help="Base name for the output files."
+    )
+
+    # Mutually exclusive group for custom regions and BED file
+    region_group = parser_pipeline.add_mutually_exclusive_group()
+    region_group.add_argument(
+        '--custom-regions',
+        type=str,
+        help=(
+            "Define custom regions for MUC1 analysis as comma-separated values "
+            "(e.g., chr1:1000-2000,chr2:3000-4000)."
+        )
+    )
+    region_group.add_argument(
+        '--bed-file',
+        type=Path,
+        help="Path to a BED file specifying regions for MUC1 analysis."
     )
 
     # Module-specific argument groups
@@ -437,11 +453,14 @@ def main():
         # Ensure that only one type of input is provided (either BAM or FASTQ)
         if args.bam and (args.fastq1 or args.fastq2):
             parser_pipeline.error("Provide either BAM or FASTQ files, not both.")
-        
+
         # If BAM is not provided, ensure both FASTQ files are provided
         if not args.bam and (args.fastq1 is None or args.fastq2 is None):
-            parser_pipeline.error("When not providing BAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing.")
-        
+            parser_pipeline.error(
+                "When not providing BAM, both --fastq1 and --fastq2 must be specified "
+                "for paired-end sequencing."
+            )
+
         # Collect module-specific arguments
         module_args = {}
         if 'advntr' in args.extra_modules:
@@ -449,7 +468,8 @@ def main():
                 'advntr_reference': args.advntr_reference
             }
             # Remove module-specific args from args to avoid conflicts
-            delattr(args, 'advntr_reference')
+            if hasattr(args, 'advntr_reference'):
+                delattr(args, 'advntr_reference')
         else:
             module_args['advntr'] = {}
 
@@ -459,7 +479,7 @@ def main():
         else:
             bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
 
-        # Pass module_args to run_pipeline
+        # Pass module_args and new arguments to run_pipeline
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
@@ -476,6 +496,8 @@ def main():
             delete_intermediates=args.delete_intermediates,
             archive_results=args.archive_results,
             archive_format=args.archive_format,
+            custom_regions=args.custom_regions,
+            bed_file=args.bed_file,
             log_level=log_level
         )
 
@@ -525,7 +547,7 @@ def main():
             fasta_file=args.reference_fasta,
             flanking=args.flanking,
             input_files={},  # You may need to populate this based on your pipeline
-            pipeline_version=VERSION
+            pipeline_version=VERSION,
         )
 
     elif args.command == "cohort":

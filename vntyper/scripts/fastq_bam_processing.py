@@ -1,5 +1,7 @@
-import os
+#!/usr/bin/env python3
+
 import logging
+import os
 from pathlib import Path
 
 from vntyper.scripts.utils import run_command
@@ -48,7 +50,9 @@ def process_fastq(
         qc_command += " --dedup"
 
     log_file = Path(output) / f"{output_name}_fastp.log"
-    logging.info(f"Executing FASTQ quality control with command: {qc_command}")
+    logging.info(
+        f"Executing FASTQ quality control with command: {qc_command}"
+    )
 
     success = run_command(str(qc_command), str(log_file), critical=True)
     if not success:
@@ -68,6 +72,7 @@ def process_bam_to_fastq(
     fast_mode=False,
     delete_intermediates=True,
     keep_intermediates=False,
+    bed_file=None,  # New parameter
 ):
     """
     Process BAM files by slicing, filtering, and converting to FASTQ.
@@ -86,6 +91,7 @@ def process_bam_to_fastq(
             processing. Defaults to True.
         keep_intermediates (bool, optional): If True, keeps intermediate files for later
             use. Defaults to False.
+        bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
 
     Returns:
         tuple: Paths to the generated FASTQ files (R1, R2, other, single).
@@ -95,13 +101,21 @@ def process_bam_to_fastq(
     """
     samtools_path = config["tools"]["samtools"]
 
-    # Determine BAM region based on reference assembly
-    bam_region = (
-        config["bam_processing"]["bam_region_hg38"]
-        if reference_assembly == "hg38"
-        else config["bam_processing"]["bam_region_hg19"]
-    )
-    logging.debug(f"BAM region set to: {bam_region}")
+    # Determine BAM region based on BED file or reference assembly
+    if bed_file:
+        if not bed_file.exists():
+            logging.error(f"Provided BED file does not exist: {bed_file}")
+            raise FileNotFoundError(f"BED file not found: {bed_file}")
+        bam_region = f"-L {bed_file}"
+        logging.debug(f"BAM regions set using BED file: {bam_region}")
+    else:
+        # Determine BAM region based on reference assembly
+        bam_region = (
+            config["bam_processing"]["bam_region_hg38"]
+            if reference_assembly == "hg38"
+            else config["bam_processing"]["bam_region_hg19"]
+        )
+        logging.debug(f"BAM region set to: {bam_region}")
 
     # Define paths for intermediate and final BAM files
     final_bam = Path(output) / f"{output_name}_sliced.bam"
@@ -109,10 +123,15 @@ def process_bam_to_fastq(
     if keep_intermediates and final_bam.exists():
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
-        # Slicing BAM region
-        command_slice = (
-            f"{samtools_path} view -P -b {in_bam} {bam_region} -o {final_bam}"
-        )
+        # Slicing BAM region using BED file or predefined region
+        if bed_file:
+            command_slice = (
+                f"{samtools_path} view -P -b {in_bam} -L {bed_file} -o {final_bam}"
+            )
+        else:
+            command_slice = (
+                f"{samtools_path} view -P -b {in_bam} {bam_region} -o {final_bam}"
+            )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
         logging.info(f"Executing BAM slicing with command: {command_slice}")
 

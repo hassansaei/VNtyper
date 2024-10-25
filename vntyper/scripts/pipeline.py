@@ -8,7 +8,10 @@ import timeit
 from pathlib import Path
 
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
-from vntyper.scripts.fastq_bam_processing import process_bam_to_fastq, process_fastq
+from vntyper.scripts.fastq_bam_processing import (
+    process_bam_to_fastq,
+    process_fastq
+)
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.utils import (
@@ -37,6 +40,8 @@ def run_pipeline(
     delete_intermediates=False,
     archive_results=False,
     archive_format='zip',
+    custom_regions=None,   # New parameter
+    bed_file=None,         # New parameter
     log_level=logging.INFO,
 ):
     """
@@ -44,7 +49,7 @@ def run_pipeline(
 
     Args:
         bwa_reference (str): Path to the genome reference FASTA file for BWA alignment.
-        output_dir (str): Path to the output directory.
+        output_dir (Path): Path to the output directory.
         extra_modules (list): List of optional modules to include (e.g., ['advntr']).
         module_args (dict): Dictionary containing module-specific arguments.
         config (dict): Configuration dictionary.
@@ -52,18 +57,31 @@ def run_pipeline(
         fastq2 (str, optional): Path to the second FASTQ file.
         bam (str, optional): Path to the BAM file.
         threads (int, optional): Number of threads to use. Default is 4.
-        reference_assembly (str, optional): Reference assembly used for the input BAM file alignment ("hg19" or "hg38").
-        fast_mode (bool, optional): Enable fast mode (skip filtering of unmapped and partially mapped reads).
+        reference_assembly (str, optional): Reference assembly used for the input BAM
+            file alignment ("hg19" or "hg38").
+        fast_mode (bool, optional): Enable fast mode (skip filtering of unmapped and
+            partially mapped reads).
         keep_intermediates (bool, optional): Keep intermediate files.
-        delete_intermediates (bool, optional): Delete intermediate files after processing.
-        archive_results (bool, optional): Create an archive of the results folder after pipeline completion.
-        archive_format (str, optional): Format of the archive: 'zip' or 'tar.gz'. Default is 'zip'.
+        delete_intermediates (bool, optional): Delete intermediate files after
+            processing.
+        archive_results (bool, optional): Create an archive of the results folder after
+            pipeline completion.
+        archive_format (str, optional): Format of the archive: 'zip' or 'tar.gz'.
+            Default is 'zip'.
+        custom_regions (str, optional): Comma-separated custom regions (e.g.,
+            "chr1:1000-2000,chr2:3000-4000").
+        bed_file (Path, optional): Path to a BED file specifying regions for MUC1
+            analysis.
         log_level (int, optional): Logging level to be set for the pipeline.
     """
     # Ensure the appropriate BWA reference is used for alignment
     if not bwa_reference:
-        logging.error("BWA reference not provided or determined from configuration.")
-        raise ValueError("BWA reference not provided or determined from configuration.")
+        logging.error(
+            "BWA reference not provided or determined from configuration."
+        )
+        raise ValueError(
+            "BWA reference not provided or determined from configuration."
+        )
 
     logging.debug(f"BWA reference set to: {bwa_reference}")
     logging.debug(f"Output directory set to: {output_dir}")
@@ -79,9 +97,11 @@ def run_pipeline(
 
     # Retrieve and log versions of the tools being used
     tool_versions = get_tool_versions(config)
-    logging.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
+    logging.info(
+        f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}"
+    )
 
-    start = timeit.default_timer()
+    start_time = timeit.default_timer()
     logging.info("Pipeline execution started.")
 
     # Collect input filenames
@@ -101,7 +121,9 @@ def run_pipeline(
         # ----------------------------
         # Ensure that only one type of input is provided (either BAM or FASTQ)
         if bam and (fastq1 or fastq2):
-            logging.error("Both BAM and FASTQ inputs provided. Please provide only one type of input.")
+            logging.error(
+                "Both BAM and FASTQ inputs provided. Please provide only one type of input."
+            )
             raise ValueError("Provide either BAM or FASTQ files, not both.")
 
         if bam:
@@ -113,21 +135,53 @@ def run_pipeline(
             validate_fastq_file(fastq2)
         else:
             logging.error("Incomplete FASTQ inputs provided.")
-            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")
+            raise ValueError(
+                "Both FASTQ files must be provided for paired-end sequencing."
+            )
 
-        # Select the appropriate BAM region based on the reference assembly
-        if reference_assembly == "hg38":
-            bam_region = config["bam_processing"]["bam_region_hg38"]
+        # ----------------------------
+        # BED File Determination
+        # ----------------------------
+        if bed_file:
+            bed_file_path = bed_file
+            if not bed_file_path.exists():
+                logging.error(
+                    f"Provided BED file does not exist: {bed_file_path}"
+                )
+                raise FileNotFoundError(
+                    f"BED file not found: {bed_file_path}"
+                )
+            logging.info(f"Using provided BED file: {bed_file_path}")
+        elif custom_regions:
+            # Convert comma-separated regions to BED file
+            bed_file_path = Path(output_dir) / "custom_regions.bed"
+            with open(bed_file_path, 'w') as bed_fh:
+                for region in custom_regions.split(','):
+                    try:
+                        chrom, positions = region.strip().split(':')
+                        start, end = positions.strip().split('-')
+                        bed_fh.write(f"{chrom}\t{start}\t{end}\n")
+                    except ValueError:
+                        logging.error(
+                            f"Invalid region format: {region}. Expected format 'chr:start-end'."
+                        )
+                        raise ValueError(
+                            f"Invalid region format: {region}. Expected format 'chr:start-end'."
+                        )
+            logging.info(
+                f"Custom regions converted to BED file: {bed_file_path}"
+            )
         else:
-            bam_region = config["bam_processing"]["bam_region_hg19"]
+            # Use predefined regions based on reference assembly
+            if reference_assembly == "hg38":
+                bed_content = config["bam_processing"]["bam_region_hg38"]
+            else:
+                bed_content = config["bam_processing"]["bam_region_hg19"]
 
-        logging.debug(f"BAM region set to: {bam_region}")
-
-        # Determine if intermediates should be deleted
-        delete_intermediates = delete_intermediates or not keep_intermediates
-        logging.debug(
-            f"delete_intermediates: {delete_intermediates}, keep_intermediates: {keep_intermediates}"
-        )
+            bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
+            with open(bed_file_path, 'w') as bed_fh:
+                bed_fh.write(bed_content)
+            logging.info(f"Using predefined BED file: {bed_file_path}")
 
         # ----------------------------
         # FASTQ Quality Control or BAM Processing
@@ -145,23 +199,28 @@ def run_pipeline(
             )
             logging.info("FASTQ quality control completed.")
         elif bam:
-            # Convert BAM to FASTQ
-            logging.info("Starting BAM to FASTQ conversion.")
+            # Convert BAM to FASTQ using BED file
+            logging.info("Starting BAM to FASTQ conversion with specified regions.")
             fastq1, fastq2, _, _ = process_bam_to_fastq(
-                bam,
-                dirs['fastq_bam_processing'],
-                "output",
-                threads,
-                config,
-                reference_assembly,
-                fast_mode,
-                delete_intermediates,
-                keep_intermediates,
+                in_bam=bam,
+                output=dirs['fastq_bam_processing'],
+                output_name="output",
+                threads=threads,
+                config=config,
+                reference_assembly=reference_assembly,
+                fast_mode=fast_mode,
+                delete_intermediates=delete_intermediates,
+                keep_intermediates=keep_intermediates,
+                bed_file=bed_file_path  # Pass BED file path
             )
 
             if not fastq1 or not fastq2:
-                logging.error("Failed to generate FASTQ files from BAM. Exiting pipeline.")
-                raise ValueError("Failed to generate FASTQ files from BAM. Exiting pipeline.")
+                logging.error(
+                    "Failed to generate FASTQ files from BAM. Exiting pipeline."
+                )
+                raise ValueError(
+                    "Failed to generate FASTQ files from BAM. Exiting pipeline."
+                )
 
         # ----------------------------
         # Kestrel Genotyping
@@ -214,7 +273,9 @@ def run_pipeline(
                     run_advntr,
                 )
             except ImportError as e:
-                logging.error(f"adVNTR module is not installed or failed to import: {e}")
+                logging.error(
+                    f"adVNTR module is not installed or failed to import: {e}"
+                )
                 sys.exit(1)
 
             # Load adVNTR settings
@@ -243,12 +304,18 @@ def run_pipeline(
                         "advntr_reference_vntr_hg38"
                     )
                 else:
-                    logging.error(f"Invalid advntr_reference specified: {advntr_reference}")
-                    raise ValueError(f"Invalid advntr_reference specified: {advntr_reference}")
+                    logging.error(
+                        f"Invalid advntr_reference specified: {advntr_reference}"
+                    )
+                    raise ValueError(
+                        f"Invalid advntr_reference specified: {advntr_reference}"
+                    )
 
             if not advntr_reference:
                 logging.error("adVNTR reference path not found in configuration.")
-                raise ValueError("adVNTR reference path not found in configuration.")
+                raise ValueError(
+                    "adVNTR reference path not found in configuration."
+                )
 
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
 
@@ -272,7 +339,9 @@ def run_pipeline(
 
             if sorted_bam:
                 # Run adVNTR genotyping with the sorted BAM file
-                logging.info(f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}")
+                logging.info(
+                    f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}"
+                )
                 run_advntr(
                     advntr_reference,
                     sorted_bam,
@@ -284,7 +353,9 @@ def run_pipeline(
                 # Process adVNTR output
                 output_format = advntr_settings.get("output_format", "tsv")
                 output_ext = ".vcf" if output_format == "vcf" else ".tsv"
-                output_path = os.path.join(dirs['advntr'], f"output_adVNTR{output_ext}")
+                output_path = os.path.join(
+                    dirs['advntr'], f"output_adVNTR{output_ext}"
+                )
                 process_advntr_output(output_path, dirs['advntr'], "output")
                 logging.info("adVNTR genotyping completed.")
             else:
@@ -328,8 +399,12 @@ def run_pipeline(
             elif archive_format == 'tar.gz':
                 fmt = 'gztar'
             else:
-                logging.error(f"Unsupported archive format: {archive_format}")
-                raise ValueError(f"Unsupported archive format: {archive_format}")
+                logging.error(
+                    f"Unsupported archive format: {archive_format}"
+                )
+                raise ValueError(
+                    f"Unsupported archive format: {archive_format}"
+                )
 
             archive_name = f"{output_dir}"
             try:
@@ -352,6 +427,6 @@ def run_pipeline(
         logging.error(f"An error occurred: {e}", exc_info=True)
         sys.exit(1)
 
-    stop = timeit.default_timer()
-    elapsed_time = (stop - start) / 60
+    stop_time = timeit.default_timer()
+    elapsed_time = (stop_time - start_time) / 60
     logging.info(f"Pipeline completed in {elapsed_time:.2f} minutes.")
