@@ -1,10 +1,9 @@
-# vntyper/scripts/utils.py
-
 import os
 import json
 import logging
 import shlex
 import subprocess
+import sys
 import importlib.resources as pkg_resources
 
 
@@ -23,7 +22,11 @@ def run_command(command, log_file, critical=False):
     logging.info(f"Running command: {command}")
     with open(log_file, "w") as lf:
         process = subprocess.Popen(
-            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            command,
+            shell=True,
+            executable="/bin/bash",  # Ensure Bash is used for process substitution
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
         for line in process.stdout:
             decoded_line = line.decode()
@@ -81,8 +84,12 @@ def create_output_directories(base_output_dir):
         "base": base_output_dir,
         "kestrel": os.path.join(base_output_dir, "kestrel"),
         "advntr": os.path.join(base_output_dir, "advntr"),
-        "fastq_bam_processing": os.path.join(base_output_dir, "fastq_bam_processing"),
-        "alignment_processing": os.path.join(base_output_dir, "alignment_processing"),
+        "fastq_bam_processing": os.path.join(
+            base_output_dir, "fastq_bam_processing"
+        ),
+        "alignment_processing": os.path.join(
+            base_output_dir, "alignment_processing"
+        ),
     }
 
     for dir_path in dirs.values():
@@ -105,7 +112,8 @@ def get_tool_version(command, version_flag):
 
     Args:
         command (str): The command to run (e.g., "fastp").
-        version_flag (str): The flag or argument to pass to the command to get its version (e.g., "-v").
+        version_flag (str): The flag or argument to pass to the command to get its version
+            (e.g., "-v").
 
     Returns:
         str: The parsed version string or 'unknown' if parsing fails.
@@ -120,36 +128,30 @@ def get_tool_version(command, version_flag):
         if command.startswith("fastp"):
             if "fastp" in output:
                 return output.split("\n")[1].split(" ")[1]
-            else:
-                return "unknown"
-        elif command.startswith("samtools"):
+            return "unknown"
+        if command.startswith("samtools"):
             if "samtools" in output:
                 return output.split("\n")[1].split(" ")[1]
-            else:
-                return "unknown"
-        elif command.startswith("bwa"):
+            return "unknown"
+        if command.startswith("bwa"):
             # Capture the second line which contains the version info
             lines = output.split("\n")
             if len(lines) >= 2 and "Version" in lines[1]:
                 return lines[1].split(": ")[1]
-            else:
-                return "unknown"
-        elif "advntr" in command:
+            return "unknown"
+        if "advntr" in command:
             lines = output.split("\n")
             if len(lines) >= 3 and "adVNTR" in lines[2]:
                 return lines[2].split(": ")[0].split(" ")[1]
-            else:
-                return "unknown"
-        elif "java" in command and "kestrel" in command:
+            return "unknown"
+        if "java" in command and "kestrel" in command:
             # Handle Kestrel version parsing (Java + JAR execution)
             if "kestrel" in output:
                 return output.split("\n")[-1].split(": ")[1]
-            else:
-                return "unknown"
-        elif command.startswith("java"):  # Handling java_path case
-            return output.split("\n")[0]  # Return the first line of the Java version output
-        else:
             return "unknown"
+        if command.startswith("java"):  # Handling java_path case
+            return output.split("\n")[0]  # Return the first line of the Java version output
+        return "unknown"
 
     except FileNotFoundError:
         logging.error(f"Command not found: {command}")
@@ -167,7 +169,8 @@ def get_tool_version(command, version_flag):
 
 def get_tool_versions(config):
     """
-    Retrieves the versions of the tools specified in the config and returns them as a dictionary.
+    Retrieves the versions of the tools specified in the config and returns them as a
+    dictionary.
 
     Args:
         config (dict): The configuration dictionary.
@@ -217,7 +220,9 @@ def search(regex: str, df, case=False):
         textlikes = df.select_dtypes(include=[object, "object"])
         result_df = df[
             textlikes.apply(
-                lambda column: column.str.contains(regex, regex=True, case=case, na=False)
+                lambda column: column.str.contains(
+                    regex, regex=True, case=case, na=False
+                )
             ).any(axis=1)
         ]
         logging.debug("Regex search completed.")
@@ -240,7 +245,7 @@ def load_config(config_path=None):
     if config_path is not None and os.path.exists(config_path):
         # User provided a config path
         try:
-            with open(config_path, 'r') as config_file:
+            with open(config_path, "r") as config_file:
                 config = json.load(config_file)
                 logging.info(f"Configuration loaded from {config_path}")
                 return config
@@ -248,12 +253,14 @@ def load_config(config_path=None):
             logging.error(f"Error decoding JSON from the config file: {e}")
             raise
         except Exception as e:
-            logging.error(f"Unexpected error loading config file {config_path}: {e}")
+            logging.error(
+                f"Unexpected error loading config file {config_path}: {e}"
+            )
             raise
     else:
         # No config path provided or file does not exist; use default config from package data
         try:
-            with pkg_resources.open_text('vntyper', 'config.json') as f:
+            with pkg_resources.open_text("vntyper", "config.json") as f:
                 config = json.load(f)
                 logging.info("Loaded default config from package data.")
                 return config
