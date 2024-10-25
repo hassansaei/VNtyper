@@ -15,6 +15,8 @@ from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_versions,
     setup_logging,
+    validate_bam_file,
+    validate_fastq_file
 )
 from vntyper.version import __version__ as VERSION
 
@@ -94,6 +96,25 @@ def run_pipeline(
         raise ValueError("No input files provided.")
 
     try:
+        # ----------------------------
+        # Input Validation Section
+        # ----------------------------
+        # Ensure that only one type of input is provided (either BAM or FASTQ)
+        if bam and (fastq1 or fastq2):
+            logging.error("Both BAM and FASTQ inputs provided. Please provide only one type of input.")
+            raise ValueError("Provide either BAM or FASTQ files, not both.")
+
+        if bam:
+            # Validate BAM file
+            validate_bam_file(bam)
+        elif fastq1 and fastq2:
+            # Validate FASTQ files
+            validate_fastq_file(fastq1)
+            validate_fastq_file(fastq2)
+        else:
+            logging.error("Incomplete FASTQ inputs provided.")
+            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")
+
         # Select the appropriate BAM region based on the reference assembly
         if reference_assembly == "hg38":
             bam_region = config["bam_processing"]["bam_region_hg38"]
@@ -108,7 +129,9 @@ def run_pipeline(
             f"delete_intermediates: {delete_intermediates}, keep_intermediates: {keep_intermediates}"
         )
 
+        # ----------------------------
         # FASTQ Quality Control or BAM Processing
+        # ----------------------------
         if fastq1 and fastq2:
             # Process raw FASTQ files if provided
             logging.info("Starting FASTQ quality control.")
@@ -140,7 +163,9 @@ def run_pipeline(
                 logging.error("Failed to generate FASTQ files from BAM. Exiting pipeline.")
                 raise ValueError("Failed to generate FASTQ files from BAM. Exiting pipeline.")
 
+        # ----------------------------
         # Kestrel Genotyping
+        # ----------------------------
         vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
         bed_out = os.path.join(dirs['kestrel'], "output.bed")
         bam_out = os.path.join(dirs['kestrel'], "output.bam")
@@ -177,7 +202,9 @@ def run_pipeline(
 
         logging.info("Kestrel genotyping completed.")
 
-        # adVNTR Genotyping if 'advntr' is in extra_modules
+        # ----------------------------
+        # adVNTR Genotyping (Optional Module)
+        # ----------------------------
         if 'advntr' in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
@@ -270,7 +297,9 @@ def run_pipeline(
         else:
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
-        # Generate the summary report as the final step
+        # ----------------------------
+        # Generate Summary Report
+        # ----------------------------
         logging.info("Generating summary report.")
         report_file = "summary_report.html"
         template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
@@ -288,7 +317,9 @@ def run_pipeline(
         )
         logging.info(f"Summary report generated: {report_file}")
 
-        # Archiving the results folder if the option is enabled
+        # ----------------------------
+        # Archive Results (Optional)
+        # ----------------------------
         if archive_results:
             logging.info("Archiving the results folder.")
             # Determine the format
@@ -312,7 +343,9 @@ def run_pipeline(
             except Exception as e:
                 logging.error(f"Failed to archive results folder: {e}")
 
-        # Final processing and output generation
+        # ----------------------------
+        # Final Processing and Completion
+        # ----------------------------
         logging.info("Pipeline finished successfully.")
 
     except Exception as e:

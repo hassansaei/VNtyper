@@ -431,6 +431,17 @@ def main():
 
     # Execute the corresponding subcommand
     if args.command == "pipeline":
+        # ----------------------------
+        # Custom Validation for Pipeline Inputs
+        # ----------------------------
+        # Ensure that only one type of input is provided (either BAM or FASTQ)
+        if args.bam and (args.fastq1 or args.fastq2):
+            parser_pipeline.error("Provide either BAM or FASTQ files, not both.")
+        
+        # If BAM is not provided, ensure both FASTQ files are provided
+        if not args.bam and (args.fastq1 is None or args.fastq2 is None):
+            parser_pipeline.error("When not providing BAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing.")
+        
         # Collect module-specific arguments
         module_args = {}
         if 'advntr' in args.extra_modules:

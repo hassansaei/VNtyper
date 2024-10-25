@@ -4,6 +4,7 @@ import logging
 import shlex
 import subprocess
 import sys
+import gzip
 import importlib.resources as pkg_resources
 
 
@@ -268,3 +269,82 @@ def load_config(config_path=None):
             logging.error("Error: Default config file not found in package data.")
             logging.error(e)
             sys.exit(1)
+
+
+def validate_bam_file(file_path):
+    """
+    Validates the BAM file for existence, correct extension, and integrity using samtools quickcheck.
+
+    Args:
+        file_path (str): Path to the BAM file.
+
+    Raises:
+        ValueError: If any validation check fails.
+    """
+    if not file_path:
+        logging.error("No BAM file provided.")
+        raise ValueError("No BAM file provided.")
+
+    if not os.path.isfile(file_path):
+        logging.error(f"BAM file does not exist: {file_path}")
+        raise ValueError(f"BAM file does not exist: {file_path}")
+
+    if not file_path.endswith(".bam"):
+        logging.error(f"Invalid BAM file extension for file: {file_path}")
+        raise ValueError(f"Invalid BAM file extension for file: {file_path}")
+
+    # Perform samtools quickcheck
+    command = f"samtools quickcheck -v {file_path}"
+    log_file = f"{file_path}.quickcheck.log"
+    success = run_command(command, log_file, critical=True)
+    if not success:
+        logging.error(f"BAM file failed quickcheck: {file_path}")
+        raise ValueError(f"BAM file failed quickcheck: {file_path}")
+
+    logging.info(f"BAM file validated successfully: {file_path}")
+
+
+def validate_fastq_file(file_path):
+    """
+    Validates the FASTQ file for existence, correct extension, and basic formatting.
+
+    Args:
+        file_path (str): Path to the FASTQ file.
+
+    Raises:
+        ValueError: If any validation check fails.
+    """
+    if not file_path:
+        logging.error("No FASTQ file provided.")
+        raise ValueError("No FASTQ file provided.")
+
+    if not os.path.isfile(file_path):
+        logging.error(f"FASTQ file does not exist: {file_path}")
+        raise ValueError(f"FASTQ file does not exist: {file_path}")
+
+    valid_extensions = (".fastq", ".fastq.gz", ".fq", ".fq.gz")
+    if not file_path.endswith(valid_extensions):
+        logging.error(
+            f"Invalid FASTQ file extension for file: {file_path}"
+        )
+        raise ValueError(
+            f"Invalid FASTQ file extension for file: {file_path}"
+        )
+
+    # Check basic FASTQ formatting by reading the first few lines
+    try:
+        open_func = gzip.open if file_path.endswith(".gz") else open
+        with open_func(file_path, 'rt') as f:
+            for _ in range(4):  # Read first 4 lines of the first read
+                line = f.readline()
+                if not line:
+                    logging.error(
+                        f"FASTQ file is incomplete or empty: {file_path}"
+                    )
+                    raise ValueError(
+                        f"FASTQ file is incomplete or empty: {file_path}"
+                    )
+        logging.info(f"FASTQ file validated successfully: {file_path}")
+    except Exception as e:
+        logging.error(f"Error validating FASTQ file {file_path}: {e}")
+        raise
