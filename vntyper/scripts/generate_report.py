@@ -204,6 +204,7 @@ def generate_summary_report(
     flanking=50,
     input_files=None,
     pipeline_version=None,
+    mean_vntr_coverage=None,  # New parameter
 ):
     """
     Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
@@ -221,6 +222,7 @@ def generate_summary_report(
         input_files (dict, optional): Dictionary of input filenames
             (e.g., {'fastq1': 'sample_R1.fastq', 'fastq2': 'sample_R2.fastq'}).
         pipeline_version (str, optional): The version of the VNtyper pipeline.
+        mean_vntr_coverage (float, optional): Mean coverage over the VNTR region.
     """
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
@@ -286,6 +288,7 @@ def generate_summary_report(
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'input_files': input_files or {},         # Ensure it's a dict
         'pipeline_version': pipeline_version or "unknown",  # Default if not provided
+        'mean_vntr_coverage': mean_vntr_coverage or "Not calculated",  # New context variable
     }
 
     # Render the template with the context

@@ -91,6 +91,7 @@ def create_output_directories(base_output_dir):
         "alignment_processing": os.path.join(
             base_output_dir, "alignment_processing"
         ),
+        "coverage": os.path.join(base_output_dir, "coverage"),
     }
 
     for dir_path in dirs.values():
