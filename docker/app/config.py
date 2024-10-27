@@ -16,6 +16,11 @@ class Settings:
     DEFAULT_INPUT_DIR: str = os.getenv("DEFAULT_INPUT_DIR", "/opt/vntyper/input")
     DEFAULT_OUTPUT_DIR: str = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 
+    # Rate limiting configurations
+    RATE_LIMIT_TIMES: int = int(os.getenv("RATE_LIMIT_TIMES", 10))  # Default to 10 requests
+    RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", 60))  # Per 60 seconds
+    RATE_LIMITING_REDIS_DB: int = int(os.getenv("RATE_LIMITING_REDIS_DB", 2))  # Use DB 2 for rate limiting
+
 settings = Settings()
 
 # Configure logging

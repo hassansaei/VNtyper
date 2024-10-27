@@ -1,41 +1,89 @@
-# backend/docker/app/main.py
+# docker/app/main.py
 
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import (
+    FastAPI,
+    APIRouter,
+    UploadFile,
+    File,
+    Form,
+    HTTPException,
+    Depends,
+    Request,
+)
+from fastapi.responses import FileResponse, JSONResponse
 from uuid import uuid4
 import os
-from .tasks import run_vntyper_job
 import shutil
 import logging
 
+from .tasks import run_vntyper_job
 from .config import settings
 
 from celery.result import AsyncResult
 import redis
+import redis.asyncio as aioredis
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version=settings.PROJECT_VERSION
+    version=settings.PROJECT_VERSION,
 )
 
 logger = logging.getLogger(__name__)
 
 # Environment variables for default directories
-DEFAULT_INPUT_DIR = os.getenv("DEFAULT_INPUT_DIR", "/opt/vntyper/input")
-DEFAULT_OUTPUT_DIR = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
+DEFAULT_INPUT_DIR = settings.DEFAULT_INPUT_DIR
+DEFAULT_OUTPUT_DIR = settings.DEFAULT_OUTPUT_DIR
 
 # Redis configuration for job_id to task_id mapping
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Use DB 1 for job mappings
 
-# Initialize Redis client
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+# Rate limiting Redis configuration
+RATE_LIMITING_REDIS_DB = settings.RATE_LIMITING_REDIS_DB
+RATE_LIMIT_REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
 
-# Initialize APIRouter with /api prefix
-router = APIRouter(prefix="/api")
+# Initialize Redis client for job_id mapping
+redis_client = redis.Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+)
 
-@router.post("/run-job/")
+
+@app.on_event("startup")
+async def startup():
+    # Initialize Redis client for rate limiting
+    redis_rate_limit = aioredis.from_url(
+        RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
+    )
+    await FastAPILimiter.init(redis_rate_limit)
+
+
+# Initialize APIRouter with /api prefix and rate limiting dependency
+router = APIRouter(
+    prefix="/api",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES,
+                seconds=settings.RATE_LIMIT_SECONDS,
+            )
+        )
+    ],
+)
+
+
+@router.post(
+    "/run-job/",
+    summary="Submit a VNtyper job",
+    description=(
+        f"Submit a VNtyper job with additional parameters. "
+        f"This endpoint is rate-limited to prevent abuse.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
 async def run_vntyper(
     bam_file: UploadFile = File(..., description="BAM file to process"),
     bai_file: UploadFile = File(None, description="Optional BAI index file"),
@@ -43,11 +91,13 @@ async def run_vntyper(
     reference_assembly: str = Form("hg38"),
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
-    archive_results: bool = Form(False)
+    archive_results: bool = Form(False),
 ):
     """
     Endpoint to run VNtyper job with additional parameters.
     Accepts a BAM file and an optional BAI index file.
+
+    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
     """
     logger.info("Received job submission")
     # Ensure input and output directories exist
@@ -85,7 +135,7 @@ async def run_vntyper(
         reference_assembly=reference_assembly,
         fast_mode=fast_mode,
         keep_intermediates=keep_intermediates,
-        archive_results=archive_results
+        archive_results=archive_results,
     )
     logger.info(f"Enqueued job {job_id} with task ID {task.id}")
 
@@ -94,10 +144,22 @@ async def run_vntyper(
 
     return {"message": "Job submitted", "job_id": job_id}
 
-@router.get("/job-status/{job_id}/")
+
+@router.get(
+    "/job-status/{job_id}/",
+    summary="Get the status of a VNtyper job",
+    description=(
+        "Retrieve the current status of a submitted VNtyper job using its job ID. "
+        "This endpoint is rate-limited to prevent abuse.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
 def get_job_status(job_id: str):
     """
     Endpoint to get the status of a job.
+
+    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
     """
     # Retrieve task ID from Redis using job_id
     task_id = redis_client.get(job_id)
@@ -122,10 +184,22 @@ def get_job_status(job_id: str):
     else:
         return {"job_id": job_id, "status": status}
 
-@router.get("/download/{job_id}/")
+
+@router.get(
+    "/download/{job_id}/",
+    summary="Download the result of a VNtyper job",
+    description=(
+        "Download the zipped result files of a completed VNtyper job using its job ID. "
+        "This endpoint is rate-limited to prevent abuse.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
 def download_result(job_id: str):
     """
     Endpoint to download the result (zipped file).
+
+    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
     """
     logger.info(f"Received download request for job {job_id}")
     zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
@@ -134,17 +208,40 @@ def download_result(job_id: str):
         return FileResponse(
             zip_path,
             media_type="application/zip",
-            filename=f"{job_id}.zip"
+            filename=f"{job_id}.zip",
         )
     logger.warning(f"File not found: {zip_path}")
     raise HTTPException(status_code=404, detail="File not found")
 
-@router.get("/health/")
+
+@router.get(
+    "/health/",
+    summary="Health check endpoint",
+    description="Endpoint to check the health status of the API.",
+)
 def health_check():
     """
     Simple health check endpoint.
     """
     return {"status": "ok"}
 
+
 # Include the router in the FastAPI app
 app.include_router(router)
+
+
+# Custom exception handler for rate limiting
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code == 429:
+        # Customize the error message for rate limit exceeded
+        logger.warning(f"Rate limit exceeded for IP: {request.client.host}")
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": "Rate limit exceeded. Please try again later."},
+        )
+    # Handle other HTTP exceptions
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
