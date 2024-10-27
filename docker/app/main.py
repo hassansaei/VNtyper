@@ -22,6 +22,7 @@ import base64
 
 from .tasks import run_vntyper_job
 from .config import settings
+from .version import API_VERSION  # Import the API version
 
 from celery.result import AsyncResult
 import redis
@@ -31,7 +32,10 @@ from fastapi_limiter.depends import RateLimiter
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version=settings.PROJECT_VERSION,
+    version=API_VERSION,  # Use API_VERSION here
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +60,7 @@ redis_client = redis.Redis(
 
 security = HTTPBasic()
 
+
 @app.on_event("startup")
 async def startup():
     # Initialize Redis client for rate limiting
@@ -64,21 +69,22 @@ async def startup():
     )
     await FastAPILimiter.init(redis_rate_limit)
 
-# Initialize APIRouter with /api prefix and rate limiting dependency
+
+# Initialize APIRouter without changing URL paths
 router = APIRouter(
     prefix="/api",
-    dependencies=[
-        Depends(
-            RateLimiter(
-                times=settings.RATE_LIMIT_TIMES,
-                seconds=settings.RATE_LIMIT_SECONDS,
-            )
-        )
-    ],
 )
+
 
 @router.post(
     "/run-job/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
     summary="Submit a VNtyper job",
     description=(
         f"Submit a VNtyper job with additional parameters. "
@@ -147,8 +153,16 @@ async def run_vntyper(
 
     return {"message": "Job submitted", "job_id": job_id}
 
+
 @router.get(
     "/job-status/{job_id}/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
     summary="Get the status of a VNtyper job",
     description=(
         "Retrieve the current status of a submitted VNtyper job using its job ID. "
@@ -175,19 +189,27 @@ def get_job_status(job_id: str):
     status = task_result.status
     logger.info(f"Job {job_id} (Task ID: {task_id}) status queried: {status}")
 
-    if status == 'PENDING':
+    if status == "PENDING":
         return {"job_id": job_id, "status": "pending"}
-    elif status == 'STARTED':
+    elif status == "STARTED":
         return {"job_id": job_id, "status": "started"}
-    elif status == 'SUCCESS':
+    elif status == "SUCCESS":
         return {"job_id": job_id, "status": "completed"}
-    elif status == 'FAILURE':
+    elif status == "FAILURE":
         return {"job_id": job_id, "status": "failed", "error": str(task_result.info)}
     else:
         return {"job_id": job_id, "status": status}
 
+
 @router.get(
     "/download/{job_id}/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
     summary="Download the result of a VNtyper job",
     description=(
         "Download the zipped result files of a completed VNtyper job using its job ID. "
@@ -214,6 +236,7 @@ def download_result(job_id: str):
     logger.warning(f"File not found: {zip_path}")
     raise HTTPException(status_code=404, detail="File not found")
 
+
 @router.get(
     "/health/",
     summary="Health check endpoint",
@@ -225,8 +248,16 @@ def health_check():
     """
     return {"status": "ok"}
 
+
 @router.get(
     "/job-queue/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
     summary="Get job queue information",
     description=(
         "Retrieve the total number of jobs in the queue, or the position of a specific job.\n\n"
@@ -254,11 +285,9 @@ def get_job_queue(
     # For now, assume all users are authorized
 
     # Connect to Redis broker (Celery uses db 0 by default)
-    redis_broker = redis.Redis(
-        host=REDIS_HOST, port=REDIS_PORT, db=0
-    )
+    redis_broker = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
 
-    queue_name = 'celery'  # Default queue name
+    queue_name = "celery"  # Default queue name
 
     try:
         # Retrieve the total number of tasks in the queue
@@ -276,14 +305,14 @@ def get_job_queue(
             for task_message in tasks:
                 # Each task message is a Redis byte string
                 # Decode and parse the message to extract the task ID
-                task_message = task_message.decode('utf-8')
+                task_message = task_message.decode("utf-8")
                 task_data = json.loads(task_message)
-                body = task_data.get('body')
+                body = task_data.get("body")
                 if body:
                     # The body is Base64 encoded JSON
                     decoded_body = base64.b64decode(body)
                     body_data = json.loads(decoded_body)
-                    task_id_in_queue = body_data.get('id')
+                    task_id_in_queue = body_data.get("id")
                     if task_id_in_queue:
                         task_ids.append(task_id_in_queue)
 
@@ -309,10 +338,13 @@ def get_job_queue(
                 }
         except Exception as e:
             logger.error(f"Error retrieving job position: {e}")
-            raise HTTPException(status_code=500, detail="Error retrieving job position")
+            raise HTTPException(
+                status_code=500, detail="Error retrieving job position"
+            )
     else:
         # Return the total number of jobs in the queue
         return {"total_jobs_in_queue": queue_length}
+
 
 # Include the router in the FastAPI app
 app.include_router(router)
