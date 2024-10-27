@@ -25,6 +25,29 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 
+def write_bed_file(regions, bed_file_path):
+    """
+    Writes regions to a BED file in the correct format.
+
+    Parameters:
+    - regions (str): Comma-separated regions in 'chr:start-end' format.
+    - bed_file_path (Path): Path to the BED file to be written.
+    """
+    with open(bed_file_path, 'w') as bed_fh:
+        for region in regions.split(','):
+            try:
+                chrom, positions = region.strip().split(':')
+                start, end = positions.strip().split('-')
+                bed_fh.write(f"{chrom}\t{start}\t{end}\n")
+            except ValueError:
+                logging.error(
+                    f"Invalid region format: {region}. Expected format 'chr:start-end'."
+                )
+                raise ValueError(
+                    f"Invalid region format: {region}. Expected format 'chr:start-end'."
+                )
+
+
 def run_pipeline(
     bwa_reference,
     output_dir,
@@ -144,7 +167,7 @@ def run_pipeline(
         # BED File Determination
         # ----------------------------
         if bed_file:
-            bed_file_path = bed_file
+            bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
                 logging.error(
                     f"Provided BED file does not exist: {bed_file_path}"
@@ -156,33 +179,20 @@ def run_pipeline(
         elif custom_regions:
             # Convert comma-separated regions to BED file
             bed_file_path = Path(output_dir) / "custom_regions.bed"
-            with open(bed_file_path, 'w') as bed_fh:
-                for region in custom_regions.split(','):
-                    try:
-                        chrom, positions = region.strip().split(':')
-                        start, end = positions.strip().split('-')
-                        bed_fh.write(f"{chrom}\t{start}\t{end}\n")
-                    except ValueError:
-                        logging.error(
-                            f"Invalid region format: {region}. Expected format 'chr:start-end'."
-                        )
-                        raise ValueError(
-                            f"Invalid region format: {region}. Expected format 'chr:start-end'."
-                        )
+            write_bed_file(custom_regions, bed_file_path)
             logging.info(
                 f"Custom regions converted to BED file: {bed_file_path}"
             )
         else:
             # Use predefined regions based on reference assembly
             if reference_assembly == "hg38":
-                bed_content = config["bam_processing"]["bam_region_hg38"]
+                predefined_regions = config["bam_processing"]["bam_region_hg38"]
             else:
-                bed_content = config["bam_processing"]["bam_region_hg19"]
+                predefined_regions = config["bam_processing"]["bam_region_hg19"]
 
             bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
-            with open(bed_file_path, 'w') as bed_fh:
-                bed_fh.write(bed_content)
-            logging.info(f"Using predefined BED file: {bed_file_path}")
+            write_bed_file(predefined_regions, bed_file_path)
+            logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
         # ----------------------------
         # FASTQ Quality Control or BAM Processing
@@ -394,12 +404,6 @@ def run_pipeline(
                 )
         else:
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
-
-        # ----------------------------
-        # Calculate VNTR Coverage
-        # ----------------------------
-        # This section is now moved before Kestrel Genotyping in the above code
-        # If you prefer it after, you can relocate accordingly
 
         # ----------------------------
         # Generate Summary Report
