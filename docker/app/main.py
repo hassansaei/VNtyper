@@ -11,10 +11,14 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from typing import Optional
 from uuid import uuid4
 import os
 import shutil
 import logging
+import json
+import base64
 
 from .tasks import run_vntyper_job
 from .config import settings
@@ -50,6 +54,7 @@ redis_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
 )
 
+security = HTTPBasic()
 
 @app.on_event("startup")
 async def startup():
@@ -58,7 +63,6 @@ async def startup():
         RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
     )
     await FastAPILimiter.init(redis_rate_limit)
-
 
 # Initialize APIRouter with /api prefix and rate limiting dependency
 router = APIRouter(
@@ -72,7 +76,6 @@ router = APIRouter(
         )
     ],
 )
-
 
 @router.post(
     "/run-job/",
@@ -144,7 +147,6 @@ async def run_vntyper(
 
     return {"message": "Job submitted", "job_id": job_id}
 
-
 @router.get(
     "/job-status/{job_id}/",
     summary="Get the status of a VNtyper job",
@@ -184,7 +186,6 @@ def get_job_status(job_id: str):
     else:
         return {"job_id": job_id, "status": status}
 
-
 @router.get(
     "/download/{job_id}/",
     summary="Download the result of a VNtyper job",
@@ -213,7 +214,6 @@ def download_result(job_id: str):
     logger.warning(f"File not found: {zip_path}")
     raise HTTPException(status_code=404, detail="File not found")
 
-
 @router.get(
     "/health/",
     summary="Health check endpoint",
@@ -225,10 +225,97 @@ def health_check():
     """
     return {"status": "ok"}
 
+@router.get(
+    "/job-queue/",
+    summary="Get job queue information",
+    description=(
+        "Retrieve the total number of jobs in the queue, or the position of a specific job.\n\n"
+        "If no `job_id` is provided, returns the total number of jobs in the queue.\n"
+        "If a `job_id` is provided, returns the position of that job in the queue.\n\n"
+        "**Note:** This endpoint is rate-limited to prevent abuse.\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
+def get_job_queue(
+    job_id: Optional[str] = None,
+    credentials: HTTPBasicCredentials = Depends(security),
+):
+    """
+    Endpoint to get job queue information.
+
+    - If `job_id` is provided, returns the position of the job in the queue.
+    - If `job_id` is not provided, returns the total number of jobs in the queue.
+
+    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
+    """
+    # Security: Validate the credentials (placeholder)
+    # TODO: Implement actual authentication logic
+    # For now, assume all users are authorized
+
+    # Connect to Redis broker (Celery uses db 0 by default)
+    redis_broker = redis.Redis(
+        host=REDIS_HOST, port=REDIS_PORT, db=0
+    )
+
+    queue_name = 'celery'  # Default queue name
+
+    try:
+        # Retrieve the total number of tasks in the queue
+        queue_length = redis_broker.llen(queue_name)
+    except Exception as e:
+        logger.error(f"Error accessing the Celery queue: {e}")
+        raise HTTPException(status_code=500, detail="Error accessing the job queue")
+
+    if job_id:
+        try:
+            # Retrieve all tasks in the queue
+            tasks = redis_broker.lrange(queue_name, 0, -1)
+            # Extract task IDs from the task messages
+            task_ids = []
+            for task_message in tasks:
+                # Each task message is a Redis byte string
+                # Decode and parse the message to extract the task ID
+                task_message = task_message.decode('utf-8')
+                task_data = json.loads(task_message)
+                body = task_data.get('body')
+                if body:
+                    # The body is Base64 encoded JSON
+                    decoded_body = base64.b64decode(body)
+                    body_data = json.loads(decoded_body)
+                    task_id_in_queue = body_data.get('id')
+                    if task_id_in_queue:
+                        task_ids.append(task_id_in_queue)
+
+            # Retrieve the task ID associated with the provided job_id
+            task_id = redis_client.get(job_id)
+            if not task_id:
+                logger.warning(f"Job ID {job_id} not found")
+                raise HTTPException(status_code=404, detail="Job ID not found")
+
+            if task_id in task_ids:
+                position = task_ids.index(task_id) + 1  # Positions start at 1
+                return {
+                    "job_id": job_id,
+                    "position_in_queue": position,
+                    "total_jobs_in_queue": queue_length,
+                }
+            else:
+                # The job is not in the queue; it might be processing or completed
+                return {
+                    "job_id": job_id,
+                    "position_in_queue": None,
+                    "status": "Job not in queue (might be processing or completed)",
+                }
+        except Exception as e:
+            logger.error(f"Error retrieving job position: {e}")
+            raise HTTPException(status_code=500, detail="Error retrieving job position")
+    else:
+        # Return the total number of jobs in the queue
+        return {"total_jobs_in_queue": queue_length}
 
 # Include the router in the FastAPI app
 app.include_router(router)
-
 
 # Custom exception handler for rate limiting
 @app.exception_handler(HTTPException)

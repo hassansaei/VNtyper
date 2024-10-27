@@ -22,3 +22,8 @@ celery_app.conf.beat_schedule = {
     },
 }
 celery_app.conf.timezone = 'UTC'
+
+# Configure Celery task rate limits
+celery_app.conf.task_annotations = {
+    'app.tasks.run_vntyper_job': {'rate_limit': '10/m'},  # Limit to 10 tasks per minute
+}
