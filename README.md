@@ -200,4 +200,3 @@ We welcome contributions to VNtyper. Please refer to the [CONTRIBUTING.md](CONTR
 
 VNtyper is licensed under the BSD 3-Clause License. See the LICENSE file for more details.
 
----
