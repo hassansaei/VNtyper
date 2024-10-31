@@ -109,6 +109,9 @@ Generate a summary report for your VNTR genotyping analysis:
 vntyper report \
     --output-dir /path/to/output/dir \
     --config-path /path/to/config.json
+```
+
+Process raw FASTQ files to prepare them for genotyping:
 
 ```bash
 vntyper fastq \
@@ -116,7 +119,6 @@ vntyper fastq \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir
 
-```bash
 vntyper bam \
     --alignment /path/to/sample.bam \
     --output-dir /path/to/output/dir \
