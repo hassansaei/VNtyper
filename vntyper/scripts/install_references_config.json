@@ -1,0 +1,46 @@
+{
+  "ucsc_references": {
+    "hg19": {
+      "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz",
+      "target_path": "reference/chr1.hg19.fa.gz",
+      "index_command": "bwa index {path}"
+    },
+    "hg38": {
+      "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr1.fa.gz",
+      "target_path": "reference/chr1.hg38.fa.gz",
+      "index_command": "bwa index {path}"
+    }
+  },
+  "vntyper_references": {
+    "vntr_data_genic_loci": {
+      "url": "https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip",
+      "target_path": "reference/vntr_data_genic_loci.zip",
+      "extract_to": "reference/vntr_data_genic_loci/"
+    },
+    "vntr_data_recommended_loci_hg38": {
+      "url": "https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_recommended_loci_hg38.zip",
+      "target_path": "reference/vntr_data_recommended_loci_hg38.zip",
+      "extract_to": "reference/vntr_data_recommended_loci_hg38/"
+    }
+  },
+  "own_repository_references": {
+    "raw_files": [
+      {
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/MUC1-VNTR.fa",
+        "target_path": "reference/MUC1-VNTR.fa",
+        "index_command": "samtools faidx {path}"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/MUC1_motifs_Rev_com.fa",
+        "target_path": "reference/MUC1_motifs_Rev_com.fa",
+        "index_command": "samtools faidx {path}"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/code-adVNTR_RUs.fa",
+        "target_path": "reference/code-adVNTR_RUs.fa",
+        "index_command": "samtools faidx {path}"
+      }
+    ]
+  },
+  "bwa_path": "bwa"
+}

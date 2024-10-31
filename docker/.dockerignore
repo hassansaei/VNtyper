@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.swp
+*.swo
+*.tmp
+*.log
+*.bak
+.env
+.git
+.gitignore
+Dockerfile
+README.md
+LICENSE

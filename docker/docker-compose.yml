@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:6-alpine
+    container_name: vntyper_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - vntyper_network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vntyper:2.0.0-alpha.7
+    container_name: vntyper_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MAX_RESULT_AGE_DAYS=7  # Maximum age for result files in days
+    volumes:
+      - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
+      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
+    depends_on:
+      - redis
+    networks:
+      - vntyper_network
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vntyper:2.0.0-alpha.7
+    container_name: vntyper_worker
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MAX_RESULT_AGE_DAYS=7
+    volumes:
+      - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
+      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
+    depends_on:
+      - redis
+    networks:
+      - vntyper_network
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vntyper:2.0.0-alpha.7
+    container_name: vntyper_beat
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - MAX_RESULT_AGE_DAYS=7
+    volumes:
+      - /mnt/c/development/VNtyper/download/:/opt/vntyper/input
+      - /mnt/c/development/VNtyper/out/output:/opt/vntyper/output
+    depends_on:
+      - redis
+    networks:
+      - vntyper_network
+
+networks:
+  vntyper_network:
+    driver: bridge

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cohort Summary Report</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+    <style>
+        body { margin: 20px; }
+        h1, h2, h3 { text-align: center; margin-top: 20px; }
+        .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
+        .table-container { width: 90%; margin: 0 auto; text-align: center; }
+        .plot { margin: 20px auto; display: block; max-width: 500px; }
+        .table td, .table th { text-align: center; word-break: break-word; }
+        th { white-space: pre-wrap; }
+        
+        /* New CSS for truncating text and showing full text on hover */
+        .table td {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px; /* Adjust this value based on your needs */
+            cursor: pointer;
+        }
+    
+        .table td:hover {
+            overflow: visible;
+            white-space: normal;
+            max-width: none;
+            position: relative;
+            z-index: 10;
+            background-color: #fff;
+            border: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cohort Summary Report</h1>
+        <p><strong>Report Date:</strong> {{ report_date }}</p>
+
+        <h2>Kestrel Results</h2>
+        <div class="table-container">
+            {{ kestrel_positive | safe }}
+        </div>
+
+        <h2>Kestrel Summary Plot</h2>
+        <div class="plot">
+            {% if interactive %}
+                {{ kestrel_plot_interactive | safe }}
+            {% else %}
+                <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
+            {% endif %}
+        </div>
+
+        <h2>adVNTR Results</h2>
+        <div class="table-container">
+            {{ advntr_positive | safe }}
+        </div>
+
+        <h2>adVNTR Summary Plot</h2>
+        <div class="plot">
+            {% if interactive %}
+                {{ advntr_plot_interactive | safe }}
+            {% else %}
+                <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
+            {% endif %}
+        </div>
+
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+    <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            $('table').DataTable({
+                "paging": true,
+                "searching": true,
+                "info": true,
+                "autoWidth": false,
+                "columnDefs": [
+                    { "width": "150px", "targets": "_all" }
+                ]
+            });
+        });
+    </script>
+</body>
+</html>
