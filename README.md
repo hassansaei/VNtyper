@@ -111,18 +111,12 @@ vntyper report \
     --config-path /path/to/config.json
 =======
 
-### 4. Processing FASTQ Files
-
-
-Process raw FASTQ files to prepare them for genotyping:
-
 ```bash
 vntyper fastq \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir
 =======
-```bash
 
 ```bash
 vntyper bam \
@@ -136,8 +130,6 @@ vntyper bam \
 
 ## Pipeline Overview
 =======
-## Execution
-Use the following command to see the help for running the tool.
 
 VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
 
