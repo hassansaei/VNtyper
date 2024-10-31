@@ -24,7 +24,7 @@ RUN apt-get update && \
 RUN conda install -y mamba -n base -c conda-forge
 
 # Define build arguments with default values
-ARG REPO_URL=https://github.com/berntpopp/VNtyper.git
+ARG REPO_URL=https://github.com/hassansaei/VNtyper.git
 ARG REPO_DIR=/opt/vntyper
 
 # Set default repository URL and directory

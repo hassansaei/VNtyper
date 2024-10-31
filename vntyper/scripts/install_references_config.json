@@ -26,17 +26,17 @@
   "own_repository_references": {
     "raw_files": [
       {
-        "url": "https://raw.githubusercontent.com/berntpopp/VNtyper/main/reference/MUC1-VNTR.fa",
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/MUC1-VNTR.fa",
         "target_path": "reference/MUC1-VNTR.fa",
         "index_command": "samtools faidx {path}"
       },
       {
-        "url": "https://raw.githubusercontent.com/berntpopp/VNtyper/main/reference/MUC1_motifs_Rev_com.fa",
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/MUC1_motifs_Rev_com.fa",
         "target_path": "reference/MUC1_motifs_Rev_com.fa",
         "index_command": "samtools faidx {path}"
       },
       {
-        "url": "https://raw.githubusercontent.com/berntpopp/VNtyper/main/reference/code-adVNTR_RUs.fa",
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/code-adVNTR_RUs.fa",
         "target_path": "reference/code-adVNTR_RUs.fa",
         "index_command": "samtools faidx {path}"
       }

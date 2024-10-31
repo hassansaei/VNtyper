@@ -7,7 +7,7 @@ A Docker container for **VNtyper**, enabling easy execution of the tool with cus
 1. **Clone the VNtyper Repository:**
 
    ```bash
-   git clone https://github.com/berntpopp/VNtyper.git
+   git clone https://github.com/hassansaei/VNtyper.git
    cd VNtyper
    ```
 
@@ -22,7 +22,7 @@ A Docker container for **VNtyper**, enabling easy execution of the tool with cus
 4. **Build the Docker Image:**
 
    ```bash
-   docker build --no-cache --build-arg REPO_URL=https://github.com/berntpopp/VNtyper.git \
+   docker build --no-cache --build-arg REPO_URL=https://github.com/hassansaei/VNtyper.git \
                --build-arg REPO_DIR=/opt/vntyper \
                -t vntyper:2.0.0-alpha.7 .
    ```
