@@ -110,35 +110,6 @@ vntyper report \
     --output-dir /path/to/output/dir \
     --config-path /path/to/config.json
 =======
-The requirements are as follows:
-1. Python >= 3.9 and libraries
-    - Pandas ``` pip3 install pandas```
-    - numpy ``` pip3 install numpy```
-    - regex ``` pip3 install regex```
-    - biopython ``` pip3 install biopython ```
-    - setuptools==58 ``` pip3 install setuptools```
-    - pysam ``` pip3 install pysam ```
-
-3. Install [(BWA)](https://bio-bwa.sourceforge.net/)
-4. Download chr1.fa file form [(UCSC genome browser)](https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz)
-5. Index fasta file with BWA
-6. Install Singularity
-7. Download [(Kestrel)](https://github.com/paudano/kestrel)
-8. Building singularity image for code-adVNTR
-9. Download [(VNTR database)](https://cseweb.ucsd.edu/~mbakhtia/adVNTR/vntr_data_genic_loci.zip) for code-adVNTR
-10. The MUC1 VNTR motif dictionary and index files are provided in the File directory
-
-## VNtyper docker image
-
-Docker image is also provided and can be pulled from the docker hub. 
-You have to make a directory to store both you inputs and outputs in the host machine.
-The instructions for installing docker on Linux can be found [(here)](https://docs.docker.com/desktop/install/linux-install/)
-
-```bashscript
-mkdir shared
-sudo docker pull saei/vntyper:1.3.0
-
-```
 
 ### 4. Processing FASTQ Files
 
