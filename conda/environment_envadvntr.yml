@@ -1,0 +1,20 @@
+name: envadvntr
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=2.7.15
+  - setuptools=44.0.0
+  - matplotlib=2.2.5
+  - biopython=1.76
+  - pysam>=0.9.1.4
+  - cython=0.29.15
+  - networkx=1.11
+  - scipy=1.2.1
+  - joblib=0.14.1
+  - scikit-learn=0.20.4
+  - numpy=1.16.5
+  - pip=20.1.1
+  - samtools=1.18
+  - muscle=3.8.1551
