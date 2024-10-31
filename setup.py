@@ -17,7 +17,7 @@ with open(os.path.join('vntyper', 'version.py')) as f:
 #     vntyper install-references --output-dir /path/to/install --config-path /path/to/config.json
 #
 # For detailed instructions, refer to the README.md or visit:
-# https://github.com/berntpopp/vntyper#installation
+# https://github.com/hassansaei/vntyper#installation
 
 setup(
     name="vntyper",
@@ -36,12 +36,12 @@ setup(
             "vntyper=vntyper.cli:main",
         ],
     },
-    author="Bernt Popp",
-    author_email="bernt.popp.md@gmail.com",
+    author="Hassan Saei, Bernt Popp",
+    author_email="hassan.saei@inserm.fr, bernt.popp.md@gmail.com",
     description="VNtyper: A tool for genotyping MUC1-VNTR",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/berntpopp/vntyper",
+    url="https://github.com/hassansaei/vntyper",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
@@ -56,7 +56,7 @@ setup(
         ],
     },
     package_data={
-        'vntyper.scripts': ['kestrel_config.json', 'install_references_config.json'], # Include kestrel_config.json and install_references_config.json
+        'vntyper.scripts': ['kestrel_config.json', 'install_references_config.json'],  # Include kestrel_config.json and install_references_config.json
         'vntyper': [
             'config.json',  # Include config.json in the vntyper package
             'templates/report_template.html',  # Include report_template.html
