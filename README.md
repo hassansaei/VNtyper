@@ -129,7 +129,6 @@ vntyper bam \
 ---
 
 ## Pipeline Overview
-=======
 
 VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
 
