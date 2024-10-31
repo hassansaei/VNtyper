@@ -198,6 +198,6 @@ We welcome contributions to VNtyper. Please refer to the [CONTRIBUTING.md](CONTR
 
 ## License
 
-VNtyper is licensed under the MIT License. See the LICENSE file for more details.
+VNtyper is licensed under the BSD 3-Clause License. See the LICENSE file for more details.
 
 ---
