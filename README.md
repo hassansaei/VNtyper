@@ -118,7 +118,8 @@ vntyper fastq \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir
-
+```
+```bash
 vntyper bam \
     --alignment /path/to/sample.bam \
     --output-dir /path/to/output/dir \
