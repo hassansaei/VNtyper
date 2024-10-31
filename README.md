@@ -109,14 +109,12 @@ Generate a summary report for your VNTR genotyping analysis:
 vntyper report \
     --output-dir /path/to/output/dir \
     --config-path /path/to/config.json
-=======
 
 ```bash
 vntyper fastq \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir
-=======
 
 ```bash
 vntyper bam \
@@ -124,7 +122,6 @@ vntyper bam \
     --output-dir /path/to/output/dir \
     --threads 4
 ```
-
 
 ---
 
@@ -176,9 +173,6 @@ graph TD
 ```
 
 ---
-
----
-
 
 ## Notes
 
