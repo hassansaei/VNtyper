@@ -109,13 +109,16 @@ Generate a summary report for your VNTR genotyping analysis:
 vntyper report \
     --output-dir /path/to/output/dir \
     --config-path /path/to/config.json
+```
+
+Process raw FASTQ files to prepare them for genotyping:
 
 ```bash
 vntyper fastq \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir
-
+```
 ```bash
 vntyper bam \
     --alignment /path/to/sample.bam \
@@ -126,7 +129,6 @@ vntyper bam \
 ---
 
 ## Pipeline Overview
-=======
 
 VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
 
@@ -198,6 +200,5 @@ We welcome contributions to VNtyper. Please refer to the [CONTRIBUTING.md](CONTR
 
 ## License
 
-VNtyper is licensed under the MIT License. See the LICENSE file for more details.
+VNtyper is licensed under the BSD 3-Clause License. See the LICENSE file for more details.
 
----
