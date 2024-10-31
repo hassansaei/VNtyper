@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: ubuntu:latest
+
+%post
+    echo "Downloading apps and supporting dependencies"
+    apt-get update
+    apt-get install bzip2
+    apt-get -y install curl 
+    apt install wget
+    apt-get -y  install git
+    apt install make
+    apt-get -y  install g++
+    apt install unzip
+    apt -y install python2
+    apt-get -y install -y libbz2-dev
+    apt-get -y install liblzma-dev
+    curl https://bootstrap.pypa.io/pip/2.7/get-pip.py --output get-pip.py
+    python2 get-pip.py
+    apt-get install libffi-dev
+    pip install Cython
+    echo 'tzdata tzdata/Areas select Europe' | debconf-set-selections
+    echo 'tzdata tzdata/Zones/Europe select Paris' | debconf-set-selections
+    DEBIAN_FRONTEND="noninteractive" apt-get -y  install python-tk
+    apt-get -y install libz-dev 
+    apt-get -y install samtools
+    apt-get install muscle
+    apt-get install -y python2.7-dev
+    pip install setuptools
+    pip install matplotlib
+    pip install biopython==1.76
+    apt-get update
+    pip install pysam==0.9.1.4
+    pip install cython
+    pip install networkx==1.11
+    pip install scipy
+    pip install joblib
+    pip install scikit-learn
+    git clone https://github.com/mehrdadbakhtiari/adVNTR.git --branch enhanced_hmm
+    cd adVNTR
+    make; make install
+    python2 setup.py install
+
+%labels
+    Author hassan.saei@inserm.fr
+    Version v1.0.0
+    adVNTR
+
+
+%runscript
+        echo "Container was created $NOW"
+        echo "Arguments received: $*"
+        exec echo "$@"
+
+
+%help
+    This is a container for genotyping MUC1-VNTR.
