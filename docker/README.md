@@ -28,14 +28,14 @@ A Docker container for **VNtyper**, enabling easy execution of the tool with cus
    ```
 5. **Pull the Docker Image from Docker Hub:**
 
-  ```bash
-  docker pull saei/vntyper:2.0.0-alpha.16
-  ```
+    ```bash
+    docker pull saei/vntyper:2.0.0-alpha.16
+    ```
 6. **Generate apptainer Image from Docker Image:**
 
-  ```bash
-  apptainer pull docker://saei/vntyper:2.0.0-alpha.16
-  ```
+    ```bash
+    apptainer pull docker://saei/vntyper:2.0.0-alpha.16
+    ```
 
 ## **Running the Docker Container**
 
@@ -53,12 +53,12 @@ Run it interactively:
 ```
 
 ```bash
-  apptainer run --pwd /opt/vntyper \
-  -B /local/input/folder/:/opt/vntyper/input \
-  -B /local/output/folder/:/opt/vntyper/output \
-  vntyper_2.0.0-alpha.16.sif vntyper pipeline \
-  --bam /opt/vntyper/input/filename.bam \
-  -o /opt/vntyper/output/filename/ 
+    apptainer run --pwd /opt/vntyper \
+    -B /local/input/folder/:/opt/vntyper/input \
+    -B /local/output/folder/:/opt/vntyper/output \
+    vntyper_2.0.0-alpha.16.sif vntyper pipeline \
+    --bam /opt/vntyper/input/filename.bam \
+    -o /opt/vntyper/output/filename/ 
 ```
 
 ### **API Usage**
