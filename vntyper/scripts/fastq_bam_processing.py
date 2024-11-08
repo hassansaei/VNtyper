@@ -41,7 +41,8 @@ def process_fastq(
         f"--compression {compression_level} "
         f"--dup_calc_accuracy {dup_calc_accuracy} "
         f"--length_required {length_required} "
-        f"--html {output}/{output_name}.html"
+        f"--html {output}/{output_name}.html "
+        f"-0 /dev/null -s /dev/null -n"
     )
 
     if disable_adapter_trimming:
@@ -151,7 +152,7 @@ def process_bam_to_fastq(
             f"{output_name}_unmapped1.bam) "
             f" >(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}/"
             f"{output_name}_unmapped2.bam) "
-            f" >(samtools view -b -f 12 -F 260 -@ {threads} - -o {output}/"
+            f" >(samtools view -b -f 12 -F 265 -@ {threads} - -o {output}/"
             f"{output_name}_unmapped3.bam) "
             f"> /dev/null"
         )
