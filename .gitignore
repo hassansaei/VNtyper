@@ -169,7 +169,6 @@ cython_debug/
 
 # ignore large reference files and subdirectories
 /reference/chr1*
-/reference/*.zip
 /reference/*/
 
 # ignore any pdb files
