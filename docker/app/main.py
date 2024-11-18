@@ -57,8 +57,6 @@ redis_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
 )
 
-security = HTTPBasic()
-
 
 @app.on_event("startup")
 async def startup():
