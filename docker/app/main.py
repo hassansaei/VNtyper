@@ -11,7 +11,6 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from typing import Optional
 from uuid import uuid4
 import os
@@ -270,7 +269,6 @@ def health_check():
 )
 def get_job_queue(
     job_id: Optional[str] = None,
-    credentials: HTTPBasicCredentials = Depends(security),
 ):
     """
     Endpoint to get job queue information.
@@ -280,9 +278,6 @@ def get_job_queue(
 
     **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
     """
-    # Security: Validate the credentials (placeholder)
-    # TODO: Implement actual authentication logic
-    # For now, assume all users are authorized
 
     # Connect to Redis broker (Celery uses db 0 by default)
     redis_broker = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
