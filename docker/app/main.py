@@ -16,8 +16,6 @@ from uuid import uuid4
 import os
 import shutil
 import logging
-import json
-import base64
 
 from .tasks import run_vntyper_job
 from .config import settings
@@ -148,6 +146,9 @@ async def run_vntyper(
     # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
     redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
 
+    # Add the task ID to a Redis list to track the queue
+    redis_client.rpush('vntyper_job_queue', task.id)
+
     return {"message": "Job submitted", "job_id": job_id}
 
 
@@ -276,39 +277,16 @@ def get_job_queue(
 
     **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
     """
-
-    # Connect to Redis broker (Celery uses db 0 by default)
-    redis_broker = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
-
-    queue_name = "celery"  # Default queue name
-
     try:
-        # Retrieve the total number of tasks in the queue
-        queue_length = redis_broker.llen(queue_name)
+        # Get the list of task IDs from the Redis list
+        task_ids = redis_client.lrange('vntyper_job_queue', 0, -1)
+        queue_length = len(task_ids)
     except Exception as e:
-        logger.error(f"Error accessing the Celery queue: {e}")
+        logger.error(f"Error accessing the job queue: {e}")
         raise HTTPException(status_code=500, detail="Error accessing the job queue")
 
     if job_id:
         try:
-            # Retrieve all tasks in the queue
-            tasks = redis_broker.lrange(queue_name, 0, -1)
-            # Extract task IDs from the task messages
-            task_ids = []
-            for task_message in tasks:
-                # Each task message is a Redis byte string
-                # Decode and parse the message to extract the task ID
-                task_message = task_message.decode("utf-8")
-                task_data = json.loads(task_message)
-                body = task_data.get("body")
-                if body:
-                    # The body is Base64 encoded JSON
-                    decoded_body = base64.b64decode(body)
-                    body_data = json.loads(decoded_body)
-                    task_id_in_queue = body_data.get("id")
-                    if task_id_in_queue:
-                        task_ids.append(task_id_in_queue)
-
             # Retrieve the task ID associated with the provided job_id
             task_id = redis_client.get(job_id)
             if not task_id:

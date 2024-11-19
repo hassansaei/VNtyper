@@ -6,8 +6,19 @@ import os
 import shutil
 import logging
 from datetime import datetime, timedelta
+import redis  # Import Redis
 
 logger = logging.getLogger(__name__)
+
+# Environment variables for Redis configuration
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Use DB 1 for job mappings
+
+# Initialize Redis client
+redis_client = redis.Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+)
 
 @celery_app.task(bind=True)
 def run_vntyper_job(
@@ -24,6 +35,7 @@ def run_vntyper_job(
     Celery task to run VNtyper pipeline with parameters.
     Automatically generates BAI index if missing and cleans up input files.
     """
+    task_id = self.request.id
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
@@ -82,7 +94,14 @@ def run_vntyper_job(
             except Exception as e:
                 logger.error(f"Error archiving results: {e}")
                 raise
+    except Exception as e:
+        logger.error(f"Error in VNtyper job: {e}")
+        raise
     finally:
+        # Remove the task ID from the Redis list
+        redis_client.lrem('vntyper_job_queue', 0, task_id)
+        logger.info(f"Removed task ID {task_id} from vntyper_job_queue")
+
         # Delete input BAM and BAI files
         try:
             if os.path.exists(bam_path):
