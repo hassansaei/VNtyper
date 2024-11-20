@@ -1,36 +1,37 @@
 # docker/app/main.py
 
+import logging
+import os
+import shutil
+import subprocess
+from typing import Optional
+from uuid import uuid4
+
+import redis
+import redis.asyncio as aioredis
+from celery.result import AsyncResult
 from fastapi import (
-    FastAPI,
     APIRouter,
-    UploadFile,
+    Depends,
+    FastAPI,
     File,
     Form,
     HTTPException,
-    Depends,
     Request,
+    UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from typing import Optional
-from uuid import uuid4
-import os
-import shutil
-import logging
-
-from .tasks import run_vntyper_job
-from .config import settings
-from .version import API_VERSION  # Import the API version
-
-from celery.result import AsyncResult
-import redis
-import redis.asyncio as aioredis
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 
+from .config import settings
+from .tasks import run_vntyper_job
+from .version import API_VERSION
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version=API_VERSION,  # Use API_VERSION here
-    root_path="/api", # Change the root path to /api to work with the nginx reverse proxy
+    version=API_VERSION,
+    root_path="/api",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -56,20 +57,68 @@ redis_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
 )
 
+# Global variable to store tool version
+TOOL_VERSION = "unknown"
+
 
 @app.on_event("startup")
-async def startup():
+async def startup_event():
+    """Initialize rate limiting and cache the VNtyper tool version."""
     # Initialize Redis client for rate limiting
     redis_rate_limit = aioredis.from_url(
         RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
     )
     await FastAPILimiter.init(redis_rate_limit)
 
+    # Cache the VNtyper tool version
+    global TOOL_VERSION
+    try:
+        tool_version_output = subprocess.check_output(
+            ['vntyper', '-v'],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5  # Timeout after 5 seconds to prevent hanging
+        )
+        TOOL_VERSION = tool_version_output.strip()
+        logger.info(f"VNtyper tool version: {TOOL_VERSION}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error retrieving tool version: {e.output.strip()}")
+        TOOL_VERSION = "error retrieving tool version"
+    except FileNotFoundError:
+        logger.error("VNtyper tool not found.")
+        TOOL_VERSION = "VNtyper tool not installed"
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout expired while retrieving tool version.")
+        TOOL_VERSION = "timeout retrieving tool version"
+
 
 # Initialize APIRouter without changing URL paths
 router = APIRouter(
     prefix="/api",
 )
+
+
+@router.get(
+    "/version/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
+    summary="Get API and Tool Version",
+    description=(
+        "Retrieve the current version of the API and the VNtyper tool.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
+def get_versions():
+    """
+    Endpoint to get the API and VNtyper tool versions.
+    """
+    return {"api_version": API_VERSION, "tool_version": TOOL_VERSION}
 
 
 @router.post(
@@ -83,8 +132,8 @@ router = APIRouter(
     ],
     summary="Submit a VNtyper job",
     description=(
-        f"Submit a VNtyper job with additional parameters. "
-        f"This endpoint is rate-limited to prevent abuse.\n\n"
+        "Submit a VNtyper job with additional parameters. "
+        "This endpoint is rate-limited to prevent abuse.\n\n"
         f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
         f"{settings.RATE_LIMIT_SECONDS} seconds."
     ),
@@ -321,9 +370,12 @@ def get_job_queue(
 # Include the router in the FastAPI app
 app.include_router(router)
 
-# Custom exception handler for rate limiting
+
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Custom exception handler for rate limiting and other HTTP exceptions.
+    """
     if exc.status_code == 429:
         # Customize the error message for rate limit exceeded
         logger.warning(f"Rate limit exceeded for IP: {request.client.host}")
