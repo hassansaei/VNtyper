@@ -5,7 +5,6 @@ import logging
 
 class Settings:
     PROJECT_NAME: str = "VNtyper API"
-    PROJECT_VERSION: str = "2.0.0-alpha.7"
     DEBUG: bool = True
 
     # Logging configuration
