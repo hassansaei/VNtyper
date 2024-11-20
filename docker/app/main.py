@@ -30,6 +30,7 @@ from fastapi_limiter.depends import RateLimiter
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=API_VERSION,  # Use API_VERSION here
+    root_path="/api", # Change the root path to /api to work with the nginx reverse proxy
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
