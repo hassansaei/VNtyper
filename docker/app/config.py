@@ -25,7 +25,7 @@ class Settings:
     SMTP_PORT: int = int(os.getenv("SMTP_PORT", 587))
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "your_smtp_username")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "your_smtp_password")
-    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "noreply@hoster.com") 
+    EMAIL_FROM: str = os.getenv("EMAIL_FROM", "noreply@hoster.com")
 
     # API Base URL
     API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
