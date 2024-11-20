@@ -23,6 +23,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
+from pydantic import EmailStr
 
 from .config import settings
 from .tasks import run_vntyper_job
@@ -146,10 +147,11 @@ async def run_vntyper(
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
+    email: Optional[EmailStr] = Form(None, description="Optional email to receive results"),
 ):
     """
     Endpoint to run VNtyper job with additional parameters.
-    Accepts a BAM file and an optional BAI index file.
+    Accepts a BAM file, an optional BAI index file, and an optional email.
 
     **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
     """
@@ -181,7 +183,7 @@ async def run_vntyper(
     else:
         bai_path = None
 
-    # Enqueue the Celery task
+    # Enqueue the Celery task with email parameter
     task = run_vntyper_job.delay(
         bam_path=bam_path,
         output_dir=job_output_dir,
@@ -190,6 +192,7 @@ async def run_vntyper(
         fast_mode=fast_mode,
         keep_intermediates=keep_intermediates,
         archive_results=archive_results,
+        email=email,
     )
     logger.info(f"Enqueued job {job_id} with task ID {task.id}")
 

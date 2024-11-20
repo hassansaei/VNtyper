@@ -7,6 +7,9 @@ import shutil
 import logging
 from datetime import datetime, timedelta
 import redis  # Import Redis
+from typing import Optional
+from email.message import EmailMessage
+import smtplib
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,32 @@ redis_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
 )
 
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_email(self, to_email: str, subject: str, content: str):
+    """
+    Celery task to send an email via SMTP.
+    Retries up to 3 times in case of failure.
+    """
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = os.getenv("EMAIL_FROM", "notifications@hoser.com")
+        msg['To'] = to_email
+        msg.set_content(content, subtype='html')
+
+        # Connect to the SMTP server
+        with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.hoser.com"), int(os.getenv("SMTP_PORT", 587))) as server:
+            server.starttls()  # Upgrade the connection to secure TLS
+            server.login(os.getenv("SMTP_USERNAME", "your_smtp_username"), os.getenv("SMTP_PASSWORD", "your_smtp_password"))
+            server.send_message(msg)
+
+        logger.info(f"Email sent to {to_email} with subject '{subject}'")
+
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {e}")
+        raise self.retry(exc=e)
+
+
 @celery_app.task(bind=True)
 def run_vntyper_job(
     self,
@@ -29,13 +58,15 @@ def run_vntyper_job(
     reference_assembly: str,
     fast_mode: bool,
     keep_intermediates: bool,
-    archive_results: bool
+    archive_results: bool,
+    email: Optional[str] = None,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
-    Automatically generates BAI index if missing and cleans up input files.
+    Sends an email upon job completion or failure if email is provided.
     """
     task_id = self.request.id
+    job_id = os.path.basename(output_dir)
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
@@ -83,6 +114,15 @@ def run_vntyper_job(
             logger.info(f"VNtyper job completed for {bam_path}")
         except subprocess.CalledProcessError as e:
             logger.error(f"Error running VNtyper: {e}")
+            # Send failure email if provided
+            if email:
+                subject = "VNtyper Job Failed"
+                content = f"""
+                <p>Your VNtyper job with Job ID <strong>{job_id}</strong> has failed.</p>
+                <p>Error Details:</p>
+                <pre>{str(e)}</pre>
+                """
+                send_email.delay(to_email=email, subject=subject, content=content)
             raise
 
         # Optionally, archive results
@@ -94,6 +134,19 @@ def run_vntyper_job(
             except Exception as e:
                 logger.error(f"Error archiving results: {e}")
                 raise
+
+        # Send success email if provided
+        if email:
+            subject = "VNtyper Job Completed Successfully"
+            download_url = f"{os.getenv('API_BASE_URL', 'http://localhost:8000')}/api/download/{job_id}/"
+            content = f"""
+            <p>Your VNtyper job has been completed successfully.</p>
+            <p>Job ID: <strong>{job_id}</strong></p>
+            <p>You can download your results <a href="{download_url}">here</a>.</p>
+            """
+            send_email.delay(to_email=email, subject=subject, content=content)
+            logger.info(f"Triggered email sending to {email}")
+
     except Exception as e:
         logger.error(f"Error in VNtyper job: {e}")
         raise
@@ -116,6 +169,7 @@ def run_vntyper_job(
                 logger.info(f"Deleted BAI file: {bai_path}")
         except Exception as e:
             logger.error(f"Error deleting BAI file {bai_path}: {e}")
+
 
 @celery_app.task
 def delete_old_results():
