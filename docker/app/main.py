@@ -23,7 +23,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-from pydantic import EmailStr
+from email_validator import validate_email, EmailNotValidError
 
 from .config import settings
 from .tasks import run_vntyper_job
@@ -147,7 +147,7 @@ async def run_vntyper(
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
-    email: Optional[EmailStr] = Form(None, description="Optional email to receive results"),
+    email: Optional[str] = Form(None, description="Optional email to receive results"),  # Updated type
 ):
     """
     Endpoint to run VNtyper job with additional parameters.
@@ -182,6 +182,16 @@ async def run_vntyper(
         logger.info(f"Saved uploaded BAI file to {bai_path}")
     else:
         bai_path = None
+
+    # Validate the email if provided
+    if email:
+        try:
+            valid = validate_email(email)
+            email = valid.email  # Get the normalized form
+            logger.info(f"Validated email: {email}")
+        except EmailNotValidError as e:
+            logger.error(f"Invalid email address provided: {email} - {str(e)}")
+            raise HTTPException(status_code=400, detail="Invalid email address provided.")
 
     # Enqueue the Celery task with email parameter
     task = run_vntyper_job.delay(
