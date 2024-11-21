@@ -1,5 +1,3 @@
-# docker/app/config.py
-
 import os
 import logging
 
@@ -37,6 +35,12 @@ class Settings:
 
     # Max result age for cleanup
     MAX_RESULT_AGE_DAYS: int = int(os.getenv("MAX_RESULT_AGE_DAYS", 7))
+
+    # Usage statistics configurations
+    USAGE_REDIS_DB: int = int(os.getenv("USAGE_REDIS_DB", 4))
+    USAGE_DATA_RETENTION_DAYS: int = int(os.getenv("USAGE_DATA_RETENTION_DAYS", 30))
+    USAGE_DATA_RETENTION_SECONDS: int = USAGE_DATA_RETENTION_DAYS * 86400
+
 
 settings = Settings()
 
