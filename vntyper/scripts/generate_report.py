@@ -204,7 +204,7 @@ def generate_summary_report(
     flanking=50,
     input_files=None,
     pipeline_version=None,
-    mean_vntr_coverage=None,  # New parameter
+    mean_vntr_coverage=None,
 ):
     """
     Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
