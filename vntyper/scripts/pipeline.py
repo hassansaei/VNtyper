@@ -64,8 +64,8 @@ def run_pipeline(
     delete_intermediates=False,
     archive_results=False,
     archive_format='zip',
-    custom_regions=None,   # New parameter
-    bed_file=None,         # New parameter
+    custom_regions=None,
+    bed_file=None,
     log_level=logging.INFO,
 ):
     """
