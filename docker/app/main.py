@@ -17,6 +17,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -24,6 +25,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from email_validator import validate_email, EmailNotValidError
+from passlib.context import CryptContext
+from datetime import datetime
 
 from .config import settings
 from .tasks import run_vntyper_job
@@ -44,22 +47,39 @@ logger = logging.getLogger(__name__)
 DEFAULT_INPUT_DIR = settings.DEFAULT_INPUT_DIR
 DEFAULT_OUTPUT_DIR = settings.DEFAULT_OUTPUT_DIR
 
-# Redis configuration for job_id to task_id mapping
+# Redis configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Use DB 1 for job mappings
 
-# Rate limiting Redis configuration
+# Redis DBs
+REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
 RATE_LIMITING_REDIS_DB = settings.RATE_LIMITING_REDIS_DB
-RATE_LIMIT_REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
+COHORT_REDIS_DB = int(os.getenv("COHORT_REDIS_DB", 3))  # Cohort data
 
-# Initialize Redis client for job_id mapping
+# Redis clients
 redis_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
 )
+redis_cohort_client = redis.Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=COHORT_REDIS_DB, decode_responses=True
+)
+
+# Rate limiting Redis URL
+RATE_LIMIT_REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
 
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
+
+# Initialize password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def hash_passphrase(passphrase: str) -> str:
+    return pwd_context.hash(passphrase)
+
+
+def verify_passphrase(passphrase: str, hashed_passphrase: str) -> bool:
+    return pwd_context.verify(passphrase, hashed_passphrase)
 
 
 @app.on_event("startup")
@@ -123,6 +143,46 @@ def get_versions():
 
 
 @router.post(
+    "/create-cohort/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
+    summary="Create a new cohort",
+    description=(
+        "Create a new cohort with an optional alias and passphrase.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
+def create_cohort(
+    alias: Optional[str] = Form(None, description="Optional cohort alias"),
+    passphrase: Optional[str] = Form(None, description="Optional passphrase to protect the cohort"),
+):
+    # Generate a unique cohort identifier
+    cohort_id = str(uuid4())
+
+    # Hash the passphrase if provided
+    hashed_passphrase = hash_passphrase(passphrase) if passphrase else None
+
+    # Store cohort metadata in Redis hash
+    cohort_key = f"cohort:{cohort_id}"
+    redis_cohort_client.hset(cohort_key, mapping={
+        "alias": alias or "",
+        "hashed_passphrase": hashed_passphrase or "",
+        "created_at": datetime.utcnow().isoformat()
+    })
+
+    # Set a TTL for the cohort based on retention policy
+    ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
+    redis_cohort_client.expire(cohort_key, ttl_seconds)
+
+    return {"cohort_id": cohort_id, "alias": alias}
+
+
+@router.post(
     "/run-job/",
     dependencies=[
         Depends(
@@ -147,7 +207,10 @@ async def run_vntyper(
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
-    email: Optional[str] = Form(None, description="Optional email to receive results"),  # Updated type
+    email: Optional[str] = Form(None, description="Optional email to receive results"),
+    cohort_id: Optional[str] = Form(None, description="Optional cohort identifier to associate the job"),
+    alias: Optional[str] = Form(None, description="Optional cohort alias"),
+    passphrase: Optional[str] = Form(None, description="Passphrase if required by the cohort"),
 ):
     """
     Endpoint to run VNtyper job with additional parameters.
@@ -193,7 +256,40 @@ async def run_vntyper(
             logger.error(f"Invalid email address provided: {email} - {str(e)}")
             raise HTTPException(status_code=400, detail="Invalid email address provided.")
 
-    # Enqueue the Celery task with email parameter
+    # Cohort handling
+    if cohort_id or alias:
+        # Retrieve the cohort using cohort_id or alias
+        cohort_key = None
+        cohort_data = None
+        if cohort_id:
+            cohort_key = f"cohort:{cohort_id}"
+            cohort_data = redis_cohort_client.hgetall(cohort_key)
+            if not cohort_data:
+                raise HTTPException(status_code=404, detail="Cohort ID not found")
+        elif alias:
+            # Search for cohort by alias
+            for key in redis_cohort_client.scan_iter("cohort:*"):
+                data = redis_cohort_client.hgetall(key)
+                if data.get("alias") == alias:
+                    cohort_key = key
+                    cohort_data = data
+                    cohort_id = key.split(":", 1)[1]  # Extract cohort_id from key
+                    break
+            if not cohort_key:
+                raise HTTPException(status_code=404, detail="Cohort alias not found")
+        else:
+            raise HTTPException(status_code=400, detail="Cohort identifier or alias required")
+
+        # Verify passphrase if required
+        if cohort_data.get("hashed_passphrase"):
+            if not passphrase:
+                raise HTTPException(status_code=401, detail="Passphrase required for this cohort")
+            if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
+                raise HTTPException(status_code=401, detail="Incorrect passphrase")
+    else:
+        cohort_key = None  # Job is not associated with any cohort
+
+    # Enqueue the Celery task with email parameter and cohort information
     task = run_vntyper_job.delay(
         bam_path=bam_path,
         output_dir=job_output_dir,
@@ -203,6 +299,7 @@ async def run_vntyper(
         keep_intermediates=keep_intermediates,
         archive_results=archive_results,
         email=email,
+        cohort_key=cohort_key,
     )
     logger.info(f"Enqueued job {job_id} with task ID {task.id}")
 
@@ -212,7 +309,14 @@ async def run_vntyper(
     # Add the task ID to a Redis list to track the queue
     redis_client.rpush('vntyper_job_queue', task.id)
 
-    return {"message": "Job submitted", "job_id": job_id}
+    # If associated with a cohort, add the job to the cohort's job set
+    if cohort_key:
+        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+        # Ensure the TTL is updated
+        ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
+        redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+
+    return {"message": "Job submitted", "job_id": job_id, "cohort_id": cohort_id}
 
 
 @router.get(
@@ -378,6 +482,99 @@ def get_job_queue(
     else:
         # Return the total number of jobs in the queue
         return {"total_jobs_in_queue": queue_length}
+
+
+@router.get(
+    "/cohort-jobs/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
+    summary="Get all jobs in a cohort",
+    description=(
+        "Retrieve all job IDs associated with a cohort.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
+def get_cohort_jobs(
+    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
+    alias: Optional[str] = Query(None, description="Cohort alias"),
+    passphrase: Optional[str] = Query(None, description="Passphrase if required by the cohort"),
+):
+    # Retrieve the cohort using cohort_id or alias
+    cohort_key = None
+    cohort_data = None
+    if cohort_id:
+        cohort_key = f"cohort:{cohort_id}"
+        cohort_data = redis_cohort_client.hgetall(cohort_key)
+        if not cohort_data:
+            raise HTTPException(status_code=404, detail="Cohort ID not found")
+    elif alias:
+        # Search for cohort by alias
+        for key in redis_cohort_client.scan_iter("cohort:*"):
+            data = redis_cohort_client.hgetall(key)
+            if data.get("alias") == alias:
+                cohort_key = key
+                cohort_data = data
+                cohort_id = key.split(":", 1)[1]  # Extract cohort_id from key
+                break
+        if not cohort_key:
+            raise HTTPException(status_code=404, detail="Cohort alias not found")
+    else:
+        raise HTTPException(status_code=400, detail="Cohort identifier or alias required")
+
+    # Verify passphrase if required
+    if cohort_data.get("hashed_passphrase"):
+        if not passphrase:
+            raise HTTPException(status_code=401, detail="Passphrase required for this cohort")
+        if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
+            raise HTTPException(status_code=401, detail="Incorrect passphrase")
+
+    # Get all job IDs associated with the cohort
+    job_ids = redis_cohort_client.smembers(f"{cohort_key}:jobs")
+
+    return {"cohort_id": cohort_id, "alias": cohort_data.get("alias"), "job_ids": list(job_ids)}
+
+
+@router.get(
+    "/cohort-status/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        )
+    ],
+    summary="Get status of all jobs in a cohort",
+    description=(
+        "Retrieve the status of all jobs associated with a cohort.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
+def get_cohort_status(
+    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
+    alias: Optional[str] = Query(None, description="Cohort alias"),
+    passphrase: Optional[str] = Query(None, description="Passphrase if required by the cohort"),
+):
+    # Reuse the get_cohort_jobs function to retrieve job_ids
+    response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
+    job_ids = response["job_ids"]
+
+    # Get status for each job
+    job_statuses = []
+    for job_id in job_ids:
+        task_id = redis_client.get(job_id)
+        if not task_id:
+            status = "unknown"
+        else:
+            task_result = AsyncResult(task_id)
+            status = task_result.status.lower()
+        job_statuses.append({"job_id": job_id, "status": status})
+
+    return {"cohort_id": response["cohort_id"], "alias": response["alias"], "jobs": job_statuses}
 
 
 # Include the router in the FastAPI app
