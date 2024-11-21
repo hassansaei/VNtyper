@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from typing import Optional
 from uuid import uuid4
+from datetime import datetime
 
 import redis
 import redis.asyncio as aioredis
@@ -26,7 +27,6 @@ from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from email_validator import validate_email, EmailNotValidError
 from passlib.context import CryptContext
-from datetime import datetime
 
 from .config import settings
 from .tasks import run_vntyper_job
@@ -113,11 +113,8 @@ async def startup_event():
         TOOL_VERSION = "timeout retrieving tool version"
 
 
-# Initialize APIRouter without changing URL paths
-router = APIRouter(
-    prefix="/api",
-)
-
+# Initialize APIRouter without prefix
+router = APIRouter()  # Removed prefix="/api"
 
 @router.get(
     "/version/",
