@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import hashlib
 from collections import Counter
-from typing import Optional
+from typing import Optional, Union
 from uuid import uuid4
 from datetime import datetime
 
@@ -27,19 +27,11 @@ from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from email_validator import validate_email, EmailNotValidError
 from passlib.context import CryptContext
+from pydantic import BaseModel, Field
 
 from .config import settings
 from .tasks import run_vntyper_job
 from .version import API_VERSION
-
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=API_VERSION,
-    root_path="/api",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
-)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +78,45 @@ def verify_passphrase(passphrase: str, hashed_passphrase: str) -> bool:
     return pwd_context.verify(passphrase, hashed_passphrase)
 
 
+app = FastAPI(
+    title="VNtyper Online API",
+    version=API_VERSION,
+    description=(
+        """
+        ### Overview
+
+        **VNtyper Online API** is a web-based application designed to facilitate the genotyping of MUC1 Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data.
+
+        This API allows users to submit genomic data for VNTR analysis, check job statuses, download results, and access aggregated usage statistics.
+
+        ### Features
+
+        - **Submit Jobs**: Upload BAM files and initiate VNTR analysis.
+        - **Job Management**: Check the status of submitted jobs and retrieve results.
+        - **Cohort Support**: Group jobs into cohorts for collective analysis.
+        - **Usage Statistics**: Access anonymized usage statistics of the API.
+        - **In-Browser Processing**: Leverages powerful genomic data processing tools.
+
+        For more information, visit the [VNtyper Online documentation](https://vntyper.org/docs/).
+        """
+    ),
+    terms_of_service="https://vntyper.org/terms/",
+    contact={
+        "name": "Support Team",
+        "url": "https://vntyper.org/support/",
+        "email": "support@vntyper.org",
+    },
+    license_info={
+        "name": "BSD 3-Clause License",
+        "url": "https://github.com/hassansaei/vntyper/blob/main/LICENSE",
+    },
+    root_path="/api",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize rate limiting and cache the VNtyper tool version."""
@@ -99,10 +130,10 @@ async def startup_event():
     global TOOL_VERSION
     try:
         tool_version_output = subprocess.check_output(
-            ['vntyper', '-v'],
+            ["vntyper", "-v"],
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=5  # Timeout after 5 seconds to prevent hanging
+            timeout=5,  # Timeout after 5 seconds to prevent hanging
         )
         TOOL_VERSION = tool_version_output.strip()
         logger.info(f"VNtyper tool version: {TOOL_VERSION}")
@@ -118,10 +149,12 @@ async def startup_event():
 
 
 # Initialize APIRouter without prefix
-router = APIRouter()  # Removed prefix="/api"
+router = APIRouter()
+
 
 @router.get(
     "/version/",
+    tags=["General"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -138,13 +171,21 @@ router = APIRouter()  # Removed prefix="/api"
 )
 def get_versions():
     """
-    Endpoint to get the API and VNtyper tool versions.
+    **Description:**
+
+    This endpoint returns the version information of the API and the VNtyper tool.
+
+    **Returns:**
+
+    - **api_version**: The version of the API.
+    - **tool_version**: The version of the VNtyper tool.
     """
     return {"api_version": API_VERSION, "tool_version": TOOL_VERSION}
 
 
 @router.post(
     "/create-cohort/",
+    tags=["Cohort Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -160,8 +201,25 @@ def get_versions():
 )
 def create_cohort(
     alias: Optional[str] = Form(None, description="Optional cohort alias"),
-    passphrase: Optional[str] = Form(None, description="Optional passphrase to protect the cohort"),
+    passphrase: Optional[str] = Form(
+        None, description="Optional passphrase to protect the cohort"
+    ),
 ):
+    """
+    **Description:**
+
+    This endpoint allows users to create a new cohort for grouping jobs. An optional alias and passphrase can be provided to identify and secure the cohort.
+
+    **Parameters:**
+
+    - **alias**: A user-defined name for the cohort.
+    - **passphrase**: A passphrase to protect the cohort access.
+
+    **Returns:**
+
+    - **cohort_id**: A unique identifier for the created cohort.
+    - **alias**: The alias provided for the cohort.
+    """
     # Generate a unique cohort identifier
     cohort_id = str(uuid4())
 
@@ -170,11 +228,14 @@ def create_cohort(
 
     # Store cohort metadata in Redis hash
     cohort_key = f"cohort:{cohort_id}"
-    redis_cohort_client.hset(cohort_key, mapping={
-        "alias": alias or "",
-        "hashed_passphrase": hashed_passphrase or "",
-        "created_at": datetime.utcnow().isoformat()
-    })
+    redis_cohort_client.hset(
+        cohort_key,
+        mapping={
+            "alias": alias or "",
+            "hashed_passphrase": hashed_passphrase or "",
+            "created_at": datetime.utcnow().isoformat(),
+        },
+    )
 
     # Set a TTL for the cohort based on retention policy
     ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
@@ -183,8 +244,19 @@ def create_cohort(
     return {"cohort_id": cohort_id, "alias": alias}
 
 
+class RunJobResponse(BaseModel):
+    message: str = Field(
+        ..., description="Confirmation message indicating job submission."
+    )
+    job_id: str = Field(..., description="Unique identifier for the submitted job.")
+    cohort_id: Optional[str] = Field(
+        None, description="Identifier of the associated cohort, if any."
+    )
+
+
 @router.post(
     "/run-job/",
+    tags=["Job Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -195,13 +267,14 @@ def create_cohort(
     summary="Submit a VNtyper job",
     description=(
         "Submit a VNtyper job with additional parameters. "
-        "This endpoint is rate-limited to prevent abuse.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
-        f"{settings.RATE_LIMIT_SECONDS} seconds."
+        "You can upload BAM files and configure various settings for the analysis. "
+        "An optional email can be provided to receive notifications upon job completion.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
     ),
+    response_model=RunJobResponse,
 )
 async def run_vntyper(
-    request: Request,  # Added request parameter
+    request: Request,
     bam_file: UploadFile = File(..., description="BAM file to process"),
     bai_file: UploadFile = File(None, description="Optional BAI index file"),
     thread: int = Form(4),
@@ -210,15 +283,38 @@ async def run_vntyper(
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
     email: Optional[str] = Form(None, description="Optional email to receive results"),
-    cohort_id: Optional[str] = Form(None, description="Optional cohort identifier to associate the job"),
+    cohort_id: Optional[str] = Form(
+        None, description="Optional cohort identifier to associate the job"
+    ),
     alias: Optional[str] = Form(None, description="Optional cohort alias"),
-    passphrase: Optional[str] = Form(None, description="Passphrase if required by the cohort"),
+    passphrase: Optional[str] = Form(
+        None, description="Passphrase if required by the cohort"
+    ),
 ):
     """
-    Endpoint to run VNtyper job with additional parameters.
-    Accepts a BAM file, an optional BAI index file, and an optional email.
+    **Description:**
 
-    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
+    This endpoint allows users to submit a VNtyper job for VNTR analysis. Users can upload BAM files and specify analysis parameters such as threading, reference assembly, and more.
+
+    **Parameters:**
+
+    - **bam_file**: The BAM file to be processed.
+    - **bai_file**: Optional BAI index file corresponding to the BAM file.
+    - **thread**: Number of threads to use for processing.
+    - **reference_assembly**: Reference genome assembly to use (e.g., 'hg38', 'hg19').
+    - **fast_mode**: Boolean flag to enable fast mode processing.
+    - **keep_intermediates**: Boolean flag to keep intermediate files.
+    - **archive_results**: Boolean flag to archive results.
+    - **email**: Optional email address to receive job notifications.
+    - **cohort_id**: Optional cohort identifier to associate the job.
+    - **alias**: Optional alias for the cohort.
+    - **passphrase**: Passphrase if required by the cohort.
+
+    **Returns:**
+
+    - **message**: Confirmation message indicating job submission.
+    - **job_id**: Unique identifier for the submitted job.
+    - **cohort_id**: Identifier of the associated cohort, if any.
     """
     logger.info("Received job submission")
     # Ensure input and output directories exist
@@ -256,7 +352,9 @@ async def run_vntyper(
             logger.info(f"Validated email: {email}")
         except EmailNotValidError as e:
             logger.error(f"Invalid email address provided: {email} - {str(e)}")
-            raise HTTPException(status_code=400, detail="Invalid email address provided.")
+            raise HTTPException(
+                status_code=400, detail="Invalid email address provided."
+            )
 
     # Cohort handling
     if cohort_id or alias:
@@ -280,12 +378,16 @@ async def run_vntyper(
             if not cohort_key:
                 raise HTTPException(status_code=404, detail="Cohort alias not found")
         else:
-            raise HTTPException(status_code=400, detail="Cohort identifier or alias required")
+            raise HTTPException(
+                status_code=400, detail="Cohort identifier or alias required"
+            )
 
         # Verify passphrase if required
         if cohort_data.get("hashed_passphrase"):
             if not passphrase:
-                raise HTTPException(status_code=401, detail="Passphrase required for this cohort")
+                raise HTTPException(
+                    status_code=401, detail="Passphrase required for this cohort"
+                )
             if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
                 raise HTTPException(status_code=401, detail="Incorrect passphrase")
     else:
@@ -315,7 +417,7 @@ async def run_vntyper(
     redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
 
     # Add the task ID to a Redis list to track the queue
-    redis_client.rpush('vntyper_job_queue', task.id)
+    redis_client.rpush("vntyper_job_queue", task.id)
 
     # If associated with a cohort, add the job to the cohort's job set
     if cohort_key:
@@ -324,11 +426,18 @@ async def run_vntyper(
         ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
         redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
 
-    return {"message": "Job submitted", "job_id": job_id, "cohort_id": cohort_id}
+    return RunJobResponse(message="Job submitted", job_id=job_id, cohort_id=cohort_id)
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str = Field(..., description="Unique identifier for the job.")
+    status: str = Field(..., description="Current status of the job.")
+    error: Optional[str] = Field(None, description="Error message if the job failed.")
 
 
 @router.get(
     "/job-status/{job_id}/",
+    tags=["Job Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -339,16 +448,26 @@ async def run_vntyper(
     summary="Get the status of a VNtyper job",
     description=(
         "Retrieve the current status of a submitted VNtyper job using its job ID. "
-        "This endpoint is rate-limited to prevent abuse.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
-        f"{settings.RATE_LIMIT_SECONDS} seconds."
+        "Possible statuses include 'pending', 'started', 'completed', and 'failed'.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
     ),
+    response_model=JobStatusResponse,
 )
 def get_job_status(job_id: str):
     """
-    Endpoint to get the status of a job.
+    **Description:**
 
-    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
+    This endpoint retrieves the status of a VNtyper job using its unique job ID.
+
+    **Parameters:**
+
+    - **job_id**: The unique identifier of the job.
+
+    **Returns:**
+
+    - **job_id**: The unique identifier of the job.
+    - **status**: The current status of the job.
+    - **error**: Error message if the job has failed.
     """
     # Retrieve task ID from Redis using job_id
     task_id = redis_client.get(job_id)
@@ -363,19 +482,20 @@ def get_job_status(job_id: str):
     logger.info(f"Job {job_id} (Task ID: {task_id}) status queried: {status}")
 
     if status == "PENDING":
-        return {"job_id": job_id, "status": "pending"}
+        return JobStatusResponse(job_id=job_id, status="pending")
     elif status == "STARTED":
-        return {"job_id": job_id, "status": "started"}
+        return JobStatusResponse(job_id=job_id, status="started")
     elif status == "SUCCESS":
-        return {"job_id": job_id, "status": "completed"}
+        return JobStatusResponse(job_id=job_id, status="completed")
     elif status == "FAILURE":
-        return {"job_id": job_id, "status": "failed", "error": str(task_result.info)}
+        return JobStatusResponse(job_id=job_id, status="failed", error=str(task_result.info))
     else:
-        return {"job_id": job_id, "status": status}
+        return JobStatusResponse(job_id=job_id, status=status)
 
 
 @router.get(
     "/download/{job_id}/",
+    tags=["Job Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -387,15 +507,29 @@ def get_job_status(job_id: str):
     description=(
         "Download the zipped result files of a completed VNtyper job using its job ID. "
         "This endpoint is rate-limited to prevent abuse.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
-        f"{settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
     ),
+    responses={
+        200: {
+            "content": {"application/zip": {}},
+            "description": "A ZIP file containing the job results.",
+        },
+        404: {"description": "File not found."},
+    },
 )
 def download_result(job_id: str):
     """
-    Endpoint to download the result (zipped file).
+    **Description:**
 
-    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
+    This endpoint allows users to download the results of a completed VNtyper job as a ZIP file.
+
+    **Parameters:**
+
+    - **job_id**: The unique identifier of the job.
+
+    **Returns:**
+
+    - **FileResponse**: A ZIP file containing the results of the job.
     """
     logger.info(f"Received download request for job {job_id}")
     zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
@@ -412,18 +546,45 @@ def download_result(job_id: str):
 
 @router.get(
     "/health/",
+    tags=["General"],
     summary="Health check endpoint",
     description="Endpoint to check the health status of the API.",
 )
 def health_check():
     """
-    Simple health check endpoint.
+    **Description:**
+
+    Simple health check endpoint to verify that the API is running.
+
+    **Returns:**
+
+    - **status**: A message indicating the health status of the API.
     """
     return {"status": "ok"}
 
 
+class JobQueueResponse(BaseModel):
+    total_jobs_in_queue: int = Field(
+        ..., description="Total number of jobs in the queue."
+    )
+
+
+class JobQueuePositionResponse(BaseModel):
+    job_id: str = Field(..., description="Unique identifier for the job.")
+    position_in_queue: Optional[int] = Field(
+        None, description="Position of the job in the queue."
+    )
+    total_jobs_in_queue: int = Field(
+        ..., description="Total number of jobs in the queue."
+    )
+    status: Optional[str] = Field(
+        None, description="Status message if job is not in the queue."
+    )
+
+
 @router.get(
     "/job-queue/",
+    tags=["Job Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -437,24 +598,35 @@ def health_check():
         "If no `job_id` is provided, returns the total number of jobs in the queue.\n"
         "If a `job_id` is provided, returns the position of that job in the queue.\n\n"
         "**Note:** This endpoint is rate-limited to prevent abuse.\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
-        f"{settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
     ),
+    response_model=Union[JobQueueResponse, JobQueuePositionResponse],
 )
 def get_job_queue(
     job_id: Optional[str] = None,
 ):
     """
-    Endpoint to get job queue information.
+    **Description:**
 
-    - If `job_id` is provided, returns the position of the job in the queue.
-    - If `job_id` is not provided, returns the total number of jobs in the queue.
+    This endpoint provides information about the job queue.
 
-    **Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds.
+    **Parameters:**
+
+    - **job_id**: (Optional) The unique identifier of a specific job.
+
+    **Returns:**
+
+    - If `job_id` is not provided:
+        - **total_jobs_in_queue**: Total number of jobs currently in the queue.
+    - If `job_id` is provided:
+        - **job_id**: The unique identifier of the job.
+        - **position_in_queue**: The position of the job in the queue.
+        - **total_jobs_in_queue**: Total number of jobs currently in the queue.
+        - **status**: Status message if the job is not in the queue.
     """
     try:
         # Get the list of task IDs from the Redis list
-        task_ids = redis_client.lrange('vntyper_job_queue', 0, -1)
+        task_ids = redis_client.lrange("vntyper_job_queue", 0, -1)
         queue_length = len(task_ids)
     except Exception as e:
         logger.error(f"Error accessing the job queue: {e}")
@@ -470,18 +642,19 @@ def get_job_queue(
 
             if task_id in task_ids:
                 position = task_ids.index(task_id) + 1  # Positions start at 1
-                return {
-                    "job_id": job_id,
-                    "position_in_queue": position,
-                    "total_jobs_in_queue": queue_length,
-                }
+                return JobQueuePositionResponse(
+                    job_id=job_id,
+                    position_in_queue=position,
+                    total_jobs_in_queue=queue_length,
+                )
             else:
                 # The job is not in the queue; it might be processing or completed
-                return {
-                    "job_id": job_id,
-                    "position_in_queue": None,
-                    "status": "Job not in queue (might be processing or completed)",
-                }
+                return JobQueuePositionResponse(
+                    job_id=job_id,
+                    position_in_queue=None,
+                    total_jobs_in_queue=queue_length,
+                    status="Job not in queue (might be processing or completed)",
+                )
         except Exception as e:
             logger.error(f"Error retrieving job position: {e}")
             raise HTTPException(
@@ -489,11 +662,12 @@ def get_job_queue(
             )
     else:
         # Return the total number of jobs in the queue
-        return {"total_jobs_in_queue": queue_length}
+        return JobQueueResponse(total_jobs_in_queue=queue_length)
 
 
 @router.get(
     "/cohort-jobs/",
+    tags=["Cohort Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -510,8 +684,27 @@ def get_job_queue(
 def get_cohort_jobs(
     cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
     alias: Optional[str] = Query(None, description="Cohort alias"),
-    passphrase: Optional[str] = Query(None, description="Passphrase if required by the cohort"),
+    passphrase: Optional[str] = Query(
+        None, description="Passphrase if required by the cohort"
+    ),
 ):
+    """
+    **Description:**
+
+    This endpoint retrieves all job IDs associated with a specific cohort.
+
+    **Parameters:**
+
+    - **cohort_id**: (Optional) The unique identifier of the cohort.
+    - **alias**: (Optional) The alias of the cohort.
+    - **passphrase**: (Optional) The passphrase for the cohort if required.
+
+    **Returns:**
+
+    - **cohort_id**: The unique identifier of the cohort.
+    - **alias**: The alias of the cohort.
+    - **job_ids**: A list of job IDs associated with the cohort.
+    """
     # Retrieve the cohort using cohort_id or alias
     cohort_key = None
     cohort_data = None
@@ -537,18 +730,25 @@ def get_cohort_jobs(
     # Verify passphrase if required
     if cohort_data.get("hashed_passphrase"):
         if not passphrase:
-            raise HTTPException(status_code=401, detail="Passphrase required for this cohort")
+            raise HTTPException(
+                status_code=401, detail="Passphrase required for this cohort"
+            )
         if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
             raise HTTPException(status_code=401, detail="Incorrect passphrase")
 
     # Get all job IDs associated with the cohort
     job_ids = redis_cohort_client.smembers(f"{cohort_key}:jobs")
 
-    return {"cohort_id": cohort_id, "alias": cohort_data.get("alias"), "job_ids": list(job_ids)}
+    return {
+        "cohort_id": cohort_id,
+        "alias": cohort_data.get("alias"),
+        "job_ids": list(job_ids),
+    }
 
 
 @router.get(
     "/cohort-status/",
+    tags=["Cohort Management"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -565,10 +765,31 @@ def get_cohort_jobs(
 def get_cohort_status(
     cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
     alias: Optional[str] = Query(None, description="Cohort alias"),
-    passphrase: Optional[str] = Query(None, description="Passphrase if required by the cohort"),
+    passphrase: Optional[str] = Query(
+        None, description="Passphrase if required by the cohort"
+    ),
 ):
+    """
+    **Description:**
+
+    This endpoint retrieves the status of all jobs associated with a specific cohort.
+
+    **Parameters:**
+
+    - **cohort_id**: (Optional) The unique identifier of the cohort.
+    - **alias**: (Optional) The alias of the cohort.
+    - **passphrase**: (Optional) The passphrase for the cohort if required.
+
+    **Returns:**
+
+    - **cohort_id**: The unique identifier of the cohort.
+    - **alias**: The alias of the cohort.
+    - **jobs**: A list of job statuses within the cohort.
+    """
     # Reuse the get_cohort_jobs function to retrieve job_ids
-    response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
+    response = get_cohort_jobs(
+        cohort_id=cohort_id, alias=alias, passphrase=passphrase
+    )
     job_ids = response["job_ids"]
 
     # Get status for each job
@@ -582,11 +803,22 @@ def get_cohort_status(
             status = task_result.status.lower()
         job_statuses.append({"job_id": job_id, "status": status})
 
-    return {"cohort_id": response["cohort_id"], "alias": response["alias"], "jobs": job_statuses}
+    return {
+        "cohort_id": response["cohort_id"],
+        "alias": response["alias"],
+        "jobs": job_statuses,
+    }
+
+
+class UsageStatisticsResponse(BaseModel):
+    total_jobs: int = Field(..., description="Total number of jobs submitted.")
+    unique_users: int = Field(..., description="Number of unique users.")
+    job_statuses: dict = Field(..., description="Counts of jobs by status.")
 
 
 @router.get(
     "/usage-statistics/",
+    tags=["Statistics"],
     dependencies=[
         Depends(
             RateLimiter(
@@ -597,13 +829,21 @@ def get_cohort_status(
     summary="Get Usage Statistics",
     description=(
         "Retrieve aggregated usage statistics.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
-        f"{settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
     ),
+    response_model=UsageStatisticsResponse,
 )
 def get_usage_statistics():
     """
-    Endpoint to retrieve aggregated usage statistics.
+    **Description:**
+
+    This endpoint provides aggregated usage statistics of the API, including total jobs submitted, unique users, and job statuses.
+
+    **Returns:**
+
+    - **total_jobs**: Total number of jobs submitted.
+    - **unique_users**: Number of unique users who have submitted jobs.
+    - **job_statuses**: A dictionary with job statuses as keys and counts as values.
     """
     # Retrieve all usage data
     usage_keys = redis_usage_client.keys("usage:*")
@@ -617,11 +857,11 @@ def get_usage_statistics():
         status = data.get("status", "unknown")
         job_statuses[status] += 1
 
-    return {
-        "total_jobs": total_jobs,
-        "unique_users": len(unique_users),
-        "job_statuses": dict(job_statuses),
-    }
+    return UsageStatisticsResponse(
+        total_jobs=total_jobs,
+        unique_users=len(unique_users),
+        job_statuses=dict(job_statuses),
+    )
 
 
 # Include the router in the FastAPI app
