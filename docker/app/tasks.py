@@ -1,5 +1,3 @@
-# docker/app/tasks.py
-
 from .celery_app import celery_app
 import subprocess
 import os
@@ -7,14 +5,15 @@ import shutil
 import logging
 from datetime import datetime, timedelta
 import redis
+import hashlib
 from typing import Optional
-from email.message import EmailMessage
-import smtplib
+
+from celery.utils.log import get_task_logger
 
 from .config import settings
 from .utils import send_email
 
-logger = logging.getLogger(__name__)
+logger = get_task_logger(__name__)
 
 # Environment variables for Redis configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -23,6 +22,7 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
 COHORT_REDIS_DB = int(os.getenv("COHORT_REDIS_DB", 3))  # Cohort data
+USAGE_REDIS_DB = settings.USAGE_REDIS_DB  # Usage statistics
 
 # Initialize Redis clients
 redis_client = redis.Redis(
@@ -30,6 +30,9 @@ redis_client = redis.Redis(
 )
 redis_cohort_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=COHORT_REDIS_DB, decode_responses=True
+)
+redis_usage_client = redis.Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=USAGE_REDIS_DB, decode_responses=True
 )
 
 
@@ -59,6 +62,8 @@ def run_vntyper_job(
     archive_results: bool,
     email: Optional[str] = None,
     cohort_key: Optional[str] = None,
+    client_ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
@@ -68,6 +73,22 @@ def run_vntyper_job(
     job_id = os.path.basename(output_dir)
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
+
+        # Generate a unique hash for the user
+        user_data = f"{client_ip}-{user_agent}"
+        user_hash = hashlib.sha256(user_data.encode("utf-8")).hexdigest()
+
+        # Store initial usage data
+        usage_data = {
+            "user_hash": user_hash,
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id,
+            "status": "started",
+        }
+        redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
+        redis_usage_client.expire(
+            f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS
+        )
 
         # Ensure the BAM index (.bai) exists
         bai_path = f"{bam_path}.bai"
@@ -81,6 +102,8 @@ def run_vntyper_job(
                 logger.info(f"Successfully generated BAI index at {bai_path}")
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error generating BAI index: {e}")
+                # Update usage data on failure
+                redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 raise
 
         command = [
@@ -113,6 +136,8 @@ def run_vntyper_job(
             logger.info(f"VNtyper job completed for {bam_path}")
         except subprocess.CalledProcessError as e:
             logger.error(f"Error running VNtyper: {e}")
+            # Update usage data on failure
+            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
             # Send failure email if provided
             if email:
                 subject = "VNtyper Job Failed"
@@ -134,7 +159,12 @@ def run_vntyper_job(
                 )
             except Exception as e:
                 logger.error(f"Error archiving results: {e}")
+                # Update usage data on failure
+                redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 raise
+
+        # Update usage data on success
+        redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
         # Send success email if provided
         if email:
@@ -150,10 +180,12 @@ def run_vntyper_job(
 
     except Exception as e:
         logger.error(f"Error in VNtyper job: {e}")
+        # Update usage data on failure
+        redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
         raise
     finally:
         # Remove the task ID from the Redis list
-        redis_client.lrem('vntyper_job_queue', 0, task_id)
+        redis_client.lrem("vntyper_job_queue", 0, task_id)
         logger.info(f"Removed task ID {task_id} from vntyper_job_queue")
 
         # Extend cohort TTL if necessary
@@ -184,7 +216,7 @@ def delete_old_results():
     Celery task to delete result ZIP files older than a specified age.
     Also deletes cohorts that have expired.
     """
-    max_age_days = int(os.getenv("MAX_RESULT_AGE_DAYS", "7"))  # Default to 7 days
+    max_age_days = settings.MAX_RESULT_AGE_DAYS
     output_dir = settings.DEFAULT_OUTPUT_DIR
     cutoff_time = datetime.now() - timedelta(days=max_age_days)
 

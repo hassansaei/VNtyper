@@ -1,9 +1,9 @@
-# docker/app/main.py
-
 import logging
 import os
 import shutil
 import subprocess
+import hashlib
+from collections import Counter
 from typing import Optional
 from uuid import uuid4
 from datetime import datetime
@@ -55,6 +55,7 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
 RATE_LIMITING_REDIS_DB = settings.RATE_LIMITING_REDIS_DB
 COHORT_REDIS_DB = int(os.getenv("COHORT_REDIS_DB", 3))  # Cohort data
+USAGE_REDIS_DB = settings.USAGE_REDIS_DB  # Usage statistics
 
 # Redis clients
 redis_client = redis.Redis(
@@ -62,6 +63,9 @@ redis_client = redis.Redis(
 )
 redis_cohort_client = redis.Redis(
     host=REDIS_HOST, port=REDIS_PORT, db=COHORT_REDIS_DB, decode_responses=True
+)
+redis_usage_client = redis.Redis(
+    host=REDIS_HOST, port=REDIS_PORT, db=USAGE_REDIS_DB, decode_responses=True
 )
 
 # Rate limiting Redis URL
@@ -197,6 +201,7 @@ def create_cohort(
     ),
 )
 async def run_vntyper(
+    request: Request,  # Added request parameter
     bam_file: UploadFile = File(..., description="BAM file to process"),
     bai_file: UploadFile = File(None, description="Optional BAI index file"),
     thread: int = Form(4),
@@ -286,6 +291,10 @@ async def run_vntyper(
     else:
         cohort_key = None  # Job is not associated with any cohort
 
+    # Extract client IP and User-Agent
+    client_ip = request.client.host
+    user_agent = request.headers.get("User-Agent", "unknown")
+
     # Enqueue the Celery task with email parameter and cohort information
     task = run_vntyper_job.delay(
         bam_path=bam_path,
@@ -297,6 +306,8 @@ async def run_vntyper(
         archive_results=archive_results,
         email=email,
         cohort_key=cohort_key,
+        client_ip=client_ip,
+        user_agent=user_agent,
     )
     logger.info(f"Enqueued job {job_id} with task ID {task.id}")
 
@@ -572,6 +583,45 @@ def get_cohort_status(
         job_statuses.append({"job_id": job_id, "status": status})
 
     return {"cohort_id": response["cohort_id"], "alias": response["alias"], "jobs": job_statuses}
+
+
+@router.get(
+    "/usage-statistics/",
+    dependencies=[
+        Depends(
+            RateLimiter(
+                times=settings.RATE_LIMIT_TIMES, seconds=settings.RATE_LIMIT_SECONDS
+            )
+        ),
+    ],
+    summary="Get Usage Statistics",
+    description=(
+        "Retrieve aggregated usage statistics.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
+        f"{settings.RATE_LIMIT_SECONDS} seconds."
+    ),
+)
+def get_usage_statistics():
+    """
+    Endpoint to retrieve aggregated usage statistics.
+    """
+    # Retrieve all usage data
+    usage_keys = redis_usage_client.keys("usage:*")
+    total_jobs = len(usage_keys)
+    unique_users = set()
+    job_statuses = Counter()
+
+    for key in usage_keys:
+        data = redis_usage_client.hgetall(key)
+        unique_users.add(data.get("user_hash"))
+        status = data.get("status", "unknown")
+        job_statuses[status] += 1
+
+    return {
+        "total_jobs": total_jobs,
+        "unique_users": len(unique_users),
+        "job_statuses": dict(job_statuses),
+    }
 
 
 # Include the router in the FastAPI app
