@@ -73,7 +73,7 @@ def process_bam_to_fastq(
     fast_mode=False,
     delete_intermediates=True,
     keep_intermediates=False,
-    bed_file=None,  # New parameter
+    bed_file=None,
 ):
     """
     Process BAM files by slicing, filtering, and converting to FASTQ.
