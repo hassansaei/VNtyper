@@ -108,21 +108,17 @@ app = FastAPI(
     version=API_VERSION,
     description=(
         """
-        ### Overview
-
-        **VNtyper Online API** is a web-based application designed to facilitate the genotyping of MUC1 Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data.
+        VNtyper Online API is a Application Programming Interface designed to facilitate the genotyping of MUC1 Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data.
 
         This API allows users to submit genomic data for VNTR analysis, check job statuses, download results, and access aggregated usage statistics.
 
-        ### Features
+        Features
 
-        - **Submit Jobs**: Upload BAM files and initiate VNTR analysis.
-        - **Job Management**: Check the status of submitted jobs and retrieve results.
-        - **Cohort Support**: Group jobs into cohorts for collective analysis.
-        - **Usage Statistics**: Access anonymized usage statistics of the API.
-        - **In-Browser Processing**: Leverages powerful genomic data processing tools.
-
-        For more information, visit the [VNtyper Online documentation](https://vntyper.org/docs/).
+        - Submit Jobs: Upload BAM files and initiate VNTR analysis.
+        - Job Management: Check the status of submitted jobs and retrieve results.
+        - Cohort Support: Group jobs into cohorts for collective analysis.
+        - Usage Statistics: Access anonymized usage statistics of the API.
+        - In-Browser Processing: Leverages powerful genomic data processing tools.
         """
     ),
     terms_of_service="https://vntyper.org/terms/",
