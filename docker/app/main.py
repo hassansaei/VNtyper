@@ -1,3 +1,5 @@
+# main.py
+
 import logging
 import os
 import shutil
@@ -43,6 +45,11 @@ DEFAULT_OUTPUT_DIR = settings.DEFAULT_OUTPUT_DIR
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
+# Redis Password Configuration
+# Set a default password if REDIS_PASSWORD is not provided
+DEFAULT_REDIS_PASSWORD = "defaultpassword"  # Change this to a secure default
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", DEFAULT_REDIS_PASSWORD)
+
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
 RATE_LIMITING_REDIS_DB = settings.RATE_LIMITING_REDIS_DB
@@ -50,18 +57,34 @@ COHORT_REDIS_DB = int(os.getenv("COHORT_REDIS_DB", 3))  # Cohort data
 USAGE_REDIS_DB = settings.USAGE_REDIS_DB  # Usage statistics
 
 # Redis clients
+REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+COHORT_REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{COHORT_REDIS_DB}"
+USAGE_REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{USAGE_REDIS_DB}"
+
 redis_client = redis.Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    db=REDIS_DB,
+    password=REDIS_PASSWORD,
+    decode_responses=True,
 )
 redis_cohort_client = redis.Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=COHORT_REDIS_DB, decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    db=COHORT_REDIS_DB,
+    password=REDIS_PASSWORD,
+    decode_responses=True,
 )
 redis_usage_client = redis.Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=USAGE_REDIS_DB, decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    db=USAGE_REDIS_DB,
+    password=REDIS_PASSWORD,
+    decode_responses=True,
 )
 
 # Rate limiting Redis URL
-RATE_LIMIT_REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
+RATE_LIMIT_REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
 
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
@@ -71,10 +94,12 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_passphrase(passphrase: str) -> str:
+    """Hash a passphrase using bcrypt."""
     return pwd_context.hash(passphrase)
 
 
 def verify_passphrase(passphrase: str, hashed_passphrase: str) -> bool:
+    """Verify a passphrase against its hash."""
     return pwd_context.verify(passphrase, hashed_passphrase)
 
 
@@ -121,10 +146,15 @@ app = FastAPI(
 async def startup_event():
     """Initialize rate limiting and cache the VNtyper tool version."""
     # Initialize Redis client for rate limiting
-    redis_rate_limit = aioredis.from_url(
-        RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
-    )
-    await FastAPILimiter.init(redis_rate_limit)
+    try:
+        redis_rate_limit = aioredis.from_url(
+            RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
+        )
+        await FastAPILimiter.init(redis_rate_limit)
+        logger.info("Rate limiting initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize rate limiting: {e}")
+        raise
 
     # Cache the VNtyper tool version
     global TOOL_VERSION

@@ -4,12 +4,30 @@ from celery import Celery
 from celery.schedules import crontab
 from kombu import Queue
 import os
+import logging
+
+# Configure logging for Celery
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Retrieve Redis password from environment variables
+# Set a default password if REDIS_PASSWORD is not provided
+DEFAULT_REDIS_PASSWORD = "qE3!#zjraRG*`X2g4%<x&J"
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", DEFAULT_REDIS_PASSWORD)
+
+# Redis configuration
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 0))  # Default Celery DB
+
+# Construct Redis URL with password
+REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
 # Initialize Celery
 celery_app = Celery(
     "worker",
-    broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+    broker=REDIS_URL,
+    backend=REDIS_URL
 )
 
 # Autodiscover tasks from the 'app.tasks' module
@@ -39,3 +57,6 @@ celery_app.conf.task_queues = (
 celery_app.conf.task_annotations = {
     'app.tasks.run_vntyper_job': {'rate_limit': None},
 }
+
+# Optional: Log Redis connection details (excluding password for security)
+logger.info(f"Celery Broker URL: redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}")
