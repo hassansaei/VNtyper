@@ -1,3 +1,5 @@
+# docker/app/tasks.py
+
 from .celery_app import celery_app
 import subprocess
 import os
@@ -19,20 +21,35 @@ logger = get_task_logger(__name__)
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
+# Retrieve Redis password from environment variables
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "qE3!#zjraRG*`X2g4%<x&J")
+
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
 COHORT_REDIS_DB = int(os.getenv("COHORT_REDIS_DB", 3))  # Cohort data
 USAGE_REDIS_DB = settings.USAGE_REDIS_DB  # Usage statistics
 
-# Initialize Redis clients
+# Initialize Redis clients with authentication
 redis_client = redis.Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    db=REDIS_DB,
+    password=REDIS_PASSWORD,
+    decode_responses=True
 )
 redis_cohort_client = redis.Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=COHORT_REDIS_DB, decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    db=COHORT_REDIS_DB,
+    password=REDIS_PASSWORD,
+    decode_responses=True
 )
 redis_usage_client = redis.Redis(
-    host=REDIS_HOST, port=REDIS_PORT, db=USAGE_REDIS_DB, decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    db=USAGE_REDIS_DB,
+    password=REDIS_PASSWORD,
+    decode_responses=True
 )
 
 
