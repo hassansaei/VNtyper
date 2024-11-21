@@ -3,6 +3,7 @@
 import os
 import logging
 
+
 class Settings:
     PROJECT_NAME: str = "VNtyper API"
     DEBUG: bool = True
@@ -29,6 +30,13 @@ class Settings:
 
     # API Base URL
     API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+    # Cohort configurations
+    COHORT_RETENTION_DAYS: int = int(os.getenv("COHORT_RETENTION_DAYS", 14))  # Default to 14 days
+    PASSWORD_HASH_SCHEME: str = "bcrypt"
+
+    # Max result age for cleanup
+    MAX_RESULT_AGE_DAYS: int = int(os.getenv("MAX_RESULT_AGE_DAYS", 7))
 
 settings = Settings()
 

@@ -1,3 +1,3 @@
 # docker/app/version.py
 
-API_VERSION = "0.4.1"
+API_VERSION = "0.5.0"
