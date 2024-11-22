@@ -86,15 +86,18 @@ redis_usage_client = redis.Redis(
 # Rate limiting Redis URL
 RATE_LIMIT_REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
 
-# Define High Rate Limiting Settings
-HIGH_RATE_LIMIT_TIMES = int(os.getenv("HIGH_RATE_LIMIT_TIMES", 100))  # Default to 100 requests
-HIGH_RATE_LIMIT_SECONDS = int(os.getenv("HIGH_RATE_LIMIT_SECONDS", 60))  # Per 60 seconds
+# Define Rate Limiting Parameters
+STANDARD_RATE_LIMIT_TIMES = int(os.getenv("RATE_LIMIT_TIMES", 10))  # e.g., 10 requests
+STANDARD_RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", 60))  # e.g., per 60 seconds
+
+HIGH_RATE_LIMIT_TIMES = int(os.getenv("HIGH_RATE_LIMIT_TIMES", 100))  # e.g., 100 requests
+HIGH_RATE_LIMIT_SECONDS = int(os.getenv("HIGH_RATE_LIMIT_SECONDS", 60))  # e.g., per 60 seconds
 
 # Define RateLimiter dependencies
 standard_rate_limiter = Depends(
     RateLimiter(
-        times=settings.RATE_LIMIT_TIMES,
-        seconds=settings.RATE_LIMIT_SECONDS,
+        times=STANDARD_RATE_LIMIT_TIMES,
+        seconds=STANDARD_RATE_LIMIT_SECONDS,
     )
 )
 
@@ -203,8 +206,8 @@ router = APIRouter()
     summary="Get API and Tool Version",
     description=(
         "Retrieve the current version of the API and the VNtyper tool.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per "
-        f"{settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {STANDARD_RATE_LIMIT_TIMES} requests per "
+        f"{STANDARD_RATE_LIMIT_SECONDS} seconds."
     ),
 )
 def get_versions():
@@ -228,7 +231,7 @@ def get_versions():
     summary="Create a new cohort",
     description=(
         "Create a new cohort with an optional alias and passphrase.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {STANDARD_RATE_LIMIT_TIMES} requests per {STANDARD_RATE_LIMIT_SECONDS} seconds."
     ),
 )
 def create_cohort(
@@ -295,7 +298,7 @@ class RunJobResponse(BaseModel):
         "Submit a VNtyper job with additional parameters. "
         "You can upload BAM files and configure various settings for the analysis. "
         "An optional email can be provided to receive notifications upon job completion.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {STANDARD_RATE_LIMIT_TIMES} requests per {STANDARD_RATE_LIMIT_SECONDS} seconds."
     ),
     response_model=RunJobResponse,
 )
@@ -523,7 +526,7 @@ def get_job_status(job_id: str):
     description=(
         "Download the zipped result files of a completed VNtyper job using its job ID. "
         "This endpoint is rate-limited to prevent abuse.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {HIGH_RATE_LIMIT_TIMES} requests per {HIGH_RATE_LIMIT_SECONDS} seconds."
     ),
     responses={
         200: {
@@ -609,7 +612,7 @@ class JobQueuePositionResponse(BaseModel):
         "If no `job_id` is provided, returns the total number of jobs in the queue.\n"
         "If a `job_id` is provided, returns the position of that job in the queue.\n\n"
         "**Note:** This endpoint is rate-limited to prevent abuse.\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {HIGH_RATE_LIMIT_TIMES} requests per {HIGH_RATE_LIMIT_SECONDS} seconds."
     ),
     response_model=Union[JobQueueResponse, JobQueuePositionResponse],
 )
@@ -683,7 +686,7 @@ def get_job_queue(
     summary="Get all jobs in a cohort",
     description=(
         "Retrieve all job IDs associated with a cohort.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {HIGH_RATE_LIMIT_TIMES} requests per {HIGH_RATE_LIMIT_SECONDS} seconds."
     ),
 )
 def get_cohort_jobs(
@@ -758,7 +761,7 @@ def get_cohort_jobs(
     summary="Get status of all jobs in a cohort",
     description=(
         "Retrieve the status of all jobs associated with a cohort.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {HIGH_RATE_LIMIT_TIMES} requests per {HIGH_RATE_LIMIT_SECONDS} seconds."
     ),
 )
 def get_cohort_status(
@@ -822,7 +825,7 @@ class UsageStatisticsResponse(BaseModel):
     summary="Get Usage Statistics",
     description=(
         "Retrieve aggregated usage statistics.\n\n"
-        f"**Rate Limit:** {settings.RATE_LIMIT_TIMES} requests per {settings.RATE_LIMIT_SECONDS} seconds."
+        f"**Rate Limit:** {HIGH_RATE_LIMIT_TIMES} requests per {HIGH_RATE_LIMIT_SECONDS} seconds."
     ),
     response_model=UsageStatisticsResponse,
 )
