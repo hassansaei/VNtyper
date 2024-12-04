@@ -56,8 +56,12 @@ USAGE_REDIS_DB = settings.USAGE_REDIS_DB  # Usage statistics
 
 # Redis clients
 REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
-COHORT_REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{COHORT_REDIS_DB}"
-USAGE_REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{USAGE_REDIS_DB}"
+COHORT_REDIS_URL = (
+    f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{COHORT_REDIS_DB}"
+)
+USAGE_REDIS_URL = (
+    f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{USAGE_REDIS_DB}"
+)
 
 redis_client = redis.Redis(
     host=REDIS_HOST,
@@ -498,9 +502,11 @@ def get_job_status(job_id: str):
     elif status == "SUCCESS":
         return JobStatusResponse(job_id=job_id, status="completed")
     elif status == "FAILURE":
-        return JobStatusResponse(job_id=job_id, status="failed", error=str(task_result.info))
+        return JobStatusResponse(
+            job_id=job_id, status="failed", error=str(task_result.info)
+        )
     else:
-        return JobStatusResponse(job_id=job_id, status=status)
+        return JobStatusResponse(job_id=job_id, status=status.lower())
 
 
 @router.get(
@@ -707,6 +713,15 @@ def get_cohort_status(
     )
     job_ids = response["job_ids"]
 
+    # Define mapping from Celery statuses to standardized statuses
+    celery_status_mapping = {
+        "PENDING": "pending",
+        "STARTED": "started",
+        "SUCCESS": "completed",
+        "FAILURE": "failed",
+        # Add more mappings if necessary
+    }
+
     # Get status for each job
     job_statuses = []
     for job_id in job_ids:
@@ -715,7 +730,8 @@ def get_cohort_status(
             status = "unknown"
         else:
             task_result = AsyncResult(task_id)
-            status = task_result.status.lower()
+            # Map the Celery status to standardized status
+            status = celery_status_mapping.get(task_result.status, task_result.status.lower())
         job_statuses.append({"job_id": job_id, "status": status})
 
     return {
