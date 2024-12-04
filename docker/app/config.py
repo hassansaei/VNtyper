@@ -15,8 +15,10 @@ class Settings:
     DEFAULT_OUTPUT_DIR: str = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 
     # Rate limiting configurations
-    RATE_LIMIT_TIMES: int = int(os.getenv("RATE_LIMIT_TIMES", 20))  # Default to 10 requests
-    RATE_LIMIT_SECONDS: int = int(os.getenv("RATE_LIMIT_SECONDS", 60))  # Per 60 seconds
+    RATE_LIMIT_SIMPLE_TIMES: int = int(os.getenv("RATE_LIMIT_SIMPLE_TIMES", 100))
+    RATE_LIMIT_SIMPLE_SECONDS: int = int(os.getenv("RATE_LIMIT_SIMPLE_SECONDS", 60))
+    RATE_LIMIT_HIGH_TIMES: int = int(os.getenv("RATE_LIMIT_HIGH_TIMES", 10))
+    RATE_LIMIT_HIGH_SECONDS: int = int(os.getenv("RATE_LIMIT_HIGH_SECONDS", 60))
     RATE_LIMITING_REDIS_DB: int = int(os.getenv("RATE_LIMITING_REDIS_DB", 2))  # Use DB 2 for rate limiting
 
     # SMTP Configuration
