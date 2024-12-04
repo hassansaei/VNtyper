@@ -158,11 +158,20 @@ def run_vntyper_job(
             # Send failure email if provided
             if email:
                 subject = "VNtyper Job Failed"
-                content = f"""
-                <p>Your VNtyper job with Job ID <strong>{job_id}</strong> has failed.</p>
-                <p>Error Details:</p>
-                <pre>{str(e)}</pre>
-                """
+                if cohort_key:
+                    cohort_id = cohort_key.split(":", 1)[1]
+                    content = f"""
+                    <p>Your VNtyper job with Job ID <strong>{job_id}</strong> has failed.</p>
+                    <p>Cohort ID: <strong>{cohort_id}</strong></p>
+                    <p>Error Details:</p>
+                    <pre>{str(e)}</pre>
+                    """
+                else:
+                    content = f"""
+                    <p>Your VNtyper job with Job ID <strong>{job_id}</strong> has failed.</p>
+                    <p>Error Details:</p>
+                    <pre>{str(e)}</pre>
+                    """
                 send_email_task.delay(to_email=email, subject=subject, content=content)
             raise
 
@@ -187,11 +196,20 @@ def run_vntyper_job(
         if email:
             subject = "VNtyper Job Completed Successfully"
             download_url = f"{settings.API_BASE_URL}/api/download/{job_id}/"
-            content = f"""
-            <p>Your VNtyper job has been completed successfully.</p>
-            <p>Job ID: <strong>{job_id}</strong></p>
-            <p>You can download your results <a href="{download_url}">here</a>.</p>
-            """
+            if cohort_key:
+                cohort_id = cohort_key.split(":", 1)[1]
+                content = f"""
+                <p>Your VNtyper job has been completed successfully.</p>
+                <p>Job ID: <strong>{job_id}</strong></p>
+                <p>Cohort ID: <strong>{cohort_id}</strong></p>
+                <p>You can download your results <a href="{download_url}">here</a>.</p>
+                """
+            else:
+                content = f"""
+                <p>Your VNtyper job has been completed successfully.</p>
+                <p>Job ID: <strong>{job_id}</strong></p>
+                <p>You can download your results <a href="{download_url}">here</a>.</p>
+                """
             send_email_task.delay(to_email=email, subject=subject, content=content)
             logger.info(f"Triggered email sending to {email}")
 
