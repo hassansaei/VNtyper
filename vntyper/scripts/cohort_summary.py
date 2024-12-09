@@ -23,24 +23,34 @@ def load_kestrel_results(kestrel_result_file):
     """
     Load and process Kestrel genotyping results.
 
-    Args:
-        kestrel_result_file (str or Path): Path to the Kestrel result TSV file.
+    The Kestrel output is expected to be a TSV file containing genotyping
+    information such as motif, variant, position, confidence, and coverage
+    statistics. If the file doesn't exist or cannot be parsed, returns a
+    DataFrame with just the 'Sample' column.
 
-    Returns:
-        pandas.DataFrame: Processed Kestrel results.
+    Parameters
+    ----------
+    kestrel_result_file : str or Path
+        Path to the Kestrel result TSV file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Processed Kestrel results with human-readable column names and
+        conditional styling applied to the 'Confidence' column.
     """
     sample_id = Path(kestrel_result_file).parents[1].name  # Extract the sample ID
     logging.info(f"Loading Kestrel results from {kestrel_result_file}")
 
     if not os.path.exists(kestrel_result_file):
         logging.warning(f"Kestrel result file not found: {kestrel_result_file}")
-        return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
+        return pd.DataFrame({'Sample': [sample_id]})  # Return minimal DataFrame
 
     try:
         df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
         df['Sample'] = sample_id  # Add sample ID column
 
-        # Define the required columns and their human-readable headers
+        # Define required columns and their human-readable headers
         columns_to_display = {
             'Sample': 'Sample',
             'Motif': 'Motif',
@@ -55,7 +65,7 @@ def load_kestrel_results(kestrel_result_file):
             'Confidence': 'Confidence'
         }
 
-        # Select only the columns that are present in the DataFrame
+        # Select columns present in the file
         available_columns = {
             col: columns_to_display[col]
             for col in columns_to_display if col in df.columns
@@ -65,11 +75,12 @@ def load_kestrel_results(kestrel_result_file):
         if missing_columns:
             logging.warning(f"Missing columns in {kestrel_result_file}: {missing_columns}")
 
-        # Rename the columns to human-readable names
+        # Rename columns to be human-readable
         df = df[list(available_columns.keys())]
         df = df.rename(columns=available_columns)
 
         # Apply conditional styling to the Confidence column
+        # Coloring based on confidence value to highlight precision level.
         df['Confidence'] = df['Confidence'].apply(
             lambda x: (
                 f'<span style="color:orange;font-weight:bold;">{x}</span>'
@@ -85,63 +96,100 @@ def load_kestrel_results(kestrel_result_file):
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
-        return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
+        return pd.DataFrame({'Sample': [sample_id]})
     except Exception as e:
         logging.error(f"Unexpected error loading Kestrel results: {e}")
-        return pd.DataFrame({'Sample': [sample_id]})  # Return DataFrame with Sample ID only
+        return pd.DataFrame({'Sample': [sample_id]})
 
 
 def load_advntr_results(advntr_result_file):
     """
     Load and process adVNTR genotyping results.
 
-    Args:
-        advntr_result_file (str or Path): Path to the adVNTR result TSV file.
+    adVNTR results are expected in a TSV format, potentially with columns for
+    sample ID, VNTR ID (VID), state, supporting reads, coverage, and p-values.
+    This function ensures a full schema is always returned, even if no file
+    is found or if the file is empty.
 
-    Returns:
-        tuple: (pandas.DataFrame, bool) Processed adVNTR results and availability flag.
+    Parameters
+    ----------
+    advntr_result_file : str or Path
+        Path to the adVNTR result TSV file.
+
+    Returns
+    -------
+    tuple
+        A tuple (pandas.DataFrame, bool) where:
+        - DataFrame contains the full set of expected columns. If no data is found,
+          returns a DataFrame with NaNs and a "Message" column indicating no output.
+        - bool indicating whether valid data was found (True) or not (False).
     """
-    sample_id = Path(advntr_result_file).parents[1].name  # Extract the sample ID
+    full_cols = [
+        "Sample",
+        "VID",
+        "State",
+        "NumberOfSupportingReads",
+        "MeanCoverage",
+        "Pvalue",
+        "Message"
+    ]
+
+    def empty_advntr_row(sample_id, message="no adVNTR output found."):
+        # Create a single-row DataFrame with all expected columns.
+        row_data = {col: [float('nan')] for col in full_cols if col not in ["Sample", "Message"]}
+        row_data["Sample"] = [sample_id]
+        row_data["Message"] = [message]
+        return pd.DataFrame(row_data, columns=full_cols)
+
+    sample_id = Path(advntr_result_file).parents[1].name
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
 
     if not os.path.exists(advntr_result_file):
         logging.warning(f"adVNTR result file not found: {advntr_result_file}")
-        return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']}), False
+        return empty_advntr_row(sample_id), False
 
     try:
         df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
         if df.empty:
             logging.warning(f"adVNTR result file {advntr_result_file} is empty.")
-            return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']}), False
+            return empty_advntr_row(sample_id), False
 
-        df['Sample'] = sample_id  # Add sample ID column
+        df['Sample'] = sample_id
 
-        # Return only the sample column and any relevant data (if present)
-        relevant_columns = ['Sample'] + [col for col in df.columns if col != 'Sample']
-        df = df[relevant_columns]
+        # Ensure all expected columns are present
+        for col in full_cols:
+            if col not in df.columns:
+                df[col] = float('nan')
 
-        return df, True  # Return DataFrame and True flag
+        df = df[full_cols]
+
+        return df, True
     except pd.errors.EmptyDataError as e:
         logging.error(f"adVNTR result file {advntr_result_file} is empty: {e}")
-        return pd.DataFrame({'Sample': [sample_id], 'Message': ['No adVNTR results found for this sample']}), False
+        return empty_advntr_row(sample_id), False
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
-        return pd.DataFrame({'Sample': [sample_id], 'Message': ['Failed to parse adVNTR results']}), False
+        return empty_advntr_row(sample_id, "Failed to parse adVNTR results"), False
     except Exception as e:
         logging.error(f"Unexpected error occurred while loading adVNTR results: {e}")
-        return pd.DataFrame({'Sample': [sample_id], 'Message': ['Error loading adVNTR results']}), False
+        return empty_advntr_row(sample_id, "Error loading adVNTR results"), False
 
 
 def find_results_files(root_dir, filename):
     """
     Recursively find all files with a specific name in a directory tree.
 
-    Args:
-        root_dir (str or Path): Root directory to start the search.
-        filename (str): Name of the file to search for.
+    Parameters
+    ----------
+    root_dir : str or Path
+        Root directory to start the search.
+    filename : str
+        Name of the file to search for.
 
-    Returns:
-        list: List of Path objects matching the filename.
+    Returns
+    -------
+    list
+        List of Path objects matching the filename.
     """
     logging.info(f"Searching for {filename} in directory {root_dir}")
     result_files = []
@@ -158,40 +206,81 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
     """
     Load results from all matching files across multiple directories.
 
-    Args:
-        input_dirs (list): List of directories to search.
-        filename (str): Name of the result files to search for.
-        file_loader (function): Function to load and process each file.
+    If loading adVNTR and no files are found in a given directory, this function
+    attempts to return one row per subfolder, treating each as a sample. If there
+    are no subfolders, it falls back to one row for the directory itself.
 
-    Returns:
-        pandas.DataFrame: Concatenated DataFrame of all loaded results.
+    Parameters
+    ----------
+    input_dirs : list
+        List of directories to search.
+    filename : str
+        Name of the result files to search for.
+    file_loader : function
+        Function to load and process each file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Concatenated DataFrame of all loaded results.
     """
     dfs = []
+    loading_advntr = ('advntr' in filename.lower())
+
+    if loading_advntr:
+        full_cols = [
+            "Sample",
+            "VID",
+            "State",
+            "NumberOfSupportingReads",
+            "MeanCoverage",
+            "Pvalue",
+            "Message"
+        ]
+
+        def empty_advntr_row(sample_id, message="no adVNTR output found."):
+            row_data = {col: [float('nan')] for col in full_cols if col not in ["Sample", "Message"]}
+            row_data["Sample"] = [sample_id]
+            row_data["Message"] = [message]
+            return pd.DataFrame(row_data, columns=full_cols)
+
     for input_dir in input_dirs:
         logging.info(f"Processing input directory: {input_dir}")
         result_files = find_results_files(input_dir, filename)
+
         if not result_files:
-            # Handle cases where there are no result files in the directory
-            sample_id = Path(input_dir).name
-            logging.warning(f"No {filename} files found in {input_dir}")
-            dfs.append(pd.DataFrame({
-                'Sample': [sample_id],
-                'Message': [f'No {filename} results found for this sample']
-            }))
+            # No result files found.
+            if loading_advntr:
+                # For adVNTR, attempt to produce one row per subfolder
+                subfolders = [d for d in Path(input_dir).iterdir() if d.is_dir()]
+                if subfolders:
+                    for subf in subfolders:
+                        sample_id = subf.name
+                        dfs.append(empty_advntr_row(sample_id))
+                else:
+                    # If no subfolders, just one row for the directory itself
+                    sample_id = Path(input_dir).name
+                    dfs.append(empty_advntr_row(sample_id))
+            else:
+                # For non-adVNTR results
+                sample_id = Path(input_dir).name
+                dfs.append(pd.DataFrame({
+                    'Sample': [sample_id],
+                    'Message': [f'No {filename} results found for this sample']
+                }))
         else:
+            # Files found, load them all
             for file in result_files:
                 logging.info(f"Attempting to load file: {file}")
                 result = file_loader(file)
-                
-                # Check if the result is a tuple (as in load_advntr_results)
                 if isinstance(result, tuple):
-                    df = result[0]  # Extract the DataFrame
+                    df = result[0]  # For advntr_results, result is (df, bool)
                 else:
                     df = result
-                
                 dfs.append(df)
-        # Log the number of results loaded from the directory
+
         logging.info(f"Loaded {len(result_files)} {filename} files from {input_dir}")
+
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
 
@@ -199,11 +288,15 @@ def encode_image_to_base64(image_path):
     """
     Encode an image file to a base64 string.
 
-    Args:
-        image_path (str or Path): Path to the image file.
+    Parameters
+    ----------
+    image_path : str or Path
+        Path to the image file.
 
-    Returns:
-        str: Base64-encoded string of the image.
+    Returns
+    -------
+    str
+        Base64-encoded string of the image.
     """
     with open(image_path, "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
@@ -212,66 +305,65 @@ def encode_image_to_base64(image_path):
 
 def generate_donut_chart(values, labels, total, title, colors, plot_path=None, interactive=False):
     """
-    Generate and save an interactive or static donut chart.
+    Generate and save a donut chart (static or interactive).
 
-    Args:
-        values (list): Values for each segment of the donut chart.
-        labels (list): Labels for each segment.
-        total (int): Total value to display in the center.
-        title (str): Title of the chart.
-        colors (list): Colors for each segment.
-        plot_path (str or Path, optional): Path to save the static plot image.
-        interactive (bool): Whether to generate an interactive Plotly chart.
+    For static plots, matplotlib is used. For interactive plots, Plotly is used.
+    This chart visualizes categories as parts of a donut, with the total in the center.
 
-    Returns:
-        str: Base64-encoded image string for static charts or HTML string for interactive charts.
+    Parameters
+    ----------
+    values : list
+        Values for each segment of the donut chart.
+    labels : list
+        Labels for each segment.
+    total : int
+        Total value displayed in the center of the donut.
+    title : str
+        Title of the chart.
+    colors : list
+        Colors for each segment of the donut.
+    plot_path : str or Path, optional
+        Path to save the static plot image.
+    interactive : bool
+        Whether to generate an interactive Plotly chart.
+
+    Returns
+    -------
+    str
+        Base64-encoded image string for static charts or HTML string for interactive charts.
     """
     if interactive:
-        # Generate an interactive donut chart using Plotly
+        # Using Plotly for interactive donut chart
         fig = go.Figure(go.Pie(
             labels=labels,
             values=values,
-            hole=0.6,  # Create the donut shape
-            marker=dict(colors=colors, line=dict(color='black', width=2)),  # Add black border
-            textinfo='none'  # Disable percentage display inside the chart
+            hole=0.6,
+            marker=dict(colors=colors, line=dict(color='black', width=2)),
+            textinfo='none'
         ))
 
-        # Add title and central number inside the donut chart
         fig.update_layout(
             title={
                 'text': title,
-                'y': 0.95,  # Adjust the vertical positioning of the title
+                'y': 0.95,
                 'x': 0.5,
                 'xanchor': 'center',
                 'yanchor': 'top'
             },
             annotations=[
-                dict(
-                    text=f'<b>{total}</b>',
-                    x=0.5, y=0.5,
-                    font_size=40, showarrow=False
-                ),  # Centralized total number
-                dict(
-                    text=labels[0],
-                    x=0.15, y=0.5,
-                    font_size=14, showarrow=False
-                ),  # Place first label to the left
-                dict(
-                    text=labels[1],
-                    x=0.85, y=0.5,
-                    font_size=14, showarrow=False
-                )   # Place second label to the right
+                dict(text=f'<b>{total}</b>', x=0.5, y=0.5, font_size=40, showarrow=False),
+                dict(text=labels[0], x=0.15, y=0.5, font_size=14, showarrow=False),
+                dict(text=labels[1], x=0.85, y=0.5, font_size=14, showarrow=False)
             ],
-            showlegend=False,  # Disable the default legend
-            margin=dict(t=50, b=50, l=50, r=50),  # Adjust margins
-            height=500, width=500  # Set dimensions
+            showlegend=False,
+            margin=dict(t=50, b=50, l=50, r=50),
+            height=500, width=500
         )
 
-        # Return the interactive plot HTML
+        # Return the interactive plot as HTML
         return pio.to_html(fig, full_html=False)
-
     else:
-        # Static chart using matplotlib
+        # Using matplotlib for static donut chart
         fig, ax = plt.subplots(figsize=(6, 6))
         wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
         ax.pie(values, wedgeprops=wedgeprops, startangle=90, colors=colors, labels=labels)
@@ -284,42 +376,67 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
 
 def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config):
     """
-    Generate the cohort summary report with static and interactive plots.
+    Generate the cohort summary report combining Kestrel and adVNTR results.
 
-    Args:
-        output_dir (str or Path): Output directory for the report.
-        kestrel_df (pandas.DataFrame): DataFrame containing Kestrel results.
-        advntr_df (pandas.DataFrame): DataFrame containing adVNTR results.
-        summary_file (str): Name of the summary report file.
-        config (dict): Configuration dictionary.
+    This function creates summary statistics, generates donut charts for each data type,
+    and then renders a Jinja2 template to produce a final HTML report.
+
+    Parameters
+    ----------
+    output_dir : str or Path
+        Output directory for the report.
+    kestrel_df : pandas.DataFrame
+        DataFrame containing Kestrel results.
+    advntr_df : pandas.DataFrame
+        DataFrame containing adVNTR results.
+    summary_file : str
+        Name of the summary report file.
+    config : dict
+        Configuration dictionary containing paths and settings.
+
+    Returns
+    -------
+    None
+        Writes the HTML report to the specified summary file.
     """
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Summary statistics for Kestrel
-    kestrel_positive = len(kestrel_df[kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
-    kestrel_negative = len(kestrel_df[~kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision')])
+    # Calculate summary statistics for Kestrel
+    kestrel_positive = len(kestrel_df[kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision', na=False)])
+    kestrel_negative = len(kestrel_df[~kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision', na=False)])
     total_kestrel = kestrel_positive + kestrel_negative
 
-    # Handle missing 'Message' column in adVNTR results
+    # Ensure 'Message' column exists in adVNTR results
     if 'Message' not in advntr_df.columns:
-        advntr_df['Message'] = None  # Add a default 'Message' column with None values if it's missing
+        advntr_df['Message'] = None
 
-    # Summary statistics for adVNTR
-    advntr_positive = len(advntr_df[(advntr_df['VID'].notna()) &
-                                    (advntr_df['VID'] != 'Negative') &
-                                    (advntr_df['Message'].isna())])
-    advntr_negative = len(advntr_df[advntr_df['VID'] == 'Negative'])
-    advntr_no_data = len(advntr_df[advntr_df['Message'].notna()])
+    # Calculate summary statistics for adVNTR
+    if 'VID' in advntr_df.columns:
+        advntr_positive = len(
+            advntr_df[
+                (advntr_df['VID'].notna()) &
+                (advntr_df['VID'] != 'Negative') &
+                (advntr_df['Message'].isna())
+            ]
+        )
+        advntr_negative = len(advntr_df[advntr_df['VID'] == 'Negative'])
+        advntr_no_data = len(advntr_df[advntr_df['Message'].notna()])
+    else:
+        # No VID column means no valid adVNTR data found
+        advntr_positive = 0
+        advntr_negative = 0
+        advntr_no_data = len(advntr_df)
+
     total_advntr = advntr_positive + advntr_negative + advntr_no_data
 
     colors = {
         'positive': '#56B4E9',  # Sky blue
         'negative': '#D55E00',  # Vermillion
-        'no_data': '#999999'     # Grey
+        'no_data': '#999999'    # Grey
     }
 
-    # Static Kestrel plot (matplotlib)
+    # Generate donut charts for Kestrel
     kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
     kestrel_plot_base64 = generate_donut_chart(
         values=[kestrel_positive, kestrel_negative],
@@ -330,8 +447,6 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         plot_path=kestrel_plot_path,
         interactive=False
     )
-
-    # Interactive Kestrel plot (Plotly)
     kestrel_plot_html = generate_donut_chart(
         values=[kestrel_positive, kestrel_negative],
         labels=['Positive', 'Negative'],
@@ -342,7 +457,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         interactive=True
     )
 
-    # Static adVNTR plot (matplotlib)
+    # Generate donut charts for adVNTR
     advntr_plot_path = plots_dir / "advntr_summary_plot.png"
     advntr_plot_base64 = generate_donut_chart(
         values=[advntr_positive, advntr_negative, advntr_no_data],
@@ -353,8 +468,6 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         plot_path=advntr_plot_path,
         interactive=False
     )
-
-    # Interactive adVNTR plot (Plotly)
     advntr_plot_html = generate_donut_chart(
         values=[advntr_positive, advntr_negative, advntr_no_data],
         labels=['Positive', 'Negative', 'No Data'],
@@ -365,7 +478,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         interactive=True
     )
 
-    # Load the template from config
+    # Load Jinja2 template
     template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
@@ -374,7 +487,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         logging.error(f"Failed to load Jinja2 template: {e}")
         raise
 
-    # Prepare context for the template
+    # Context for rendering HTML template
     context = {
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'kestrel_positive': kestrel_df.to_html(
@@ -387,7 +500,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         'advntr_plot_base64': advntr_plot_base64,
         'kestrel_plot_interactive': kestrel_plot_html,
         'advntr_plot_interactive': advntr_plot_html,
-        'interactive': True  # Flag to toggle between static and interactive plots in the template
+        'interactive': True
     }
 
     # Render the template with the context
@@ -412,13 +525,27 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config):
     """
     Aggregate outputs from multiple runs into a single summary file.
 
-    Args:
-        input_dirs (list): List of directories containing output files to aggregate.
-        output_dir (str or Path): Output directory for the aggregated summary.
-        summary_file (str): Name of the cohort summary report file.
-        config (dict): Configuration dictionary.
+    This function uses load_results_from_dirs to gather Kestrel and adVNTR results
+    from multiple directories, merges them into DataFrames, and then generates a
+    single cohort summary report.
+
+    Parameters
+    ----------
+    input_dirs : list
+        List of directories containing output files to aggregate. Each directory
+        represents a separate sample or run.
+    output_dir : str or Path
+        Output directory for the aggregated summary report.
+    summary_file : str
+        Name of the summary report file.
+    config : dict
+        Configuration dictionary containing paths and other settings.
+
+    Returns
+    -------
+    None
+        Writes the cohort summary report to the specified output directory.
     """
-    # Load results using the individual functions
     kestrel_df = load_results_from_dirs(
         input_dirs=input_dirs,
         filename="kestrel_result.tsv",
@@ -430,7 +557,6 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config):
         file_loader=load_advntr_results
     )
 
-    # Generate summary report and plot
     generate_cohort_summary_report(
         output_dir=output_dir,
         kestrel_df=kestrel_df,
