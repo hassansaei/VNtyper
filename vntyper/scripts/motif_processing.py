@@ -108,29 +108,30 @@ def load_additional_motifs(config):
     """
     Load additional motifs for final annotation from specified FASTA files.
 
-    This function reads motifs from 'code-adVNTR_RUs.fa' and
-    'MUC1_motifs_Rev_com.fa' files as specified in the configuration,
-    merges them into a single DataFrame, and returns it.
+    Previously, this function attempted to read motifs from 'code-adVNTR_RUs.fa'
+    and 'MUC1_motifs_Rev_com.fa' files as specified in the configuration, then
+    merge them. However, due to issues with the validity and necessity of 
+    'code-adVNTR_RUs.fa', we are currently only loading motifs from 
+    'MUC1_motifs_Rev_com.fa'.
+
+    If in the future we decide to incorporate 'code-adVNTR_RUs.fa' again for 
+    visualization or annotation purposes, we can reintroduce it here once it is 
+    validated and integrated properly with the pipeline.
 
     Args:
         config (dict): Configuration dictionary containing paths to reference data.
 
     Returns:
-        pd.DataFrame: DataFrame containing merged additional motifs with IDs and sequences.
+        pd.DataFrame: DataFrame containing motifs (currently only from 'MUC1_motifs_Rev_com.fa').
     """
     identifiers = []
     sequences = []
 
-    # Retrieve file paths from the configuration
-    code_advntr_file = config["reference_data"]["code_adVNTR_RUs"]
+    # Retrieve the path to MUC1_motifs_Rev_com.fa from the configuration
     muc1_motifs_rev_com_file = config["reference_data"]["muc1_motifs_rev_com"]
 
-    # Open and parse both FASTA files
-    with open(code_advntr_file) as ru_file, open(muc1_motifs_rev_com_file) as motif_file:
-        for seq_record in SeqIO.parse(ru_file, 'fasta'):
-            identifiers.append(seq_record.id)
-            sequences.append(str(seq_record.seq.upper()))
-
+    # Currently, we only load MUC1_motifs_Rev_com.fa
+    with open(muc1_motifs_rev_com_file) as motif_file:
         for seq_record in SeqIO.parse(motif_file, 'fasta'):
             identifiers.append(seq_record.id)
             sequences.append(str(seq_record.seq.upper()))
@@ -139,7 +140,7 @@ def load_additional_motifs(config):
     s1 = pd.Series(identifiers, name='ID')
     s2 = pd.Series(sequences, name='Sequence')
 
-    # Merge the Series into a single DataFrame
+    # Create a DataFrame from the parsed motifs
     merged_motifs = pd.DataFrame({
         'Motif': s1,
         'Motif_sequence': s2
