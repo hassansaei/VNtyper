@@ -1,5 +1,7 @@
-import pandas as pd
+#!/usr/bin/env python3
+# vntyper/scripts/file_processing.py
 
+import pandas as pd
 
 def filter_vcf(input_path, output_path):
     """

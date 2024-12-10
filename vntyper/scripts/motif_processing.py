@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# vntyper/scripts/motif_processing.py
+
 import pandas as pd
 from Bio import SeqIO
 

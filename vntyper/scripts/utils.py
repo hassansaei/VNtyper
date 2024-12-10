@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# vntyper/scripts/utils.py
+
 import os
 import json
 import logging

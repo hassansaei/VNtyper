@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# vntyper/scripts/fastq_bam_processing.py
 
 import logging
 import os
