@@ -2,7 +2,7 @@
   "output_directory": "out",
   "log_level": "INFO",
   "reference_data": {
-    "muc1_reference_vntr": "reference/MUC1-VNTR.fa",
+    "muc1_reference_vntr": "reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
     "advntr_reference_vntr_hg19": "reference/vntr_data_genic_loci/vntr_data/hg19_genic_VNTRs.db",
     "advntr_reference_vntr_hg38": "reference/vntr_data_recommended_loci_hg38/vntr_data/hg38_selected_VNTRs_Illumina.db",
     "bwa_reference_hg19": "reference/chr1.hg19.fa.gz",

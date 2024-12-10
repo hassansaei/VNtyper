@@ -26,8 +26,8 @@
   "own_repository_references": {
     "raw_files": [
       {
-        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/MUC1-VNTR.fa",
-        "target_path": "reference/MUC1-VNTR.fa",
+        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+        "target_path": "reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
         "index_command": "samtools faidx {path}"
       },
       {
