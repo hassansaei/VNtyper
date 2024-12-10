@@ -3,8 +3,7 @@
     "java_memory": "12g",
     "kmer_sizes": [20],
     "max_align_states": 30,
-    "max_hap_states": 30,
-    "java_path": "java"
+    "max_hap_states": 30
   },
   "frame_score_filtering": {
     "replace_value": "C",
