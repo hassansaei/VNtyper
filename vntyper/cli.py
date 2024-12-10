@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# vntyper/cli.py
+# VNtyper CLI entry point
 
 import argparse
 import importlib.resources as pkg_resources  # For accessing package data
