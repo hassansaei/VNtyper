@@ -117,6 +117,11 @@ def main():
         help="Path to the BAM file."
     )
     parser_pipeline.add_argument(
+        '--cram',
+        type=str,
+        help="Path to the CRAM file."
+    )
+    parser_pipeline.add_argument(
         '--threads',
         type=int,
         default=4,
@@ -127,7 +132,7 @@ def main():
         type=str,
         choices=["hg19", "hg38"],
         default="hg19",
-        help="Specify the reference assembly used for the input BAM file alignment."
+        help="Specify the reference assembly used for the input BAM/CRAM file alignment."
     )
     parser_pipeline.add_argument(
         '--fast-mode',
@@ -452,14 +457,19 @@ def main():
         # ----------------------------
         # Custom Validation for Pipeline Inputs
         # ----------------------------
-        # Ensure that only one type of input is provided (either BAM or FASTQ)
-        if args.bam and (args.fastq1 or args.fastq2):
-            parser_pipeline.error("Provide either BAM or FASTQ files, not both.")
+        # Ensure that only one type of input is provided (either BAM, CRAM, or FASTQ)
+        input_types = sum([
+            1 if args.bam else 0,
+            1 if args.cram else 0,
+            1 if (args.fastq1 or args.fastq2) else 0
+        ])
+        if input_types > 1:
+            parser_pipeline.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
 
-        # If BAM is not provided, ensure both FASTQ files are provided
-        if not args.bam and (args.fastq1 is None or args.fastq2 is None):
+        # If no BAM or CRAM, ensure both FASTQ files are provided
+        if not args.bam and not args.cram and (args.fastq1 is None or args.fastq2 is None):
             parser_pipeline.error(
-                "When not providing BAM, both --fastq1 and --fastq2 must be specified "
+                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified "
                 "for paired-end sequencing."
             )
 
@@ -482,6 +492,7 @@ def main():
             bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
 
         # Pass module_args and new arguments to run_pipeline
+        # Include cram=args.cram for CRAM support
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
@@ -491,6 +502,7 @@ def main():
             fastq1=args.fastq1,
             fastq2=args.fastq2,
             bam=args.bam,
+            cram=args.cram,  # CRAM support: pass CRAM argument to pipeline
             threads=args.threads,
             reference_assembly=args.reference_assembly,
             fast_mode=args.fast_mode,
