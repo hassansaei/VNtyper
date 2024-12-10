@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# vntyper/scripts/pipeline.py
 
 import logging
 import os
@@ -57,6 +58,7 @@ def run_pipeline(
     fastq1=None,
     fastq2=None,
     bam=None,
+    cram=None,  # CRAM support
     threads=4,
     reference_assembly="hg19",
     fast_mode=False,
@@ -80,9 +82,10 @@ def run_pipeline(
         fastq1 (str, optional): Path to the first FASTQ file.
         fastq2 (str, optional): Path to the second FASTQ file.
         bam (str, optional): Path to the BAM file.
+        cram (str, optional): Path to the CRAM file.
         threads (int, optional): Number of threads to use. Default is 4.
-        reference_assembly (str, optional): Reference assembly used for the input BAM
-            file alignment ("hg19" or "hg38").
+        reference_assembly (str, optional): Reference assembly used for the input alignment
+            file ("hg19" or "hg38").
         fast_mode (bool, optional): Enable fast mode (skip filtering of unmapped and
             partially mapped reads).
         keep_intermediates (bool, optional): Keep intermediate files.
@@ -130,11 +133,14 @@ def run_pipeline(
 
     # Collect input filenames
     input_files = {}
+    # Ensure only one input type: FASTQ or BAM or CRAM
     if fastq1 and fastq2:
         input_files['fastq1'] = os.path.basename(fastq1)
         input_files['fastq2'] = os.path.basename(fastq2)
     elif bam:
         input_files['bam'] = os.path.basename(bam)
+    elif cram:
+        input_files['cram'] = os.path.basename(cram)
     else:
         logging.error("No input files provided.")
         raise ValueError("No input files provided.")
@@ -143,16 +149,24 @@ def run_pipeline(
         # ----------------------------
         # Input Validation Section
         # ----------------------------
-        # Ensure that only one type of input is provided (either BAM or FASTQ)
-        if bam and (fastq1 or fastq2):
+        # Ensure that only one type of input is provided (FASTQ, BAM, or CRAM)
+        input_count = sum([
+            1 if (fastq1 and fastq2) else 0,
+            1 if bam else 0,
+            1 if cram else 0
+        ])
+        if input_count > 1:
             logging.error(
-                "Both BAM and FASTQ inputs provided. Please provide only one type of input."
+                "Multiple input types provided. Please provide only one input type: FASTQ, BAM, or CRAM."
             )
-            raise ValueError("Provide either BAM or FASTQ files, not both.")
+            raise ValueError("Provide either BAM, CRAM, or FASTQ files, not multiples.")
 
         if bam:
             # Validate BAM file
             validate_bam_file(bam)
+        elif cram:
+            # Validate CRAM file using the same method as BAM
+            validate_bam_file(cram)
         elif fastq1 and fastq2:
             # Validate FASTQ files
             validate_fastq_file(fastq1)
@@ -195,7 +209,7 @@ def run_pipeline(
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
         # ----------------------------
-        # FASTQ Quality Control or BAM Processing
+        # FASTQ Quality Control or BAM/CRAM Processing
         # ----------------------------
         if fastq1 and fastq2:
             # Process raw FASTQ files if provided
@@ -233,15 +247,46 @@ def run_pipeline(
                     "Failed to generate FASTQ files from BAM. Exiting pipeline."
                 )
 
+        elif cram:
+            # Convert CRAM to FASTQ using BED file
+            logging.info("Starting CRAM to FASTQ conversion with specified regions.")
+            fastq1, fastq2, _, _ = process_bam_to_fastq(
+                in_bam=cram,
+                output=dirs['fastq_bam_processing'],
+                output_name="output",
+                threads=threads,
+                config=config,
+                reference_assembly=reference_assembly,
+                fast_mode=fast_mode,
+                delete_intermediates=delete_intermediates,
+                keep_intermediates=keep_intermediates,
+                bed_file=bed_file_path,
+                file_format="cram"  # CRAM format
+            )
+
+            if not fastq1 or not fastq2:
+                logging.error(
+                    "Failed to generate FASTQ files from CRAM. Exiting pipeline."
+                )
+                raise ValueError(
+                    "Failed to generate FASTQ files from CRAM. Exiting pipeline."
+                )
+
         # ----------------------------
         # Calculate VNTR Coverage
         # ----------------------------
         logging.info("Calculating mean coverage over the VNTR region.")
+        # If BAM provided, input_bam is bam
+        # If CRAM provided, now we directly use the CRAM file for coverage
+        # If FASTQ provided, we use the sliced BAM (output_sliced.bam)
         if bam:
             input_bam = Path(bam)
+        elif cram:
+            # Use the CRAM file directly for coverage calculation
+            input_bam = Path(cram)
         else:
-            # Assuming the sliced BAM is stored as 'output_sliced.bam' in fastq_bam_processing directory
-            input_bam = dirs['fastq_bam_processing'] / "output_sliced.bam"
+            # FASTQ case: results in output_sliced.bam
+            input_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
 
         # Determine VNTR region based on reference assembly
         if reference_assembly == "hg38":
@@ -373,6 +418,11 @@ def run_pipeline(
                 # Use the provided BAM file directly for adVNTR
                 sorted_bam = bam
                 logging.debug("Using provided BAM for adVNTR genotyping.")
+            elif cram:
+                # If CRAM was provided originally, after processing we have a sliced BAM at
+                # fastq_bam_processing/output_sliced.bam
+                sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
+                logging.debug("Using CRAM-converted BAM for adVNTR genotyping.")
 
             if sorted_bam:
                 # Run adVNTR genotyping with the sorted BAM file

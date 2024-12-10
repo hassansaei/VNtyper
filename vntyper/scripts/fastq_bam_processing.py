@@ -75,12 +75,13 @@ def process_bam_to_fastq(
     delete_intermediates=True,
     keep_intermediates=False,
     bed_file=None,
+    file_format="bam"
 ):
     """
-    Process BAM files by slicing, filtering, and converting to FASTQ.
+    Process alignment files by slicing, filtering, and converting to FASTQ.
 
     Args:
-        in_bam (str or Path): Path to the input BAM file.
+        in_bam (str or Path): Path to the input BAM/CRAM file.
         output (str or Path): Output directory.
         output_name (str): Base name for the output files.
         threads (int): Number of threads to use.
@@ -94,16 +95,18 @@ def process_bam_to_fastq(
         keep_intermediates (bool, optional): If True, keeps intermediate files for later
             use. Defaults to False.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
+        file_format (str, optional): "bam" or "cram". Default is "bam". This parameter
+            enables CRAM support.
 
     Returns:
         tuple: Paths to the generated FASTQ files (R1, R2, other, single).
 
     Raises:
-        RuntimeError: If any step in the BAM processing fails.
+        RuntimeError: If any step in the processing fails.
     """
     samtools_path = config["tools"]["samtools"]
 
-    # Determine BAM region based on BED file or reference assembly
+    # Determine BAM/CRAM region based on BED file or reference assembly
     if bed_file:
         if not bed_file.exists():
             logging.error(f"Provided BED file does not exist: {bed_file}")
@@ -111,7 +114,7 @@ def process_bam_to_fastq(
         bam_region = f"-L {bed_file}"
         logging.debug(f"BAM regions set using BED file: {bam_region}")
     else:
-        # Determine BAM region based on reference assembly
+        # Determine region based on reference assembly
         bam_region = (
             config["bam_processing"]["bam_region_hg38"]
             if reference_assembly == "hg38"
@@ -119,36 +122,43 @@ def process_bam_to_fastq(
         )
         logging.debug(f"BAM region set to: {bam_region}")
 
+    # For CRAM, we initially tried requiring a reference FASTA. However,
+    # samtools can handle CRAM if the reference is embedded or provided elsewhere.
+    # We remove the requirement for a reference FASTA and do not set cram_ref_option.
+    cram_ref_option = ""
+
     # Define paths for intermediate and final BAM files
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
     if keep_intermediates and final_bam.exists():
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
-        # Slicing BAM region using BED file or predefined region
+        # Slicing BAM/CRAM region using BED file or predefined region
+        # No reference FASTA requirement for CRAM now, so we do not use -T option
         if bed_file:
             command_slice = (
-                f"{samtools_path} view -P -b {in_bam} -L {bed_file} -o {final_bam}"
+                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} -L {bed_file} -o {final_bam}"
             )
         else:
             command_slice = (
-                f"{samtools_path} view -P -b {in_bam} {bam_region} -o {final_bam}"
+                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} {bam_region} -o {final_bam}"
             )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
-        logging.info(f"Executing BAM slicing with command: {command_slice}")
+        logging.info(f"Executing region slicing with command: {command_slice}")
 
         success = run_command(
             str(command_slice), str(log_file_slice), critical=True
         )
         if not success:
-            logging.error("BAM region slicing failed.")
-            raise RuntimeError("BAM region slicing failed.")
-        logging.info("BAM region slicing completed.")
+            logging.error(f"{file_format.upper()} region slicing failed.")
+            raise RuntimeError(f"{file_format.upper()} region slicing failed.")
+        logging.info("BAM/CRAM region slicing completed.")
 
     if not fast_mode:
-        # Filtering BAM
+        # Filtering BAM/CRAM
+        # No -T option or reference required now
         command_filter = (
-            f"{samtools_path} view -@ {threads} -h {in_bam} | tee "
+            f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
             f" >(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}/"
             f"{output_name}_unmapped1.bam) "
             f" >(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}/"
@@ -158,14 +168,14 @@ def process_bam_to_fastq(
             f"> /dev/null"
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
-        logging.info(f"Executing BAM filtering with command: {command_filter}")
+        logging.info(f"Executing filtering with command: {command_filter}")
 
         success = run_command(
             str(command_filter), str(log_file_filter), critical=True
         )
         if not success:
-            logging.error("BAM filtering failed.")
-            raise RuntimeError("BAM filtering failed.")
+            logging.error("BAM/CRAM filtering failed.")
+            raise RuntimeError("BAM/CRAM filtering failed.")
 
         # Merging BAM files
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
@@ -186,7 +196,7 @@ def process_bam_to_fastq(
             raise RuntimeError("BAM merging failed.")
 
         final_bam = merged_bam
-        logging.info("BAM filtering and merging completed.")
+        logging.info("BAM/CRAM filtering and merging completed.")
 
     # Define paths for FASTQ files
     final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"
@@ -209,6 +219,7 @@ def process_bam_to_fastq(
         )
     else:
         # Sorting and converting BAM to FASTQ using pipes
+        # Once sliced and filtered, final_bam is in BAM format, no extra CRAM handling needed here
         command_sort_fastq = (
             f"{samtools_path} sort -n -@ {threads} {final_bam} | "
             f"{samtools_path} fastq -@ {threads} - -1 {final_fastq_1} "

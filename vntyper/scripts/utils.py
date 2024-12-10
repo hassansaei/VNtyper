@@ -194,7 +194,7 @@ def get_tool_versions(config):
         "advntr": "",
         "java_path": "--version",
         "kestrel": '-jar "{kestrel_path}" -h'.format(
-            kestrel_path=config["tools"].get("kestrel", ""),
+            kestrel_path=tools.get("kestrel", ""),
         ),
     }
 
@@ -277,35 +277,46 @@ def load_config(config_path=None):
 
 def validate_bam_file(file_path):
     """
-    Validates the BAM file for existence, correct extension, and integrity using samtools quickcheck.
+    Validates the alignment file (BAM or CRAM) for existence, correct extension, and
+    integrity using samtools quickcheck.
+
+    This function was originally intended for BAM files, but we now extend it
+    to handle CRAM as well. The logic remains the same; we just allow .cram
+    extension in addition to .bam and run samtools quickcheck regardless.
 
     Args:
-        file_path (str): Path to the BAM file.
+        file_path (str): Path to the BAM or CRAM file.
 
     Raises:
         ValueError: If any validation check fails.
     """
     if not file_path:
-        logging.error("No BAM file provided.")
-        raise ValueError("No BAM file provided.")
+        logging.error("No alignment file provided.")
+        raise ValueError("No alignment file provided.")
 
     if not os.path.isfile(file_path):
-        logging.error(f"BAM file does not exist: {file_path}")
-        raise ValueError(f"BAM file does not exist: {file_path}")
+        logging.error(f"Alignment file does not exist: {file_path}")
+        raise ValueError(f"Alignment file does not exist: {file_path}")
 
-    if not file_path.endswith(".bam"):
-        logging.error(f"Invalid BAM file extension for file: {file_path}")
-        raise ValueError(f"Invalid BAM file extension for file: {file_path}")
+    # Modified to allow both .bam and .cram extensions
+    if not (file_path.endswith(".bam") or file_path.endswith(".cram")):
+        logging.error(
+            f"Invalid alignment file extension for file: {file_path}. "
+            "Must be .bam or .cram"
+        )
+        raise ValueError(
+            f"Invalid alignment file extension for file: {file_path}"
+        )
 
     # Perform samtools quickcheck
     command = f"samtools quickcheck -v {file_path}"
     log_file = f"{file_path}.quickcheck.log"
     success = run_command(command, log_file, critical=True)
     if not success:
-        logging.error(f"BAM file failed quickcheck: {file_path}")
-        raise ValueError(f"BAM file failed quickcheck: {file_path}")
+        logging.error(f"Alignment file failed quickcheck: {file_path}")
+        raise ValueError(f"Alignment file failed quickcheck: {file_path}")
 
-    logging.info(f"BAM file validated successfully: {file_path}")
+    logging.info(f"Alignment file validated successfully: {file_path}")
 
 
 def validate_fastq_file(file_path):
