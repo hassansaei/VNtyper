@@ -171,7 +171,7 @@ def run_kestrel(
     global kestrel_config  # Ensure we use the global kestrel_config
 
     kestrel_settings = kestrel_config.get("kestrel_settings", {})
-    java_path = kestrel_settings.get("java_path", "java")
+    java_path = config["tools"]["java_path"]
     java_memory = kestrel_settings.get("java_memory", "12g")
     kmer_sizes = kestrel_settings.get("kmer_sizes", [20])
     max_align_states = kestrel_settings.get("max_align_states", 30)
@@ -298,13 +298,7 @@ def process_kestrel_output(
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
 
     # Sort combined_df by all columns for deterministic results
-    # Exclude columns that might vary between runs if necessary
     sort_columns = list(combined_df.columns)
-
-    # If there are columns that could vary between runs, exclude them
-    # For example, if there's a 'Timestamp' column:
-    # sort_columns.remove('Timestamp')
-
     combined_df = combined_df.sort_values(by=sort_columns).reset_index(drop=True)
 
     if combined_df.empty:
@@ -643,7 +637,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     df['POS'] = df['POS'].astype(int)
 
     # Split into left and right motifs based on position
-    motif_left = df[df['POS'] < position_threshold].copy()  # Use position_threshold from config
+    motif_left = df[df['POS'] < position_threshold].copy()
     motif_right = df[df['POS'] >= position_threshold].copy()
 
     # Process the left motifs
@@ -754,20 +748,16 @@ def generate_bed_file(df, output_dir):
         )
         return None
 
-    # Check if the DataFrame is empty (no rows)
     if df.empty:
         logging.warning("DataFrame is empty. No variants to generate a BED file.")
         return None
 
-    # Create the output BED file path
     bed_file_path = os.path.join(output_dir, "output.bed")
 
-    # Open the file for writing
     with open(bed_file_path, 'w') as bed_file:
         for _, row in df.iterrows():
             motif_fasta = row['Motif_fasta']
             pos = row['POS_fasta']
-            # Write the BED format (Motif_fasta, POS_fasta, POS_fasta+1) as tab-delimited
             bed_file.write(f"{motif_fasta}\t{pos}\t{pos + 1}\n")
 
     logging.info(f"BED file generated at: {bed_file_path}")
