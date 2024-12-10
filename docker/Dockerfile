@@ -92,6 +92,5 @@ USER appuser
 # Define the entry point to either run VNtyper, Celery worker, Celery Beat, or start the FastAPI server
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-# Add HEALTHCHECK to ensure the container is running correctly
-# HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-#   CMD curl -f http://localhost:8000/health/ || exit 1
+# Add a HEALTHCHECK to ensure the container is running correctly
+HEALTHCHECK --interval=60s --timeout=5s --retries=3 CMD curl -f http://localhost:8000/health/ || exit 1
