@@ -226,37 +226,92 @@ def process_kestrel_output(
     output_dir, vcf_path, reference_vntr, kestrel_config, config
 ):
     """
-    Processes the Kestrel output VCF files, filters variants, and writes
-    the results to output files.
+    Processes the Kestrel output VCF files, filters variants, fixes the VCF file format header,
+    and writes the results to output files.
+
+    This function performs the following steps:
+    1. Filters the initial VCF to extract INDEL variants into `output_indel.vcf`.
+    2. Fixes the incorrect file format line in `output_indel.vcf` from `##fileformat=VCF4.2` 
+       to `##fileformat=VCFv4.2`.
+    3. (New step) As a preparation for future integration, sorts and indexes the `output_indel.vcf` 
+       using bcftools. However, this sorted/indexed VCF is currently not used to generate the 
+       insertion/deletion VCFs for the rest of the pipeline. Instead, it is just produced and kept 
+       for now, as requested.
+    4. Filters the original (fixed-header) `output_indel.vcf` (not the sorted one) into insertion 
+       and deletion VCFs, and proceeds with the pre-existing processing steps (motif annotation, 
+       depth score calculation, etc.).
+    5. Writes out intermediate and final TSV results.
+
+    NOTE: The sorted and indexed VCF is created but not integrated further in the pipeline yet.
+    Future steps might include using this sorted/indexed VCF for IGV.js session coverage improvements.
 
     Args:
         output_dir (str): Directory where Kestrel outputs are saved.
-        vcf_path (Path): Path to the Kestrel VCF output file.
+        vcf_path (Path): Path to the original Kestrel VCF output file.
         reference_vntr (str): Path to the reference VNTR file.
         kestrel_config (dict): Configuration dictionary for Kestrel settings.
         config (dict): Overall configuration dictionary.
 
     Returns:
-        pd.DataFrame or None: Processed DataFrame or None if processing failed.
+        pd.DataFrame or None: The final processed DataFrame of variants, or None if no variants found.
     """
     logging.info("Processing Kestrel VCF results...")
 
+    # Define file paths for intermediate and final files
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
     output_ins = os.path.join(output_dir, "output_insertion.vcf")
     output_del = os.path.join(output_dir, "output_deletion.vcf")
 
-    # Filter the VCF to extract indels, insertions, and deletions
+    # Filter the original VCF to extract indels into output_indel.vcf
     filter_vcf(vcf_path, indel_vcf)
+
+    # Fix the fileformat line in the output_indel.vcf
+    # Kestrel currently writes '##fileformat=VCF4.2', which should be '##fileformat=VCFv4.2'
+    fixed_indel_vcf = indel_vcf + ".fixed"
+    with open(indel_vcf, "r") as fin, open(fixed_indel_vcf, "w") as fout:
+        for line in fin:
+            if line.startswith("##fileformat=VCF4.2"):
+                fout.write("##fileformat=VCFv4.2\n")
+            else:
+                fout.write(line)
+    # Replace the original indel VCF with the fixed version
+    os.replace(fixed_indel_vcf, indel_vcf)
+
+    # ------------------------------------------------------------------------
+    # NEW STEP: Produce a sorted and indexed VCF for IGV integration
+    # Note: We do NOT use this sorted/indexed VCF for the current pipeline steps, 
+    #       just produce it and keep it in place for future integration.
+    # ------------------------------------------------------------------------
+    sorted_indel_vcf_gz = indel_vcf + ".gz"
+    # Sort the VCF
+    run_command(
+        f"bcftools sort {indel_vcf} -o {sorted_indel_vcf_gz} -W -O z",
+        log_file=os.path.join(output_dir, "bcftools_sort.log"),
+    )
+    # Index the sorted VCF
+    run_command(
+        f"bcftools index {sorted_indel_vcf_gz}",
+        log_file=os.path.join(output_dir, "bcftools_index.log"),
+    )
+    # ------------------------------------------------------------------------
+
+    # Filter the original (fixed) indel VCF to separate insertions and deletions
+    # NOTE: We do NOT use the sorted and indexed file here to avoid breaking current logic.
     filter_indel_vcf(indel_vcf, output_ins, output_del)
 
-    # Generate the header
+    # Generate a custom header for result files
     header = generate_header(reference_vntr)
 
-    # Manually read the VCF file to remove '##' comments and retain the header
     def read_vcf_without_comments(vcf_file):
+        """
+        Utility function to read a VCF (possibly gzipped) without '##' comments, 
+        returning a DataFrame of variants.
+        """
+        import gzip
+        open_func = gzip.open if vcf_file.endswith(".gz") else open
         data = []
         header_line = None
-        with open(vcf_file, 'r') as f:
+        with open_func(vcf_file, 'rt') as f:
             for line in f:
                 if line.startswith("#CHROM"):
                     header_line = line.strip().split('\t')
@@ -267,7 +322,7 @@ def process_kestrel_output(
         else:
             return pd.DataFrame()
 
-    # Load the filtered VCF files into DataFrames
+    # Load insertion and deletion VCFs into DataFrames
     vcf_insertion = read_vcf_without_comments(output_ins)
     vcf_deletion = read_vcf_without_comments(output_del)
 
@@ -277,27 +332,26 @@ def process_kestrel_output(
             "Skipping Kestrel processing."
         )
         output_empty_result(output_dir, header)
-        return None  # Early exit if no data
+        return None
 
-    # Load MUC1 VNTR reference motifs
+    # Load MUC1 reference VNTR motifs
     muc1_ref = load_muc1_reference(reference_vntr)
 
-    # Preprocess insertion and deletion DataFrames
+    # Preprocess insertion and deletion data
     insertion_df = (
-        preprocessing_insertion(vcf_insertion, muc1_ref)
-        if not vcf_insertion.empty
+        preprocessing_insertion(vcf_insertion, muc1_ref) 
+        if not vcf_insertion.empty 
         else pd.DataFrame()
     )
     deletion_df = (
-        preprocessing_deletion(vcf_deletion, muc1_ref)
-        if not vcf_deletion.empty
+        preprocessing_deletion(vcf_deletion, muc1_ref) 
+        if not vcf_deletion.empty 
         else pd.DataFrame()
     )
 
     # Combine insertion and deletion DataFrames
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
-
-    # Sort combined_df by all columns for deterministic results
+    # Sort combined results deterministically
     sort_columns = list(combined_df.columns)
     combined_df = combined_df.sort_values(by=sort_columns).reset_index(drop=True)
 
@@ -307,12 +361,12 @@ def process_kestrel_output(
             "Skipping further processing."
         )
         output_empty_result(output_dir, header)
-        return None  # Early exit if no data
+        return None
 
     # Load additional motifs from the configuration
     merged_motifs = load_additional_motifs(config)
 
-    # Process and filter results based on frameshifts and confidence scores
+    # Process the combined DataFrame (calculate frame score, depth score, apply filters, etc.)
     processed_df = process_kmer_results(
         combined_df, merged_motifs, output_dir, kestrel_config
     )
@@ -322,16 +376,16 @@ def process_kestrel_output(
             "Final processed DataFrame is empty. Outputting empty results."
         )
         output_empty_result(output_dir, header)
-        return None  # Early exit if no data
+        return None
 
-    # Save the intermediate pre-result as `_pre_result.tsv`
+    # Write the intermediate (pre-result) DataFrame to a TSV file
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
     with open(pre_result_path, 'w') as f:
         f.write("\n".join(header) + "\n")
         combined_df.to_csv(f, sep='\t', index=False)
     logging.info(f"Intermediate results saved as {pre_result_path}")
 
-    # Save the final processed DataFrame as `kestrel_result.tsv`
+    # Write the final processed DataFrame to a TSV file
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
     with open(final_output_path, 'w') as f:
         f.write("\n".join(header) + "\n")

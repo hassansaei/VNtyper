@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # vntyper/scripts/generate_report.py
 
 import os
@@ -112,9 +113,9 @@ def load_pipeline_log(log_file):
         return "Failed to load pipeline log."
 
 
-def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
+def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None):
     """
-    Runs the IGV report generation command using the provided BED, BAM, and FASTA files.
+    Runs the IGV report generation command using the provided BED, BAM, FASTA, and optionally VCF files.
 
     Args:
         bed_file (str or Path): Path to the BED file.
@@ -122,6 +123,7 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
         fasta_file (str or Path): Path to the reference FASTA file.
         output_html (str or Path): Path to the output HTML file for the IGV report.
         flanking (int): Flanking region for IGV reports.
+        vcf_file (str or Path, optional): Path to the sorted and indexed VCF file.
     """
     # Convert Path objects to strings if needed
     bed_file = str(bed_file)
@@ -134,9 +136,10 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50):
         bed_file,
         '--flanking', str(flanking),
         '--fasta', fasta_file,
-        '--tracks', bam_file,
+        '--tracks', vcf_file, bam_file,
         '--output', output_html
     ]
+
     try:
         logging.info(f"Running IGV report: {' '.join(igv_report_cmd)}")
         subprocess.run(igv_report_cmd, check=True)
@@ -205,10 +208,12 @@ def generate_summary_report(
     input_files=None,
     pipeline_version=None,
     mean_vntr_coverage=None,
+    vcf_file=None
 ):
     """
     Generates a summary report that includes Kestrel results, adVNTR results, pipeline log,
-    and IGV alignment visualizations.
+    and IGV alignment visualizations. It also integrates the sorted and indexed VCF file 
+    into the IGV report for improved coverage display.
 
     Args:
         output_dir (str): Output directory for the report.
@@ -219,10 +224,10 @@ def generate_summary_report(
         bam_file (str): Path to the BAM file for IGV reports.
         fasta_file (str): Path to the reference FASTA file for IGV reports.
         flanking (int): Size of the flanking region for IGV reports.
-        input_files (dict, optional): Dictionary of input filenames
-            (e.g., {'fastq1': 'sample_R1.fastq', 'fastq2': 'sample_R2.fastq'}).
+        input_files (dict, optional): Dictionary of input filenames.
         pipeline_version (str, optional): The version of the VNtyper pipeline.
         mean_vntr_coverage (float, optional): Mean coverage over the VNTR region.
+        vcf_file (str, optional): Path to the sorted and indexed VCF file to include in the IGV report.
     """
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
     advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
@@ -231,7 +236,7 @@ def generate_summary_report(
     # Only run IGV report if the BED file exists
     if bed_file and os.path.exists(bed_file):
         logging.info(f"Running IGV report for BED file: {bed_file}")
-        run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking)
+        run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking, vcf_file=vcf_file)
     else:
         logging.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None  # No IGV report will be created
@@ -288,7 +293,7 @@ def generate_summary_report(
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'input_files': input_files or {},         # Ensure it's a dict
         'pipeline_version': pipeline_version or "unknown",  # Default if not provided
-        'mean_vntr_coverage': mean_vntr_coverage or "Not calculated",  # New context variable
+        'mean_vntr_coverage': mean_vntr_coverage or "Not calculated",
     }
 
     # Render the template with the context
