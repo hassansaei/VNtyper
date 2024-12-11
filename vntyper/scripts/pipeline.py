@@ -58,7 +58,7 @@ def run_pipeline(
     fastq1=None,
     fastq2=None,
     bam=None,
-    cram=None,  # CRAM support
+    cram=None,
     threads=4,
     reference_assembly="hg19",
     fast_mode=False,
@@ -69,6 +69,7 @@ def run_pipeline(
     custom_regions=None,
     bed_file=None,
     log_level=logging.INFO,
+    sample_name=None
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -325,6 +326,7 @@ def run_pipeline(
                 reference_vntr,
                 kestrel_path,
                 config,
+                sample_name=sample_name,
                 log_level=log_level,
             )
         else:

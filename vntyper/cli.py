@@ -170,6 +170,14 @@ def main():
         help="Base name for the output files."
     )
 
+    # Add sample-name parameter for pipeline
+    parser_pipeline.add_argument(
+        '-s', '--sample-name',
+        type=str,
+        default=None,
+        help="Set the sample name for labeling results. If not provided, defaults to input BAM or FASTQ name."
+    )
+
     # Mutually exclusive group for custom regions and BED file
     region_group = parser_pipeline.add_mutually_exclusive_group()
     region_group.add_argument(
@@ -314,6 +322,14 @@ def main():
         type=str,
         default="out",
         help="Output directory for Kestrel results."
+    )
+
+    # Add sample-name parameter for kestrel
+    parser_kestrel.add_argument(
+        '-s', '--sample-name',
+        type=str,
+        default=None,
+        help="Set the sample name for Kestrel. If not provided, defaults to input FASTQ name."
     )
 
     # Subcommand for generating reports
@@ -491,6 +507,16 @@ def main():
         else:
             bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
 
+        # Set sample name based on input files
+        sample_name = args.sample_name
+        if sample_name is None:
+            if args.bam:
+                sample_name = Path(args.bam).stem
+            elif args.fastq1:
+                sample_name = Path(args.fastq1).stem
+            else:
+                sample_name = "sample"
+
         # Pass module_args and new arguments to run_pipeline
         # Include cram=args.cram for CRAM support
         run_pipeline(
@@ -512,7 +538,8 @@ def main():
             archive_format=args.archive_format,
             custom_regions=args.custom_regions,
             bed_file=args.bed_file,
-            log_level=log_level
+            log_level=log_level,
+            sample_name=sample_name,
         )
 
     elif args.command == "fastq":
@@ -547,6 +574,7 @@ def main():
             reference_vntr=args.reference_vntr,
             kestrel_path=config.get("tools", {}).get("kestrel"),
             config=config,
+            sample_name=args.sample_name,
             log_level=log_level
         )
 

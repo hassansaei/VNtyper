@@ -54,6 +54,7 @@ def construct_kestrel_command(
     max_align_states,
     max_hap_states,
     log_level,
+    sample_name,
 ):
     """
     Constructs the command for running Kestrel based on various settings.
@@ -71,6 +72,7 @@ def construct_kestrel_command(
         max_align_states (int): Maximum alignment states.
         max_hap_states (int): Maximum haplotype states.
         log_level (str): Log level to use for Kestrel.
+        sample_name (str): Sample name to be set using the -s/--sample option.
 
     Returns:
         str: The constructed Kestrel command.
@@ -82,7 +84,7 @@ def construct_kestrel_command(
         f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
-        f"{fastq_1} {fastq_2} "
+        f"-s{sample_name} {fastq_1} {fastq_2} "
         f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout "
         f"--loglevel {log_level.upper()} --temploc {output_dir}"
     )
@@ -152,6 +154,7 @@ def run_kestrel(
     reference_vntr,
     kestrel_path,
     config,
+    sample_name,
     log_level=logging.INFO,
 ):
     """
@@ -166,6 +169,7 @@ def run_kestrel(
         reference_vntr (str): Path to the reference VNTR file.
         kestrel_path (str): Path to the Kestrel jar file.
         config (dict): Overall configuration dictionary.
+        sample_name (str): The sample name to pass to Kestrel.
         log_level (int): Logging level.
     """
     global kestrel_config  # Ensure we use the global kestrel_config
@@ -192,6 +196,7 @@ def run_kestrel(
             max_align_states=max_align_states,
             max_hap_states=max_hap_states,
             log_level=log_level_str,  # Pass the log level here
+            sample_name=sample_name,
         )
 
         log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
@@ -287,11 +292,6 @@ def process_kestrel_output(
     run_command(
         f"bcftools sort {indel_vcf} -o {sorted_indel_vcf_gz} -W -O z",
         log_file=os.path.join(output_dir, "bcftools_sort.log"),
-    )
-    # Index the sorted VCF
-    run_command(
-        f"bcftools index {sorted_indel_vcf_gz}",
-        log_file=os.path.join(output_dir, "bcftools_index.log"),
     )
     # ------------------------------------------------------------------------
 
@@ -442,12 +442,10 @@ def split_depth_and_calculate_frame_score(df):
     if df.empty:
         return df
 
-    # Rename 'Sample' column to 'Depth'
-    df = df.rename(columns={'Sample': 'Depth'})
-
-    # Split the 'Depth' column into components
+    # Remove the redundant logic of renaming 'Sample' to 'Depth'
+    # Directly split the 'Sample' column
     df[['Del', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']] = df[
-        'Depth'
+        'Sample'
     ].str.split(':', expand=True)
 
     # Select relevant columns
@@ -462,7 +460,7 @@ def split_depth_and_calculate_frame_score(df):
             'Estimated_Depth_AlternateVariant',
             'Estimated_Depth_Variant_ActiveRegion',
         ]
-    ]
+    ].copy()
 
     # Calculate reference and alternate allele lengths
     df["ref_len"] = df["REF"].str.len()
