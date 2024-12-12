@@ -22,3 +22,4 @@ dependencies:
   - igv-reports=1.13.0
   - plotly=5.24.0
   - openjdk=11.0.23
+  - bcftools=1.21
