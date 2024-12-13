@@ -43,7 +43,6 @@ def process_fastq(
         f"--dup_calc_accuracy {dup_calc_accuracy} "
         f"--length_required {length_required} "
         f"--html {output}/{output_name}.html "
-        f"-0 /dev/null -s /dev/null -n"
     )
 
     if disable_adapter_trimming:
