@@ -77,6 +77,7 @@ def align_and_sort_fastq(
         return None
 
     # Create the output directory if it does not exist
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Define the path for the sorted BAM output file
