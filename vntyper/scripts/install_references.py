@@ -201,6 +201,28 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
         md5_dict[str(target_path)] = md5_checksum
         logging.info(f"MD5 checksum for {target_path.name}: {md5_checksum}")
 
+        # Extract if required
+        if target_path.suffix == '.zip':
+            try:
+                with zipfile.ZipFile(target_path, 'r') as zip_ref:
+                    zip_ref.extractall(path=extract_dir)
+                logging.info(f"Successfully extracted {target_path.name}")
+            except Exception as e:
+                logging.error(f"Failed to extract {target_path}: {e}")
+                sys.exit(1)
+        elif target_path.suffixes[-2:] == ['.tar', '.gz'] or target_path.suffix == '.tgz':
+            try:
+                with tarfile.open(target_path, "r:gz") as tar:
+                    tar.extractall(path=extract_dir)
+                logging.info(f"Successfully extracted {target_path.name}")
+            except Exception as e:
+                logging.error(f"Failed to extract {target_path}: {e}")
+                sys.exit(1)
+        else:
+            logging.warning(
+                f"Unsupported archive format for {target_path}. Skipping extraction."
+            )
+
         # Index the reference if required and not skipped
         if index_command and not skip_indexing:
             execute_index_command(index_command, target_path)
