@@ -205,7 +205,7 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
         if target_path.suffix == '.zip':
             try:
                 with zipfile.ZipFile(target_path, 'r') as zip_ref:
-                    zip_ref.extractall(path=extract_dir)
+                    zip_ref.extractall(path=target_path)
                 logging.info(f"Successfully extracted {target_path.name}")
             except Exception as e:
                 logging.error(f"Failed to extract {target_path}: {e}")
@@ -213,7 +213,7 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
         elif target_path.suffixes[-2:] == ['.tar', '.gz'] or target_path.suffix == '.tgz':
             try:
                 with tarfile.open(target_path, "r:gz") as tar:
-                    tar.extractall(path=extract_dir)
+                    tar.extractall(path=target_path)
                 logging.info(f"Successfully extracted {target_path.name}")
             except Exception as e:
                 logging.error(f"Failed to extract {target_path}: {e}")
