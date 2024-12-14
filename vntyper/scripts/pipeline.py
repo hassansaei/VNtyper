@@ -59,6 +59,7 @@ def run_pipeline(
     fastq2=None,
     bam=None,
     cram=None,
+    sorted_bam=None,
     threads=4,
     reference_assembly="hg19",
     fast_mode=False,
@@ -209,21 +210,9 @@ def run_pipeline(
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
         # ----------------------------
-        # FASTQ Quality Control or BAM/CRAM Processing
+        # FASTQ Quality Control, Alignment and processing or BAM/CRAM Processing
         # ----------------------------
-        if fastq1 and fastq2:
-            # Process raw FASTQ files
-            logging.info("Starting FASTQ quality control.")
-            process_fastq(
-                fastq1,
-                fastq2,
-                threads,
-                dirs['fastq_bam_processing'],
-                "output",
-                config,
-            )
-            logging.info("FASTQ quality control completed.")
-        elif bam:
+        if bam:
             # Convert BAM to FASTQ
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
             fastq1, fastq2, _, _ = process_bam_to_fastq(
@@ -272,6 +261,56 @@ def run_pipeline(
                     "Failed to generate FASTQ files from CRAM. Exiting pipeline."
                 )
 
+        elif fastq1 and fastq2:
+            # Process raw FASTQ files
+            logging.info("Starting FASTQ quality control.")
+            process_fastq(
+                fastq1,
+                fastq2,
+                threads,
+                dirs['fastq_bam_processing'],
+                "output",
+                config,
+            )
+            logging.info("FASTQ quality control completed.")
+
+            # Align and sort the FASTQ files
+            logging.info("Starting FASTQ alignment.")
+            sorted_bam = align_and_sort_fastq(
+                fastq1,
+                fastq2,
+                bwa_reference,
+                dirs['alignment_processing'],
+                "output",
+                threads,
+                config,
+            )
+            logging.debug(f"Sorted BAM path: {sorted_bam}")
+            logging.info("FASTQ alignment completed.")
+            
+            # Convert sorted BAM to FASTQ
+            logging.info("Starting BAM to FASTQ conversion with specified regions.")
+            fastq1, fastq2, _, _ = process_bam_to_fastq(
+                in_bam=sorted_bam,
+                output=dirs['fastq_bam_processing'],
+                output_name="output",
+                threads=threads,
+                config=config,
+                reference_assembly=reference_assembly,
+                fast_mode=fast_mode,
+                delete_intermediates=delete_intermediates,
+                keep_intermediates=keep_intermediates,
+                bed_file=bed_file_path
+            )
+
+            if not fastq1 or not fastq2:
+                logging.error(
+                    "Failed to generate FASTQ files from BAM. Exiting pipeline."
+                )
+                raise ValueError(
+                    "Failed to generate FASTQ files from BAM. Exiting pipeline."
+                )
+
         # ----------------------------
         # Calculate VNTR Coverage
         # ----------------------------
@@ -291,17 +330,14 @@ def run_pipeline(
             vntr_region = config["bam_processing"]["vntr_region_hg19"]
 
         # Calculate mean coverage
-        if bam or cram:
-            mean_coverage = calculate_vntr_coverage(
-                bam_file=str(input_bam),
-                region=vntr_region,
-                threads=threads,
-                config=config,
-                output_dir=dirs['coverage'],
-                output_name="coverage"
-            )
-        else:
-            logging.info("Calculating mean coverage skipped.")      
+        mean_coverage = calculate_vntr_coverage(
+            bam_file=str(input_bam),
+            region=vntr_region,
+            threads=threads,
+            config=config,
+            output_dir=dirs['coverage'],
+            output_name="coverage"
+        )
 
         # ----------------------------
         # Kestrel Genotyping
@@ -403,19 +439,9 @@ def run_pipeline(
 
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
 
-            sorted_bam = None
             if fastq1 and fastq2:
-                # Align and sort the FASTQ files for adVNTR
-                sorted_bam = align_and_sort_fastq(
-                    fastq1,
-                    fastq2,
-                    bwa_reference,
-                    dirs['alignment_processing'],
-                    "output",
-                    threads,
-                    config,
-                )
-                logging.debug(f"Sorted BAM path: {sorted_bam}")
+                # Use newly generated sorted BAM file
+                sorted_bam = sorted_bam
             elif bam:
                 # Use provided BAM directly
                 sorted_bam = bam
