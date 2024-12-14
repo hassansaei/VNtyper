@@ -291,14 +291,17 @@ def run_pipeline(
             vntr_region = config["bam_processing"]["vntr_region_hg19"]
 
         # Calculate mean coverage
-        mean_coverage = calculate_vntr_coverage(
-            bam_file=str(input_bam),
-            region=vntr_region,
-            threads=threads,
-            config=config,
-            output_dir=dirs['coverage'],
-            output_name="coverage"
-        )
+        if bam or cram:
+            mean_coverage = calculate_vntr_coverage(
+                bam_file=str(input_bam),
+                region=vntr_region,
+                threads=threads,
+                config=config,
+                output_dir=dirs['coverage'],
+                output_name="coverage"
+            )
+        else:
+            logging.info("Calculating mean coverage skipped.")      
 
         # ----------------------------
         # Kestrel Genotyping
