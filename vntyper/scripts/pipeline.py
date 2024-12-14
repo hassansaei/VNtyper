@@ -50,7 +50,7 @@ def write_bed_file(regions, bed_file_path):
 
 
 def run_pipeline(
-    bwa_reference,
+    bwa_reference_hg19,
     output_dir,
     extra_modules,
     module_args,
@@ -76,7 +76,7 @@ def run_pipeline(
     Main pipeline function that orchestrates the genotyping process.
 
     Args:
-        bwa_reference (str): Path to the genome reference FASTA file for BWA alignment.
+        bwa_reference_hg19 (str): Path to the genome reference FASTA file for BWA alignment.
         output_dir (Path): Path to the output directory.
         extra_modules (list): List of optional modules to include (e.g., ['advntr']).
         module_args (dict): Dictionary containing module-specific arguments.
@@ -104,7 +104,7 @@ def run_pipeline(
         log_level (int, optional): Logging level to be set for the pipeline.
     """
     # Ensure the appropriate BWA reference is used for alignment
-    if not bwa_reference:
+    if not bwa_reference_hg19:
         logging.error(
             "BWA reference not provided or determined from configuration."
         )
@@ -112,7 +112,7 @@ def run_pipeline(
             "BWA reference not provided or determined from configuration."
         )
 
-    logging.debug(f"BWA reference set to: {bwa_reference}")
+    logging.debug(f"BWA reference set to: {bwa_reference_hg19}")
     logging.debug(f"Output directory set to: {output_dir}")
 
     # Create output directories for different analysis steps
@@ -279,7 +279,7 @@ def run_pipeline(
             sorted_bam = align_and_sort_fastq(
                 fastq1,
                 fastq2,
-                bwa_reference,
+                bwa_reference_hg19,
                 dirs['alignment_processing'],
                 "output",
                 threads,
