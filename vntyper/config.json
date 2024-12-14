@@ -5,8 +5,8 @@
     "muc1_reference_vntr": "reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
     "advntr_reference_vntr_hg19": "reference/vntr_data_genic_loci/vntr_data/hg19_genic_VNTRs.db",
     "advntr_reference_vntr_hg38": "reference/vntr_data_recommended_loci_hg38/vntr_data/hg38_selected_VNTRs_Illumina.db",
-    "bwa_reference_hg19": "reference/chr1.hg19.fa",
-    "bwa_reference_hg38": "reference/chr1.hg38.fa",
+    "bwa_reference_hg19": "reference/chr1.hg19.fa.gz",
+    "bwa_reference_hg38": "reference/chr1.hg38.fa.gz",
     "code_adVNTR_RUs": "reference/code-adVNTR_RUs.fa",
     "muc1_motifs_rev_com": "reference/MUC1_motifs_Rev_com.fa"
   },
