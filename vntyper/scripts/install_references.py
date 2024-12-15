@@ -8,7 +8,8 @@ from typing import Optional, Dict, Any, List
 from urllib.request import urlretrieve
 import tarfile
 import zipfile
-import gzip 
+import gzip
+import shutil
 import subprocess
 import hashlib
 from datetime import datetime
