@@ -132,15 +132,17 @@ def process_bam_to_fastq(
     if keep_intermediates and final_bam.exists():
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
-        # Slicing BAM/CRAM region using BED file or predefined region
+        # Slicing BAM/CRAM region using BED file or predefined region and index final bam file
         # No reference FASTA requirement for CRAM now, so we do not use -T option
         if bed_file:
             command_slice = (
-                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} -L {bed_file} -o {final_bam}"
+                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} -L {bed_file} -o {final_bam} && "
+                f"{samtools_path} index {final_bam}"
             )
         else:
             command_slice = (
-                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} {bam_region} -o {final_bam}"
+                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} {bam_region} -o {final_bam} && "
+                f"{samtools_path} index {final_bam}"
             )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
         logging.info(f"Executing region slicing with command: {command_slice}")
