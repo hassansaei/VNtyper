@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from urllib.request import urlretrieve
 import tarfile
 import zipfile
+import gzip 
 import subprocess
 import hashlib
 from datetime import datetime
@@ -210,6 +211,16 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
             except Exception as e:
                 logging.error(f"Failed to extract {target_path}: {e}")
                 sys.exit(1)
+        elif target_path.suffix == '.gz':
+            try:
+                output_path = target_path.with_suffix('')
+                with gzip.open(target_path, 'rb') as f_in:
+                    with open(output_path, 'wb') as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                logging.info(f"Successfully extracted {target_path.name} to {output_path.name}")
+            except Exception as e:
+                logging.error(f"Failed to extract {target_path}: {e}")
+                sys.exit(1)    
         elif target_path.suffixes[-2:] == ['.tar', '.gz'] or target_path.suffix == '.tgz':
             try:
                 with tarfile.open(target_path, "r:gz") as tar:
@@ -225,9 +236,9 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
 
         # Index the reference if required and not skipped
         if index_command and not skip_indexing:
-            execute_index_command(index_command, target_path)
+            execute_index_command(index_command, output_path)
         elif index_command and skip_indexing:
-            logging.info(f"Skipping indexing for {target_path}")
+            logging.info(f"Skipping indexing for {output_path}")
 
 
 def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
