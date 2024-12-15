@@ -93,7 +93,7 @@ vntyper pipeline \
     --output-dir /path/to/output/dir \
     --threads 4 --fast-mode
 ```
-The advntr gentyping is optional and skipped by default. To enable advntr genotyping the ```bash --extra-modules advntr ``` option should be used. 
+The advntr gentyping is optional and skipped by default. To enable advntr genotyping the ``` --extra-modules advntr ``` option should be used. 
 
 Docker image for vntyper 2.0 is provided and can be pulled and used as follows:
 
