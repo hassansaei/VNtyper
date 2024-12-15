@@ -438,7 +438,7 @@ def run_pipeline(
                 )
 
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
-
+            sorted_bam = None
             if fastq1 and fastq2:
                 # Use newly generated sorted BAM file
                 sorted_bam = sorted_bam
