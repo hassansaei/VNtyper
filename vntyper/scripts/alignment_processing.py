@@ -24,9 +24,9 @@ def check_bwa_index(reference: Path) -> bool:
     required_extensions = [".amb", ".ann", ".bwt", ".pac", ".sa"]
     reference = Path(reference)
     missing_files = [
-        reference.with_suffix(ext)
+        reference.with_name(reference.name + ext)
         for ext in required_extensions
-        if not reference.with_suffix(ext).exists()
+        if not reference.with_name(reference.name + ext).exists()
     ]
 
     if missing_files:
