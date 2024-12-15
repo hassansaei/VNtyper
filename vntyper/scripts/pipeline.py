@@ -321,7 +321,7 @@ def run_pipeline(
         elif cram:
             input_bam = Path(cram)
         else:
-            input_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
+            input_bam = Path(dirs['alignment_processing']) / "output_sorted.bam"
 
         # Determine VNTR region based on reference assembly
         if reference_assembly == "hg38":
