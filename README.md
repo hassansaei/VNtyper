@@ -81,7 +81,7 @@ vntyper pipeline \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir \
-    --threads 4
+    --threads 4 --fast-mode
 ```
 
 Alternatively, using a BAM file:
@@ -91,9 +91,35 @@ vntyper pipeline \
     --config-path /path/to/config.json \
     --bam /path/to/sample.bam \
     --output-dir /path/to/output/dir \
-    --threads 4
+    --threads 4 --fast-mode
 ```
+The advntr gentyping is optional and skipped by default. To enable advntr genotyping the ```bash --extra-modules advntr ``` option should be used. 
 
+Docker image for vntyper 2.0 is provided and can be pulled and used as follows:
+
+```bash
+    docker pull saei/vntyper:2.0.0-alpha.25
+
+    docker run -w /opt/vntyper --rm \
+    -v /local/input/folder/:/opt/vntyper/input \
+    -v /local/output/folder/:/opt/vntyper/output \
+    vntyper:2.0.0-alpha.25 \
+    vntyper pipeline --bam /local/input/folder/filename.bam \
+    -o /local/output/folder/filename/
+
+```
+Apptainer image can be generated from docker image as follows:
+
+```bash
+  apptainer pull docker://saei/vntyper:2.0.0-alpha.25  
+  
+  apptainer run --pwd /opt/vntyper \
+    -B /local/input/folder/:/opt/vntyper/input \
+    -B /local/output/folder/:/opt/vntyper/output \
+    vntyper_2.0.0-alpha.25.sif vntyper pipeline \
+    --bam /opt/vntyper/input/filename.bam \
+    -o /opt/vntyper/output/filename/ 
+```
 
 ### 2. Installing References
 
