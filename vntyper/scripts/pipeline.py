@@ -59,7 +59,6 @@ def run_pipeline(
     fastq2=None,
     bam=None,
     cram=None,
-    sorted_bam=None,
     threads=4,
     reference_assembly="hg19",
     fast_mode=False,
@@ -438,13 +437,13 @@ def run_pipeline(
                 )
 
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
-            sorted_bam = None
+            sorted_bam=None
             if fastq1 and fastq2:
                 # Use newly generated sorted BAM file
-                sorted_bam = sorted_bam
+                sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
             elif bam:
                 # Use provided BAM directly
-                sorted_bam = bam
+                sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
                 logging.debug("Using provided BAM for adVNTR genotyping.")
             elif cram:
                 # CRAM was converted to a sliced BAM
