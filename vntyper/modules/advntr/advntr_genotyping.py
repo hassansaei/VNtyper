@@ -45,7 +45,7 @@ def run_advntr(db_file, sorted_bam, output, output_name, config):
     output_ext = ".vcf" if output_format == "vcf" else ".tsv"
 
     advntr_command = (
-        f"{advntr_path} genotype -fs -vid {advntr_settings['vid']} "
+        f"{advntr_path} genotype -fs -vid {advntr_settings.get("vid", 25561)} "
         f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR{output_ext} "
         f"-m {db_file} --working_directory {output} -t {threads} {additional_commands}"
     )
