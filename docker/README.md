@@ -29,12 +29,12 @@ A Docker container for **VNtyper**, enabling easy execution of the tool with cus
 5. **Pull the Docker Image from Docker Hub:**
 
     ```bash
-    docker pull saei/vntyper:2.0.0-alpha.16
+    docker pull saei/vntyper:2.0.0-alpha.25
     ```
 6. **Generate apptainer Image from Docker Image:**
 
     ```bash
-    apptainer pull docker://saei/vntyper:2.0.0-alpha.16
+    apptainer pull docker://saei/vntyper:2.0.0-alpha.25
     ```
 
 ## **Running the Docker Container**
