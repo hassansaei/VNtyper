@@ -43,6 +43,7 @@ def process_fastq(
         f"--dup_calc_accuracy {dup_calc_accuracy} "
         f"--length_required {length_required} "
         f"--html {output}/{output_name}.html "
+        f"--json {output}/{output_name}.json "
     )
 
     if disable_adapter_trimming:
@@ -181,7 +182,7 @@ def process_bam_to_fastq(
         # Merging BAM files
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
         command_merge = (
-            f"{samtools_path} merge -@ {threads} {merged_bam} "
+            f"{samtools_path} merge -f -@ {threads} {merged_bam} "
             f"{final_bam} {output}/{output_name}_unmapped1.bam "
             f"{output}/{output_name}_unmapped2.bam "
             f"{output}/{output_name}_unmapped3.bam"

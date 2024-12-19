@@ -1,3 +1,3 @@
 # vntyper/version.py
 
-__version__ = "2.0.0-alpha.26"
+__version__ = "2.0.0-alpha.27"
