@@ -96,11 +96,15 @@ def run_pipeline(
             pipeline completion.
         archive_format (str, optional): Format of the archive: 'zip' or 'tar.gz'.
             Default is 'zip'.
-        custom_regions (str, optional): Comma-separated custom regions (e.g.,
-            "chr1:1000-2000,chr2:3000-4000").
+        custom_regions (str, optional): Comma-separated custom regions.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1
             analysis.
         log_level (int, optional): Logging level to be set for the pipeline.
+        sample_name (str, optional): Sample name for labeling results.
+
+    Raises:
+        ValueError: Various conditions when inputs are invalid or missing.
+        FileNotFoundError: BED file not found, if specified.
     """
     # Ensure the appropriate BWA reference is used for alignment
     if not bwa_reference:
@@ -147,9 +151,7 @@ def run_pipeline(
         raise ValueError("No input files provided.")
 
     try:
-        # ----------------------------
-        # Input Validation Section
-        # ----------------------------
+        # Input validation
         input_count = sum([
             1 if (fastq1 and fastq2) else 0,
             1 if bam else 0,
@@ -165,7 +167,7 @@ def run_pipeline(
             # Validate BAM file
             validate_bam_file(bam)
         elif cram:
-            # Validate CRAM file as we do with BAM
+            # Validate CRAM file
             validate_bam_file(cram)
         elif fastq1 and fastq2:
             # Validate FASTQ files
@@ -177,9 +179,7 @@ def run_pipeline(
                 "Both FASTQ files must be provided for paired-end sequencing."
             )
 
-        # ----------------------------
         # BED File Determination
-        # ----------------------------
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
@@ -208,9 +208,7 @@ def run_pipeline(
             write_bed_file(predefined_regions, bed_file_path)
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
-        # ----------------------------
-        # FASTQ Quality Control, Alignment and processing or BAM/CRAM Processing
-        # ----------------------------
+        # Processing Input Data
         if bam:
             # Convert BAM to FASTQ
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
@@ -261,7 +259,7 @@ def run_pipeline(
                 )
 
         elif fastq1 and fastq2:
-            # Process raw FASTQ files
+            # Process raw FASTQ files through QC first
             logging.info("Starting FASTQ quality control.")
             process_fastq(
                 fastq1,
@@ -273,7 +271,11 @@ def run_pipeline(
             )
             logging.info("FASTQ quality control completed.")
 
-            # Align and sort the FASTQ files
+            # Update fastq1 and fastq2 to the QCed FASTQ files
+            fastq1 = os.path.join(dirs['fastq_bam_processing'], "output_R1.fastq.gz")
+            fastq2 = os.path.join(dirs['fastq_bam_processing'], "output_R2.fastq.gz")
+
+            # Align and sort the QCed FASTQs
             logging.info("Starting FASTQ alignment.")
             sorted_bam = align_and_sort_fastq(
                 fastq1,
@@ -284,10 +286,9 @@ def run_pipeline(
                 threads,
                 config,
             )
-            logging.debug(f"Sorted BAM path: {sorted_bam}")
             logging.info("FASTQ alignment completed.")
-            
-            # Convert sorted BAM to FASTQ
+
+            # Convert sorted BAM to FASTQ for region slicing
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=sorted_bam,
@@ -310,11 +311,8 @@ def run_pipeline(
                     "Failed to generate FASTQ files from BAM. Exiting pipeline."
                 )
 
-        # ----------------------------
         # Calculate VNTR Coverage
-        # ----------------------------
         logging.info("Calculating mean coverage over the VNTR region.")
-        # Determine which input to use for coverage calculation
         if bam:
             input_bam = Path(bam)
         elif cram:
@@ -322,13 +320,11 @@ def run_pipeline(
         else:
             input_bam = Path(dirs['alignment_processing']) / "output_sorted.bam"
 
-        # Determine VNTR region based on reference assembly
         if reference_assembly == "hg38":
             vntr_region = config["bam_processing"]["vntr_region_hg38"]
         else:
             vntr_region = config["bam_processing"]["vntr_region_hg19"]
 
-        # Calculate mean coverage
         mean_coverage = calculate_vntr_coverage(
             bam_file=str(input_bam),
             region=vntr_region,
@@ -338,32 +334,21 @@ def run_pipeline(
             output_name="coverage"
         )
 
-        # ----------------------------
         # Kestrel Genotyping
-        # ----------------------------
-        vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
-        bed_out = os.path.join(dirs['kestrel'], "output.bed")
-        bam_out = os.path.join(dirs['kestrel'], "output.bam")
-
-        vcf_path = Path(vcf_out)
-
-        reference_vntr = config["reference_data"]["muc1_reference_vntr"]
-        fasta_reference = config["reference_data"]["muc1_reference_vntr"]
-
-        kestrel_path = config["tools"]["kestrel"]
-
         logging.info("Starting Kestrel genotyping.")
-        logging.debug(f"VCF output path: {vcf_out}")
+        vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
+        kestrel_path = config["tools"]["kestrel"]
+        reference_vntr = config["reference_data"]["muc1_reference_vntr"]
 
         if fastq1 and fastq2:
             run_kestrel(
-                vcf_path,
-                dirs['kestrel'],
-                fastq1,
-                fastq2,
-                reference_vntr,
-                kestrel_path,
-                config,
+                vcf_path=Path(vcf_out),
+                output_dir=Path(dirs['kestrel']),
+                fastq_1=fastq1,
+                fastq_2=fastq2,
+                reference_vntr=reference_vntr,
+                kestrel_path=kestrel_path,
+                config=config,
                 sample_name=sample_name,
                 log_level=log_level,
             )
@@ -377,12 +362,7 @@ def run_pipeline(
 
         logging.info("Kestrel genotyping completed.")
 
-        # After Kestrel genotyping, a sorted and indexed VCF should exist: output_indel.vcf.gz
-        sorted_vcf = os.path.join(dirs['kestrel'], "output_indel.vcf.gz")
-
-        # ----------------------------
-        # adVNTR Genotyping (Optional Module)
-        # ----------------------------
+        # After Kestrel, process optional modules like adVNTR if included
         if 'advntr' in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
@@ -397,12 +377,10 @@ def run_pipeline(
                 )
                 sys.exit(1)
 
-            # Load adVNTR settings
             advntr_config = load_advntr_config()
             advntr_settings = advntr_config.get("advntr_settings", {})
-
-            # Get advntr_reference from module_args or use default
             advntr_reference = module_args['advntr'].get('advntr_reference')
+
             if not advntr_reference:
                 if reference_assembly == "hg19":
                     advntr_reference = config.get("reference_data", {}).get(
@@ -437,24 +415,19 @@ def run_pipeline(
                 )
 
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
-            sorted_bam=None
+            sorted_bam = None
             if fastq1 and fastq2:
-                # Use newly generated sorted BAM file
+                # Use newly generated sliced BAM
+                # process_bam_to_fastq outputs output_sliced.bam along the way
                 sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
             elif bam:
-                # Use provided BAM directly
                 sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
                 logging.debug("Using provided BAM for adVNTR genotyping.")
             elif cram:
-                # CRAM was converted to a sliced BAM
                 sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
                 logging.debug("Using CRAM-converted BAM for adVNTR genotyping.")
 
-            if sorted_bam:
-                # Run adVNTR genotyping
-                logging.info(
-                    f"Proceeding with sorted BAM for adVNTR genotyping: {sorted_bam}"
-                )
+            if sorted_bam and sorted_bam.exists():
                 run_advntr(
                     advntr_reference,
                     sorted_bam,
@@ -463,7 +436,6 @@ def run_pipeline(
                     config,
                 )
 
-                # Process adVNTR output
                 output_format = advntr_settings.get("output_format", "tsv")
                 output_ext = ".vcf" if output_format == "vcf" else ".tsv"
                 output_path = os.path.join(
@@ -481,14 +453,17 @@ def run_pipeline(
         else:
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
-        # ----------------------------
         # Generate Summary Report
-        # ----------------------------
         logging.info("Generating summary report.")
         report_file = "summary_report.html"
         template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
 
-        # Pass the sorted and indexed VCF file to the summary report for IGV visualization
+        # VCF for IGV visualization if needed
+        sorted_vcf = os.path.join(dirs['kestrel'], "output_indel.vcf.gz")
+        bam_out = os.path.join(dirs['kestrel'], "output.bam")
+        bed_out = os.path.join(dirs['kestrel'], "output.bed")
+        fasta_reference = config["reference_data"]["muc1_reference_vntr"]
+
         generate_summary_report(
             output_dir,
             template_dir,
@@ -505,9 +480,7 @@ def run_pipeline(
         )
         logging.info(f"Summary report generated: {report_file}")
 
-        # ----------------------------
         # Archive Results (Optional)
-        # ----------------------------
         if archive_results:
             logging.info("Archiving the results folder.")
             if archive_format == 'zip':
@@ -534,9 +507,6 @@ def run_pipeline(
             except Exception as e:
                 logging.error(f"Failed to archive results folder: {e}")
 
-        # ----------------------------
-        # Final Processing and Completion
-        # ----------------------------
         logging.info("Pipeline finished successfully.")
 
     except Exception as e:
