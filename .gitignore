@@ -178,3 +178,6 @@ cython_debug/
 
 # ignore any fastp output files
 fastp.json
+
+# mac specific files
+.DS_Store
