@@ -170,6 +170,11 @@ cython_debug/
 # ignore large reference files and subdirectories
 /reference/chr1*
 /reference/*/
+/references/*/
+/references/*
 
 # ignore any pdb files
 *.pdb
+
+# ignore any fastp output files
+fastp.json
