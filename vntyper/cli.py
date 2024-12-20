@@ -20,6 +20,9 @@ from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.utils import setup_logging
 from vntyper.version import __version__ as VERSION
 
+# Import the online mode function
+from vntyper.scripts.online_mode import run_online_mode
+
 
 def load_config(config_path=None):
     """
@@ -32,7 +35,6 @@ def load_config(config_path=None):
         dict: The loaded configuration dictionary.
     """
     if config_path is not None and Path(config_path).exists():
-        # User provided a config path
         with open(config_path, 'r') as f:
             config = json.load(f)
     else:
@@ -86,7 +88,7 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Subcommand for running the full pipeline
+    # Subcommand: pipeline
     parser_pipeline = subparsers.add_parser(
         "pipeline",
         help="Run the full VNtyper pipeline.",
@@ -202,7 +204,7 @@ def main():
             help="Reference assembly for adVNTR genotyping (hg19 or hg38)."
         )
 
-    # Subcommand for FASTQ processing
+    # Subcommand: fastq
     parser_fastq = subparsers.add_parser(
         "fastq",
         help="Process FASTQ files.",
@@ -238,7 +240,7 @@ def main():
         help="Base name for the output FASTQ files."
     )
 
-    # Subcommand for BAM processing
+    # Subcommand: bam
     parser_bam = subparsers.add_parser(
         "bam",
         help="Process BAM files.",
@@ -291,7 +293,7 @@ def main():
         help="Base name for the output FASTQ files."
     )
 
-    # Subcommand for Kestrel genotyping
+    # Subcommand: kestrel
     parser_kestrel = subparsers.add_parser(
         "kestrel",
         help="Run Kestrel genotyping.",
@@ -327,7 +329,7 @@ def main():
         help="Set the sample name for Kestrel. If not provided, defaults to input FASTQ name."
     )
 
-    # Subcommand for generating reports
+    # Subcommand: report
     parser_report = subparsers.add_parser(
         "report",
         help="Generate a summary report and visualizations from output data.",
@@ -367,7 +369,7 @@ def main():
         help="Flanking region size for IGV reports."
     )
 
-    # Subcommand for cohort analysis
+    # Subcommand: cohort
     parser_cohort = subparsers.add_parser(
         "cohort",
         help="Aggregate outputs from multiple runs into a single summary file.",
@@ -392,7 +394,7 @@ def main():
         help="Name of the cohort summary report file."
     )
 
-    # Subcommand for installing references
+    # Subcommand: install-references
     parser_install = subparsers.add_parser(
         "install-references",
         help="Download and set up necessary reference files.",
@@ -408,6 +410,61 @@ def main():
         '--skip-indexing',
         action='store_true',
         help="Skip the bwa indexing step."
+    )
+
+    # Subcommand: online (no region argument now)
+    parser_online = subparsers.add_parser(
+        "online",
+        help="Subset the BAM and submit it to an online vntyper instance, then retrieve results.",
+        parents=[parent_parser]
+    )
+    parser_online.add_argument(
+        '--bam',
+        type=str,
+        required=True,
+        help="Path to the input BAM file."
+    )
+    parser_online.add_argument(
+        '-o', '--output-dir',
+        type=str,
+        default="out",
+        help="Output directory for results."
+    )
+    parser_online.add_argument(
+        '--reference-assembly',
+        type=str,
+        choices=["hg19", "hg38"],
+        default="hg19",
+        help="Reference assembly used."
+    )
+    parser_online.add_argument(
+        '--threads',
+        type=int,
+        default=4,
+        help="Number of threads to use."
+    )
+    parser_online.add_argument(
+        '--email',
+        type=str,
+        default=None,
+        help="Email to receive notifications (optional)."
+    )
+    parser_online.add_argument(
+        '--cohort-id',
+        type=str,
+        default=None,
+        help="Cohort ID to associate the job with (optional)."
+    )
+    parser_online.add_argument(
+        '--passphrase',
+        type=str,
+        default=None,
+        help="Passphrase for the cohort (if required)."
+    )
+    parser_online.add_argument(
+        '--resume',
+        action='store_true',
+        help="Resume polling a previously submitted job if job_id is found."
     )
 
     # Parse arguments
@@ -565,7 +622,7 @@ def main():
             flanking=args.flanking,
             input_files={},  # Populate as needed
             pipeline_version=VERSION,
-            config=config  # Pass the config here
+            config=config
         )
 
     elif args.command == "cohort":
@@ -574,6 +631,19 @@ def main():
             output_dir=Path(args.output_dir),
             summary_file=args.summary_file,
             config=config
+        )
+
+    elif args.command == "online":
+        run_online_mode(
+            config=config,
+            bam=args.bam,
+            output_dir=args.output_dir,
+            reference_assembly=args.reference_assembly,
+            threads=args.threads,
+            email=args.email,
+            cohort_id=args.cohort_id,
+            passphrase=args.passphrase,
+            resume=args.resume
         )
 
     else:

@@ -1,6 +1,9 @@
 {
   "output_directory": "out",
   "log_level": "INFO",
+  "api": {
+    "base_url": "https://vntyper.org/api"
+  },
   "reference_data": {
     "muc1_reference_vntr": "reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
     "advntr_reference_vntr_hg19": "reference/vntr_data_genic_loci/vntr_data/hg19_genic_VNTRs.db",
