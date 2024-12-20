@@ -46,6 +46,8 @@ def write_bed_file(regions, bed_file_path):
                 )
                 raise ValueError(
                     f"Invalid region format: {region}. Expected format 'chr:start-end'."
+
+
                 )
 
 
@@ -105,6 +107,7 @@ def run_pipeline(
     Raises:
         ValueError: Various conditions when inputs are invalid or missing.
         FileNotFoundError: BED file not found, if specified.
+        RuntimeError: If alignment fails due to missing BWA indices or other critical steps fail.
     """
     # Ensure the appropriate BWA reference is used for alignment
     if not bwa_reference:
@@ -212,6 +215,11 @@ def run_pipeline(
         if bam:
             # Convert BAM to FASTQ
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
+            # Ensure bam is not None or invalid before calling
+            if bam is None or str(bam).strip().lower() == "none":
+                logging.error("Invalid BAM input provided (None).")
+                raise ValueError("Invalid BAM file input.")
+
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=bam,
                 output=dirs['fastq_bam_processing'],
@@ -236,6 +244,10 @@ def run_pipeline(
         elif cram:
             # Convert CRAM to FASTQ
             logging.info("Starting CRAM to FASTQ conversion with specified regions.")
+            if cram is None or str(cram).strip().lower() == "none":
+                logging.error("Invalid CRAM input provided (None).")
+                raise ValueError("Invalid CRAM file input.")
+
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=cram,
                 output=dirs['fastq_bam_processing'],
@@ -286,10 +298,26 @@ def run_pipeline(
                 threads,
                 config,
             )
+
+            # Check if alignment succeeded
+            if not sorted_bam:
+                logging.error(
+                    "Alignment failed: BWA index files for the provided reference are missing or incomplete. "
+                    "Please run 'bwa index <reference.fa>' to generate them."
+                )
+                raise RuntimeError(
+                    "Alignment failed due to missing or incomplete BWA reference indices. "
+                    "Fix the issue by running 'bwa index <reference.fa>' and then rerun the pipeline."
+                )
+
             logging.info("FASTQ alignment completed.")
 
             # Convert sorted BAM to FASTQ for region slicing
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
+            if sorted_bam is None or str(sorted_bam).lower() == "none":
+                logging.error("Alignment produced a None value for sorted_bam.")
+                raise ValueError("No valid sorted_bam file provided.")
+
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=sorted_bam,
                 output=dirs['fastq_bam_processing'],
@@ -417,8 +445,7 @@ def run_pipeline(
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
             sorted_bam = None
             if fastq1 and fastq2:
-                # Use newly generated sliced BAM
-                # process_bam_to_fastq outputs output_sliced.bam along the way
+                # Use newly generated sliced BAM (created by process_bam_to_fastq)
                 sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
             elif bam:
                 sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
