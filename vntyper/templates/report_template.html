@@ -161,23 +161,58 @@
             </p>
         {% endif %}
 
-        <!-- New Section for VNTR Coverage -->
+        <!-- Coverage Section -->
         <h2>VNTR Region Coverage</h2>
-        <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }}</p>
+        <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</p>
+
+        <!-- Conditionally show fastp metrics if available -->
+        {% if fastp_available %}
+        <h2>fastp Quality Metrics</h2>
+        <p><strong>Sequencing Setup:</strong> {{ sequencing_str }}</p>
+        <table class="table table-bordered table-sm">
+            <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Duplication Rate (Cutoff: 10%)</td>
+                    <td>{{ duplication_rate if duplication_rate is not none else 'N/A' }}</td>
+                    <td>{{ duplication_rate_icon }}</td>
+                </tr>
+                <tr>
+                    <td>Q20 Rate (Cutoff: 80%)</td>
+                    <td>{{ (q20_rate * 100)|round(2) if q20_rate is not none else 'N/A' }}%</td>
+                    <td>{{ q20_icon }}</td>
+                </tr>
+                <tr>
+                    <td>Q30 Rate (Cutoff: 70%)</td>
+                    <td>{{ (q30_rate * 100)|round(2) if q30_rate is not none else 'N/A' }}%</td>
+                    <td>{{ q30_icon }}</td>
+                </tr>
+                <tr>
+                    <td>Passed Filter Rate (Cutoff: 80%)</td>
+                    <td>{{ (passed_filter_rate * 100)|round(2) if passed_filter_rate is not none else 'N/A' }}%</td>
+                    <td>{{ passed_filter_icon }}</td>
+                </tr>
+            </tbody>
+        </table>
+        {% endif %}
 
         <h2>Kestrel Identified Variants</h2>
         <div class="table-container">
             {{ kestrel_highlight | safe }}
         </div>
 
-        <!-- Conditionally display the adVNTR section -->
         {% if advntr_available and advntr_highlight %}
             <h2>adVNTR Identified Variants</h2>
             <div class="table-container">
                 {{ advntr_highlight | safe }}
             </div>
         {% else %}
-            <!-- Optionally, you can include a message if adVNTR was not run -->
             <p><em>adVNTR genotyping was not performed or no adVNTR results are available.</em></p>
         {% endif %}
 
