@@ -345,7 +345,6 @@ def main():
         default="summary_report.html",
         help="Name of the output report file."
     )
-    # Removed the redundant --log-file from parser_report (it is now global only)
     parser_report.add_argument(
         '--bed-file',
         type=Path,
@@ -405,7 +404,6 @@ def main():
         required=True,
         help="Directory where references will be installed."
     )
-    # Removed the redundant -c/--config-path from parser_install (it is now global only)
     parser_install.add_argument(
         '--skip-indexing',
         action='store_true',

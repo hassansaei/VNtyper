@@ -46,8 +46,6 @@ def write_bed_file(regions, bed_file_path):
                 )
                 raise ValueError(
                     f"Invalid region format: {region}. Expected format 'chr:start-end'."
-
-
                 )
 
 
