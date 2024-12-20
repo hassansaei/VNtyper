@@ -1,4 +1,4 @@
-# vntyper/scripts/cohort_summary.py
+#!/usr/bin/env python3
 
 import os
 import logging
@@ -75,23 +75,28 @@ def load_kestrel_results(kestrel_result_file):
         if missing_columns:
             logging.warning(f"Missing columns in {kestrel_result_file}: {missing_columns}")
 
-        # Rename columns to be human-readable
+        # Safely handle missing columns by only using available columns
+        if not available_columns:
+            # No columns found at all besides 'Sample', return minimal df
+            logging.warning("No expected columns found in Kestrel results, returning minimal DataFrame.")
+            return pd.DataFrame({'Sample': [sample_id]})
+
         df = df[list(available_columns.keys())]
         df = df.rename(columns=available_columns)
 
-        # Apply conditional styling to the Confidence column
-        # Coloring based on confidence value to highlight precision level.
-        df['Confidence'] = df['Confidence'].apply(
-            lambda x: (
-                f'<span style="color:orange;font-weight:bold;">{x}</span>'
-                if x == 'Low_Precision'
-                else f'<span style="color:red;font-weight:bold;">{x}</span>'
-                if x == 'High_Precision'
-                else f'<span style="color:blue;font-weight:bold;">{x}</span>'
-                if x == 'Negative'
-                else x
+        # Apply conditional styling to the Confidence column if it exists
+        if 'Confidence' in df.columns:
+            df['Confidence'] = df['Confidence'].apply(
+                lambda x: (
+                    f'<span style="color:orange;font-weight:bold;">{x}</span>'
+                    if x == 'Low_Precision'
+                    else f'<span style="color:red;font-weight:bold;">{x}</span>'
+                    if x == 'High_Precision'
+                    else f'<span style="color:blue;font-weight:bold;">{x}</span>'
+                    if x == 'Negative'
+                    else x
+                )
             )
-        )
 
         return df
     except pd.errors.ParserError as e:
@@ -281,7 +286,12 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
 
         logging.info(f"Loaded {len(result_files)} {filename} files from {input_dir}")
 
-    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+    if not dfs:
+        # If no data at all, return an empty DataFrame
+        logging.warning(f"No data found at all for {filename}. Returning empty DataFrame.")
+        return pd.DataFrame()
+
+    return pd.concat(dfs, ignore_index=True)
 
 
 def encode_image_to_base64(image_path):
@@ -352,26 +362,34 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
             },
             annotations=[
                 dict(text=f'<b>{total}</b>', x=0.5, y=0.5, font_size=40, showarrow=False),
-                dict(text=labels[0], x=0.15, y=0.5, font_size=14, showarrow=False),
-                dict(text=labels[1], x=0.85, y=0.5, font_size=14, showarrow=False)
+                dict(text=labels[0] if len(labels) > 0 else '', x=0.15, y=0.5, font_size=14, showarrow=False),
+                dict(text=labels[1] if len(labels) > 1 else '', x=0.85, y=0.5, font_size=14, showarrow=False)
             ],
             showlegend=False,
             margin=dict(t=50, b=50, l=50, r=50),
             height=500, width=500
         )
 
-        # Return the interactive plot as HTML
         return pio.to_html(fig, full_html=False)
     else:
         # Using matplotlib for static donut chart
         fig, ax = plt.subplots(figsize=(6, 6))
         wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
-        ax.pie(values, wedgeprops=wedgeprops, startangle=90, colors=colors, labels=labels)
-        ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
-        ax.set_title(title)
-        plt.savefig(plot_path)
+        try:
+            ax.pie(values, wedgeprops=wedgeprops, startangle=90, colors=colors, labels=labels)
+            ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
+            ax.set_title(title)
+            if plot_path:
+                plt.savefig(plot_path)
+            else:
+                logging.warning("No plot_path provided for static donut chart, chart not saved.")
+        except Exception as e:
+            logging.error(f"Error generating donut chart: {e}")
         plt.close()
-        return encode_image_to_base64(plot_path)
+        if plot_path and os.path.exists(plot_path):
+            return encode_image_to_base64(plot_path)
+        else:
+            return ""
 
 
 def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config):
@@ -402,28 +420,48 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Calculate summary statistics for Kestrel
-    kestrel_positive = len(kestrel_df[kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision', na=False)])
-    kestrel_negative = len(kestrel_df[~kestrel_df['Confidence'].str.contains('Low_Precision|High_Precision', na=False)])
+    # Handle missing 'Confidence' column for Kestrel
+    if 'Confidence' in kestrel_df.columns:
+        try:
+            # Safely handle cases where Confidence column might have unexpected values
+            kestrel_df_conf = kestrel_df['Confidence'].fillna('')
+            kestrel_positive = len(kestrel_df[kestrel_df_conf.str.contains('Low_Precision|High_Precision', na=False)])
+            kestrel_negative = len(kestrel_df[~kestrel_df_conf.str.contains('Low_Precision|High_Precision', na=False)])
+        except Exception as e:
+            logging.error(f"Error processing 'Confidence' values: {e}")
+            kestrel_positive = 0
+            kestrel_negative = 0
+    else:
+        logging.warning("No 'Confidence' column found in Kestrel results. Setting positive/negative counts to 0.")
+        kestrel_positive = 0
+        kestrel_negative = 0
+
     total_kestrel = kestrel_positive + kestrel_negative
 
     # Ensure 'Message' column exists in adVNTR results
     if 'Message' not in advntr_df.columns:
+        logging.warning("No 'Message' column found in adVNTR results, adding it.")
         advntr_df['Message'] = None
 
-    # Calculate summary statistics for adVNTR
+    # Handle missing 'VID' column in adVNTR
     if 'VID' in advntr_df.columns:
-        advntr_positive = len(
-            advntr_df[
-                (advntr_df['VID'].notna()) &
-                (advntr_df['VID'] != 'Negative') &
-                (advntr_df['Message'].isna())
-            ]
-        )
-        advntr_negative = len(advntr_df[advntr_df['VID'] == 'Negative'])
-        advntr_no_data = len(advntr_df[advntr_df['Message'].notna()])
+        try:
+            advntr_positive = len(
+                advntr_df[
+                    (advntr_df['VID'].notna()) &
+                    (advntr_df['VID'] != 'Negative') &
+                    (advntr_df['Message'].isna())
+                ]
+            )
+            advntr_negative = len(advntr_df[advntr_df['VID'] == 'Negative'])
+            advntr_no_data = len(advntr_df[advntr_df['Message'].notna()])
+        except Exception as e:
+            logging.error(f"Error processing adVNTR values: {e}")
+            advntr_positive = 0
+            advntr_negative = 0
+            advntr_no_data = len(advntr_df)
     else:
-        # No VID column means no valid adVNTR data found
+        logging.warning("No 'VID' column found in adVNTR results. Treating all as no data.")
         advntr_positive = 0
         advntr_negative = 0
         advntr_no_data = len(advntr_df)
