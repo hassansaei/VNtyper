@@ -503,7 +503,8 @@ def run_pipeline(
             input_files=input_files,
             pipeline_version=VERSION,
             mean_vntr_coverage=mean_coverage,
-            vcf_file=sorted_vcf
+            vcf_file=sorted_vcf,
+            config=config
         )
         logging.info(f"Summary report generated: {report_file}")
 

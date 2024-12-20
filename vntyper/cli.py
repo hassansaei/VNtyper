@@ -567,6 +567,7 @@ def main():
             flanking=args.flanking,
             input_files={},  # Populate as needed
             pipeline_version=VERSION,
+            config=config  # Pass the config here
         )
 
     elif args.command == "cohort":
