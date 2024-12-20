@@ -33,6 +33,7 @@ def process_fastq(
     deduplication = config["bam_processing"]["deduplication"]
     dup_calc_accuracy = config["bam_processing"]["dup_calc_accuracy"]
     length_required = config["bam_processing"]["length_required"]
+    qualified_quality_phred = config["bam_processing"]["qualified_quality_phred"]
 
     # Construct the fastp command
     qc_command = (
@@ -40,6 +41,7 @@ def process_fastq(
         f"--out1 {output}/{output_name}_R1.fastq.gz --out2 {output}/"
         f"{output_name}_R2.fastq.gz "
         f"--compression {compression_level} "
+        f"--qualified_quality_phred {qualified_quality_phred} "
         f"--dup_calc_accuracy {dup_calc_accuracy} "
         f"--length_required {length_required} "
         f"--html {output}/{output_name}.html "

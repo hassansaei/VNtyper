@@ -27,7 +27,8 @@
     "disable_adapter_trimming": true,
     "deduplication": true,
     "dup_calc_accuracy": 3,
-    "length_required": 40
+    "length_required": 50,
+    "qualified_quality_phred": 20
   },
   "paths": {
     "template_dir": "vntyper/templates"
