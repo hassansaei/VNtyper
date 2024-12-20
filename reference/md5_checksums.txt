@@ -1,0 +1,7 @@
+e103808b81f7d0a52353dee92d2ff164  chr1.hg19.fa.gz
+f069c41e7cc8c2d3a7655cbb2d4186b8  chr1.hg38.fa.gz
+e747aa1e8597893dbf5a8ea125cf59c4  vntr_data_genic_loci.zip
+5c6adc44ca37546e62f4f2e455512ea5  vntr_data_recommended_loci_hg38.zip
+00f893e20c4cd0b58c943b8808dd2b1f  All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
+537375b7877cb0eb854f8156fe5517d9  MUC1_motifs_Rev_com.fa
+b1ce25723e6528b7eabdad5e36f2e33c  code-adVNTR_RUs.fa
