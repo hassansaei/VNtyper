@@ -50,30 +50,27 @@ def load_config(config_path=None):
 def main():
     """
     Main function to parse arguments and execute corresponding subcommands.
+    With this setup, global parameters can now be placed before or after the subcommand.
     """
-    # Create the main parser and add global arguments
-    parser = argparse.ArgumentParser(
-        description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.",
-        add_help=True
-    )
 
-    # Adding global flags with short and long options
-    parser.add_argument(
+    # Parent parser for global arguments
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument(
         '-l', '--log-level',
         help="Set the logging level (e.g., DEBUG, INFO, WARNING, ERROR)",
         default="INFO"
     )
-    parser.add_argument(
+    parent_parser.add_argument(
         '-f', '--log-file',
         help="Set the log output file (default is stdout)",
         default=None
     )
-    parser.add_argument(
+    parent_parser.add_argument(
         '-v', '--version',
         action='version',
         version=f'%(prog)s {VERSION}'
     )
-    parser.add_argument(
+    parent_parser.add_argument(
         '--config-path',
         type=Path,
         default=None,
@@ -81,12 +78,19 @@ def main():
         required=False
     )
 
+    # Main parser that includes the parent parser
+    parser = argparse.ArgumentParser(
+        description="VNtyper CLI: A pipeline for genotyping MUC1-VNTR.",
+        parents=[parent_parser]
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Subcommand for running the full pipeline
     parser_pipeline = subparsers.add_parser(
         "pipeline",
-        help="Run the full VNtyper pipeline."
+        help="Run the full VNtyper pipeline.",
+        parents=[parent_parser]
     )
     parser_pipeline.add_argument(
         '-o', '--output-dir',
@@ -94,7 +98,6 @@ def main():
         default="out",
         help="Output directory for the results."
     )
-    # Added the --extra-modules flag
     parser_pipeline.add_argument(
         '--extra-modules',
         nargs='*',
@@ -149,7 +152,6 @@ def main():
         action='store_true',
         help="Delete intermediate files after processing (overrides --keep-intermediates)."
     )
-    # New arguments for archiving results
     parser_pipeline.add_argument(
         '--archive-results',
         action='store_true',
@@ -162,31 +164,23 @@ def main():
         default='zip',
         help="Format of the archive: 'zip' or 'tar.gz'. Default is 'zip'."
     )
-    # Added output_name argument
     parser_pipeline.add_argument(
         '-n', '--output-name',
         type=str,
         default="processed",
         help="Base name for the output files."
     )
-
-    # Add sample-name parameter for pipeline
     parser_pipeline.add_argument(
         '-s', '--sample-name',
         type=str,
         default=None,
         help="Set the sample name for labeling results. If not provided, defaults to input BAM or FASTQ name."
     )
-
-    # Mutually exclusive group for custom regions and BED file
     region_group = parser_pipeline.add_mutually_exclusive_group()
     region_group.add_argument(
         '--custom-regions',
         type=str,
-        help=(
-            "Define custom regions for MUC1 analysis as comma-separated values "
-            "(e.g., chr1:1000-2000,chr2:3000-4000)."
-        )
+        help="Define custom regions for MUC1 analysis as comma-separated values (e.g., chr1:1000-2000,chr2:3000-4000)."
     )
     region_group.add_argument(
         '--bed-file',
@@ -194,7 +188,7 @@ def main():
         help="Path to a BED file specifying regions for MUC1 analysis."
     )
 
-    # Module-specific argument groups
+    # If we want module-specific parser groups that depend on sys.argv:
     module_parsers = {}
     if 'advntr' in sys.argv:
         module_parsers['advntr'] = parser_pipeline.add_argument_group(
@@ -211,7 +205,8 @@ def main():
     # Subcommand for FASTQ processing
     parser_fastq = subparsers.add_parser(
         "fastq",
-        help="Process FASTQ files."
+        help="Process FASTQ files.",
+        parents=[parent_parser]
     )
     parser_fastq.add_argument(
         '-r1', '--fastq1',
@@ -246,7 +241,8 @@ def main():
     # Subcommand for BAM processing
     parser_bam = subparsers.add_parser(
         "bam",
-        help="Process BAM files."
+        help="Process BAM files.",
+        parents=[parent_parser]
     )
     parser_bam.add_argument(
         '-a', '--alignment',
@@ -298,7 +294,8 @@ def main():
     # Subcommand for Kestrel genotyping
     parser_kestrel = subparsers.add_parser(
         "kestrel",
-        help="Run Kestrel genotyping."
+        help="Run Kestrel genotyping.",
+        parents=[parent_parser]
     )
     parser_kestrel.add_argument(
         '-r', '--reference-vntr',
@@ -323,8 +320,6 @@ def main():
         default="out",
         help="Output directory for Kestrel results."
     )
-
-    # Add sample-name parameter for kestrel
     parser_kestrel.add_argument(
         '-s', '--sample-name',
         type=str,
@@ -335,7 +330,8 @@ def main():
     # Subcommand for generating reports
     parser_report = subparsers.add_parser(
         "report",
-        help="Generate a summary report and visualizations from output data."
+        help="Generate a summary report and visualizations from output data.",
+        parents=[parent_parser]
     )
     parser_report.add_argument(
         '-o', '--output-dir',
@@ -349,13 +345,7 @@ def main():
         default="summary_report.html",
         help="Name of the output report file."
     )
-    parser_report.add_argument(
-        '--log-file',
-        type=str,
-        default="pipeline.log",
-        help="Pipeline log file to include in the report."
-    )
-    # Subcommand for generating IGV reports
+    # Removed the redundant --log-file from parser_report (it is now global only)
     parser_report.add_argument(
         '--bed-file',
         type=Path,
@@ -381,7 +371,8 @@ def main():
     # Subcommand for cohort analysis
     parser_cohort = subparsers.add_parser(
         "cohort",
-        help="Aggregate outputs from multiple runs into a single summary file."
+        help="Aggregate outputs from multiple runs into a single summary file.",
+        parents=[parent_parser]
     )
     parser_cohort.add_argument(
         '-i', '--input-dirs',
@@ -405,7 +396,8 @@ def main():
     # Subcommand for installing references
     parser_install = subparsers.add_parser(
         "install-references",
-        help="Download and set up necessary reference files."
+        help="Download and set up necessary reference files.",
+        parents=[parent_parser]
     )
     parser_install.add_argument(
         '-d', '--output-dir',
@@ -413,12 +405,7 @@ def main():
         required=True,
         help="Directory where references will be installed."
     )
-    parser_install.add_argument(
-        '-c', '--config-path',
-        type=Path,
-        default=None,
-        help="Path to the main config.json file to update. If not provided, config update is skipped."
-    )
+    # Removed the redundant -c/--config-path from parser_install (it is now global only)
     parser_install.add_argument(
         '--skip-indexing',
         action='store_true',
@@ -444,7 +431,6 @@ def main():
 
     # Handle install-references subcommand
     if args.command == "install-references":
-        # Execute the install_references_main function with arguments
         install_references_main(
             output_dir=args.output_dir,
             config_path=args.config_path,
@@ -459,7 +445,7 @@ def main():
         logging.critical(f"Failed to load configuration: {e}")
         sys.exit(1)
 
-    # Handle other subcommands
+    # For other commands, ensure logging to output_dir/pipeline.log if not specified
     if args.command != "install-references":
         if args.log_file:
             log_file = args.log_file
@@ -470,10 +456,6 @@ def main():
 
     # Execute the corresponding subcommand
     if args.command == "pipeline":
-        # ----------------------------
-        # Custom Validation for Pipeline Inputs
-        # ----------------------------
-        # Ensure that only one type of input is provided (either BAM, CRAM, or FASTQ)
         input_types = sum([
             1 if args.bam else 0,
             1 if args.cram else 0,
@@ -482,32 +464,29 @@ def main():
         if input_types > 1:
             parser_pipeline.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
 
-        # If no BAM or CRAM, ensure both FASTQ files are provided
         if not args.bam and not args.cram and (args.fastq1 is None or args.fastq2 is None):
             parser_pipeline.error(
                 "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified "
                 "for paired-end sequencing."
             )
 
-        # Collect module-specific arguments
         module_args = {}
         if 'advntr' in args.extra_modules:
-            module_args['advntr'] = {
-                'advntr_reference': args.advntr_reference
-            }
-            # Remove module-specific args from args to avoid conflicts
             if hasattr(args, 'advntr_reference'):
+                module_args['advntr'] = {
+                    'advntr_reference': args.advntr_reference
+                }
                 delattr(args, 'advntr_reference')
+            else:
+                module_args['advntr'] = {}
         else:
             module_args['advntr'] = {}
 
-        # Determine bwa_reference based on reference_assembly
         if args.reference_assembly == "hg19":
             bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
         else:
             bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
 
-        # Set sample name based on input files
         sample_name = args.sample_name
         if sample_name is None:
             if args.bam:
@@ -517,8 +496,6 @@ def main():
             else:
                 sample_name = "sample"
 
-        # Pass module_args and new arguments to run_pipeline
-        # Include cram=args.cram for CRAM support
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
@@ -528,7 +505,7 @@ def main():
             fastq1=args.fastq1,
             fastq2=args.fastq2,
             bam=args.bam,
-            cram=args.cram,  # CRAM support: pass CRAM argument to pipeline
+            cram=args.cram,
             threads=args.threads,
             reference_assembly=args.reference_assembly,
             fast_mode=args.fast_mode,
@@ -588,7 +565,7 @@ def main():
             bam_file=args.bam_file,
             fasta_file=args.reference_fasta,
             flanking=args.flanking,
-            input_files={},  # You may need to populate this based on your pipeline
+            input_files={},  # Populate as needed
             pipeline_version=VERSION,
         )
 
