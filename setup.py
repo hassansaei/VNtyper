@@ -62,6 +62,8 @@ setup(
             'templates/report_template.html',  # Include report_template.html
             'templates/cohort_summary_template.html',  # Include cohort_summary_template.html
             'dependencies/kestrel/*.jar',  # Include all JAR files in dependencies/kestrel/
+            'modules/shark/shark_config.json',  # Include shark_config.json
+            'modules/advntr/advntr_config.json',  # Include advntr_config.json
         ],
     },
 )
