@@ -35,16 +35,16 @@ def load_config(config_path=None):
         dict: The loaded configuration dictionary.
     """
     if config_path is not None and Path(config_path).exists():
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
     else:
         # No config path provided or file does not exist; use default config from package data
         try:
             with pkg_resources.open_text('vntyper', 'config.json') as f:
                 config = json.load(f)
-        except Exception as e:
+        except Exception as exc:
             logging.error("Error: Default config file not found in package data.")
-            logging.error(e)
+            logging.error(exc)
             sys.exit(1)
     return config
 
@@ -52,7 +52,8 @@ def load_config(config_path=None):
 def main():
     """
     Main function to parse arguments and execute corresponding subcommands.
-    With this setup, global parameters can now be placed before or after the subcommand.
+    With this setup, global parameters can now be placed before or after
+    the subcommand.
     """
 
     # Parent parser for global arguments
@@ -76,7 +77,10 @@ def main():
         '--config-path',
         type=Path,
         default=None,
-        help="Path to the configuration file (config.json). If not provided, the default config will be used.",
+        help=(
+            "Path to the configuration file (config.json). "
+            "If not provided, the default config will be used."
+        ),
         required=False
     )
 
@@ -105,6 +109,11 @@ def main():
         nargs='*',
         default=[],
         help="Optional extra modules to include (e.g., advntr)."
+    )
+    parser_pipeline.add_argument(
+        '--enable-shark',
+        action='store_true',
+        help="Enable SHARK module for pre-processing FASTQ files."
     )
     parser_pipeline.add_argument(
         '--fastq1',
@@ -137,12 +146,14 @@ def main():
         type=str,
         choices=["hg19", "hg38"],
         default="hg19",
-        help="Specify the reference assembly used for the input BAM/CRAM file alignment."
+        help="Specify the reference assembly used for the input "
+             "BAM/CRAM file alignment."
     )
     parser_pipeline.add_argument(
         '--fast-mode',
         action='store_true',
-        help="Enable fast mode (skips filtering for unmapped and partially mapped reads)."
+        help="Enable fast mode (skips filtering for unmapped "
+             "and partially mapped reads)."
     )
     parser_pipeline.add_argument(
         '--keep-intermediates',
@@ -152,12 +163,14 @@ def main():
     parser_pipeline.add_argument(
         '--delete-intermediates',
         action='store_true',
-        help="Delete intermediate files after processing (overrides --keep-intermediates)."
+        help="Delete intermediate files after processing "
+             "(overrides --keep-intermediates)."
     )
     parser_pipeline.add_argument(
         '--archive-results',
         action='store_true',
-        help="Create an archive of the results folder after pipeline completion."
+        help="Create an archive of the results folder after "
+             "pipeline completion."
     )
     parser_pipeline.add_argument(
         '--archive-format',
@@ -176,13 +189,15 @@ def main():
         '-s', '--sample-name',
         type=str,
         default=None,
-        help="Set the sample name for labeling results. If not provided, defaults to input BAM or FASTQ name."
+        help=("Set the sample name for labeling results. If not provided, "
+              "defaults to input BAM or FASTQ name.")
     )
     region_group = parser_pipeline.add_mutually_exclusive_group()
     region_group.add_argument(
         '--custom-regions',
         type=str,
-        help="Define custom regions for MUC1 analysis as comma-separated values (e.g., chr1:1000-2000,chr2:3000-4000)."
+        help="Define custom regions for MUC1 analysis as comma-separated "
+             "values (e.g., chr1:1000-2000,chr2:3000-4000)."
     )
     region_group.add_argument(
         '--bed-file',
@@ -269,12 +284,14 @@ def main():
         type=str,
         choices=["hg19", "hg38"],
         default="hg19",
-        help="Specify the reference assembly to use (hg19 or hg38). Default is hg19."
+        help="Specify the reference assembly to use (hg19 or hg38). "
+             "Default is hg19."
     )
     parser_bam.add_argument(
         '--fast-mode',
         action='store_true',
-        help="Enable fast mode (skips filtering for unmapped and partially mapped reads)."
+        help="Enable fast mode (skips filtering for unmapped and partially "
+             "mapped reads)."
     )
     parser_bam.add_argument(
         '--keep-intermediates',
@@ -284,7 +301,8 @@ def main():
     parser_bam.add_argument(
         '--delete-intermediates',
         action='store_true',
-        help="Delete intermediate files after processing (overrides --keep-intermediates)."
+        help="Delete intermediate files after processing "
+             "(overrides --keep-intermediates)."
     )
     parser_bam.add_argument(
         '-n', '--output-name',
@@ -326,7 +344,8 @@ def main():
         '-s', '--sample-name',
         type=str,
         default=None,
-        help="Set the sample name for Kestrel. If not provided, defaults to input FASTQ name."
+        help="Set the sample name for Kestrel. If not provided, "
+             "defaults to input FASTQ name."
     )
 
     # Subcommand: report
@@ -412,10 +431,11 @@ def main():
         help="Skip the bwa indexing step."
     )
 
-    # Subcommand: online (no region argument now)
+    # Subcommand: online
     parser_online = subparsers.add_parser(
         "online",
-        help="Subset the BAM and submit it to an online vntyper instance, then retrieve results.",
+        help=("Subset the BAM and submit it to an online vntyper instance, "
+              "then retrieve results."),
         parents=[parent_parser]
     )
     parser_online.add_argument(
@@ -476,13 +496,13 @@ def main():
         sys.exit(0)
 
     # Setup logging
-    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    log_level_value = getattr(logging, args.log_level.upper(), logging.INFO)
     if args.log_file:
         log_file_path = Path(args.log_file)
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
-        setup_logging(log_level=log_level, log_file=str(log_file_path))
+        setup_logging(log_level=log_level_value, log_file=str(log_file_path))
     else:
-        setup_logging(log_level=log_level, log_file=None)
+        setup_logging(log_level=log_level_value, log_file=None)
 
     # Handle install-references subcommand
     if args.command == "install-references":
@@ -496,8 +516,8 @@ def main():
     # Load configuration
     try:
         config = load_config(args.config_path)
-    except Exception as e:
-        logging.critical(f"Failed to load configuration: {e}")
+    except Exception as exc:
+        logging.critical(f"Failed to load configuration: {exc}")
         sys.exit(1)
 
     # For other commands, ensure logging to output_dir/pipeline.log if not specified
@@ -507,7 +527,7 @@ def main():
         else:
             log_file = Path(args.output_dir) / "pipeline.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        setup_logging(log_level=log_level, log_file=str(log_file))
+        setup_logging(log_level=log_level_value, log_file=str(log_file))
 
     # Execute the corresponding subcommand
     if args.command == "pipeline":
@@ -517,45 +537,56 @@ def main():
             1 if (args.fastq1 or args.fastq2) else 0
         ])
         if input_types > 1:
-            parser_pipeline.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
-
-        if not args.bam and not args.cram and (args.fastq1 is None or args.fastq2 is None):
             parser_pipeline.error(
-                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified "
-                "for paired-end sequencing."
+                "Provide either BAM, CRAM, or FASTQ files (not multiples)."
             )
 
-        module_args = {}
+        if (not args.bam and not args.cram
+                and (args.fastq1 is None or args.fastq2 is None)):
+            parser_pipeline.error(
+                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be "
+                "specified for paired-end sequencing."
+            )
+
+        module_args_dict = {}
         if 'advntr' in args.extra_modules:
             if hasattr(args, 'advntr_reference'):
-                module_args['advntr'] = {
+                module_args_dict['advntr'] = {
                     'advntr_reference': args.advntr_reference
                 }
                 delattr(args, 'advntr_reference')
             else:
-                module_args['advntr'] = {}
+                module_args_dict['advntr'] = {}
         else:
-            module_args['advntr'] = {}
+            module_args_dict['advntr'] = {}
+
+        # Add shark to extra_modules if --enable-shark is used
+        if args.enable_shark and 'shark' not in args.extra_modules:
+            args.extra_modules.append('shark')
 
         if args.reference_assembly == "hg19":
-            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
+            bwa_reference = config.get(
+                "reference_data", {}
+            ).get("bwa_reference_hg19")
         else:
-            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
+            bwa_reference = config.get(
+                "reference_data", {}
+            ).get("bwa_reference_hg38")
 
-        sample_name = args.sample_name
-        if sample_name is None:
+        sample_name_val = args.sample_name
+        if sample_name_val is None:
             if args.bam:
-                sample_name = Path(args.bam).stem
+                sample_name_val = Path(args.bam).stem
             elif args.fastq1:
-                sample_name = Path(args.fastq1).stem
+                sample_name_val = Path(args.fastq1).stem
             else:
-                sample_name = "sample"
+                sample_name_val = "sample"
 
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
             extra_modules=args.extra_modules,
-            module_args=module_args,
+            module_args=module_args_dict,
             config=config,
             fastq1=args.fastq1,
             fastq2=args.fastq2,
@@ -570,8 +601,8 @@ def main():
             archive_format=args.archive_format,
             custom_regions=args.custom_regions,
             bed_file=args.bed_file,
-            log_level=log_level,
-            sample_name=sample_name,
+            log_level=log_level_value,
+            sample_name=sample_name_val,
         )
 
     elif args.command == "fastq":
@@ -607,13 +638,15 @@ def main():
             kestrel_path=config.get("tools", {}).get("kestrel"),
             config=config,
             sample_name=args.sample_name,
-            log_level=log_level
+            log_level=log_level_value
         )
 
     elif args.command == "report":
         generate_summary_report(
             output_dir=Path(args.output_dir),
-            template_dir=config.get('paths', {}).get('template_dir', 'vntyper/templates'),
+            template_dir=config.get('paths', {}).get(
+                'template_dir', 'vntyper/templates'
+            ),
             report_file=args.report_file,
             log_file=args.log_file,
             bed_file=args.bed_file,

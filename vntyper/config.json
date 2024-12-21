@@ -18,6 +18,7 @@
     "samtools": "samtools",
     "bwa": "bwa",
     "advntr": "mamba run -n envadvntr advntr",
+    "shark": "mamba run -n shark_env shark",
     "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
     "java_path": "java"
   },

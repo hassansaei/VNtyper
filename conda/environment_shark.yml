@@ -1,0 +1,7 @@
+name: shark_env
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - shark=1.2.0=h077b44d_5
