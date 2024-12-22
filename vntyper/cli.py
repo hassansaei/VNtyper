@@ -56,17 +56,29 @@ def main():
     the subcommand.
     """
 
+    # We'll load an initial config for CLI defaults. We do a try/except because
+    # we might overwrite this again if the user specifies --config-path.
+    try:
+        initial_config = load_config(None)
+    except Exception:
+        initial_config = {}
+
+    # Fallback lookups for CLI defaults
+    default_cli = initial_config.get("cli_defaults", {})
+    default_log_level = default_cli.get("log_level", "INFO")
+    default_log_file = default_cli.get("log_file", None)
+
     # Parent parser for global arguments
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument(
         '-l', '--log-level',
         help="Set the logging level (e.g., DEBUG, INFO, WARNING, ERROR)",
-        default="INFO"
+        default=default_log_level
     )
     parent_parser.add_argument(
         '-f', '--log-file',
         help="Set the log output file (default is stdout)",
-        default=None
+        default=default_log_file
     )
     parent_parser.add_argument(
         '-v', '--version',
@@ -93,6 +105,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Subcommand: pipeline
+    # We read further defaults from the loaded config (once we re-load config in "run" step).
     parser_pipeline = subparsers.add_parser(
         "pipeline",
         help="Run the full VNtyper pipeline.",
@@ -101,13 +114,13 @@ def main():
     parser_pipeline.add_argument(
         '-o', '--output-dir',
         type=str,
-        default="out",
+        default=None,
         help="Output directory for the results."
     )
     parser_pipeline.add_argument(
         '--extra-modules',
         nargs='*',
-        default=[],
+        default=None,
         help="Optional extra modules to include (e.g., advntr)."
     )
     parser_pipeline.add_argument(
@@ -138,14 +151,14 @@ def main():
     parser_pipeline.add_argument(
         '--threads',
         type=int,
-        default=4,
+        default=None,
         help="Number of threads to use."
     )
     parser_pipeline.add_argument(
         '--reference-assembly',
         type=str,
         choices=["hg19", "hg38"],
-        default="hg19",
+        default=None,
         help="Specify the reference assembly used for the input "
              "BAM/CRAM file alignment."
     )
@@ -176,13 +189,13 @@ def main():
         '--archive-format',
         type=str,
         choices=['zip', 'tar.gz'],
-        default='zip',
-        help="Format of the archive: 'zip' or 'tar.gz'. Default is 'zip'."
+        default=None,
+        help="Format of the archive: 'zip' or 'tar.gz'."
     )
     parser_pipeline.add_argument(
         '-n', '--output-name',
         type=str,
-        default="processed",
+        default=None,
         help="Base name for the output files."
     )
     parser_pipeline.add_argument(
@@ -205,20 +218,6 @@ def main():
         help="Path to a BED file specifying regions for MUC1 analysis."
     )
 
-    # If we want module-specific parser groups that depend on sys.argv:
-    module_parsers = {}
-    if 'advntr' in sys.argv:
-        module_parsers['advntr'] = parser_pipeline.add_argument_group(
-            'adVNTR Module Options'
-        )
-        module_parsers['advntr'].add_argument(
-            '--advntr-reference',
-            type=str,
-            choices=["hg19", "hg38"],
-            required=False,
-            help="Reference assembly for adVNTR genotyping (hg19 or hg38)."
-        )
-
     # Subcommand: fastq
     parser_fastq = subparsers.add_parser(
         "fastq",
@@ -239,19 +238,19 @@ def main():
     parser_fastq.add_argument(
         '-t', '--threads',
         type=int,
-        default=4,
+        default=None,
         help="Number of threads to use."
     )
     parser_fastq.add_argument(
         '-o', '--output-dir',
         type=str,
-        default="out",
+        default=None,
         help="Output directory for processed FASTQ files."
     )
     parser_fastq.add_argument(
         '-n', '--output-name',
         type=str,
-        default="processed",
+        default=None,
         help="Base name for the output FASTQ files."
     )
 
@@ -270,22 +269,21 @@ def main():
     parser_bam.add_argument(
         '-t', '--threads',
         type=int,
-        default=4,
+        default=None,
         help="Number of threads to use."
     )
     parser_bam.add_argument(
         '-o', '--output-dir',
         type=str,
-        default="out",
+        default=None,
         help="Output directory for processed BAM files."
     )
     parser_bam.add_argument(
         '--reference-assembly',
         type=str,
         choices=["hg19", "hg38"],
-        default="hg19",
-        help="Specify the reference assembly to use (hg19 or hg38). "
-             "Default is hg19."
+        default=None,
+        help="Specify the reference assembly to use (hg19 or hg38)."
     )
     parser_bam.add_argument(
         '--fast-mode',
@@ -307,7 +305,7 @@ def main():
     parser_bam.add_argument(
         '-n', '--output-name',
         type=str,
-        default="processed",
+        default=None,
         help="Base name for the output FASTQ files."
     )
 
@@ -337,7 +335,7 @@ def main():
     parser_kestrel.add_argument(
         '-o', '--output-dir',
         type=str,
-        default="out",
+        default=None,
         help="Output directory for Kestrel results."
     )
     parser_kestrel.add_argument(
@@ -363,7 +361,7 @@ def main():
     parser_report.add_argument(
         '--report-file',
         type=str,
-        default="summary_report.html",
+        default=None,
         help="Name of the output report file."
     )
     parser_report.add_argument(
@@ -384,7 +382,7 @@ def main():
     parser_report.add_argument(
         '--flanking',
         type=int,
-        default=50,
+        default=None,
         help="Flanking region size for IGV reports."
     )
 
@@ -409,7 +407,7 @@ def main():
     parser_cohort.add_argument(
         '--summary-file',
         type=str,
-        default="cohort_summary.html",
+        default=None,
         help="Name of the cohort summary report file."
     )
 
@@ -447,20 +445,20 @@ def main():
     parser_online.add_argument(
         '-o', '--output-dir',
         type=str,
-        default="out",
+        default=None,
         help="Output directory for results."
     )
     parser_online.add_argument(
         '--reference-assembly',
         type=str,
         choices=["hg19", "hg38"],
-        default="hg19",
+        default=None,
         help="Reference assembly used."
     )
     parser_online.add_argument(
         '--threads',
         type=int,
-        default=4,
+        default=None,
         help="Number of threads to use."
     )
     parser_online.add_argument(
@@ -487,7 +485,7 @@ def main():
         help="Resume polling a previously submitted job if job_id is found."
     )
 
-    # Parse arguments
+    # Parse initial arguments just enough to see what command is used
     args = parser.parse_args()
 
     # Display help if no command is provided
@@ -495,16 +493,87 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    # Setup logging
+    # If the user gave us a config path, reload the config to get updated defaults
+    if args.config_path:
+        try:
+            updated_config = load_config(args.config_path)
+        except Exception as exc:
+            logging.critical(f"Failed to load configuration: {exc}")
+            sys.exit(1)
+        config_for_cli = updated_config
+    else:
+        config_for_cli = initial_config
+
+    # Overwrite CLI defaults if present in config
+    # We'll do small helper function here:
+    def get_conf(key, fallback):
+        return config_for_cli.get("default_values", {}).get(key, fallback)
+
+    # Setup the final logging now that we have updated config (log level, etc.)
     log_level_value = getattr(logging, args.log_level.upper(), logging.INFO)
     if args.log_file:
         log_file_path = Path(args.log_file)
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
         setup_logging(log_level=log_level_value, log_file=str(log_file_path))
     else:
-        setup_logging(log_level=log_level_value, log_file=None)
+        # No CLI-supplied log file, so fallback to config or None
+        fallback_file = get_conf("log_file", None)
+        if fallback_file:
+            lf_path = Path(fallback_file)
+            lf_path.parent.mkdir(parents=True, exist_ok=True)
+            setup_logging(log_level=log_level_value, log_file=str(lf_path))
+        else:
+            setup_logging(log_level=log_level_value, log_file=None)
 
-    # Handle install-references subcommand
+    # From here, we fill in missing arguments from config if the user left them unset
+    # (We do this to avoid overwriting if user has specified them.)
+    if args.command == "pipeline":
+        if args.output_dir is None:
+            args.output_dir = get_conf("output_dir", "out")
+        if args.threads is None:
+            args.threads = get_conf("threads", 4)
+        if args.reference_assembly is None:
+            args.reference_assembly = get_conf("reference_assembly", "hg19")
+        if args.output_name is None:
+            args.output_name = get_conf("output_name", "processed")
+        if args.archive_format is None:
+            args.archive_format = get_conf("archive_format", "zip")
+    elif args.command == "fastq":
+        if args.output_dir is None:
+            args.output_dir = get_conf("output_dir", "out")
+        if args.threads is None:
+            args.threads = get_conf("threads", 4)
+        if args.output_name is None:
+            args.output_name = get_conf("output_name", "processed")
+    elif args.command == "bam":
+        if args.output_dir is None:
+            args.output_dir = get_conf("output_dir", "out")
+        if args.threads is None:
+            args.threads = get_conf("threads", 4)
+        if args.reference_assembly is None:
+            args.reference_assembly = get_conf("reference_assembly", "hg19")
+        if args.output_name is None:
+            args.output_name = get_conf("output_name", "processed")
+    elif args.command == "kestrel":
+        if args.output_dir is None:
+            args.output_dir = get_conf("output_dir", "out")
+    elif args.command == "report":
+        if args.report_file is None:
+            args.report_file = get_conf("report_file", "summary_report.html")
+        if args.flanking is None:
+            args.flanking = get_conf("flanking", 50)
+    elif args.command == "cohort":
+        if args.summary_file is None:
+            args.summary_file = get_conf("summary_file", "cohort_summary.html")
+    elif args.command == "online":
+        if args.output_dir is None:
+            args.output_dir = get_conf("output_dir", "out")
+        if args.reference_assembly is None:
+            args.reference_assembly = get_conf("reference_assembly", "hg19")
+        if args.threads is None:
+            args.threads = get_conf("threads", 4)
+
+    # Now we handle install-references or other subcommands
     if args.command == "install-references":
         install_references_main(
             output_dir=args.output_dir,
@@ -513,18 +582,19 @@ def main():
         )
         sys.exit(0)
 
-    # Load configuration
+    # If not "install-references," load the config fully once more for pipeline usage:
     try:
         config = load_config(args.config_path)
     except Exception as exc:
         logging.critical(f"Failed to load configuration: {exc}")
         sys.exit(1)
 
-    # For other commands, ensure logging to output_dir/pipeline.log if not specified
+    # For other commands, ensure we also log to output_dir/pipeline.log if not specified
     if args.command != "install-references":
         if args.log_file:
             log_file = args.log_file
         else:
+            # Possibly use output_dir/pipeline.log
             log_file = Path(args.output_dir) / "pipeline.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         setup_logging(log_level=log_level_value, log_file=str(log_file))
@@ -548,22 +618,27 @@ def main():
                 "specified for paired-end sequencing."
             )
 
+        # Construct module_args_dict for advntr, etc.
         module_args_dict = {}
-        if 'advntr' in args.extra_modules:
+        if 'advntr' in (args.extra_modules or []):
+            # If we have advntr in sys.argv, see if advntr_reference is set
             if hasattr(args, 'advntr_reference'):
                 module_args_dict['advntr'] = {
                     'advntr_reference': args.advntr_reference
                 }
+                # remove the attribute to avoid confusion
                 delattr(args, 'advntr_reference')
             else:
                 module_args_dict['advntr'] = {}
         else:
             module_args_dict['advntr'] = {}
 
-        # Add shark to extra_modules if --enable-shark is used
-        if args.enable_shark and 'shark' not in args.extra_modules:
-            args.extra_modules.append('shark')
+        # If shark was enabled
+        extra_modules_list = args.extra_modules or []
+        if args.enable_shark and 'shark' not in extra_modules_list:
+            extra_modules_list.append('shark')
 
+        # BWA reference from config
         if args.reference_assembly == "hg19":
             bwa_reference = config.get(
                 "reference_data", {}
@@ -585,7 +660,7 @@ def main():
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
-            extra_modules=args.extra_modules,
+            extra_modules=extra_modules_list,
             module_args=module_args_dict,
             config=config,
             fastq1=args.fastq1,

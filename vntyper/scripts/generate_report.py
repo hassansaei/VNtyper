@@ -34,8 +34,6 @@ def load_kestrel_results(kestrel_result_file):
         }
         df = df[list(columns_to_display.keys())]
         df = df.rename(columns=columns_to_display)
-
-        # Apply conditional styling to the Confidence column
         df['Confidence'] = df['Confidence'].apply(
             lambda x: (
                 f'<span style="color:orange;font-weight:bold;">{x}</span>'
@@ -45,7 +43,6 @@ def load_kestrel_results(kestrel_result_file):
                 else x
             )
         )
-
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
@@ -86,7 +83,14 @@ def load_pipeline_log(log_file):
         return "Failed to load pipeline log."
 
 
-def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None):
+def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
+    """
+    Wrapper around `create_report` IGV command. If config is provided and flanking is not explicitly set,
+    fallback to config's default_values.flanking.
+    """
+    if config is not None and flanking == 50:
+        flanking = config.get("default_values", {}).get("flanking", 50)
+
     bed_file = str(bed_file) if bed_file else None
     bam_file = str(bam_file) if bam_file else None
     fasta_file = str(fasta_file) if fasta_file else None
@@ -197,6 +201,9 @@ def generate_summary_report(
     if config is None:
         raise ValueError("Config dictionary must be provided to generate_summary_report")
 
+    if flanking == 50:
+        flanking = config.get("default_values", {}).get("flanking", 50)
+
     thresholds = config.get("thresholds", {})
     mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
     dup_rate_cutoff = thresholds.get("duplication_rate", 0.1)
@@ -209,34 +216,33 @@ def generate_summary_report(
     igv_report_file = Path(output_dir) / "igv_report.html"
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
 
-    # Only run IGV report if the BED file exists
     if bed_file and os.path.exists(bed_file):
         logging.info(f"Running IGV report for BED file: {bed_file}")
-        run_igv_report(bed_file, bam_file, fasta_file, igv_report_file, flanking=flanking, vcf_file=vcf_file)
+        run_igv_report(
+            bed_file,
+            bam_file,
+            fasta_file,
+            igv_report_file,
+            flanking=flanking,
+            vcf_file=vcf_file,
+            config=config
+        )
     else:
         logging.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None
 
-    # Load Kestrel results
     kestrel_df = load_kestrel_results(kestrel_result_file)
-
-    # Load adVNTR results
     advntr_df, advntr_available = load_advntr_results(advntr_result_file)
-
-    # Load pipeline log
     log_content = load_pipeline_log(log_file)
 
-    # Extract IGV content if available
     if igv_report_file and os.path.exists(igv_report_file):
         igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
     else:
         logging.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
 
-    # Load fastp output
     fastp_data = load_fastp_output(fastp_file)
 
-    # Process mean VNTR coverage warning
     if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
         coverage_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
         coverage_color = 'red'
@@ -244,7 +250,6 @@ def generate_summary_report(
         coverage_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
         coverage_color = 'green'
 
-    # Extract fastp metrics
     duplication_rate = None
     q20_rate = None
     q30_rate = None
@@ -287,13 +292,11 @@ def generate_summary_report(
     q30_icon, q30_color = warn_icon(q30_rate, q30_rate_cutoff, higher_better=True)
     pf_icon, pf_color = warn_icon(passed_filter_rate, passed_filter_rate_cutoff, higher_better=True)
 
-    # Convert DataFrames to HTML tables
     kestrel_html = kestrel_df.to_html(
         classes='table table-bordered table-striped hover compact order-column table-sm',
         index=False,
         escape=False
     )
-
     if advntr_available and not advntr_df.empty:
         advntr_html = advntr_df.to_html(
             classes='table table-bordered table-striped hover compact order-column table-sm',
@@ -302,7 +305,6 @@ def generate_summary_report(
     else:
         advntr_html = None
 
-    # Set up Jinja2 environment
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
         template = env.get_template('report_template.html')

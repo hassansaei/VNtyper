@@ -174,34 +174,27 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     if df.empty:
         return df
 
-    # Extract motif filtering config
     mf = kestrel_config['motif_filtering']
-    position_threshold = mf['position_threshold']
-    exclude_motifs_right = mf['exclude_motifs_right']
-    alt_for_motif_right_gg = mf['alt_for_motif_right_gg']
-    motifs_for_alt_gg = mf['motifs_for_alt_gg']
-    exclude_alts_combined = mf['exclude_alts_combined']
-    exclude_motifs_combined = mf['exclude_motifs_combined']
+    position_threshold = mf.get('position_threshold', 1000)
+    exclude_motifs_right = mf.get('exclude_motifs_right', [])
+    alt_for_motif_right_gg = mf.get('alt_for_motif_right_gg', 'GG')
+    motifs_for_alt_gg = mf.get('motifs_for_alt_gg', [])
+    exclude_alts_combined = mf.get('exclude_alts_combined', [])
+    exclude_motifs_combined = mf.get('exclude_motifs_combined', [])
 
-    # Keep original 'Motifs' in 'Motif_fasta'
     if 'Motifs' in df.columns:
         df['Motif_fasta'] = df['Motifs']
 
-    # Ensure we only split if there's exactly one dash
     if df['Motifs'].str.count('-').max() == 1:
         df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
     else:
         logging.error("Unexpected format in 'Motifs' column: cannot split as 'left-right'.")
         return pd.DataFrame()
 
-    # Ensure POS is integer
     df['POS'] = df['POS'].astype(int)
-
-    # Partition left vs. right based on position threshold
     motif_left = df[df['POS'] < position_threshold].copy()
     motif_right = df[df['POS'] >= position_threshold].copy()
 
-    # Process left motif: rename columns, merge with extra motifs
     if not motif_left.empty:
         motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
         motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
@@ -220,7 +213,6 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             'Confidence',
         ]
         motif_left = motif_left[keep_cols]
-        # Keep highest Depth_Score per ALT
         motif_left = (
             motif_left.sort_values('Depth_Score', ascending=False)
             .drop_duplicates('ALT', keep='first')
@@ -228,7 +220,6 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             .tail(1)
         )
 
-    # Process right motif similarly
     if not motif_right.empty:
         motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
         motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
@@ -248,7 +239,6 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         ]
         motif_right = motif_right[keep_cols]
 
-        # If alt_for_motif_right_gg (e.g. "GG") is present, apply special logic
         if motif_right['ALT'].str.contains(r'\b' + alt_for_motif_right_gg + r'\b').any():
             motif_right = motif_right.loc[~motif_right['Motif'].isin(exclude_motifs_right)]
             motif_right = motif_right.loc[motif_right['ALT'] == alt_for_motif_right_gg]
@@ -266,18 +256,15 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
 
         motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
 
-    # Combine left & right, exclude motifs/ALTs
     combined_df = pd.concat([motif_right, motif_left])
     combined_df = combined_df[~combined_df['ALT'].isin(exclude_alts_combined)]
     combined_df = combined_df[~combined_df['Motif'].isin(exclude_motifs_combined)]
 
     combined_df['POS'] = combined_df['POS'].astype(int)
 
-    # Create 'POS_fasta' from 'POS'
     if 'POS' in combined_df.columns:
         combined_df['POS_fasta'] = combined_df['POS']
 
-    # Adjust positions for right side by subtracting the threshold
     combined_df.update(
         combined_df['POS'].mask(
             combined_df['POS'] >= position_threshold,

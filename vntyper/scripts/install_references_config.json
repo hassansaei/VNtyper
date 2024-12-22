@@ -1,16 +1,20 @@
 {
+  "bwa_path": "bwa",
+  "md5_chunk_size": 4096,
+
   "ucsc_references": {
     "hg19": {
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz",
-      "target_path": "reference/chr1.hg19.fa.gz",
+      "target_path": "reference/alignment/chr1.hg19.fa.gz",
       "index_command": "bwa index {path}"
     },
     "hg38": {
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr1.fa.gz",
-      "target_path": "reference/chr1.hg38.fa.gz",
+      "target_path": "reference/alignment/chr1.hg38.fa.gz",
       "index_command": "bwa index {path}"
     }
   },
+
   "vntyper_references": {
     "vntr_data_genic_loci": {
       "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_data_genic_loci.zip",
@@ -23,6 +27,7 @@
       "extract_to": "reference/vntr_data_recommended_loci_hg38/"
     }
   },
+
   "own_repository_references": {
     "raw_files": [
       {
@@ -41,6 +46,5 @@
         "index_command": "samtools faidx {path}"
       }
     ]
-  },
-  "bwa_path": "bwa"
+  }
 }

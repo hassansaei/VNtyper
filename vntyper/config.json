@@ -1,6 +1,19 @@
 {
-  "output_directory": "out",
-  "log_level": "INFO",
+  "default_values": {
+    "threads": 4,
+    "output_dir": "out",
+    "output_name": "processed",
+    "archive_format": "zip",
+    "report_file": "summary_report.html",
+    "log_file": null,
+    "flanking": 50,
+    "summary_file": "cohort_summary.html",
+    "reference_assembly": "hg19"
+  },
+  "cli_defaults": {
+    "log_level": "INFO",
+    "log_file": null
+  },
   "api": {
     "base_url": "https://vntyper.org/api"
   },
@@ -22,6 +35,9 @@
     "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
     "java_path": "java"
   },
+  "tool_params": {
+    "bwa_index_extensions": [".amb", ".ann", ".bwt", ".pac", ".sa"]
+  },
   "bam_processing": {
     "bam_region_hg19": "chr1:155158000-155163000",
     "bam_region_hg38": "chr1:155184000-155194000",
@@ -34,8 +50,12 @@
     "length_required": 50,
     "qualified_quality_phred": 20
   },
-  "paths": {
-    "template_dir": "vntyper/templates"
+  "visualization": {
+    "donut_colors": ["#56B4E9", "#D55E00", "#999999"],
+    "donut_hole_size": 0.6,
+    "plot_height": 500,
+    "plot_width": 500,
+    "annotation_font_size": 14
   },
   "thresholds": {
     "mean_vntr_coverage": 100,
@@ -43,6 +63,23 @@
     "q20_rate": 0.8,
     "q30_rate": 0.7,
     "passed_filter_reads_rate": 0.8
+  },
+  "cohort": {
+    "kestrel_result_file": "kestrel_result.tsv",
+    "advntr_result_file": "output_adVNTR.tsv"
+  },
+  "file_processing": {
+    "snv_length": 1
+  },
+  "install_references": {
+    "md5_chunk_size": 4096,
+    "checksum_filename": "md5_checksums.txt"
+  },
+  "paths": {
+    "template_dir": "vntyper/templates"
+  },
+  "utils": {
+    "fastq_validation_lines": 4
   },
   "welcome_message": "==========================================================================================================\nGiven alignment (BAM) or raw file (FASTQ), this tool genotypes MUC1 coding-VNTR \n-- For rapid genotyping, BAM files are preferred!\n-- User can Skip code-adVNTR genotyping step using --ignore_advntr option (This step will take a while..)\nThis is free non-commercial software.\n=========================================================================================================="
 }

@@ -3,7 +3,7 @@
 
 import logging
 import os
-import shutil  # For archiving
+import shutil
 import sys
 import timeit
 from pathlib import Path
@@ -200,7 +200,6 @@ def run_pipeline(
             write_bed_file(predefined_regions, bed_file_path)
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
-        # Processing Input Data
         if input_type == "BAM":
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
             if bam is None or str(bam).strip().lower() == "none":
@@ -247,7 +246,6 @@ def run_pipeline(
                 raise ValueError("Failed to generate FASTQ files from CRAM.")
 
         elif input_type == "FASTQ":
-            # SHARK step must happen BEFORE QC if enabled
             if 'shark' in extra_modules:
                 from vntyper.modules.shark.shark_filtering import (
                     run_shark_filter, load_shark_config
@@ -266,7 +264,6 @@ def run_pipeline(
                     threads=threads
                 )
 
-            # Now run the usual FASTQ QC
             logging.info("Starting FASTQ quality control.")
             process_fastq(
                 fastq1,
@@ -278,7 +275,6 @@ def run_pipeline(
             )
             logging.info("FASTQ quality control completed.")
 
-            # Update fastq1 and fastq2 to the QCed FASTQ files
             fastq1 = os.path.join(dirs['fastq_bam_processing'], "output_R1.fastq.gz")
             fastq2 = os.path.join(dirs['fastq_bam_processing'], "output_R2.fastq.gz")
 
@@ -304,7 +300,6 @@ def run_pipeline(
 
             logging.info("FASTQ alignment completed.")
 
-            # Convert sorted BAM to FASTQ for region slicing
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
             if sorted_bam is None or str(sorted_bam).lower() == "none":
                 logging.error("Alignment produced a None value for sorted_bam.")
@@ -326,7 +321,6 @@ def run_pipeline(
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
                 raise ValueError("Failed to generate FASTQ files from BAM.")
 
-        # Calculate VNTR Coverage
         logging.info("Calculating mean coverage over the VNTR region.")
         if input_type == "BAM":
             input_bam = Path(bam)
@@ -349,7 +343,6 @@ def run_pipeline(
             output_name="coverage"
         )
 
-        # Kestrel Genotyping
         logging.info("Starting Kestrel genotyping.")
         vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
         kestrel_path = config["tools"]["kestrel"]
@@ -373,7 +366,6 @@ def run_pipeline(
 
         logging.info("Kestrel genotyping completed.")
 
-        # After Kestrel, process optional modules like adVNTR if included
         if 'advntr' in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
@@ -442,7 +434,6 @@ def run_pipeline(
         else:
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
-        # Generate Summary Report
         logging.info("Generating summary report.")
         report_file = "summary_report.html"
         template_dir = config.get(
@@ -462,7 +453,7 @@ def run_pipeline(
             bed_file=bed_out,
             bam_file=bam_out,
             fasta_file=fasta_reference,
-            flanking=50,
+            flanking=config.get("default_values", {}).get("flanking", 50),
             input_files=input_files,
             pipeline_version=VERSION,
             mean_vntr_coverage=mean_coverage,

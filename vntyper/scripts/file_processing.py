@@ -2,6 +2,9 @@
 # vntyper/scripts/file_processing.py
 
 import pandas as pd
+import json
+import importlib.resources as pkg_resources
+
 
 def filter_vcf(input_path, output_path):
     """
@@ -14,26 +17,19 @@ def filter_vcf(input_path, output_path):
         input_path (str): Path to the input VCF file.
         output_path (str): Path to the output VCF file containing only indels.
     """
+    with pkg_resources.open_text('vntyper', 'config.json') as f:
+        config_data = json.load(f)
+    snv_length = config_data.get("file_processing", {}).get("snv_length", 1)
+
     with open(input_path, "r") as vcf_file, open(output_path, "w") as indel_file:
         for line in vcf_file:
             if line.startswith("##"):
-                # Metadata lines that begin with "##" are written as-is to the output file
                 indel_file.write(line)
             elif line.startswith("#CHROM"):
-                # The header line that starts with "#CHROM" contains the column names.
-                # This line must be written to the output file.
                 indel_file.write(line)
             else:
-                # Split the line into columns using tab as the delimiter.
-                # The VCF format is tab-delimited, and the columns are:
-                # CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO, FORMAT, SAMPLE
-                # We are particularly interested in the REF (reference allele) and ALT (alternate allele) columns.
                 _, _, _, ref, alt, *_ = line.split("\t")
-
-                # Determine if the variant is an indel:
-                # An indel occurs when either REF or ALT is of different length than 1 base.
-                if (len(ref) == 1 and len(alt) != 1) or (len(ref) != 1 and len(alt) == 1):
-                    # Write lines containing indels to the output file.
+                if (len(ref) == snv_length and len(alt) != snv_length) or (len(ref) != snv_length and len(alt) == snv_length):
                     indel_file.write(line)
 
 
@@ -51,28 +47,24 @@ def filter_indel_vcf(indel_vcf, output_ins, output_del):
         output_ins (str): Path to the output VCF file for insertions.
         output_del (str): Path to the output VCF file for deletions.
     """
+    with pkg_resources.open_text('vntyper', 'config.json') as f:
+        config_data = json.load(f)
+    snv_length = config_data.get("file_processing", {}).get("snv_length", 1)
+
     with open(indel_vcf, "r") as vcf_file, \
             open(output_ins, "w") as insertion_file, \
             open(output_del, "w") as deletion_file:
         for line in vcf_file:
             if line.startswith("##"):
-                # Metadata lines that begin with "##" are written as-is to both output files
                 insertion_file.write(line)
                 deletion_file.write(line)
             elif line.startswith("#CHROM"):
-                # The header line that starts with "#CHROM" contains the column names.
-                # This line must be written to both output files.
                 insertion_file.write(line)
                 deletion_file.write(line)
             else:
-                # Split the line into columns using tab as the delimiter.
-                # Extract the REF (reference allele) and ALT (alternate allele) columns.
                 _, _, _, ref, alt, *_ = line.split("\t")
 
-                # Determine if the variant is an insertion or deletion:
-                if len(ref) == 1 and len(alt) > 1:
-                    # If ALT is longer than REF, it's an insertion.
+                if len(ref) == snv_length and len(alt) > snv_length:
                     insertion_file.write(line)
                 else:
-                    # Otherwise, it's a deletion.
                     deletion_file.write(line)
