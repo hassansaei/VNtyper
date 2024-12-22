@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # vntyper/scripts/install_references.py
 
 import json
@@ -61,7 +62,6 @@ def download_file(url: str, dest_path: Path):
 
     logging.info(f"Downloading from {url} to {dest_path}...")
     try:
-        # Ensure parent directories exist
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         urlretrieve(url, dest_path)
         logging.info(f"Successfully downloaded {dest_path.name}")
@@ -111,7 +111,6 @@ def execute_index_command(index_command: str, fasta_path: Path):
     command = index_command.format(path=str(fasta_path))
     logging.info(f"Executing indexing command: {command}")
     try:
-        # Split the command into arguments
         args = command.split()
         result = subprocess.run(
             args,
@@ -154,11 +153,9 @@ def update_config(config_path: Path, references: Dict[str, Path]):
         logging.error(f"Unexpected error reading main config.json: {e}")
         sys.exit(1)
 
-    # Ensure 'reference_data' section exists
     if "reference_data" not in config:
         config["reference_data"] = {}
 
-    # Update the reference_data section
     for ref_key, ref_path in references.items():
         config["reference_data"][ref_key] = str(ref_path)
 
@@ -195,15 +192,12 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
             )
             continue
 
-        # Download the UCSC reference
         download_file(url, target_path)
 
-        # Calculate MD5 checksum
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
         logging.info(f"MD5 checksum for {target_path.name}: {md5_checksum}")
 
-        # Extract if required
         if target_path.suffix == '.zip':
             try:
                 with zipfile.ZipFile(target_path, 'r') as zip_ref:
@@ -235,11 +229,11 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
                 f"Unsupported archive format for {target_path}. Skipping extraction."
             )
 
-        # Index the reference if required and not skipped
         if index_command and not skip_indexing:
+            output_path = target_path.with_suffix('')
             execute_index_command(index_command, output_path)
         elif index_command and skip_indexing:
-            logging.info(f"Skipping indexing for {output_path}")
+            logging.info(f"Skipping indexing for {target_path.with_suffix('')}")
 
 
 def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
@@ -267,15 +261,12 @@ def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
             )
             continue
 
-        # Download the VNtyper reference
         download_file(url, target_path)
 
-        # Calculate MD5 checksum
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
         logging.info(f"MD5 checksum for {target_path.name}: {md5_checksum}")
 
-        # Extract if required
         if extract_to:
             extract_dir = output_dir / extract_to
             extract_dir.mkdir(parents=True, exist_ok=True)
@@ -300,7 +291,6 @@ def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
                     f"Unsupported archive format for {target_path}. Skipping extraction."
                 )
 
-        # Index the reference if required and not skipped
         if index_command and not skip_indexing:
             execute_index_command(index_command, target_path)
         elif index_command and skip_indexing:
@@ -331,15 +321,12 @@ def process_own_repository_references(own_repo_refs: Dict[str, Any],
             )
             continue
 
-        # Download the raw file
         download_file(url, target_path)
 
-        # Calculate MD5 checksum
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
         logging.info(f"MD5 checksum for {target_path.name}: {md5_checksum}")
 
-        # Index the file if required and not skipped
         if index_command and not skip_indexing:
             execute_index_command(index_command, target_path)
         elif index_command and skip_indexing:
@@ -375,27 +362,22 @@ def setup_logging(output_dir: Path):
     """
     log_file = output_dir / "install_references.log"
 
-    # Create a custom logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # Remove all handlers associated with the root logger object
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
 
-    # Create handlers
     c_handler = logging.StreamHandler(sys.stdout)
     f_handler = logging.FileHandler(log_file)
 
     c_handler.setLevel(logging.INFO)
     f_handler.setLevel(logging.INFO)
 
-    # Create formatters and add them to handlers
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     c_handler.setFormatter(formatter)
     f_handler.setFormatter(formatter)
 
-    # Add handlers to the logger
     logger.addHandler(c_handler)
     logger.addHandler(f_handler)
 
@@ -411,11 +393,9 @@ def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bo
         config_path (Optional[Path]): Path to the main config.json file to update.
         skip_indexing (bool): Whether to skip the indexing step.
     """
-    # Define the path to the install_references_config.json
     script_dir = Path(__file__).parent
     install_config_path = script_dir / "install_references_config.json"
 
-    # Load the installation configuration
     install_config = load_install_config(install_config_path)
 
     ucsc_refs = install_config.get("ucsc_references", {})
@@ -423,17 +403,14 @@ def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bo
     own_repo_refs = install_config.get("own_repository_references", {})
     bwa_path = install_config.get("bwa_path", "bwa")  # Default to 'bwa'
 
-    # Set the base output directory
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
         logging.error(f"Failed to create output directory {output_dir}: {e}")
         sys.exit(1)
 
-    # Setup logging after output_dir is created
     setup_logging(output_dir)
 
-    # Initialize a dictionary to store MD5 checksums
     md5_dict = {}
 
     # Process UCSC references
@@ -457,7 +434,6 @@ def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bo
 
     # Update the main config.json with new reference paths if config_path is provided
     if config_path and config_path.exists():
-        # Prepare a dictionary with updated reference paths
         updated_references = {}
 
         # Collect all references from UCSC
@@ -470,14 +446,13 @@ def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bo
             ref_path = output_dir / ref_info.get("target_path")
             updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
 
-        # Collect references from own repository raw_files
+        # Collect references from own repository
         raw_files: List[Dict[str, str]] = own_repo_refs.get("raw_files", [])
         for file_info in raw_files:
             ref_name = Path(file_info.get("target_path")).stem
             ref_path = output_dir / file_info.get("target_path")
             updated_references[f"own_repo_{ref_name}"] = ref_path.resolve()
 
-        # Update config.json
         update_config(config_path, updated_references)
     else:
         if config_path:
@@ -493,7 +468,6 @@ def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bo
 if __name__ == "__main__":
     import argparse
 
-    # Parse command-line arguments for standalone execution
     parser = argparse.ArgumentParser(
         description="Install necessary reference files for vntyper."
     )

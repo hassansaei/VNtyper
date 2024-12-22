@@ -15,7 +15,6 @@ import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
 import plotly.graph_objects as go
 
-# Use the Agg backend to avoid Qt-related warnings
 matplotlib.use('Agg')
 
 
@@ -39,18 +38,16 @@ def load_kestrel_results(kestrel_result_file):
         Processed Kestrel results with human-readable column names and
         conditional styling applied to the 'Confidence' column.
     """
-    sample_id = Path(kestrel_result_file).parents[1].name  # Extract the sample ID
+    sample_id = Path(kestrel_result_file).parents[1].name
     logging.info(f"Loading Kestrel results from {kestrel_result_file}")
 
     if not os.path.exists(kestrel_result_file):
         logging.warning(f"Kestrel result file not found: {kestrel_result_file}")
-        return pd.DataFrame({'Sample': [sample_id]})  # Return minimal DataFrame
+        return pd.DataFrame({'Sample': [sample_id]})
 
     try:
         df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
-        df['Sample'] = sample_id  # Add sample ID column
-
-        # Define required columns and their human-readable headers
+        df['Sample'] = sample_id
         columns_to_display = {
             'Sample': 'Sample',
             'Motif': 'Motif',
@@ -64,27 +61,18 @@ def load_kestrel_results(kestrel_result_file):
             'Depth_Score': 'Depth\nScore',
             'Confidence': 'Confidence'
         }
-
-        # Select columns present in the file
         available_columns = {
             col: columns_to_display[col]
             for col in columns_to_display if col in df.columns
         }
         missing_columns = set(columns_to_display) - set(available_columns)
-
         if missing_columns:
             logging.warning(f"Missing columns in {kestrel_result_file}: {missing_columns}")
-
-        # Safely handle missing columns by only using available columns
         if not available_columns:
-            # No columns found at all besides 'Sample', return minimal df
             logging.warning("No expected columns found in Kestrel results, returning minimal DataFrame.")
             return pd.DataFrame({'Sample': [sample_id]})
-
         df = df[list(available_columns.keys())]
         df = df.rename(columns=available_columns)
-
-        # Apply conditional styling to the Confidence column if it exists
         if 'Confidence' in df.columns:
             df['Confidence'] = df['Confidence'].apply(
                 lambda x: (
@@ -97,7 +85,6 @@ def load_kestrel_results(kestrel_result_file):
                     else x
                 )
             )
-
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
@@ -140,7 +127,6 @@ def load_advntr_results(advntr_result_file):
     ]
 
     def empty_advntr_row(sample_id, message="no adVNTR output found."):
-        # Create a single-row DataFrame with all expected columns.
         row_data = {col: [float('nan')] for col in full_cols if col not in ["Sample", "Message"]}
         row_data["Sample"] = [sample_id]
         row_data["Message"] = [message]
@@ -158,16 +144,11 @@ def load_advntr_results(advntr_result_file):
         if df.empty:
             logging.warning(f"adVNTR result file {advntr_result_file} is empty.")
             return empty_advntr_row(sample_id), False
-
         df['Sample'] = sample_id
-
-        # Ensure all expected columns are present
         for col in full_cols:
             if col not in df.columns:
                 df[col] = float('nan')
-
         df = df[full_cols]
-
         return df, True
     except pd.errors.EmptyDataError as e:
         logging.error(f"adVNTR result file {advntr_result_file} is empty: {e}")
@@ -254,32 +235,27 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
         result_files = find_results_files(input_dir, filename)
 
         if not result_files:
-            # No result files found.
             if loading_advntr:
-                # For adVNTR, attempt to produce one row per subfolder
                 subfolders = [d for d in Path(input_dir).iterdir() if d.is_dir()]
                 if subfolders:
                     for subf in subfolders:
                         sample_id = subf.name
                         dfs.append(empty_advntr_row(sample_id))
                 else:
-                    # If no subfolders, just one row for the directory itself
                     sample_id = Path(input_dir).name
                     dfs.append(empty_advntr_row(sample_id))
             else:
-                # For non-adVNTR results
                 sample_id = Path(input_dir).name
                 dfs.append(pd.DataFrame({
                     'Sample': [sample_id],
                     'Message': [f'No {filename} results found for this sample']
                 }))
         else:
-            # Files found, load them all
             for file in result_files:
                 logging.info(f"Attempting to load file: {file}")
                 result = file_loader(file)
                 if isinstance(result, tuple):
-                    df = result[0]  # For advntr_results, result is (df, bool)
+                    df = result[0]
                 else:
                     df = result
                 dfs.append(df)
@@ -287,7 +263,6 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
         logging.info(f"Loaded {len(result_files)} {filename} files from {input_dir}")
 
     if not dfs:
-        # If no data at all, return an empty DataFrame
         logging.warning(f"No data found at all for {filename}. Returning empty DataFrame.")
         return pd.DataFrame()
 
@@ -343,7 +318,6 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
         Base64-encoded image string for static charts or HTML string for interactive charts.
     """
     if interactive:
-        # Using Plotly for interactive donut chart
         fig = go.Figure(go.Pie(
             labels=labels,
             values=values,
@@ -351,7 +325,6 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
             marker=dict(colors=colors, line=dict(color='black', width=2)),
             textinfo='none'
         ))
-
         fig.update_layout(
             title={
                 'text': title,
@@ -369,10 +342,8 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
             margin=dict(t=50, b=50, l=50, r=50),
             height=500, width=500
         )
-
         return pio.to_html(fig, full_html=False)
     else:
-        # Using matplotlib for static donut chart
         fig, ax = plt.subplots(figsize=(6, 6))
         wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
         try:
@@ -420,10 +391,8 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Handle missing 'Confidence' column for Kestrel
     if 'Confidence' in kestrel_df.columns:
         try:
-            # Safely handle cases where Confidence column might have unexpected values
             kestrel_df_conf = kestrel_df['Confidence'].fillna('')
             kestrel_positive = len(kestrel_df[kestrel_df_conf.str.contains('Low_Precision|High_Precision', na=False)])
             kestrel_negative = len(kestrel_df[~kestrel_df_conf.str.contains('Low_Precision|High_Precision', na=False)])
@@ -438,12 +407,10 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
 
     total_kestrel = kestrel_positive + kestrel_negative
 
-    # Ensure 'Message' column exists in adVNTR results
     if 'Message' not in advntr_df.columns:
         logging.warning("No 'Message' column found in adVNTR results, adding it.")
         advntr_df['Message'] = None
 
-    # Handle missing 'VID' column in adVNTR
     if 'VID' in advntr_df.columns:
         try:
             advntr_positive = len(
@@ -468,13 +435,13 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
 
     total_advntr = advntr_positive + advntr_negative + advntr_no_data
 
+    color_list = config.get("visualization", {}).get("donut_colors", ["#56B4E9", "#D55E00", "#999999"])
     colors = {
-        'positive': '#56B4E9',  # Sky blue
-        'negative': '#D55E00',  # Vermillion
-        'no_data': '#999999'    # Grey
+        'positive': color_list[0],
+        'negative': color_list[1],
+        'no_data': color_list[2]
     }
 
-    # Generate donut charts for Kestrel
     kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
     kestrel_plot_base64 = generate_donut_chart(
         values=[kestrel_positive, kestrel_negative],
@@ -495,7 +462,6 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         interactive=True
     )
 
-    # Generate donut charts for adVNTR
     advntr_plot_path = plots_dir / "advntr_summary_plot.png"
     advntr_plot_base64 = generate_donut_chart(
         values=[advntr_positive, advntr_negative, advntr_no_data],
@@ -516,7 +482,6 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         interactive=True
     )
 
-    # Load Jinja2 template
     template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
@@ -525,7 +490,6 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         logging.error(f"Failed to load Jinja2 template: {e}")
         raise
 
-    # Context for rendering HTML template
     context = {
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'kestrel_positive': kestrel_df.to_html(
@@ -541,14 +505,12 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         'interactive': True
     }
 
-    # Render the template with the context
     try:
         rendered_html = template.render(context)
     except Exception as e:
         logging.error(f"Failed to render the cohort summary template: {e}")
         raise
 
-    # Write the rendered HTML to the summary report file
     report_file_path = Path(output_dir) / summary_file
     try:
         with open(report_file_path, 'w') as f:

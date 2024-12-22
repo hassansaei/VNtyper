@@ -27,19 +27,15 @@ def process_fastq(
     """
     fastp_path = config["tools"]["fastp"]
     compression_level = config["bam_processing"]["compression_level"]
-    disable_adapter_trimming = config["bam_processing"][
-        "disable_adapter_trimming"
-    ]
+    disable_adapter_trimming = config["bam_processing"]["disable_adapter_trimming"]
     deduplication = config["bam_processing"]["deduplication"]
     dup_calc_accuracy = config["bam_processing"]["dup_calc_accuracy"]
     length_required = config["bam_processing"]["length_required"]
     qualified_quality_phred = config["bam_processing"]["qualified_quality_phred"]
 
-    # Construct the fastp command
     qc_command = (
         f"{fastp_path} --thread {threads} --in1 {fastq_1} --in2 {fastq_2} "
-        f"--out1 {output}/{output_name}_R1.fastq.gz --out2 {output}/"
-        f"{output_name}_R2.fastq.gz "
+        f"--out1 {output}/{output_name}_R1.fastq.gz --out2 {output}/{output_name}_R2.fastq.gz "
         f"--compression {compression_level} "
         f"--qualified_quality_phred {qualified_quality_phred} "
         f"--dup_calc_accuracy {dup_calc_accuracy} "
@@ -108,7 +104,6 @@ def process_bam_to_fastq(
     """
     samtools_path = config["tools"]["samtools"]
 
-    # Determine BAM/CRAM region based on BED file or reference assembly
     if bed_file:
         if not bed_file.exists():
             logging.error(f"Provided BED file does not exist: {bed_file}")
@@ -116,7 +111,6 @@ def process_bam_to_fastq(
         bam_region = f"-L {bed_file}"
         logging.debug(f"BAM regions set using BED file: {bam_region}")
     else:
-        # Determine region based on reference assembly
         bam_region = (
             config["bam_processing"]["bam_region_hg38"]
             if reference_assembly == "hg38"
@@ -124,19 +118,12 @@ def process_bam_to_fastq(
         )
         logging.debug(f"BAM region set to: {bam_region}")
 
-    # For CRAM, we initially tried requiring a reference FASTA. However,
-    # samtools can handle CRAM if the reference is embedded or provided elsewhere.
-    # We remove the requirement for a reference FASTA and do not set cram_ref_option.
     cram_ref_option = ""
-
-    # Define paths for intermediate and final BAM files
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
     if keep_intermediates and final_bam.exists():
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
-        # Slicing BAM/CRAM region using BED file or predefined region and index final bam file
-        # No reference FASTA requirement for CRAM now, so we do not use -T option
         if bed_file:
             command_slice = (
                 f"{samtools_path} view -P -b {cram_ref_option} {in_bam} -L {bed_file} -o {final_bam} && "
@@ -159,8 +146,6 @@ def process_bam_to_fastq(
         logging.info("BAM/CRAM region slicing completed.")
 
     if not fast_mode:
-        # Filtering BAM/CRAM
-        # No -T option or reference required now
         command_filter = (
             f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
             f" >(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}/"
@@ -181,7 +166,6 @@ def process_bam_to_fastq(
             logging.error("BAM/CRAM filtering failed.")
             raise RuntimeError("BAM/CRAM filtering failed.")
 
-        # Merging BAM files
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
         command_merge = (
             f"{samtools_path} merge -f -@ {threads} {merged_bam} "
@@ -202,7 +186,6 @@ def process_bam_to_fastq(
         final_bam = merged_bam
         logging.info("BAM/CRAM filtering and merging completed.")
 
-    # Define paths for FASTQ files
     final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"
     final_fastq_2 = Path(output) / f"{output_name}_R2.fastq.gz"
     final_fastq_other = Path(output) / f"{output_name}_other.fastq.gz"
@@ -222,8 +205,6 @@ def process_bam_to_fastq(
             f"{final_fastq_other}, and {final_fastq_single}"
         )
     else:
-        # Sorting and converting BAM to FASTQ using pipes
-        # Once sliced and filtered, final_bam is in BAM format, no extra CRAM handling needed here
         command_sort_fastq = (
             f"{samtools_path} sort -n -@ {threads} {final_bam} | "
             f"{samtools_path} fastq -@ {threads} - -1 {final_fastq_1} "
@@ -243,7 +224,6 @@ def process_bam_to_fastq(
             raise RuntimeError("BAM to FASTQ conversion failed.")
         logging.info("BAM to FASTQ conversion completed.")
 
-    # Remove intermediate BAM files if required
     if delete_intermediates and not keep_intermediates:
         logging.info("Removing intermediate BAM files...")
         intermediate_files = [
@@ -257,7 +237,6 @@ def process_bam_to_fastq(
                 logging.debug(f"Removed intermediate file: {file}")
         logging.info("Intermediate BAM files removed.")
 
-    # Return the paths to the generated FASTQ files
     return (
         str(final_fastq_1),
         str(final_fastq_2),
@@ -285,17 +264,11 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         RuntimeError: If coverage calculation fails.
     """
     samtools_path = config["tools"]["samtools"]
-
-    # Define coverage output file
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
-
-    # Construct the samtools depth command
     depth_command = (
         f"{samtools_path} depth -@ {threads} -r {region} {bam_file} > {coverage_output}"
     )
-
     logging.info(f"Calculating VNTR coverage with command: {depth_command}")
-
     success = run_command(
         str(depth_command), str(coverage_output.with_suffix('.depth.log')), critical=True
     )
@@ -303,7 +276,6 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         logging.error("VNTR coverage calculation failed.")
         raise RuntimeError("VNTR coverage calculation failed.")
 
-    # Read the coverage output and calculate mean coverage
     try:
         with open(coverage_output, 'r') as f:
             coverage_values = [int(line.strip().split('\t')[2]) for line in f if line.strip()]
