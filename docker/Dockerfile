@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/conda/envs/vntyper/bin:/opt/conda/envs/environment_vntyper/bin:$PATH \
     DEFAULT_INPUT_DIR=/opt/vntyper/input \
     DEFAULT_OUTPUT_DIR=/opt/vntyper/output \
-    REFERENCE_DIR=/opt/vntyper/references
+    REFERENCE_DIR=/opt/vntyper
 
 # Update and install necessary system packages in a single RUN command to reduce layers
 RUN apt-get update && \
