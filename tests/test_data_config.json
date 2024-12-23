@@ -1,0 +1,159 @@
+{
+  "file_resources": [
+    {
+      "filename": "tests/data/example_1.bam",
+      "url": "https://yourserver.com/data/example_1.bam",
+      "md5sum": "ebde38b7f749449b6c0bd7d6c5c0e3d1"
+    },
+    {
+      "filename": "tests/data/example_2.bam",
+      "url": "https://yourserver.com/data/example_2.bam",
+      "md5sum": "285e343da8e8077aaa81a074168369d3"
+    },
+    {
+      "filename": "tests/data/example_3.bam",
+      "url": "https://yourserver.com/data/example_3.bam",
+      "md5sum": "352751af01740f79464979e1b885954a"
+    },
+    {
+      "filename": "tests/data/example_4.bam",
+      "url": "https://yourserver.com/data/example_4.bam",
+      "md5sum": "c0a928d77c374dd8eae9cc5dd4e72c79"
+    },
+    {
+      "filename": "tests/data/example_5.bam",
+      "url": "https://yourserver.com/data/example_5.bam",
+      "md5sum": "d53354fedd054a5d8b8011b51c1d356b"
+    },
+    {
+      "filename": "tests/data/example_2.r1.fastq",
+      "url": "https://yourserver.com/data/example_2.r1.fastq",
+      "md5sum": "313979488dc1a6cebaeecf9998443d28"
+    },
+    {
+      "filename": "tests/data/example_2.r2.fastq",
+      "url": "https://yourserver.com/data/example_2.r2.fastq",
+      "md5sum": "79ae9f81f984d100b65428666cf96065"
+    }
+  ],
+  "unit_tests": {
+    "fastq_tests": [
+      {
+        "test_name": "example_fastq_2",
+        "fastq1": "tests/data/example_2.r1.fastq",
+        "fastq2": "tests/data/example_2.r2.fastq",
+        "cli_options": [
+          "--enable-shark"
+        ],
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
+      }
+    ]
+  },
+  "integration_tests": {
+    "bam_tests": [
+      {
+        "test_name": "example_1",
+        "bam": "tests/data/example_1.bam",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 44,
+          "Estimated_Depth_Variant_ActiveRegion": 4741,
+          "Depth_Score": {
+            "value": 0.009280742459396751,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_2",
+        "bam": "tests/data/example_2.bam",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 250,
+          "Estimated_Depth_Variant_ActiveRegion": 20872,
+          "Depth_Score": {
+            "value": 0.011977769260252971,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_3",
+        "bam": "tests/data/example_3.bam",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 1234,
+          "Estimated_Depth_Variant_ActiveRegion": 69424,
+          "Depth_Score": {
+            "value": 0.017774832910808943,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_4",
+        "bam": "tests/data/example_4.bam",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 93,
+          "Estimated_Depth_Variant_ActiveRegion": 9883,
+          "Depth_Score": {
+            "value": 0.009410098148335525,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_5",
+        "bam": "tests/data/example_5.bam",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 57,
+          "Estimated_Depth_Variant_ActiveRegion": 7753,
+          "Depth_Score": {
+            "value": 0.0073519927769895525,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "check_igv_report": true
+      }
+    ]
+  }
+}
