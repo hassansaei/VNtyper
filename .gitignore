@@ -172,6 +172,7 @@ cython_debug/
 /reference/*/
 /references/*/
 /references/*
+/references/
 
 # ignore any pdb files
 *.pdb
