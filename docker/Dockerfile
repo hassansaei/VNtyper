@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/conda/envs/vntyper/bin:/opt/conda/envs/environment_vntyper/bin:$PATH \
     DEFAULT_INPUT_DIR=/opt/vntyper/input \
     DEFAULT_OUTPUT_DIR=/opt/vntyper/output \
-    REFERENCE_DIR=/opt/vntyper/references
+    REFERENCE_DIR=/opt/vntyper/reference
 
 # Update and install necessary system packages in a single RUN command to reduce layers
 RUN apt-get update && \
@@ -39,13 +39,15 @@ WORKDIR ${REPO_DIR}
 
 # Copy VNtyper environment files using RUN cp
 RUN cp conda/environment_vntyper.yml /tmp/environment_vntyper.yml && \
-    cp conda/environment_envadvntr.yml /tmp/environment_envadvntr.yml
-
+    cp conda/environment_envadvntr.yml /tmp/environment_envadvntr.yml && \
+    cp conda/environment_shark.yml /tmp/environment_shark.yml
+ 
 # Create and install conda environments
 RUN mamba env create -f /tmp/environment_vntyper.yml && \
     mamba env create -f /tmp/environment_envadvntr.yml && \
+    mamba env create -f /tmp/environment_shark.yml && \
     conda clean -afy && \
-    rm /tmp/environment_vntyper.yml /tmp/environment_envadvntr.yml
+    rm /tmp/environment_vntyper.yml /tmp/environment_envadvntr.yml /tmp/environment_shark.yml
 
 # Install VNtyper using setup.py within the vntyper environment
 RUN conda run -n vntyper pip install .
