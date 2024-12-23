@@ -181,3 +181,6 @@ fastp.json
 
 # mac specific files
 .DS_Store
+
+# tests data folder
+/tests/data/
