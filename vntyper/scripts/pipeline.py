@@ -111,6 +111,7 @@ def run_pipeline(
             "BWA reference not provided or determined from configuration."
         )
 
+    # DEBUG: BWA reference, output dir
     logging.debug(f"BWA reference set to: {bwa_reference}")
     logging.debug(f"Output directory set to: {output_dir}")
 
@@ -163,6 +164,7 @@ def run_pipeline(
                 "Provide either BAM, CRAM, or FASTQ files, not multiples."
             )
 
+        # Validate input files
         if input_type == "BAM":
             validate_bam_file(bam)
         elif input_type == "CRAM":
@@ -176,6 +178,7 @@ def run_pipeline(
                 "Both FASTQ files must be provided for paired-end sequencing."
             )
 
+        # BED file logic
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
@@ -200,6 +203,11 @@ def run_pipeline(
             write_bed_file(predefined_regions, bed_file_path)
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
+        # DEBUG: Show final bed_file_path
+        logging.debug(f"Final bed_file_path => {bed_file_path}")
+        logging.debug(f"bed_file_path exists? {bed_file_path.exists()}")
+
+        # Convert input from BAM/CRAM/FASTQ to the final R1/R2
         if input_type == "BAM":
             logging.info("Starting BAM to FASTQ conversion with specified regions.")
             if bam is None or str(bam).strip().lower() == "none":
@@ -321,6 +329,7 @@ def run_pipeline(
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
                 raise ValueError("Failed to generate FASTQ files from BAM.")
 
+        # Calculate coverage
         logging.info("Calculating mean coverage over the VNTR region.")
         if input_type == "BAM":
             input_bam = Path(bam)
@@ -343,6 +352,7 @@ def run_pipeline(
             output_name="coverage"
         )
 
+        # Kestrel genotyping
         logging.info("Starting Kestrel genotyping.")
         vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
         kestrel_path = config["tools"]["kestrel"]
@@ -366,6 +376,7 @@ def run_pipeline(
 
         logging.info("Kestrel genotyping completed.")
 
+        # adVNTR module
         if 'advntr' in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
@@ -434,16 +445,25 @@ def run_pipeline(
         else:
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
+        # Generate final summary report
         logging.info("Generating summary report.")
         report_file = "summary_report.html"
-        template_dir = config.get(
-            'paths', {}
-        ).get('template_dir', 'vntyper/templates')
+        template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
 
         sorted_vcf = os.path.join(dirs['kestrel'], "output_indel.vcf.gz")
         bam_out = os.path.join(dirs['kestrel'], "output.bam")
         bed_out = os.path.join(dirs['kestrel'], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
+
+        # DEBUG: Show the paths about to be passed to generate_summary_report
+        logging.debug("---- DEBUG: About to call generate_summary_report ----")
+        logging.debug(f"bed_out => {bed_out}")
+        logging.debug(f"Absolute bed_out => {os.path.abspath(bed_out)}")
+        logging.debug(f"bed_out exists? => {os.path.exists(os.path.abspath(bed_out))}")
+
+        logging.debug(f"log_file => {log_file}")
+        logging.debug(f"Absolute log_file => {os.path.abspath(log_file)}")
+        logging.debug(f"log_file exists? => {os.path.exists(os.path.abspath(log_file))}")
 
         generate_summary_report(
             output_dir,
@@ -462,6 +482,7 @@ def run_pipeline(
         )
         logging.info(f"Summary report generated: {report_file}")
 
+        # Archiving
         if archive_results:
             logging.info("Archiving the results folder.")
             if archive_format == 'zip':
