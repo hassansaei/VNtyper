@@ -85,8 +85,9 @@ def load_pipeline_log(log_file):
 
 def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
     """
-    Wrapper around `create_report` IGV command. If config is provided and flanking is not explicitly set,
-    fallback to config's default_values.flanking.
+    Wrapper around `create_report` IGV command. If config is provided and flanking
+    is not explicitly set, we fallback to config's default_values.flanking.
+    We skip passing None for track arguments (vcf_file or bam_file).
     """
     logging.debug("run_igv_report called with:")
     logging.debug(f"  bed_file={bed_file}")
@@ -99,19 +100,39 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     if config is not None and flanking == 50:
         flanking = config.get("default_values", {}).get("flanking", 50)
 
+    # Convert each path or None into string or skip
     bed_file = str(bed_file) if bed_file else None
     bam_file = str(bam_file) if bam_file else None
     fasta_file = str(fasta_file) if fasta_file else None
     output_html = str(output_html) if output_html else None
+
+    # We'll build the IGV command piece by piece, skipping None tracks
     igv_report_cmd = [
         'create_report',
-        bed_file,
+        bed_file,               # The region/bed
         '--flanking', str(flanking),
         '--fasta', fasta_file,
-        '--tracks', vcf_file, bam_file,
-        '--output', output_html
+        '--tracks'
     ]
 
+    # Collect tracks in a list, skipping any that are None
+    tracks = []
+    if vcf_file:
+        tracks.append(str(vcf_file))
+    if bam_file:
+        tracks.append(str(bam_file))
+
+    # If you want to enforce at least one track, you can check here:
+    if not tracks:
+        logging.warning("No valid tracks (VCF or BAM) provided to IGV. The IGV report may be empty.")
+
+    igv_report_cmd.extend(tracks)
+
+    igv_report_cmd.extend([
+        '--output', output_html
+    ])
+
+    # Now run the command
     try:
         logging.info(f"Running IGV report: {' '.join([str(x) for x in igv_report_cmd if x])}")
         subprocess.run(igv_report_cmd, check=True)
