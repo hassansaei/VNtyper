@@ -180,7 +180,13 @@
             <tbody>
                 <tr>
                     <td>Duplication Rate (Cutoff: 10%)</td>
-                    <td>{{ duplication_rate if duplication_rate is not none else 'N/A' }}</td>
+                    <td>
+                        {% if duplication_rate is not none %}
+                            {{ (duplication_rate * 100)|round(2) }}%
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </td>                    
                     <td>{{ duplication_rate_icon }}</td>
                 </tr>
                 <tr>
@@ -231,7 +237,15 @@
         </div>
 
         <h2>Pipeline Log</h2>
-        <pre>{{ log_content }}</pre>
+        <div class="wrap-collabsible">
+            <input id="logToggle" class="toggle" type="checkbox">
+            <label for="logToggle" class="lbl-toggle">Show/Hide Log</label>
+            <div class="collapsible-content">
+                <div class="content-inner">
+                    <pre>{{ log_content }}</pre>
+                </div>
+            </div>
+        </div>
 
     </div>
 
