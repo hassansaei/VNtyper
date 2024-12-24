@@ -118,7 +118,6 @@ def main():
         help="Output directory for the results."
     )
     # Changed here (#57): allow --extra-modules multiple times
-    # The user can do: --extra-modules advntr --extra-modules shark
     parser_pipeline.add_argument(
         '--extra-modules',
         action='append',
@@ -126,12 +125,6 @@ def main():
         help="Optional extra modules to include (e.g., advntr, shark). "
              "Can be repeated multiple times."
     )
-    # Removed here (#57): the --enable-shark flag is superfluous, replaced by --extra-modules shark
-    # parser_pipeline.add_argument(
-    #     '--enable-shark',
-    #     action='store_true',
-    #     help="Enable SHARK module for pre-processing FASTQ files."  # DEPRECATED
-    # )
     parser_pipeline.add_argument(
         '--fastq1',
         type=str,
@@ -232,7 +225,13 @@ def main():
         '-o', '--output-dir',
         type=str,
         required=True,
-        help="Output directory containing pipeline results."
+        help="Directory containing pipeline results (subdirectories, etc.)."
+    )
+    parser_report.add_argument(
+        '--input-dir',
+        type=Path,
+        default=None,
+        help="If provided, search this directory (and its subdirs) for standard pipeline output filenames."
     )
     parser_report.add_argument(
         '--report-file',
@@ -369,30 +368,24 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    # If the user gave us a config path, reload the config to get updated defaults
-    if args.config_path:
-        try:
-            updated_config = load_config(args.config_path)
-        except Exception as exc:
-            logging.critical(f"Failed to load configuration: {exc}")
-            sys.exit(1)
-        config_for_cli = updated_config
-    else:
-        config_for_cli = initial_config
+    # We create a base logger with user-specified or config-based defaults
+    # (we may override or add additional logging in each subcommand).
+    try:
+        base_config = load_config(args.config_path) if args.config_path else initial_config
+    except Exception as exc:
+        logging.critical(f"Failed to load configuration: {exc}")
+        sys.exit(1)
 
-    # Overwrite CLI defaults if present in config
-    # We'll do small helper function here:
     def get_conf(key, fallback):
-        return config_for_cli.get("default_values", {}).get(key, fallback)
+        return base_config.get("default_values", {}).get(key, fallback)
 
-    # Setup the final logging now that we have updated config (log level, etc.)
+    # Setup base logging now
     log_level_value = getattr(logging, args.log_level.upper(), logging.INFO)
     if args.log_file:
         log_file_path = Path(args.log_file)
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
         setup_logging(log_level=log_level_value, log_file=str(log_file_path))
     else:
-        # No CLI-supplied log file, so fallback to config or None
         fallback_file = get_conf("log_file", None)
         if fallback_file:
             lf_path = Path(fallback_file)
@@ -401,8 +394,40 @@ def main():
         else:
             setup_logging(log_level=log_level_value, log_file=None)
 
-    # From here, we fill in missing arguments from config if the user left them unset
+    # Subcommand: install-references
+    if args.command == "install-references":
+        install_references_main(
+            output_dir=args.output_dir,
+            config_path=args.config_path,
+            skip_indexing=args.skip_indexing
+        )
+        sys.exit(0)
+
+    # Load the config again for relevant subcommands
+    # (some subcommands, like 'report' or 'cohort', also need config).
+    try:
+        config = load_config(args.config_path) if args.config_path else initial_config
+    except Exception as exc:
+        logging.critical(f"Failed to load configuration: {exc}")
+        sys.exit(1)
+
+    #
+    # -------------------------------------------------------------------------
+    # pipeline command
+    # -------------------------------------------------------------------------
+    #
     if args.command == "pipeline":
+        # Possibly unify logs into output_dir/pipeline.log if not specified
+        if not args.log_file:
+            if args.output_dir:
+                log_file = Path(args.output_dir) / "pipeline.log"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                setup_logging(log_level=log_level_value, log_file=str(log_file))
+            else:
+                # fallback to current dir if no output_dir
+                log_file = Path("pipeline.log")
+                setup_logging(log_level=log_level_value, log_file=str(log_file))
+
         if args.output_dir is None:
             args.output_dir = get_conf("output_dir", "out")
         if args.threads is None:
@@ -413,107 +438,53 @@ def main():
             args.output_name = get_conf("output_name", "processed")
         if args.archive_format is None:
             args.archive_format = get_conf("archive_format", "zip")
-    elif args.command == "report":
-        if args.report_file is None:
-            args.report_file = get_conf("report_file", "summary_report.html")
-        if args.flanking is None:
-            args.flanking = get_conf("flanking", 50)
-    elif args.command == "cohort":
-        if args.summary_file is None:
-            args.summary_file = get_conf("summary_file", "cohort_summary.html")
-    elif args.command == "online":
-        if args.output_dir is None:
-            args.output_dir = get_conf("output_dir", "out")
-        if args.reference_assembly is None:
-            args.reference_assembly = get_conf("reference_assembly", "hg19")
-        if args.threads is None:
-            args.threads = get_conf("threads", 4)
 
-    # Now we handle install-references or other subcommands
-    if args.command == "install-references":
-        install_references_main(
-            output_dir=args.output_dir,
-            config_path=args.config_path,
-            skip_indexing=args.skip_indexing
-        )
-        sys.exit(0)
-
-    # If not "install-references," load the config fully once more for pipeline usage:
-    try:
-        config = load_config(args.config_path)
-    except Exception as exc:
-        logging.critical(f"Failed to load configuration: {exc}")
-        sys.exit(1)
-
-    # For other commands, ensure we also log to output_dir/pipeline.log if not specified
-    if args.command != "install-references":
-        if args.log_file:
-            log_file = args.log_file
-        else:
-            # Possibly use output_dir/pipeline.log
-            log_file = Path(args.output_dir) / "pipeline.log"
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        setup_logging(log_level=log_level_value, log_file=str(log_file))
-
-    # Execute the corresponding subcommand
-    if args.command == "pipeline":
-        # Flatten extra_modules because --extra-modules can be repeated multiple times.
-        # Each occurrence is appended as a list of strings in the current parser setup.
         import itertools
         flattened_modules = list(itertools.chain.from_iterable(
             m if isinstance(m, list) else [m] for m in args.extra_modules
         ))
 
+        # Validate single input type
         input_types = sum([
             1 if args.bam else 0,
             1 if args.cram else 0,
             1 if (args.fastq1 or args.fastq2) else 0
         ])
         if input_types > 1:
-            parser_pipeline.error(
-                "Provide either BAM, CRAM, or FASTQ files (not multiples)."
-            )
+            parser_pipeline.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
 
         if (not args.bam and not args.cram
                 and (args.fastq1 is None or args.fastq2 is None)):
             parser_pipeline.error(
-                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be "
-                "specified for paired-end sequencing."
+                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must "
+                "be specified for paired-end sequencing."
             )
 
         # Construct module_args_dict for advntr, etc.
         module_args_dict = {}
         if 'advntr' in flattened_modules:
-            # If we have advntr in sys.argv, see if advntr_reference is set
             if hasattr(args, 'advntr_reference'):
                 module_args_dict['advntr'] = {
                     'advntr_reference': args.advntr_reference
                 }
-                # remove the attribute to avoid confusion
                 delattr(args, 'advntr_reference')
             else:
                 module_args_dict['advntr'] = {}
         else:
             module_args_dict['advntr'] = {}
 
-        # (#62) If user tries to use 'shark' in BAM mode, exit with a warning
-        # Because SHARK is only intended to function in FASTQ mode
+        # (#62) If user tries to use 'shark' in BAM/CRAM mode, exit with a warning
         if (args.bam or args.cram) and ('shark' in flattened_modules):
             logging.warning(
-                "Shark is not supported in BAM mode; please use FASTQ mode "
-                "or remove the shark flag."
+                "Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag."
             )
             sys.exit(1)
 
-        # BWA reference from config
+        # Determine which BWA reference to use from config
         if args.reference_assembly == "hg19":
-            bwa_reference = config.get(
-                "reference_data", {}
-            ).get("bwa_reference_hg19")
+            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
         else:
-            bwa_reference = config.get(
-                "reference_data", {}
-            ).get("bwa_reference_hg38")
+            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
 
         sample_name_val = args.sample_name
         if sample_name_val is None:
@@ -547,24 +518,85 @@ def main():
             sample_name=sample_name_val,
         )
 
+    #
+    # -------------------------------------------------------------------------
+    # report command
+    # -------------------------------------------------------------------------
+    #
     elif args.command == "report":
+        # Possibly unify logs into output_dir/report.log if not specified
+        if not args.log_file:
+            report_log_file = Path(args.output_dir) / "report.log"
+            report_log_file.parent.mkdir(parents=True, exist_ok=True)
+            setup_logging(log_level=log_level_value, log_file=str(report_log_file))
+        else:
+            # If user gave log_file, we already set it up above
+            report_log_file = Path(args.log_file)
+
+        # Fallback from config if not specified on CLI
+        # (we do so only if relevant keys exist in config["default_values"])
+        if args.report_file is None:
+            args.report_file = get_conf("report_file", "summary_report.html")
+        if args.flanking is None:
+            args.flanking = get_conf("flanking", 50)
+
+        # If user did not provide reference_fasta, fallback to config if present
+        if args.reference_fasta is None:
+            # for example: config["reference_data"]["muc1_reference_vntr"]
+            ref_fasta = config.get("reference_data", {}).get("muc1_reference_vntr")
+            if ref_fasta:
+                args.reference_fasta = Path(ref_fasta)
+
+        # If user didn't specify --bam-file, we attempt to find a standard location
+        # e.g. <input-dir>/kestrel/output.bam
+        # (only if --input-dir was provided)
+        if args.bam_file is None and args.input_dir:
+            candidate_bam = args.input_dir / "kestrel" / "output.bam"
+            if candidate_bam.exists():
+                args.bam_file = candidate_bam
+
+        # Same approach for bed-file (standard name is "output.bed" in "kestrel")
+        if args.bed_file is None and args.input_dir:
+            candidate_bed = args.input_dir / "kestrel" / "output.bed"
+            if candidate_bed.exists():
+                args.bed_file = candidate_bed
+
+        # Now call generate_summary_report
         generate_summary_report(
             output_dir=Path(args.output_dir),
-            template_dir=config.get('paths', {}).get(
-                'template_dir', 'vntyper/templates'
-            ),
+            template_dir=config.get('paths', {}).get('template_dir', 'vntyper/templates'),
             report_file=args.report_file,
-            log_file=args.log_file,
+            log_file=str(report_log_file),
             bed_file=args.bed_file,
             bam_file=args.bam_file,
             fasta_file=args.reference_fasta,
             flanking=args.flanking,
-            input_files={},  # Populate as needed
+            input_files={},  # Optionally populate if you want to reference them in the final report
             pipeline_version=VERSION,
+            # We pass in the entire config, since we've made it consistent with the pipeline usage.
             config=config
         )
 
+    #
+    # -------------------------------------------------------------------------
+    # cohort command
+    # -------------------------------------------------------------------------
+    #
     elif args.command == "cohort":
+        # Possibly unify logs into output_dir/pipeline.log if not specified
+        if not args.log_file:
+            if args.output_dir:
+                log_file = Path(args.output_dir) / "pipeline.log"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                setup_logging(log_level=log_level_value, log_file=str(log_file))
+            else:
+                # fallback to current dir
+                log_file = Path("pipeline.log")
+                setup_logging(log_level=log_level_value, log_file=str(log_file))
+
+        if args.summary_file is None:
+            args.summary_file = get_conf("summary_file", "cohort_summary.html")
+
         aggregate_cohort(
             input_dirs=args.input_dirs,
             output_dir=Path(args.output_dir),
@@ -572,7 +604,30 @@ def main():
             config=config
         )
 
+    #
+    # -------------------------------------------------------------------------
+    # online command
+    # -------------------------------------------------------------------------
+    #
     elif args.command == "online":
+        # Possibly unify logs into output_dir/pipeline.log if not specified
+        if not args.log_file:
+            if args.output_dir:
+                log_file = Path(args.output_dir) / "pipeline.log"
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                setup_logging(log_level=log_level_value, log_file=str(log_file))
+            else:
+                # fallback to current dir
+                log_file = Path("pipeline.log")
+                setup_logging(log_level=log_level_value, log_file=str(log_file))
+
+        if args.output_dir is None:
+            args.output_dir = get_conf("output_dir", "out")
+        if args.reference_assembly is None:
+            args.reference_assembly = get_conf("reference_assembly", "hg19")
+        if args.threads is None:
+            args.threads = get_conf("threads", 4)
+
         run_online_mode(
             config=config,
             bam=args.bam,
