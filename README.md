@@ -97,18 +97,20 @@ vntyper pipeline \
 
 The adVNTR genotyping is optional and skipped by default. To enable adVNTR genotyping, use the `--extra-modules advntr` option.
 
-**New**: To enable SHARK filtering on FASTQ reads *before* the usual QC and alignment (for improved MUC1 detection), specify `--enable-shark`:
+**New**: To enable SHARK filtering on FASTQ reads *before* the usual QC and alignment (for improved MUC1 detection), add `shark` to the `--extra-modules` flag (e.g., `--extra-modules shark`). This can be done as:
+
 ```bash
 vntyper pipeline \
     --config-path /path/to/config.json \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
-    --enable-shark \
+    --extra-modules shark \
     --threads 4 \
     --output-dir /path/to/output/dir
 ```
+
 - SHARK will run first on the raw FASTQ files to extract and filter reads covering the MUC1 VNTR region.  
-- The filtered reads will then be processed by the usual FASTQ quality control and alignment steps.
+- **Important**: SHARK is only supported in FASTQ mode. If you try to use `--extra-modules shark` together with `--bam` or `--cram`, VNtyper will exit gracefully with a warning.
 
 Docker image for VNtyper 2.0 is provided and can be pulled and used as follows:
 
@@ -175,7 +177,7 @@ vntyper bam \
 VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
 
 1. **FASTQ Quality Control**: Raw FASTQ files are checked for quality.  
-2. **(Optional) SHARK Filtering**: If `--enable-shark` is specified, raw FASTQ reads are first filtered to extract MUC1-specific reads (especially relevant for exome or large WGS datasets).  
+2. **(Optional) SHARK Filtering**: If `shark` is specified in `--extra-modules`, raw FASTQ reads are first filtered to extract MUC1-specific reads (especially relevant for exome or large WGS datasets).  
 3. **Alignment**: Reads are aligned using BWA (if FASTQ files are provided).  
 4. **Kestrel Genotyping**: Mapping-free genotyping of VNTRs.  
 5. **(Optional) adVNTR Genotyping**: Profile-HMM-based method for VNTR genotyping (requires additional setup).  
@@ -187,18 +189,18 @@ VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following
 
 VNtyper 2.0 relies on several tools and Python libraries. Ensure that the following dependencies are available in your environment:
 
-- Python >= 3.9
-- BWA
-- Samtools
-- Fastp
-- Pandas
-- Numpy
-- Biopython
-- Pysam
-- Jinja2
-- Matplotlib
-- Seaborn
-- IGV-Reports
+- Python >= 3.9  
+- BWA  
+- Samtools  
+- Fastp  
+- Pandas  
+- Numpy  
+- Biopython  
+- Pysam  
+- Jinja2  
+- Matplotlib  
+- Seaborn  
+- IGV-Reports  
 
 You can easily set up these dependencies via the provided Conda environment file.
 

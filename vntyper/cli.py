@@ -117,17 +117,21 @@ def main():
         default=None,
         help="Output directory for the results."
     )
+    # Changed here (#57): allow --extra-modules multiple times
+    # The user can do: --extra-modules advntr --extra-modules shark
     parser_pipeline.add_argument(
         '--extra-modules',
-        nargs='*',
-        default=None,
-        help="Optional extra modules to include (e.g., advntr)."
+        action='append',
+        default=[],
+        help="Optional extra modules to include (e.g., advntr, shark). "
+             "Can be repeated multiple times."
     )
-    parser_pipeline.add_argument(
-        '--enable-shark',
-        action='store_true',
-        help="Enable SHARK module for pre-processing FASTQ files."
-    )
+    # Removed here (#57): the --enable-shark flag is superfluous, replaced by --extra-modules shark
+    # parser_pipeline.add_argument(
+    #     '--enable-shark',
+    #     action='store_true',
+    #     help="Enable SHARK module for pre-processing FASTQ files."  # DEPRECATED
+    # )
     parser_pipeline.add_argument(
         '--fastq1',
         type=str,
@@ -453,6 +457,13 @@ def main():
 
     # Execute the corresponding subcommand
     if args.command == "pipeline":
+        # Flatten extra_modules because --extra-modules can be repeated multiple times.
+        # Each occurrence is appended as a list of strings in the current parser setup.
+        import itertools
+        flattened_modules = list(itertools.chain.from_iterable(
+            m if isinstance(m, list) else [m] for m in args.extra_modules
+        ))
+
         input_types = sum([
             1 if args.bam else 0,
             1 if args.cram else 0,
@@ -472,7 +483,7 @@ def main():
 
         # Construct module_args_dict for advntr, etc.
         module_args_dict = {}
-        if 'advntr' in (args.extra_modules or []):
+        if 'advntr' in flattened_modules:
             # If we have advntr in sys.argv, see if advntr_reference is set
             if hasattr(args, 'advntr_reference'):
                 module_args_dict['advntr'] = {
@@ -485,10 +496,14 @@ def main():
         else:
             module_args_dict['advntr'] = {}
 
-        # If shark was enabled
-        extra_modules_list = args.extra_modules or []
-        if args.enable_shark and 'shark' not in extra_modules_list:
-            extra_modules_list.append('shark')
+        # (#62) If user tries to use 'shark' in BAM mode, exit with a warning
+        # Because SHARK is only intended to function in FASTQ mode
+        if (args.bam or args.cram) and ('shark' in flattened_modules):
+            logging.warning(
+                "Shark is not supported in BAM mode; please use FASTQ mode "
+                "or remove the shark flag."
+            )
+            sys.exit(1)
 
         # BWA reference from config
         if args.reference_assembly == "hg19":
@@ -512,7 +527,7 @@ def main():
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
-            extra_modules=extra_modules_list,
+            extra_modules=flattened_modules,
             module_args=module_args_dict,
             config=config,
             fastq1=args.fastq1,
