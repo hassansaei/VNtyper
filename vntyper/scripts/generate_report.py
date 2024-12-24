@@ -350,6 +350,9 @@ def generate_summary_report(
         logging.error(f"Failed to load Jinja2 template: {e}")
         raise
 
+    summary_text = build_screening_summary(
+        kestrel_df, advntr_df, advntr_available, mean_vntr_coverage, mean_vntr_cov_threshold
+    )
     context = {
         'kestrel_highlight': kestrel_html,
         'advntr_highlight': advntr_html,
@@ -379,7 +382,9 @@ def generate_summary_report(
         'passed_filter_rate': passed_filter_rate,
         'passed_filter_icon': pf_icon,
         'passed_filter_color': pf_color,
-        'sequencing_str': sequencing_str
+        'sequencing_str': sequencing_str,
+        # Insert the summary text into the template context
+        'summary_text': summary_text
     }
 
     try:
@@ -396,3 +401,80 @@ def generate_summary_report(
     except Exception as e:
         logging.error(f"Failed to write the summary report: {e}")
         raise
+
+
+def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_coverage, mean_vntr_cov_threshold):
+    """
+    Build the short screening summary text based on Kestrel and adVNTR data.
+
+    Args:
+        kestrel_df (pd.DataFrame): Kestrel results DataFrame.
+        advntr_df (pd.DataFrame): adVNTR results DataFrame.
+        advntr_available (bool): Whether adVNTR results are available.
+        mean_vntr_coverage (float): Mean coverage over the VNTR region.
+        mean_vntr_cov_threshold (float): Coverage threshold for the VNTR region.
+
+    Returns:
+        str: A short summary text describing the findings or negative result.
+    """
+    summary_text = ""
+    try:
+        import re
+
+        def strip_html_tags(confidence_value):
+            return re.sub(r"<[^>]*>", "", confidence_value or "")
+
+        # Check if there's any recognized Confidence
+        if not kestrel_df.empty and "Confidence" in kestrel_df.columns:
+            kestrel_confidences = kestrel_df["Confidence"].apply(strip_html_tags).dropna().unique().tolist()
+            kestrel_valid = any(conf in ("High_Precision", "Low_Precision") for conf in kestrel_confidences)
+        else:
+            kestrel_valid = False
+
+        advntr_has_data = advntr_available and not advntr_df.empty
+
+      : Log info about the adVNTR DataFrame
+        logging.debug(f"advntr_available => {advntr_available}")
+        logging.debug(f"advntr_df.empty => {advntr_df.empty}")
+        logging.debug(f"advntr_has_data => {advntr_has_data}")
+        logging.debug(f"adVNTR columns => {list(advntr_df.columns)}")
+        logging.debug(f"adVNTR first row => {advntr_df.head(1).to_dict(orient='records')}")
+
+        # Check coverage status
+        coverage_status = (
+            "above" if (mean_vntr_coverage is not None and mean_vntr_coverage >= mean_vntr_cov_threshold)
+            else "below"
+        )
+
+        # Check if adVNTR p-value is available
+        if advntr_has_data:
+            lower_cols = [c.lower() for c in advntr_df.columns]
+            logging.debug(f"Lowercased adVNTR columns => {lower_cols}")
+            if "p-value" in lower_cols:
+                pval_col = [col for col in advntr_df.columns if col.lower() == "p-value"][0]
+                pval_val = advntr_df[pval_col].iloc[0]
+                pval_msg = f" adVNTR p-value: {pval_val}."
+            elif "pvalue" in lower_cols:
+                pval_col = [col for col in advntr_df.columns if col.lower() == "pvalue"][0]
+                pval_val = advntr_df[pval_col].iloc[0]
+                pval_msg = f" adVNTR p-value: {pval_val}."
+            else:
+                logging.debug("No p-value or pvalue column detected.")
+                pval_msg = ""
+        else:
+            pval_msg = ""
+
+        # Summarize
+        if kestrel_valid or advntr_has_data:
+            summary_text = (
+                f"{'Kestrel detected a variant.' if kestrel_valid else ''}"
+                f"{pval_msg} Coverage is {coverage_status} threshold."
+            )
+        else:
+            summary_text = "The screening was negative (no valid Kestrel or adVNTR data)."
+
+    except Exception as ex:
+        logging.error(f"Exception in build_screening_summary: {ex}")
+        summary_text = "No summary available."
+
+    return summary_text
