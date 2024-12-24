@@ -88,6 +88,14 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     Wrapper around `create_report` IGV command. If config is provided and flanking is not explicitly set,
     fallback to config's default_values.flanking.
     """
+    logging.debug("run_igv_report called with:")
+    logging.debug(f"  bed_file={bed_file}")
+    logging.debug(f"  bam_file={bam_file}")
+    logging.debug(f"  fasta_file={fasta_file}")
+    logging.debug(f"  output_html={output_html}")
+    logging.debug(f"  vcf_file={vcf_file}")
+    logging.debug(f"  flanking={flanking}")
+
     if config is not None and flanking == 50:
         flanking = config.get("default_values", {}).get("flanking", 50)
 
@@ -117,6 +125,7 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
 
 
 def extract_igv_content(igv_report_html):
+    logging.debug(f"extract_igv_content called with igv_report_html={igv_report_html}")
     try:
         with open(igv_report_html, 'r') as f:
             content = f.read()
@@ -149,6 +158,7 @@ def extract_igv_content(igv_report_html):
 
 
 def load_fastp_output(fastp_file):
+    logging.debug(f"load_fastp_output called with fastp_file={fastp_file}")
     if not os.path.exists(fastp_file):
         logging.warning(f"fastp output file not found: {fastp_file}")
         return {}
@@ -198,10 +208,27 @@ def generate_summary_report(
     Raises:
         ValueError: If config is not provided.
     """
+    logging.debug("---- DEBUG: Entered generate_summary_report ----")
+    logging.debug(f"Called with output_dir={output_dir}, template_dir={template_dir}, report_file={report_file}")
+    logging.debug(f"bed_file={bed_file}, bam_file={bam_file}, fasta_file={fasta_file}, flanking={flanking}")
+    logging.debug(f"log_file={log_file}, vcf_file={vcf_file}, mean_vntr_coverage={mean_vntr_coverage}")
+
     if config is None:
         raise ValueError("Config dictionary must be provided to generate_summary_report")
 
-    if flanking == 50:
+    # Debug checks for bed_file existence
+    if bed_file:
+        abs_bed_file = os.path.abspath(bed_file)
+        logging.debug(f"Absolute bed_file => {abs_bed_file}")
+        logging.debug(f"Exists? => {os.path.exists(abs_bed_file)}")
+
+    # Debug checks for log_file existence
+    if log_file:
+        abs_log_file = os.path.abspath(log_file)
+        logging.debug(f"Absolute log_file => {abs_log_file}")
+        logging.debug(f"Exists? => {os.path.exists(abs_log_file)}")
+
+    if flanking == 50 and config is not None:
         flanking = config.get("default_values", {}).get("flanking", 50)
 
     thresholds = config.get("thresholds", {})
@@ -212,10 +239,17 @@ def generate_summary_report(
     passed_filter_rate_cutoff = thresholds.get("passed_filter_reads_rate", 0.8)
 
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
-    advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.tsv"
+    advntr_result_file = Path(output_dir) / "advntr/output_adVNTR_result.tsv"
     igv_report_file = Path(output_dir) / "igv_report.html"
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
 
+    # Debug checks
+    logging.debug(f"kestrel_result_file => {kestrel_result_file}, exists? {kestrel_result_file.exists()}")
+    logging.debug(f"advntr_result_file => {advntr_result_file}, exists? {advntr_result_file.exists()}")
+    logging.debug(f"igv_report_file => {igv_report_file}, exists? {igv_report_file.exists()}")
+    logging.debug(f"fastp_file => {fastp_file}, exists? {fastp_file.exists()}")
+
+    # Attempt IGV generation only if bed_file is present & real
     if bed_file and os.path.exists(bed_file):
         logging.info(f"Running IGV report for BED file: {bed_file}")
         run_igv_report(
@@ -235,7 +269,8 @@ def generate_summary_report(
     advntr_df, advntr_available = load_advntr_results(advntr_result_file)
     log_content = load_pipeline_log(log_file)
 
-    if igv_report_file and os.path.exists(igv_report_file):
+    # If we did produce an IGV report, extract the content
+    if igv_report_file and igv_report_file.exists():
         igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
     else:
         logging.warning("IGV report file not found. Skipping IGV content.")
@@ -270,7 +305,10 @@ def generate_summary_report(
 
         total_reads_before = before_filtering.get("total_reads", 1)
         passed_filter_reads = filtering_result.get("passed_filter_reads", 0)
-        passed_filter_rate = passed_filter_reads / total_reads_before if total_reads_before > 0 else None
+        if total_reads_before > 0:
+            passed_filter_rate = passed_filter_reads / total_reads_before
+        else:
+            passed_filter_rate = None
         sequencing_str = summary.get("sequencing", "")
 
     def warn_icon(value, cutoff, higher_better=True):
@@ -323,7 +361,9 @@ def generate_summary_report(
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'input_files': input_files or {},
         'pipeline_version': pipeline_version or "unknown",
-        'mean_vntr_coverage': mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated",
+        'mean_vntr_coverage': (
+            mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"
+        ),
         'mean_vntr_coverage_icon': coverage_icon,
         'mean_vntr_coverage_color': coverage_color,
         'fastp_available': fastp_available,
