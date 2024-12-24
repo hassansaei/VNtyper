@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
+# vntyper/modules/advntr/advntr_genotyping.py
 
 import logging
-import pandas as pd
-import numpy as np
 import os
 import subprocess as sp
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
 from vntyper.scripts.utils import run_command, load_config
+
+# -------------------------------------------------------------------------
+# Configure logging
+# -------------------------------------------------------------------------
+# You can adjust the logging level here to control the verbosity.
+# For production, you might set this to logging.INFO or logging.WARNING.
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 
 def load_advntr_config(config_path=None):
     """
@@ -31,6 +44,9 @@ def run_advntr(db_file, sorted_bam, output, output_name, config):
         output (str): Directory where the results will be saved.
         output_name (str): Base name for the output files.
         config (dict): Main configuration dictionary.
+
+    Returns:
+        int: Return code indicating success (0) or failure (non-zero).
     """
     advntr_path = config["tools"]["advntr"]
 
@@ -46,7 +62,24 @@ def run_advntr(db_file, sorted_bam, output, output_name, config):
 
     # Set the VNTR ID from config file or default to 25561
     vid = advntr_settings.get("vid", 25561)
-    
+
+    # ---------------------------------------------------------------------
+    # Validate input paths before proceeding
+    # ---------------------------------------------------------------------
+    if not os.path.isfile(db_file):
+        logging.critical(f"VNTR database file not found: {db_file}")
+        return 1
+    if not os.path.isfile(sorted_bam):
+        logging.critical(f"Sorted BAM file not found: {sorted_bam}")
+        return 1
+    if not os.path.isdir(output):
+        logging.warning(f"Output directory does not exist, creating: {output}")
+        try:
+            os.makedirs(output, exist_ok=True)
+        except Exception as e:
+            logging.critical(f"Could not create output directory {output}: {e}")
+            return 1
+
     advntr_command = (
         f"{advntr_path} genotype -fs -vid {vid} "
         f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR{output_ext} "
@@ -56,18 +89,25 @@ def run_advntr(db_file, sorted_bam, output, output_name, config):
     # Define log file for adVNTR output
     log_file = os.path.join(output, f"{output_name}_advntr.log")
 
-    logging.info("Launching adVNTR genotyping!")
+    logging.info("Launching adVNTR genotyping...")
+    logging.debug(f"Command: {advntr_command}")
 
     try:
         # Run the adVNTR command and log output to the specified log file
         if not run_command(advntr_command, log_file, critical=True):
+            # run_command() returned False, indicating an error
             logging.error("adVNTR genotyping failed. Check the log for details.")
-            # Do not raise an exception here, allowing the pipeline to continue
+            # Pipeline will continue, but we return a non-zero exit code
+            return 1
+    except sp.CalledProcessError as cpe:
+        logging.error(f"adVNTR genotyping CalledProcessError: {cpe}")
+        return 1
     except Exception as e:
-        logging.error(f"adVNTR genotyping encountered an error: {e}")
-        # Continue without raising an exception
+        logging.error(f"adVNTR genotyping encountered an unexpected error: {e}")
+        return 1
 
-    logging.info("adVNTR genotyping of MUC1-VNTR completed!")
+    logging.info("adVNTR genotyping of MUC1-VNTR completed successfully.")
+    return 0
 
 def advntr_processing_del(df):
     """
@@ -79,7 +119,6 @@ def advntr_processing_del(df):
     Returns:
         pd.DataFrame: Filtered DataFrame containing deletions.
     """
-    # Create a copy of the original DataFrame to avoid modifying it directly
     df1 = df.copy()
 
     # Rename columns for clarity
@@ -105,7 +144,6 @@ def advntr_processing_del(df):
     frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
 
-    # Filter the DataFrame
     df1 = df1[(df1['Deletion_length'] >= 1) & df1['frame'].isin(del_frame)]
 
     return df1
@@ -120,7 +158,6 @@ def advntr_processing_ins(df):
     Returns:
         pd.DataFrame: Filtered DataFrame containing insertions.
     """
-    # Create a copy of the original DataFrame to avoid modifying it directly
     df1 = df.copy()
 
     # Rename columns for clarity
@@ -146,7 +183,6 @@ def advntr_processing_ins(df):
     frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
     ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
 
-    # Filter the DataFrame
     df1 = df1[(df1['Insertion_len'] >= 1) & df1['frame'].isin(ins_frame)]
 
     return df1
@@ -204,10 +240,7 @@ def process_advntr_output(output_path, output, output_name):
         logging.info('Loading data into DataFrame...')
         df = pd.read_csv(output_path, sep='\t', comment='#')
         logging.info(f"Data loaded successfully with shape: {df.shape}")
-
-        # Log the first few rows of the DataFrame
         logging.debug(f"First few rows of the DataFrame:\n{df.head()}")
-
     except Exception as e:
         logging.error(f"Error loading data into DataFrame: {e}")
         return
@@ -236,12 +269,10 @@ def process_advntr_output(output_path, output, output_name):
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat.to_csv(output_result_path, sep='\t', index=False)
         logging.info(f"Processed adVNTR results saved to {output_result_path}")
-
     except Exception as e:
         logging.error(f"Error during processing of deletions and insertions: {e}")
         return
 
-    # Clean up intermediate files if necessary
     cleanup_files(output, output_name)
 
 def cleanup_files(output, output_name):
