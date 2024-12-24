@@ -4,7 +4,7 @@
       "frameshift_multiplier": 3,
       "vid": 25561,
       "output_format": "vcf",
-      "threads": 12,
+      "threads": 1,
       "additional_commands": "-aln"
     }
   }
