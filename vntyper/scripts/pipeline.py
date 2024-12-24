@@ -79,7 +79,7 @@ def run_pipeline(
     Args:
         bwa_reference (str): Path to the genome reference FASTA file for BWA.
         output_dir (Path): Path to the output directory.
-        extra_modules (list): Optional modules to include (e.g., ['advntr']).
+        extra_modules (list): Optional modules to include (e.g., ['advntr', 'shark']).
         module_args (dict): Dictionary containing module-specific arguments.
         config (dict): Configuration dictionary.
         fastq1 (str, optional): Path to the first FASTQ file.
@@ -254,6 +254,8 @@ def run_pipeline(
                 raise ValueError("Failed to generate FASTQ files from CRAM.")
 
         elif input_type == "FASTQ":
+            # If shark is in extra_modules, run the shark_filter
+            # (#62) This check for shark is valid only in FASTQ mode, so no exit needed here
             if 'shark' in extra_modules:
                 from vntyper.modules.shark.shark_filtering import (
                     run_shark_filter, load_shark_config
