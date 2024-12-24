@@ -20,7 +20,7 @@ We have provided a helper script `install_advntr.sh` to automate the installatio
 
 ### Prerequisites:
 
-- **Conda Environment**: Ensure that the conda environment exists if you plan to specify one. The script does not create conda environments.
+- **Conda Environment**: Ensure that the conda environment exists if you plan to specify one. The script does **not** create conda environments.
 - **Python Version**: adVNTR requires Python 2.7 or Python 3.7.
 
 ### Steps:
@@ -32,9 +32,7 @@ We have provided a helper script `install_advntr.sh` to automate the installatio
    ```bash
    conda env create -f environment_envadvntr.yml
    ```
-
    Activate the environment:
-
    ```bash
    conda activate envadvntr
    ```
@@ -61,19 +59,16 @@ We have provided a helper script `install_advntr.sh` to automate the installatio
    **Examples:**
 
    - **Install adVNTR and activate a conda environment:**
-
      ```bash
      bash install_advntr.sh -e envadvntr
      ```
 
    - **Install adVNTR to a custom directory and activate a conda environment:**
-
      ```bash
      bash install_advntr.sh -e envadvntr -d /path/to/install/adVNTR
      ```
 
    - **Overwrite existing installation:**
-
      ```bash
      bash install_advntr.sh -o
      ```
@@ -81,11 +76,9 @@ We have provided a helper script `install_advntr.sh` to automate the installatio
 4. **Verify Installation**
 
    After the script completes, adVNTR should be installed in the specified directory. You can verify the installation:
-
    ```bash
    advntr --help
    ```
-
    If `advntr` is not found, ensure that your conda environment is activated and that the `bin` directory of the environment is in your `PATH`.
 
 ---
@@ -98,7 +91,6 @@ If you prefer to install adVNTR manually, follow these steps.
 
 - **Conda Environment**: Ensure that your conda environment is created and activated.
   - Use your existing `environment_envadvntr.yml`:
-
     ```bash
     conda env create -f environment_envadvntr.yml
     conda activate envadvntr
@@ -119,15 +111,7 @@ If you prefer to install adVNTR manually, follow these steps.
    python setup.py install
    ```
 
-3. **Download Reference VNTRs**
-
-   ```bash
-   wget -O vntr_data_recommended_loci.zip https://github.com/mehrdadbakhtiari/adVNTR/releases/download/0.1/vntr_data_recommended_loci.zip
-   unzip vntr_data_recommended_loci.zip
-   rm vntr_data_recommended_loci.zip
-   ```
-
-4. **Verify Installation**
+3. **Verify Installation**
 
    ```bash
    advntr --help
@@ -137,11 +121,19 @@ If you prefer to install adVNTR manually, follow these steps.
 
 ## References
 
-- **adVNTR GitHub Repository**: [https://github.com/mehrdadbakhtiari/adVNTR](https://github.com/mehrdadbakhtiari/adVNTR)
-- **adVNTR Documentation**: [https://advntr.readthedocs.io](https://advntr.readthedocs.io)
+We have **removed** reference installation from the `install_advntr.sh` script to avoid duplicating or mismatching reference data. 
+
+To install **references** for VNtyper (including those used by adVNTR), use the dedicated command:
+```bash
+vntyper install-references -d /path/to/install/references --config-path /path/to/config.json
+```
+This leverages the `install_references.py` script and its associated `install_references_config.json`.
+
+For more details on reference installation:
+- See the script at **`vntyper/scripts/install_references.py`**  
+- Or check **`install_references_config.json`** for configuration and URLs.
 
 ---
 
-**Note:** For integration with VNtyper, ensure that the `advntr` command is accessible in your environment, and update the VNtyper configuration files if necessary to point to the correct adVNTR installation paths.
-
----
+**Note:**  
+For integration with VNtyper, ensure that the `advntr` command is accessible in your environment. You may need to update VNtyper’s configuration files to point to the correct adVNTR installation path if necessary.
