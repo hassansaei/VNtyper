@@ -7,7 +7,6 @@ set -e  # Exit immediately if a command exits with a non-zero status
 
 # Default configuration
 INSTALL_DIR="$PWD/adVNTR"
-REFERENCE_VNTR_URL="https://github.com/mehrdadbakhtiari/adVNTR/releases/download/0.1/vntr_data_recommended_loci.zip"
 OVERWRITE=false
 CONDA_ENV=""
 
