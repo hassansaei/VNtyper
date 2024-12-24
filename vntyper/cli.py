@@ -218,134 +218,6 @@ def main():
         help="Path to a BED file specifying regions for MUC1 analysis."
     )
 
-    # Subcommand: fastq
-    parser_fastq = subparsers.add_parser(
-        "fastq",
-        help="Process FASTQ files.",
-        parents=[parent_parser]
-    )
-    parser_fastq.add_argument(
-        '-r1', '--fastq1',
-        type=str,
-        required=True,
-        help="Path to the first FASTQ file."
-    )
-    parser_fastq.add_argument(
-        '-r2', '--fastq2',
-        type=str,
-        help="Path to the second FASTQ file."
-    )
-    parser_fastq.add_argument(
-        '-t', '--threads',
-        type=int,
-        default=None,
-        help="Number of threads to use."
-    )
-    parser_fastq.add_argument(
-        '-o', '--output-dir',
-        type=str,
-        default=None,
-        help="Output directory for processed FASTQ files."
-    )
-    parser_fastq.add_argument(
-        '-n', '--output-name',
-        type=str,
-        default=None,
-        help="Base name for the output FASTQ files."
-    )
-
-    # Subcommand: bam
-    parser_bam = subparsers.add_parser(
-        "bam",
-        help="Process BAM files.",
-        parents=[parent_parser]
-    )
-    parser_bam.add_argument(
-        '-a', '--alignment',
-        type=str,
-        required=True,
-        help="Path to the BAM file."
-    )
-    parser_bam.add_argument(
-        '-t', '--threads',
-        type=int,
-        default=None,
-        help="Number of threads to use."
-    )
-    parser_bam.add_argument(
-        '-o', '--output-dir',
-        type=str,
-        default=None,
-        help="Output directory for processed BAM files."
-    )
-    parser_bam.add_argument(
-        '--reference-assembly',
-        type=str,
-        choices=["hg19", "hg38"],
-        default=None,
-        help="Specify the reference assembly to use (hg19 or hg38)."
-    )
-    parser_bam.add_argument(
-        '--fast-mode',
-        action='store_true',
-        help="Enable fast mode (skips filtering for unmapped and partially "
-             "mapped reads)."
-    )
-    parser_bam.add_argument(
-        '--keep-intermediates',
-        action='store_true',
-        help="Keep intermediate files (e.g., BAM slices, temporary files)."
-    )
-    parser_bam.add_argument(
-        '--delete-intermediates',
-        action='store_true',
-        help="Delete intermediate files after processing "
-             "(overrides --keep-intermediates)."
-    )
-    parser_bam.add_argument(
-        '-n', '--output-name',
-        type=str,
-        default=None,
-        help="Base name for the output FASTQ files."
-    )
-
-    # Subcommand: kestrel
-    parser_kestrel = subparsers.add_parser(
-        "kestrel",
-        help="Run Kestrel genotyping.",
-        parents=[parent_parser]
-    )
-    parser_kestrel.add_argument(
-        '-r', '--reference-vntr',
-        type=str,
-        required=True,
-        help="Path to the MUC1-specific reference VNTR file."
-    )
-    parser_kestrel.add_argument(
-        '-f1', '--fastq1',
-        type=str,
-        required=True,
-        help="Path to the first FASTQ file."
-    )
-    parser_kestrel.add_argument(
-        '-f2', '--fastq2',
-        type=str,
-        help="Path to the second FASTQ file."
-    )
-    parser_kestrel.add_argument(
-        '-o', '--output-dir',
-        type=str,
-        default=None,
-        help="Output directory for Kestrel results."
-    )
-    parser_kestrel.add_argument(
-        '-s', '--sample-name',
-        type=str,
-        default=None,
-        help="Set the sample name for Kestrel. If not provided, "
-             "defaults to input FASTQ name."
-    )
-
     # Subcommand: report
     parser_report = subparsers.add_parser(
         "report",
@@ -526,7 +398,6 @@ def main():
             setup_logging(log_level=log_level_value, log_file=None)
 
     # From here, we fill in missing arguments from config if the user left them unset
-    # (We do this to avoid overwriting if user has specified them.)
     if args.command == "pipeline":
         if args.output_dir is None:
             args.output_dir = get_conf("output_dir", "out")
@@ -538,25 +409,6 @@ def main():
             args.output_name = get_conf("output_name", "processed")
         if args.archive_format is None:
             args.archive_format = get_conf("archive_format", "zip")
-    elif args.command == "fastq":
-        if args.output_dir is None:
-            args.output_dir = get_conf("output_dir", "out")
-        if args.threads is None:
-            args.threads = get_conf("threads", 4)
-        if args.output_name is None:
-            args.output_name = get_conf("output_name", "processed")
-    elif args.command == "bam":
-        if args.output_dir is None:
-            args.output_dir = get_conf("output_dir", "out")
-        if args.threads is None:
-            args.threads = get_conf("threads", 4)
-        if args.reference_assembly is None:
-            args.reference_assembly = get_conf("reference_assembly", "hg19")
-        if args.output_name is None:
-            args.output_name = get_conf("output_name", "processed")
-    elif args.command == "kestrel":
-        if args.output_dir is None:
-            args.output_dir = get_conf("output_dir", "out")
     elif args.command == "report":
         if args.report_file is None:
             args.report_file = get_conf("report_file", "summary_report.html")
@@ -678,42 +530,6 @@ def main():
             bed_file=args.bed_file,
             log_level=log_level_value,
             sample_name=sample_name_val,
-        )
-
-    elif args.command == "fastq":
-        process_fastq(
-            fastq_1=args.fastq1,
-            fastq_2=args.fastq2,
-            threads=args.threads,
-            output=Path(args.output_dir),
-            output_name=args.output_name,
-            config=config
-        )
-
-    elif args.command == "bam":
-        process_bam_to_fastq(
-            in_bam=args.alignment,
-            output=Path(args.output_dir),
-            output_name=args.output_name,
-            threads=args.threads,
-            config=config,
-            reference_assembly=args.reference_assembly,
-            fast_mode=args.fast_mode,
-            delete_intermediates=args.delete_intermediates,
-            keep_intermediates=args.keep_intermediates
-        )
-
-    elif args.command == "kestrel":
-        run_kestrel(
-            vcf_path=Path(args.output_dir) / "output.vcf",
-            output_dir=Path(args.output_dir),
-            fastq_1=args.fastq1,
-            fastq_2=args.fastq2,
-            reference_vntr=args.reference_vntr,
-            kestrel_path=config.get("tools", {}).get("kestrel"),
-            config=config,
-            sample_name=args.sample_name,
-            log_level=log_level_value
         )
 
     elif args.command == "report":

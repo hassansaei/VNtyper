@@ -433,7 +433,6 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
 
         advntr_has_data = advntr_available and not advntr_df.empty
 
-      : Log info about the adVNTR DataFrame
         logging.debug(f"advntr_available => {advntr_available}")
         logging.debug(f"advntr_df.empty => {advntr_df.empty}")
         logging.debug(f"advntr_has_data => {advntr_has_data}")
