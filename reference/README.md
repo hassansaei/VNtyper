@@ -1,8 +1,6 @@
-Below is the text of the `README.md` file describing the script and the configuration:
+# Reference folder for vntyper
 
----
-
-# VNTR Reference Generator
+## 1. VNTR Reference Generator
 
 This repository contains a Python script `generate_vntr_reference.py` which generates pairwise combinations of VNTR motifs from a given input FASTA file and writes them out to a new FASTA file. The script also uses a JSON configuration file to filter out certain disallowed motif combinations.
 
@@ -93,3 +91,9 @@ If you have:
 This means:
 - When the first contig is `1`, do not allow `1-1` or `1-3`.
 - All other combinations starting with `1` (except `1-1` and `1-3`) are allowed.
+
+## 2. pseudonymize.py
+
+## 3. Adapted adVNTR references
+
+The referneces in vntr_db_advntr.zip have been created by removing all non-Muc1 entries from the hg9 database and adding the MUC1 reference with the same ID to the hgg38 database where it was missing and changing the start position to the corresponding start position after finding this with UCSC BLAT usng the left sequence.

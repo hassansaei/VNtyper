@@ -16,15 +16,10 @@
   },
 
   "vntyper_references": {
-    "vntr_data_genic_loci": {
-      "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_data_genic_loci.zip",
-      "target_path": "vntr_data_genic_loci.zip",
-      "extract_to": "vntr_data_genic_loci/"
-    },
-    "vntr_data_recommended_loci_hg38": {
-      "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_data_recommended_loci_hg38.zip",
-      "target_path": "vntr_data_recommended_loci_hg38.zip",
-      "extract_to": "vntr_data_recommended_loci_hg38/"
+    "vntr_db_advntr": {
+      "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_db_advntr.zip",
+      "target_path": "vntr_db_advntr.zip",
+      "extract_to": "vntr_db_advntr/"
     }
   },
 
