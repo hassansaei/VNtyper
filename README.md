@@ -115,12 +115,12 @@ vntyper pipeline \
 Docker image for VNtyper 2.0 is provided and can be pulled and used as follows:
 
 ```bash
-docker pull saei/vntyper:2.0.0-alpha.40
+docker pull saei/vntyper:2.0.0-alpha.52
 
 docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:2.0.0-alpha.40 \
+    vntyper:2.0.0-alpha.52 \
     vntyper pipeline --bam /local/input/folder/filename.bam \
     -o /local/output/folder/filename/
 ```
@@ -128,12 +128,12 @@ docker run -w /opt/vntyper --rm \
 An Apptainer image can be generated from the Docker image as follows:
 
 ```bash
-apptainer pull docker://saei/vntyper:2.0.0-alpha.40
+apptainer pull docker://saei/vntyper:2.0.0-alpha.52
 
 apptainer run --pwd /opt/vntyper \
     -B /local/input/folder/:/opt/vntyper/input \
     -B /local/output/folder/:/opt/vntyper/output \
-    vntyper_2.0.0-alpha.40.sif vntyper pipeline \
+    vntyper_2.0.0-alpha.52.sif vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/
 ```
