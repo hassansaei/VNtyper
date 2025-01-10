@@ -77,8 +77,7 @@ VNtyper 2.0 offers multiple subcommands that can be used depending on your input
 To run the entire pipeline on paired-end FASTQ files or BAM files:
 
 ```bash
-vntyper pipeline \
-    --config-path /path/to/config.json \
+vntyper --config-path /path/to/config.json pipeline \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --output-dir /path/to/output/dir \
@@ -88,8 +87,7 @@ vntyper pipeline \
 Alternatively, using a BAM file:
 
 ```bash
-vntyper pipeline \
-    --config-path /path/to/config.json \
+vntyper --config-path /path/to/config.json pipeline \
     --bam /path/to/sample.bam \
     --output-dir /path/to/output/dir \
     --threads 4 --fast-mode
@@ -100,8 +98,7 @@ The adVNTR genotyping is optional and skipped by default. To enable adVNTR genot
 **New**: To enable SHARK filtering on FASTQ reads *before* the usual QC and alignment (for improved MUC1 detection), add `shark` to the `--extra-modules` flag (e.g., `--extra-modules shark`). This can be done as:
 
 ```bash
-vntyper pipeline \
-    --config-path /path/to/config.json \
+vntyper --config-path /path/to/config.json pipeline \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
     --extra-modules shark \
@@ -141,18 +138,16 @@ apptainer run --pwd /opt/vntyper \
 ### 2. Installing References
 
 ```bash
-vntyper install-references \
+vntyper --config-path /path/to/config.json install-references \
     --output-dir /path/to/reference/install \
-    --config-path /path/to/config.json \
     --skip-indexing  # Optional: skip BWA indexing if needed
 ```
 
 ### 3. Generating Reports
 
 ```bash
-vntyper report \
-    --output-dir /path/to/output/dir \
-    --config-path /path/to/config.json
+vntyper --config-path /path/to/config.json report \
+    --output-dir /path/to/output/dir
 ```
 
 Process raw FASTQ files to prepare them for genotyping:
