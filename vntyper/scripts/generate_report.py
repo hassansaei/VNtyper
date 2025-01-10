@@ -69,20 +69,6 @@ def load_advntr_results(advntr_result_file):
         return pd.DataFrame(), False
 
 
-def load_pipeline_log(log_file):
-    logging.info(f"Loading pipeline log from {log_file}")
-    if not os.path.exists(log_file):
-        logging.warning(f"Pipeline log file not found: {log_file}")
-        return "Pipeline log file not found."
-
-    try:
-        with open(log_file, 'r') as f:
-            return f.read()
-    except Exception as e:
-        logging.error(f"Failed to read pipeline log file: {e}")
-        return "Failed to load pipeline log."
-
-
 def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
     """
     Wrapper around `create_report` IGV command. If config is provided and flanking
@@ -197,7 +183,6 @@ def generate_summary_report(
     output_dir,
     template_dir,
     report_file,
-    log_file,
     bed_file=None,
     bam_file=None,
     fasta_file=None,
@@ -212,18 +197,17 @@ def generate_summary_report(
     Generates a summary report.
 
     Args:
-        output_dir (str): Output directory for the report.
+        output_dir (Path): Output directory for the report.
         template_dir (str): Directory containing the report template.
         report_file (str): Name of the report file.
-        log_file (str): Path to the pipeline log file.
-        bed_file (str, optional): Path to the BED file for IGV reports.
-        bam_file (str, optional): Path to the BAM file for IGV reports.
-        fasta_file (str, optional): Path to the reference FASTA file for IGV reports.
+        bed_file (Path, optional): Path to the BED file for IGV reports.
+        bam_file (Path, optional): Path to the BAM file for IGV reports.
+        fasta_file (Path, optional): Path to the reference FASTA file for IGV reports.
         flanking (int, optional): Size of the flanking region for IGV reports.
         input_files (dict, optional): Dictionary of input filenames.
         pipeline_version (str, optional): The version of the VNtyper pipeline.
         mean_vntr_coverage (float, optional): Mean coverage over the VNTR region.
-        vcf_file (str, optional): Path to the sorted and indexed VCF file.
+        vcf_file (Path, optional): Path to the sorted and indexed VCF file.
         config (dict, optional): Configuration dictionary.
 
     Raises:
@@ -232,7 +216,7 @@ def generate_summary_report(
     logging.debug("---- DEBUG: Entered generate_summary_report ----")
     logging.debug(f"Called with output_dir={output_dir}, template_dir={template_dir}, report_file={report_file}")
     logging.debug(f"bed_file={bed_file}, bam_file={bam_file}, fasta_file={fasta_file}, flanking={flanking}")
-    logging.debug(f"log_file={log_file}, vcf_file={vcf_file}, mean_vntr_coverage={mean_vntr_coverage}")
+    logging.debug(f"vcf_file={vcf_file}, mean_vntr_coverage={mean_vntr_coverage}")
 
     if config is None:
         raise ValueError("Config dictionary must be provided to generate_summary_report")
@@ -242,12 +226,6 @@ def generate_summary_report(
         abs_bed_file = os.path.abspath(bed_file)
         logging.debug(f"Absolute bed_file => {abs_bed_file}")
         logging.debug(f"Exists? => {os.path.exists(abs_bed_file)}")
-
-    # Debug checks for log_file existence
-    if log_file:
-        abs_log_file = os.path.abspath(log_file)
-        logging.debug(f"Absolute log_file => {abs_log_file}")
-        logging.debug(f"Exists? => {os.path.exists(abs_log_file)}")
 
     if flanking == 50 and config is not None:
         flanking = config.get("default_values", {}).get("flanking", 50)
@@ -288,14 +266,14 @@ def generate_summary_report(
 
     kestrel_df = load_kestrel_results(kestrel_result_file)
     advntr_df, advntr_available = load_advntr_results(advntr_result_file)
-    log_content = load_pipeline_log(log_file)
 
-    # If we did produce an IGV report, extract the content
+    # Removed log_content since log_file is no longer handled here
+    igv_content, table_json, session_dictionary = ("", "", "")
+
     if igv_report_file and igv_report_file.exists():
         igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
     else:
         logging.warning("IGV report file not found. Skipping IGV content.")
-        igv_content, table_json, session_dictionary = "", "", ""
 
     fastp_data = load_fastp_output(fastp_file)
 
@@ -378,7 +356,7 @@ def generate_summary_report(
         'kestrel_highlight': kestrel_html,
         'advntr_highlight': advntr_html,
         'advntr_available': advntr_available,
-        'log_content': log_content,
+        # 'log_content': log_content,  # Removed
         'igv_content': igv_content,
         'table_json': table_json,
         'session_dictionary': session_dictionary,
@@ -404,8 +382,7 @@ def generate_summary_report(
         'passed_filter_icon': pf_icon,
         'passed_filter_color': pf_color,
         'sequencing_str': sequencing_str,
-        # Insert the summary text into the template context
-        'summary_text': summary_text
+        # 'summary_text': summary_text  # Assuming it's included in the template
     }
 
     try:

@@ -19,7 +19,6 @@ from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_versions,
-    setup_logging,
     validate_bam_file,
     validate_fastq_file
 )
@@ -118,9 +117,7 @@ def run_pipeline(
     dirs = create_output_directories(output_dir)
     logging.info(f"Created output directories in: {output_dir}")
 
-    log_file = os.path.join(output_dir, "pipeline.log")
-    setup_logging(log_level=log_level, log_file=log_file)
-    logging.info(f"Logging to file: {log_file}")
+    # Removed logging setup here to rely on cli.py's configuration
 
     tool_versions = get_tool_versions(config)
     logging.info(
@@ -162,6 +159,17 @@ def run_pipeline(
             )
             raise ValueError(
                 "Provide either BAM, CRAM, or FASTQ files, not multiples."
+            )
+
+        if (not bam and not cram
+                and (not fastq1 or not fastq2)):
+            logging.error(
+                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must "
+                "be specified for paired-end sequencing."
+            )
+            raise ValueError(
+                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must "
+                "be specified for paired-end sequencing."
             )
 
         # Validate input files
@@ -255,7 +263,6 @@ def run_pipeline(
 
         elif input_type == "FASTQ":
             # If shark is in extra_modules, run the shark_filter
-            # (#62) This check for shark is valid only in FASTQ mode, so no exit needed here
             if 'shark' in extra_modules:
                 from vntyper.modules.shark.shark_filtering import (
                     run_shark_filter, load_shark_config
@@ -431,7 +438,7 @@ def run_pipeline(
                     sorted_bam,
                     dirs['advntr'],
                     "output",
-                    config,
+                    config=config,
                 )
 
                 output_format = advntr_settings.get("output_format", "tsv")
@@ -463,15 +470,11 @@ def run_pipeline(
         logging.debug(f"Absolute bed_out => {os.path.abspath(bed_out)}")
         logging.debug(f"bed_out exists? => {os.path.exists(os.path.abspath(bed_out))}")
 
-        logging.debug(f"log_file => {log_file}")
-        logging.debug(f"Absolute log_file => {os.path.abspath(log_file)}")
-        logging.debug(f"log_file exists? => {os.path.exists(os.path.abspath(log_file))}")
-
+        # Removed the undefined 'log_file' reference
         generate_summary_report(
             output_dir,
             template_dir,
             report_file,
-            log_file,
             bed_file=bed_out,
             bam_file=bam_out,
             fasta_file=fasta_reference,
