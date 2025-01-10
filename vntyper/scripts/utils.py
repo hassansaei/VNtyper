@@ -23,7 +23,7 @@ def run_command(command, log_file, critical=False):
     Returns:
         bool: True if the command succeeded, False otherwise.
     """
-    logging.info(f"Running command: {command}")
+    logging.debug(f"Running command: {command}")
     with open(log_file, "w") as lf:
         process = subprocess.Popen(
             command,
@@ -35,11 +35,11 @@ def run_command(command, log_file, critical=False):
         for line in process.stdout:
             decoded_line = line.decode()
             lf.write(decoded_line)
-            logging.info(decoded_line.strip())
+            logging.debug(decoded_line.strip())
         process.wait()
 
         if process.returncode != 0:
-            logging.error(f"Command failed: {command}")
+            logging.debug(f"Command failed: {command}")
             if critical:
                 raise RuntimeError(f"Critical command failed: {command}")
             return False
@@ -55,8 +55,9 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         log_file (str, optional): Path to a log file. If None, logs are printed to console.
     """
     logger = logging.getLogger()  # Get the root logger
-    logger.setLevel(log_level)  # Set the overall logging level
+    logger.setLevel(log_level)    # Set the overall logging level
 
+    # Clear existing handlers so we don't duplicate logs
     if logger.hasHandlers():
         logger.handlers.clear()
 
@@ -64,12 +65,16 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
+    # If writing logs to a file, create a FileHandler, set its level, and attach
     if log_file:
         file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
+    # Always attach a console handler at the same requested log level
     console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
