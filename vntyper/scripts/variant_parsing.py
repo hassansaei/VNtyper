@@ -71,7 +71,7 @@ def filter_by_alt_values_and_finalize(df, kestrel_config):
       1) If 'GG' is present in the ALT column, only keep those rows if
          Depth_Score >= 'gg_depth_score_threshold'.
       2) Exclude any ALTs in 'exclude_alts'.
-      3) Drop 'left' and 'right' columns from earlier frame splitting steps
+      3) Drop 'left' and 'right' columns from earlier frame splitting
          to finalize the output.
 
     Args:
@@ -86,7 +86,11 @@ def filter_by_alt_values_and_finalize(df, kestrel_config):
     Returns:
         pd.DataFrame: Filtered, finalized DataFrame ready for final steps.
     """
+    logging.debug("Entering filter_by_alt_values_and_finalize")
+    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+
     if df.empty:
+        logging.debug("DataFrame is empty. Exiting filter_by_alt_values_and_finalize.")
         return df
 
     alt_filter = kestrel_config['alt_filtering']
@@ -94,7 +98,9 @@ def filter_by_alt_values_and_finalize(df, kestrel_config):
     gg_depth_score_threshold = alt_filter['gg_depth_score_threshold']
     exclude_alts = alt_filter['exclude_alts']
 
-    # If 'GG' is in ALT, only retain it if Depth_Score >= threshold
+    # Step 1) If 'GG' in ALT, keep rows only if Depth_Score >= threshold
+    pre_gg_rows = len(df)
+    pre_gg_cols = df.columns.tolist()
     if df['ALT'].str.contains(r'\b' + gg_alt_value + r'\b').any():
         gg_condition = df['ALT'] == gg_alt_value
         df = pd.concat(
@@ -103,12 +109,28 @@ def filter_by_alt_values_and_finalize(df, kestrel_config):
                 df[gg_condition & (df['Depth_Score'] >= gg_depth_score_threshold)],
             ]
         )
+    logging.debug("After applying 'GG' depth_score filter:")
+    logging.debug(f"Changed from {pre_gg_rows} rows, {pre_gg_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Exclude specified ALTs
+    # Step 2) Exclude specified ALTs
+    pre_exclude_rows = len(df)
+    pre_exclude_cols = df.columns.tolist()
     df = df[~df['ALT'].isin(exclude_alts)]
+    logging.debug("After excluding specified ALTs:")
+    logging.debug(f"Changed from {pre_exclude_rows} rows, {pre_exclude_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Drop intermediate columns from frame splitting
+    # Step 3) Drop intermediate columns from frame splitting
     drop_cols = [col for col in ['left', 'right'] if col in df.columns]
-    df.drop(drop_cols, axis=1, inplace=True)
+    if drop_cols:
+        pre_drop_rows = len(df)
+        pre_drop_cols = df.columns.tolist()
+        df.drop(drop_cols, axis=1, inplace=True)
+        logging.debug("After dropping columns for frame splitting:")
+        logging.debug(f"Changed from {pre_drop_rows} rows, {pre_drop_cols} columns")
+        logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
+    logging.debug("Exiting filter_by_alt_values_and_finalize")
+    logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df
