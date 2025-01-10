@@ -61,9 +61,8 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
     bash vntyper/dependencies/advntr/install_advntr.sh"
 
 # Install VNtyper references during build
-RUN conda run -n vntyper vntyper install-references \
-    --output-dir $REFERENCE_DIR \
-    --config-path /opt/vntyper/config/config.json
+RUN conda run -n vntyper vntyper --config-path /opt/vntyper/config/config.json install-references \
+    --output-dir $REFERENCE_DIR
 
 # Install FastAPI, Uvicorn, Celery, Redis, and other dependencies
 RUN conda run -n vntyper pip install fastapi==0.115.3 uvicorn==0.32.0 redis==5.2.0 celery==5.4.0 python-multipart==0.0.12 fastapi-limiter==0.1.6 email_validator==2.2.0 passlib[bcrypt]==1.7.4 pydantic==2.10.0

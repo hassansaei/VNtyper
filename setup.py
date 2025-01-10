@@ -14,7 +14,7 @@ with open(os.path.join('vntyper', 'version.py')) as f:
 # After installing vntyper, you need to download and set up the required reference files.
 # Run the following command to perform the installation of references:
 #
-#     vntyper install-references --output-dir /path/to/install --config-path /path/to/config.json
+#     vntyper --config-path /path/to/config.json install-references --output-dir /path/to/install
 #
 # For detailed instructions, refer to the README.md or visit:
 # https://github.com/hassansaei/vntyper#installation
