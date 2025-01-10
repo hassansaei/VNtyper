@@ -23,6 +23,7 @@ References:
 - #6: Docs: Kestrel postprocessing heuristic (depth score usage)
 """
 
+import logging
 import pandas as pd
 
 
@@ -53,21 +54,34 @@ def calculate_depth_score_and_assign_confidence(df, kestrel_config):
               - 'Depth_Score' (float)
               - 'Confidence' (str: 'Low_Precision', 'High_Precision', etc.)
     """
+    logging.debug("Entering calculate_depth_score_and_assign_confidence")
+    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+
     if df.empty:
+        logging.debug("DataFrame is empty. Exiting calculate_depth_score_and_assign_confidence.")
         return df
 
-    # Convert depth columns from string to integer
+    # Step 1: Convert depth columns from string to integer
+    pre_convert_rows = len(df)
+    pre_convert_cols = df.columns.tolist()
     df['Estimated_Depth_AlternateVariant'] = df['Estimated_Depth_AlternateVariant'].astype(int)
-    df['Estimated_Depth_Variant_ActiveRegion'] = (
-        df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
-    )
+    df['Estimated_Depth_Variant_ActiveRegion'] = df['Estimated_Depth_Variant_ActiveRegion'].astype(int)
+    logging.debug("After converting depth columns to integer:")
+    logging.debug(f"Changed from {pre_convert_rows} rows, {pre_convert_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Depth_Score = alt_depth / total_region_depth
+    # Step 2: Calculate Depth_Score
+    pre_calculate_rows = len(df)
+    pre_calculate_cols = df.columns.tolist()
     df['Depth_Score'] = (
-        df['Estimated_Depth_AlternateVariant'] / df['Estimated_Depth_Variant_ActiveRegion']
+        df['Estimated_Depth_AlternateVariant'] /
+        df['Estimated_Depth_Variant_ActiveRegion']
     )
+    logging.debug("After calculating 'Depth_Score':")
+    logging.debug(f"Changed from {pre_calculate_rows} rows, {pre_calculate_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Retrieve threshold settings from kestrel_config
+    # Step 3: Assign confidence
     conf_assign = kestrel_config['confidence_assignment']
     depth_score_thresholds = conf_assign['depth_score_thresholds']
     alt_depth_thresholds = conf_assign['alt_depth_thresholds']
@@ -113,5 +127,13 @@ def calculate_depth_score_and_assign_confidence(df, kestrel_config):
         else:
             return confidence_levels['low_precision']
 
+    pre_conf_rows = len(df)
+    pre_conf_cols = df.columns.tolist()
     df['Confidence'] = df.apply(assign_confidence, axis=1)
+    logging.debug("After assigning 'Confidence':")
+    logging.debug(f"Changed from {pre_conf_rows} rows, {pre_conf_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
+
+    logging.debug("Exiting calculate_depth_score_and_assign_confidence")
+    logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df

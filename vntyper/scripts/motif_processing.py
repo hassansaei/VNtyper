@@ -22,7 +22,7 @@ Typical Flow:
 
 References:
 -----------
-- Saei et al., iScience 26, 107171 (2023) for motif definitions & thresholds
+- Saei et al., iScience 26, 107171 (2023).
 """
 
 import logging
@@ -171,7 +171,11 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             Updated DataFrame with final annotated/filtered results. May be empty
             if all variants are excluded.
     """
+    logging.debug("Entering motif_correction_and_annotation")
+    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+
     if df.empty:
+        logging.debug("DataFrame is empty. Exiting motif_correction_and_annotation.")
         return df
 
     mf = kestrel_config['motif_filtering']
@@ -182,6 +186,9 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     exclude_alts_combined = mf.get('exclude_alts_combined', [])
     exclude_motifs_combined = mf.get('exclude_motifs_combined', [])
 
+    # Step 1) Possible rename to 'Motif_fasta' + splitting 'Motifs'
+    pre_split_rows = len(df)
+    pre_split_cols = df.columns.tolist()
     if 'Motifs' in df.columns:
         df['Motif_fasta'] = df['Motifs']
 
@@ -190,15 +197,31 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     else:
         logging.error("Unexpected format in 'Motifs' column: cannot split as 'left-right'.")
         return pd.DataFrame()
+    logging.debug("After splitting 'Motifs' into left/right:")
+    logging.debug(f"Changed from {pre_split_rows} rows, {pre_split_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
+    # Step 2) Filter by 'POS' into motif_left, motif_right
     df['POS'] = df['POS'].astype(int)
+    pre_filter_rows = len(df)
+    pre_filter_cols = df.columns.tolist()
     motif_left = df[df['POS'] < position_threshold].copy()
     motif_right = df[df['POS'] >= position_threshold].copy()
+    logging.debug("After splitting into left/right sub-DataFrames by POS threshold:")
+    logging.debug(f"Original had {pre_filter_rows} rows, columns: {pre_filter_cols}")
+    logging.debug(f"motif_left has {len(motif_left)} rows, motif_right has {len(motif_right)} rows")
 
+    # Step 3) Merge with additional motifs on left side
     if not motif_left.empty:
+        pre_left_merge_rows = len(motif_left)
+        pre_left_merge_cols = motif_left.columns.tolist()
         motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
         motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
         motif_left = motif_left.merge(merged_motifs, on='Motif', how='left')
+        logging.debug("After merging left motif with 'merged_motifs':")
+        logging.debug(f"Changed from {pre_left_merge_rows} rows, {pre_left_merge_cols} columns")
+        logging.debug(f"To {len(motif_left)} rows, {motif_left.columns.tolist()} columns")
+
         keep_cols = [
             'Motif',
             'Motif_fasta',
@@ -213,17 +236,27 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             'Confidence',
         ]
         motif_left = motif_left[keep_cols]
+        pre_left_filter_rows = len(motif_left)
         motif_left = (
             motif_left.sort_values('Depth_Score', ascending=False)
             .drop_duplicates('ALT', keep='first')
             .sort_values('POS', ascending=False)
             .tail(1)
         )
+        logging.debug("After final filtering on left motif variants:")
+        logging.debug(f"Changed from {pre_left_filter_rows} rows to {len(motif_left)} rows")
 
+    # Step 4) Merge with additional motifs on right side
     if not motif_right.empty:
+        pre_right_merge_rows = len(motif_right)
+        pre_right_merge_cols = motif_right.columns.tolist()
         motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
         motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
         motif_right = motif_right.merge(merged_motifs, on='Motif', how='left')
+        logging.debug("After merging right motif with 'merged_motifs':")
+        logging.debug(f"Changed from {pre_right_merge_rows} rows, {pre_right_merge_cols} columns")
+        logging.debug(f"To {len(motif_right)} rows, {motif_right.columns.tolist()} columns")
+
         keep_cols = [
             'Motif',
             'Motif_fasta',
@@ -239,6 +272,8 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         ]
         motif_right = motif_right[keep_cols]
 
+        # Special handling for 'GG' on the right
+        pre_right_gg_rows = len(motif_right)
         if motif_right['ALT'].str.contains(r'\b' + alt_for_motif_right_gg + r'\b').any():
             motif_right = motif_right.loc[~motif_right['Motif'].isin(exclude_motifs_right)]
             motif_right = motif_right.loc[motif_right['ALT'] == alt_for_motif_right_gg]
@@ -253,23 +288,37 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 motif_right.sort_values('Depth_Score', ascending=False)
                 .drop_duplicates('ALT', keep='first')
             )
+        logging.debug("After handling 'GG' alt on right motif:")
+        logging.debug(f"Changed from {pre_right_gg_rows} rows to {len(motif_right)} rows")
 
+        pre_right_dedup_rows = len(motif_right)
         motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
+        logging.debug("After dropping duplicates on right motif:")
+        logging.debug(f"Changed from {pre_right_dedup_rows} rows to {len(motif_right)} rows")
 
-    combined_df = pd.concat([motif_right, motif_left])
+    # Step 5) Combine left/right, exclude certain ALTs/motifs
+    pre_combine_rows = (0 if motif_left.empty else len(motif_left)) + (0 if motif_right.empty else len(motif_right))
+    combined_df = pd.concat([motif_right, motif_left], axis=0)
     combined_df = combined_df[~combined_df['ALT'].isin(exclude_alts_combined)]
     combined_df = combined_df[~combined_df['Motif'].isin(exclude_motifs_combined)]
+    logging.debug("After combining left/right and excluding ALTs/Motifs:")
+    logging.debug(f"Combined row count: {pre_combine_rows}, now {len(combined_df)} rows")
 
+    # Step 6) Adjust POS for the right side
+    pre_pos_adjust_rows = len(combined_df)
     combined_df['POS'] = combined_df['POS'].astype(int)
-
     if 'POS' in combined_df.columns:
         combined_df['POS_fasta'] = combined_df['POS']
-
-    combined_df.update(
-        combined_df['POS'].mask(
-            combined_df['POS'] >= position_threshold,
-            lambda x: x - position_threshold
+        combined_df.update(
+            combined_df['POS'].mask(
+                combined_df['POS'] >= position_threshold,
+                lambda x: x - position_threshold
+            )
         )
-    )
+    logging.debug("After adjusting 'POS' for right side variants:")
+    logging.debug(f"Changed from {pre_pos_adjust_rows} rows to {len(combined_df)} rows")
+    logging.debug(f"Columns are now: {combined_df.columns.tolist()}")
 
+    logging.debug("Exiting motif_correction_and_annotation")
+    logging.debug(f"Final row count: {len(combined_df)}, columns: {combined_df.columns.tolist()}")
     return combined_df
