@@ -382,7 +382,7 @@ def generate_summary_report(
         'passed_filter_icon': pf_icon,
         'passed_filter_color': pf_color,
         'sequencing_str': sequencing_str,
-        # 'summary_text': summary_text  # Assuming it's included in the template
+        'summary_text': summary_text  # **Uncommented to include in context**
     }
 
     try:
