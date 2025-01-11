@@ -24,19 +24,19 @@ References:
 
 import logging
 import pandas as pd
+import numpy as np
 
 
-def split_depth_and_calculate_frame_score(df):
+def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     """
     Splits the 'Sample' column to obtain alternate/depth coverage,
-    then calculates a 'Frame_Score' = (alt_len - ref_len)/3.
+    then calculates a 'Frame_Score' = (alt_len - ref_len) / 3.
 
     Steps:
       1) df['Sample'].split(':') -> e.g., Del:AltDepth:ActiveDepth
       2) Re-map to new columns (Estimated_Depth_AlternateVariant, etc.).
-      3) Compute frame difference: (ALT length - REF length)/3.
-         Round to two decimals, converting e.g. "3.0" -> "3C" to denote
-         a multiple of 3.
+      3) Compute frame difference: (ALT length - REF length) / 3.
+         Determine if it's a frameshift variant based on modulo operation.
 
     Args:
         df (pd.DataFrame):
@@ -45,7 +45,7 @@ def split_depth_and_calculate_frame_score(df):
     Returns:
         pd.DataFrame:
             Adds 'Frame_Score' and keeps only frameshift
-            (non-"C") variants. The others are filtered out.
+            (non-multiple of 3) variants. The others are filtered out.
     """
     logging.debug("Entering split_depth_and_calculate_frame_score")
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
@@ -57,9 +57,13 @@ def split_depth_and_calculate_frame_score(df):
     # Step 1) Split the Sample column into 3 parts
     pre_split_rows = len(df)
     pre_split_cols = df.columns.tolist()
-    df[['Del', 'Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']] = (
-        df['Sample'].str.split(':', expand=True)
-    )
+    split_columns = df['Sample'].str.split(':', expand=True)
+    split_columns.columns = [
+        'Del',
+        'Estimated_Depth_AlternateVariant',
+        'Estimated_Depth_Variant_ActiveRegion'
+    ]
+    df = pd.concat([df, split_columns], axis=1)
     logging.debug("After splitting 'Sample':")
     logging.debug(f"Changed from {pre_split_rows} rows, {pre_split_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
@@ -67,46 +71,43 @@ def split_depth_and_calculate_frame_score(df):
     # Step 2) Keep only necessary columns in a new DataFrame
     pre_select_rows = len(df)
     pre_select_cols = df.columns.tolist()
-    df = df[
-        [
-            'Motifs',
-            'Variant',
-            'POS',
-            'REF',
-            'ALT',
-            'Motif_sequence',
-            'Estimated_Depth_AlternateVariant',
-            'Estimated_Depth_Variant_ActiveRegion',
-        ]
-    ].copy()
+    necessary_columns = [
+        'Motifs',
+        'Variant',
+        'POS',
+        'REF',
+        'ALT',
+        'Motif_sequence',
+        'Estimated_Depth_AlternateVariant',
+        'Estimated_Depth_Variant_ActiveRegion',
+    ]
+    df = df[necessary_columns].copy()
     logging.debug("After selecting necessary columns:")
     logging.debug(f"Changed from {pre_select_rows} rows, {pre_select_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Step 3) Compute lengths, then frame score
+    # Step 3) Compute lengths and frame score
     pre_frame_rows = len(df)
     pre_frame_cols = df.columns.tolist()
     df["ref_len"] = df["REF"].str.len()
     df["alt_len"] = df["ALT"].str.len()
-    df["Frame_Score"] = (
-        (df["alt_len"] - df["ref_len"]) / 3
-    ).round(2).astype(str).apply(lambda x: x.replace('.0', 'C'))
+    df["Frame_Score"] = (df["alt_len"] - df["ref_len"]) / 3
     logging.debug("After computing 'Frame_Score':")
     logging.debug(f"Changed from {pre_frame_rows} rows, {pre_frame_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Step 4) Mark non-frameshift
+    # Step 4) Mark frameshift variants
     pre_truefalse_rows = len(df)
     pre_truefalse_cols = df.columns.tolist()
-    df["TrueFalse"] = df['Frame_Score'].str.contains('C', regex=True)
-    logging.debug("After marking non-frameshift variants:")
+    df["is_frameshift"] = ((df["alt_len"] - df["ref_len"]) % 3 != 0)
+    logging.debug("After marking frameshift variants:")
     logging.debug(f"Changed from {pre_truefalse_rows} rows, {pre_truefalse_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Keep only rows where Frame_Score does not contain 'C'
+    # Keep only frameshift variants
     pre_filter_rows = len(df)
     pre_filter_cols = df.columns.tolist()
-    df = df[df["TrueFalse"] == False].copy()
+    df = df[df["is_frameshift"]].copy()
     logging.debug("After filtering out non-frameshift variants:")
     logging.debug(f"Changed from {pre_filter_rows} rows, {pre_filter_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
@@ -116,22 +117,23 @@ def split_depth_and_calculate_frame_score(df):
     return df
 
 
-def split_frame_score(df):
+def split_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Splits 'Frame_Score' into 'left' and 'right' parts (e.g., "-1.33" → ["-1","33"])
+    Splits 'Frame_Score' into 'direction' and 'frameshift_amount'
     for further logic in identifying insertion vs. deletion frameshifts.
 
     Steps:
-      1) df['Frame_Score'].split('.', 2)
-      2) If 'left' is '-0', replace with '-1' to standardize
-      3) Drop intermediate columns (TrueFalse, ref_len, alt_len)
+      1) Determine the direction based on the sign of (alt_len - ref_len).
+      2) Calculate frameshift_amount as abs(alt_len - ref_len) % 3.
+      3) Adjust direction if necessary.
+      4) Drop intermediate columns.
 
     Args:
         df (pd.DataFrame):
-            Should contain 'Frame_Score', 'TrueFalse', 'ref_len', 'alt_len'.
+            Should contain 'Frame_Score', 'is_frameshift', 'ref_len', 'alt_len'.
 
     Returns:
-        pd.DataFrame: Now has columns 'left' and 'right' for analyzing frames.
+        pd.DataFrame: Now has columns 'direction' and 'frameshift_amount' for analyzing frames.
     """
     logging.debug("Entering split_frame_score")
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
@@ -140,26 +142,36 @@ def split_frame_score(df):
         logging.debug("DataFrame is empty. Exiting split_frame_score.")
         return df
 
-    # Step 1) Split 'Frame_Score'
-    pre_split_rows = len(df)
-    pre_split_cols = df.columns.tolist()
-    df[['left', 'right']] = df['Frame_Score'].str.split('.', expand=True)
-    logging.debug("After splitting 'Frame_Score':")
-    logging.debug(f"Changed from {pre_split_rows} rows, {pre_split_cols} columns")
+    # Step 1) Determine the direction
+    pre_direction_rows = len(df)
+    pre_direction_cols = df.columns.tolist()
+    df["direction"] = np.sign(df["alt_len"] - df["ref_len"])
+    logging.debug("After determining 'direction':")
+    logging.debug(f"Changed from {pre_direction_rows} rows, {pre_direction_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Step 2) Replace '-0' with '-1'
-    pre_replace_rows = len(df)
-    pre_replace_cols = df.columns.tolist()
-    df['left'] = df['left'].replace('-0', '-1')
-    logging.debug("After replacing '-0' with '-1' in 'left':")
-    logging.debug(f"Changed from {pre_replace_rows} rows, {pre_replace_cols} columns")
+    # Step 2) Calculate frameshift_amount
+    pre_frameshift_rows = len(df)
+    pre_frameshift_cols = df.columns.tolist()
+    df["frameshift_amount"] = (df["alt_len"] - df["ref_len"]).abs() % 3
+    logging.debug("After calculating 'frameshift_amount':")
+    logging.debug(f"Changed from {pre_frameshift_rows} rows, {pre_frameshift_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Step 3) Drop intermediate columns
+    # Step 3) Adjust direction if necessary (optional based on original logic)
+    # In the original code, '-0' was replaced with '-1', but since (alt_len - ref_len) cannot be zero here
+    # because is_frameshift is True, this step might be redundant. Including for completeness.
+    pre_adjust_rows = len(df)
+    pre_adjust_cols = df.columns.tolist()
+    df["direction"] = df["direction"].replace(0, -1)
+    logging.debug("After adjusting 'direction':")
+    logging.debug(f"Changed from {pre_adjust_rows} rows, {pre_adjust_cols} columns")
+    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
+
+    # Step 4) Drop intermediate columns
     pre_drop_rows = len(df)
     pre_drop_cols = df.columns.tolist()
-    df.drop(['TrueFalse', 'ref_len', 'alt_len'], axis=1, inplace=True)
+    df.drop(['is_frameshift', 'ref_len', 'alt_len'], axis=1, inplace=True)
     logging.debug("After dropping intermediate columns:")
     logging.debug(f"Changed from {pre_drop_rows} rows, {pre_drop_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
@@ -169,19 +181,19 @@ def split_frame_score(df):
     return df
 
 
-def extract_frameshifts(df):
+def extract_frameshifts(df: pd.DataFrame) -> pd.DataFrame:
     """
     Extracts frameshift variants that follow known insertion/deletion patterns.
 
     Steps:
-      - For insertion frameshifts: (left not negative) & right = "33"
+      - For insertion frameshifts: direction > 0 & frameshift_amount == 1
         (3n+1 logic).
-      - For deletion frameshifts: (left negative) & right = "67"
+      - For deletion frameshifts: direction < 0 & frameshift_amount == 2
         (3n+2 logic).
 
     Args:
         df (pd.DataFrame):
-            Must contain 'left' and 'right' columns.
+            Must contain 'direction' and 'frameshift_amount' columns.
 
     Returns:
         pd.DataFrame:
@@ -194,30 +206,36 @@ def extract_frameshifts(df):
         logging.debug("DataFrame is empty. Exiting extract_frameshifts.")
         return df
 
-    # Identify insertion frameshifts
+    # Identify insertion frameshifts: direction > 0 and frameshift_amount == 1
     pre_ins_rows = len(df)
     pre_ins_cols = df.columns.tolist()
     ins = df[
-        df["left"].apply(lambda x: '-' not in x) &
-        df["right"].apply(lambda y: '33' in y)
+        (df["direction"] > 0) &
+        (df["frameshift_amount"] == 1)
     ]
     logging.debug("After identifying insertion frameshifts:")
-    logging.debug(f"Sliced from {pre_ins_rows} rows, {pre_ins_cols} columns to {len(ins)} rows.")
+    logging.debug(
+        f"Sliced from {pre_ins_rows} rows, {pre_ins_cols} columns to {len(ins)} rows."
+    )
 
-    # Identify deletion frameshifts
+    # Identify deletion frameshifts: direction < 0 and frameshift_amount == 2
     pre_del_rows = len(df)
     pre_del_cols = df.columns.tolist()
     del_ = df[
-        df["left"].apply(lambda x: '-' in x) &
-        df["right"].apply(lambda y: '67' in y)
+        (df["direction"] < 0) &
+        (df["frameshift_amount"] == 2)
     ]
     logging.debug("After identifying deletion frameshifts:")
-    logging.debug(f"Sliced from {pre_del_rows} rows, {pre_del_cols} columns to {len(del_)} rows.")
+    logging.debug(
+        f"Sliced from {pre_del_rows} rows, {pre_del_cols} columns to {len(del_)} rows."
+    )
 
-    # Combine
-    combined = pd.concat([ins, del_], axis=0)
+    # Combine insertion and deletion frameshifts
+    combined = pd.concat([ins, del_], axis=0).reset_index(drop=True)
     logging.debug("After concatenating insertion and deletion frameshifts:")
-    logging.debug(f"Resulting row count: {len(combined)}, columns: {combined.columns.tolist()}")
+    logging.debug(
+        f"Resulting row count: {len(combined)}, columns: {combined.columns.tolist()}"
+    )
 
     logging.debug("Exiting extract_frameshifts")
     return combined
