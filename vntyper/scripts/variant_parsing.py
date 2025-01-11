@@ -25,11 +25,14 @@ References:
 - Saei et al., iScience 26, 107171 (2023)
 """
 
+import gzip
 import logging
+from typing import Optional
+
 import pandas as pd
 
 
-def read_vcf_without_comments(vcf_file):
+def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
     """
     Reads a VCF file (possibly gzipped) ignoring lines starting with '##'.
     The line starting with '#CHROM' is used to define DataFrame columns.
@@ -42,27 +45,32 @@ def read_vcf_without_comments(vcf_file):
         pd.DataFrame:
             Contains the main variant records. May be empty if the file has no variants.
     """
-    import gzip
-
     open_func = gzip.open if vcf_file.endswith(".gz") else open
     data = []
-    header_line = None
+    header: Optional[list] = None
 
-    with open_func(vcf_file, 'rt') as f:
-        for line in f:
-            # The "##" lines are meta lines to be skipped
-            if line.startswith("#CHROM"):
-                header_line = line.strip().split('\t')
-            elif not line.startswith("##"):
-                data.append(line.strip().split('\t'))
-
-    if data:
-        return pd.DataFrame(data, columns=header_line)
-    else:
+    try:
+        with open_func(vcf_file, 'rt') as f:
+            for line in f:
+                if line.startswith("#CHROM"):
+                    header = line.strip().split('\t')
+                elif not line.startswith("##") and header:
+                    data.append(line.strip().split('\t'))
+    except FileNotFoundError:
+        logging.error(f"VCF file not found: {vcf_file}")
+        return pd.DataFrame()
+    except Exception as e:
+        logging.error(f"Error reading VCF file {vcf_file}: {e}")
         return pd.DataFrame()
 
+    if data and header:
+        logging.debug(f"VCF read successfully with {len(data)} records.")
+        return pd.DataFrame(data, columns=header)
+    logging.debug("No variant records found in VCF.")
+    return pd.DataFrame()
 
-def filter_by_alt_values_and_finalize(df, kestrel_config):
+
+def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) -> pd.DataFrame:
     """
     Applies final filtering rules based on ALT values, e.g., removing certain
     ALTs or requiring a minimal Depth_Score if ALT='GG'.
@@ -87,50 +95,43 @@ def filter_by_alt_values_and_finalize(df, kestrel_config):
         pd.DataFrame: Filtered, finalized DataFrame ready for final steps.
     """
     logging.debug("Entering filter_by_alt_values_and_finalize")
-    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+    logging.debug(f"Initial DataFrame shape: {df.shape}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting filter_by_alt_values_and_finalize.")
+        logging.debug("DataFrame is empty. Exiting function.")
         return df
 
-    alt_filter = kestrel_config['alt_filtering']
-    gg_alt_value = alt_filter['gg_alt_value']
-    gg_depth_score_threshold = alt_filter['gg_depth_score_threshold']
-    exclude_alts = alt_filter['exclude_alts']
+    # Validate required columns
+    required_columns = {'ALT', 'Depth_Score'}
+    missing_columns = required_columns - set(df.columns)
+    if missing_columns:
+        logging.error(f"Missing required columns: {missing_columns}")
+        raise KeyError(f"Missing required columns: {missing_columns}")
 
-    # Step 1) If 'GG' in ALT, keep rows only if Depth_Score >= threshold
-    pre_gg_rows = len(df)
-    pre_gg_cols = df.columns.tolist()
-    if df['ALT'].str.contains(r'\b' + gg_alt_value + r'\b').any():
-        gg_condition = df['ALT'] == gg_alt_value
-        df = pd.concat(
-            [
-                df[~gg_condition],
-                df[gg_condition & (df['Depth_Score'] >= gg_depth_score_threshold)],
-            ]
-        )
-    logging.debug("After applying 'GG' depth_score filter:")
-    logging.debug(f"Changed from {pre_gg_rows} rows, {pre_gg_cols} columns")
-    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
+    alt_filter = kestrel_config.get('alt_filtering', {})
+    gg_alt_value = alt_filter.get('gg_alt_value', 'GG')
+    gg_depth_threshold = alt_filter.get('gg_depth_score_threshold', 0.0)
+    exclude_alts = alt_filter.get('exclude_alts', [])
 
-    # Step 2) Exclude specified ALTs
-    pre_exclude_rows = len(df)
-    pre_exclude_cols = df.columns.tolist()
+    # Step 1: Filter 'GG' ALT with Depth_Score threshold
+    gg_mask = df['ALT'] == gg_alt_value
+    if gg_mask.any():
+        non_gg = df[~gg_mask]
+        gg_filtered = df[gg_mask & (df['Depth_Score'].astype(float) >= gg_depth_threshold)]
+        df = pd.concat([non_gg, gg_filtered], ignore_index=True)
+        logging.debug(f"Applied 'GG' depth score filter: {df.shape}")
+
+    # Step 2: Exclude specified ALTs
+    initial_count = len(df)
     df = df[~df['ALT'].isin(exclude_alts)]
-    logging.debug("After excluding specified ALTs:")
-    logging.debug(f"Changed from {pre_exclude_rows} rows, {pre_exclude_cols} columns")
-    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
+    logging.debug(f"Excluded specified ALTs: {initial_count} -> {df.shape[0]} records")
 
-    # Step 3) Drop intermediate columns from frame splitting
+    # Step 3: Drop intermediate columns if they exist
     drop_cols = [col for col in ['left', 'right'] if col in df.columns]
     if drop_cols:
-        pre_drop_rows = len(df)
-        pre_drop_cols = df.columns.tolist()
-        df.drop(drop_cols, axis=1, inplace=True)
-        logging.debug("After dropping columns for frame splitting:")
-        logging.debug(f"Changed from {pre_drop_rows} rows, {pre_drop_cols} columns")
-        logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
+        df = df.drop(columns=drop_cols)
+        logging.debug(f"Dropped intermediate columns: {drop_cols}")
 
+    logging.debug(f"Final DataFrame shape: {df.shape}")
     logging.debug("Exiting filter_by_alt_values_and_finalize")
-    logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df
