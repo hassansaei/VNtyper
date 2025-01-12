@@ -75,25 +75,38 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     confidence_levels = conf_assign['confidence_levels']
 
     conditions = [
+        # Condition 1: Low Precision
         (df['Depth_Score'] <= thresholds['low']) | (df['Estimated_Depth_Variant_ActiveRegion'] <= var_region_threshold),
-        ((df['Estimated_Depth_AlternateVariant'] > alt_thresholds['mid_high']) &
-         (df['Depth_Score'] >= thresholds['high'])),
-        ((df['Estimated_Depth_AlternateVariant'].between(alt_thresholds['mid_low'], alt_thresholds['mid_high'])) &
-         (df['Depth_Score'].between(thresholds['low'], thresholds['high']))),
+
+        # Condition 2: High Precision Star (Updated to include alt_depth >= mid_high)
+        (df['Estimated_Depth_AlternateVariant'] >= alt_thresholds['mid_high']) &
+        (df['Depth_Score'] >= thresholds['high']),
+
+        # Condition 3: Low Precision
+        (df['Estimated_Depth_AlternateVariant'].between(alt_thresholds['mid_low'], alt_thresholds['mid_high'])) &
+        (df['Depth_Score'].between(thresholds['low'], thresholds['high'])),
+
+        # Condition 4: Low Precision
         (df['Estimated_Depth_AlternateVariant'] <= alt_thresholds['low']),
-        ((df['Estimated_Depth_AlternateVariant'].between(alt_thresholds['mid_low'], alt_thresholds['mid_high'])) &
-         (df['Depth_Score'] >= thresholds['high']))
+
+        # Condition 5: High Precision
+        (df['Estimated_Depth_AlternateVariant'].between(alt_thresholds['mid_low'], alt_thresholds['mid_high'], inclusive='left')) &
+        (df['Depth_Score'] >= thresholds['high'])
     ]
 
     choices = [
         confidence_levels['low_precision'],
-        confidence_levels['high_precision'],
+        confidence_levels['high_precision_star'],  # Updated to assign 'High_Precision*'
         confidence_levels['low_precision'],
         confidence_levels['low_precision'],
         confidence_levels['high_precision']
     ]
 
-    # Replace pd.np.select with np.select
+    # Ensure 'high_precision_star' exists in confidence_levels
+    if 'high_precision_star' not in confidence_levels:
+        logging.error("'high_precision_star' not found in confidence_levels.")
+        raise KeyError("'high_precision_star' not found in confidence_levels.")
+
     df['Confidence'] = np.select(conditions, choices, default=confidence_levels.get('low_precision', 'Low_Precision'))
     logging.debug("Assigned 'Confidence' labels based on conditions.")
 
