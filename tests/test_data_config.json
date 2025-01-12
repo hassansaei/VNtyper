@@ -208,7 +208,7 @@
             "value": 0.05869074492099323,
             "tolerance_percentage": 5
           },
-          "Confidence": "High_Precision"
+          "Confidence": "High_Precision*"
         },
         "check_igv_report": true
       },
@@ -248,7 +248,7 @@
             "value": 0.02168057579370336,
             "tolerance_percentage": 5
           },
-          "Confidence": "High_Precision"
+          "Confidence": "High_Precision*"
         },
         "check_igv_report": true
       },
@@ -288,7 +288,7 @@
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
           },
-          "Confidence": "High_Precision"
+          "Confidence": "High_Precision*"
         },
         "check_igv_report": false
       }
