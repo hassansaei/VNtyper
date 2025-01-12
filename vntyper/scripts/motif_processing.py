@@ -174,19 +174,20 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     logging.debug("Entering motif_correction_and_annotation")
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
+    # Exit early if empty
     if df.empty:
         logging.debug("DataFrame is empty. Exiting motif_correction_and_annotation.")
         return df
 
     mf = kestrel_config['motif_filtering']
-    position_threshold = mf.get('position_threshold', 1000)
+    position_threshold = mf.get('position_threshold', 60)
     exclude_motifs_right = mf.get('exclude_motifs_right', [])
     alt_for_motif_right_gg = mf.get('alt_for_motif_right_gg', 'GG')
     motifs_for_alt_gg = mf.get('motifs_for_alt_gg', [])
     exclude_alts_combined = mf.get('exclude_alts_combined', [])
     exclude_motifs_combined = mf.get('exclude_motifs_combined', [])
 
-    # Step 1) Possible rename to 'Motif_fasta' + splitting 'Motifs'
+    # Step 1) Rename to 'Motif_fasta' + split 'Motifs'
     pre_split_rows = len(df)
     pre_split_cols = df.columns.tolist()
     if 'Motifs' in df.columns:
@@ -197,11 +198,12 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     else:
         logging.error("Unexpected format in 'Motifs' column: cannot split as 'left-right'.")
         return pd.DataFrame()
+
     logging.debug("After splitting 'Motifs' into left/right:")
     logging.debug(f"Changed from {pre_split_rows} rows, {pre_split_cols} columns")
     logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
 
-    # Step 2) Filter by 'POS' into motif_left, motif_right
+    # Step 2) Separate into motif_left, motif_right by POS threshold
     df['POS'] = df['POS'].astype(int)
     pre_filter_rows = len(df)
     pre_filter_cols = df.columns.tolist()
@@ -211,12 +213,12 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     logging.debug(f"Original had {pre_filter_rows} rows, columns: {pre_filter_cols}")
     logging.debug(f"motif_left has {len(motif_left)} rows, motif_right has {len(motif_right)} rows")
 
-    # Step 3) Merge with additional motifs on left side
+    # Step 3) Merge + filter left side
     if not motif_left.empty:
         pre_left_merge_rows = len(motif_left)
         pre_left_merge_cols = motif_left.columns.tolist()
         motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
-        motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
+        motif_left.drop(['Motif_sequence'], axis=1, inplace=True)  # if it exists
         motif_left = motif_left.merge(merged_motifs, on='Motif', how='left')
         logging.debug("After merging left motif with 'merged_motifs':")
         logging.debug(f"Changed from {pre_left_merge_rows} rows, {pre_left_merge_cols} columns")
@@ -237,21 +239,26 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         ]
         motif_left = motif_left[keep_cols]
         pre_left_filter_rows = len(motif_left)
-        motif_left = (
-            motif_left.sort_values('Depth_Score', ascending=False)
-            .drop_duplicates('ALT', keep='first')
-            .sort_values('POS', ascending=False)
-            .tail(1)
+
+        # Sort by depth, drop duplicate ALTs but DO NOT do a final .tail(1)
+        motif_left = motif_left.sort_values(
+            ["Depth_Score", "POS"], ascending=[False, False]
         )
+
+        # Drop duplicates on ALT, keep first in this order:
+        motif_left = motif_left.drop_duplicates("ALT", keep="first")
+
+
+
         logging.debug("After final filtering on left motif variants:")
         logging.debug(f"Changed from {pre_left_filter_rows} rows to {len(motif_left)} rows")
 
-    # Step 4) Merge with additional motifs on right side
+    # Step 4) Merge + filter right side
     if not motif_right.empty:
         pre_right_merge_rows = len(motif_right)
         pre_right_merge_cols = motif_right.columns.tolist()
         motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
-        motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
+        motif_right.drop(['Motif_sequence'], axis=1, inplace=True)  # if it exists
         motif_right = motif_right.merge(merged_motifs, on='Motif', how='left')
         logging.debug("After merging right motif with 'merged_motifs':")
         logging.debug(f"Changed from {pre_right_merge_rows} rows, {pre_right_merge_cols} columns")
@@ -288,6 +295,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 motif_right.sort_values('Depth_Score', ascending=False)
                 .drop_duplicates('ALT', keep='first')
             )
+
         logging.debug("After handling 'GG' alt on right motif:")
         logging.debug(f"Changed from {pre_right_gg_rows} rows to {len(motif_right)} rows")
 
