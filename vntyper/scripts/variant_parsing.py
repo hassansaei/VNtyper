@@ -97,6 +97,7 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
     logging.debug("Entering filter_by_alt_values_and_finalize")
     logging.debug(f"Initial DataFrame shape: {df.shape}")
 
+    # Early exit if empty
     if df.empty:
         logging.debug("DataFrame is empty. Exiting function.")
         return df
@@ -108,26 +109,24 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
         logging.error(f"Missing required columns: {missing_columns}")
         raise KeyError(f"Missing required columns: {missing_columns}")
 
+    # Fetch filtering parameters from config
     alt_filter = kestrel_config.get('alt_filtering', {})
     gg_alt_value = alt_filter.get('gg_alt_value', 'GG')
     gg_depth_threshold = alt_filter.get('gg_depth_score_threshold', 0.0)
     exclude_alts = alt_filter.get('exclude_alts', [])
 
-    # Step 1: Filter 'GG' ALT with Depth_Score threshold
-    gg_mask = df['ALT'] == gg_alt_value
-    if gg_mask.any():
-        non_gg = df[~gg_mask]
-        gg_filtered = df[gg_mask & (df['Depth_Score'].astype(float) >= gg_depth_threshold)]
-        df = pd.concat([non_gg, gg_filtered], ignore_index=True)
-        logging.debug(f"Applied 'GG' depth score filter: {df.shape}")
+    # Convert Depth_Score to float to ensure numeric comparison
+    df['Depth_Score'] = df['Depth_Score'].astype(float)
 
-    # Step 2: Exclude specified ALTs
+    # STEP 1 & 2) Filter rows with ALT=GG by depth threshold and exclude any ALTs in exclude_alts
     initial_count = len(df)
-    df = df[~df['ALT'].isin(exclude_alts)]
-    logging.debug(f"Excluded specified ALTs: {initial_count} -> {df.shape[0]} records")
+    is_gg = df['ALT'] == gg_alt_value
+    meets_gg_threshold = df['Depth_Score'] >= gg_depth_threshold
+    df = df[(~is_gg | meets_gg_threshold) & (~df['ALT'].isin(exclude_alts))]
+    logging.debug(f"Filtered 'GG' by depth and excluded ALTs: {initial_count} -> {len(df)} records")
 
-    # Step 3: Drop intermediate columns if they exist
-    drop_cols = [col for col in ['left', 'right'] if col in df.columns]
+    # STEP 3) Drop intermediate columns 'left' and 'right' if they exist
+    drop_cols = [col for col in ('left', 'right') if col in df.columns]
     if drop_cols:
         df = df.drop(columns=drop_cols)
         logging.debug(f"Dropped intermediate columns: {drop_cols}")
