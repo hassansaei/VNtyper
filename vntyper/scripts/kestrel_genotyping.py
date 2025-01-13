@@ -412,13 +412,6 @@ def process_kestrel_output(
         output_empty_result(output_dir, header)
         return None
 
-    # Write an intermediate TSV for debugging
-    pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
-    with open(pre_result_path, 'w') as f:
-        f.write("\n".join(header) + "\n")
-        combined_df.to_csv(f, sep='\t', index=False)
-    logging.info(f"Intermediate results saved to {pre_result_path}")
-
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
     with open(final_output_path, 'w') as f:
@@ -466,13 +459,13 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     """
     Applies the main postprocessing heuristics:
       1) Split the depth from the 'Sample' column and compute frame score
-      2) Split frame score into numeric parts, filter out non-frameshifts
-      3) Extract frameshift variants that meet the 3n+1 / 3n+2 logic
-      4) Compute a Depth_Score = alt_depth / region_depth
-         - Then assign confidence: Low_Precision, High_Precision, etc.
-      5) Filter by certain ALT values if needed (like removing "GG" below threshold)
-      6) Motif correction & annotation (positions, edges, etc.)
-      7) Optionally generate a BED file for coverage visualization
+      2) Split frame score into numeric parts, mark frameshifts vs. non-frameshifts
+      3) Extract frameshift variants (3n+1 / 3n+2)
+      4) Compute Depth_Score, assign confidence
+      5) ALT-based filtering logic (e.g., 'GG' threshold)
+      6) Motif correction & annotation
+      7) Optionally generate a BED file for coverage
+      8) Finally, filter out rows that fail any relevant boolean filter columns
 
     References:
       - Saei et al., iScience 26, 107171 (2023) for empirical cutoffs
@@ -499,7 +492,7 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     if df.empty:
         return df
 
-    # (2) Split frame score into numeric 'left'/'right', remove non-frameshifts
+    # (2) Split frame score into numeric 'direction'/'frameshift_amount'
     df = split_frame_score(df)
     if df.empty:
         return df
@@ -524,7 +517,13 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     if df.empty:
         return df
 
-    # (7) Generate an optional BED file for IGV coverage (not used downstream yet)
+    # (7) Final Filter
+    df = filter_final_dataframe(df, output_dir)
+    if df.empty:
+        logging.info("All rows failed one or more filter criteria. Returning empty.")
+        return df
+
+    # (8) Now generate the BED file from the fully filtered result
     bed_file_path = generate_bed_file(df, output_dir)
     if bed_file_path:
         logging.info(f"BED file created at: {bed_file_path}")
@@ -568,3 +567,61 @@ def generate_bed_file(df, output_dir):
 
     logging.info(f"BED file generated at: {bed_file_path}")
     return bed_file_path
+
+
+def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+    """
+    Final step: filter the DataFrame based on the boolean columns introduced
+    by earlier steps (e.g., 'is_frameshift', 'is_valid_frameshift',
+    'depth_confidence_pass', 'alt_filter_pass', 'motif_filter_pass').
+
+    We keep rows where *all existing* filter columns are True.
+    If a filter column does not exist in the DataFrame, we ignore it.
+
+    Additionally, this function logs how many rows pass or fail each filter
+    and writes the unfiltered DataFrame to 'kestrel_pre_result.tsv' directly
+    in the 'output_dir'. The final filtered DataFrame is returned in memory.
+
+    Args:
+        df (pd.DataFrame): The postprocessed DataFrame, with various
+            boolean filter columns.
+        output_dir (str): Path to the main output directory.
+
+    Returns:
+        pd.DataFrame: A copy of `df` containing only rows that pass
+            all available filter columns.
+    """
+    logging.info("Starting final filter of DataFrame with %d rows...", len(df))
+
+    # Write the unfiltered DataFrame to 'kestrel_pre_result.tsv' in output_dir
+    pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
+    df.to_csv(pre_result_path, sep="\t", index=False)
+    logging.info("Wrote pre-filter DataFrame to %s", pre_result_path)
+
+    # Columns we will require to be True if they exist
+    filter_cols = [
+        'is_frameshift',
+        'is_valid_frameshift',
+        'depth_confidence_pass',
+        'alt_filter_pass',
+        'motif_filter_pass',
+    ]
+
+    # Build a mask requiring all existing boolean filters == True
+    final_mask = pd.Series(True, index=df.index)
+    for col in filter_cols:
+        if col in df.columns:
+            before_count = final_mask.sum()
+            final_mask &= df[col]
+            after_count = final_mask.sum()
+            logging.info(
+                "Filter column '%s' exists; %d -> %d rows remain after requiring True.",
+                col, before_count, after_count
+            )
+        else:
+            logging.info("Filter column '%s' not found; skipping.", col)
+
+    filtered_df = df[final_mask].copy()
+    logging.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
+
+    return filtered_df

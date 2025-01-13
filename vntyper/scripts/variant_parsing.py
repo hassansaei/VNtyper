@@ -75,12 +75,9 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
     Applies final filtering rules based on ALT values, e.g., removing certain
     ALTs or requiring a minimal Depth_Score if ALT='GG'.
 
-    Steps:
-      1) If 'GG' is present in the ALT column, only keep those rows if
-         Depth_Score >= 'gg_depth_score_threshold'.
-      2) Exclude any ALTs in 'exclude_alts'.
-      3) Drop 'left' and 'right' columns from earlier frame splitting
-         to finalize the output.
+    (Refactored)
+      - Instead of removing rows, add a boolean column 'alt_filter_pass'
+        that marks whether each row passes these checks.
 
     Args:
         df (pd.DataFrame):
@@ -92,45 +89,40 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
               - 'exclude_alts'
 
     Returns:
-        pd.DataFrame: Filtered, finalized DataFrame ready for final steps.
+        pd.DataFrame:
+            Same shape as input, with a new 'alt_filter_pass' column (bool).
+            Intermediate columns like 'left', 'right' are no longer dropped;
+            they remain for debugging.
     """
     logging.debug("Entering filter_by_alt_values_and_finalize")
     logging.debug(f"Initial DataFrame shape: {df.shape}")
 
-    # Early exit if empty
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting function.")
+        logging.debug("DataFrame is empty. Exiting filter_by_alt_values_and_finalize.")
         return df
 
-    # Validate required columns
     required_columns = {'ALT', 'Depth_Score'}
     missing_columns = required_columns - set(df.columns)
     if missing_columns:
         logging.error(f"Missing required columns: {missing_columns}")
         raise KeyError(f"Missing required columns: {missing_columns}")
 
-    # Fetch filtering parameters from config
     alt_filter = kestrel_config.get('alt_filtering', {})
     gg_alt_value = alt_filter.get('gg_alt_value', 'GG')
     gg_depth_threshold = alt_filter.get('gg_depth_score_threshold', 0.0)
     exclude_alts = alt_filter.get('exclude_alts', [])
 
-    # Convert Depth_Score to float to ensure numeric comparison
-    df['Depth_Score'] = df['Depth_Score'].astype(float)
+    # Ensure Depth_Score is float
+    df['Depth_Score'] = pd.to_numeric(df['Depth_Score'], errors='coerce')
 
-    # STEP 1 & 2) Filter rows with ALT=GG by depth threshold and exclude any ALTs in exclude_alts
-    initial_count = len(df)
-    is_gg = df['ALT'] == gg_alt_value
-    meets_gg_threshold = df['Depth_Score'] >= gg_depth_threshold
-    df = df[(~is_gg | meets_gg_threshold) & (~df['ALT'].isin(exclude_alts))]
-    logging.debug(f"Filtered 'GG' by depth and excluded ALTs: {initial_count} -> {len(df)} records")
+    # Create the boolean mask
+    is_gg = (df['ALT'] == gg_alt_value)
+    meets_gg_threshold = (df['Depth_Score'] >= gg_depth_threshold)
+    not_excluded_alt = ~df['ALT'].isin(exclude_alts)
 
-    # STEP 3) Drop intermediate columns 'left' and 'right' if they exist
-    drop_cols = [col for col in ('left', 'right') if col in df.columns]
-    if drop_cols:
-        df = df.drop(columns=drop_cols)
-        logging.debug(f"Dropped intermediate columns: {drop_cols}")
+    # Instead of filtering the DataFrame, we store a new boolean column
+    df['alt_filter_pass'] = ( (~is_gg | meets_gg_threshold) & not_excluded_alt )
 
-    logging.debug(f"Final DataFrame shape: {df.shape}")
     logging.debug("Exiting filter_by_alt_values_and_finalize")
+    logging.debug(f"Final DataFrame shape: {df.shape}")
     return df

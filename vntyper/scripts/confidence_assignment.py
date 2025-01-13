@@ -32,84 +32,116 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     """
     Calculates Depth_Score for each variant and assigns a confidence label
     based on coverage thresholds defined in kestrel_config['confidence_assignment'].
+    
+    (Refactored) 
+    - All rows remain in the DataFrame.
+    - A new boolean column 'depth_confidence_pass' is True if the row's 
+      final Confidence is not 'Negative'.
 
     Args:
         df (pd.DataFrame):
-            DataFrame with columns:
-              - 'Estimated_Depth_AlternateVariant' (alt depth)
-              - 'Estimated_Depth_Variant_ActiveRegion' (region depth)
+            Must have numeric columns:
+              - 'Estimated_Depth_AlternateVariant'
+              - 'Estimated_Depth_Variant_ActiveRegion'
         kestrel_config (dict):
-            Contains subdict 'confidence_assignment', which has:
-              - 'depth_score_thresholds'
-              - 'alt_depth_thresholds'
-              - 'var_active_region_threshold'
-              - 'confidence_levels'
+            Must contain a subdict 'confidence_assignment' with keys:
+              - 'depth_score_thresholds' (e.g. {'low': 0.2, 'high': 0.4})
+              - 'alt_depth_thresholds' (e.g. {'low': 5, 'mid_low': 10, 'mid_high': 20})
+              - 'var_active_region_threshold' (e.g. 30)
+              - 'confidence_levels' (dict with keys like 
+                'low_precision', 'high_precision', 'high_precision_star')
 
     Returns:
         pd.DataFrame:
-            Same DataFrame with two new columns:
+            Same shape as input, with:
               - 'Depth_Score' (float)
-              - 'Confidence' (str: 'Low_Precision', 'High_Precision', etc.)
+              - 'Confidence' (str, e.g., 'Low_Precision', 'High_Precision', etc.)
+              - 'depth_confidence_pass' (bool; True if Confidence != 'Negative')
     """
     logging.debug("Entering calculate_depth_score_and_assign_confidence")
     logging.debug(f"Initial DataFrame shape: {df.shape}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting function.")
+        logging.debug("DataFrame is empty. Exiting function without changes.")
         return df
 
-    # Step 1: Convert depth columns to integers
+    # Extract relevant config subdict
+    conf_assign = kestrel_config.get('confidence_assignment', {})
+    thresholds = conf_assign.get('depth_score_thresholds', {})
+    alt_thresholds = conf_assign.get('alt_depth_thresholds', {})
+    var_region_threshold = conf_assign.get('var_active_region_threshold', 0)
+    confidence_levels = conf_assign.get('confidence_levels', {})
+
+    # Fallback for confidence levels
+    low_prec_label = confidence_levels.get('low_precision', 'Low_Precision')
+    high_prec_label = confidence_levels.get('high_precision', 'High_Precision')
+    high_prec_star_label = confidence_levels.get('high_precision_star', 'High_Precision*')
+
+    # Default to 0.2 for 'low' and 0.4 for 'high' if not specified
+    low_threshold = thresholds.get('low', 0.2)
+    high_threshold = thresholds.get('high', 0.4)
+
+    # Default alt-depth thresholds (in case they are missing)
+    alt_low = alt_thresholds.get('low', 5)
+    alt_mid_low = alt_thresholds.get('mid_low', 10)
+    alt_mid_high = alt_thresholds.get('mid_high', 20)
+
+    # Convert depth columns to integer (or float) for arithmetic
     depth_cols = ['Estimated_Depth_AlternateVariant', 'Estimated_Depth_Variant_ActiveRegion']
-    df[depth_cols] = df[depth_cols].astype(int)
-    logging.debug("Converted depth columns to integers.")
+    for col in depth_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Step 2: Calculate Depth_Score
-    df['Depth_Score'] = df['Estimated_Depth_AlternateVariant'] / df['Estimated_Depth_Variant_ActiveRegion']
-    logging.debug("Calculated 'Depth_Score'.")
+    # Step 2: Calculate Depth_Score (avoid division by zero -> np.nan)
+    with pd.option_context('mode.use_inf_as_na', True):
+        df['Depth_Score'] = df['Estimated_Depth_AlternateVariant'] / df['Estimated_Depth_Variant_ActiveRegion']
 
-    # Step 3: Assign confidence
-    conf_assign = kestrel_config['confidence_assignment']
-    thresholds = conf_assign['depth_score_thresholds']
-    alt_thresholds = conf_assign['alt_depth_thresholds']
-    var_region_threshold = conf_assign['var_active_region_threshold']
-    confidence_levels = conf_assign['confidence_levels']
+    # Step 3: Assign Confidence
+    # We set a default of 'Negative' for all rows, then update them using np.select or logical conditions
+    df['Confidence'] = 'Negative'
 
-    conditions = [
-        # Condition 1: Low Precision
-        (df['Depth_Score'] <= thresholds['low']) | (df['Estimated_Depth_Variant_ActiveRegion'] <= var_region_threshold),
+    # Condition-based assignment logic
+    # Condition 1: Low Precision if Depth_Score <= low_threshold
+    #              OR region depth <= var_region_threshold
+    cond1 = (
+        (df['Depth_Score'] <= low_threshold) |
+        (df['Estimated_Depth_Variant_ActiveRegion'] <= var_region_threshold)
+    )
 
-        # Condition 2: High Precision Star (Updated to include alt_depth >= mid_high)
-        (df['Estimated_Depth_AlternateVariant'] >= alt_thresholds['mid_high']) &
-        (df['Depth_Score'] >= thresholds['high']),
+    # Condition 2: High Precision STAR if alt depth >= alt_mid_high AND Depth_Score >= high_threshold
+    cond2 = (
+        (df['Estimated_Depth_AlternateVariant'] >= alt_mid_high) &
+        (df['Depth_Score'] >= high_threshold)
+    )
 
-        # Condition 3: Low Precision
-        (df['Estimated_Depth_AlternateVariant'].between(alt_thresholds['mid_low'], alt_thresholds['mid_high'])) &
-        (df['Depth_Score'].between(thresholds['low'], thresholds['high'])),
+    # Condition 3: Low Precision if alt_depth is between mid_low and mid_high,
+    #              and Depth_Score between low_threshold and high_threshold
+    cond3 = (
+        df['Estimated_Depth_AlternateVariant'].between(alt_mid_low, alt_mid_high) &
+        df['Depth_Score'].between(low_threshold, high_threshold)
+    )
 
-        # Condition 4: Low Precision
-        (df['Estimated_Depth_AlternateVariant'] <= alt_thresholds['low']),
+    # Condition 4: Low Precision if alt depth <= alt_low
+    cond4 = (df['Estimated_Depth_AlternateVariant'] <= alt_low)
 
-        # Condition 5: High Precision
-        (df['Estimated_Depth_AlternateVariant'].between(alt_thresholds['mid_low'], alt_thresholds['mid_high'], inclusive='left')) &
-        (df['Depth_Score'] >= thresholds['high'])
-    ]
+    # Condition 5: High Precision if alt_depth is between mid_low and mid_high
+    #              and Depth_Score >= high_threshold
+    cond5 = (
+        df['Estimated_Depth_AlternateVariant'].between(alt_mid_low, alt_mid_high, inclusive='left') &
+        (df['Depth_Score'] >= high_threshold)
+    )
 
-    choices = [
-        confidence_levels['low_precision'],
-        confidence_levels['high_precision_star'],  # Updated to assign 'High_Precision*'
-        confidence_levels['low_precision'],
-        confidence_levels['low_precision'],
-        confidence_levels['high_precision']
-    ]
+    # Apply the conditions in order of precedence
+    # to handle potential overlap (later conditions can overwrite earlier ones).
+    df.loc[cond1, 'Confidence'] = low_prec_label
+    df.loc[cond2, 'Confidence'] = high_prec_star_label
+    df.loc[cond3, 'Confidence'] = low_prec_label
+    df.loc[cond4, 'Confidence'] = low_prec_label
+    df.loc[cond5, 'Confidence'] = high_prec_label
 
-    # Ensure 'high_precision_star' exists in confidence_levels
-    if 'high_precision_star' not in confidence_levels:
-        logging.error("'high_precision_star' not found in confidence_levels.")
-        raise KeyError("'high_precision_star' not found in confidence_levels.")
+    # Step 4: Mark pass/fail for coverage-based logic
+    # "Passing" means the Confidence is anything except 'Negative'
+    df['depth_confidence_pass'] = df['Confidence'] != 'Negative'
 
-    df['Confidence'] = np.select(conditions, choices, default=confidence_levels.get('low_precision', 'Low_Precision'))
-    logging.debug("Assigned 'Confidence' labels based on conditions.")
-
-    logging.debug(f"Final DataFrame shape: {df.shape}")
     logging.debug("Exiting calculate_depth_score_and_assign_confidence")
+    logging.debug(f"Final DataFrame shape: {df.shape}")
     return df
