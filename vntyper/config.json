@@ -5,14 +5,13 @@
     "output_name": "processed",
     "archive_format": "zip",
     "report_file": "summary_report.html",
-    "log_file": null,
     "flanking": 50,
     "summary_file": "cohort_summary.html",
     "reference_assembly": "hg19"
   },
   "cli_defaults": {
     "log_level": "INFO",
-    "log_file": null
+    "log_file": "pipeline.log"
   },
   "api": {
     "base_url": "https://vntyper.org/api"

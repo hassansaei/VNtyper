@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # vntyper/scripts/motif_processing.py
+
 """
 motif_processing.py
 
@@ -7,7 +8,7 @@ Module Purpose:
 ---------------
 Handles all logic for working with MUC1 VNTR motifs:
   - Loading references from FASTA
-  - Preprocessing insertion/deletion data by merging them with motif info
+  - Preprocessing insertion/deletion variants by merging them with motif info
   - Performing final motif correction & annotation based on the Kestrel
     config thresholds (position_threshold, exclude lists).
 
@@ -149,165 +150,127 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     """
     Final step of motif annotation: correct positions for left/right motifs,
     drop duplicates, handle special cases (e.g., 'GG' alt on the right motif).
-
-    Steps:
-      1) Split 'Motifs' column into 'Motif_left'/'Motif_right' if it has a dash.
-      2) Filter by 'POS' to decide which side is left vs. right, referencing
-         the 'position_threshold' from kestrel_config.
-      3) Merge with the additional motifs for annotation.
-      4) Apply exclude lists for certain motifs or ALTs (e.g., 'exclude_motifs_right').
-      5) Adjust 'POS' for the right side so it's zero-based from the threshold.
-
-    References:
-        - Saei et al., iScience 26, 107171 (2023)
-
-    Args:
-        df (pd.DataFrame): DataFrame with columns (REF, ALT, Motifs, etc.).
-        merged_motifs (pd.DataFrame): Additional motif data (from load_additional_motifs).
-        kestrel_config (dict): Contains 'motif_filtering' subdict with thresholds.
-
-    Returns:
-        pd.DataFrame:
-            Updated DataFrame with final annotated/filtered results. May be empty
-            if all variants are excluded.
+    
+    (Refactored):
+      - Returns the same shape as `df`,
+      - Adds 'motif_filter_pass' boolean,
+      - Ensures 'Motif_fasta', 'POS_fasta', and 'Motif' columns
+        exist in the final output, even for failing rows.
     """
     logging.debug("Entering motif_correction_and_annotation")
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
         logging.debug("DataFrame is empty. Exiting motif_correction_and_annotation.")
+        df['motif_filter_pass'] = False
+        df['Motif_fasta'] = pd.NA
+        df['POS_fasta'] = pd.NA
+        df['Motif'] = pd.NA
         return df
 
+    # Keep a copy to attach pass/fail
+    original_df = df.copy(deep=True)
+    original_df['original_index'] = original_df.index
+
     mf = kestrel_config['motif_filtering']
-    position_threshold = mf.get('position_threshold', 1000)
+    position_threshold = mf.get('position_threshold', 60)
     exclude_motifs_right = mf.get('exclude_motifs_right', [])
     alt_for_motif_right_gg = mf.get('alt_for_motif_right_gg', 'GG')
     motifs_for_alt_gg = mf.get('motifs_for_alt_gg', [])
     exclude_alts_combined = mf.get('exclude_alts_combined', [])
     exclude_motifs_combined = mf.get('exclude_motifs_combined', [])
 
-    # Step 1) Possible rename to 'Motif_fasta' + splitting 'Motifs'
-    pre_split_rows = len(df)
-    pre_split_cols = df.columns.tolist()
-    if 'Motifs' in df.columns:
-        df['Motif_fasta'] = df['Motifs']
+    # =============== Original Logic ===============
+    working_df = original_df.copy(deep=True)
 
-    if df['Motifs'].str.count('-').max() == 1:
-        df[['Motif_left', 'Motif_right']] = df['Motifs'].str.split('-', expand=True)
+    # Step 1) Ensure 'Motif_fasta'; check for dash
+    if 'Motifs' in working_df.columns:
+        working_df['Motif_fasta'] = working_df['Motifs']
     else:
-        logging.error("Unexpected format in 'Motifs' column: cannot split as 'left-right'.")
-        return pd.DataFrame()
-    logging.debug("After splitting 'Motifs' into left/right:")
-    logging.debug(f"Changed from {pre_split_rows} rows, {pre_split_cols} columns")
-    logging.debug(f"To {len(df)} rows, {df.columns.tolist()} columns")
+        logging.error("Missing 'Motifs' column. Old code returns empty.")
+        combined_df = pd.DataFrame(columns=working_df.columns)
+        pass
 
-    # Step 2) Filter by 'POS' into motif_left, motif_right
-    df['POS'] = df['POS'].astype(int)
-    pre_filter_rows = len(df)
-    pre_filter_cols = df.columns.tolist()
-    motif_left = df[df['POS'] < position_threshold].copy()
-    motif_right = df[df['POS'] >= position_threshold].copy()
-    logging.debug("After splitting into left/right sub-DataFrames by POS threshold:")
-    logging.debug(f"Original had {pre_filter_rows} rows, columns: {pre_filter_cols}")
-    logging.debug(f"motif_left has {len(motif_left)} rows, motif_right has {len(motif_right)} rows")
+    if 'Motifs' not in working_df.columns or working_df['Motifs'].str.count('-').max() != 1:
+        logging.error("Cannot split 'Motifs' into left-right. Old code returns empty.")
+        combined_df = pd.DataFrame(columns=working_df.columns)
+    else:
+        working_df[['Motif_left', 'Motif_right']] = working_df['Motifs'].str.split('-', expand=True)
+        working_df['POS'] = pd.to_numeric(working_df['POS'], errors='coerce').fillna(-1).astype(int)
 
-    # Step 3) Merge with additional motifs on left side
-    if not motif_left.empty:
-        pre_left_merge_rows = len(motif_left)
-        pre_left_merge_cols = motif_left.columns.tolist()
-        motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
-        motif_left.drop(['Motif_sequence'], axis=1, inplace=True)
-        motif_left = motif_left.merge(merged_motifs, on='Motif', how='left')
-        logging.debug("After merging left motif with 'merged_motifs':")
-        logging.debug(f"Changed from {pre_left_merge_rows} rows, {pre_left_merge_cols} columns")
-        logging.debug(f"To {len(motif_left)} rows, {motif_left.columns.tolist()} columns")
+        # Left vs. Right
+        motif_left = working_df[working_df['POS'] < position_threshold].copy()
+        motif_right = working_df[working_df['POS'] >= position_threshold].copy()
 
-        keep_cols = [
-            'Motif',
-            'Motif_fasta',
-            'Variant',
-            'POS',
-            'REF',
-            'ALT',
-            'Motif_sequence',
-            'Estimated_Depth_AlternateVariant',
-            'Estimated_Depth_Variant_ActiveRegion',
-            'Depth_Score',
-            'Confidence',
-        ]
-        motif_left = motif_left[keep_cols]
-        pre_left_filter_rows = len(motif_left)
-        motif_left = (
-            motif_left.sort_values('Depth_Score', ascending=False)
-            .drop_duplicates('ALT', keep='first')
-            .sort_values('POS', ascending=False)
-            .tail(1)
-        )
-        logging.debug("After final filtering on left motif variants:")
-        logging.debug(f"Changed from {pre_left_filter_rows} rows to {len(motif_left)} rows")
+        # Merge + filter left
+        if not motif_left.empty:
+            motif_left.rename(columns={'Motif_right': 'Motif'}, inplace=True)
+            if 'Motif_sequence' in motif_left.columns:
+                motif_left.drop(columns=['Motif_sequence'], inplace=True, errors='ignore')
+            motif_left = motif_left.merge(merged_motifs, on='Motif', how='left')
 
-    # Step 4) Merge with additional motifs on right side
-    if not motif_right.empty:
-        pre_right_merge_rows = len(motif_right)
-        pre_right_merge_cols = motif_right.columns.tolist()
-        motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
-        motif_right.drop(['Motif_sequence'], axis=1, inplace=True)
-        motif_right = motif_right.merge(merged_motifs, on='Motif', how='left')
-        logging.debug("After merging right motif with 'merged_motifs':")
-        logging.debug(f"Changed from {pre_right_merge_rows} rows, {pre_right_merge_cols} columns")
-        logging.debug(f"To {len(motif_right)} rows, {motif_right.columns.tolist()} columns")
+            keep_cols = [
+                'Motif',
+                'Motif_fasta',
+                'Variant',
+                'POS',
+                'REF',
+                'ALT',
+                'Motif_sequence',
+                'Estimated_Depth_AlternateVariant',
+                'Estimated_Depth_Variant_ActiveRegion',
+                'Depth_Score',
+                'Confidence',
+                'original_index',
+            ]
+            motif_left = motif_left[keep_cols]
+            motif_left.sort_values(['Depth_Score', 'POS'], ascending=[False, False], inplace=True)
+            motif_left.drop_duplicates('ALT', keep='first', inplace=True)
 
-        keep_cols = [
-            'Motif',
-            'Motif_fasta',
-            'Variant',
-            'POS',
-            'REF',
-            'ALT',
-            'Motif_sequence',
-            'Estimated_Depth_AlternateVariant',
-            'Estimated_Depth_Variant_ActiveRegion',
-            'Depth_Score',
-            'Confidence',
-        ]
-        motif_right = motif_right[keep_cols]
+        # Merge + filter right
+        if not motif_right.empty:
+            motif_right.rename(columns={'Motif_left': 'Motif'}, inplace=True)
+            if 'Motif_sequence' in motif_right.columns:
+                motif_right.drop(columns=['Motif_sequence'], inplace=True, errors='ignore')
+            motif_right = motif_right.merge(merged_motifs, on='Motif', how='left')
 
-        # Special handling for 'GG' on the right
-        pre_right_gg_rows = len(motif_right)
-        if motif_right['ALT'].str.contains(r'\b' + alt_for_motif_right_gg + r'\b').any():
-            motif_right = motif_right.loc[~motif_right['Motif'].isin(exclude_motifs_right)]
-            motif_right = motif_right.loc[motif_right['ALT'] == alt_for_motif_right_gg]
-            motif_right = (
-                motif_right.sort_values('Depth_Score', ascending=False)
-                .drop_duplicates('ALT', keep='first')
-            )
-            if motif_right['Motif'].isin(motifs_for_alt_gg).any():
-                motif_right = motif_right[motif_right['Motif'].isin(motifs_for_alt_gg)]
-        else:
-            motif_right = (
-                motif_right.sort_values('Depth_Score', ascending=False)
-                .drop_duplicates('ALT', keep='first')
-            )
-        logging.debug("After handling 'GG' alt on right motif:")
-        logging.debug(f"Changed from {pre_right_gg_rows} rows to {len(motif_right)} rows")
+            keep_cols = [
+                'Motif',
+                'Motif_fasta',
+                'Variant',
+                'POS',
+                'REF',
+                'ALT',
+                'Motif_sequence',
+                'Estimated_Depth_AlternateVariant',
+                'Estimated_Depth_Variant_ActiveRegion',
+                'Depth_Score',
+                'Confidence',
+                'original_index',
+            ]
+            motif_right = motif_right[keep_cols]
 
-        pre_right_dedup_rows = len(motif_right)
-        motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
-        logging.debug("After dropping duplicates on right motif:")
-        logging.debug(f"Changed from {pre_right_dedup_rows} rows to {len(motif_right)} rows")
+            # 'GG' logic
+            if motif_right['ALT'].str.contains(r'\b' + alt_for_motif_right_gg + r'\b').any():
+                motif_right = motif_right[~motif_right['Motif'].isin(exclude_motifs_right)]
+                motif_right = motif_right[motif_right['ALT'] == alt_for_motif_right_gg]
+                motif_right.sort_values('Depth_Score', ascending=False, inplace=True)
+                motif_right.drop_duplicates('ALT', keep='first', inplace=True)
+                if motif_right['Motif'].isin(motifs_for_alt_gg).any():
+                    motif_right = motif_right[motif_right['Motif'].isin(motifs_for_alt_gg)]
+            else:
+                motif_right.sort_values('Depth_Score', ascending=False, inplace=True)
+                motif_right.drop_duplicates('ALT', keep='first', inplace=True)
 
-    # Step 5) Combine left/right, exclude certain ALTs/motifs
-    pre_combine_rows = (0 if motif_left.empty else len(motif_left)) + (0 if motif_right.empty else len(motif_right))
-    combined_df = pd.concat([motif_right, motif_left], axis=0)
-    combined_df = combined_df[~combined_df['ALT'].isin(exclude_alts_combined)]
-    combined_df = combined_df[~combined_df['Motif'].isin(exclude_motifs_combined)]
-    logging.debug("After combining left/right and excluding ALTs/Motifs:")
-    logging.debug(f"Combined row count: {pre_combine_rows}, now {len(combined_df)} rows")
+            motif_right.drop_duplicates(subset=['REF', 'ALT'], inplace=True)
 
-    # Step 6) Adjust POS for the right side
-    pre_pos_adjust_rows = len(combined_df)
-    combined_df['POS'] = combined_df['POS'].astype(int)
-    if 'POS' in combined_df.columns:
+        # Combine
+        combined_df = pd.concat([motif_right, motif_left], axis=0, ignore_index=True)
+        combined_df = combined_df[~combined_df['ALT'].isin(exclude_alts_combined)]
+        combined_df = combined_df[~combined_df['Motif'].isin(exclude_motifs_combined)]
+
+        # Adjust POS => create POS_fasta
+        combined_df['POS'] = pd.to_numeric(combined_df['POS'], errors='coerce').fillna(-1).astype(int)
         combined_df['POS_fasta'] = combined_df['POS']
         combined_df.update(
             combined_df['POS'].mask(
@@ -315,10 +278,36 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 lambda x: x - position_threshold
             )
         )
-    logging.debug("After adjusting 'POS' for right side variants:")
-    logging.debug(f"Changed from {pre_pos_adjust_rows} rows to {len(combined_df)} rows")
-    logging.debug(f"Columns are now: {combined_df.columns.tolist()}")
+    # =============== End Original Logic ===============
+
+    # Mark pass/fail based on original_index
+    pass_mask = original_df['original_index'].isin(combined_df.get('original_index', []))
+    original_df['motif_filter_pass'] = pass_mask
+
+    # Ensure final columns exist in the main DF even for failing rows
+    # (They remain NaN if the row didn't pass.)
+    if 'Motif_fasta' not in original_df.columns:
+        original_df['Motif_fasta'] = pd.NA
+    if 'POS_fasta' not in original_df.columns:
+        original_df['POS_fasta'] = pd.NA
+    if 'Motif' not in original_df.columns:
+        original_df['Motif'] = pd.NA
+
+    # For rows that "passed", copy over the final POS_fasta, Motif_fasta, and Motif
+    combined_df = combined_df.set_index('original_index', drop=False)
+    for idx in combined_df.index:
+        if idx in original_df.index:
+            # Copy Motif_fasta / POS_fasta
+            original_df.at[idx, 'Motif_fasta'] = combined_df.at[idx, 'Motif_fasta']
+            if 'POS_fasta' in combined_df.columns:
+                original_df.at[idx, 'POS_fasta'] = combined_df.at[idx, 'POS_fasta']
+            # Also copy 'Motif'
+            if 'Motif' in combined_df.columns:
+                original_df.at[idx, 'Motif'] = combined_df.at[idx, 'Motif']
+
+    # Drop the temporary original_index column
+    original_df.drop(columns=['original_index'], inplace=True, errors='ignore')
 
     logging.debug("Exiting motif_correction_and_annotation")
-    logging.debug(f"Final row count: {len(combined_df)}, columns: {combined_df.columns.tolist()}")
-    return combined_df
+    logging.debug(f"Final row count: {len(original_df)}, columns: {original_df.columns.tolist()}")
+    return original_df
