@@ -1,6 +1,6 @@
 # This workflow is run as part of CI to test that they run through.
 #
-# The images are pushed to `ghcr.io` for each PR and branch.  The ones for
+# The images are pushed to `ghcr.io` and 'docker hub' for each PR and branch.  The ones for
 # the releases are pushed in `release-please.yml`.
 name: Docker Build
 
@@ -13,32 +13,45 @@ on:
       - main
 
 env:
-  REGISTRY: ghcr.io
+  GHCR_REGISTRY: ghcr.io
+  DOCKERHUB_REGISTRY: docker.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push-image:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write  # Required for ghcr.io
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Log in to the Container registry
+      # Log in to GitHub Container Registry (ghcr.io)
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}  # Add to GitHub secrets
+          password: ${{ secrets.DOCKER_PASSWORD }}  # Add to GitHub secrets
+
+      # Extract metadata (tags, labels) for Docker
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: |
+            ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.DOCKERHUB_REGISTRY }}/saei/vntyper
           tags: |
             type=schedule
             type=ref,event=branch
@@ -46,6 +59,7 @@ jobs:
             type=ref,event=pr
             type=sha
 
+      # Build and push Docker image to both registries
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
