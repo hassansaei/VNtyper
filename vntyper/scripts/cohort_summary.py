@@ -79,7 +79,7 @@ def load_kestrel_results(kestrel_result_file):
                     f'<span style="color:orange;font-weight:bold;">{x}</span>'
                     if x == 'Low_Precision'
                     else f'<span style="color:red;font-weight:bold;">{x}</span>'
-                    if x == 'High_Precision'
+                    if x in ['High_Precision', 'High_Precision*']  # Updated to include 'High_Precision*'
                     else f'<span style="color:blue;font-weight:bold;">{x}</span>'
                     if x == 'Negative'
                     else x
@@ -394,8 +394,9 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     if 'Confidence' in kestrel_df.columns:
         try:
             kestrel_df_conf = kestrel_df['Confidence'].fillna('')
-            kestrel_positive = len(kestrel_df[kestrel_df_conf.str.contains('Low_Precision|High_Precision', na=False)])
-            kestrel_negative = len(kestrel_df[~kestrel_df_conf.str.contains('Low_Precision|High_Precision', na=False)])
+            # Updated to include 'High_Precision*' in positive counts
+            kestrel_positive = len(kestrel_df[kestrel_df_conf.str.contains('Low_Precision|High_Precision\\*?', na=False)])
+            kestrel_negative = len(kestrel_df[~kestrel_df_conf.str.contains('Low_Precision|High_Precision\\*?', na=False)])
         except Exception as e:
             logging.error(f"Error processing 'Confidence' values: {e}")
             kestrel_positive = 0
