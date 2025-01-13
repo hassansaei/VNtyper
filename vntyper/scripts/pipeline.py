@@ -70,7 +70,8 @@ def run_pipeline(
     custom_regions=None,
     bed_file=None,
     log_level=logging.INFO,
-    sample_name=None
+    sample_name=None,
+    log_file=None
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -475,6 +476,7 @@ def run_pipeline(
             output_dir,
             template_dir,
             report_file,
+            log_file,
             bed_file=bed_out,
             bam_file=bam_out,
             fasta_file=fasta_reference,

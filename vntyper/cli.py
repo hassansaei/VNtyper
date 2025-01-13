@@ -58,19 +58,6 @@ def main():
     the subcommand.
     """
 
-    # Load an initial config for CLI defaults. Use try/except in case loading fails.
-    try:
-        initial_config = load_config(None)
-        logging.debug("Initial configuration loaded successfully.")
-    except Exception:
-        initial_config = {}
-        logging.debug("Failed to load initial_config; using empty dictionary.")
-
-    # Fallback lookups for CLI defaults
-    default_cli = initial_config.get("cli_defaults", {})
-    default_log_level = default_cli.get("log_level", "INFO")
-    default_log_file = default_cli.get("log_file", None)
-
     # Parent parser for global arguments
     parent_parser = argparse.ArgumentParser(add_help=False, conflict_handler='resolve')
     parent_parser.add_argument(
@@ -364,7 +351,7 @@ def main():
     # Parse all arguments first
     args = parser.parse_args()
 
-    # Display help if no command is provided
+    # If no command is provided, display help and exit
     if args.command is None:
         parser.print_help()
         sys.exit(0)
@@ -372,7 +359,7 @@ def main():
     # Load the main configuration based on the provided config path
     try:
         # IMPORTANT: Use `initial_config` as fallback when `--config-path` is not provided
-        config = load_config(args.config_path) if args.config_path else initial_config
+        config = load_config(args.config_path) if args.config_path else load_config(None)
         logging.debug("Configuration loaded successfully.")
     except Exception as exc:
         logging.critical(f"Failed to load configuration: {exc}")
@@ -381,24 +368,33 @@ def main():
     def get_conf(key, fallback):
         return config.get("default_values", {}).get(key, fallback)
 
-    # Setup base logging now (only once)
-    # Command-line arguments take precedence over config file
+    # Determine log level
     if args.log_level:
         log_level_value = getattr(logging, args.log_level.upper(), logging.INFO)
     else:
-        log_level_value = getattr(logging, get_conf("log_level", "INFO").upper(), logging.INFO)
+        log_level_value = getattr(logging, config.get("cli_defaults", {}).get("log_level", "INFO").upper(), logging.INFO)
 
+    # Determine log file
     if args.log_file:
         log_file_value = args.log_file
     else:
-        log_file_value = get_conf("log_file", None)
+        # If the command is 'pipeline' and output_dir is provided, set log_file accordingly
+        if args.command == "pipeline" and args.output_dir:
+            log_file_value = Path(args.output_dir) / "pipeline.log"
+        else:
+            log_file_value = config.get("cli_defaults", {}).get("log_file", None)
 
-    # Log the determined log level and log file
-    logging.debug(f"log_level_value is set to {log_level_value}")
-    logging.debug(f"log_file_value is set to {log_file_value}")
+    # Ensure that the log file directory exists
+    if log_file_value:
+        log_file_path = Path(log_file_value)
+        log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file_str = str(log_file_path)
+    else:
+        log_file_str = None
 
-    setup_logging(log_level=log_level_value, log_file=str(log_file_value) if log_file_value else None)
-    logging.debug(f"Logging has been set up with level {log_level_value} and log_file {log_file_value}")
+    # Setup logging now (only once) with the determined log level and log file
+    setup_logging(log_level=log_level_value, log_file=log_file_str)
+    logging.debug(f"Logging has been set up with level {log_level_value} and log_file {log_file_str}")
 
     # Log current logging handlers and their levels
     for handler in logging.getLogger().handlers:
@@ -416,32 +412,17 @@ def main():
         )
         sys.exit(0)
 
-    # No need to reload config; it's already loaded correctly
-
     #
     # -------------------------------------------------------------------------
     # pipeline command
     # -------------------------------------------------------------------------
+    #
     if args.command == "pipeline":
-        if not args.log_file:
-            if args.output_dir:
-                log_file = Path(args.output_dir) / "pipeline.log"
-                log_file.parent.mkdir(parents=True, exist_ok=True)
-                logging.debug(f"Setting log file to {log_file}")
-                # Update log_file in logging handlers
-                for handler in logging.getLogger().handlers:
-                    if isinstance(handler, logging.FileHandler):
-                        handler.baseFilename = str(log_file)
-                        logging.debug(f"Updated handler baseFilename to {handler.baseFilename}")
-            else:
-                # Fallback to current dir if no output_dir
-                log_file = Path("pipeline.log")
-                logging.debug(f"Setting log file to {log_file}")
-                # Update log_file in logging handlers
-                for handler in logging.getLogger().handlers:
-                    if isinstance(handler, logging.FileHandler):
-                        handler.baseFilename = str(log_file)
-                        logging.debug(f"Updated handler baseFilename to {handler.baseFilename}")
+        # If log_file was not explicitly provided and output_dir is set, ensure log_file is correctly set
+        if not args.log_file and args.output_dir:
+            log_file = Path(args.output_dir) / "pipeline.log"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            logging.debug(f"Setting log file to {log_file}")
 
         if args.output_dir is None:
             args.output_dir = get_conf("output_dir", "out")
@@ -472,13 +453,13 @@ def main():
             1 if (args.fastq1 or args.fastq2) else 0
         ])
         if input_types > 1:
-            parser_pipeline.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
+            parser.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
             logging.debug("Multiple input types detected.")
             sys.exit(1)
 
         if (not args.bam and not args.cram
                 and (args.fastq1 is None or args.fastq2 is None)):
-            parser_pipeline.error(
+            parser.error(
                 "When not providing BAM/CRAM, both --fastq1 and --fastq2 must "
                 "be specified for paired-end sequencing."
             )
@@ -550,6 +531,7 @@ def main():
             bed_file=args.bed_file,
             log_level=log_level_value,  # Pass log_level to run_pipeline
             sample_name=sample_name_val,
+            log_file=log_file_str  # Pass the correctly determined log_file
         )
 
     #
