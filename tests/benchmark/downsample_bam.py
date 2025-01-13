@@ -3,8 +3,8 @@
 Downsampling and Benchmarking Script for BAM Files
 
 This script subsets a BAM file to the MUC1 region, calculates coverage in the VNTR region,
-and downsamples the BAM to specified fractions or absolute coverage levels. The downsampled
-BAM files are sorted, indexed, and accompanied by MD5 checksums for verification.
+and downsamples the BAM to specified fractions or absolute coverage levels. Optionally,
+it can run `vntyper` on the downsampled BAM files and summarize the results in a tabular format.
 
 Usage:
     python downsample_bam.py \
@@ -15,7 +15,11 @@ Usage:
         --seed 42 \
         --threads 4 \
         --muc1-region 'chr1:155158000-155163000' \
-        --vntr-region 'chr1:155160500-155162000'
+        --vntr-region 'chr1:155160500-155162000' \
+        [--run-vntyper] \
+        [--vntyper-path path/to/vntyper] \
+        [--vntyper-options "additional vntyper options"] \
+        [--summary-output summary.csv]
 """
 
 import argparse
@@ -25,7 +29,8 @@ import os
 import subprocess
 from pathlib import Path
 from typing import List, Optional
-
+import csv
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(
@@ -203,65 +208,114 @@ def calculate_vntr_coverage(
     return mean_coverage
 
 
-def subsample_bam(
-    samtools: str,
-    input_bam: Path,
-    output_bam: Path,
-    fraction: float,
-    seed: int,
+def run_vntyper(
+    vntyper_path: str,
+    bam_file: Path,
+    reference_assembly: str,
     threads: int,
-) -> None:
+    output_dir: Path,
+    keep_intermediates: bool,
+    archive_results: bool,
+    fast_mode: bool,
+    additional_options: Optional[str] = None,
+) -> Path:
     """
-    Subsample BAM file to a specific fraction.
+    Run the vntyper command on a given BAM file.
 
     Args:
-        samtools (str): Path to samtools executable.
-        input_bam (Path): Input BAM file.
-        output_bam (Path): Output subsampled BAM file.
-        fraction (float): Fraction of reads to retain.
-        seed (int): Seed for reproducibility.
+        vntyper_path (str): Path to the vntyper executable.
+        bam_file (Path): Path to the input BAM file.
+        reference_assembly (str): Reference assembly (e.g., hg19, hg38).
         threads (int): Number of threads to use.
-    """
-    logging.info(f"Subsampling BAM with fraction {fraction}")
-    # Samtools view uses -s seed.fraction where seed is integer and fraction is float between 0-1
-    # Combine seed and fraction into a single float: seed.fraction
-    subsample_param = float(f"{seed}.{int(fraction * 1000):03d}")  # e.g., 42.100
-    view_command = [
-        samtools,
-        "view",
-        "-s",
-        f"{subsample_param}",
-        "-@",
-        str(threads),
-        "-b",
-        "-o",
-        str(output_bam),
-        str(input_bam),
-    ]
-    run_command(view_command, description=f"subsample BAM to fraction {fraction}")
+        output_dir (Path): Directory to store vntyper outputs.
+        keep_intermediates (bool): Whether to keep intermediate files.
+        archive_results (bool): Whether to archive results.
+        fast_mode (bool): Whether to run in fast mode.
+        additional_options (str, optional): Additional command-line options for vntyper.
 
-    # Sort the subsampled BAM
-    sorted_bam = output_bam.with_suffix(".sorted.bam")
-    run_command(
-        [
-            samtools,
-            "sort",
-            "-@",
-            str(threads),
-            "-o",
-            str(sorted_bam),
-            str(output_bam),
-        ],
-        description="sort subsampled BAM",
-    )
-    # Replace unsorted BAM with sorted BAM
-    output_bam.unlink()
-    sorted_bam.rename(output_bam)
-    # Index the BAM
-    run_command(
-        [samtools, "index", str(output_bam)],
-        description="index subsampled BAM",
-    )
+    Returns:
+        Path: Path to the vntyper output directory.
+    """
+    output_subdir = output_dir / f"{bam_file.stem}_vntyper_output"
+    output_subdir.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        vntyper_path,
+        "-l", "DEBUG",
+        "pipeline",
+        "--bam", str(bam_file),
+        "--threads", str(threads),
+        "--reference-assembly", reference_assembly,
+        "-o", str(output_subdir),
+    ]
+
+    if keep_intermediates:
+        command.append("--keep-intermediates")
+    if archive_results:
+        command.append("--archive-results")
+    if fast_mode:
+        command.append("--fast-mode")
+    if additional_options:
+        # Split the additional_options string into individual arguments
+        command.extend(additional_options.split())
+
+    logging.info(f"Executing vntyper for {bam_file.name}")
+    run_command(command, description=f"vntyper on {bam_file.name}")
+
+    return output_subdir
+
+
+def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[dict]:
+    """
+    Summarize vntyper results from the output directory.
+
+    Args:
+        vntyper_output_dir (Path): Path to the vntyper output directory.
+
+    Returns:
+        dict or None: Dictionary with summary fields or None if not found.
+    """
+    # Search for kestrel_result.tsv anywhere under vntyper_output_dir
+    result_files = list(vntyper_output_dir.rglob("kestrel_result.tsv"))
+    if not result_files:
+        logging.warning(f"No kestrel_result.tsv found in {vntyper_output_dir}")
+        return None
+
+    # Take the first match
+    result_file = result_files[0]
+    logging.info(f"Parsing Kestrel results from {result_file}")
+
+    try:
+        # Add comment='#' to skip lines starting with '#' or '##'
+        df = pd.read_csv(result_file, sep='\t', comment='#')
+
+        # Verify that required columns exist
+        required_columns = [
+            'Estimated_Depth_AlternateVariant',
+            'Estimated_Depth_Variant_ActiveRegion',
+            'Depth_Score',
+            'Confidence'
+        ]
+        for col in required_columns:
+            if col not in df.columns:
+                logging.error(f"Missing expected column '{col}' in {result_file}")
+                return None
+
+        summary = {
+            # Use the vntyper output directory name as a fallback
+            'file_analyzed': vntyper_output_dir.name,
+            'Estimated_Depth_AlternateVariant': df['Estimated_Depth_AlternateVariant'].tolist(),
+            'Estimated_Depth_Variant_ActiveRegion': df['Estimated_Depth_Variant_ActiveRegion'].tolist(),
+            'Depth_Score': df['Depth_Score'].tolist(),
+            'Confidence': df['Confidence'].tolist(),
+        }
+        return summary
+    except pd.errors.ParserError as e:
+        logging.error(f"Failed to parse vntyper results from {result_file}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Unexpected error while parsing vntyper results from {result_file}: {e}")
+        return None
 
 
 def calculate_required_fraction(
@@ -296,7 +350,7 @@ def parse_arguments() -> argparse.Namespace:
         argparse.Namespace: Parsed arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Downsample BAM to specified fractions or absolute coverage levels."
+        description="Downsample BAM to specified fractions or absolute coverage levels. Optionally run vntyper on downsampled BAMs and summarize results."
     )
     parser.add_argument(
         "--input-bam",
@@ -354,6 +408,51 @@ def parse_arguments() -> argparse.Namespace:
         default=4,
         help="Number of threads to use for samtools operations.",
     )
+    # New arguments for vntyper
+    parser.add_argument(
+        "--run-vntyper",
+        action="store_true",
+        help="Flag to indicate whether to run vntyper on the downsampled BAM files.",
+    )
+    parser.add_argument(
+        "--vntyper-path",
+        type=str,
+        default="vntyper",
+        help="Path to the vntyper executable. Defaults to 'vntyper' in PATH.",
+    )
+    parser.add_argument(
+        "--vntyper-options",
+        type=str,
+        default="",
+        help="Additional command-line options for vntyper.",
+    )
+    parser.add_argument(
+        "--reference-assembly",
+        type=str,
+        default="hg19",
+        help="Reference assembly for vntyper (e.g., hg19, hg38).",
+    )
+    parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="Keep intermediate files generated by vntyper.",
+    )
+    parser.add_argument(
+        "--archive-results",
+        action="store_true",
+        help="Archive results generated by vntyper.",
+    )
+    parser.add_argument(
+        "--fast-mode",
+        action="store_true",
+        help="Run vntyper in fast mode.",
+    )
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        default="vntyper_summary.csv",
+        help="Path to the summary CSV file for vntyper results.",
+    )
     return parser.parse_args()
 
 
@@ -367,6 +466,9 @@ def main():
 
     # Create output directory if it doesn't exist
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize summary data list
+    vntyper_summary = []
 
     # Step 1: Subset BAM to MUC1 region without subsampling
     subset_bam_path = args.output_dir / f"{args.input_bam.stem}_MUC1_subset.bam"
@@ -396,10 +498,11 @@ def main():
             logging.warning(f"Invalid fraction {fraction}. Skipping.")
             continue
         output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{int(fraction*100)}p.bam"
-        subsample_bam(
+        subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
             output_bam=output_bam,
+            region=args.muc1_region,
             fraction=fraction,
             seed=args.seed,
             threads=args.threads,
@@ -412,14 +515,53 @@ def main():
         logging.info(f"Created downsampled BAM: {output_bam}")
         logging.info(f"MD5 checksum: {md5sum}")
 
+        # If vntyper is to be run, execute it
+        if args.run_vntyper:
+            vntyper_output_dir = run_vntyper(
+                vntyper_path=args.vntyper_path,
+                bam_file=output_bam,
+                reference_assembly=args.reference_assembly,
+                threads=args.threads,
+                output_dir=args.output_dir,
+                keep_intermediates=args.keep_intermediates,
+                archive_results=args.archive_results,
+                fast_mode=args.fast_mode,
+                additional_options=args.vntyper_options,
+            )
+            # Summarize vntyper results
+            summary = summarize_vntyper_results(vntyper_output_dir)
+            if summary:
+                # Append the additional fields to the CSV
+                vntyper_summary.append({
+                    'file_analyzed': summary.get('file_analyzed', output_bam.name),
+                    'method': 'fraction',
+                    'value': fraction,
+                    'confidence': ', '.join(map(str, summary.get('Confidence', []))),
+                    # New columns below
+                    'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
+                    'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
+                    'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
+                })
+            else:
+                vntyper_summary.append({
+                    'file_analyzed': output_bam.name,
+                    'method': 'fraction',
+                    'value': fraction,
+                    'confidence': 'No Results',
+                    'Estimated_Depth_AlternateVariant': '',
+                    'Estimated_Depth_Variant_ActiveRegion': '',
+                    'Depth_Score': ''
+                })
+
     # Step 4: Downsample to absolute coverages
     for coverage in args.coverages:
         fraction = calculate_required_fraction(desired_coverage=coverage, current_coverage=current_coverage)
         output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
-        subsample_bam(
+        subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
             output_bam=output_bam,
+            region=args.muc1_region,
             fraction=fraction,
             seed=args.seed,
             threads=args.threads,
@@ -431,6 +573,64 @@ def main():
             f.write(f"{md5sum}  {output_bam.name}\n")
         logging.info(f"Created downsampled BAM: {output_bam}")
         logging.info(f"MD5 checksum: {md5sum}")
+
+        # If vntyper is to be run, execute it
+        if args.run_vntyper:
+            vntyper_output_dir = run_vntyper(
+                vntyper_path=args.vntyper_path,
+                bam_file=output_bam,
+                reference_assembly=args.reference_assembly,
+                threads=args.threads,
+                output_dir=args.output_dir,
+                keep_intermediates=args.keep_intermediates,
+                archive_results=args.archive_results,
+                fast_mode=args.fast_mode,
+                additional_options=args.vntyper_options,
+            )
+            # Summarize vntyper results
+            summary = summarize_vntyper_results(vntyper_output_dir)
+            if summary:
+                # Append the additional fields to the CSV
+                vntyper_summary.append({
+                    'file_analyzed': summary.get('file_analyzed', output_bam.name),
+                    'method': 'coverage',
+                    'value': coverage,
+                    'confidence': ', '.join(map(str, summary.get('Confidence', []))),
+                    # New columns below
+                    'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
+                    'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
+                    'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
+                })
+            else:
+                vntyper_summary.append({
+                    'file_analyzed': output_bam.name,
+                    'method': 'coverage',
+                    'value': coverage,
+                    'confidence': 'No Results',
+                    'Estimated_Depth_AlternateVariant': '',
+                    'Estimated_Depth_Variant_ActiveRegion': '',
+                    'Depth_Score': ''
+                })
+
+    # Step 5: Write summary table if vntyper was run
+    if args.run_vntyper:
+        summary_csv_path = args.summary_output
+        logging.info(f"Writing vntyper summary to {summary_csv_path}")
+        with summary_csv_path.open('w', newline='') as csvfile:
+            fieldnames = [
+                'file_analyzed', 
+                'method', 
+                'value', 
+                'confidence',
+                'Estimated_Depth_AlternateVariant',
+                'Estimated_Depth_Variant_ActiveRegion',
+                'Depth_Score'
+            ]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in vntyper_summary:
+                writer.writerow(row)
+        logging.info(f"Vntyper summary successfully written to {summary_csv_path}")
 
 
 if __name__ == "__main__":
