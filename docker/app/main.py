@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import hashlib
 from collections import Counter
-from typing import Optional, Union
+from typing import Optional, Union, List
 from uuid import uuid4
 from datetime import datetime
 
@@ -30,7 +30,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
 from .config import settings
-from .tasks import run_vntyper_job
+from .tasks import run_vntyper_job, run_cohort_analysis_job  # <-- Added import for run_cohort_analysis_job
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -439,8 +439,6 @@ async def run_vntyper(
     # Add the task ID to a Redis list to track the queue
     redis_client.rpush("vntyper_job_queue", task.id)
 
-    # --- REMOVED: immediate job addition to the cohort. Now done post-hoc in tasks.py ---
-
     return RunJobResponse(message="Job submitted", job_id=job_id, cohort_id=cohort_id)
 
 
@@ -844,6 +842,100 @@ def cohort_download(
         media_type="application/zip",
         filename=download_name,
     )
+
+
+# ----------------------------------------------------------------------
+# Feature #82: Joint Cohort Analysis Endpoint
+# ----------------------------------------------------------------------
+@router.post(
+    "/cohort-analysis/",
+    tags=["Cohort Management"],
+    dependencies=[Depends(high_rate_limiter)],
+    summary="Run a joint cohort analysis",
+    description=(
+        "Run a VNtyper joint cohort analysis using all .zip results files "
+        "from each job in the specified cohort. "
+        "Returns a new 'analysis job ID' for checking status and downloading results.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_HIGH_TIMES} requests per "
+        f"{settings.RATE_LIMIT_HIGH_SECONDS} seconds."
+    ),
+)
+def run_cohort_analysis(
+    request: Request,
+    cohort_id: Optional[str] = Form(None, description="Cohort identifier"),
+    alias: Optional[str] = Form(None, description="Cohort alias"),
+    passphrase: Optional[str] = Form(None, description="Passphrase if required by the cohort"),
+):
+    """
+    **Description:**
+
+    This endpoint gathers the `.zip` files for all jobs in a specified cohort
+    and performs a joint cohort analysis via `vntyper cohort`.
+
+    **Parameters:**
+
+    - **cohort_id**: (Optional) The unique identifier of the cohort.
+    - **alias**: (Optional) The alias of the cohort.
+    - **passphrase**: (Optional) The passphrase if required by the cohort.
+
+    **Returns:**
+    - **message**: Confirmation message.
+    - **analysis_job_id**: A unique identifier for this cohort analysis job.
+    """
+    logger.info("Received cohort analysis request")
+
+    # 1) Retrieve the set of job IDs for this cohort
+    response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
+    cid = response["cohort_id"]
+    job_ids = response["job_ids"]
+    if not job_ids:
+        raise HTTPException(
+            status_code=400, detail="No jobs found in the specified cohort."
+        )
+
+    # 2) Build the list of existing .zip result paths for these jobs
+    zip_paths: List[str] = []
+    for jid in job_ids:
+        candidate_zip = os.path.join(DEFAULT_OUTPUT_DIR, f"{jid}.zip")
+        if os.path.exists(candidate_zip):
+            zip_paths.append(candidate_zip)
+        else:
+            logger.warning(
+                f"Job {jid} missing .zip file. Skipping from cohort analysis."
+            )
+
+    if not zip_paths:
+        raise HTTPException(
+            status_code=400,
+            detail="No .zip files found for the specified cohort's jobs.",
+        )
+
+    # 3) Create a unique "analysis job ID" (directory) for results
+    analysis_job_id = str(uuid4())
+    analysis_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, analysis_job_id)
+
+    # 4) Enqueue the new Celery task
+    client_ip = request.client.host
+    user_agent = request.headers.get("User-Agent", "unknown")
+    task = run_cohort_analysis_job.delay(
+        cohort_id=cid,
+        zip_paths=zip_paths,
+        output_dir=analysis_output_dir,
+        user_ip=client_ip,
+        user_agent=user_agent,
+    )
+    logger.info(
+        f"Enqueued cohort analysis job: analysis_job_id={analysis_job_id}, task_id={task.id}"
+    )
+
+    # Store the mapping for job status checking
+    redis_client.set(analysis_job_id, task.id, ex=604800)  # 7 days TTL
+    redis_client.rpush("vntyper_job_queue", task.id)
+
+    return {
+        "message": "Cohort analysis started",
+        "analysis_job_id": analysis_job_id,
+    }
 
 
 # Include the router in the FastAPI app
