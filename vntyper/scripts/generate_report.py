@@ -295,7 +295,7 @@ def generate_summary_report(
     passed_filter_rate_cutoff = thresholds.get("passed_filter_reads_rate", 0.8)
 
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
-    advntr_result_file = Path(output_dir) / "advntr/output_adVNTR_result.tsv"
+    advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.vcf"
     igv_report_file = Path(output_dir) / "igv_report.html"
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
 
