@@ -261,11 +261,16 @@ def main():
         help="Aggregate outputs from multiple runs into a single summary file.",
         conflict_handler='resolve'
     )
-    parser_cohort.add_argument(
+    cohort_group = parser_cohort.add_mutually_exclusive_group(required=True)
+    cohort_group.add_argument(
         '-i', '--input-dirs',
         nargs='+',
-        required=True,
         help="List of directories containing output files to aggregate."
+    )
+    cohort_group.add_argument(
+        '--input-file',
+        type=Path,
+        help="Path to a newline-separated text file listing directories or zip files to aggregate."
     )
     parser_cohort.add_argument(
         '-o', '--output-dir',
@@ -387,6 +392,8 @@ def main():
         # If the command is 'pipeline' and output_dir is provided, set log_file accordingly
         if args.command == "pipeline" and args.output_dir:
             log_file_value = Path(args.output_dir) / "pipeline.log"
+        elif args.command == "cohort" and args.output_dir:
+            log_file_value = Path(args.output_dir) / "cohort.log"
         else:
             log_file_value = config.get("cli_defaults", {}).get("log_file", None)
 
@@ -613,8 +620,24 @@ def main():
             args.summary_file = get_conf("summary_file", "cohort_summary.html")
             logging.debug(f"summary_file set to {args.summary_file}")
 
+        # Prepare the list of input paths
+        input_paths = []
+
+        if args.input_dirs:
+            input_paths.extend(args.input_dirs)
+            logging.debug(f"Added input_dirs: {args.input_dirs}")
+
+        if args.input_file:
+            if not args.input_file.exists():
+                logging.error(f"The input file {args.input_file} does not exist.")
+                sys.exit(1)
+            with open(args.input_file, 'r') as f:
+                file_lines = [line.strip() for line in f if line.strip()]
+                input_paths.extend(file_lines)
+            logging.debug(f"Added input_file entries: {file_lines}")
+
         aggregate_cohort(
-            input_dirs=args.input_dirs,
+            input_paths=input_paths,
             output_dir=Path(args.output_dir),
             summary_file=args.summary_file,
             config=config
