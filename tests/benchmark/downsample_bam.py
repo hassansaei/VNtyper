@@ -26,11 +26,13 @@ import argparse
 import hashlib
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 import csv
 import pandas as pd
+
 
 # Configure logging
 logging.basicConfig(
@@ -241,12 +243,17 @@ def run_vntyper(
 
     command = [
         vntyper_path,
-        "-l", "DEBUG",
+        "-l",
+        "DEBUG",
         "pipeline",
-        "--bam", str(bam_file),
-        "--threads", str(threads),
-        "--reference-assembly", reference_assembly,
-        "-o", str(output_subdir),
+        "--bam",
+        str(bam_file),
+        "--threads",
+        str(threads),
+        "--reference-assembly",
+        reference_assembly,
+        "-o",
+        str(output_subdir),
     ]
 
     if keep_intermediates:
@@ -265,7 +272,7 @@ def run_vntyper(
     return output_subdir
 
 
-def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[dict]:
+def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
     """
     Summarize vntyper results from the output directory.
 
@@ -340,6 +347,44 @@ def calculate_required_fraction(
         f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}"
     )
     return fraction
+
+
+def parse_pipeline_log(vntyper_output_dir: Path) -> Optional[float]:
+    """
+    Parse the pipeline.log file to extract the analysis time in minutes.
+
+    Args:
+        vntyper_output_dir (Path): Directory where the vntyper output is located.
+
+    Returns:
+        float or None: Analysis time in minutes if found, else None.
+    """
+    pipeline_log = vntyper_output_dir / "pipeline.log"
+    if not pipeline_log.is_file():
+        logging.warning(f"pipeline.log not found in {vntyper_output_dir}")
+        return None
+
+    try:
+        with pipeline_log.open("r") as f:
+            lines = f.readlines()
+            if not lines:
+                logging.warning("pipeline.log is empty.")
+                return None
+            last_line = lines[-1].strip()
+            logging.debug(f"Last line of pipeline.log: {last_line}")
+            # Example line:
+            # 2025-01-15 13:37:21,126 - root - INFO - Pipeline completed in 5.28 minutes.
+            match = re.search(r"Pipeline completed in (\d+\.?\d*) minutes\.", last_line)
+            if match:
+                analysis_time = float(match.group(1))
+                logging.info(f"Analysis time extracted: {analysis_time} minutes")
+                return analysis_time
+            else:
+                logging.warning("Could not parse analysis time from pipeline.log.")
+                return None
+    except Exception as e:
+        logging.error(f"Error reading pipeline.log: {e}")
+        return None
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -528,6 +573,8 @@ def main():
                 fast_mode=args.fast_mode,
                 additional_options=args.vntyper_options,
             )
+            # Parse pipeline.log for analysis time
+            analysis_time = parse_pipeline_log(vntyper_output_dir)
             # Summarize vntyper results
             summary = summarize_vntyper_results(vntyper_output_dir)
             if summary:
@@ -541,6 +588,7 @@ def main():
                     'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
                     'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
                     'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
+                    'analysis_time_minutes': analysis_time if analysis_time is not None else '',
                 })
             else:
                 vntyper_summary.append({
@@ -550,7 +598,8 @@ def main():
                     'confidence': 'No Results',
                     'Estimated_Depth_AlternateVariant': '',
                     'Estimated_Depth_Variant_ActiveRegion': '',
-                    'Depth_Score': ''
+                    'Depth_Score': '',
+                    'analysis_time_minutes': '',
                 })
 
     # Step 4: Downsample to absolute coverages
@@ -587,6 +636,8 @@ def main():
                 fast_mode=args.fast_mode,
                 additional_options=args.vntyper_options,
             )
+            # Parse pipeline.log for analysis time
+            analysis_time = parse_pipeline_log(vntyper_output_dir)
             # Summarize vntyper results
             summary = summarize_vntyper_results(vntyper_output_dir)
             if summary:
@@ -600,6 +651,7 @@ def main():
                     'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
                     'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
                     'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
+                    'analysis_time_minutes': analysis_time if analysis_time is not None else '',
                 })
             else:
                 vntyper_summary.append({
@@ -609,7 +661,8 @@ def main():
                     'confidence': 'No Results',
                     'Estimated_Depth_AlternateVariant': '',
                     'Estimated_Depth_Variant_ActiveRegion': '',
-                    'Depth_Score': ''
+                    'Depth_Score': '',
+                    'analysis_time_minutes': '',
                 })
 
     # Step 5: Write summary table if vntyper was run
@@ -618,13 +671,14 @@ def main():
         logging.info(f"Writing vntyper summary to {summary_csv_path}")
         with summary_csv_path.open('w', newline='') as csvfile:
             fieldnames = [
-                'file_analyzed', 
-                'method', 
-                'value', 
+                'file_analyzed',
+                'method',
+                'value',
                 'confidence',
                 'Estimated_Depth_AlternateVariant',
                 'Estimated_Depth_Variant_ActiveRegion',
-                'Depth_Score'
+                'Depth_Score',
+                'analysis_time_minutes',  # New column
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
