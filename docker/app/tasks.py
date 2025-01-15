@@ -192,6 +192,9 @@ def run_vntyper_job(
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
+        if cohort_key:
+            redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+
         # Construct the download URL
         download_url = f"{settings.API_BASE_URL}/api/download/{job_id}/"
 

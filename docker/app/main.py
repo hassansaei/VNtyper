@@ -439,12 +439,7 @@ async def run_vntyper(
     # Add the task ID to a Redis list to track the queue
     redis_client.rpush("vntyper_job_queue", task.id)
 
-    # If associated with a cohort, add the job to the cohort's job set
-    if cohort_key:
-        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
-        # Ensure the TTL is updated
-        ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-        redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+    # --- REMOVED: immediate job addition to the cohort. Now done post-hoc in tasks.py ---
 
     return RunJobResponse(message="Job submitted", job_id=job_id, cohort_id=cohort_id)
 
@@ -786,6 +781,68 @@ def get_usage_statistics():
         total_jobs=total_jobs,
         unique_users=len(unique_users),
         job_statuses=dict(job_statuses),
+    )
+
+
+# New endpoint: Download entire cohort as one zip
+@router.get(
+    "/cohort-download/",
+    tags=["Cohort Management"],
+    dependencies=[Depends(high_rate_limiter)],
+    summary="Download all cohort results as a single zip",
+    description=(
+        "Generate and download a single ZIP file containing all job result `.zip` "
+        "files for the specified cohort.\n\n"
+        f"**Rate Limit:** {settings.RATE_LIMIT_HIGH_TIMES} requests per {settings.RATE_LIMIT_HIGH_SECONDS} seconds."
+    ),
+)
+def cohort_download(
+    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
+    alias: Optional[str] = Query(None, description="Cohort alias"),
+    passphrase: Optional[str] = Query(None, description="Passphrase if required by the cohort"),
+):
+    """
+    **Description:**
+
+    This endpoint creates a single ZIP file containing all job `.zip` result files
+    for a given cohort, then serves it as a downloadable file.
+
+    **Parameters:**
+
+    - **cohort_id**: (Optional) The unique identifier of the cohort.
+    - **alias**: (Optional) The alias of the cohort.
+    - **passphrase**: (Optional) The passphrase for the cohort if required.
+
+    **Returns:**
+
+    - **FileResponse**: A ZIP file containing all `.zip` results for the cohort.
+    """
+    import tempfile
+    import zipfile
+
+    # Retrieve job IDs for the given cohort
+    response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
+    job_ids = response["job_ids"]
+
+    # Create a temporary ZIP file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_zip:
+        with zipfile.ZipFile(temp_zip.name, "w", zipfile.ZIP_DEFLATED) as zf:
+            # For each job, look for its existing .zip file in the output directory
+            for job_id in job_ids:
+                job_zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
+                if os.path.exists(job_zip_path):
+                    zf.write(job_zip_path, arcname=os.path.basename(job_zip_path))
+
+        final_zip_path = temp_zip.name  # We'll pass this to FileResponse
+
+    # Suggest a download filename
+    download_name = f"cohort_{response['cohort_id']}.zip"
+
+    # Return the zipped file as a download
+    return FileResponse(
+        path=final_zip_path,
+        media_type="application/zip",
+        filename=download_name,
     )
 
 
