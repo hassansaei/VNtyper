@@ -285,3 +285,99 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
     except Exception as e:
         logging.error(f"Error calculating mean coverage: {e}")
         raise RuntimeError(f"Error calculating mean coverage: {e}")
+
+
+def downsample_bam_if_needed(
+    bam_path,
+    max_coverage,
+    reference_assembly,
+    threads,
+    config,
+    coverage_dir,
+    coverage_prefix
+):
+    """
+    Check the current coverage of 'bam_path' in the VNTR region and
+    downsample if coverage exceeds 'max_coverage'.
+
+    Args:
+        bam_path (str or Path): Path to the input BAM file.
+        max_coverage (int): The maximum coverage threshold (e.g., 300).
+        reference_assembly (str): "hg19" or "hg38" to pick correct region.
+        threads (int): Number of threads to use.
+        config (dict): Configuration dictionary with samtools paths, etc.
+        coverage_dir (Path or str): Directory where coverage logs can be written.
+        coverage_prefix (str): Prefix for coverage logs (e.g., 'advntr_precheck').
+
+    Returns:
+        Path: The path to the (optionally) downsampled BAM.
+    """
+    from pathlib import Path
+    bam_path = Path(bam_path)  # ensure it's a Path object
+
+    # 1) Calculate current coverage
+    if reference_assembly == "hg38":
+        region = config["bam_processing"]["vntr_region_hg38"]
+    else:
+        region = config["bam_processing"]["vntr_region_hg19"]
+
+    current_coverage = calculate_vntr_coverage(
+        bam_file=str(bam_path),
+        region=region,
+        threads=threads,
+        config=config,
+        output_dir=coverage_dir,
+        output_name=coverage_prefix
+    )
+
+    # 2) If coverage is below or equal to max_coverage, do nothing
+    if current_coverage <= max_coverage:
+        logging.info(f"Current coverage ({current_coverage:.2f}) <= max_coverage ({max_coverage}). "
+                     "No downsampling needed.")
+        return bam_path
+
+    # 3) Otherwise, compute downsampling fraction
+    fraction = max_coverage / current_coverage
+    logging.info(f"Current coverage: {current_coverage:.2f}, max coverage: {max_coverage}, "
+                 f"downsampling fraction: {fraction:.4f}")
+
+    # 4) Run samtools to downsample
+    samtools_path = config["tools"]["samtools"]
+    downsampled_bam = bam_path.parent / (bam_path.stem + "_downsampled.bam")
+    seed = 42  # fixed seed or make user-configurable
+    subsample_param = f"{seed}.{int(fraction * 1000):03d}"
+
+    cmd_view = [
+        samtools_path, "view",
+        "-s", subsample_param,
+        "-@", str(threads),
+        "-b",
+        "-o", str(downsampled_bam),
+        str(bam_path)
+    ]
+    logging.info(f"Downsampling BAM with command: {' '.join(cmd_view)}")
+    try:
+        subprocess.run(cmd_view, check=True)
+    except subprocess.CalledProcessError as err:
+        logging.error(f"Downsampling failed: {err}")
+        return bam_path  # fallback to original bam
+
+    # 5) Sort & index the downsampled BAM
+    sorted_down_bam = downsampled_bam.with_suffix(".sorted.bam")
+    cmd_sort = [
+        samtools_path, "sort",
+        "-@", str(threads),
+        "-o", str(sorted_down_bam),
+        str(downsampled_bam)
+    ]
+    try:
+        subprocess.run(cmd_sort, check=True)
+        downsampled_bam.unlink()  # remove unsorted
+        cmd_index = [samtools_path, "index", str(sorted_down_bam)]
+        subprocess.run(cmd_index, check=True)
+    except subprocess.CalledProcessError as err:
+        logging.error(f"Sorting/indexing failed after downsampling: {err}")
+        return bam_path
+
+    logging.info(f"Downsampling complete. Using BAM: {sorted_down_bam}")
+    return sorted_down_bam
