@@ -192,10 +192,12 @@ def run_vntyper_job(
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
+        # Construct the download URL
+        download_url = f"{settings.API_BASE_URL}/api/download/{job_id}/"
+
         # Send success email if provided
         if email:
             subject = "VNtyper Job Completed Successfully"
-            download_url = f"{settings.API_BASE_URL}/api/download/{job_id}/"
             if cohort_key:
                 cohort_id = cohort_key.split(":", 1)[1]
                 content = f"""
@@ -211,7 +213,7 @@ def run_vntyper_job(
                 <p>You can download your results <a href="{download_url}">here</a>.</p>
                 """
             send_email_task.delay(to_email=email, subject=subject, content=content)
-            logger.info(f"Triggered email sending to {email}")
+            logger.info(f"Triggered email sending to {email} with download link")
 
     except Exception as e:
         logger.error(f"Error in VNtyper job: {e}")
