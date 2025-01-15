@@ -89,7 +89,8 @@ def main():
     # 3) Convert "value" to numeric (Y-axis)
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
 
-    # 4) Build a long-form DF with columns: [file_analyzed, method, confidence, metric_name, x_value, y_value, color]
+    # 4) Build a long-form DF with columns:
+    # [file_analyzed, method, confidence, metric_name, x_value, y_value, color]
     long_rows = []
     for _, row in df.iterrows():
         color_str = confidence_to_color(row.get("confidence", ""))
@@ -97,18 +98,20 @@ def main():
 
         for metric_name in metrics:
             if metric_name == "analysis_time_minutes":
-                # Plot analysis_time_minutes separately
+                # Plot analysis_time_minutes with x=analysis_time_minutes and y=value (coverage/fraction)
                 analysis_time = row.get(metric_name, float("nan"))
                 if pd.isna(analysis_time):
                     continue
+                # Ensure that y_val corresponds to coverage/fraction
+                # Assuming 'value' represents coverage/fraction in all cases
                 long_rows.append({
                     "file_analyzed": row.get("file_analyzed", ""),
                     "method": row.get("method", ""),
                     "confidence": row.get("confidence", ""),
                     "color": color_str,
                     "metric_name": metric_name,
-                    "x_value": 1,  # Dummy x_value since analysis time is a single value per run
-                    "y_value": analysis_time,
+                    "x_value": analysis_time,  # Set x to analysis_time_minutes
+                    "y_value": y_val,           # y remains as coverage/fraction
                 })
                 continue
 
@@ -137,7 +140,7 @@ def main():
         logging.warning("No numeric data found to plot. Exiting.")
         return
 
-    # 5) Create 2x2 subplots, one per metric
+    # 5) Create subplots for each metric
     num_metrics = len(metrics)
     cols = 2
     rows = (num_metrics + 1) // cols
@@ -156,7 +159,7 @@ def main():
             continue
 
         if metric_name == "analysis_time_minutes":
-            # Since x_value is dummy (1), plot all points along x=1
+            # Plot coverage/fraction vs analysis_time_minutes
             ax.scatter(
                 sub["x_value"],
                 sub["y_value"],
@@ -165,10 +168,11 @@ def main():
                 alpha=0.7,
                 edgecolors='w'
             )
-            ax.set_xlabel("Run")
-            ax.set_ylabel("Analysis Time (minutes)")
-            ax.set_title("Analysis Time")
-            ax.set_xlim(0.5, 1.5)
+            ax.set_xlabel("Analysis Time (minutes)")
+            ax.set_ylabel("Fraction or Coverage (from 'value')")
+            ax.set_title("Coverage/Fraction vs Analysis Time")
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
         else:
             # Regular scatter plot for other metrics
             ax.scatter(
@@ -209,7 +213,7 @@ def main():
         bbox_to_anchor=(0.5, 0.05)
     )
 
-    plt.suptitle("VNtyper Scatter Plots (X = depth metrics, Y = fraction/coverage/time, NO lines)", fontsize=20)
+    plt.suptitle("VNtyper Scatter Plots (X = depth metrics or Analysis Time, Y = fraction/coverage, NO lines)", fontsize=20)
     plt.tight_layout(rect=[0, 0.1, 1, 0.95])  # Adjust to make space for the legend
     plt.savefig(args.output_png, dpi=300)
     logging.info(f"Plot saved to {args.output_png}")
