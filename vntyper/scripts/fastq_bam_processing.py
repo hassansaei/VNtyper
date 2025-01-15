@@ -4,6 +4,7 @@
 import logging
 import os
 from pathlib import Path
+import subprocess
 
 from vntyper.scripts.utils import run_command
 
