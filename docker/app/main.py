@@ -310,6 +310,10 @@ async def run_vntyper(
     passphrase: Optional[str] = Form(
         None, description="Passphrase if required by the cohort"
     ),
+    # ----------------------------------------------------
+    # ADDED: single option for advntr_mode (default False)
+    # ----------------------------------------------------
+    advntr_mode: bool = Form(False),
 ):
     """
     **Description:**
@@ -417,21 +421,45 @@ async def run_vntyper(
     client_ip = request.client.host
     user_agent = request.headers.get("User-Agent", "unknown")
 
-    # Enqueue the Celery task with email parameter and cohort information
-    task = run_vntyper_job.delay(
-        bam_path=bam_path,
-        output_dir=job_output_dir,
-        thread=thread,
-        reference_assembly=reference_assembly,
-        fast_mode=fast_mode,
-        keep_intermediates=keep_intermediates,
-        archive_results=archive_results,
-        email=email,
-        cohort_key=cohort_key,
-        client_ip=client_ip,
-        user_agent=user_agent,
-    )
-    logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+    # ---------------------------------------------------------------------
+    # ADDED: If advntr_mode is True, use vntyper_long_queue; else default.
+    # Pass advntr_mode to the task for advanced module usage.
+    # ---------------------------------------------------------------------
+    if advntr_mode:
+        task = run_vntyper_job.apply_async(
+            kwargs={
+                "bam_path": bam_path,
+                "output_dir": job_output_dir,
+                "thread": thread,
+                "reference_assembly": reference_assembly,
+                "fast_mode": fast_mode,
+                "keep_intermediates": keep_intermediates,
+                "archive_results": archive_results,
+                "email": email,
+                "cohort_key": cohort_key,
+                "client_ip": client_ip,
+                "user_agent": user_agent,
+                "advntr_mode": True,
+            },
+            queue="vntyper_long_queue",
+        )
+        logger.info(f"Enqueued ADVntr job {job_id} in long queue with task ID {task.id}")
+    else:
+        task = run_vntyper_job.delay(
+            bam_path=bam_path,
+            output_dir=job_output_dir,
+            thread=thread,
+            reference_assembly=reference_assembly,
+            fast_mode=fast_mode,
+            keep_intermediates=keep_intermediates,
+            archive_results=archive_results,
+            email=email,
+            cohort_key=cohort_key,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            advntr_mode=False,
+        )
+        logger.info(f"Enqueued job {job_id} with task ID {task.id}")
 
     # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
     redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds

@@ -50,6 +50,10 @@ celery_app.conf.task_routes = {
 # Define task queues
 celery_app.conf.task_queues = (
     Queue('vntyper_queue'),
+    # ------------------------------------------------
+    # ADDED: Queue for long-running advntr jobs
+    # ------------------------------------------------
+    Queue('vntyper_long_queue'),
     Queue('celery'),  # Default queue for other tasks
 )
 

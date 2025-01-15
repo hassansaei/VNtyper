@@ -81,6 +81,7 @@ def run_vntyper_job(
     cohort_key: Optional[str] = None,
     client_ip: Optional[str] = None,
     user_agent: Optional[str] = None,
+    advntr_mode: bool = False,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
@@ -112,10 +113,7 @@ def run_vntyper_job(
         if not os.path.exists(bai_path):
             logger.info(f"BAI index not found for {bam_path}. Generating index.")
             try:
-                subprocess.run(
-                    ["samtools", "index", bam_path],
-                    check=True,
-                )
+                subprocess.run(["samtools", "index", bam_path], check=True)
                 logger.info(f"Successfully generated BAI index at {bai_path}")
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error generating BAI index: {e}")
@@ -123,6 +121,7 @@ def run_vntyper_job(
                 redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 raise
 
+        # Build the base command for VNtyper
         command = [
             "conda",
             "run",
@@ -146,9 +145,11 @@ def run_vntyper_job(
             command.append("--keep-intermediates")
         if archive_results:
             command.append("--archive-results")
+        if advntr_mode:
+            command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
 
+        # Run the VNtyper pipeline
         try:
-            # Run the VNtyper pipeline
             subprocess.run(command, check=True)
             logger.info(f"VNtyper job completed for {bam_path}")
         except subprocess.CalledProcessError as e:
@@ -349,7 +350,7 @@ def run_cohort_analysis_job(
         input_file = os.path.join(output_dir, "cohort_input.txt")
         with open(input_file, "w") as f:
             for zpath in zip_paths:
-                f.write(f"{zpath}\n")  # One path per line
+                f.write(f"{zpath}\n")
 
         # 2) Run the "vntyper cohort" command
         command = [
