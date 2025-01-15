@@ -292,6 +292,28 @@
         },
         "check_igv_report": false
       }
+    ],
+
+    "advntr_tests": [
+      {
+        "test_name": "example_24dc_hg19_subset_advntr",
+        "bam": "tests/data/example_24dc_hg19_subset.bam",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results",
+          "--extra-modules", "advntr",
+          "--advntr-max-coverage", "300"
+        ],
+        "expected_vcf": "output_adVNTR.vcf",
+        "advntr_assertions": {
+          "VID": "25561",
+          "State": "I22_2_G_LEN1",
+          "NumberOfSupportingReads": 11,
+          "MeanCoverage": 153.986111111,
+          "Pvalue": 6.78296229901e-07
+        }
+      }
     ]
   }
 }
