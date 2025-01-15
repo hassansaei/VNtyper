@@ -202,6 +202,12 @@ def main():
         type=Path,
         help="Path to a BED file specifying regions for MUC1 analysis."
     )
+    parser_pipeline.add_argument(
+        '--advntr-max-coverage',
+        type=int,
+        default=None,
+        help="Max coverage (e.g. 300) for quick adVNTR mode."
+    )
 
     # Subcommand: report
     parser_report = subparsers.add_parser(
@@ -469,15 +475,19 @@ def main():
         # Construct module_args_dict for advntr, etc.
         module_args_dict = {}
         if 'advntr' in flattened_modules:
+            module_args_dict['advntr'] = {}
+
+            # If the user set advntr_reference somewhere
             if hasattr(args, 'advntr_reference'):
-                module_args_dict['advntr'] = {
-                    'advntr_reference': args.advntr_reference
-                }
+                module_args_dict['advntr']['advntr_reference'] = args.advntr_reference
                 delattr(args, 'advntr_reference')
                 logging.debug(f"advntr_reference set to {args.advntr_reference}")
-            else:
-                module_args_dict['advntr'] = {}
-                logging.debug("advntr_reference not provided; using default.")
+
+            # The new coverage parameter:
+            if args.advntr_max_coverage:
+                module_args_dict['advntr']['max_coverage'] = args.advntr_max_coverage
+                logging.debug(f"advntr_max_coverage set to {args.advntr_max_coverage}")
+
         else:
             module_args_dict['advntr'] = {}
             logging.debug("advntr module not included.")
