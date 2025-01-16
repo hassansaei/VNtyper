@@ -74,21 +74,21 @@ VNtyper 2.0 offers multiple subcommands that can be used depending on your input
 
 ### 1. Running the Full Pipeline
 
-To run the entire pipeline on paired-end FASTQ files or BAM files:
+To run the entire pipeline using a BAM file:
+
+```bash
+vntyper --config-path /path/to/config.json pipeline \
+    --bam /path/to/sample.bam \
+    --output-dir /path/to/output/dir \
+    --threads 4 --fast-mode
+```
+
+Alternatively, using paired-end FASTQ files:
 
 ```bash
 vntyper --config-path /path/to/config.json pipeline \
     --fastq1 /path/to/sample_R1.fastq.gz \
     --fastq2 /path/to/sample_R2.fastq.gz \
-    --output-dir /path/to/output/dir \
-    --threads 4 --fast-mode
-```
-
-Alternatively, using a BAM file:
-
-```bash
-vntyper --config-path /path/to/config.json pipeline \
-    --bam /path/to/sample.bam \
     --output-dir /path/to/output/dir \
     --threads 4 --fast-mode
 ```
@@ -112,12 +112,12 @@ vntyper --config-path /path/to/config.json pipeline \
 Docker image for VNtyper 2.0 is provided and can be pulled and used as follows:
 
 ```bash
-docker pull saei/vntyper:2.0.0
+docker pull saei/vntyper:main
 
 docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:2.0.0 \
+    saei/vntyper:main \
     vntyper pipeline --bam /local/input/folder/filename.bam \
     -o /local/output/folder/filename/
 ```
@@ -125,7 +125,7 @@ docker run -w /opt/vntyper --rm \
 An Apptainer image can be generated from the Docker image as follows:
 
 ```bash
-apptainer pull docker://saei/vntyper:2.0.0
+apptainer pull docker://saei/vntyper:main
 
 apptainer run --pwd /opt/vntyper \
     -B /local/input/folder/:/opt/vntyper/input \
@@ -148,21 +148,6 @@ vntyper --config-path /path/to/config.json install-references \
 ```bash
 vntyper --config-path /path/to/config.json report \
     --output-dir /path/to/output/dir
-```
-
-Process raw FASTQ files to prepare them for genotyping:
-
-```bash
-vntyper fastq \
-    --fastq1 /path/to/sample_R1.fastq.gz \
-    --fastq2 /path/to/sample_R2.fastq.gz \
-    --output-dir /path/to/output/dir
-```
-```bash
-vntyper bam \
-    --alignment /path/to/sample.bam \
-    --output-dir /path/to/output/dir \
-    --threads 4
 ```
 
 ---
@@ -221,7 +206,7 @@ graph TD
 Once the pipeline completes, you will have:
 
 - **BAM or FASTQ** slices containing MUC1-specific reads.  
-- **VCF files** with genotyping results (for Kestrel and optional adVNTR).  
+- **VCF files** or **TSV files** with genotyping results (for Kestrel and optional adVNTR).  
 - **HTML summary report** detailing coverage stats, genotyping calls, and relevant logs.  
 
 ---
@@ -229,7 +214,7 @@ Once the pipeline completes, you will have:
 ## Notes
 
 1. This tool is for **research use only**.  
-2. Ensure **high-coverage WES/WGS data** is used to genotype MUC1 VNTR accurately.  
+2. Ensure **high-coverage WES/WGS or targeted data** is used to genotype MUC1 VNTR accurately.  
 3. For questions or issues, refer to the GitHub repository for support.  
 
 ---
