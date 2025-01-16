@@ -185,3 +185,6 @@ fastp.json
 
 # tests data folder
 /tests/data/
+
+# apptainer files
+*.sif
