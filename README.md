@@ -112,25 +112,30 @@ vntyper --config-path /path/to/config.json pipeline \
 Docker image for VNtyper 2.0 is provided and can be pulled and used as follows:
 
 ```bash
+# pull the docker image
 docker pull saei/vntyper:main
 
+# run the pipeline using the docker image
 docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
     saei/vntyper:main \
-    vntyper pipeline --bam /local/input/folder/filename.bam \
-    -o /local/output/folder/filename/
+    vntyper pipeline \
+    --bam /opt/vntyper/input/filename.bam \
+    -o /opt/vntyper/output/filename/
 ```
 
 An Apptainer image can be generated from the Docker image as follows:
 
 ```bash
+# create the apptainer sif image
 apptainer pull docker://saei/vntyper:main
 
+# run the pipeline using the apptainer image
 apptainer run --pwd /opt/vntyper \
     -B /local/input/folder/:/opt/vntyper/input \
     -B /local/output/folder/:/opt/vntyper/output \
-    vntyper_2.0.0.sif vntyper pipeline \
+    vntyper_main.sif vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/
 ```
