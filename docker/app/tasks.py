@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 import redis
 import hashlib
-from typing import Optional
+from typing import Optional, List  # Added List for typing in new task
 
 from celery.utils.log import get_task_logger
 
@@ -81,6 +81,7 @@ def run_vntyper_job(
     cohort_key: Optional[str] = None,
     client_ip: Optional[str] = None,
     user_agent: Optional[str] = None,
+    advntr_mode: bool = False,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
@@ -112,10 +113,7 @@ def run_vntyper_job(
         if not os.path.exists(bai_path):
             logger.info(f"BAI index not found for {bam_path}. Generating index.")
             try:
-                subprocess.run(
-                    ["samtools", "index", bam_path],
-                    check=True,
-                )
+                subprocess.run(["samtools", "index", bam_path], check=True)
                 logger.info(f"Successfully generated BAI index at {bai_path}")
             except subprocess.CalledProcessError as e:
                 logger.error(f"Error generating BAI index: {e}")
@@ -123,6 +121,7 @@ def run_vntyper_job(
                 redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 raise
 
+        # Build the base command for VNtyper
         command = [
             "conda",
             "run",
@@ -146,9 +145,11 @@ def run_vntyper_job(
             command.append("--keep-intermediates")
         if archive_results:
             command.append("--archive-results")
+        if advntr_mode:
+            command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
 
+        # Run the VNtyper pipeline
         try:
-            # Run the VNtyper pipeline
             subprocess.run(command, check=True)
             logger.info(f"VNtyper job completed for {bam_path}")
         except subprocess.CalledProcessError as e:
@@ -191,6 +192,9 @@ def run_vntyper_job(
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
+
+        if cohort_key:
+            redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
 
         # Construct the download URL
         download_url = f"{settings.API_BASE_URL}/api/download/{job_id}/"
@@ -296,3 +300,92 @@ def delete_old_results():
             logger.info(f"Deleted expired cohort data: {key}")
 
     logger.info("Completed delete_old_results task.")
+
+
+# ----------------------------------------------------------------------
+# Feature #82: Joint Cohort Analysis Task
+# ----------------------------------------------------------------------
+@celery_app.task(bind=True)
+def run_cohort_analysis_job(
+    self,
+    cohort_id: str,
+    zip_paths: List[str],
+    output_dir: str,
+    user_ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
+):
+    """
+    Celery task to run a joint cohort analysis using 'vntyper cohort'.
+    zip_paths: list of full paths to individual .zip result files for cohort samples
+    output_dir: directory to store the joint analysis output and final zip.
+
+    This task:
+      1) Creates a file listing all .zip paths.
+      2) Runs 'vntyper cohort --input-file <list> -o <output_dir>'.
+      3) Zips the combined results and updates usage data.
+    """
+    task_id = self.request.id
+    job_id = os.path.basename(output_dir)
+    logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
+
+    # Generate a unique hash for the user
+    user_data = f"{user_ip}-{user_agent}"
+    user_hash = hashlib.sha256(user_data.encode("utf-8")).hexdigest()
+
+    # Store initial usage data
+    usage_data = {
+        "user_hash": user_hash,
+        "timestamp": datetime.utcnow().isoformat(),
+        "job_id": job_id,
+        "status": "started",
+        "analysis_type": "cohort_analysis",
+        "cohort_id": cohort_id,
+    }
+    redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
+    redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
+
+    try:
+        # 1) Create directory, input file listing all .zip files
+        os.makedirs(output_dir, exist_ok=True)
+        input_file = os.path.join(output_dir, "cohort_input.txt")
+        with open(input_file, "w") as f:
+            for zpath in zip_paths:
+                f.write(f"{zpath}\n")
+
+        # 2) Run the "vntyper cohort" command
+        command = [
+            "conda",
+            "run",
+            "-n",
+            "vntyper",
+            "vntyper",
+            "cohort",
+            "--input-file",
+            input_file,
+            "-o",
+            output_dir,
+        ]
+        logger.info(f"Running command: {' '.join(command)}")
+        subprocess.run(command, check=True)
+        logger.info("Joint cohort analysis completed.")
+
+        # 3) Zip the results
+        try:
+            shutil.make_archive(output_dir, "zip", output_dir)
+            logger.info(f"Zipped results to {output_dir}.zip")
+        except Exception as e:
+            logger.error(f"Error zipping results for cohort analysis: {e}")
+            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+            raise
+
+        # Update usage data on success
+        redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
+
+    except Exception as e:
+        logger.error(f"Error in joint cohort analysis for {cohort_id}: {e}")
+        redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        raise
+    finally:
+        # Remove the task ID from the Redis list
+        redis_client.lrem("vntyper_job_queue", 0, task_id)
+        logger.info(f"Removed cohort analysis task ID {task_id} from queue")

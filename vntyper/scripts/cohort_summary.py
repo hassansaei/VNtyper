@@ -4,6 +4,9 @@ import os
 import logging
 from datetime import datetime
 from pathlib import Path
+import zipfile
+import tempfile
+import shutil
 
 import pandas as pd
 import base64
@@ -98,7 +101,7 @@ def load_advntr_results(advntr_result_file):
     """
     Load and process adVNTR genotyping results.
 
-    adVNTR results are expected in a TSV format, potentially with columns for
+    adVNTR results are expected in a TSV or VCF format, potentially with columns for
     sample ID, VNTR ID (VID), state, supporting reads, coverage, and p-values.
     This function ensures a full schema is always returned, even if no file
     is found or if the file is empty.
@@ -106,7 +109,7 @@ def load_advntr_results(advntr_result_file):
     Parameters
     ----------
     advntr_result_file : str or Path
-        Path to the adVNTR result TSV file.
+        Path to the adVNTR result TSV or VCF file.
 
     Returns
     -------
@@ -132,6 +135,7 @@ def load_advntr_results(advntr_result_file):
         row_data["Message"] = [message]
         return pd.DataFrame(row_data, columns=full_cols)
 
+    # Corrected to go one level up to get the correct sample_id
     sample_id = Path(advntr_result_file).parents[1].name
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
 
@@ -140,7 +144,20 @@ def load_advntr_results(advntr_result_file):
         return empty_advntr_row(sample_id), False
 
     try:
-        df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
+        # Determine file extension to handle TSV and VCF
+        file_ext = Path(advntr_result_file).suffix.lower()
+        if file_ext == '.tsv':
+            df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
+        elif file_ext == '.vcf':
+            # For VCF files, parse using pandas but skipping header lines
+            df = pd.read_csv(advntr_result_file, sep='\t', comment='#', header=None)
+            # Assign column names based on expected VCF format
+            # This is a placeholder; adjust as per actual VCF structure
+            df.columns = ["Sample", "VID", "State", "NumberOfSupportingReads", "MeanCoverage", "Pvalue", "Message"]
+        else:
+            logging.error(f"Unsupported file extension for adVNTR results: {file_ext}")
+            return empty_advntr_row(sample_id), False
+
         if df.empty:
             logging.warning(f"adVNTR result file {advntr_result_file} is empty.")
             return empty_advntr_row(sample_id), False
@@ -161,34 +178,35 @@ def load_advntr_results(advntr_result_file):
         return empty_advntr_row(sample_id, "Error loading adVNTR results"), False
 
 
-def find_results_files(root_dir, filename):
+def find_results_files(root_dir, filenames):
     """
-    Recursively find all files with a specific name in a directory tree.
+    Recursively find all files with specific names in a directory tree.
 
     Parameters
     ----------
     root_dir : str or Path
         Root directory to start the search.
-    filename : str
-        Name of the file to search for.
+    filenames : list of str
+        List of filenames to search for.
 
     Returns
     -------
     list
-        List of Path objects matching the filename.
+        List of Path objects matching any of the filenames.
     """
-    logging.info(f"Searching for {filename} in directory {root_dir}")
+    logging.info(f"Searching for {filenames} in directory {root_dir}")
     result_files = []
     for root, _, files in os.walk(root_dir):
         logging.debug(f"Checking directory: {root}")
-        if filename in files:
-            file_path = Path(root) / filename
-            logging.info(f"Found {filename} in {file_path}")
-            result_files.append(file_path)
+        for filename in filenames:
+            if filename in files:
+                file_path = Path(root) / filename
+                logging.info(f"Found {filename} in {file_path}")
+                result_files.append(file_path)
     return result_files
 
 
-def load_results_from_dirs(input_dirs, filename, file_loader):
+def load_results_from_dirs(input_dirs, filenames, file_loader):
     """
     Load results from all matching files across multiple directories.
 
@@ -200,8 +218,8 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
     ----------
     input_dirs : list
         List of directories to search.
-    filename : str
-        Name of the result files to search for.
+    filenames : list of str
+        List of result filenames to search for.
     file_loader : function
         Function to load and process each file.
 
@@ -211,7 +229,7 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
         Concatenated DataFrame of all loaded results.
     """
     dfs = []
-    loading_advntr = ('advntr' in filename.lower())
+    loading_advntr = any('advntr' in filename.lower() for filename in filenames)
 
     if loading_advntr:
         full_cols = [
@@ -232,7 +250,7 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
 
     for input_dir in input_dirs:
         logging.info(f"Processing input directory: {input_dir}")
-        result_files = find_results_files(input_dir, filename)
+        result_files = find_results_files(input_dir, filenames)
 
         if not result_files:
             if loading_advntr:
@@ -248,7 +266,7 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
                 sample_id = Path(input_dir).name
                 dfs.append(pd.DataFrame({
                     'Sample': [sample_id],
-                    'Message': [f'No {filename} results found for this sample']
+                    'Message': [f'No {filenames} results found for this sample']
                 }))
         else:
             for file in result_files:
@@ -260,10 +278,10 @@ def load_results_from_dirs(input_dirs, filename, file_loader):
                     df = result
                 dfs.append(df)
 
-        logging.info(f"Loaded {len(result_files)} {filename} files from {input_dir}")
+        logging.info(f"Loaded {len(result_files)} files for {filenames} from {input_dir}")
 
     if not dfs:
-        logging.warning(f"No data found at all for {filename}. Returning empty DataFrame.")
+        logging.warning(f"No data found at all for {filenames}. Returning empty DataFrame.")
         return pd.DataFrame()
 
     return pd.concat(dfs, ignore_index=True)
@@ -334,9 +352,7 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
                 'yanchor': 'top'
             },
             annotations=[
-                dict(text=f'<b>{total}</b>', x=0.5, y=0.5, font_size=40, showarrow=False),
-                dict(text=labels[0] if len(labels) > 0 else '', x=0.15, y=0.5, font_size=14, showarrow=False),
-                dict(text=labels[1] if len(labels) > 1 else '', x=0.85, y=0.5, font_size=14, showarrow=False)
+                dict(text=f'<b>{total}</b>', x=0.5, y=0.5, font_size=40, showarrow=False)
             ],
             showlegend=False,
             margin=dict(t=50, b=50, l=50, r=50),
@@ -522,19 +538,19 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         raise
 
 
-def aggregate_cohort(input_dirs, output_dir, summary_file, config):
+def aggregate_cohort(input_paths, output_dir, summary_file, config):
     """
     Aggregate outputs from multiple runs into a single summary file.
 
-    This function uses load_results_from_dirs to gather Kestrel and adVNTR results
-    from multiple directories, merges them into DataFrames, and then generates a
-    single cohort summary report.
+    This function processes each input path, which can be either a directory
+    or a zip file. Zip files are extracted to temporary directories for processing.
+    Only top-level sample directories within extracted zip files are processed to
+    prevent internal subdirectories from being treated as separate samples.
 
     Parameters
     ----------
-    input_dirs : list
-        List of directories containing output files to aggregate. Each directory
-        represents a separate sample or run.
+    input_paths : list
+        List of directories or zip files containing output files to aggregate.
     output_dir : str or Path
         Output directory for the aggregated summary report.
     summary_file : str
@@ -547,21 +563,80 @@ def aggregate_cohort(input_dirs, output_dir, summary_file, config):
     None
         Writes the cohort summary report to the specified output directory.
     """
-    kestrel_df = load_results_from_dirs(
-        input_dirs=input_dirs,
-        filename="kestrel_result.tsv",
-        file_loader=load_kestrel_results
-    )
-    advntr_df = load_results_from_dirs(
-        input_dirs=input_dirs,
-        filename="output_adVNTR.tsv",
-        file_loader=load_advntr_results
-    )
+    temp_dirs = []
+    processed_dirs = []
 
-    generate_cohort_summary_report(
-        output_dir=output_dir,
-        kestrel_df=kestrel_df,
-        advntr_df=advntr_df,
-        summary_file=summary_file,
-        config=config
-    )
+    try:
+        for path_str in input_paths:
+            path = Path(path_str)
+            if not path.exists():
+                logging.warning(f"Input path does not exist and will be skipped: {path}")
+                continue
+            if path.is_dir():
+                logging.info(f"Adding directory to processing list: {path}")
+                processed_dirs.append(path)
+            elif zipfile.is_zipfile(path):
+                logging.info(f"Extracting zip file: {path}")
+                temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
+                try:
+                    with zipfile.ZipFile(path, 'r') as zip_ref:
+                        zip_ref.extractall(temp_dir)
+                    temp_path = Path(temp_dir)
+                    logging.info(f"Extracted zip file to temporary directory: {temp_path}")
+
+                    # Assume that each top-level directory in the zip corresponds to a sample
+                    extracted_subdirs = [p for p in temp_path.iterdir() if p.is_dir()]
+                    if not extracted_subdirs:
+                        logging.warning(f"No subdirectories found in extracted zip file: {path}")
+                        # Optionally, you can treat the temp_dir itself as a sample directory
+                        processed_dirs.append(temp_path)
+                    else:
+                        processed_dirs.extend(extracted_subdirs)
+                        logging.info(f"Added {len(extracted_subdirs)} sample directories from zip file: {path}")
+
+                    temp_dirs.append(temp_dir)
+                except zipfile.BadZipFile as e:
+                    logging.error(f"Bad zip file {path}: {e}")
+                    shutil.rmtree(temp_dir)
+                except Exception as e:
+                    logging.error(f"Error extracting zip file {path}: {e}")
+                    shutil.rmtree(temp_dir)
+            else:
+                logging.warning(f"Unsupported file type (not a directory or zip): {path}")
+
+        if not processed_dirs:
+            logging.error("No valid input directories or zip files found for cohort aggregation.")
+            return
+
+        # Load Kestrel results
+        kestrel_df = load_results_from_dirs(
+            input_dirs=processed_dirs,
+            filenames=["kestrel_result.tsv"],
+            file_loader=load_kestrel_results
+        )
+
+        # Load adVNTR results with both TSV and VCF filenames
+        advntr_filenames = ["output_adVNTR.tsv", "output_adVNTR.vcf"]
+        advntr_df = load_results_from_dirs(
+            input_dirs=processed_dirs,
+            filenames=advntr_filenames,
+            file_loader=load_advntr_results
+        )
+
+        # Generate the cohort summary report
+        generate_cohort_summary_report(
+            output_dir=output_dir,
+            kestrel_df=kestrel_df,
+            advntr_df=advntr_df,
+            summary_file=summary_file,
+            config=config
+        )
+
+    finally:
+        # Cleanup temporary directories
+        for temp_dir in temp_dirs:
+            try:
+                shutil.rmtree(temp_dir)
+                logging.debug(f"Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logging.error(f"Failed to remove temporary directory {temp_dir}: {e}")
