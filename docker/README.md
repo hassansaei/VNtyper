@@ -24,17 +24,17 @@ A Docker container for **VNtyper**, enabling easy execution of the tool with cus
    ```bash
    docker build --no-cache --build-arg REPO_URL=https://github.com/hassansaei/VNtyper.git \
                --build-arg REPO_DIR=/opt/vntyper \
-               -t vntyper:2.0.0 .
+               -t vntyper:latest .
    ```
 5. **Pull the Docker Image from Docker Hub:**
 
     ```bash
-    docker pull saei/vntyper:2.0.0
+    docker pull saei/vntyper:latest
     ```
 6. **Generate apptainer Image from Docker Image:**
 
     ```bash
-    apptainer pull docker://saei/vntyper:2.0.0
+    apptainer pull docker://saei/vntyper:latest
     ```
 
 ## **Running the Docker Container**
@@ -47,7 +47,7 @@ Run docker interactively:
    docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:2.0.0 \
+    vntyper:latest \
     vntyper pipeline --bam /local/input/folder/filename.bam \
     -o /local/output/folder/filename/
 ```
@@ -72,7 +72,7 @@ Start the FastAPI server by running the container:
 docker run -d -p 8000:8000 \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:2.0.0
+    vntyper:latest
 ```
 
 #### **2. Submit a Job via API**

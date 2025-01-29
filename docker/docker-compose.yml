@@ -13,7 +13,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: vntyper:2.0.0
+    image: vntyper:latest
     container_name: vntyper_api
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
@@ -34,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: vntyper:2.0.0
+    image: vntyper:latest
     container_name: vntyper_worker
     command: celery -A app.celery_app worker --loglevel=info
     environment:
@@ -53,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: vntyper:2.0.0
+    image: vntyper:latest
     container_name: vntyper_beat
     command: celery -A app.celery_app beat --loglevel=info
     environment:
