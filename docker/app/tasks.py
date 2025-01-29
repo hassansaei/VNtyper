@@ -193,8 +193,14 @@ def run_vntyper_job(
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
+        # **Removed**: Cohort assignment from the task
+        # if cohort_key:
+        #     redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+
+        # **Cohort assignment is now handled only upon successful completion**
         if cohort_key:
             redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+            logger.info(f"Assigned job {job_id} to cohort {cohort_key}")
 
         # Construct the download URL
         download_url = f"{settings.API_BASE_URL}/api/download/{job_id}/"
@@ -226,8 +232,8 @@ def run_vntyper_job(
         raise
     finally:
         # Remove the task ID from the Redis list
-        redis_client.lrem("vntyper_job_queue", 0, task_id)
-        logger.info(f"Removed task ID {task_id} from vntyper_job_queue")
+        redis_client.lrem("vntyper_job_queue", 0, self.request.id)
+        logger.info(f"Removed task ID {self.request.id} from vntyper_job_queue")
 
         # Extend cohort TTL if necessary
         if cohort_key:
@@ -389,3 +395,35 @@ def run_cohort_analysis_job(
         # Remove the task ID from the Redis list
         redis_client.lrem("vntyper_job_queue", 0, task_id)
         logger.info(f"Removed cohort analysis task ID {task_id} from queue")
+
+        # Extend cohort TTL if necessary
+        if cohort_id:
+            cohort_key = f"cohort:{cohort_id}"
+            ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
+            redis_cohort_client.expire(cohort_key, ttl_seconds)
+            redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+
+        # Delete input ZIP listing file
+        try:
+            if os.path.exists(input_file):
+                os.remove(input_file)
+                logger.info(f"Deleted cohort input file: {input_file}")
+        except Exception as e:
+            logger.error(f"Error deleting cohort input file {input_file}: {e}")
+
+        # Delete individual .zip files if archive_results was used
+        for zpath in zip_paths:
+            try:
+                if os.path.exists(zpath):
+                    os.remove(zpath)
+                    logger.info(f"Deleted individual result file: {zpath}")
+            except Exception as e:
+                logger.error(f"Error deleting file {zpath}: {e}")
+
+        # Optionally, delete the output directory if it's empty
+        try:
+            if os.path.exists(output_dir) and not os.listdir(output_dir):
+                os.rmdir(output_dir)
+                logger.info(f"Deleted empty output directory: {output_dir}")
+        except Exception as e:
+            logger.error(f"Error deleting directory {output_dir}: {e}")

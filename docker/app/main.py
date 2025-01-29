@@ -2,7 +2,6 @@ import logging
 import os
 import shutil
 import subprocess
-import hashlib
 from collections import Counter
 from typing import Optional, Union, List
 from uuid import uuid4
@@ -30,7 +29,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
 from .config import settings
-from .tasks import run_vntyper_job, run_cohort_analysis_job  # <-- Added import for run_cohort_analysis_job
+from .tasks import run_vntyper_job, run_cohort_analysis_job
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -55,14 +54,6 @@ COHORT_REDIS_DB = int(os.getenv("COHORT_REDIS_DB", 3))  # Cohort data
 USAGE_REDIS_DB = settings.USAGE_REDIS_DB  # Usage statistics
 
 # Redis clients
-REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
-COHORT_REDIS_URL = (
-    f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{COHORT_REDIS_DB}"
-)
-USAGE_REDIS_URL = (
-    f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{USAGE_REDIS_DB}"
-)
-
 redis_client = redis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
@@ -380,31 +371,25 @@ async def run_vntyper(
                 status_code=400, detail="Invalid email address provided."
             )
 
-    # Cohort handling
-    if cohort_id or alias:
-        # Retrieve the cohort using cohort_id or alias
-        cohort_key = None
-        cohort_data = None
-        if cohort_id:
-            cohort_key = f"cohort:{cohort_id}"
-            cohort_data = redis_cohort_client.hgetall(cohort_key)
-            if not cohort_data:
-                raise HTTPException(status_code=404, detail="Cohort ID not found")
-        elif alias:
-            # Search for cohort by alias
-            for key in redis_cohort_client.scan_iter("cohort:*"):
-                data = redis_cohort_client.hgetall(key)
-                if data.get("alias") == alias:
-                    cohort_key = key
-                    cohort_data = data
-                    cohort_id = key.split(":", 1)[1]  # Extract cohort_id from key
-                    break
-            if not cohort_key:
-                raise HTTPException(status_code=404, detail="Cohort alias not found")
-        else:
-            raise HTTPException(
-                status_code=400, detail="Cohort identifier or alias required"
-            )
+    # Cohort handling logic
+    if cohort_id:
+        # Retrieve the cohort using cohort_id
+        cohort_key = f"cohort:{cohort_id}"
+        cohort_data = redis_cohort_client.hgetall(cohort_key)
+        if not cohort_data:
+            raise HTTPException(status_code=404, detail="Cohort ID not found")
+
+        # If alias is provided, verify it matches the cohort's alias
+        if alias:
+            if cohort_data.get("alias") != alias:
+                logger.error(
+                    f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Provided alias does not match the cohort's alias.",
+                )
+            logger.info(f"Alias '{alias}' verified for cohort '{cohort_id}'.")
 
         # Verify passphrase if required
         if cohort_data.get("hashed_passphrase"):
@@ -415,10 +400,12 @@ async def run_vntyper(
             if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
                 raise HTTPException(status_code=401, detail="Incorrect passphrase")
 
-        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
-
+        # **Removed**: Premature assignment of job to cohort
+        # redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+        logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
     else:
         cohort_key = None  # Job is not associated with any cohort
+        logger.info(f"Job {job_id} submitted as a single job without cohort assignment.")
 
     # Extract client IP and User-Agent
     client_ip = request.client.host
@@ -445,7 +432,9 @@ async def run_vntyper(
             },
             queue="vntyper_long_queue",
         )
-        logger.info(f"Enqueued ADVntr job {job_id} in long queue with task ID {task.id}")
+        logger.info(
+            f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}"
+        )
     else:
         task = run_vntyper_job.delay(
             bam_path=bam_path,
@@ -1019,6 +1008,18 @@ def get_cohort_jobs(
         raise HTTPException(
             status_code=400, detail="Cohort identifier or alias required"
         )
+
+    # If cohort_id is provided and alias is also provided, verify alias matches
+    if cohort_id and alias:
+        if cohort_data.get("alias") != alias:
+            logger.error(
+                f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Provided alias does not match the cohort's alias.",
+            )
+        logger.info(f"Alias '{alias}' verified for cohort '{cohort_id}'.")
 
     # Verify passphrase if required
     if cohort_data.get("hashed_passphrase"):
