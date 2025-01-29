@@ -414,6 +414,9 @@ async def run_vntyper(
                 )
             if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
                 raise HTTPException(status_code=401, detail="Incorrect passphrase")
+
+        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+
     else:
         cohort_key = None  # Job is not associated with any cohort
 
@@ -422,8 +425,7 @@ async def run_vntyper(
     user_agent = request.headers.get("User-Agent", "unknown")
 
     # ---------------------------------------------------------------------
-    # ADDED: If advntr_mode is True, use vntyper_long_queue; else default.
-    # Pass advntr_mode to the task for advanced module usage.
+    # If advntr_mode is True, use vntyper_long_queue; else the default queue.
     # ---------------------------------------------------------------------
     if advntr_mode:
         task = run_vntyper_job.apply_async(
@@ -810,7 +812,6 @@ def get_usage_statistics():
     )
 
 
-# New endpoint: Download entire cohort as one zip
 @router.get(
     "/cohort-download/",
     tags=["Cohort Management"],
