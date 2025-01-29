@@ -37,12 +37,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Log in to Docker Hub
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}  # Added to GitHub secrets
-          password: ${{ secrets.DOCKER_PASSWORD }}  # Added to GitHub secrets
+      #- name: Log in to Docker Hub
+        #uses: docker/login-action@v3
+        #with:
+          #registry: ${{ env.DOCKERHUB_REGISTRY }}
+          #username: ${{ secrets.DOCKER_USERNAME }}  # Added to GitHub secrets
+          #password: ${{ secrets.DOCKER_PASSWORD }}  # Added to GitHub secrets
 
       # Extract metadata (tags, labels) for Docker
       - name: Extract metadata (tags, labels) for Docker
@@ -51,7 +51,6 @@ jobs:
         with:
           images: |
             ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}
-            ${{ env.DOCKERHUB_REGISTRY }}/saei/vntyper
           tags: |
             type=schedule
             type=ref,event=branch
