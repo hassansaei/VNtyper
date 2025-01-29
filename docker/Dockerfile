@@ -1,5 +1,5 @@
 # Use a specific Miniforge3 version for reproducibility
-FROM condaforge/miniforge3:4.12.0-0
+FROM condaforge/miniforge3:24.11.3-0
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
