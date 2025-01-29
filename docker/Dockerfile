@@ -71,12 +71,13 @@ RUN conda run -n vntyper pip install fastapi==0.115.3 uvicorn==0.32.0 redis==5.2
 RUN mkdir -p $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR
 
 # Allow dynamic UID and GID as build arguments
-ARG USER_ID=1000
-ARG GROUP_ID=1000
+ARG USERNAME=appuser
+ARG USER_UID=1001
+ARG USER_GID=1001
 
 # Create a group and user with the specified UID and GID
-RUN groupadd -g $GROUP_ID appgroup && \
-    useradd -m -u $USER_ID -g appgroup appuser
+RUN groupadd --gid $USER_GID $USERNAME && \
+    useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash --create-home $USERNAME
 
 # Set up entrypoint using RUN cp commands instead of COPY
 RUN cp docker/entrypoint.sh /usr/local/bin/entrypoint.sh && \
@@ -86,13 +87,13 @@ RUN cp docker/entrypoint.sh /usr/local/bin/entrypoint.sh && \
 RUN cp -r docker/app /opt/vntyper/app
 
 # Set ownership of directories and app to appuser
-RUN chown -R appuser:appgroup $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR /opt/vntyper/app /opt/vntyper
+RUN chown -R $USERNAME:$USERNAME $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR /opt/vntyper/app /opt
 
 # Expose FastAPI port
 EXPOSE 8000
 
 # Switch to a non-root user
-USER appuser
+USER $USERNAME
 
 # Define the entry point to either run VNtyper, Celery worker, Celery Beat, or start the FastAPI server
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
