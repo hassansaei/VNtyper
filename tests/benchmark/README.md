@@ -1,17 +1,20 @@
 # VNtyper Benchmarking and Plotting
 
-This repository provides two main scripts to help you:
+This repository provides three main scripts to help you:
 
 1. **Downsample and benchmark** BAM files for MUC1 VNTR analysis, optionally running `vntyper`.  
-2. **Plot** the resulting `vntyper_summary.csv` as scatter plots (one subplot per metric).
+2. **Benchmark** vntyper results against known mutation status using a dedicated benchmarking script.  
+3. **Plot** the resulting `vntyper_summary.csv` as scatter plots (one subplot per metric).
 
 ## Table of Contents
 1. [Requirements](#requirements)
 2. [Scripts Overview](#scripts-overview)
    - [downsample_bam.py](#downsample_bampy)
+   - [benchmark_vntyper.py](#benchmark_vntyperpy)
    - [plot_vntyper_summary.py](#plot_vntyper_summarypy)
 3. [Usage](#usage)
    - [Example: downsample and run vntyper](#example-downsample-and-run-vntyper)
+   - [Example: benchmark vntyper results](#example-benchmark-vntyper-results)
    - [Example: generate scatter plots](#example-generate-scatter-plots)
 4. [Contact](#contact)
 
@@ -21,7 +24,7 @@ This repository provides two main scripts to help you:
 
 - **Python 3.7+**  
 - **Samtools** (installed and in PATH, if you're downsampling)  
-- **vntyper** (installed and in PATH if using the `--run-vntyper` functionality)  
+- **vntyper** (installed and in PATH if using the `--run-vntyper` or benchmarking functionality)  
 - **Matplotlib** and **pandas** (for the plotting script). Install with:
   ```bash
   pip install matplotlib pandas
@@ -36,7 +39,7 @@ This repository provides two main scripts to help you:
 > **Location**: `tests/benchmark/downsample_bam.py`
 
 **Purpose**  
-Downsamples a BAM file to a specific **region** (MUC1) and optionally **downsamples** further to desired fractions or absolute coverage levels. If `--run-vntyper` is set, each downsampled BAM is processed with `vntyper`, and a summary CSV is generated.
+Downsamples a BAM file to a specific **region** (MUC1) and optionally **further downsamples** to desired fractions or absolute coverage levels. If `--run-vntyper` is set, each downsampled BAM is processed with `vntyper`, and a summary CSV is generated.
 
 **Usage**  
 ```bash
@@ -81,6 +84,53 @@ python downsample_bam.py \
 
 ---
 
+### benchmark_vntyper.py
+
+> **Location**: `tests/benchmark/benchmark_vntyper.py`
+
+**Purpose**  
+Benchmarks `vntyper` results on simulated BAM files by comparing the predicted mutation status (derived from the categorical `Confidence` field) with the known status provided in a CSV/TSV file. The script computes a confusion matrix and test statistics, including sensitivity (recall), specificity, precision (PPV), negative predictive value (NPV), and accuracy.
+
+**New Feature**  
+- **Result Caching:**  
+  The script checks if a `vntyper` output directory already exists (with a `kestrel_result.tsv` file) and skips recomputation unless the `--recompute` flag is set.
+
+**Usage**  
+```bash
+python benchmark_vntyper.py \
+    --sample-info path/to/sample_info.csv \
+    --delimiter , \
+    --bam-col bam \
+    --status-col status \
+    --vntyper-path path/to/vntyper \
+    --reference-assembly hg38 \
+    --threads 4 \
+    --output-dir path/to/vntyper_outputs \
+    --summary-output benchmark_summary.csv \
+    --stats-output benchmark_stats.csv \
+    [--recompute] \
+    [--keep-intermediates] [--archive-results] [--fast-mode] \
+    [--vntyper-options "additional options"]
+```
+
+**Key Arguments**  
+- `--sample-info`: Path to the CSV/TSV file containing the BAM file paths and known mutation status.  
+- `--delimiter`: Field delimiter for the sample info file (e.g., `,` for CSV or `\t` for TSV).  
+- `--bam-col` and `--status-col`: Column names for the BAM file paths and mutation status (default: `bam` and `status`).  
+- `--vntyper-path`: Path to the `vntyper` executable (defaults to `vntyper` in PATH).  
+- `--reference-assembly`: Reference assembly (e.g., hg19 or hg38).  
+- `--threads`: Number of threads for processing.  
+- `--output-dir`: Directory to store `vntyper` outputs.  
+- `--summary-output`: Path to the per-sample summary CSV file.  
+- `--stats-output`: Path to the overall test statistics CSV file.  
+- `--recompute`: If set, forces recomputation of `vntyper` results even if they already exist.
+
+**What It Produces**  
+- **Per-Sample Summary CSV:** Contains details per sample (sample ID, BAM path, expected and predicted statuses, output directory).  
+- **Overall Test Statistics CSV:** Contains the confusion matrix (TP, FN, FP, TN, Total) and computed test statistics (Sensitivity, Specificity, Precision, NPV, Accuracy).
+
+---
+
 ### plot_vntyper_summary.py
 
 > **Location**: `tests/benchmark/plot_vntyper_summary.py`
@@ -106,14 +156,14 @@ python plot_vntyper_summary.py \
 
 **Key Arguments**  
 - `--input-csv`: The summary CSV file created by `downsample_bam.py` when `--run-vntyper` is used.  
-- `--output-png`: File path for the generated PNG plot (default `vntyper_summary_plot.png`).  
+- `--output-png`: File path for the generated PNG plot (default: `vntyper_summary_plot.png`).
 
 **What It Produces**  
 - A **PNG** with 3 subplots (side by side):
   - **X-axis**: each metric (`Estimated_Depth_AlternateVariant`, etc.)
   - **Y-axis**: the `value` column in the CSV (i.e., fraction or coverage).  
   - Points color-coded by `confidence`.  
-  - Axes start at 0.  
+  - Axes starting at 0.
 
 ---
 
@@ -143,14 +193,38 @@ This command will:
 
 1. Create `out/benchmark/example_c495/` (if not existing).  
 2. Subset the BAM to the MUC1 region.  
-3. Downsample to coverage levels 25, 50, 100, etc.  
-4. Run `vntyper` on each downsampled BAM.  
+3. Downsample to various coverage levels.  
+4. Run `vntyper` on each downsampled BAM (if `--run-vntyper` is specified).  
 5. Write the final summary CSV to `out/benchmark/example_c495/vntyper_summary.csv`.
 
 Afterwards, check `out/benchmark/example_c495` for:
 - Downsampled BAMs  
 - `kestrel_result.tsv` subdirectories (if any)  
 - The CSV summary
+
+### Example: benchmark vntyper results
+
+```bash
+python tests/benchmark/benchmark_vntyper.py \
+    --sample-info tests/data/sample_info.csv \
+    --delimiter , \
+    --bam-col bam \
+    --status-col status \
+    --vntyper-path vntyper \
+    --reference-assembly hg38 \
+    --threads 8 \
+    --output-dir out/benchmark/benchmark_results \
+    --summary-output out/benchmark/benchmark_summary.csv \
+    --stats-output out/benchmark/benchmark_stats.csv
+```
+
+This command will:
+
+1. Read the sample info CSV, which contains the BAM file paths and known mutation statuses.
+2. For each sample, check if a corresponding `vntyper` output exists.  
+   - If results already exist, they will be reused unless the `--recompute` flag is specified.
+3. Parse the vntyper results and compare the predicted status with the expected status.
+4. Write a per-sample summary CSV (`benchmark_summary.csv`) and an overall statistics CSV (`benchmark_stats.csv`) containing the confusion matrix and test statistics (Sensitivity, Specificity, Precision, NPV, Accuracy).
 
 ### Example: generate scatter plots
 
@@ -160,7 +234,7 @@ python tests/benchmark/plot_vntyper_summary.py \
     --output-png out/benchmark/example_c495/vntyper_summary.png
 ```
 
-- Reads the summary CSV
-- Produces a `vntyper_summary.png` with 3 subplots for the 3 metrics (X-axis) vs. the `value` column (Y-axis).
+- Reads the summary CSV.
+- Produces a `vntyper_summary.png` with 3 subplots for the metrics versus the `value` column.
 
 Check `out/benchmark/example_c495/vntyper_summary.png` to see your scatter plots.
