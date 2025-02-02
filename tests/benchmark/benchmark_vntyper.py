@@ -18,7 +18,8 @@ For each sample, the script will:
   4. Compare the prediction with the expected status.
   5. Compute test statistics (confusion matrix, sensitivity, specificity,
      precision, NPV, and accuracy) and write a detailed per-sample summary as well
-     as these aggregated statistics to output CSV files.
+     as these aggregated statistics (including standard errors and 95% confidence intervals)
+     to output CSV files.
 
 Usage:
     python benchmark_vntyper.py \
@@ -46,6 +47,7 @@ import argparse
 import csv
 import hashlib
 import logging
+import math
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -138,7 +140,6 @@ def run_vntyper(
     if fast_mode:
         command.append("--fast-mode")
     if additional_options:
-        # Split the additional options string into individual arguments.
         command.extend(additional_options.split())
 
     logging.info(f"Executing vntyper for {bam_file.name}")
@@ -198,6 +199,28 @@ def determine_call(summary: Optional[Dict]) -> str:
         if conf.strip().lower() != "negative":
             return "positive"
     return "negative"
+
+# -----------------------
+# Confidence interval helper
+# -----------------------
+def calc_ci(p: float, n: int, z: float = 1.96):
+    """
+    Calculate the standard error and 95% confidence interval for a proportion.
+    
+    Args:
+        p (float): Estimated proportion.
+        n (int): Denominator (sample size).
+        z (float): z-score for desired confidence level (default 1.96 for ~95%).
+    
+    Returns:
+        Tuple: (standard error, lower bound, upper bound) with bounds clamped to [0, 1].
+    """
+    if n == 0:
+        return 0, 0, 0
+    se = math.sqrt(p * (1 - p) / n)
+    lower = max(0, p - z * se)
+    upper = min(1, p + z * se)
+    return se, lower, upper
 
 # -----------------------
 # Argument parsing
@@ -392,12 +415,25 @@ def main():
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0   # Positive Predictive Value (PPV)
     npv = tn / (tn + fn) if (tn + fn) > 0 else 0           # Negative Predictive Value (NPV)
 
+    # Compute standard errors and 95% confidence intervals.
+    sens_n = tp + fn
+    spec_n = tn + fp
+    prec_n = tp + fp
+    npv_n = tn + fn
+    acc_n = total
+
+    sens_se, sens_lower, sens_upper = calc_ci(sensitivity, sens_n)
+    spec_se, spec_lower, spec_upper = calc_ci(specificity, spec_n)
+    prec_se, prec_lower, prec_upper = calc_ci(precision, prec_n)
+    npv_se, npv_lower, npv_upper = calc_ci(npv, npv_n)
+    acc_se, acc_lower, acc_upper = calc_ci(accuracy, acc_n)
+
     logging.info("=== Test Statistics ===")
-    logging.info(f"Sensitivity (Recall): {sensitivity:.3f}")
-    logging.info(f"Specificity: {specificity:.3f}")
-    logging.info(f"Precision (PPV): {precision:.3f}")
-    logging.info(f"NPV: {npv:.3f}")
-    logging.info(f"Accuracy: {accuracy:.3f}")
+    logging.info(f"Sensitivity (Recall): {sensitivity:.3f} (SE: {sens_se:.3f}, CI: [{sens_lower:.3f}, {sens_upper:.3f}])")
+    logging.info(f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])")
+    logging.info(f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])")
+    logging.info(f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])")
+    logging.info(f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])")
 
     # Write detailed per-sample results to summary CSV.
     with args.summary_output.open("w", newline="") as csvfile:
@@ -408,9 +444,16 @@ def main():
             writer.writerow(rec)
     logging.info(f"Per-sample benchmark summary written to {args.summary_output}")
 
-    # Write the overall test statistics and confusion matrix to the stats output file.
+    # Write the overall test statistics and confusion matrix with SE and CIs to the stats output file.
     with args.stats_output.open("w", newline="") as csvfile:
-        fieldnames = ["TP", "FN", "FP", "TN", "Total", "Sensitivity", "Specificity", "Precision", "NPV", "Accuracy"]
+        fieldnames = [
+            "TP", "FN", "FP", "TN", "Total",
+            "Sensitivity", "Sensitivity_SE", "Sensitivity_CI_lower", "Sensitivity_CI_upper",
+            "Specificity", "Specificity_SE", "Specificity_CI_lower", "Specificity_CI_upper",
+            "Precision", "Precision_SE", "Precision_CI_lower", "Precision_CI_upper",
+            "NPV", "NPV_SE", "NPV_CI_lower", "NPV_CI_upper",
+            "Accuracy", "Accuracy_SE", "Accuracy_CI_lower", "Accuracy_CI_upper"
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerow({
@@ -420,10 +463,25 @@ def main():
             "TN": tn,
             "Total": total,
             "Sensitivity": f"{sensitivity:.3f}",
+            "Sensitivity_SE": f"{sens_se:.3f}",
+            "Sensitivity_CI_lower": f"{sens_lower:.3f}",
+            "Sensitivity_CI_upper": f"{sens_upper:.3f}",
             "Specificity": f"{specificity:.3f}",
+            "Specificity_SE": f"{spec_se:.3f}",
+            "Specificity_CI_lower": f"{spec_lower:.3f}",
+            "Specificity_CI_upper": f"{spec_upper:.3f}",
             "Precision": f"{precision:.3f}",
+            "Precision_SE": f"{prec_se:.3f}",
+            "Precision_CI_lower": f"{prec_lower:.3f}",
+            "Precision_CI_upper": f"{prec_upper:.3f}",
             "NPV": f"{npv:.3f}",
+            "NPV_SE": f"{npv_se:.3f}",
+            "NPV_CI_lower": f"{npv_lower:.3f}",
+            "NPV_CI_upper": f"{npv_upper:.3f}",
             "Accuracy": f"{accuracy:.3f}",
+            "Accuracy_SE": f"{acc_se:.3f}",
+            "Accuracy_CI_lower": f"{acc_lower:.3f}",
+            "Accuracy_CI_upper": f"{acc_upper:.3f}",
         })
     logging.info(f"Overall test statistics written to {args.stats_output}")
 
