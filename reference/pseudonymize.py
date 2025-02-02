@@ -99,7 +99,7 @@ def run_samtools_reheader(input_bam, output_bam):
     cmd_reheader = [
         'samtools', 'reheader',
         '-P',
-        '-c', "grep -v ^@pg | grep -v ^@rg",
+        '-c', "grep -v ^@PG | grep -v ^@RG | grep -v ^@CO",
         input_bam
     ]
     logging.debug("Reheader command: %s", " ".join(cmd_reheader))
