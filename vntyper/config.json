@@ -18,8 +18,8 @@
   },
   "reference_data": {
     "muc1_reference_vntr": "reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
-    "advntr_reference_vntr_hg19": "reference/vntr_db_advntr/vntr_db_advntr/hg19_muc1.db",
-    "advntr_reference_vntr_hg38": "reference/vntr_db_advntr/vntr_db_advntr/hg38_muc1.db",
+    "advntr_reference_vntr_hg19": "reference/vntr_db_advntr/hg19_muc1.db",
+    "advntr_reference_vntr_hg38": "reference/vntr_db_advntr/hg38_muc1.db",
     "bwa_reference_hg19": "reference/alignment/chr1.hg19.fa",
     "bwa_reference_hg38": "reference/alignment/chr1.hg38.fa",
     "code_adVNTR_RUs": "reference/code-adVNTR_RUs.fa",
