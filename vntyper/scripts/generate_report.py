@@ -68,8 +68,8 @@ def load_advntr_results(advntr_result_file):
     """
     Loads adVNTR results (output_adVNTR.vcf) if present. For files that indicate
     a negative outcome (e.g. a single non-comment line starting with "Negative"),
-    returns an empty DataFrame along with a True flag indicating that adVNTR was performed.
-    Otherwise, attempts to parse the file normally.
+    returns a DataFrame with one row containing the negative result along with a True flag
+    indicating that adVNTR was performed. Otherwise, attempts to parse the file normally.
     """
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
     if not os.path.exists(advntr_result_file):
@@ -79,20 +79,41 @@ def load_advntr_results(advntr_result_file):
     try:
         # Read all non-empty lines from the file
         with open(advntr_result_file, 'r') as f:
-            lines = [line.strip() for line in f if line.strip()]
-        # Filter out comment lines (those starting with '#')
-        non_comment_lines = [line for line in lines if not line.startswith('#')]
-        if len(non_comment_lines) == 1:
-            # If there's a single non-comment line, check if it indicates a negative result
-            fields = non_comment_lines[0].split('\t')
-            if fields[0].lower() == "negative":
-                logging.debug("adVNTR result indicates a negative outcome.")
-                return pd.DataFrame(), True
+            lines = [line.rstrip('\n') for line in f if line.strip()]
+        # Extract header from a commented line starting with "#VID"
+        header = None
+        for line in lines:
+            if line.startswith("#VID"):
+                header = line.lstrip("#").strip().split("\t")
+                break
 
-        # Otherwise, parse the file normally using pandas (skipping comment lines)
-        df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
-        logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows.")
-        return df, True
+        # Get non-comment lines
+        data_lines = [line for line in lines if not line.startswith("#")]
+        if len(data_lines) == 1:
+            # If there's a single non-comment line, check if it indicates a negative result
+            fields = data_lines[0].split("\t")
+            if fields[0].strip().lower() == "negative":
+                logging.debug("adVNTR result indicates a negative outcome.")
+                if header is None:
+                    # Fallback to default column names if no header was found
+                    header = ["VID", "State", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
+                df = pd.DataFrame([fields], columns=header)
+                return df, True
+
+        # Otherwise, if a header was found in the comments, parse data manually
+        if header is not None:
+            data = data_lines  # All non-comment lines
+            from io import StringIO
+            csv_data = "\n".join(data)
+            df = pd.read_csv(StringIO(csv_data), sep="\t", header=None)
+            df.columns = header
+            logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows from manual parsing.")
+            return df, True
+        else:
+            # Fallback to pandas parsing if no header line was detected
+            df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
+            logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows using fallback parsing.")
+            return df, True
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
         return pd.DataFrame(), False
@@ -107,16 +128,12 @@ def load_pipeline_log(log_file):
     Returns a placeholder string if not found or on error.
     """
     logging.info(f"Loading pipeline log from {log_file}")
-    # If log_file is None or empty, just return a placeholder.
     if not log_file:
         logging.warning("No pipeline log file provided; skipping log loading.")
         return "No pipeline log file was provided."
-
-    # If log_file is not None, check if it exists:
     if not os.path.exists(log_file):
         logging.warning(f"Pipeline log file not found: {log_file}")
         return "Pipeline log file not found."
-
     try:
         with open(log_file, 'r') as f:
             content = f.read()
@@ -145,7 +162,6 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
         flanking = config.get("default_values", {}).get("flanking", 50)
         logging.debug(f"Flanking region set to {flanking} based on config.")
 
-    # Convert each path or None into string or skip
     bed_file = str(bed_file) if bed_file else None
     bam_file = str(bam_file) if bam_file else None
     fasta_file = str(fasta_file) if fasta_file else None
@@ -286,13 +302,11 @@ def generate_summary_report(
     if config is None:
         raise ValueError("Config dictionary must be provided to generate_summary_report")
 
-    # Debug checks for bed_file existence
     if bed_file:
         abs_bed_file = os.path.abspath(bed_file)
         logging.debug(f"Absolute bed_file => {abs_bed_file}")
         logging.debug(f"Exists? => {os.path.exists(abs_bed_file)}")
 
-    # Debug checks for log_file existence
     if log_file:
         abs_log_file = os.path.abspath(log_file)
         logging.debug(f"Absolute log_file => {abs_log_file}")
@@ -314,13 +328,11 @@ def generate_summary_report(
     igv_report_file = Path(output_dir) / "igv_report.html"
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
 
-    # Debug checks
     logging.debug(f"kestrel_result_file => {kestrel_result_file}, exists? {kestrel_result_file.exists()}")
     logging.debug(f"advntr_result_file => {advntr_result_file}, exists? {advntr_result_file.exists()}")
     logging.debug(f"igv_report_file => {igv_report_file}, exists? {igv_report_file.exists()}")
     logging.debug(f"fastp_file => {fastp_file}, exists? {fastp_file.exists()}")
 
-    # Attempt IGV generation only if bed_file is present & real
     if bed_file and os.path.exists(bed_file):
         logging.info(f"Running IGV report for BED file: {bed_file}")
         run_igv_report(
@@ -340,7 +352,6 @@ def generate_summary_report(
     advntr_df, advntr_available = load_advntr_results(advntr_result_file)
     log_content = load_pipeline_log(log_file)
 
-    # If we did produce an IGV report, extract the content
     if igv_report_file and igv_report_file.exists():
         igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
     else:
@@ -349,7 +360,6 @@ def generate_summary_report(
 
     fastp_data = load_fastp_output(fastp_file)
 
-    # Coverage status
     if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
         coverage_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
         coverage_color = 'red'
@@ -390,10 +400,6 @@ def generate_summary_report(
         logging.debug(f"Sequencing setup: {sequencing_str}")
 
     def warn_icon(value, cutoff, higher_better=True):
-        """
-        Returns an HTML icon/string and a color ('red' or 'green'), depending
-        on whether 'value' passes 'cutoff' under the 'higher_better' logic.
-        """
         if value is None:
             logging.debug("warn_icon called with value=None; returning empty strings.")
             return "", ""
@@ -412,13 +418,11 @@ def generate_summary_report(
                 logging.debug(f"Value {value} is below or equal to the cutoff {cutoff} (higher_better=False).")
                 return '<span style="color:green;font-weight:bold;">&#10004;</span>', 'green'
 
-    # Evaluate duplication, Q20, Q30, and passed filter rates
     dup_icon, dup_color = warn_icon(duplication_rate, dup_rate_cutoff, higher_better=False)
     q20_icon, q20_color = warn_icon(q20_rate, q20_rate_cutoff, higher_better=True)
     q30_icon, q30_color = warn_icon(q30_rate, q30_rate_cutoff, higher_better=True)
     pf_icon, pf_color = warn_icon(passed_filter_rate, passed_filter_rate_cutoff, higher_better=True)
 
-    # Convert Kestrel & adVNTR data to HTML
     kestrel_html = kestrel_df.to_html(
         classes='table table-bordered table-striped hover compact order-column table-sm',
         index=False,
@@ -442,7 +446,6 @@ def generate_summary_report(
         logging.debug("adVNTR was not performed; adding message to report.")
     # --- End Modified Section ---
 
-    # Prepare Jinja2 template
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
         template = env.get_template('report_template.html')
@@ -451,27 +454,23 @@ def generate_summary_report(
         logging.error(f"Failed to load Jinja2 template: {e}")
         raise
 
-    # Summarize the results
     summary_text = build_screening_summary(
         kestrel_df, advntr_df, advntr_available, mean_vntr_coverage, mean_vntr_cov_threshold
     )
     logging.debug(f"Summary text generated: {summary_text}")
 
-    # Build the final context for rendering
     context = {
         'kestrel_highlight': kestrel_html,
         'advntr_highlight': advntr_html,
         'advntr_available': advntr_available,
-        'log_content': log_content,  # Re-added pipeline log content
+        'log_content': log_content,
         'igv_content': igv_content,
         'table_json': table_json,
         'session_dictionary': session_dictionary,
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'input_files': input_files or {},
         'pipeline_version': pipeline_version or "unknown",
-        'mean_vntr_coverage': (
-            mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"
-        ),
+        'mean_vntr_coverage': (mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"),
         'mean_vntr_coverage_icon': coverage_icon,
         'mean_vntr_coverage_color': coverage_color,
         'fastp_available': fastp_available,
@@ -491,7 +490,6 @@ def generate_summary_report(
         'summary_text': summary_text
     }
 
-    # Render the template
     try:
         rendered_html = template.render(context)
         logging.debug("Report template rendered successfully.")
@@ -499,7 +497,6 @@ def generate_summary_report(
         logging.error(f"Failed to render the report template: {e}")
         raise
 
-    # Write out the final HTML report
     report_file_path = Path(output_dir) / report_file
     try:
         with open(report_file_path, 'w') as f:
@@ -541,7 +538,7 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
                                  for conf in kestrel_confidences)
         logging.debug(f"Pathogenic variants identified by Kestrel: {pathogenic_kestrel}")
 
-        # Determine confidence level
+        # Determine confidence level if Kestrel found any variants
         confidence_level = None
         if "High_Precision" in kestrel_confidences or "High_Precision*" in kestrel_confidences:
             confidence_level = "High_Precision"
@@ -558,53 +555,51 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
         else:
             logging.debug("Quality metrics assessment: Passed (coverage above threshold).")
 
-        # Scenario 1 & 2: Pathogenic variants identified by Kestrel
-        if pathogenic_kestrel and confidence_level == "High_Precision":
-            if quality_metrics_pass:
-                summary_text += ("Pathogenic frameshift variant identified by Kestrel with high precision, "
-                                 "and the VNTR coverage and quality metrics are above the threshold.")
-                logging.debug("Scenario 1 applied: High precision with passing quality metrics.")
+        # If Kestrel found variants, build a summary from its result
+        if pathogenic_kestrel:
+            if confidence_level == "High_Precision":
+                if quality_metrics_pass:
+                    summary_text += ("Pathogenic frameshift variant identified by Kestrel with high precision, "
+                                     "and the VNTR coverage and quality metrics are above the threshold.")
+                    logging.debug("Scenario 1 applied: High precision with passing quality metrics.")
+                else:
+                    summary_text += ("Pathogenic frameshift variant identified by Kestrel with high precision, "
+                                     "but one or more quality metrics are below the threshold.")
+                    logging.debug("Scenario 2 applied: High precision with failing quality metrics.")
+            elif confidence_level == "Low_Precision":
+                if quality_metrics_pass:
+                    summary_text += ("Warning: Pathogenic variant identified with low precision confidence. "
+                                     "Validation through alternative methods (e.g., SNaPshot for dupC or "
+                                     "long-read sequencing for other variants) is recommended.")
+                    logging.debug("Scenario 3a applied: Low precision with passing quality metrics.")
+                else:
+                    summary_text += ("Warning: Pathogenic variant identified with low precision confidence and low-quality metrics. "
+                                     "Validation using alternative methods is strongly recommended.")
+                    logging.debug("Scenario 3b applied: Low precision with failing quality metrics.")
+
+        # If adVNTR results are available, handle them based on Kestrel result
+        if advntr_available and not advntr_df.empty:
+            # When Kestrel is positive, check concordance with adVNTR
+            if pathogenic_kestrel:
+                if str(advntr_df.iloc[0, 0]).strip().lower() != "negative":
+                    summary_text += (" Both Kestrel and adVNTR genotyping methods have identified pathogenic variants and are concordant.")
+                    logging.debug("Scenario 4 applied: Both methods positive and concordant.")
+                else:
+                    summary_text += (" There is a discrepancy between Kestrel and adVNTR genotyping methods regarding the identification of pathogenic variants.")
+                    logging.debug("Scenario 4 applied: Discrepancy between methods.")
+            # Scenario 5: Kestrel negative but adVNTR has a result
             else:
-                summary_text += ("Pathogenic frameshift variant identified by Kestrel with high precision, "
-                                 "but one or more quality metrics are below the threshold.")
-                logging.debug("Scenario 2 applied: High precision with failing quality metrics.")
+                if str(advntr_df.iloc[0, 0]).strip().lower() == "negative":
+                    summary_text += ("adVNTR genotyping indicates a negative result, and Kestrel did not detect any variant.")
+                    logging.debug("Scenario 5 applied: adVNTR negative, Kestrel negative.")
+                else:
+                    if quality_metrics_pass:
+                        summary_text += ("Pathogenic variant identified by adVNTR with sufficient quality metrics, while Kestrel did not detect any variant.")
+                        logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, passing quality metrics.")
+                    else:
+                        summary_text += ("Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.")
+                        logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, failing quality metrics.")
 
-        # Scenario 3: Pathogenic variants identified with low precision
-        elif pathogenic_kestrel and confidence_level == "Low_Precision":
-            if quality_metrics_pass:
-                summary_text += ("Warning: Pathogenic variant identified with low precision confidence. "
-                                 "Validation through alternative methods (e.g., SNaPshot for dupC or "
-                                 "long-read sequencing for other variants) is recommended.")
-                logging.debug("Scenario 3a applied: Low precision with passing quality metrics.")
-            else:
-                summary_text += ("Warning: Pathogenic variant identified with low precision confidence and low-quality metrics. "
-                                 "Validation using alternative methods is strongly recommended.")
-                logging.debug("Scenario 3b applied: Low precision with failing quality metrics.")
-
-        # Scenario 4: Both Kestrel and adVNTR positive
-        if advntr_available and not advntr_df.empty and pathogenic_kestrel:
-            # Determine if adVNTR also has a positive result
-            adVNTR_positive = not advntr_df.empty
-
-            if adVNTR_positive:
-                summary_text += (" Both Kestrel and adVNTR genotyping methods have identified pathogenic variants and are concordant.")
-                logging.debug("Scenario 4 applied: Both methods positive and concordant.")
-            else:
-                summary_text += (" There is a discrepancy between Kestrel and adVNTR genotyping methods regarding the identification of pathogenic variants.")
-                logging.debug("Scenario 4 applied: Discrepancy between methods.")
-
-        # --- Modified Section for Bug #91 ---
-        # Scenario 5: Only adVNTR positive while Kestrel is negative
-        if not pathogenic_kestrel and advntr_available and not advntr_df.empty:
-            if quality_metrics_pass:
-                summary_text += ("Pathogenic variant identified by adVNTR with sufficient quality metrics, while Kestrel did not detect any variant.")
-                logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, passing quality metrics.")
-            else:
-                summary_text += ("Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.")
-                logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, failing quality metrics.")
-        # --- End Modified Section ---
-
-        # Final negative screening if no summary text was added
         if summary_text == "":
             summary_text = "The screening was negative (no valid Kestrel or adVNTR data)."
             logging.debug("No pathogenic variants identified by either method; negative screening.")
