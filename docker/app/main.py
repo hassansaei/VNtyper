@@ -372,25 +372,35 @@ async def run_vntyper(
             )
 
     # Cohort handling logic
-    if cohort_id:
-        # Retrieve the cohort using cohort_id
-        cohort_key = f"cohort:{cohort_id}"
-        cohort_data = redis_cohort_client.hgetall(cohort_key)
-        if not cohort_data:
-            raise HTTPException(status_code=404, detail="Cohort ID not found")
-
+    if cohort_id or alias:
+        if cohort_id:
+            cohort_key = f"cohort:{cohort_id}"
+            cohort_data = redis_cohort_client.hgetall(cohort_key)
+            if not cohort_data:
+                raise HTTPException(status_code=404, detail="Cohort ID not found")
+        else:
+            # Search for cohort by alias
+            cohort_key = None
+            cohort_data = None
+            for key in redis_cohort_client.scan_iter("cohort:*"):
+                data = redis_cohort_client.hgetall(key)
+                if data.get("alias") == alias:
+                    cohort_key = key
+                    cohort_data = data
+                    cohort_id = key.split(":", 1)[1]
+                    break
+            if not cohort_key:
+                raise HTTPException(status_code=404, detail="Cohort alias not found")
         # If alias is provided, verify it matches the cohort's alias
-        if alias:
-            if cohort_data.get("alias") != alias:
-                logger.error(
-                    f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Provided alias does not match the cohort's alias.",
-                )
-            logger.info(f"Alias '{alias}' verified for cohort '{cohort_id}'.")
-
+        if alias and cohort_data.get("alias") != alias:
+            logger.error(
+                f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Provided alias does not match the cohort's alias.",
+            )
+        logger.info(f"Cohort identified: {cohort_id} with alias: {cohort_data.get('alias')}")
         # Verify passphrase if required
         if cohort_data.get("hashed_passphrase"):
             if not passphrase:
@@ -399,9 +409,8 @@ async def run_vntyper(
                 )
             if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
                 raise HTTPException(status_code=401, detail="Incorrect passphrase")
-
-        # **Removed**: Premature assignment of job to cohort
-        # redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+        # Assign the job to the cohort immediately
+        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
         logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
     else:
         cohort_key = None  # Job is not associated with any cohort
@@ -1020,7 +1029,6 @@ def get_cohort_jobs(
                 detail="Provided alias does not match the cohort's alias.",
             )
         logger.info(f"Alias '{alias}' verified for cohort '{cohort_id}'.")
-
     # Verify passphrase if required
     if cohort_data.get("hashed_passphrase"):
         if not passphrase:
