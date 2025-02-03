@@ -66,8 +66,10 @@ def load_kestrel_results(kestrel_result_file):
 
 def load_advntr_results(advntr_result_file):
     """
-    Loads adVNTR results (output_adVNTR_result.tsv) if present. Returns
-    an empty DataFrame and a False flag if not found or parsing fails.
+    Loads adVNTR results (output_adVNTR.vcf) if present. For files that indicate
+    a negative outcome (e.g. a single non-comment line starting with "Negative"),
+    returns an empty DataFrame along with a True flag indicating that adVNTR was performed.
+    Otherwise, attempts to parse the file normally.
     """
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
     if not os.path.exists(advntr_result_file):
@@ -75,6 +77,19 @@ def load_advntr_results(advntr_result_file):
         return pd.DataFrame(), False
 
     try:
+        # Read all non-empty lines from the file
+        with open(advntr_result_file, 'r') as f:
+            lines = [line.strip() for line in f if line.strip()]
+        # Filter out comment lines (those starting with '#')
+        non_comment_lines = [line for line in lines if not line.startswith('#')]
+        if len(non_comment_lines) == 1:
+            # If there's a single non-comment line, check if it indicates a negative result
+            fields = non_comment_lines[0].split('\t')
+            if fields[0].lower() == "negative":
+                logging.debug("adVNTR result indicates a negative outcome.")
+                return pd.DataFrame(), True
+
+        # Otherwise, parse the file normally using pandas (skipping comment lines)
         df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
         logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows.")
         return df, True
@@ -83,7 +98,7 @@ def load_advntr_results(advntr_result_file):
         return pd.DataFrame(), False
     except Exception as e:
         logging.error(f"Unexpected error loading adVNTR results: {e}")
-        return pd.DataFrame(), False()
+        return pd.DataFrame(), False
 
 
 def load_pipeline_log(log_file):
@@ -411,15 +426,21 @@ def generate_summary_report(
     )
     logging.debug("Kestrel results converted to HTML.")
 
-    if advntr_available and not advntr_df.empty:
-        advntr_html = advntr_df.to_html(
-            classes='table table-bordered table-striped hover compact order-column table-sm',
-            index=False
-        )
-        logging.debug("adVNTR results converted to HTML.")
+    # --- Modified Section for adVNTR HTML ---
+    if advntr_available:
+        if not advntr_df.empty:
+            advntr_html = advntr_df.to_html(
+                classes='table table-bordered table-striped hover compact order-column table-sm',
+                index=False
+            )
+            logging.debug("adVNTR results converted to HTML.")
+        else:
+            advntr_html = '<p>No pathogenic variants identified by adVNTR.</p>'
+            logging.debug("adVNTR was performed but no variants identified; adding negative message to report.")
     else:
-        advntr_html = None
-        logging.debug("No adVNTR results available to convert to HTML.")
+        advntr_html = '<p>adVNTR genotyping was not performed.</p>'
+        logging.debug("adVNTR was not performed; adding message to report.")
+    # --- End Modified Section ---
 
     # Prepare Jinja2 template
     env = Environment(loader=FileSystemLoader(template_dir))
@@ -560,10 +581,9 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
                                  "Validation using alternative methods is strongly recommended.")
                 logging.debug("Scenario 3b applied: Low precision with failing quality metrics.")
 
-        # Scenario 4: Check if both Kestrel and adVNTR have positive results
+        # Scenario 4: Both Kestrel and adVNTR positive
         if advntr_available and not advntr_df.empty and pathogenic_kestrel:
             # Determine if adVNTR also has a positive result
-            # Assuming that a positive result means that adVNTR identified at least one variant
             adVNTR_positive = not advntr_df.empty
 
             if adVNTR_positive:
@@ -573,8 +593,19 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
                 summary_text += (" There is a discrepancy between Kestrel and adVNTR genotyping methods regarding the identification of pathogenic variants.")
                 logging.debug("Scenario 4 applied: Discrepancy between methods.")
 
-        # If no pathogenic variants are identified by either method
-        if not pathogenic_kestrel and (not advntr_available or advntr_df.empty):
+        # --- Modified Section for Bug #91 ---
+        # Scenario 5: Only adVNTR positive while Kestrel is negative
+        if not pathogenic_kestrel and advntr_available and not advntr_df.empty:
+            if quality_metrics_pass:
+                summary_text += ("Pathogenic variant identified by adVNTR with sufficient quality metrics, while Kestrel did not detect any variant.")
+                logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, passing quality metrics.")
+            else:
+                summary_text += ("Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.")
+                logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, failing quality metrics.")
+        # --- End Modified Section ---
+
+        # Final negative screening if no summary text was added
+        if summary_text == "":
             summary_text = "The screening was negative (no valid Kestrel or adVNTR data)."
             logging.debug("No pathogenic variants identified by either method; negative screening.")
 
