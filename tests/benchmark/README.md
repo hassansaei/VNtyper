@@ -9,7 +9,7 @@ This repository provides three main scripts to help you:
 ## Table of Contents
 1. [Requirements](#requirements)
 2. [Scripts Overview](#scripts-overview)
-   - [downsample_bam.py](#downsample_bampy)
+   - [benchamrk_downsample.py](#benchamrk_downsamplepy)
    - [benchmark_vntyper.py](#benchmark_vntyperpy)
    - [plot_vntyper_summary.py](#plot_vntyper_summarypy)
 3. [Usage](#usage)
@@ -34,16 +34,16 @@ This repository provides three main scripts to help you:
 
 ## Scripts Overview
 
-### downsample_bam.py
+### benchamrk_downsample.py
 
-> **Location**: `tests/benchmark/downsample_bam.py`
+> **Location**: `tests/benchmark/benchamrk_downsample.py`
 
 **Purpose**  
-Downsamples a BAM file to a specific **region** (MUC1) and optionally **further downsamples** to desired fractions or absolute coverage levels. If `--run-vntyper` is set, each downsampled BAM is processed with `vntyper`, and a summary CSV is generated.
+Downsamples a BAM file to a specific **region** (MUC1) and optionally **further downsamples** to desired fractions or absolute coverage levels. If `--run-vntyper` is set, each downsampled BAM is processed with `vntyper` (with an optional adVNTR mode via `--run-advntr`), and a summary CSV is generated.
 
 **Usage**  
 ```bash
-python downsample_bam.py \
+python tests/benchmark/benchamrk_downsample.py \
     --input-bam path/to/input.bam \
     --output-dir path/to/output_directory \
     --fractions 0.1 0.2 0.5 \
@@ -53,6 +53,7 @@ python downsample_bam.py \
     --muc1-region 'chr1:155158000-155163000' \
     --vntr-region 'chr1:155160500-155162000' \
     [--run-vntyper] \
+    [--run-advntr] \
     [--vntyper-path path/to/vntyper] \
     [--vntyper-options "additional vntyper options"] \
     [--reference-assembly hg19|hg38] \
@@ -70,6 +71,7 @@ python downsample_bam.py \
 - `--muc1-region`: MUC1 region in `chr:start-end` format.  
 - `--vntr-region`: Sub-region for coverage calculation.  
 - `--run-vntyper`: Run `vntyper` on downsampled BAMs if set.  
+- `--run-advntr`: Include adVNTR mode (appends `--extra-modules advntr` to the vntyper command and parses its results).  
 - `--vntyper-path`: Path to the `vntyper` executable (defaults to `vntyper` in PATH).  
 - `--summary-output`: Path to the final CSV containing the summary of results.  
 
@@ -78,9 +80,9 @@ python downsample_bam.py \
 - If `--run-vntyper` is set: a summary CSV (default: `vntyper_summary.csv`) containing columns like:
   ```
   file_analyzed,method,value,confidence,
-  Estimated_Depth_AlternateVariant,Estimated_Depth_Variant_ActiveRegion,Depth_Score
+  Estimated_Depth_AlternateVariant,Estimated_Depth_Variant_ActiveRegion,Depth_Score,analysis_time_minutes,advntr_result
   ```
-- For each downsampled BAM, if `vntyper` is run, additional subdirectories with `kestrel_result.tsv` may be created.
+- For each downsampled BAM, if `vntyper` is run, additional subdirectories with `kestrel_result.tsv` (and possibly adVNTR results) may be created.
 
 ---
 
@@ -97,7 +99,7 @@ Benchmarks `vntyper` results on (simulated) BAM files by comparing the predicted
 
 **Usage**  
 ```bash
-python benchmark_vntyper.py \
+python tests/benchmark/benchmark_vntyper.py \
     --sample-info path/to/sample_info.csv \
     --delimiter , \
     --bam-col bam \
@@ -149,13 +151,13 @@ The points are **colored** by `confidence`:
 
 **Usage**  
 ```bash
-python plot_vntyper_summary.py \
+python tests/benchmark/plot_vntyper_summary.py \
     --input-csv path/to/vntyper_summary.csv \
     --output-png path/to/vntyper_summary.png
 ```
 
 **Key Arguments**  
-- `--input-csv`: The summary CSV file created by `downsample_bam.py` when `--run-vntyper` is used.  
+- `--input-csv`: The summary CSV file created by `benchamrk_downsample.py` when `--run-vntyper` is used.  
 - `--output-png`: File path for the generated PNG plot (default: `vntyper_summary_plot.png`).
 
 **What It Produces**  
@@ -172,7 +174,7 @@ python plot_vntyper_summary.py \
 ### Example: downsample and run vntyper
 
 ```bash
-python tests/benchmark/downsample_bam.py \
+python tests/benchmark/benchamrk_downsample.py \
     --input-bam tests/data/example_c495.bam \
     --output-dir out/benchmark/example_c495 \
     --coverages 25 50 100 125 150 175 200 225 250 300 500 \
@@ -194,13 +196,15 @@ This command will:
 1. Create `out/benchmark/example_c495/` (if not existing).  
 2. Subset the BAM to the MUC1 region.  
 3. Downsample to various coverage levels.  
-4. Run `vntyper` on each downsampled BAM (if `--run-vntyper` is specified).  
+4. Run `vntyper` (and optionally adVNTR if `--run-advntr` is added) on each downsampled BAM.  
 5. Write the final summary CSV to `out/benchmark/example_c495/vntyper_summary.csv`.
 
 Afterwards, check `out/benchmark/example_c495` for:
 - Downsampled BAMs  
 - `kestrel_result.tsv` subdirectories (if any)  
 - The CSV summary
+
+---
 
 ### Example: benchmark vntyper results
 
@@ -225,6 +229,8 @@ This command will:
    - If results already exist, they will be reused unless the `--recompute` flag is specified.
 3. Parse the vntyper results and compare the predicted status with the expected status.
 4. Write a per-sample summary CSV (`benchmark_summary.csv`) and an overall statistics CSV (`benchmark_stats.csv`) containing the confusion matrix and test statistics (Sensitivity, Specificity, Precision, NPV, Accuracy).
+
+---
 
 ### Example: generate scatter plots
 

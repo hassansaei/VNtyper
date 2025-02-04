@@ -5,6 +5,9 @@ Downsampling and Benchmarking Script for BAM Files
 This script subsets a BAM file to the MUC1 region, calculates coverage in the VNTR region,
 and downsamples the BAM to specified fractions or absolute coverage levels. Optionally,
 it can run `vntyper` on the downsampled BAM files and summarize the results in a tabular format.
+When using the new adVNTR benchmarking feature (via --run-advntr), the vntyper command
+will be modified to include the extra module and the resulting adVNTR output will be parsed
+and added to the summary.
 
 Usage:
     python downsample_bam.py \
@@ -17,8 +20,13 @@ Usage:
         --muc1-region 'chr1:155158000-155163000' \
         --vntr-region 'chr1:155160500-155162000' \
         [--run-vntyper] \
+        [--run-advntr] \
         [--vntyper-path path/to/vntyper] \
         [--vntyper-options "additional vntyper options"] \
+        [--reference-assembly hg19] \
+        [--keep-intermediates] \
+        [--archive-results] \
+        [--fast-mode] \
         [--summary-output summary.csv]
 """
 
@@ -32,7 +40,6 @@ from pathlib import Path
 from typing import List, Optional, Dict
 import csv
 import pandas as pd
-
 
 # Configure logging
 logging.basicConfig(
@@ -272,7 +279,7 @@ def run_vntyper(
     return output_subdir
 
 
-def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
+def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
     """
     Summarize vntyper results from the output directory.
 
@@ -325,28 +332,46 @@ def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
         return None
 
 
-def calculate_required_fraction(
-    desired_coverage: int, current_coverage: float
-) -> float:
+def summarize_advntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
     """
-    Calculate the fraction of reads to keep to achieve desired coverage.
+    Summarize adVNTR results from the vntyper output directory.
 
     Args:
-        desired_coverage (int): Desired coverage (e.g., 10x).
-        current_coverage (float): Current mean coverage.
+        vntyper_output_dir (Path): Path to the vntyper output directory.
 
     Returns:
-        float: Fraction of reads to retain.
+        dict or None: Dictionary with adVNTR summary, or None if not found.
     """
-    if current_coverage == 0:
-        logging.warning("Current coverage is 0. Cannot calculate required fraction.")
-        return 1.0
-    fraction = desired_coverage / current_coverage
-    fraction = min(max(fraction, 0.0), 1.0)  # Clamp between 0 and 1
-    logging.info(
-        f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}"
-    )
-    return fraction
+    advntr_file = vntyper_output_dir / "advntr" / "output_adVNTR.vcf"
+    if not advntr_file.is_file():
+        logging.warning(f"adVNTR result file not found in {vntyper_output_dir}")
+        return None
+    try:
+        with advntr_file.open("r") as f:
+            lines = [line.rstrip("\n") for line in f if line.strip()]
+        data_lines = [line for line in lines if not line.startswith("#")]
+        if len(data_lines) == 1:
+            fields = data_lines[0].split("\t")
+            if fields[0].strip().lower() == "negative":
+                logging.debug("adVNTR result indicates a negative outcome.")
+                return {"advntr_result": "Negative"}
+        header = None
+        for line in lines:
+            if line.startswith("#VID"):
+                header = line.lstrip("#").strip().split("\t")
+                break
+        if header is not None:
+            from io import StringIO
+            csv_data = "\n".join(data_lines)
+            df = pd.read_csv(StringIO(csv_data), sep="\t", header=None)
+            df.columns = header
+        else:
+            df = pd.read_csv(advntr_file, sep="\t", comment='#')
+        summary = {"advntr_result": df.to_dict(orient="records")}
+        return summary
+    except Exception as e:
+        logging.error(f"Error parsing adVNTR results: {e}")
+        return None
 
 
 def parse_pipeline_log(vntyper_output_dir: Path) -> Optional[float]:
@@ -387,6 +412,30 @@ def parse_pipeline_log(vntyper_output_dir: Path) -> Optional[float]:
         return None
 
 
+def calculate_required_fraction(
+    desired_coverage: int, current_coverage: float
+) -> float:
+    """
+    Calculate the fraction of reads to keep to achieve desired coverage.
+
+    Args:
+        desired_coverage (int): Desired coverage (e.g., 10x).
+        current_coverage (float): Current mean coverage.
+
+    Returns:
+        float: Fraction of reads to retain.
+    """
+    if current_coverage == 0:
+        logging.warning("Current coverage is 0. Cannot calculate required fraction.")
+        return 1.0
+    fraction = desired_coverage / current_coverage
+    fraction = min(max(fraction, 0.0), 1.0)  # Clamp between 0 and 1
+    logging.info(
+        f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}"
+    )
+    return fraction
+
+
 def parse_arguments() -> argparse.Namespace:
     """
     Parse command-line arguments.
@@ -395,7 +444,7 @@ def parse_arguments() -> argparse.Namespace:
         argparse.Namespace: Parsed arguments.
     """
     parser = argparse.ArgumentParser(
-        description="Downsample BAM to specified fractions or absolute coverage levels. Optionally run vntyper on downsampled BAMs and summarize results."
+        description="Downsample BAM to specified fractions or absolute coverage levels. Optionally run vntyper (and adVNTR via --run-advntr) on downsampled BAMs and summarize results."
     )
     parser.add_argument(
         "--input-bam",
@@ -453,11 +502,16 @@ def parse_arguments() -> argparse.Namespace:
         default=4,
         help="Number of threads to use for samtools operations.",
     )
-    # New arguments for vntyper
+    # Arguments for vntyper
     parser.add_argument(
         "--run-vntyper",
         action="store_true",
         help="Flag to indicate whether to run vntyper on the downsampled BAM files.",
+    )
+    parser.add_argument(
+        "--run-advntr",
+        action="store_true",
+        help="Flag to indicate whether to include adVNTR mode (adds '--extra-modules advntr' to vntyper and parses its results).",
     )
     parser.add_argument(
         "--vntyper-path",
@@ -562,6 +616,10 @@ def main():
 
         # If vntyper is to be run, execute it
         if args.run_vntyper:
+            # If adVNTR mode is requested, ensure '--extra-modules advntr' is included
+            vntyper_options = args.vntyper_options
+            if args.run_advntr and "--extra-modules" not in vntyper_options:
+                vntyper_options = (vntyper_options + " --extra-modules advntr").strip()
             vntyper_output_dir = run_vntyper(
                 vntyper_path=args.vntyper_path,
                 bam_file=output_bam,
@@ -571,24 +629,27 @@ def main():
                 keep_intermediates=args.keep_intermediates,
                 archive_results=args.archive_results,
                 fast_mode=args.fast_mode,
-                additional_options=args.vntyper_options,
+                additional_options=vntyper_options,
             )
             # Parse pipeline.log for analysis time
             analysis_time = parse_pipeline_log(vntyper_output_dir)
             # Summarize vntyper results
-            summary = summarize_vntyper_results(vntyper_output_dir)
+            summary = summarize_vntr_results(vntyper_output_dir)
+            # Summarize adVNTR results if requested
+            advntr_summary_dict = {}
+            if args.run_advntr:
+                advntr_summary_dict = summarize_advntr_results(vntyper_output_dir)
             if summary:
-                # Append the additional fields to the CSV
                 vntyper_summary.append({
                     'file_analyzed': summary.get('file_analyzed', output_bam.name),
                     'method': 'fraction',
                     'value': fraction,
                     'confidence': ', '.join(map(str, summary.get('Confidence', []))),
-                    # New columns below
                     'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
                     'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
                     'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
                     'analysis_time_minutes': analysis_time if analysis_time is not None else '',
+                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
                 })
             else:
                 vntyper_summary.append({
@@ -600,6 +661,7 @@ def main():
                     'Estimated_Depth_Variant_ActiveRegion': '',
                     'Depth_Score': '',
                     'analysis_time_minutes': '',
+                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
                 })
 
     # Step 4: Downsample to absolute coverages
@@ -625,6 +687,10 @@ def main():
 
         # If vntyper is to be run, execute it
         if args.run_vntyper:
+            # If adVNTR mode is requested, ensure '--extra-modules advntr' is included
+            vntyper_options = args.vntyper_options
+            if args.run_advntr and "--extra-modules" not in vntyper_options:
+                vntyper_options = (vntyper_options + " --extra-modules advntr").strip()
             vntyper_output_dir = run_vntyper(
                 vntyper_path=args.vntyper_path,
                 bam_file=output_bam,
@@ -634,24 +700,27 @@ def main():
                 keep_intermediates=args.keep_intermediates,
                 archive_results=args.archive_results,
                 fast_mode=args.fast_mode,
-                additional_options=args.vntyper_options,
+                additional_options=vntyper_options,
             )
             # Parse pipeline.log for analysis time
             analysis_time = parse_pipeline_log(vntyper_output_dir)
             # Summarize vntyper results
-            summary = summarize_vntyper_results(vntyper_output_dir)
+            summary = summarize_vntr_results(vntyper_output_dir)
+            # Summarize adVNTR results if requested
+            advntr_summary_dict = {}
+            if args.run_advntr:
+                advntr_summary_dict = summarize_advntr_results(vntyper_output_dir)
             if summary:
-                # Append the additional fields to the CSV
                 vntyper_summary.append({
                     'file_analyzed': summary.get('file_analyzed', output_bam.name),
                     'method': 'coverage',
                     'value': coverage,
                     'confidence': ', '.join(map(str, summary.get('Confidence', []))),
-                    # New columns below
                     'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
                     'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
                     'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
                     'analysis_time_minutes': analysis_time if analysis_time is not None else '',
+                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
                 })
             else:
                 vntyper_summary.append({
@@ -663,6 +732,7 @@ def main():
                     'Estimated_Depth_Variant_ActiveRegion': '',
                     'Depth_Score': '',
                     'analysis_time_minutes': '',
+                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
                 })
 
     # Step 5: Write summary table if vntyper was run
@@ -678,7 +748,8 @@ def main():
                 'Estimated_Depth_AlternateVariant',
                 'Estimated_Depth_Variant_ActiveRegion',
                 'Depth_Score',
-                'analysis_time_minutes',  # New column
+                'analysis_time_minutes',
+                'advntr_result'
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
