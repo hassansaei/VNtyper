@@ -89,7 +89,7 @@ python downsample_bam.py \
 > **Location**: `tests/benchmark/benchmark_vntyper.py`
 
 **Purpose**  
-Benchmarks `vntyper` results on simulated BAM files by comparing the predicted mutation status (derived from the categorical `Confidence` field) with the known status provided in a CSV/TSV file. The script computes a confusion matrix and test statistics, including sensitivity (recall), specificity, precision (PPV), negative predictive value (NPV), and accuracy.
+Benchmarks `vntyper` results on (simulated) BAM files by comparing the predicted mutation status (derived from the categorical `Confidence` field) with the known status provided in a CSV/TSV file. The script computes a confusion matrix and test statistics, including sensitivity (recall), specificity, precision (PPV), negative predictive value (NPV), and accuracy.
 
 **New Feature**  
 - **Result Caching:**  
