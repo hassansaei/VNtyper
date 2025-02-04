@@ -109,6 +109,8 @@ vntyper --config-path /path/to/config.json pipeline \
 - SHARK will run first on the raw FASTQ files to extract and filter reads covering the MUC1 VNTR region.  
 - **Important**: SHARK is only supported in FASTQ mode. If you try to use `--extra-modules shark` together with `--bam` or `--cram`, VNtyper will exit gracefully with a warning.
 
+### 2. Running VNtyper with Docker
+
 Docker image for VNtyper 2.0 is provided and can be pulled and used as follows:
 
 ```bash
@@ -125,6 +127,32 @@ docker run -w /opt/vntyper --rm \
     -o /opt/vntyper/output/filename/
 ```
 
+> **Important Host Volume Permissions Note:**  
+> When mounting host directories into the container (using the `-v` flag), please ensure that the host directories (e.g., `/local/input/folder/` and `/local/output/folder/`) have the appropriate permissions so that they are writable by the container's non-root user.
+>
+> **Why Non-Root?**  
+> VNtyper runs as a non-root user for enhanced security and to avoid file ownership issues on your host. Running as root may create files owned by root, leading to permission problems later.
+>
+> There are two ways to ensure proper permissions:
+>
+> 1. **Adjust Host Directory Permissions:**  
+>    Change the ownership/permissions on the host directories so that the UID and GID match those expected by VNtyper in the container.
+>
+> 2. **Use the `--user` Flag:**  
+>    Run the container with the `--user` flag to specify your current user’s UID and GID. For example:
+>
+>    ```bash
+>    docker run --user $(id -u):$(id -g) -w /opt/vntyper --rm \
+>      -v /local/input/folder/:/opt/vntyper/input \
+>      -v /local/output/folder/:/opt/vntyper/output \
+>      saei/vntyper:main \
+>      vntyper pipeline \
+>      --bam /opt/vntyper/input/filename.bam \
+>      -o /opt/vntyper/output/filename/
+>    ```
+>
+> Using either method ensures VNtyper can write its log files (e.g., `pipeline.log`) and other outputs without encountering permission errors.
+
 An Apptainer image can be generated from the Docker image as follows:
 
 ```bash
@@ -140,7 +168,7 @@ apptainer run --pwd /opt/vntyper \
     -o /opt/vntyper/output/filename/
 ```
 
-### 2. Installing References
+### 3. Installing References
 
 ```bash
 vntyper --config-path /path/to/config.json install-references \
@@ -148,7 +176,7 @@ vntyper --config-path /path/to/config.json install-references \
     --skip-indexing  # Optional: skip BWA indexing if needed
 ```
 
-### 3. Generating Reports
+### 4. Generating Reports
 
 ```bash
 vntyper --config-path /path/to/config.json report \
@@ -212,7 +240,7 @@ Once the pipeline completes, you will have:
 
 - **BAM or FASTQ** slices containing MUC1-specific reads.  
 - **VCF files** or **TSV files** with genotyping results (for Kestrel and optional adVNTR).  
-- **HTML summary report** detailing coverage stats, genotyping calls, and relevant logs.  
+- **HTML summary report** detailing coverage stats, genotyping calls, and relevant logs.
 
 ---
 
@@ -220,7 +248,7 @@ Once the pipeline completes, you will have:
 
 1. This tool is for **research use only**.  
 2. Ensure **high-coverage WES/WGS or targeted data** is used to genotype MUC1 VNTR accurately.  
-3. For questions or issues, refer to the GitHub repository for support.  
+3. For questions or issues, refer to the GitHub repository for support.
 
 ---
 
@@ -230,7 +258,7 @@ If you use VNtyper 2.0 in your research, please cite the following:
 
 1. Saei H, Morinière V, Heidet L, et al. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data. iScience. 2023.  
 2. Audano PA, Ravishankar S, et al. Mapping-free variant calling using haplotype reconstruction from k-mer frequencies. Bioinformatics. 2018.  
-3. Park J, Bakhtiari M, et al. Detecting tandem repeat variants in coding regions using code-adVNTR. iScience. 2022.  
+3. Park J, Bakhtiari M, et al. Detecting tandem repeat variants in coding regions using code-adVNTR. iScience. 2022.
 
 ---
 
