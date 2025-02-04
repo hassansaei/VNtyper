@@ -220,6 +220,13 @@
 
         <h2>Screening Summary</h2>
         <p class="summary-box {% if 'negative' not in summary_text %}summary-positive{% endif %}">{{ summary_text|safe }}</p>
+        <!-- Added screening disclaimer with link to ADTKD Diagnostics page -->
+        <p class="text-muted small">
+            Note: VNtyper is a screening tool and results must be confirmed using an alternative method.
+            If the suspicion of ADTKD-MUC1 persists, specialized testing should be initiated.
+            For more details, please visit
+            <a href="http://vntyper.org/adtkd_diagnostics.html" target="_blank" rel="noopener noreferrer">ADTKD Diagnostics</a>.
+        </p>
 
         <h2>Kestrel Identified Variants</h2>
         <div class="table-container">
