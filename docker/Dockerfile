@@ -58,7 +58,7 @@ RUN chmod +x vntyper/dependencies/advntr/install_advntr.sh
 # Install adVNTR environment
 RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
     conda activate envadvntr && \
-    bash vntyper/dependencies/advntr/install_advntr.sh"
+    bash vntyper/dependencies/advntr/install_advntr.sh -o"
 
 # Install VNtyper references during build
 RUN conda run -n vntyper vntyper --config-path /opt/vntyper/config/config.json install-references \
