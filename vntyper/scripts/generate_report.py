@@ -66,54 +66,81 @@ def load_kestrel_results(kestrel_result_file):
 
 def load_advntr_results(advntr_result_file):
     """
-    Loads adVNTR results (output_adVNTR.vcf) if present. For files that indicate
-    a negative outcome (e.g. a single non-comment line starting with "Negative"),
-    returns a DataFrame with one row containing the negative result along with a True flag
+    Loads adVNTR results from a TSV or VCF file.
+    
+    If a file with a .tsv extension (using the same base name) exists,
+    it is used instead of the provided file. For files that indicate a negative
+    outcome (e.g. a single non-comment line starting with "Negative"), returns a
+    DataFrame with one row containing the negative result along with a True flag
     indicating that adVNTR was performed. Otherwise, attempts to parse the file normally.
+
+    Returns:
+        tuple: (DataFrame, bool) where the bool indicates whether valid adVNTR data was loaded.
     """
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
-    if not os.path.exists(advntr_result_file):
-        logging.warning(f"adVNTR result file not found: {advntr_result_file}")
+    advntr_file = Path(advntr_result_file)
+
+    # If the provided file is a VCF, check for a corresponding TSV version.
+    if advntr_file.suffix.lower() == ".vcf":
+        tsv_file = advntr_file.with_suffix('.tsv')
+        if tsv_file.exists():
+            logging.info(f"Found TSV version of adVNTR results: {tsv_file}")
+            advntr_file = tsv_file
+        else:
+            logging.info("No TSV version found; using the provided VCF file.")
+
+    if not advntr_file.exists():
+        logging.warning(f"adVNTR result file not found: {advntr_file}")
         return pd.DataFrame(), False
 
     try:
-        # Read all non-empty lines from the file
-        with open(advntr_result_file, 'r') as f:
-            lines = [line.rstrip('\n') for line in f if line.strip()]
-        # Extract header from a commented line starting with "#VID"
-        header = None
-        for line in lines:
-            if line.startswith("#VID"):
-                header = line.lstrip("#").strip().split("\t")
-                break
+        file_ext = advntr_file.suffix.lower()
+        if file_ext == '.tsv':
+            df = pd.read_csv(advntr_file, sep='\t', comment='#')
+            # Check for a negative outcome if only a single row is present
+            if df.shape[0] == 1:
+                first_field = str(df.iloc[0, 0]).strip().lower()
+                if first_field == "negative":
+                    logging.debug("adVNTR result indicates a negative outcome in TSV.")
+                    return df, True
+            logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows from TSV.")
+            return df, True
+        elif file_ext == '.vcf':
+            # Read all non-empty lines from the VCF file
+            with open(advntr_file, 'r') as f:
+                lines = [line.rstrip('\n') for line in f if line.strip()]
+            # Attempt to extract header from a commented line starting with "#VID"
+            header = None
+            for line in lines:
+                if line.startswith("#VID"):
+                    header = line.lstrip("#").strip().split("\t")
+                    break
 
-        # Get non-comment lines
-        data_lines = [line for line in lines if not line.startswith("#")]
-        if len(data_lines) == 1:
-            # If there's a single non-comment line, check if it indicates a negative result
-            fields = data_lines[0].split("\t")
-            if fields[0].strip().lower() == "negative":
-                logging.debug("adVNTR result indicates a negative outcome.")
-                if header is None:
-                    # Fallback to default column names if no header was found
-                    header = ["VID", "State", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
-                df = pd.DataFrame([fields], columns=header)
+            # Get non-comment lines
+            data_lines = [line for line in lines if not line.startswith("#")]
+            if len(data_lines) == 1:
+                fields = data_lines[0].split("\t")
+                if fields[0].strip().lower() == "negative":
+                    logging.debug("adVNTR result indicates a negative outcome in VCF.")
+                    if header is None:
+                        header = ["VID", "State", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
+                    df = pd.DataFrame([fields], columns=header)
+                    return df, True
+            if header is not None:
+                from io import StringIO
+                csv_data = "\n".join(data_lines)
+                df = pd.read_csv(StringIO(csv_data), sep="\t", header=None)
+                df.columns = header
+                logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows from manual VCF parsing.")
                 return df, True
-
-        # Otherwise, if a header was found in the comments, parse data manually
-        if header is not None:
-            data = data_lines  # All non-comment lines
-            from io import StringIO
-            csv_data = "\n".join(data)
-            df = pd.read_csv(StringIO(csv_data), sep="\t", header=None)
-            df.columns = header
-            logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows from manual parsing.")
-            return df, True
+            else:
+                # Fallback to pandas parsing if no header was detected
+                df = pd.read_csv(advntr_file, sep='\t', comment='#')
+                logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows using fallback VCF parsing.")
+                return df, True
         else:
-            # Fallback to pandas parsing if no header line was detected
-            df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
-            logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows using fallback parsing.")
-            return df, True
+            logging.error(f"Unsupported file extension for adVNTR results: {file_ext}")
+            return pd.DataFrame(), False
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
         return pd.DataFrame(), False
@@ -324,7 +351,7 @@ def generate_summary_report(
     passed_filter_rate_cutoff = thresholds.get("passed_filter_reads_rate", 0.8)
 
     kestrel_result_file = Path(output_dir) / "kestrel/kestrel_result.tsv"
-    advntr_result_file = Path(output_dir) / "advntr/output_adVNTR.vcf"
+    advntr_result_file = Path(output_dir) / "advntr/output_adVNTR_result.tsv"
     igv_report_file = Path(output_dir) / "igv_report.html"
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
 
