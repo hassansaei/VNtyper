@@ -609,7 +609,7 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
             # When Kestrel is positive, check concordance with adVNTR
             if pathogenic_kestrel:
                 if str(advntr_df.iloc[0, 0]).strip().lower() != "negative":
-                    summary_text += (" Both Kestrel and adVNTR genotyping methods have identified pathogenic variants and are concordant.")
+                    summary_text += (" Both Kestrel and adVNTR genotyping methods have identified pathogenic frameshifts (verifying and matching the findings is recommened).")
                     logging.debug("Scenario 4 applied: Both methods positive and concordant.")
                 else:
                     summary_text += (" There is a discrepancy between Kestrel and adVNTR genotyping methods regarding the identification of pathogenic variants.")
@@ -621,7 +621,7 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
                     logging.debug("Scenario 5 applied: adVNTR negative, Kestrel negative.")
                 else:
                     if quality_metrics_pass:
-                        summary_text += ("Pathogenic variant identified by adVNTR with sufficient quality metrics, while Kestrel did not detect any variant.")
+                        summary_text += ("Pathogenic variant identified by adVNTR, while Kestrel did not detect any variant.")
                         logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, passing quality metrics.")
                     else:
                         summary_text += ("Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.")
