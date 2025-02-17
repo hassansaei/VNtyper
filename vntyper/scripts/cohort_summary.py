@@ -105,99 +105,88 @@ def load_advntr_results(advntr_result_file):
     """
     Load and process adVNTR genotyping results.
 
-    adVNTR results are expected in a TSV or VCF format, potentially with columns for
-    sample ID, VNTR ID (VID), state, supporting reads, coverage, and p-values.
-    This function ensures a full schema is always returned, even if no file
-    is found or if the file is empty.
+    The primary file is expected to be "output_adVNTR_result.tsv". If that file
+    does not exist, the sample is marked as Not Performed.
+    
+    - If the TSV exists and contains data rows, the sample is marked as Positive.
+    - If the TSV exists but contains no data rows (only header), the sample is marked as Negative.
+    - If no file exists, the sample is marked as Not Performed.
 
     Parameters
     ----------
     advntr_result_file : str or Path
-        Path to the adVNTR result TSV or VCF file.
+        Path to the adVNTR result file (primary TSV).
 
     Returns
     -------
     tuple
         A tuple (pandas.DataFrame, bool) where:
-        - DataFrame contains the full set of expected columns. If no data is found,
-          returns a DataFrame with NaNs and a "Message" column indicating no output.
-        - bool indicating whether valid data was found (True) or not (False).
+        - The DataFrame contains columns: Sample, VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue, AdvntrState.
+        - The bool is True if the TSV was found (even if negative), False if no file.
     """
-    full_cols = [
-        "Sample",
-        "VID",
-        "State",
-        "NumberOfSupportingReads",
-        "MeanCoverage",
-        "Pvalue",
-        "Message"
-    ]
-
-    def empty_advntr_row(sample_id, message="no adVNTR output found."):
-        row_data = {col: [float('nan')] for col in full_cols if col not in ["Sample", "Message"]}
-        row_data["Sample"] = [sample_id]
-        row_data["Message"] = [message]
-        return pd.DataFrame(row_data, columns=full_cols)
-
-    # Corrected to go one level up to get the correct sample_id
+    cols = ["VID", "Variant", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
+    out_cols = ["Sample"] + cols + ["AdvntrState"]
     sample_id = Path(advntr_result_file).parents[1].name
     logging.info(f"Loading adVNTR results from {advntr_result_file}")
 
-    if not os.path.exists(advntr_result_file):
-        logging.warning(f"adVNTR result file not found: {advntr_result_file}")
-        return empty_advntr_row(sample_id), False
+    primary_file = Path(advntr_result_file).with_name("output_adVNTR_result.tsv")
+    if not primary_file.exists():
+        logging.warning(f"Primary adVNTR TSV not found for sample {sample_id}. Marking as Not Performed.")
+        data = {
+            "Sample": [sample_id],
+            "VID": [""],
+            "Variant": ["Not Performed"],
+            "NumberOfSupportingReads": [float('nan')],
+            "MeanCoverage": [float('nan')],
+            "Pvalue": [float('nan')],
+            "AdvntrState": ["Not Performed"]
+        }
+        return pd.DataFrame(data, columns=out_cols), False
 
     try:
-        # Determine file extension to handle TSV and VCF
-        file_ext = Path(advntr_result_file).suffix.lower()
-        if file_ext == '.tsv':
-            df = pd.read_csv(advntr_result_file, sep='\t', comment='#')
-        elif file_ext == '.vcf':
-            # For VCF files, parse using pandas but skipping header lines
-            df = pd.read_csv(advntr_result_file, sep='\t', comment='#', header=None)
-            # Assign column names based on expected VCF format
-            # This is a placeholder; adjust as per actual VCF structure
-            df.columns = [
-                "Sample",
-                "VID",
-                "State",
-                "NumberOfSupportingReads",
-                "MeanCoverage",
-                "Pvalue",
-                "Message"
-            ]
+        df = pd.read_csv(primary_file, sep='\t', comment='#')
+        # If the file has no data rows (only header), mark as Negative.
+        if df.empty or len(df) == 0:
+            logging.debug("TSV file exists but has no data rows; marking sample as Negative.")
+            data = {
+                "Sample": [sample_id],
+                "VID": [""],
+                "Variant": ["Negative"],
+                "NumberOfSupportingReads": [float('nan')],
+                "MeanCoverage": [float('nan')],
+                "Pvalue": [float('nan')],
+                "AdvntrState": ["Negative"]
+            }
+            return pd.DataFrame(data, columns=out_cols), True
         else:
-            logging.error(
-                f"Unsupported file extension for adVNTR results: {file_ext}"
-            )
-            return empty_advntr_row(sample_id), False
-
-        if df.empty:
-            logging.warning(f"adVNTR result file {advntr_result_file} is empty.")
-            return empty_advntr_row(sample_id), False
-        df['Sample'] = sample_id
-        for col in full_cols:
-            if col not in df.columns:
-                df[col] = float('nan')
-        df = df[full_cols]
-        return df, True
-    except pd.errors.EmptyDataError as e:
-        logging.error(
-            f"adVNTR result file {advntr_result_file} is empty: {e}"
-        )
-        return empty_advntr_row(sample_id), False
+            df["Sample"] = sample_id
+            df["AdvntrState"] = "Positive"
+            df = df[out_cols]
+            return df, True
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse adVNTR result file: {e}")
-        return empty_advntr_row(
-            sample_id, "Failed to parse adVNTR results"
-        ), False
+        data = {
+            "Sample": [sample_id],
+            "VID": [""],
+            "Variant": ["Negative"],
+            "NumberOfSupportingReads": [float('nan')],
+            "MeanCoverage": [float('nan')],
+            "Pvalue": [float('nan')],
+            "AdvntrState": ["Negative"]
+        }
+        return pd.DataFrame(data, columns=out_cols), True
     except Exception as e:
-        logging.error(
-            f"Unexpected error occurred while loading adVNTR results: {e}"
-        )
-        return empty_advntr_row(
-            sample_id, "Error loading adVNTR results"
-        ), False
+        logging.error(f"Unexpected error occurred while loading adVNTR results: {e}")
+        data = {
+            "Sample": [sample_id],
+            "VID": [""],
+            "Variant": ["Negative"],
+            "NumberOfSupportingReads": [float('nan')],
+            "MeanCoverage": [float('nan')],
+            "Pvalue": [float('nan')],
+            "AdvntrState": ["Negative"]
+        }
+        return pd.DataFrame(data, columns=out_cols), True
 
 
 def find_results_files(root_dir, filenames):
@@ -252,51 +241,33 @@ def load_results_from_dirs(input_dirs, filenames, file_loader):
     pandas.DataFrame
         Concatenated DataFrame of all loaded results.
     """
-    dfs = []
-    loading_advntr = any(
-        'advntr' in filename.lower() for filename in filenames
-    )
-
+    dfs = []  # Ensure dfs is defined
+    loading_advntr = any('advntr' in filename.lower() for filename in filenames)
     if loading_advntr:
-        full_cols = [
-            "Sample",
-            "VID",
-            "State",
-            "NumberOfSupportingReads",
-            "MeanCoverage",
-            "Pvalue",
-            "Message"
-        ]
-
-        def empty_advntr_row(sample_id, message="no adVNTR output found."):
-            row_data = {
-                col: [float('nan')]
-                for col in full_cols
-                if col not in ["Sample", "Message"]
+        cols = ["VID", "Variant", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
+        def empty_advntr_row(sample_id):
+            data = {
+                "Sample": [sample_id],
+                "VID": [""],
+                "Variant": ["Not Performed"],
+                "NumberOfSupportingReads": [float('nan')],
+                "MeanCoverage": [float('nan')],
+                "Pvalue": [float('nan')],
+                "AdvntrState": ["Not Performed"]
             }
-            row_data["Sample"] = [sample_id]
-            row_data["Message"] = [message]
-            return pd.DataFrame(row_data, columns=full_cols)
+            return pd.DataFrame(data, columns=["Sample"] + cols + ["AdvntrState"])
 
     for input_dir in input_dirs:
         logging.info(f"Processing input directory: {input_dir}")
         result_files = find_results_files(input_dir, filenames)
-
         if not result_files:
             if loading_advntr:
-                # Check if input_dir is a sample directory by looking for tool subdirectories
-                # Here, we assume that a sample directory contains both 'advntr' and 'kestrel' subdirectories
-                has_advntr = (Path(input_dir) / 'advntr').is_dir()
                 has_kestrel = (Path(input_dir) / 'kestrel').is_dir()
-                if has_advntr and has_kestrel:
-                    # No adVNTR results found for this sample
+                if has_kestrel:
                     sample_id = Path(input_dir).name
                     dfs.append(empty_advntr_row(sample_id))
                 else:
-                    # Not a sample directory, possibly a tool directory; skip
-                    logging.debug(
-                        f"Directory {input_dir} does not appear to be a sample directory. Skipping."
-                    )
+                    logging.debug(f"Directory {input_dir} does not appear to be a sample directory. Skipping.")
             else:
                 sample_id = Path(input_dir).name
                 dfs.append(pd.DataFrame({
@@ -312,17 +283,10 @@ def load_results_from_dirs(input_dirs, filenames, file_loader):
                 else:
                     df = result
                 dfs.append(df)
-
-        logging.info(
-            f"Loaded {len(result_files)} files for {filenames} from {input_dir}"
-        )
-
+        logging.info(f"Loaded {len(result_files)} files for {filenames} from {input_dir}")
     if not dfs:
-        logging.warning(
-            f"No data found at all for {filenames}. Returning empty DataFrame."
-        )
+        logging.warning(f"No data found at all for {filenames}. Returning empty DataFrame.")
         return pd.DataFrame()
-
     return pd.concat(dfs, ignore_index=True)
 
 
@@ -342,17 +306,14 @@ def encode_image_to_base64(image_path):
     """
     try:
         with open(image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(
-                image_file.read()
-            ).decode('utf-8')
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
         return f"data:image/png;base64,{encoded_string}"
     except Exception as e:
         logging.error(f"Failed to encode image {image_path}: {e}")
         return ""
 
 
-def generate_donut_chart(values, labels, total, title, colors,
-                         plot_path=None, interactive=False):
+def generate_donut_chart(values, labels, total, title, colors, plot_path=None, interactive=False):
     """
     Generate and save a donut chart (static or interactive).
 
@@ -379,9 +340,11 @@ def generate_donut_chart(values, labels, total, title, colors,
     Returns
     -------
     str
-        Base64-encoded image string for static charts or HTML string for
-        interactive charts.
+        Base64-encoded image string for static charts or HTML string for interactive charts.
     """
+    if sum(values) == 0:
+        logging.warning(f"No data to plot for donut chart '{title}'.")
+        return ""
     if interactive:
         fig = go.Figure(go.Pie(
             labels=labels,
@@ -391,22 +354,8 @@ def generate_donut_chart(values, labels, total, title, colors,
             textinfo='none'
         ))
         fig.update_layout(
-            title={
-                'text': title,
-                'y': 0.95,
-                'x': 0.5,
-                'xanchor': 'center',
-                'yanchor': 'top'
-            },
-            annotations=[
-                dict(
-                    text=f'<b>{total}</b>',
-                    x=0.5,
-                    y=0.5,
-                    font_size=40,
-                    showarrow=False
-                )
-            ],
+            title={'text': title, 'y': 0.95, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
+            annotations=[dict(text=f'<b>{total}</b>', x=0.5, y=0.5, font_size=40, showarrow=False)],
             showlegend=False,
             margin=dict(t=50, b=50, l=50, r=50),
             height=500,
@@ -417,26 +366,13 @@ def generate_donut_chart(values, labels, total, title, colors,
         fig, ax = plt.subplots(figsize=(6, 6))
         wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
         try:
-            ax.pie(
-                values,
-                wedgeprops=wedgeprops,
-                startangle=90,
-                colors=colors,
-                labels=labels
-            )
-            ax.text(
-                0, 0, f"{total}",
-                ha='center',
-                va='center',
-                fontsize=24
-            )
+            ax.pie(values, wedgeprops=wedgeprops, startangle=90, colors=colors, labels=labels)
+            ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
             ax.set_title(title)
             if plot_path:
                 plt.savefig(plot_path)
             else:
-                logging.warning(
-                    "No plot_path provided for static donut chart, chart not saved."
-                )
+                logging.warning("No plot_path provided for static donut chart, chart not saved.")
         except Exception as e:
             logging.error(f"Error generating donut chart: {e}")
         plt.close()
@@ -446,8 +382,7 @@ def generate_donut_chart(values, labels, total, title, colors,
             return ""
 
 
-def generate_cohort_summary_report(output_dir, kestrel_df,
-                                   advntr_df, summary_file, config):
+def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results.
 
@@ -479,75 +414,27 @@ def generate_cohort_summary_report(output_dir, kestrel_df,
     if 'Confidence' in kestrel_df.columns:
         try:
             kestrel_df_conf = kestrel_df['Confidence'].fillna('')
-            # Updated to include 'High_Precision*' in positive counts
-            kestrel_positive = len(
-                kestrel_df[
-                    kestrel_df_conf.str.contains(
-                        'Low_Precision|High_Precision\\*?', na=False
-                    )
-                ]
-            )
-            kestrel_negative = len(
-                kestrel_df[
-                    ~kestrel_df_conf.str.contains(
-                        'Low_Precision|High_Precision\\*?', na=False
-                    )
-                ]
-            )
+            kestrel_positive = len(kestrel_df[kestrel_df_conf.str.contains('Low_Precision|High_Precision\\*?', na=False)])
+            kestrel_negative = len(kestrel_df[~kestrel_df_conf.str.contains('Low_Precision|High_Precision\\*?', na=False)])
         except Exception as e:
-            logging.error(
-                f"Error processing 'Confidence' values: {e}"
-            )
+            logging.error(f"Error processing 'Confidence' values: {e}")
             kestrel_positive = 0
             kestrel_negative = 0
     else:
-        logging.warning(
-            "No 'Confidence' column found in Kestrel results. Setting positive/negative counts to 0."
-        )
+        logging.warning("No 'Confidence' column found in Kestrel results. Setting positive/negative counts to 0.")
         kestrel_positive = 0
         kestrel_negative = 0
 
     total_kestrel = kestrel_positive + kestrel_negative
 
-    if 'Message' not in advntr_df.columns:
-        logging.warning(
-            "No 'Message' column found in adVNTR results, adding it."
-        )
-        advntr_df['Message'] = None
+    # Count advntr states based on the "AdvntrState" column.
+    advntr_positive = len(advntr_df[advntr_df["AdvntrState"] == "Positive"]) if "AdvntrState" in advntr_df.columns else 0
+    advntr_negative = len(advntr_df[advntr_df["AdvntrState"] == "Negative"]) if "AdvntrState" in advntr_df.columns else 0
+    advntr_not_performed = len(advntr_df[advntr_df["AdvntrState"] == "Not Performed"]) if "AdvntrState" in advntr_df.columns else 0
 
-    if 'VID' in advntr_df.columns:
-        try:
-            advntr_positive = len(
-                advntr_df[
-                    (advntr_df['VID'].notna()) &
-                    (advntr_df['VID'] != 'Negative') &
-                    (advntr_df['Message'].isna())
-                ]
-            )
-            advntr_negative = len(
-                advntr_df[advntr_df['VID'] == 'Negative']
-            )
-            advntr_no_data = len(
-                advntr_df[advntr_df['Message'].notna()]
-            )
-        except Exception as e:
-            logging.error(f"Error processing adVNTR values: {e}")
-            advntr_positive = 0
-            advntr_negative = 0
-            advntr_no_data = len(advntr_df)
-    else:
-        logging.warning(
-            "No 'VID' column found in adVNTR results. Treating all as no data."
-        )
-        advntr_positive = 0
-        advntr_negative = 0
-        advntr_no_data = len(advntr_df)
+    total_advntr = advntr_positive + advntr_negative + advntr_not_performed
 
-    total_advntr = advntr_positive + advntr_negative + advntr_no_data
-
-    color_list = config.get(
-        "visualization", {}
-    ).get("donut_colors", ["#56B4E9", "#D55E00", "#999999"])
+    color_list = config.get("visualization", {}).get("donut_colors", ["#56B4E9", "#D55E00", "#999999"])
     colors = {
         'positive': color_list[0],
         'negative': color_list[1],
@@ -576,35 +463,25 @@ def generate_cohort_summary_report(output_dir, kestrel_df,
 
     advntr_plot_path = plots_dir / "advntr_summary_plot.png"
     advntr_plot_base64 = generate_donut_chart(
-        values=[advntr_positive, advntr_negative, advntr_no_data],
-        labels=['Positive', 'Negative', 'No Data'],
+        values=[advntr_positive, advntr_negative, advntr_not_performed],
+        labels=['Positive', 'Negative', 'Not Performed'],
         total=total_advntr,
         title='adVNTR Results',
-        colors=[
-            colors['positive'],
-            colors['negative'],
-            colors['no_data']
-        ],
+        colors=[colors['positive'], colors['negative'], colors['no_data']],
         plot_path=advntr_plot_path,
         interactive=False
     )
     advntr_plot_html = generate_donut_chart(
-        values=[advntr_positive, advntr_negative, advntr_no_data],
-        labels=['Positive', 'Negative', 'No Data'],
+        values=[advntr_positive, advntr_negative, advntr_not_performed],
+        labels=['Positive', 'Negative', 'Not Performed'],
         total=total_advntr,
         title='adVNTR Results',
-        colors=[
-            colors['positive'],
-            colors['negative'],
-            colors['no_data']
-        ],
+        colors=[colors['positive'], colors['negative'], colors['no_data']],
         plot_path=None,
         interactive=True
     )
 
-    template_dir = config.get(
-        'paths', {}
-    ).get('template_dir', 'vntyper/templates')
+    template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
         template = env.get_template('cohort_summary_template.html')
@@ -614,12 +491,8 @@ def generate_cohort_summary_report(output_dir, kestrel_df,
 
     context = {
         'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'kestrel_positive': kestrel_df.to_html(
-            classes='table table-bordered table-striped', index=False, escape=False
-        ),
-        'advntr_positive': advntr_df.to_html(
-            classes='table table-bordered table-striped', index=False, escape=False
-        ),
+        'kestrel_positive': kestrel_df.to_html(classes='table table-bordered table-striped', index=False, escape=False),
+        'advntr_positive': advntr_df.to_html(classes='table table-bordered table-striped', index=False, escape=False),
         'kestrel_plot_base64': kestrel_plot_base64,
         'advntr_plot_base64': advntr_plot_base64,
         'kestrel_plot_interactive': kestrel_plot_html,
@@ -637,9 +510,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df,
     try:
         with open(report_file_path, 'w') as f:
             f.write(rendered_html)
-        logging.info(
-            f"Cohort summary report generated and saved to {report_file_path}"
-        )
+        logging.info(f"Cohort summary report generated and saved to {report_file_path}")
     except Exception as e:
         logging.error(f"Failed to write the cohort summary report: {e}")
         raise
@@ -678,9 +549,7 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
         for path_str in input_paths:
             path = Path(path_str)
             if not path.exists():
-                logging.warning(
-                    f"Input path does not exist and will be skipped: {path}"
-                )
+                logging.warning(f"Input path does not exist and will be skipped: {path}")
                 continue
             if path.is_dir():
                 logging.info(f"Adding directory to processing list: {path}")
@@ -692,40 +561,26 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
                     with zipfile.ZipFile(path, 'r') as zip_ref:
                         zip_ref.extractall(temp_dir)
                     temp_path = Path(temp_dir)
-                    logging.info(
-                        f"Extracted zip file to temporary directory: {temp_path}"
-                    )
+                    logging.info(f"Extracted zip file to temporary directory: {temp_path}")
 
                     # **Modification Starts Here**
                     # Identify sample directories within the extracted zip
                     # Assuming that each sample directory contains both 'kestrel/' and 'advntr/' subdirectories
                     sample_dirs = [
                         p for p in temp_path.iterdir()
-                        if p.is_dir() and
-                        (p / 'kestrel').is_dir() and
-                        (p / 'advntr').is_dir()
+                        if p.is_dir() and (p / 'kestrel').is_dir() and (p / 'advntr').is_dir()
                     ]
 
                     if not sample_dirs:
-                        logging.warning(
-                            f"No sample directories found in extracted zip file: {path}"
-                        )
-                        # Optionally, treat the entire temp_path as a single sample
-                        # If so, ensure that it contains the necessary tool subdirectories
+                        logging.warning(f"No sample directories found in extracted zip file: {path}")
                         if (temp_path / 'kestrel').is_dir() and (temp_path / 'advntr').is_dir():
                             processed_dirs.append(temp_path)
-                            logging.info(
-                                f"Added top-level directory as a single sample from zip file: {path}"
-                            )
+                            logging.info(f"Added top-level directory as a single sample from zip file: {path}")
                         else:
-                            logging.error(
-                                f"Extracted zip file does not contain valid sample directories: {path}"
-                            )
+                            logging.error(f"Extracted zip file does not contain valid sample directories: {path}")
                     else:
                         processed_dirs.extend(sample_dirs)
-                        logging.info(
-                            f"Added {len(sample_dirs)} sample directories from zip file: {path}"
-                        )
+                        logging.info(f"Added {len(sample_dirs)} sample directories from zip file: {path}")
                     # **Modification Ends Here**
 
                     temp_dirs.append(temp_dir)
@@ -736,14 +591,10 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
                     logging.error(f"Error extracting zip file {path}: {e}")
                     shutil.rmtree(temp_dir)
             else:
-                logging.warning(
-                    f"Unsupported file type (not a directory or zip): {path}"
-                )
+                logging.warning(f"Unsupported file type (not a directory or zip): {path}")
 
         if not processed_dirs:
-            logging.error(
-                "No valid input directories or zip files found for cohort aggregation."
-            )
+            logging.error("No valid input directories or zip files found for cohort aggregation.")
             return
 
         # Load Kestrel results
@@ -753,8 +604,8 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
             file_loader=load_kestrel_results
         )
 
-        # Load adVNTR results with both TSV and VCF filenames
-        advntr_filenames = ["output_adVNTR.tsv", "output_adVNTR.vcf"]
+        # Load adVNTR results with the correct filename (only the primary TSV is used)
+        advntr_filenames = ["output_adVNTR_result.tsv"]
         advntr_df = load_results_from_dirs(
             input_dirs=processed_dirs,
             filenames=advntr_filenames,
