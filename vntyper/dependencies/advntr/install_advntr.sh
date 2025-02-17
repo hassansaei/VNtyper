@@ -1,14 +1,23 @@
 #!/bin/bash
-
 # install_advntr.sh
 # A helper script to automate the installation of adVNTR with optional conda environment activation
 
-set -e  # Exit immediately if a command exits with a non-zero status
+set -e  # Exit immediately if any command exits with a non-zero status
 
-# Default configuration
-INSTALL_DIR="$PWD/adVNTR"
+# Default configuration file (can be overridden with -c/--config)
+CONFIG_FILE="install_advntr.cfg"
+
+# If a configuration file exists in the current directory, source it.
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+fi
+
+# Set defaults if variables are not defined in the config.
+INSTALL_DIR=${INSTALL_DIR:-"$PWD/adVNTR"}
 OVERWRITE=false
-CONDA_ENV=""
+CONDA_ENV=${CONDA_ENV:-""}
+GIT_REPO=${GIT_REPO:-"https://github.com/berntpopp/adVNTR.git"}
+GIT_BRANCH=${GIT_BRANCH:-"enhanced_hmm"}
 
 # Function to display help message
 function display_help() {
@@ -16,12 +25,16 @@ function display_help() {
     echo ""
     echo "Options:"
     echo "  -e, --env              Name of the conda environment to activate (optional)."
-    echo "  -d, --install-dir      Directory where adVNTR will be installed (default: $PWD/adVNTR)."
+    echo "  -d, --install-dir      Directory where adVNTR will be installed (default: \$INSTALL_DIR)."
     echo "  -o, --overwrite        Overwrite the installation directory if it exists."
+    echo "  -c, --config           Path to configuration file (default: install_advntr.cfg)."
     echo "  -h, --help             Display this help message."
     echo ""
-    echo "If a conda environment is specified, the script will attempt to activate it."
-    echo "If not specified, the script assumes the conda environment is already activated."
+    echo "Config file variables:"
+    echo "  CONDA_ENV   : Name of the conda environment (e.g., envadvntr)."
+    echo "  INSTALL_DIR : Directory for installation."
+    echo "  GIT_REPO    : Git repository URL for adVNTR."
+    echo "  GIT_BRANCH  : Git branch to clone."
     exit 0
 }
 
@@ -39,6 +52,16 @@ while [[ "$#" -gt 0 ]]; do
         -o|--overwrite)
             OVERWRITE=true
             ;;
+        -c|--config)
+            CONFIG_FILE="$2"
+            shift
+            if [ -f "$CONFIG_FILE" ]; then
+                source "$CONFIG_FILE"
+            else
+                echo "Configuration file $CONFIG_FILE not found."
+                exit 1
+            fi
+            ;;
         -h|--help)
             display_help
             ;;
@@ -53,6 +76,8 @@ done
 echo "Installation settings:"
 echo "  Install directory: $INSTALL_DIR"
 echo "  Overwrite if exists: $OVERWRITE"
+echo "  Git repository: $GIT_REPO"
+echo "  Git branch: $GIT_BRANCH"
 if [ -n "$CONDA_ENV" ]; then
     echo "  Conda environment to activate: $CONDA_ENV"
 else
@@ -61,13 +86,11 @@ fi
 
 # Attempt to activate the conda environment if specified
 if [ -n "$CONDA_ENV" ]; then
-    # Check if conda is installed
     if ! command -v conda &> /dev/null; then
         echo "Error: Conda is not installed. Please install Conda before running this script."
         exit 1
     fi
 
-    # Check if the conda environment exists
     if conda env list | grep -qw "$CONDA_ENV"; then
         echo "Activating conda environment: $CONDA_ENV"
         source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -78,7 +101,7 @@ if [ -n "$CONDA_ENV" ]; then
     fi
 fi
 
-# Check if adVNTR directory exists
+# Check if the installation directory exists
 if [ -d "$INSTALL_DIR" ]; then
     if [ "$OVERWRITE" = true ]; then
         echo "Overwriting existing installation directory: $INSTALL_DIR"
@@ -90,9 +113,9 @@ if [ -d "$INSTALL_DIR" ]; then
     fi
 fi
 
-# Clone the adVNTR repository from the enhanced_hmm branch
-echo "Cloning adVNTR repository into $INSTALL_DIR..."
-git clone https://github.com/berntpopp/adVNTR.git --branch enhanced_hmm "$INSTALL_DIR"
+# Clone the adVNTR repository from the specified branch.
+echo "Cloning adVNTR repository from $GIT_REPO (branch: $GIT_BRANCH) into $INSTALL_DIR..."
+git clone "$GIT_REPO" --branch "$GIT_BRANCH" "$INSTALL_DIR"
 
 cd "$INSTALL_DIR"
 
@@ -101,12 +124,10 @@ echo "Installing adVNTR..."
 python setup.py install
 
 echo "adVNTR installation completed successfully in $INSTALL_DIR."
-
-# Provide usage instructions
 echo ""
 if [ -n "$CONDA_ENV" ]; then
     echo "To use adVNTR, activate the conda environment with:"
     echo "conda activate $CONDA_ENV"
 else
-    echo "Note: Ensure that your conda environment is activated before using adVNTR."
+    echo "Ensure that your conda environment is activated before using adVNTR."
 fi
