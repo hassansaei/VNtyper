@@ -92,7 +92,7 @@ fi
 
 # Clone the adVNTR repository from the enhanced_hmm branch
 echo "Cloning adVNTR repository into $INSTALL_DIR..."
-git clone https://github.com/mehrdadbakhtiari/adVNTR.git --branch enhanced_hmm "$INSTALL_DIR"
+git clone https://github.com/berntpopp/adVNTR.git --branch enhanced_hmm "$INSTALL_DIR"
 
 cd "$INSTALL_DIR"
 

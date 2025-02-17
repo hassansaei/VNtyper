@@ -109,83 +109,161 @@ def run_advntr(db_file, sorted_bam, output, output_name, config):
     logging.info("adVNTR genotyping of MUC1-VNTR completed successfully.")
     return 0
 
+
 def advntr_processing_del(df):
     """
-    Process adVNTR deletions by calculating deletion length and filtering by frameshift.
+    Process adVNTR deletions by calculating deletion length, computing the frameshift,
+    and filtering variants based on valid frameshift patterns.
+
+    This function:
+      - Renames columns for clarity.
+      - Calculates the number of deletion ('D') and insertion ('I') characters in the entire
+        variant string. Note that multi-allelic strings (e.g. "D55_6&D56_6&D57_6&D58_6&D59_6&D60_6")
+        are treated as a single value; the function aggregates the counts.
+      - Extracts the insertion length information by looking for the first occurrence of a substring 
+        starting with "LEN". For example, for "D18_7&D19_7&D20_7&I20_7_C_LEN16", it extracts "LEN16" and then
+        isolates "16" as the insertion length.
+      - Splits the extracted value on 'LEN', converts the numeric part to an integer,
+        and computes the frameshift as the absolute difference between insertion length and deletion count.
+      - Defines valid deletion frames using parameters from advntr_settings and filters the DataFrame.
+
+    For example:
+      - "D55_6&D56_6&D57_6&D58_6&D59_6&D60_6" results in deletion count = 6, insertion length = 0,
+        and frameshift = |0 - 6| = 6.
+      - "D18_7&D19_7&D20_7&I20_7_C_LEN16" results in deletion count = 3, insertion count = 1,
+        insertion length = 16, and frameshift = |16 - 3| = 13.
 
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
 
     Returns:
-        pd.DataFrame: Filtered DataFrame containing deletions.
+        pd.DataFrame: Filtered DataFrame containing only those deletions that pass the frameshift filter.
     """
+    logger = logging.getLogger(__name__)
+    logger.debug("Starting deletion processing.")
+
+    # Create a copy of the input DataFrame to avoid modifying the original data.
     df1 = df.copy()
+    logger.debug("Copied input DataFrame for deletion processing.")
 
-    # Rename columns for clarity
+    # Rename columns for clarity.
     df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
+    logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
 
-    # Calculate deletion and insertion lengths
+    # Calculate deletion and insertion counts.
     df1['Deletion_length'] = df1['Variant'].str.count('D')
     df1['Insertion_length'] = df1['Variant'].str.count('I')
+    logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
 
-    # Extract insertion length values
-    df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')
+    # Extract insertion length values using regex.
+    # Fix: Use [0] to ensure extraction returns a Series rather than a DataFrame.
+    df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')[0]
+    logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
+
+    # Fill missing values and split the extracted string on 'LEN'.
+    df1['Insertion_len'] = df1['Insertion_len'].fillna('LEN')
     df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
-    df1['Insertion_len'] = df1['Insertion_len'].replace('', 0).astype(int)
+    logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
 
-    # Convert columns to integer type
+    # Replace empty strings with '0' (avoiding downcasting warning) and convert to integer.
+    df1['Insertion_len'] = df1['Insertion_len'].astype(str).replace('^$', '0', regex=True)
+    df1['Insertion_len'] = pd.to_numeric(df1['Insertion_len'], errors='coerce').fillna(0).astype(int)
     df1['Deletion_length'] = df1['Deletion_length'].astype(int)
+    logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
 
-    # Calculate frameshift value
+    # Calculate frameshift as the absolute difference between insertion and deletion lengths.
     df1['frame'] = abs(df1['Insertion_len'] - df1['Deletion_length']).astype(str)
+    logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
 
-    # Define valid frameshift patterns based on settings from advntr_settings
+    # Define valid deletion frames based on settings from advntr_settings.
     max_frameshift = advntr_settings.get("max_frameshift", 100)
     frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
+    logger.debug(f"Valid deletion frames (first 5): {del_frame[:5].tolist()}")
 
+    # Filter DataFrame: keep rows with at least one deletion and a valid frameshift.
     df1 = df1[(df1['Deletion_length'] >= 1) & df1['frame'].isin(del_frame)]
+    logger.debug(f"Filtered DataFrame shape after deletion processing: {df1.shape}")
 
     return df1
 
+
 def advntr_processing_ins(df):
     """
-    Process adVNTR insertions by calculating insertion length and filtering by frameshift.
+    Process adVNTR insertions by calculating insertion length, computing the frameshift,
+    and filtering variants based on valid frameshift patterns.
+
+    This function:
+      - Renames columns for clarity.
+      - Calculates the number of deletion ('D') and insertion ('I') characters in the entire
+        variant string. Note that multi-allelic strings (e.g. "D18_7&D19_7&D20_7&I20_7_C_LEN16")
+        are treated as a single value; the function aggregates the counts.
+      - Extracts the insertion length information from the variant string by searching for a substring 
+        starting with "LEN". In the example "D18_7&D19_7&D20_7&I20_7_C_LEN16", it extracts "LEN16" and isolates "16".
+      - Splits the extracted value on 'LEN', converts the numeric part to an integer,
+        and computes the frameshift as the absolute difference between insertion length and deletion count.
+      - Defines valid insertion frames using parameters from advntr_settings and filters the DataFrame.
+
+    For example:
+      - For a variant string without a LEN value, such as "D55_6&D56_6&D57_6&D58_6&D59_6&D60_6",
+        the insertion length is considered 0 and the frameshift is the deletion count.
+      - For "D18_7&D19_7&D20_7&I20_7_C_LEN16", the deletion count is 3, insertion count is 1,
+        the extracted insertion length is 16, and the frameshift is |16 - 3| = 13.
 
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
 
     Returns:
-        pd.DataFrame: Filtered DataFrame containing insertions.
+        pd.DataFrame: Filtered DataFrame containing only those insertions that pass the frameshift filter.
     """
+    logger = logging.getLogger(__name__)
+    logger.debug("Starting insertion processing.")
+
+    # Create a copy of the input DataFrame to avoid modifying the original data.
     df1 = df.copy()
+    logger.debug("Copied input DataFrame for insertion processing.")
 
-    # Rename columns for clarity
+    # Rename columns for clarity.
     df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
+    logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
 
-    # Calculate deletion and insertion lengths
+    # Calculate deletion and insertion counts.
     df1['Deletion_length'] = df1['Variant'].str.count('D')
     df1['Insertion_length'] = df1['Variant'].str.count('I')
+    logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
 
-    # Extract insertion length values
-    df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')
+    # Extract insertion length values using regex.
+    # Fix: Use [0] to ensure extraction returns a Series rather than a DataFrame.
+    df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')[0]
+    logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
+
+    # Fill missing values and split the extracted string on 'LEN'.
+    df1['Insertion_len'] = df1['Insertion_len'].fillna('LEN')
     df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
-    df1['Insertion_len'] = df1['Insertion_len'].replace('', 0).astype(int)
+    logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
 
-    # Convert columns to integer type
+    # Replace empty strings with '0' (avoiding downcasting warning) and convert to integer.
+    df1['Insertion_len'] = df1['Insertion_len'].astype(str).replace('^$', '0', regex=True)
+    df1['Insertion_len'] = pd.to_numeric(df1['Insertion_len'], errors='coerce').fillna(0).astype(int)
     df1['Deletion_length'] = df1['Deletion_length'].astype(int)
+    logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
 
-    # Calculate frameshift value
+    # Calculate frameshift as the absolute difference between insertion and deletion lengths.
     df1['frame'] = abs(df1['Insertion_len'] - df1['Deletion_length']).astype(str)
+    logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
 
-    # Define valid frameshift patterns based on settings from advntr_settings
+    # Define valid insertion frames based on settings from advntr_settings.
     max_frameshift = advntr_settings.get("max_frameshift", 100)
     frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
     ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
+    logger.debug(f"Valid insertion frames (first 5): {ins_frame[:5].tolist()}")
 
+    # Filter DataFrame: keep rows with at least one insertion and a valid frameshift.
     df1 = df1[(df1['Insertion_len'] >= 1) & df1['frame'].isin(ins_frame)]
+    logger.debug(f"Filtered DataFrame shape after insertion processing: {df1.shape}")
 
     return df1
+
 
 def process_advntr_output(output_path, output, output_name):
     """
