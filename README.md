@@ -2,8 +2,8 @@
 
 **VNtyper 2.0** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This version integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
 
-  - We have developed a web server to provide free access to VNtyper, which runs in the background for ease of use.
-    Access it through the following link: [vntyper-online](https://vntyper.org/)
+- We have developed a web server to provide free access to VNtyper, which runs in the background for ease of use.  
+  Access it through the following link: [vntyper-online](https://vntyper.org/)
 
 ---
 
@@ -14,13 +14,14 @@
 3. [Usage](#usage)  
 4. [Pipeline Overview](#pipeline-overview)  
 5. [Dependencies](#dependencies)  
-6. [Pipeline Logic Diagram](#pipeline-logic-diagram)  
-7. [Results](#results)  
-8. [Notes](#notes)  
-9. [Citations](#citations)  
-10. [Contributing](#contributing)  
-11. [License](#license)  
-12. [Contact](#contact)
+6. [Linting and Code Formatting](#linting-and-code-formatting)  
+7. [Pipeline Logic Diagram](#pipeline-logic-diagram)  
+8. [Results](#results)  
+9. [Notes](#notes)  
+10. [Citations](#citations)  
+11. [Contributing](#contributing)  
+12. [License](#license)  
+13. [Contact](#contact)
 
 ---
 
@@ -216,6 +217,51 @@ VNtyper 2.0 relies on several tools and Python libraries. Ensure that the follow
 - IGV-Reports  
 
 You can easily set up these dependencies via the provided Conda environment file.
+
+---
+
+## Linting and Code Formatting
+
+VNtyper adheres to PEP8 style guidelines to ensure clean, readable, and maintainable code. We recommend the following tools:
+
+### Using flake8 for Linting
+
+**flake8** is used to check for style violations. Note that flake8 only reports issues—it does not automatically fix them.
+
+1. **Install flake8:**  
+   You can install it as part of the development extras:
+
+   ```bash
+   pip install -e .[dev]
+   ```
+
+   *Or install it directly:*
+
+   ```bash
+   pip install flake8
+   ```
+
+2. **Run flake8:**  
+   To check your code, run the following command from the project root:
+
+   ```bash
+   flake8 .
+   ```
+
+   This command will recursively scan your project and report any PEP8 issues.
+
+### Automatic Code Formatting with Black
+
+For automatic formatting, we use **Black**, which is already included in the development extras.
+
+1. **Run Black:**  
+   Simply execute the following command in the project root:
+
+   ```bash
+   black .
+   ```
+
+   Black will automatically reformat your code according to its opinionated style, which is also compliant with PEP8.
 
 ---
 
