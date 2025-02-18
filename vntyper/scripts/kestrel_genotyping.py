@@ -75,9 +75,7 @@ def load_kestrel_config(config_path=None):
     """
     if config_path is None:
         # Default path to kestrel_config.json
-        config_path = os.path.join(
-            os.path.dirname(__file__), 'kestrel_config.json'
-        )
+        config_path = os.path.join(os.path.dirname(__file__), "kestrel_config.json")
     return load_config(config_path)
 
 
@@ -414,9 +412,9 @@ def process_kestrel_output(
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
-    with open(final_output_path, 'w') as f:
+    with open(final_output_path, "w") as f:
         f.write("\n".join(header) + "\n")
-        processed_df.to_csv(f, sep='\t', index=False)
+        processed_df.to_csv(f, sep="\t", index=False)
 
     logging.info("Kestrel VCF processing completed.")
     return processed_df
@@ -435,22 +433,22 @@ def output_empty_result(output_dir, header):
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
 
     empty_result_data = {
-        'Motif': ['None'],
-        'Variant': ['None'],
-        'POS': ['None'],
-        'REF': ['None'],
-        'ALT': ['None'],
-        'Motif_sequence': ['None'],
-        'Estimated_Depth_AlternateVariant': ['None'],
-        'Estimated_Depth_Variant_ActiveRegion': ['None'],
-        'Depth_Score': ['None'],
-        'Confidence': ['Negative'],
+        "Motif": ["None"],
+        "Variant": ["None"],
+        "POS": ["None"],
+        "REF": ["None"],
+        "ALT": ["None"],
+        "Motif_sequence": ["None"],
+        "Estimated_Depth_AlternateVariant": ["None"],
+        "Estimated_Depth_Variant_ActiveRegion": ["None"],
+        "Depth_Score": ["None"],
+        "Confidence": ["Negative"],
     }
     empty_df = pd.DataFrame(empty_result_data)
 
-    with open(final_output_path, 'w') as f:
+    with open(final_output_path, "w") as f:
         f.write("\n".join(header) + "\n")
-        empty_df.to_csv(f, sep='\t', index=False)
+        empty_df.to_csv(f, sep="\t", index=False)
 
     logging.info(f"Empty result file with placeholder saved at {final_output_path}")
 
@@ -545,7 +543,7 @@ def generate_bed_file(df, output_dir):
         str or None: Path to the generated BED or None if data is missing/empty.
     """
     # We only generate a BED if columns 'Motif_fasta' & 'POS_fasta' exist
-    if 'Motif_fasta' not in df.columns or 'POS_fasta' not in df.columns:
+    if "Motif_fasta" not in df.columns or "POS_fasta" not in df.columns:
         logging.warning(
             "Missing 'Motif_fasta' or 'POS_fasta' in DataFrame. "
             "Skipping BED file generation."
@@ -559,10 +557,10 @@ def generate_bed_file(df, output_dir):
     bed_file_path = os.path.join(output_dir, "output.bed")
 
     # Each row: motif_fasta, start=pos_fasta, end=pos_fasta+1
-    with open(bed_file_path, 'w') as bed_file:
+    with open(bed_file_path, "w") as bed_file:
         for _, row in df.iterrows():
-            motif_fasta = row['Motif_fasta']
-            pos = row['POS_fasta']
+            motif_fasta = row["Motif_fasta"]
+            pos = row["POS_fasta"]
             bed_file.write(f"{motif_fasta}\t{pos}\t{pos + 1}\n")
 
     logging.info(f"BED file generated at: {bed_file_path}")
@@ -600,11 +598,11 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
 
     # Columns we will require to be True if they exist
     filter_cols = [
-        'is_frameshift',
-        'is_valid_frameshift',
-        'depth_confidence_pass',
-        'alt_filter_pass',
-        'motif_filter_pass',
+        "is_frameshift",
+        "is_valid_frameshift",
+        "depth_confidence_pass",
+        "alt_filter_pass",
+        "motif_filter_pass",
     ]
 
     # Build a mask requiring all existing boolean filters == True
@@ -616,7 +614,9 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
             after_count = final_mask.sum()
             logging.info(
                 "Filter column '%s' exists; %d -> %d rows remain after requiring True.",
-                col, before_count, after_count
+                col,
+                before_count,
+                after_count,
             )
         else:
             logging.info("Filter column '%s' not found; skipping.", col)

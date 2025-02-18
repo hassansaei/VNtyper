@@ -400,7 +400,9 @@ async def run_vntyper(
                 status_code=400,
                 detail="Provided alias does not match the cohort's alias.",
             )
-        logger.info(f"Cohort identified: {cohort_id} with alias: {cohort_data.get('alias')}")
+        logger.info(
+            f"Cohort identified: {cohort_id} with alias: {cohort_data.get('alias')}"
+        )
         # Verify passphrase if required
         if cohort_data.get("hashed_passphrase"):
             if not passphrase:
@@ -414,7 +416,9 @@ async def run_vntyper(
         logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
     else:
         cohort_key = None  # Job is not associated with any cohort
-        logger.info(f"Job {job_id} submitted as a single job without cohort assignment.")
+        logger.info(
+            f"Job {job_id} submitted as a single job without cohort assignment."
+        )
 
     # Extract client IP and User-Agent
     client_ip = request.client.host
@@ -686,9 +690,7 @@ def get_job_queue(
                 )
         except Exception as e:
             logger.error(f"Error retrieving job position: {e}")
-            raise HTTPException(
-                status_code=500, detail="Error retrieving job position"
-            )
+            raise HTTPException(status_code=500, detail="Error retrieving job position")
     else:
         # Return the total number of jobs in the queue
         return JobQueueResponse(total_jobs_in_queue=queue_length)
@@ -729,9 +731,7 @@ def get_cohort_status(
     - **jobs**: A list of job statuses within the cohort.
     """
     # Reuse the get_cohort_jobs function to retrieve job_ids
-    response = get_cohort_jobs(
-        cohort_id=cohort_id, alias=alias, passphrase=passphrase
-    )
+    response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
     job_ids = response["job_ids"]
 
     # Define mapping from Celery statuses to standardized statuses
@@ -752,7 +752,9 @@ def get_cohort_status(
         else:
             task_result = AsyncResult(task_id)
             # Map the Celery status to standardized status
-            status = celery_status_mapping.get(task_result.status, task_result.status.lower())
+            status = celery_status_mapping.get(
+                task_result.status, task_result.status.lower()
+            )
         job_statuses.append({"job_id": job_id, "status": status})
 
     return {
@@ -824,7 +826,9 @@ def get_usage_statistics():
 def cohort_download(
     cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
     alias: Optional[str] = Query(None, description="Cohort alias"),
-    passphrase: Optional[str] = Query(None, description="Passphrase if required by the cohort"),
+    passphrase: Optional[str] = Query(
+        None, description="Passphrase if required by the cohort"
+    ),
 ):
     """
     **Description:**
@@ -891,7 +895,9 @@ def run_cohort_analysis(
     request: Request,
     cohort_id: Optional[str] = Form(None, description="Cohort identifier"),
     alias: Optional[str] = Form(None, description="Cohort alias"),
-    passphrase: Optional[str] = Form(None, description="Passphrase if required by the cohort"),
+    passphrase: Optional[str] = Form(
+        None, description="Passphrase if required by the cohort"
+    ),
 ):
     """
     **Description:**

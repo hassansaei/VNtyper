@@ -63,6 +63,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+
 # -----------------------
 # Utility functions
 # -----------------------
@@ -79,6 +80,7 @@ def run_command(command: List[str], description: str, critical: bool = True) -> 
         if critical:
             raise
 
+
 def compute_md5(file_path: Path, chunk_size: int = 1_048_576) -> str:
     """
     Compute the MD5 checksum of a file.
@@ -89,6 +91,7 @@ def compute_md5(file_path: Path, chunk_size: int = 1_048_576) -> str:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
+
 
 # -----------------------
 # vntyper-specific functions
@@ -126,12 +129,17 @@ def run_vntyper(
 
     command = [
         vntyper_path,
-        "-l", "DEBUG",
+        "-l",
+        "DEBUG",
         "pipeline",
-        "--bam", str(bam_file),
-        "--threads", str(threads),
-        "--reference-assembly", reference_assembly,
-        "-o", str(sample_output),
+        "--bam",
+        str(bam_file),
+        "--threads",
+        str(threads),
+        "--reference-assembly",
+        reference_assembly,
+        "-o",
+        str(sample_output),
     ]
     if keep_intermediates:
         command.append("--keep-intermediates")
@@ -147,13 +155,14 @@ def run_vntyper(
 
     return sample_output
 
+
 def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
     """
     Parse vntyper results to extract key metrics from the 'kestrel_result.tsv' file.
     Expects the file to contain a column "Confidence" whose value is either
     "negative" or one of:
        "Low_Precision", "High_Precision", "High_Precision*".
-    
+
     Returns:
         A dictionary with the key "Confidence" (a list of strings), or None if parsing fails.
     """
@@ -171,9 +180,7 @@ def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
             logging.error(f"Missing expected column 'Confidence' in {result_file}")
             return None
 
-        summary = {
-            "Confidence": df["Confidence"].dropna().astype(str).tolist()
-        }
+        summary = {"Confidence": df["Confidence"].dropna().astype(str).tolist()}
         return summary
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse {result_file}: {e}")
@@ -182,10 +189,11 @@ def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
         logging.error(f"Unexpected error while parsing {result_file}: {e}")
         return None
 
+
 def determine_call(summary: Optional[Dict]) -> str:
     """
     Determine the predicted mutation status based on the vntyper summary.
-    
+
     If no summary is available or if the only reported confidence is "negative",
     the sample is called "negative". Otherwise (if any reported confidence is not
     "negative"), the sample is called "positive".
@@ -200,18 +208,19 @@ def determine_call(summary: Optional[Dict]) -> str:
             return "positive"
     return "negative"
 
+
 # -----------------------
 # Confidence interval helper
 # -----------------------
 def calc_ci(p: float, n: int, z: float = 1.96):
     """
     Calculate the standard error and 95% confidence interval for a proportion.
-    
+
     Args:
         p (float): Estimated proportion.
         n (int): Denominator (sample size).
         z (float): z-score for desired confidence level (default 1.96 for ~95%).
-    
+
     Returns:
         Tuple: (standard error, lower bound, upper bound) with bounds clamped to [0, 1].
     """
@@ -221,6 +230,7 @@ def calc_ci(p: float, n: int, z: float = 1.96):
     lower = max(0, p - z * se)
     upper = min(1, p + z * se)
     return se, lower, upper
+
 
 # -----------------------
 # Argument parsing
@@ -317,6 +327,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+
 # -----------------------
 # Main processing
 # -----------------------
@@ -340,7 +351,9 @@ def main():
             truth_status = row[args.status_col].strip().lower()
             sample_id = bam_path.stem
 
-            logging.info(f"Processing sample {sample_id} with expected status '{truth_status}'")
+            logging.info(
+                f"Processing sample {sample_id} with expected status '{truth_status}'"
+            )
 
             if not bam_path.is_file():
                 logging.error(f"BAM file not found: {bam_path}. Skipping sample.")
@@ -349,8 +362,14 @@ def main():
             # Determine the expected vntyper output directory.
             vntyper_out_dir = args.output_dir / f"{bam_path.stem}_vntyper_output"
             # Check if results already exist (i.e. a kestrel_result.tsv file is present)
-            if not args.recompute and vntyper_out_dir.exists() and any(vntyper_out_dir.rglob("kestrel_result.tsv")):
-                logging.info(f"vntyper output already exists for {bam_path.name}, skipping recomputation")
+            if (
+                not args.recompute
+                and vntyper_out_dir.exists()
+                and any(vntyper_out_dir.rglob("kestrel_result.tsv"))
+            ):
+                logging.info(
+                    f"vntyper output already exists for {bam_path.name}, skipping recomputation"
+                )
             else:
                 try:
                     vntyper_out_dir = run_vntyper(
@@ -392,13 +411,15 @@ def main():
                         fp += 1
 
             # Save per-sample result.
-            results.append({
-                "sample_id": sample_id,
-                "bam_path": str(bam_path),
-                "expected_status": truth_status,
-                "predicted_status": predicted_status,
-                "vntyper_output": str(vntyper_out_dir),
-            })
+            results.append(
+                {
+                    "sample_id": sample_id,
+                    "bam_path": str(bam_path),
+                    "expected_status": truth_status,
+                    "predicted_status": predicted_status,
+                    "vntyper_output": str(vntyper_out_dir),
+                }
+            )
 
     total = tp + tn + fp + fn
     logging.info("=== Confusion Matrix ===")
@@ -412,8 +433,10 @@ def main():
     sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0  # Recall
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
     accuracy = (tp + tn) / total if total > 0 else 0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0   # Positive Predictive Value (PPV)
-    npv = tn / (tn + fn) if (tn + fn) > 0 else 0           # Negative Predictive Value (NPV)
+    precision = (
+        tp / (tp + fp) if (tp + fp) > 0 else 0
+    )  # Positive Predictive Value (PPV)
+    npv = tn / (tn + fn) if (tn + fn) > 0 else 0  # Negative Predictive Value (NPV)
 
     # Compute standard errors and 95% confidence intervals.
     sens_n = tp + fn
@@ -429,15 +452,31 @@ def main():
     acc_se, acc_lower, acc_upper = calc_ci(accuracy, acc_n)
 
     logging.info("=== Test Statistics ===")
-    logging.info(f"Sensitivity (Recall): {sensitivity:.3f} (SE: {sens_se:.3f}, CI: [{sens_lower:.3f}, {sens_upper:.3f}])")
-    logging.info(f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])")
-    logging.info(f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])")
-    logging.info(f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])")
-    logging.info(f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])")
+    logging.info(
+        f"Sensitivity (Recall): {sensitivity:.3f} (SE: {sens_se:.3f}, CI: [{sens_lower:.3f}, {sens_upper:.3f}])"
+    )
+    logging.info(
+        f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])"
+    )
+    logging.info(
+        f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])"
+    )
+    logging.info(
+        f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])"
+    )
+    logging.info(
+        f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])"
+    )
 
     # Write detailed per-sample results to summary CSV.
     with args.summary_output.open("w", newline="") as csvfile:
-        fieldnames = ["sample_id", "bam_path", "expected_status", "predicted_status", "vntyper_output"]
+        fieldnames = [
+            "sample_id",
+            "bam_path",
+            "expected_status",
+            "predicted_status",
+            "vntyper_output",
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for rec in results:
@@ -447,43 +486,65 @@ def main():
     # Write the overall test statistics and confusion matrix with SE and CIs to the stats output file.
     with args.stats_output.open("w", newline="") as csvfile:
         fieldnames = [
-            "TP", "FN", "FP", "TN", "Total",
-            "Sensitivity", "Sensitivity_SE", "Sensitivity_CI_lower", "Sensitivity_CI_upper",
-            "Specificity", "Specificity_SE", "Specificity_CI_lower", "Specificity_CI_upper",
-            "Precision", "Precision_SE", "Precision_CI_lower", "Precision_CI_upper",
-            "NPV", "NPV_SE", "NPV_CI_lower", "NPV_CI_upper",
-            "Accuracy", "Accuracy_SE", "Accuracy_CI_lower", "Accuracy_CI_upper"
+            "TP",
+            "FN",
+            "FP",
+            "TN",
+            "Total",
+            "Sensitivity",
+            "Sensitivity_SE",
+            "Sensitivity_CI_lower",
+            "Sensitivity_CI_upper",
+            "Specificity",
+            "Specificity_SE",
+            "Specificity_CI_lower",
+            "Specificity_CI_upper",
+            "Precision",
+            "Precision_SE",
+            "Precision_CI_lower",
+            "Precision_CI_upper",
+            "NPV",
+            "NPV_SE",
+            "NPV_CI_lower",
+            "NPV_CI_upper",
+            "Accuracy",
+            "Accuracy_SE",
+            "Accuracy_CI_lower",
+            "Accuracy_CI_upper",
         ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerow({
-            "TP": tp,
-            "FN": fn,
-            "FP": fp,
-            "TN": tn,
-            "Total": total,
-            "Sensitivity": f"{sensitivity:.3f}",
-            "Sensitivity_SE": f"{sens_se:.3f}",
-            "Sensitivity_CI_lower": f"{sens_lower:.3f}",
-            "Sensitivity_CI_upper": f"{sens_upper:.3f}",
-            "Specificity": f"{specificity:.3f}",
-            "Specificity_SE": f"{spec_se:.3f}",
-            "Specificity_CI_lower": f"{spec_lower:.3f}",
-            "Specificity_CI_upper": f"{spec_upper:.3f}",
-            "Precision": f"{precision:.3f}",
-            "Precision_SE": f"{prec_se:.3f}",
-            "Precision_CI_lower": f"{prec_lower:.3f}",
-            "Precision_CI_upper": f"{prec_upper:.3f}",
-            "NPV": f"{npv:.3f}",
-            "NPV_SE": f"{npv_se:.3f}",
-            "NPV_CI_lower": f"{npv_lower:.3f}",
-            "NPV_CI_upper": f"{npv_upper:.3f}",
-            "Accuracy": f"{accuracy:.3f}",
-            "Accuracy_SE": f"{acc_se:.3f}",
-            "Accuracy_CI_lower": f"{acc_lower:.3f}",
-            "Accuracy_CI_upper": f"{acc_upper:.3f}",
-        })
+        writer.writerow(
+            {
+                "TP": tp,
+                "FN": fn,
+                "FP": fp,
+                "TN": tn,
+                "Total": total,
+                "Sensitivity": f"{sensitivity:.3f}",
+                "Sensitivity_SE": f"{sens_se:.3f}",
+                "Sensitivity_CI_lower": f"{sens_lower:.3f}",
+                "Sensitivity_CI_upper": f"{sens_upper:.3f}",
+                "Specificity": f"{specificity:.3f}",
+                "Specificity_SE": f"{spec_se:.3f}",
+                "Specificity_CI_lower": f"{spec_lower:.3f}",
+                "Specificity_CI_upper": f"{spec_upper:.3f}",
+                "Precision": f"{precision:.3f}",
+                "Precision_SE": f"{prec_se:.3f}",
+                "Precision_CI_lower": f"{prec_lower:.3f}",
+                "Precision_CI_upper": f"{prec_upper:.3f}",
+                "NPV": f"{npv:.3f}",
+                "NPV_SE": f"{npv_se:.3f}",
+                "NPV_CI_lower": f"{npv_lower:.3f}",
+                "NPV_CI_upper": f"{npv_upper:.3f}",
+                "Accuracy": f"{accuracy:.3f}",
+                "Accuracy_SE": f"{acc_se:.3f}",
+                "Accuracy_CI_lower": f"{acc_lower:.3f}",
+                "Accuracy_CI_upper": f"{acc_upper:.3f}",
+            }
+        )
     logging.info(f"Overall test statistics written to {args.stats_output}")
+
 
 if __name__ == "__main__":
     main()

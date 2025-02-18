@@ -12,7 +12,7 @@ import pytest
 import pandas as pd
 from pathlib import Path
 from vntyper.scripts.confidence_assignment import (
-    calculate_depth_score_and_assign_confidence
+    calculate_depth_score_and_assign_confidence,
 )
 
 
@@ -41,10 +41,7 @@ def kestrel_config():
     config_path = scripts_dir / "kestrel_config.json"
 
     if not config_path.exists():
-        pytest.exit(
-            f"kestrel_config.json not found at {config_path}",
-            returncode=1
-        )
+        pytest.exit(f"kestrel_config.json not found at {config_path}", returncode=1)
 
     with config_path.open("r") as f:
         raw_config = json.load(f)
@@ -68,32 +65,40 @@ def test_calculate_depth_score_low_precision(kestrel_config):
     """
     Test that low depth scores result in 'Low_Precision' confidence.
     """
-    df = pd.DataFrame({
-        "Estimated_Depth_AlternateVariant": [10],
-        "Estimated_Depth_Variant_ActiveRegion": [10000]
-    })
+    df = pd.DataFrame(
+        {
+            "Estimated_Depth_AlternateVariant": [10],
+            "Estimated_Depth_Variant_ActiveRegion": [10000],
+        }
+    )
     out = calculate_depth_score_and_assign_confidence(df, kestrel_config)
 
     # If your code references:
     #   conf_assign = kestrel_config["confidence_assignment"]
     # then inside conf_assign["confidence_levels"]["low_precision"] ...
-    low_label = kestrel_config["confidence_assignment"]["confidence_levels"]["low_precision"]
+    low_label = kestrel_config["confidence_assignment"]["confidence_levels"][
+        "low_precision"
+    ]
 
-    assert out.loc[0, "Confidence"] == low_label, (
-        "Expected Low_Precision for low depth score."
-    )
+    assert (
+        out.loc[0, "Confidence"] == low_label
+    ), "Expected Low_Precision for low depth score."
 
 
 def test_calculate_depth_score_high_precision(kestrel_config):
-    df = pd.DataFrame({
-        "Estimated_Depth_AlternateVariant": [100],
-        "Estimated_Depth_Variant_ActiveRegion": [5000]
-    })
+    df = pd.DataFrame(
+        {
+            "Estimated_Depth_AlternateVariant": [100],
+            "Estimated_Depth_Variant_ActiveRegion": [5000],
+        }
+    )
     out = calculate_depth_score_and_assign_confidence(df, kestrel_config)
 
     # If your function returns "High_Precision*",
     # then let's just confirm the actual returned value is "High_Precision*".
-    high_star_label = kestrel_config["confidence_assignment"]["confidence_levels"]["high_precision_star"]
-    assert out.loc[0, "Confidence"] == high_star_label, (
-        "Expected 'High_Precision*' for depth_score=0.02 with alt=100 >= mid_high=100"
-    )
+    high_star_label = kestrel_config["confidence_assignment"]["confidence_levels"][
+        "high_precision_star"
+    ]
+    assert (
+        out.loc[0, "Confidence"] == high_star_label
+    ), "Expected 'High_Precision*' for depth_score=0.02 with alt=100 >= mid_high=100"

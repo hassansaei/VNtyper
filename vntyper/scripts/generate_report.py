@@ -25,36 +25,40 @@ def load_kestrel_results(kestrel_result_file):
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
+        df = pd.read_csv(kestrel_result_file, sep="\t", comment="#")
         logging.debug(f"Kestrel DataFrame loaded with {len(df)} rows.")
 
         columns_to_display = {
-            'Motif': 'Motif',
-            'Variant': 'Variant',
-            'POS': 'Position',
-            'REF': 'REF',
-            'ALT': 'ALT',
-            'Motif_sequence': 'Motif Sequence',
-            'Estimated_Depth_AlternateVariant': 'Depth (Variant)',
-            'Estimated_Depth_Variant_ActiveRegion': 'Depth (Region)',
-            'Depth_Score': 'Depth Score',
-            'Confidence': 'Confidence'
+            "Motif": "Motif",
+            "Variant": "Variant",
+            "POS": "Position",
+            "REF": "REF",
+            "ALT": "ALT",
+            "Motif_sequence": "Motif Sequence",
+            "Estimated_Depth_AlternateVariant": "Depth (Variant)",
+            "Estimated_Depth_Variant_ActiveRegion": "Depth (Region)",
+            "Depth_Score": "Depth Score",
+            "Confidence": "Confidence",
         }
         df = df[list(columns_to_display.keys())]
         df = df.rename(columns=columns_to_display)
         logging.debug("Kestrel DataFrame columns renamed for display.")
 
         # Handle Low_Precision in orange, High_Precision & High_Precision* in red
-        df['Confidence'] = df['Confidence'].apply(
+        df["Confidence"] = df["Confidence"].apply(
             lambda x: (
                 f'<span style="color:orange;font-weight:bold;">{x}</span>'
-                if x == 'Low_Precision'
-                else f'<span style="color:red;font-weight:bold;">{x}</span>'
-                if x in ['High_Precision', 'High_Precision*']
-                else x
+                if x == "Low_Precision"
+                else (
+                    f'<span style="color:red;font-weight:bold;">{x}</span>'
+                    if x in ["High_Precision", "High_Precision*"]
+                    else x
+                )
             )
         )
-        logging.debug("Kestrel 'Confidence' column color-coded based on precision levels.")
+        logging.debug(
+            "Kestrel 'Confidence' column color-coded based on precision levels."
+        )
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
@@ -67,7 +71,7 @@ def load_kestrel_results(kestrel_result_file):
 def load_advntr_results(advntr_result_file):
     """
     Loads adVNTR results from a TSV or VCF file.
-    
+
     If a file with a .tsv extension (using the same base name) exists,
     it is used instead of the provided file. For files that indicate a negative
     outcome (e.g. a single non-comment line starting with "Negative"), returns a
@@ -82,7 +86,7 @@ def load_advntr_results(advntr_result_file):
 
     # If the provided file is a VCF, check for a corresponding TSV version.
     if advntr_file.suffix.lower() == ".vcf":
-        tsv_file = advntr_file.with_suffix('.tsv')
+        tsv_file = advntr_file.with_suffix(".tsv")
         if tsv_file.exists():
             logging.info(f"Found TSV version of adVNTR results: {tsv_file}")
             advntr_file = tsv_file
@@ -95,8 +99,8 @@ def load_advntr_results(advntr_result_file):
 
     try:
         file_ext = advntr_file.suffix.lower()
-        if file_ext == '.tsv':
-            df = pd.read_csv(advntr_file, sep='\t', comment='#')
+        if file_ext == ".tsv":
+            df = pd.read_csv(advntr_file, sep="\t", comment="#")
             # Check for a negative outcome if only a single row is present
             if df.shape[0] == 1:
                 first_field = str(df.iloc[0, 0]).strip().lower()
@@ -105,10 +109,10 @@ def load_advntr_results(advntr_result_file):
                     return df, True
             logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows from TSV.")
             return df, True
-        elif file_ext == '.vcf':
+        elif file_ext == ".vcf":
             # Read all non-empty lines from the VCF file
-            with open(advntr_file, 'r') as f:
-                lines = [line.rstrip('\n') for line in f if line.strip()]
+            with open(advntr_file, "r") as f:
+                lines = [line.rstrip("\n") for line in f if line.strip()]
             # Attempt to extract header from a commented line starting with "#VID"
             header = None
             for line in lines:
@@ -123,20 +127,31 @@ def load_advntr_results(advntr_result_file):
                 if fields[0].strip().lower() == "negative":
                     logging.debug("adVNTR result indicates a negative outcome in VCF.")
                     if header is None:
-                        header = ["VID", "State", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
+                        header = [
+                            "VID",
+                            "State",
+                            "NumberOfSupportingReads",
+                            "MeanCoverage",
+                            "Pvalue",
+                        ]
                     df = pd.DataFrame([fields], columns=header)
                     return df, True
             if header is not None:
                 from io import StringIO
+
                 csv_data = "\n".join(data_lines)
                 df = pd.read_csv(StringIO(csv_data), sep="\t", header=None)
                 df.columns = header
-                logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows from manual VCF parsing.")
+                logging.debug(
+                    f"adVNTR DataFrame loaded with {len(df)} rows from manual VCF parsing."
+                )
                 return df, True
             else:
                 # Fallback to pandas parsing if no header was detected
-                df = pd.read_csv(advntr_file, sep='\t', comment='#')
-                logging.debug(f"adVNTR DataFrame loaded with {len(df)} rows using fallback VCF parsing.")
+                df = pd.read_csv(advntr_file, sep="\t", comment="#")
+                logging.debug(
+                    f"adVNTR DataFrame loaded with {len(df)} rows using fallback VCF parsing."
+                )
                 return df, True
         else:
             logging.error(f"Unsupported file extension for adVNTR results: {file_ext}")
@@ -162,7 +177,7 @@ def load_pipeline_log(log_file):
         logging.warning(f"Pipeline log file not found: {log_file}")
         return "Pipeline log file not found."
     try:
-        with open(log_file, 'r') as f:
+        with open(log_file, "r") as f:
             content = f.read()
         logging.debug("Pipeline log successfully loaded.")
         return content
@@ -171,7 +186,9 @@ def load_pipeline_log(log_file):
         return "Failed to load pipeline log."
 
 
-def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
+def run_igv_report(
+    bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None
+):
     """
     Wrapper around `create_report` IGV command. If config is provided and flanking
     is not explicitly set, we fallback to config's default_values.flanking.
@@ -195,11 +212,13 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     output_html = str(output_html) if output_html else None
 
     igv_report_cmd = [
-        'create_report',
+        "create_report",
         bed_file,
-        '--flanking', str(flanking),
-        '--fasta', fasta_file,
-        '--tracks'
+        "--flanking",
+        str(flanking),
+        "--fasta",
+        fasta_file,
+        "--tracks",
     ]
 
     tracks = []
@@ -208,15 +227,21 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     if bam_file:
         tracks.append(str(bam_file))
     if not tracks:
-        logging.warning("No valid tracks (VCF or BAM) provided to IGV. The IGV report may be empty.")
+        logging.warning(
+            "No valid tracks (VCF or BAM) provided to IGV. The IGV report may be empty."
+        )
 
     igv_report_cmd.extend(tracks)
-    igv_report_cmd.extend(['--output', output_html])
+    igv_report_cmd.extend(["--output", output_html])
 
-    logging.debug(f"IGV report command: {' '.join([str(x) for x in igv_report_cmd if x])}")
+    logging.debug(
+        f"IGV report command: {' '.join([str(x) for x in igv_report_cmd if x])}"
+    )
 
     try:
-        logging.info(f"Running IGV report: {' '.join([str(x) for x in igv_report_cmd if x])}")
+        logging.info(
+            f"Running IGV report: {' '.join([str(x) for x in igv_report_cmd if x])}"
+        )
         subprocess.run(igv_report_cmd, check=True)
         logging.info(f"IGV report successfully generated at {output_html}")
     except subprocess.CalledProcessError as e:
@@ -235,11 +260,11 @@ def extract_igv_content(igv_report_html):
     """
     logging.debug(f"extract_igv_content called with igv_report_html={igv_report_html}")
     try:
-        with open(igv_report_html, 'r') as f:
+        with open(igv_report_html, "r") as f:
             content = f.read()
 
         igv_start = content.find('<div id="container"')
-        igv_end = content.find('</body>')
+        igv_end = content.find("</body>")
 
         if igv_start == -1 or igv_end == -1:
             logging.error("Failed to extract IGV content from report.")
@@ -247,15 +272,21 @@ def extract_igv_content(igv_report_html):
 
         igv_content = content[igv_start:igv_end].strip()
 
-        table_json_start = content.find('const tableJson = ') + len('const tableJson = ')
-        table_json_end = content.find('\n', table_json_start)
+        table_json_start = content.find("const tableJson = ") + len(
+            "const tableJson = "
+        )
+        table_json_end = content.find("\n", table_json_start)
         table_json = content[table_json_start:table_json_end].strip()
 
-        session_dict_start = content.find('const sessionDictionary = ') + len('const sessionDictionary = ')
-        session_dict_end = content.find('\n', session_dict_start)
+        session_dict_start = content.find("const sessionDictionary = ") + len(
+            "const sessionDictionary = "
+        )
+        session_dict_end = content.find("\n", session_dict_start)
         session_dictionary = content[session_dict_start:session_dict_end].strip()
 
-        logging.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
+        logging.info(
+            "Successfully extracted IGV content, tableJson, and sessionDictionary."
+        )
         return igv_content, table_json, session_dictionary
     except FileNotFoundError:
         logging.error(f"IGV report file not found: {igv_report_html}")
@@ -276,7 +307,7 @@ def load_fastp_output(fastp_file):
         return {}
 
     try:
-        with open(fastp_file, 'r') as f:
+        with open(fastp_file, "r") as f:
             data = json.load(f)
         logging.debug("fastp output successfully loaded.")
         return data
@@ -298,7 +329,7 @@ def generate_summary_report(
     pipeline_version=None,
     mean_vntr_coverage=None,
     vcf_file=None,
-    config=None
+    config=None,
 ):
     """
     Generates a summary report.
@@ -322,12 +353,20 @@ def generate_summary_report(
         ValueError: If config is not provided.
     """
     logging.debug("---- DEBUG: Entered generate_summary_report ----")
-    logging.debug(f"Called with output_dir={output_dir}, template_dir={template_dir}, report_file={report_file}")
-    logging.debug(f"bed_file={bed_file}, bam_file={bam_file}, fasta_file={fasta_file}, flanking={flanking}")
-    logging.debug(f"log_file={log_file}, vcf_file={vcf_file}, mean_vntr_coverage={mean_vntr_coverage}")
+    logging.debug(
+        f"Called with output_dir={output_dir}, template_dir={template_dir}, report_file={report_file}"
+    )
+    logging.debug(
+        f"bed_file={bed_file}, bam_file={bam_file}, fasta_file={fasta_file}, flanking={flanking}"
+    )
+    logging.debug(
+        f"log_file={log_file}, vcf_file={vcf_file}, mean_vntr_coverage={mean_vntr_coverage}"
+    )
 
     if config is None:
-        raise ValueError("Config dictionary must be provided to generate_summary_report")
+        raise ValueError(
+            "Config dictionary must be provided to generate_summary_report"
+        )
 
     if bed_file:
         abs_bed_file = os.path.abspath(bed_file)
@@ -355,9 +394,15 @@ def generate_summary_report(
     igv_report_file = Path(output_dir) / "igv_report.html"
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
 
-    logging.debug(f"kestrel_result_file => {kestrel_result_file}, exists? {kestrel_result_file.exists()}")
-    logging.debug(f"advntr_result_file => {advntr_result_file}, exists? {advntr_result_file.exists()}")
-    logging.debug(f"igv_report_file => {igv_report_file}, exists? {igv_report_file.exists()}")
+    logging.debug(
+        f"kestrel_result_file => {kestrel_result_file}, exists? {kestrel_result_file.exists()}"
+    )
+    logging.debug(
+        f"advntr_result_file => {advntr_result_file}, exists? {advntr_result_file.exists()}"
+    )
+    logging.debug(
+        f"igv_report_file => {igv_report_file}, exists? {igv_report_file.exists()}"
+    )
     logging.debug(f"fastp_file => {fastp_file}, exists? {fastp_file.exists()}")
 
     if bed_file and os.path.exists(bed_file):
@@ -369,10 +414,12 @@ def generate_summary_report(
             igv_report_file,
             flanking=flanking,
             vcf_file=vcf_file,
-            config=config
+            config=config,
         )
     else:
-        logging.warning("BED file does not exist or not provided. Skipping IGV report generation.")
+        logging.warning(
+            "BED file does not exist or not provided. Skipping IGV report generation."
+        )
         igv_report_file = None
 
     kestrel_df = load_kestrel_results(kestrel_result_file)
@@ -380,7 +427,9 @@ def generate_summary_report(
     log_content = load_pipeline_log(log_file)
 
     if igv_report_file and igv_report_file.exists():
-        igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
+        igv_content, table_json, session_dictionary = extract_igv_content(
+            igv_report_file
+        )
     else:
         logging.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
@@ -389,11 +438,11 @@ def generate_summary_report(
 
     if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
         coverage_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
-        coverage_color = 'red'
+        coverage_color = "red"
         logging.debug("Mean VNTR coverage is below the threshold.")
     else:
         coverage_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
-        coverage_color = 'green'
+        coverage_color = "green"
         logging.debug("Mean VNTR coverage is above the threshold.")
 
     duplication_rate = None
@@ -422,7 +471,9 @@ def generate_summary_report(
             logging.debug(f"Passed filter rate calculated: {passed_filter_rate:.2f}")
         else:
             passed_filter_rate = None
-            logging.debug("Total reads before filtering is zero; passed filter rate set to None.")
+            logging.debug(
+                "Total reads before filtering is zero; passed filter rate set to None."
+            )
         sequencing_str = summary.get("sequencing", "")
         logging.debug(f"Sequencing setup: {sequencing_str}")
 
@@ -432,28 +483,46 @@ def generate_summary_report(
             return "", ""
         if higher_better:
             if value < cutoff:
-                logging.debug(f"Value {value} is below the cutoff {cutoff} (higher_better=True).")
-                return '<span style="color:red;font-weight:bold;">&#9888;</span>', 'red'
+                logging.debug(
+                    f"Value {value} is below the cutoff {cutoff} (higher_better=True)."
+                )
+                return '<span style="color:red;font-weight:bold;">&#9888;</span>', "red"
             else:
-                logging.debug(f"Value {value} is above or equal to the cutoff {cutoff} (higher_better=True).")
-                return '<span style="color:green;font-weight:bold;">&#10004;</span>', 'green'
+                logging.debug(
+                    f"Value {value} is above or equal to the cutoff {cutoff} (higher_better=True)."
+                )
+                return (
+                    '<span style="color:green;font-weight:bold;">&#10004;</span>',
+                    "green",
+                )
         else:
             if value > cutoff:
-                logging.debug(f"Value {value} is above the cutoff {cutoff} (higher_better=False).")
-                return '<span style="color:red;font-weight:bold;">&#9888;</span>', 'red'
+                logging.debug(
+                    f"Value {value} is above the cutoff {cutoff} (higher_better=False)."
+                )
+                return '<span style="color:red;font-weight:bold;">&#9888;</span>', "red"
             else:
-                logging.debug(f"Value {value} is below or equal to the cutoff {cutoff} (higher_better=False).")
-                return '<span style="color:green;font-weight:bold;">&#10004;</span>', 'green'
+                logging.debug(
+                    f"Value {value} is below or equal to the cutoff {cutoff} (higher_better=False)."
+                )
+                return (
+                    '<span style="color:green;font-weight:bold;">&#10004;</span>',
+                    "green",
+                )
 
-    dup_icon, dup_color = warn_icon(duplication_rate, dup_rate_cutoff, higher_better=False)
+    dup_icon, dup_color = warn_icon(
+        duplication_rate, dup_rate_cutoff, higher_better=False
+    )
     q20_icon, q20_color = warn_icon(q20_rate, q20_rate_cutoff, higher_better=True)
     q30_icon, q30_color = warn_icon(q30_rate, q30_rate_cutoff, higher_better=True)
-    pf_icon, pf_color = warn_icon(passed_filter_rate, passed_filter_rate_cutoff, higher_better=True)
+    pf_icon, pf_color = warn_icon(
+        passed_filter_rate, passed_filter_rate_cutoff, higher_better=True
+    )
 
     kestrel_html = kestrel_df.to_html(
-        classes='table table-bordered table-striped hover compact order-column table-sm',
+        classes="table table-bordered table-striped hover compact order-column table-sm",
         index=False,
-        escape=False
+        escape=False,
     )
     logging.debug("Kestrel results converted to HTML.")
 
@@ -461,60 +530,68 @@ def generate_summary_report(
     if advntr_available:
         if not advntr_df.empty:
             advntr_html = advntr_df.to_html(
-                classes='table table-bordered table-striped hover compact order-column table-sm',
-                index=False
+                classes="table table-bordered table-striped hover compact order-column table-sm",
+                index=False,
             )
             logging.debug("adVNTR results converted to HTML.")
         else:
-            advntr_html = '<p>No pathogenic variants identified by adVNTR.</p>'
-            logging.debug("adVNTR was performed but no variants identified; adding negative message to report.")
+            advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
+            logging.debug(
+                "adVNTR was performed but no variants identified; adding negative message to report."
+            )
     else:
-        advntr_html = '<p>adVNTR genotyping was not performed.</p>'
+        advntr_html = "<p>adVNTR genotyping was not performed.</p>"
         logging.debug("adVNTR was not performed; adding message to report.")
     # --- End Modified Section ---
 
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
-        template = env.get_template('report_template.html')
+        template = env.get_template("report_template.html")
         logging.debug("Jinja2 template 'report_template.html' loaded successfully.")
     except Exception as e:
         logging.error(f"Failed to load Jinja2 template: {e}")
         raise
 
     summary_text = build_screening_summary(
-        kestrel_df, advntr_df, advntr_available, mean_vntr_coverage, mean_vntr_cov_threshold
+        kestrel_df,
+        advntr_df,
+        advntr_available,
+        mean_vntr_coverage,
+        mean_vntr_cov_threshold,
     )
     logging.debug(f"Summary text generated: {summary_text}")
 
     context = {
-        'kestrel_highlight': kestrel_html,
-        'advntr_highlight': advntr_html,
-        'advntr_available': advntr_available,
-        'log_content': log_content,
-        'igv_content': igv_content,
-        'table_json': table_json,
-        'session_dictionary': session_dictionary,
-        'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'input_files': input_files or {},
-        'pipeline_version': pipeline_version or "unknown",
-        'mean_vntr_coverage': (mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"),
-        'mean_vntr_coverage_icon': coverage_icon,
-        'mean_vntr_coverage_color': coverage_color,
-        'fastp_available': fastp_available,
-        'duplication_rate': duplication_rate,
-        'duplication_rate_icon': dup_icon,
-        'duplication_rate_color': dup_color,
-        'q20_rate': q20_rate,
-        'q20_icon': q20_icon,
-        'q20_color': q20_color,
-        'q30_rate': q30_rate,
-        'q30_icon': q30_icon,
-        'q30_color': q30_color,
-        'passed_filter_rate': passed_filter_rate,
-        'passed_filter_icon': pf_icon,
-        'passed_filter_color': pf_color,
-        'sequencing_str': sequencing_str,
-        'summary_text': summary_text
+        "kestrel_highlight": kestrel_html,
+        "advntr_highlight": advntr_html,
+        "advntr_available": advntr_available,
+        "log_content": log_content,
+        "igv_content": igv_content,
+        "table_json": table_json,
+        "session_dictionary": session_dictionary,
+        "report_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "input_files": input_files or {},
+        "pipeline_version": pipeline_version or "unknown",
+        "mean_vntr_coverage": (
+            mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"
+        ),
+        "mean_vntr_coverage_icon": coverage_icon,
+        "mean_vntr_coverage_color": coverage_color,
+        "fastp_available": fastp_available,
+        "duplication_rate": duplication_rate,
+        "duplication_rate_icon": dup_icon,
+        "duplication_rate_color": dup_color,
+        "q20_rate": q20_rate,
+        "q20_icon": q20_icon,
+        "q20_color": q20_color,
+        "q30_rate": q30_rate,
+        "q30_icon": q30_icon,
+        "q30_color": q30_color,
+        "passed_filter_rate": passed_filter_rate,
+        "passed_filter_icon": pf_icon,
+        "passed_filter_color": pf_color,
+        "sequencing_str": sequencing_str,
+        "summary_text": summary_text,
     }
 
     try:
@@ -526,7 +603,7 @@ def generate_summary_report(
 
     report_file_path = Path(output_dir) / report_file
     try:
-        with open(report_file_path, 'w') as f:
+        with open(report_file_path, "w") as f:
             f.write(rendered_html)
         logging.info(f"Summary report generated and saved to {report_file_path}")
     except Exception as e:
@@ -534,7 +611,9 @@ def generate_summary_report(
         raise
 
 
-def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_coverage, mean_vntr_cov_threshold):
+def build_screening_summary(
+    kestrel_df, advntr_df, advntr_available, mean_vntr_coverage, mean_vntr_cov_threshold
+):
     """
     Build the detailed screening summary text based on Kestrel and adVNTR data.
 
@@ -557,17 +636,30 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
         # Extract unique confidence values from Kestrel results
         kestrel_confidences = []
         if not kestrel_df.empty and "Confidence" in kestrel_df.columns:
-            kestrel_confidences = kestrel_df["Confidence"].apply(strip_html_tags).dropna().unique().tolist()
+            kestrel_confidences = (
+                kestrel_df["Confidence"]
+                .apply(strip_html_tags)
+                .dropna()
+                .unique()
+                .tolist()
+            )
             logging.debug(f"Kestrel confidences extracted: {kestrel_confidences}")
 
         # Determine if Kestrel identified any pathogenic variants
-        pathogenic_kestrel = any(conf in ("High_Precision", "High_Precision*", "Low_Precision")
-                                 for conf in kestrel_confidences)
-        logging.debug(f"Pathogenic variants identified by Kestrel: {pathogenic_kestrel}")
+        pathogenic_kestrel = any(
+            conf in ("High_Precision", "High_Precision*", "Low_Precision")
+            for conf in kestrel_confidences
+        )
+        logging.debug(
+            f"Pathogenic variants identified by Kestrel: {pathogenic_kestrel}"
+        )
 
         # Determine confidence level if Kestrel found any variants
         confidence_level = None
-        if "High_Precision" in kestrel_confidences or "High_Precision*" in kestrel_confidences:
+        if (
+            "High_Precision" in kestrel_confidences
+            or "High_Precision*" in kestrel_confidences
+        ):
             confidence_level = "High_Precision"
             logging.debug("Confidence level determined: High_Precision")
         elif "Low_Precision" in kestrel_confidences:
@@ -576,60 +668,95 @@ def build_screening_summary(kestrel_df, advntr_df, advntr_available, mean_vntr_c
 
         # Assess quality metrics
         quality_metrics_pass = True
-        if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
+        if (
+            mean_vntr_coverage is not None
+            and mean_vntr_coverage < mean_vntr_cov_threshold
+        ):
             quality_metrics_pass = False
-            logging.debug("Quality metrics assessment: Failed (coverage below threshold).")
+            logging.debug(
+                "Quality metrics assessment: Failed (coverage below threshold)."
+            )
         else:
-            logging.debug("Quality metrics assessment: Passed (coverage above threshold).")
+            logging.debug(
+                "Quality metrics assessment: Passed (coverage above threshold)."
+            )
 
         # If Kestrel found variants, build a summary from its result
         if pathogenic_kestrel:
             if confidence_level == "High_Precision":
                 if quality_metrics_pass:
-                    summary_text += ("Pathogenic frameshift variant identified by Kestrel with high precision, "
-                                     "and the VNTR coverage and quality metrics are above the threshold.")
-                    logging.debug("Scenario 1 applied: High precision with passing quality metrics.")
+                    summary_text += (
+                        "Pathogenic frameshift variant identified by Kestrel with high precision, "
+                        "and the VNTR coverage and quality metrics are above the threshold."
+                    )
+                    logging.debug(
+                        "Scenario 1 applied: High precision with passing quality metrics."
+                    )
                 else:
-                    summary_text += ("Pathogenic frameshift variant identified by Kestrel with high precision, "
-                                     "but one or more quality metrics are below the threshold.")
-                    logging.debug("Scenario 2 applied: High precision with failing quality metrics.")
+                    summary_text += (
+                        "Pathogenic frameshift variant identified by Kestrel with high precision, "
+                        "but one or more quality metrics are below the threshold."
+                    )
+                    logging.debug(
+                        "Scenario 2 applied: High precision with failing quality metrics."
+                    )
             elif confidence_level == "Low_Precision":
                 if quality_metrics_pass:
-                    summary_text += ("Warning: Pathogenic variant identified with low precision confidence. "
-                                     "Validation through alternative methods (e.g., SNaPshot for dupC or "
-                                     "long-read sequencing for other variants) is recommended.")
-                    logging.debug("Scenario 3a applied: Low precision with passing quality metrics.")
+                    summary_text += (
+                        "Warning: Pathogenic variant identified with low precision confidence. "
+                        "Validation through alternative methods (e.g., SNaPshot for dupC or "
+                        "long-read sequencing for other variants) is recommended."
+                    )
+                    logging.debug(
+                        "Scenario 3a applied: Low precision with passing quality metrics."
+                    )
                 else:
-                    summary_text += ("Warning: Pathogenic variant identified with low precision confidence and low-quality metrics. "
-                                     "Validation using alternative methods is strongly recommended.")
-                    logging.debug("Scenario 3b applied: Low precision with failing quality metrics.")
+                    summary_text += (
+                        "Warning: Pathogenic variant identified with low precision confidence and low-quality metrics. "
+                        "Validation using alternative methods is strongly recommended."
+                    )
+                    logging.debug(
+                        "Scenario 3b applied: Low precision with failing quality metrics."
+                    )
 
         # If adVNTR results are available, handle them based on Kestrel result
         if advntr_available and not advntr_df.empty:
             # When Kestrel is positive, check concordance with adVNTR
             if pathogenic_kestrel:
                 if str(advntr_df.iloc[0, 0]).strip().lower() != "negative":
-                    summary_text += (" Both Kestrel and adVNTR genotyping methods have identified pathogenic frameshifts (verifying and matching the findings is recommened).")
-                    logging.debug("Scenario 4 applied: Both methods positive and concordant.")
+                    summary_text += " Both Kestrel and adVNTR genotyping methods have identified pathogenic frameshifts (verifying and matching the findings is recommened)."
+                    logging.debug(
+                        "Scenario 4 applied: Both methods positive and concordant."
+                    )
                 else:
-                    summary_text += (" There is a discrepancy between Kestrel and adVNTR genotyping methods regarding the identification of pathogenic variants.")
+                    summary_text += " There is a discrepancy between Kestrel and adVNTR genotyping methods regarding the identification of pathogenic variants."
                     logging.debug("Scenario 4 applied: Discrepancy between methods.")
             # Scenario 5: Kestrel negative but adVNTR has a result
             else:
                 if str(advntr_df.iloc[0, 0]).strip().lower() == "negative":
-                    summary_text += ("adVNTR genotyping indicates a negative result, and Kestrel did not detect any variant.")
-                    logging.debug("Scenario 5 applied: adVNTR negative, Kestrel negative.")
+                    summary_text += "adVNTR genotyping indicates a negative result, and Kestrel did not detect any variant."
+                    logging.debug(
+                        "Scenario 5 applied: adVNTR negative, Kestrel negative."
+                    )
                 else:
                     if quality_metrics_pass:
-                        summary_text += ("Pathogenic variant identified by adVNTR, while Kestrel did not detect any variant.")
-                        logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, passing quality metrics.")
+                        summary_text += "Pathogenic variant identified by adVNTR, while Kestrel did not detect any variant."
+                        logging.debug(
+                            "Scenario 5 applied: adVNTR positive, Kestrel negative, passing quality metrics."
+                        )
                     else:
-                        summary_text += ("Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.")
-                        logging.debug("Scenario 5 applied: adVNTR positive, Kestrel negative, failing quality metrics.")
+                        summary_text += "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant."
+                        logging.debug(
+                            "Scenario 5 applied: adVNTR positive, Kestrel negative, failing quality metrics."
+                        )
 
         if summary_text == "":
-            summary_text = "The screening was negative (no valid Kestrel or adVNTR data)."
-            logging.debug("No pathogenic variants identified by either method; negative screening.")
+            summary_text = (
+                "The screening was negative (no valid Kestrel or adVNTR data)."
+            )
+            logging.debug(
+                "No pathogenic variants identified by either method; negative screening."
+            )
 
     except Exception as ex:
         logging.error(f"Exception in build_screening_summary: {ex}")

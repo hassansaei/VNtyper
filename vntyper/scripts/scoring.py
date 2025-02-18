@@ -54,15 +54,17 @@ def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting split_depth_and_calculate_frame_score.")
+        logging.debug(
+            "DataFrame is empty. Exiting split_depth_and_calculate_frame_score."
+        )
         return df
 
     # Step 1) Split 'Sample' into 3 parts
-    split_columns = df['Sample'].str.split(':', expand=True)
+    split_columns = df["Sample"].str.split(":", expand=True)
     split_columns.columns = [
-        'Del',
-        'Estimated_Depth_AlternateVariant',
-        'Estimated_Depth_Variant_ActiveRegion'
+        "Del",
+        "Estimated_Depth_AlternateVariant",
+        "Estimated_Depth_Variant_ActiveRegion",
     ]
     df = pd.concat([df, split_columns], axis=1)
 
@@ -72,7 +74,7 @@ def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     df["Frame_Score"] = (df["alt_len"] - df["ref_len"]) / 3
 
     # Step 3) Mark frameshift in a new boolean column
-    df["is_frameshift"] = ((df["alt_len"] - df["ref_len"]) % 3 != 0)
+    df["is_frameshift"] = (df["alt_len"] - df["ref_len"]) % 3 != 0
 
     logging.debug("Exiting split_depth_and_calculate_frame_score")
     logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")

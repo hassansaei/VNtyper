@@ -24,10 +24,10 @@ def send_email(to_email: str, subject: str, content: str):
     Utility function to send an email via SMTP.
     """
     msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = settings.EMAIL_FROM
-    msg['To'] = to_email
-    msg.set_content(content, subtype='html')
+    msg["Subject"] = subject
+    msg["From"] = settings.EMAIL_FROM
+    msg["To"] = to_email
+    msg.set_content(content, subtype="html")
 
     # Connect to the SMTP server
     with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:

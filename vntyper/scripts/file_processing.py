@@ -17,7 +17,7 @@ def filter_vcf(input_path, output_path):
         input_path (str): Path to the input VCF file.
         output_path (str): Path to the output VCF file containing only indels.
     """
-    with pkg_resources.open_text('vntyper', 'config.json') as f:
+    with pkg_resources.open_text("vntyper", "config.json") as f:
         config_data = json.load(f)
     snv_length = config_data.get("file_processing", {}).get("snv_length", 1)
 
@@ -29,7 +29,9 @@ def filter_vcf(input_path, output_path):
                 indel_file.write(line)
             else:
                 _, _, _, ref, alt, *_ = line.split("\t")
-                if (len(ref) == snv_length and len(alt) != snv_length) or (len(ref) != snv_length and len(alt) == snv_length):
+                if (len(ref) == snv_length and len(alt) != snv_length) or (
+                    len(ref) != snv_length and len(alt) == snv_length
+                ):
                     indel_file.write(line)
 
 
@@ -47,13 +49,13 @@ def filter_indel_vcf(indel_vcf, output_ins, output_del):
         output_ins (str): Path to the output VCF file for insertions.
         output_del (str): Path to the output VCF file for deletions.
     """
-    with pkg_resources.open_text('vntyper', 'config.json') as f:
+    with pkg_resources.open_text("vntyper", "config.json") as f:
         config_data = json.load(f)
     snv_length = config_data.get("file_processing", {}).get("snv_length", 1)
 
-    with open(indel_vcf, "r") as vcf_file, \
-            open(output_ins, "w") as insertion_file, \
-            open(output_del, "w") as deletion_file:
+    with open(indel_vcf, "r") as vcf_file, open(
+        output_ins, "w"
+    ) as insertion_file, open(output_del, "w") as deletion_file:
         for line in vcf_file:
             if line.startswith("##"):
                 insertion_file.write(line)

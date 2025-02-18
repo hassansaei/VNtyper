@@ -41,14 +41,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 logging.basicConfig(level=logging.INFO)
 
 # Map reference assemblies to MUC1 subsetting regions
-REGION_MAP = {
-    "hg19": "chr1:155158000-155163000",
-    "hg38": "chr1:155184000-155194000"
-}
+REGION_MAP = {"hg19": "chr1:155158000-155163000", "hg38": "chr1:155184000-155194000"}
 
 ###############################################################################
 # 1) Helpers for parsing filenames and computing MD5
 ###############################################################################
+
 
 def parse_filename(filename):
     """
@@ -69,8 +67,8 @@ def parse_filename(filename):
     if extension is None:
         return filename, "", ""
 
-    core = filename[:-len(extension)]
-    match = re.search(r'(_R\d+)$', core)
+    core = filename[: -len(extension)]
+    match = re.search(r"(_R\d+)$", core)
     if match:
         read_suffix = match.group(1)
         core = core[: -len(read_suffix)]
@@ -83,7 +81,7 @@ def compute_md5(filepath, chunk_size=1_048_576):
     Compute the MD5 hex digest of the given file in a memory-efficient way.
     """
     md5 = hashlib.md5()
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         while True:
             data = f.read(chunk_size)
             if not data:
@@ -97,21 +95,25 @@ def run_samtools_reheader(input_bam, output_bam):
     Reheader the BAM to remove @pg and @rg lines, then index it.
     """
     cmd_reheader = [
-        'samtools', 'reheader',
-        '-P',
-        '-c', "grep -v ^@PG | grep -v ^@RG | grep -v ^@CO",
-        input_bam
+        "samtools",
+        "reheader",
+        "-P",
+        "-c",
+        "grep -v ^@PG | grep -v ^@RG | grep -v ^@CO",
+        input_bam,
     ]
     logging.debug("Reheader command: %s", " ".join(cmd_reheader))
 
-    with open(output_bam, 'w') as fout:
+    with open(output_bam, "w") as fout:
         subprocess.run(cmd_reheader, stdout=fout, check=True)
 
-    subprocess.run(['samtools', 'index', output_bam], check=True)
+    subprocess.run(["samtools", "index", output_bam], check=True)
+
 
 ###############################################################################
 # 2) Subset & Revert Logic
 ###############################################################################
+
 
 def subset_only(input_bam, region, subset_bam):
     """
@@ -120,16 +122,19 @@ def subset_only(input_bam, region, subset_bam):
     """
     logging.info(f"Subsetting BAM {input_bam} to region {region}. Output: {subset_bam}")
     view_cmd = [
-        'samtools', 'view',
-        '-P',  # keep paired reads
-        '-b', input_bam,
+        "samtools",
+        "view",
+        "-P",  # keep paired reads
+        "-b",
+        input_bam,
         region,
-        '-o', subset_bam
+        "-o",
+        subset_bam,
     ]
     logging.debug("Subset command: %s", " ".join(view_cmd))
 
     subprocess.run(view_cmd, check=True)
-    subprocess.run(['samtools', 'index', subset_bam], check=True)
+    subprocess.run(["samtools", "index", subset_bam], check=True)
 
 
 def revert_only(subset_bam, out_r1, out_r2):
@@ -151,7 +156,9 @@ def revert_only(subset_bam, out_r1, out_r2):
     subprocess.run(cmd_str, shell=True, check=True)
 
 
-def subset_revert_task(final_bam, region, new_core_name, file_ref, output_dir, do_revert):
+def subset_revert_task(
+    final_bam, region, new_core_name, file_ref, output_dir, do_revert
+):
     """
     - Always produce a subset .bam named: <new_core_name>_<file_ref>_subset.bam
     - Then optionally revert that .bam to FASTQ:
@@ -167,9 +174,11 @@ def subset_revert_task(final_bam, region, new_core_name, file_ref, output_dir, d
         r2 = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz")
         revert_only(subset_bam, r1, r2)
 
+
 ###############################################################################
 # 3) Parallel tasks for MD5 and reheader/copy
 ###############################################################################
+
 
 def md5_of_file_task(file_path):
     """
@@ -188,9 +197,11 @@ def reheader_or_copy_task(file_path, out_path, extension):
         shutil.copy2(file_path, out_path)
     return file_path, out_path
 
+
 ###############################################################################
 # 4) Write JSON with file_resources
 ###############################################################################
+
 
 def write_json_resources(output_dir, json_out, filter_mode="all"):
     """
@@ -246,25 +257,23 @@ def write_json_resources(output_dir, json_out, filter_mode="all"):
         md5sum = compute_md5(fpath)
         rel_path = os.path.relpath(fpath, start=os.getcwd())
 
-        file_resources.append({
-            "filename": rel_path,
-            "url": "",
-            "md5sum": md5sum
-        })
+        file_resources.append({"filename": rel_path, "url": "", "md5sum": md5sum})
 
     output_data = {
         "file_resources": file_resources,
         "unit_tests": {},
-        "integration_tests": {}
+        "integration_tests": {},
     }
 
     with open(json_out, "w") as jf:
         json.dump(output_data, jf, indent=2)
     logging.info(f"Wrote JSON resource file: {json_out}")
 
+
 ###############################################################################
 # 5) Main logic
 ###############################################################################
+
 
 def collect_files(input_dir):
     """
@@ -276,7 +285,9 @@ def collect_files(input_dir):
         if fname.lower().endswith(valid_exts):
             full_path = os.path.join(input_dir, fname)
             core, read_suffix, extension = parse_filename(fname)
-            files_by_core.setdefault(core, []).append((full_path, read_suffix, extension))
+            files_by_core.setdefault(core, []).append(
+                (full_path, read_suffix, extension)
+            )
     return files_by_core
 
 
@@ -299,14 +310,14 @@ def load_reference_mapping(mapping_file):
     """
     logging.info(f"Loading reference mapping file: {mapping_file}")
     ref_map = {}
-    delimiter = ','
+    delimiter = ","
 
-    with open(mapping_file, 'r') as f:
+    with open(mapping_file, "r") as f:
         first_line = f.readline()
-        if '\t' in first_line and ',' not in first_line:
-            delimiter = '\t'
+        if "\t" in first_line and "," not in first_line:
+            delimiter = "\t"
 
-    with open(mapping_file, 'r') as f:
+    with open(mapping_file, "r") as f:
         reader = csv.reader(f, delimiter=delimiter)
         for row in reader:
             if len(row) < 2:
@@ -325,7 +336,7 @@ def pseudonymize_files(
     do_subset=False,
     do_revert=False,
     json_out=None,
-    json_filter="all"
+    json_filter="all",
 ):
     """
     - Step 1: Compute MD5 for all files in parallel.
@@ -348,7 +359,7 @@ def pseudonymize_files(
     # ------------------------------------------------
     all_files = []
     for core_name, file_list in files_by_core.items():
-        for (fp, _, _) in file_list:
+        for fp, _, _ in file_list:
             all_files.append(fp)
 
     file_md5_map = {}
@@ -368,7 +379,7 @@ def pseudonymize_files(
         new_core_name, final_md5 = generate_deterministic_name(md5s_for_core)
         mapping_rows.append((core_name, final_md5, new_core_name))
 
-        for (fp, read_suffix, extension) in file_list:
+        for fp, read_suffix, extension in file_list:
             new_filename = new_core_name + read_suffix + extension
             out_path = os.path.join(output_dir, new_filename)
             parallel_tasks.append((fp, out_path, extension))
@@ -387,7 +398,9 @@ def pseudonymize_files(
     csv_path = os.path.join(output_dir, "pseudonymization_table.csv")
     with open(csv_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(["old_base_name", "combined_md5", "new_pseudonym", "reference_used"])
+        writer.writerow(
+            ["old_base_name", "combined_md5", "new_pseudonym", "reference_used"]
+        )
 
         for row in sorted(mapping_rows, key=lambda x: x[0]):
             old_core, final_md5, new_core_name = row
@@ -412,9 +425,11 @@ def pseudonymize_files(
         for core_name, file_list in files_by_core.items():
             new_core_name = [r[2] for r in mapping_rows if r[0] == core_name][0]
 
-            for (fp, read_suffix, extension) in file_list:
+            for fp, read_suffix, extension in file_list:
                 if extension == ".bam":
-                    new_bam = os.path.join(output_dir, new_core_name + read_suffix + extension)
+                    new_bam = os.path.join(
+                        output_dir, new_core_name + read_suffix + extension
+                    )
 
                     # Reference assembly for the file
                     base_fname = os.path.basename(fp)
@@ -427,7 +442,9 @@ def pseudonymize_files(
                     file_ref = file_ref.lower()
 
                     region = REGION_MAP[file_ref]
-                    subset_revert_task(new_bam, region, new_core_name, file_ref, output_dir, do_revert)
+                    subset_revert_task(
+                        new_bam, region, new_core_name, file_ref, output_dir, do_revert
+                    )
 
     # ------------------------------------------------
     # 5) Write JSON with final outputs
@@ -439,34 +456,64 @@ def main():
     parser = argparse.ArgumentParser(
         description="Deterministic pseudonymization for BAM/FASTQ with optional subsetting/revert to FASTQ."
     )
-    parser.add_argument("--input-dir", required=True,
-                        help="Directory containing the original BAM/FASTQ files.")
-    parser.add_argument("--output-dir", required=True,
-                        help="Output directory for pseudonymized files.")
-    parser.add_argument("--workers", type=int, default=None,
-                        help="Number of parallel workers (default: use all available cores).")
+    parser.add_argument(
+        "--input-dir",
+        required=True,
+        help="Directory containing the original BAM/FASTQ files.",
+    )
+    parser.add_argument(
+        "--output-dir", required=True, help="Output directory for pseudonymized files."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: use all available cores).",
+    )
 
-    parser.add_argument("--ref-assembly", default=None,
-                        help="A single reference assembly to apply to all input files (e.g. hg19/hg38).")
-    parser.add_argument("--ref-mapping-file", default=None,
-                        help="Path to TSV/CSV file with columns [filename, reference].")
+    parser.add_argument(
+        "--ref-assembly",
+        default=None,
+        help="A single reference assembly to apply to all input files (e.g. hg19/hg38).",
+    )
+    parser.add_argument(
+        "--ref-mapping-file",
+        default=None,
+        help="Path to TSV/CSV file with columns [filename, reference].",
+    )
 
-    parser.add_argument("--subset-muc1", action="store_true",
-                        help="If specified, create a MUC1 region-only subset for each BAM (with -P).")
-    parser.add_argument("--revert-fastq", action="store_true",
-                        help="If specified (and --subset-muc1), revert the subset BAM to FASTQ in a second step.")
+    parser.add_argument(
+        "--subset-muc1",
+        action="store_true",
+        help="If specified, create a MUC1 region-only subset for each BAM (with -P).",
+    )
+    parser.add_argument(
+        "--revert-fastq",
+        action="store_true",
+        help="If specified (and --subset-muc1), revert the subset BAM to FASTQ in a second step.",
+    )
 
-    parser.add_argument("--log-level", default="INFO",
-                        help="Set logging level (DEBUG, INFO, WARNING, ERROR). Default=INFO.")
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Set logging level (DEBUG, INFO, WARNING, ERROR). Default=INFO.",
+    )
 
     # If not specified, we'll default to 'pseudonymization_output.json' in the same output directory.
-    parser.add_argument("--json-out", default=None,
-                        help="Write a JSON file listing all files in the output directory with MD5 sums. "
-                             "If not provided, defaults to 'pseudonymization_output.json' in output-dir.")
+    parser.add_argument(
+        "--json-out",
+        default=None,
+        help="Write a JSON file listing all files in the output directory with MD5 sums. "
+        "If not provided, defaults to 'pseudonymization_output.json' in output-dir.",
+    )
 
-    parser.add_argument("--json-filter", choices=["all", "subset"], default="all",
-                        help="Filter mode for the JSON resource file. 'all' => all .bam, .bai, .fastq.gz. "
-                             "'subset' => only files containing '_subset'. Default=all.")
+    parser.add_argument(
+        "--json-filter",
+        choices=["all", "subset"],
+        default="all",
+        help="Filter mode for the JSON resource file. 'all' => all .bam, .bai, .fastq.gz. "
+        "'subset' => only files containing '_subset'. Default=all.",
+    )
 
     args = parser.parse_args()
 
@@ -481,7 +528,7 @@ def main():
         do_subset=args.subset_muc1,
         do_revert=args.revert_fastq,
         json_out=args.json_out,
-        json_filter=args.json_filter
+        json_filter=args.json_filter,
     )
 
 

@@ -35,21 +35,21 @@ redis_client = redis.Redis(
     port=REDIS_PORT,
     db=REDIS_DB,
     password=REDIS_PASSWORD,
-    decode_responses=True
+    decode_responses=True,
 )
 redis_cohort_client = redis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
     db=COHORT_REDIS_DB,
     password=REDIS_PASSWORD,
-    decode_responses=True
+    decode_responses=True,
 )
 redis_usage_client = redis.Redis(
     host=REDIS_HOST,
     port=REDIS_PORT,
     db=USAGE_REDIS_DB,
     password=REDIS_PASSWORD,
-    decode_responses=True
+    decode_responses=True,
 )
 
 
@@ -146,7 +146,9 @@ def run_vntyper_job(
         if archive_results:
             command.append("--archive-results")
         if advntr_mode:
-            command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
+            command.extend(
+                ["--extra-modules", "advntr", "--advntr-max-coverage", "300"]
+            )
 
         # Run the VNtyper pipeline
         try:
@@ -300,7 +302,9 @@ def delete_old_results():
                         logger.error(f"Error deleting file {zip_path}: {e}")
                 # Remove job ID from Redis
                 redis_client.delete(job_id)
-                redis_client.delete(f"celery-task-meta-{job_id}")  # Remove Celery task meta
+                redis_client.delete(
+                    f"celery-task-meta-{job_id}"
+                )  # Remove Celery task meta
             # Remove cohort jobs set
             redis_cohort_client.delete(cohort_jobs_key)
             logger.info(f"Deleted expired cohort data: {key}")

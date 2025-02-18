@@ -16,9 +16,7 @@ def load_shark_config(config_path=None):
     """
     if config_path is None:
         # Default path to shark_config.json
-        config_path = os.path.join(
-            os.path.dirname(__file__), 'shark_config.json'
-        )
+        config_path = os.path.join(os.path.dirname(__file__), "shark_config.json")
     return load_config(config_path)
 
 
@@ -31,11 +29,11 @@ def run_shark_filter(
     fastq_1,
     fastq_2,
     output_dir,
-    config,        # shark_config dict
-    main_config,   # main config dict (for tool paths)
+    config,  # shark_config dict
+    main_config,  # main config dict (for tool paths)
     sample_name,
     reference_assembly="hg19",
-    threads=4
+    threads=4,
 ):
     """
     Run SHARK filtering on FASTQ files.
@@ -65,12 +63,8 @@ def run_shark_filter(
     if not muc1_region_fasta:
         raise ValueError("muc1_region_fasta not defined in shark_config.json")
 
-    filtered_fastq_1 = os.path.join(
-        output_dir, f"{sample_name}_shark_R1.fastq"
-    )
-    filtered_fastq_2 = os.path.join(
-        output_dir, f"{sample_name}_shark_R2.fastq"
-    )
+    filtered_fastq_1 = os.path.join(output_dir, f"{sample_name}_shark_R1.fastq")
+    filtered_fastq_2 = os.path.join(output_dir, f"{sample_name}_shark_R2.fastq")
 
     # Add the threads parameter to the command using the -t option
     command = (

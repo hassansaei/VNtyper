@@ -50,12 +50,12 @@ def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
     header: Optional[list] = None
 
     try:
-        with open_func(vcf_file, 'rt') as f:
+        with open_func(vcf_file, "rt") as f:
             for line in f:
                 if line.startswith("#CHROM"):
-                    header = line.strip().split('\t')
+                    header = line.strip().split("\t")
                 elif not line.startswith("##") and header:
-                    data.append(line.strip().split('\t'))
+                    data.append(line.strip().split("\t"))
     except FileNotFoundError:
         logging.error(f"VCF file not found: {vcf_file}")
         return pd.DataFrame()
@@ -70,7 +70,9 @@ def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) -> pd.DataFrame:
+def filter_by_alt_values_and_finalize(
+    df: pd.DataFrame, kestrel_config: dict
+) -> pd.DataFrame:
     """
     Applies final filtering rules based on ALT values, e.g., removing certain
     ALTs or requiring a minimal Depth_Score if ALT='GG'.
@@ -101,27 +103,27 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
         logging.debug("DataFrame is empty. Exiting filter_by_alt_values_and_finalize.")
         return df
 
-    required_columns = {'ALT', 'Depth_Score'}
+    required_columns = {"ALT", "Depth_Score"}
     missing_columns = required_columns - set(df.columns)
     if missing_columns:
         logging.error(f"Missing required columns: {missing_columns}")
         raise KeyError(f"Missing required columns: {missing_columns}")
 
-    alt_filter = kestrel_config.get('alt_filtering', {})
-    gg_alt_value = alt_filter.get('gg_alt_value', 'GG')
-    gg_depth_threshold = alt_filter.get('gg_depth_score_threshold', 0.0)
-    exclude_alts = alt_filter.get('exclude_alts', [])
+    alt_filter = kestrel_config.get("alt_filtering", {})
+    gg_alt_value = alt_filter.get("gg_alt_value", "GG")
+    gg_depth_threshold = alt_filter.get("gg_depth_score_threshold", 0.0)
+    exclude_alts = alt_filter.get("exclude_alts", [])
 
     # Ensure Depth_Score is float
-    df['Depth_Score'] = pd.to_numeric(df['Depth_Score'], errors='coerce')
+    df["Depth_Score"] = pd.to_numeric(df["Depth_Score"], errors="coerce")
 
     # Create the boolean mask
-    is_gg = (df['ALT'] == gg_alt_value)
-    meets_gg_threshold = (df['Depth_Score'] >= gg_depth_threshold)
-    not_excluded_alt = ~df['ALT'].isin(exclude_alts)
+    is_gg = df["ALT"] == gg_alt_value
+    meets_gg_threshold = df["Depth_Score"] >= gg_depth_threshold
+    not_excluded_alt = ~df["ALT"].isin(exclude_alts)
 
     # Instead of filtering the DataFrame, we store a new boolean column
-    df['alt_filter_pass'] = ( (~is_gg | meets_gg_threshold) & not_excluded_alt )
+    df["alt_filter_pass"] = (~is_gg | meets_gg_threshold) & not_excluded_alt
 
     logging.debug("Exiting filter_by_alt_values_and_finalize")
     logging.debug(f"Final DataFrame shape: {df.shape}")

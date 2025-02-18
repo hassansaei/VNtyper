@@ -24,12 +24,11 @@ def check_bwa_index(reference: Path) -> bool:
     Returns:
         bool: True if all BWA index files exist, False otherwise.
     """
-    with pkg_resources.open_text('vntyper', 'config.json') as f:
+    with pkg_resources.open_text("vntyper", "config.json") as f:
         config_data = json.load(f)
 
     required_extensions = config_data.get("tool_params", {}).get(
-        "bwa_index_extensions",
-        [".amb", ".ann", ".bwt", ".pac", ".sa"]
+        "bwa_index_extensions", [".amb", ".ann", ".bwt", ".pac", ".sa"]
     )
 
     reference = Path(reference)
@@ -56,7 +55,7 @@ def align_and_sort_fastq(
     output_dir: Path,
     output_name: str,
     threads: int,
-    config: dict
+    config: dict,
 ) -> Optional[str]:
     """
     Align FASTQ files to the reference genome using BWA, then sort and convert to BAM using Samtools.
@@ -98,9 +97,7 @@ def align_and_sort_fastq(
         )
         return None
 
-    bwa_command = (
-        f"{bwa_path} mem -t {threads} {reference} {fastq1} {fastq2}"
-    )
+    bwa_command = f"{bwa_path} mem -t {threads} {reference} {fastq1} {fastq2}"
 
     samtools_view_sort_command = (
         f"{config['tools']['samtools']} view -@ {threads} -b | "
