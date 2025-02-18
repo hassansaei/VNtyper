@@ -1,0 +1,21 @@
+# Include the main documentation and license
+include README.md
+include LICENSE
+
+# Include the main config file
+include vntyper/config.json
+
+# Include the templates
+include vntyper/templates/report_template.html
+include vntyper/templates/cohort_summary_template.html
+
+# Include all JAR files in the dependencies/kestrel directory
+recursive-include vntyper/dependencies/kestrel *.jar
+
+# Include the configuration files in the scripts subpackage
+include vntyper/scripts/kestrel_config.json
+include vntyper/scripts/install_references_config.json
+
+# Include the configuration files for the modules
+include vntyper/modules/shark/shark_config.json
+include vntyper/modules/advntr/advntr_config.json
