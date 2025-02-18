@@ -158,7 +158,6 @@ def advntr_processing_del(df):
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
 
     # Extract insertion length values using regex.
-    # Fix: Use [0] to ensure extraction returns a Series rather than a DataFrame.
     df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
 
@@ -167,7 +166,7 @@ def advntr_processing_del(df):
     df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
 
-    # Replace empty strings with '0' (avoiding downcasting warning) and convert to integer.
+    # Replace empty strings with '0' and convert to integer.
     df1["Insertion_len"] = (
         df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
     )
@@ -225,11 +224,10 @@ def advntr_processing_ins(df):
     logger = logging.getLogger(__name__)
     logger.debug("Starting insertion processing.")
 
-    # Create a copy of the input DataFrame to avoid modifying the original data.
     df1 = df.copy()
     logger.debug("Copied input DataFrame for insertion processing.")
 
-    # Rename columns for clarity.
+    # Create a copy of the input DataFrame to avoid modifying the original data.
     df1.rename(columns={"State": "Variant", "Pvalue\n": "Pvalue"}, inplace=True)
     logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
 
@@ -303,43 +301,15 @@ def process_advntr_output(output_path, output, output_name):
         "Pvalue",
     ]
 
-    # Check if the file is empty or only contains comments
-    if not content or all(line.startswith("#") for line in content):
-        logging.warning("No pathogenic variant was found with adVNTR!")
-
-        # Write the header and a negative result line
-        with open(output_path, "w") as f:
-            f.write(f"#Input File: {output_name} \n")
-            f.write("#Reference file: None\n")
-            f.write("#P-value cutoff: 0.001\n")
-            f.write("\t".join(default_columns_advntr_output) + "\n")
-            f.write(
-                "Negative\t"
-                + "\t".join(["None"] * (len(default_columns_advntr_output) - 1))
-                + "\n"
-            )
-
-        logging.info(
-            f"Empty or comment-only output found, written header and negative line to {output_path}"
-        )
-        return
-
-    # Read the output file again to update the header
-    with open(output_path, "r") as file:
-        content = file.readlines()
-
-    # Replace #VID with VID in the header line
+    # Update header: Replace '#VID' with 'VID'
     content = [
         line.replace("#VID", "VID") if line.startswith("#VID") else line
         for line in content
     ]
-
-    # Write the modified content back to the file
     with open(output_path, "w") as file:
         file.writelines(content)
 
     try:
-        # Load the data using pandas
         logging.info("Loading data into DataFrame...")
         df = pd.read_csv(output_path, sep="\t", comment="#")
         logging.info(f"Data loaded successfully with shape: {df.shape}")
@@ -349,34 +319,43 @@ def process_advntr_output(output_path, output, output_name):
         return
 
     try:
-        # Process deletions and insertions
         logging.info("Processing deletions...")
         df_del = advntr_processing_del(df)
 
         logging.info("Processing insertions...")
         df_ins = advntr_processing_ins(df)
 
-        # Concatenate deletions and insertions
         logging.info("Concatenating deletions and insertions...")
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
 
-        # Keep relevant columns
-        default_columns_advntr_final = [
-            "VID",
-            "Variant",
-            "NumberOfSupportingReads",
-            "MeanCoverage",
-            "Pvalue",
-        ]
-        advntr_concat = advntr_concat[default_columns_advntr_final]
+        # If the final DataFrame is empty, create a default negative result row.
+        if advntr_concat.empty:
+            logging.warning(
+                "No pathogenic variant found after filtering. Generating default negative result."
+            )
+            negative_data = {
+                "VID": "None",
+                "Variant": "None",
+                "NumberOfSupportingReads": "None",
+                "MeanCoverage": "None",
+                "Pvalue": "Negative",
+            }
+            advntr_concat = pd.DataFrame([negative_data])
+        else:
+            # Keep relevant columns if non-empty.
+            default_columns_advntr_final = [
+                "VID",
+                "Variant",
+                "NumberOfSupportingReads",
+                "MeanCoverage",
+                "Pvalue",
+            ]
+            advntr_concat = advntr_concat[default_columns_advntr_final]
+            logging.info("Removing duplicates...")
+            advntr_concat.drop_duplicates(
+                subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True
+            )
 
-        # Remove duplicates
-        logging.info("Removing duplicates...")
-        advntr_concat.drop_duplicates(
-            subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True
-        )
-
-        # Save the processed adVNTR results
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat.to_csv(output_result_path, sep="\t", index=False)
         logging.info(f"Processed adVNTR results saved to {output_result_path}")
@@ -395,6 +374,4 @@ def cleanup_files(output, output_name):
         output (str): The output directory.
         output_name (str): The base name for the output files.
     """
-    # Currently, this function is not used.
-    # Implement cleanup logic here if needed.
     logging.info("Intermediate files cleaned up.")

@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 import subprocess
+import statistics  # for median and stdev calculations
 
 from vntyper.scripts.utils import run_command
 
@@ -143,12 +144,9 @@ def process_bam_to_fastq(
     if not fast_mode:
         command_filter = (
             f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
-            f" >(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}/"
-            f"{output_name}_unmapped1.bam) "
-            f" >(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}/"
-            f"{output_name}_unmapped2.bam) "
-            f" >(samtools view -b -f 12 -F 265 -@ {threads} - -o {output}/"
-            f"{output_name}_unmapped3.bam) "
+            f" >(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}/{output_name}_unmapped1.bam) "
+            f" >(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}/{output_name}_unmapped2.bam) "
+            f" >(samtools view -b -f 12 -F 265 -@ {threads} - -o {output}/{output_name}_unmapped3.bam) "
             f"> /dev/null"
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
@@ -236,20 +234,24 @@ def process_bam_to_fastq(
     )
 
 
-def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, output_name):
+def calculate_vntr_coverage(
+    bam_file, region, threads, config, output_dir, output_name, summary_filename=None
+):
     """
-    Calculate the mean coverage over the VNTR region using samtools depth.
+    Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
 
     Args:
         bam_file (str or Path): Path to the BAM file.
         region (str): Genomic region in 'chr:start-end' format.
         threads (int): Number of threads to use.
         config (dict): Configuration dictionary containing tool paths.
-        output_dir (str or Path): Directory to store the coverage log.
-        output_name (str): Base name for the coverage log file.
+        output_dir (str or Path): Directory to store the coverage output.
+        output_name (str): Base name for the coverage output file.
+        summary_filename (str or Path, optional): File name for the TSV coverage summary.
+            Defaults to "<output_name>_summary.tsv" in output_dir.
 
     Returns:
-        float: Mean coverage over the VNTR region.
+        dict: A dictionary containing mean, median, standard deviation, min, and max coverage.
 
     Raises:
         RuntimeError: If coverage calculation fails.
@@ -274,14 +276,45 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
             coverage_values = [
                 int(line.strip().split("\t")[2]) for line in f if line.strip()
             ]
-        mean_coverage = (
-            sum(coverage_values) / len(coverage_values) if coverage_values else 0
+        if not coverage_values:
+            raise RuntimeError("No coverage data found.")
+
+        mean_coverage = sum(coverage_values) / len(coverage_values)
+        median_coverage = statistics.median(coverage_values)
+        stdev_coverage = (
+            statistics.stdev(coverage_values) if len(coverage_values) > 1 else 0
         )
+        min_coverage = min(coverage_values)
+        max_coverage = max(coverage_values)
+
         logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
-        return mean_coverage
+        logging.info(f"Median VNTR coverage: {median_coverage:.2f}")
+        logging.info(f"Standard deviation: {stdev_coverage:.2f}")
+        logging.info(f"Min coverage: {min_coverage}")
+        logging.info(f"Max coverage: {max_coverage}")
+
+        if summary_filename is None:
+            summary_filename = Path(output_dir) / f"{output_name}_summary.tsv"
+        else:
+            summary_filename = Path(summary_filename)
+
+        with open(summary_filename, "w") as out_f:
+            out_f.write("mean\tmedian\tstdev\tmin\tmax\n")
+            out_f.write(
+                f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t{min_coverage}\t{max_coverage}\n"
+            )
+        logging.info(f"Coverage summary written to: {summary_filename}")
+
+        return {
+            "mean": mean_coverage,
+            "median": median_coverage,
+            "stdev": stdev_coverage,
+            "min": min_coverage,
+            "max": max_coverage,
+        }
     except Exception as e:
-        logging.error(f"Error calculating mean coverage: {e}")
-        raise RuntimeError(f"Error calculating mean coverage: {e}")
+        logging.error(f"Error calculating coverage summary: {e}")
+        raise RuntimeError(f"Error calculating coverage summary: {e}")
 
 
 def downsample_bam_if_needed(
@@ -313,7 +346,6 @@ def downsample_bam_if_needed(
 
     bam_path = Path(bam_path)  # ensure it's a Path object
 
-    # 1) Calculate current coverage
     if reference_assembly == "hg38":
         region = config["bam_processing"]["vntr_region_hg38"]
     else:
@@ -326,27 +358,22 @@ def downsample_bam_if_needed(
         config=config,
         output_dir=coverage_dir,
         output_name=coverage_prefix,
-    )
+    )["mean"]
 
-    # 2) If coverage is below or equal to max_coverage, do nothing
     if current_coverage <= max_coverage:
         logging.info(
-            f"Current coverage ({current_coverage:.2f}) <= max_coverage ({max_coverage}). "
-            "No downsampling needed."
+            f"Current coverage ({current_coverage:.2f}) <= max_coverage ({max_coverage}). No downsampling needed."
         )
         return bam_path
 
-    # 3) Otherwise, compute downsampling fraction
     fraction = max_coverage / current_coverage
     logging.info(
-        f"Current coverage: {current_coverage:.2f}, max coverage: {max_coverage}, "
-        f"downsampling fraction: {fraction:.4f}"
+        f"Current coverage: {current_coverage:.2f}, max coverage: {max_coverage}, downsampling fraction: {fraction:.4f}"
     )
 
-    # 4) Run samtools to downsample
     samtools_path = config["tools"]["samtools"]
     downsampled_bam = bam_path.parent / (bam_path.stem + "_downsampled.bam")
-    seed = 42  # fixed seed or make user-configurable
+    seed = 42
     subsample_param = f"{seed}.{int(fraction * 1000):03d}"
 
     cmd_view = [
@@ -366,9 +393,8 @@ def downsample_bam_if_needed(
         subprocess.run(cmd_view, check=True)
     except subprocess.CalledProcessError as err:
         logging.error(f"Downsampling failed: {err}")
-        return bam_path  # fallback to original bam
+        return bam_path
 
-    # 5) Sort & index the downsampled BAM
     sorted_down_bam = downsampled_bam.with_suffix(".sorted.bam")
     cmd_sort = [
         samtools_path,
@@ -381,7 +407,7 @@ def downsample_bam_if_needed(
     ]
     try:
         subprocess.run(cmd_sort, check=True)
-        downsampled_bam.unlink()  # remove unsorted
+        downsampled_bam.unlink()
         cmd_index = [samtools_path, "index", str(sorted_down_bam)]
         subprocess.run(cmd_index, check=True)
     except subprocess.CalledProcessError as err:
