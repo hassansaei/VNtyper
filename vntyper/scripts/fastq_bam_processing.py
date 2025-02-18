@@ -146,7 +146,7 @@ def process_bam_to_fastq(
             f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
             f" >(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}/{output_name}_unmapped1.bam) "
             f" >(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}/{output_name}_unmapped2.bam) "
-            f" >(samtools view -b -f 12 -F 265 -@ {threads} - -o {output}/{output_name}_unmapped3.bam) "
+            f" >(samtools view -b -f 12 -F 256 -@ {threads} - -o {output}/{output_name}_unmapped3.bam) "
             f"> /dev/null"
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
