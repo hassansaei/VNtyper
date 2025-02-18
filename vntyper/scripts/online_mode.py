@@ -4,6 +4,7 @@ import time
 import requests
 from pathlib import Path
 
+
 def subset_bam(bam_path, region, output_bam):
     """
     Subset the BAM file to a specified region using samtools and index it.
@@ -16,16 +17,7 @@ def subset_bam(bam_path, region, output_bam):
     Raises:
         RuntimeError: If subset or indexing fails.
     """
-    cmd = [
-        "samtools",
-        "view",
-        "-P",
-        "-b",
-        bam_path,
-        region,
-        "-o",
-        output_bam
-    ]
+    cmd = ["samtools", "view", "-P", "-b", bam_path, region, "-o", output_bam]
     logging.info(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -39,8 +31,16 @@ def subset_bam(bam_path, region, output_bam):
         raise RuntimeError(f"Failed to index subset BAM: {result_idx.stderr}")
 
 
-def submit_job(api_url, subset_bam, subset_bai, reference_assembly, threads,
-               email=None, cohort_id=None, passphrase=None):
+def submit_job(
+    api_url,
+    subset_bam,
+    subset_bai,
+    reference_assembly,
+    threads,
+    email=None,
+    cohort_id=None,
+    passphrase=None,
+):
     """
     Submit a job to the online API.
 
@@ -61,24 +61,28 @@ def submit_job(api_url, subset_bam, subset_bai, reference_assembly, threads,
         RuntimeError: If submission fails.
     """
     files = {
-        'bam_file': ('subset.bam', open(subset_bam, 'rb'), 'application/octet-stream')
+        "bam_file": ("subset.bam", open(subset_bam, "rb"), "application/octet-stream")
     }
     if subset_bai:
-        files['bai_file'] = ('subset.bam.bai', open(subset_bai, 'rb'), 'application/octet-stream')
+        files["bai_file"] = (
+            "subset.bam.bai",
+            open(subset_bai, "rb"),
+            "application/octet-stream",
+        )
 
     data = {
-        'thread': threads,
-        'reference_assembly': reference_assembly,
-        'fast_mode': 'false',
-        'keep_intermediates': 'false',
-        'archive_results': 'true'
+        "thread": threads,
+        "reference_assembly": reference_assembly,
+        "fast_mode": "false",
+        "keep_intermediates": "false",
+        "archive_results": "true",
     }
     if email:
-        data['email'] = email
+        data["email"] = email
     if cohort_id:
-        data['cohort_id'] = cohort_id
+        data["cohort_id"] = cohort_id
     if passphrase:
-        data['passphrase'] = passphrase
+        data["passphrase"] = passphrase
 
     submit_url = f"{api_url}/run-job/"
     logging.info(f"Submitting job to {submit_url}")
@@ -118,8 +122,8 @@ def poll_job_status(api_url, job_id):
                 f"Failed to get job status. Status: {resp.status_code}, Detail: {resp.text}"
             )
         data = resp.json()
-        status = data.get('status', '')
-        if status in ['completed', 'failed']:
+        status = data.get("status", "")
+        if status in ["completed", "failed"]:
             return status
         logging.info(f"Job {job_id} status: {status}, waiting...")
         time.sleep(10)
@@ -145,14 +149,21 @@ def download_results(api_url, job_id, output_dir):
             f"Failed to download results. Status: {resp.status_code}, Detail: {resp.text}"
         )
     zip_path = output_dir / f"{job_id}.zip"
-    with open(zip_path, 'wb') as f:
+    with open(zip_path, "wb") as f:
         f.write(resp.content)
     logging.info(f"Results saved to {zip_path}")
 
 
 def run_online_mode(
-    config, bam, output_dir, reference_assembly, threads,
-    email=None, cohort_id=None, passphrase=None, resume=False
+    config,
+    bam,
+    output_dir,
+    reference_assembly,
+    threads,
+    email=None,
+    cohort_id=None,
+    passphrase=None,
+    resume=False,
 ):
     """
     Run the online mode functionality:
@@ -189,10 +200,10 @@ def run_online_mode(
     job_id_file = output_path / "job_id.txt"
 
     if resume and job_id_file.exists():
-        with open(job_id_file, 'r') as f:
+        with open(job_id_file, "r") as f:
             job_id = f.read().strip()
         status = poll_job_status(api_url, job_id)
-        if status == 'completed':
+        if status == "completed":
             download_results(api_url, job_id, output_path)
             logging.info("Job completed successfully.")
         else:
@@ -212,19 +223,19 @@ def run_online_mode(
         threads=threads,
         email=email,
         cohort_id=cohort_id,
-        passphrase=passphrase
+        passphrase=passphrase,
     )
     job_id = resp.get("job_id")
     if not job_id:
         logging.error("No job_id returned from API.")
         return
 
-    with open(job_id_file, 'w') as f:
+    with open(job_id_file, "w") as f:
         f.write(job_id)
 
     # Poll until completed
     status = poll_job_status(api_url, job_id)
-    if status == 'completed':
+    if status == "completed":
         download_results(api_url, job_id, output_path)
         logging.info("Job completed successfully.")
     else:

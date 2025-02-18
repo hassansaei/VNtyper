@@ -5,10 +5,11 @@ import importlib
 
 # Dictionary mapping module names to their package paths
 AVAILABLE_MODULES = {
-    'advntr': 'vntyper.modules.advntr',
+    "advntr": "vntyper.modules.advntr",
     # Add future modules here
     # 'moduleX': 'vntyper.modules.moduleX',
 }
+
 
 def is_module_available(module_name):
     """
@@ -21,6 +22,7 @@ def is_module_available(module_name):
         bool: True if the module is available, False otherwise.
     """
     return module_name in AVAILABLE_MODULES
+
 
 def load_module(module_name):
     """

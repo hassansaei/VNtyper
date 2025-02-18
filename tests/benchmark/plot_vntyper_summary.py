@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Plot scatter plots from a vntyper_summary.csv (no lines), including analysis time. "
-                    "Separate figures are produced for vntyper kestrel and advntr results."
+        "Separate figures are produced for vntyper kestrel and advntr results."
     )
     parser.add_argument(
         "--input-csv",
@@ -57,7 +57,7 @@ def confidence_to_color(conf_str: str) -> str:
 def parse_advntr_result(adv_str):
     """
     Parse the advntr_result string.
-    
+
     If the string (after stripping) equals "Negative" (case-insensitive), return zeros.
     Otherwise, attempt to parse the string as a list of dictionaries and extract:
       - NumberOfSupportingReads
@@ -117,10 +117,10 @@ def advntr_color_func(row):
 def build_long_form(df, metrics, module_label, value_column="value", color_func=None):
     """
     Build a long-form DataFrame from a given metrics list.
-    
+
     Each row in the output contains:
       - file_analyzed, method, confidence, module, metric_name, x_value, y_value, color
-      
+
     If color_func is provided, it is used to compute the color.
     """
     long_rows = []
@@ -144,7 +144,25 @@ def build_long_form(df, metrics, module_label, value_column="value", color_func=
                         x_val = float(val_str)
                     except ValueError:
                         continue
-                    long_rows.append({
+                    long_rows.append(
+                        {
+                            "file_analyzed": row.get("file_analyzed", ""),
+                            "method": row.get("method", ""),
+                            "confidence": row.get("confidence", ""),
+                            "module": module_label,
+                            "metric_name": metric,
+                            "x_value": x_val,
+                            "y_value": y_val,
+                            "color": color_str,
+                        }
+                    )
+            else:
+                try:
+                    x_val = float(raw_val)
+                except (ValueError, TypeError):
+                    continue
+                long_rows.append(
+                    {
                         "file_analyzed": row.get("file_analyzed", ""),
                         "method": row.get("method", ""),
                         "confidence": row.get("confidence", ""),
@@ -153,22 +171,8 @@ def build_long_form(df, metrics, module_label, value_column="value", color_func=
                         "x_value": x_val,
                         "y_value": y_val,
                         "color": color_str,
-                    })
-            else:
-                try:
-                    x_val = float(raw_val)
-                except (ValueError, TypeError):
-                    continue
-                long_rows.append({
-                    "file_analyzed": row.get("file_analyzed", ""),
-                    "method": row.get("method", ""),
-                    "confidence": row.get("confidence", ""),
-                    "module": module_label,
-                    "metric_name": metric,
-                    "x_value": x_val,
-                    "y_value": y_val,
-                    "color": color_str,
-                })
+                    }
+                )
     return pd.DataFrame(long_rows)
 
 
@@ -199,29 +203,47 @@ def main():
         "Depth_Score",
     ]
     for m in vntyper_metrics + common_metrics:
-        df.loc[df["confidence"].fillna("").str.contains("Negative", case=False) & df[m].isna(), m] = 0.0
+        df.loc[
+            df["confidence"].fillna("").str.contains("Negative", case=False)
+            & df[m].isna(),
+            m,
+        ] = 0.0
 
     # 3) Ensure "value" (the downsample fraction or coverage) is numeric.
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
 
     # 4) Parse advntr_result into new columns.
-    df["advntr_NumberOfSupportingReads"], df["advntr_MeanCoverage"], df["advntr_Pvalue"] = zip(*df.apply(
-        lambda row: parse_advntr_result(row.get("advntr_result", "")), axis=1
-    ))
+    (
+        df["advntr_NumberOfSupportingReads"],
+        df["advntr_MeanCoverage"],
+        df["advntr_Pvalue"],
+    ) = zip(
+        *df.apply(lambda row: parse_advntr_result(row.get("advntr_result", "")), axis=1)
+    )
     # 5) Compute a new column "advntr_call" for advntr results.
     df["advntr_call"] = df.apply(get_advntr_call, axis=1)
 
     # 6) Build long-form DataFrames for each module.
     # vntyper module uses its original metric columns.
-    vntyper_long = build_long_form(df, vntyper_metrics + common_metrics, module_label="vntyper kestrel", value_column="value")
+    vntyper_long = build_long_form(
+        df,
+        vntyper_metrics + common_metrics,
+        module_label="vntyper kestrel",
+        value_column="value",
+    )
     # advntr module uses the parsed advntr metrics plus analysis_time_minutes.
     advntr_metrics = [
         "advntr_NumberOfSupportingReads",
         "advntr_MeanCoverage",
         "advntr_Pvalue",
     ]
-    advntr_long = build_long_form(df, advntr_metrics + common_metrics, module_label="advntr", value_column="value",
-                                  color_func=advntr_color_func)
+    advntr_long = build_long_form(
+        df,
+        advntr_metrics + common_metrics,
+        module_label="advntr",
+        value_column="value",
+        color_func=advntr_color_func,
+    )
 
     if vntyper_long.empty and advntr_long.empty:
         logging.warning("No numeric data found to plot. Exiting.")
@@ -232,7 +254,9 @@ def main():
         num_metrics = len(metrics_to_plot)
         cols = 2
         rows_subplot = (num_metrics + cols - 1) // cols
-        fig, axes = plt.subplots(nrows=rows_subplot, ncols=cols, figsize=(18, 10), sharey=False)
+        fig, axes = plt.subplots(
+            nrows=rows_subplot, ncols=cols, figsize=(18, 10), sharey=False
+        )
         axes = axes.flatten()
 
         for idx, metric in enumerate(metrics_to_plot):
@@ -250,7 +274,7 @@ def main():
                 c=sub["color"],
                 s=100,
                 alpha=0.7,
-                edgecolors='w'
+                edgecolors="w",
             )
             if metric == "analysis_time_minutes":
                 ax.set_xlabel("Analysis Time (minutes)")
@@ -268,33 +292,79 @@ def main():
 
         # Adapt legend based on module.
         from matplotlib.lines import Line2D
+
         if module_label == "advntr":
             legend_elements = [
-                Line2D([0], [0], marker='o', color='w', label='Positive',
-                       markerfacecolor='green', markersize=10),
-                Line2D([0], [0], marker='o', color='w', label='Negative',
-                       markerfacecolor='black', markersize=10),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="Positive",
+                    markerfacecolor="green",
+                    markersize=10,
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="Negative",
+                    markerfacecolor="black",
+                    markersize=10,
+                ),
             ]
         else:
             legend_elements = [
-                Line2D([0], [0], marker='o', color='w', label='High_Precision',
-                       markerfacecolor='red', markersize=10),
-                Line2D([0], [0], marker='o', color='w', label='Low_Precision',
-                       markerfacecolor='orange', markersize=10),
-                Line2D([0], [0], marker='o', color='w', label='Negative',
-                       markerfacecolor='black', markersize=10),
-                Line2D([0], [0], marker='o', color='w', label='Other',
-                       markerfacecolor='gray', markersize=10),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="High_Precision",
+                    markerfacecolor="red",
+                    markersize=10,
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="Low_Precision",
+                    markerfacecolor="orange",
+                    markersize=10,
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="Negative",
+                    markerfacecolor="black",
+                    markersize=10,
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    label="Other",
+                    markerfacecolor="gray",
+                    markersize=10,
+                ),
             ]
         fig.legend(
             handles=legend_elements,
-            loc='lower center',
+            loc="lower center",
             ncol=len(legend_elements),
-            title='Confidence' if module_label != "advntr" else 'Advntr Call',
-            bbox_to_anchor=(0.5, 0.05)
+            title="Confidence" if module_label != "advntr" else "Advntr Call",
+            bbox_to_anchor=(0.5, 0.05),
         )
 
-        plt.suptitle(f"VNtyper Scatter Plots ({module_label})\n(X = depth metric or Analysis Time, Y = fraction/coverage)", fontsize=20)
+        plt.suptitle(
+            f"VNtyper Scatter Plots ({module_label})\n(X = depth metric or Analysis Time, Y = fraction/coverage)",
+            fontsize=20,
+        )
         plt.tight_layout(rect=[0, 0.1, 1, 0.95])
         base, ext = os.path.splitext(args.output_png)
         output_file = f"{base}_{module_label.replace(' ', '_')}{ext}"

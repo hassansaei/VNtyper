@@ -9,9 +9,7 @@ import subprocess
 from vntyper.scripts.utils import run_command
 
 
-def process_fastq(
-    fastq_1, fastq_2, threads, output, output_name, config
-):
+def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     """
     Process FASTQ files using fastp for quality control.
 
@@ -51,9 +49,7 @@ def process_fastq(
         qc_command += " --dedup"
 
     log_file = Path(output) / f"{output_name}_fastp.log"
-    logging.info(
-        f"Executing FASTQ quality control with command: {qc_command}"
-    )
+    logging.info(f"Executing FASTQ quality control with command: {qc_command}")
 
     success = run_command(str(qc_command), str(log_file), critical=True)
     if not success:
@@ -74,7 +70,7 @@ def process_bam_to_fastq(
     delete_intermediates=True,
     keep_intermediates=False,
     bed_file=None,
-    file_format="bam"
+    file_format="bam",
 ):
     """
     Process alignment files by slicing, filtering, and converting to FASTQ.
@@ -138,9 +134,7 @@ def process_bam_to_fastq(
         log_file_slice = Path(output) / f"{output_name}_slice.log"
         logging.info(f"Executing region slicing with command: {command_slice}")
 
-        success = run_command(
-            str(command_slice), str(log_file_slice), critical=True
-        )
+        success = run_command(str(command_slice), str(log_file_slice), critical=True)
         if not success:
             logging.error(f"{file_format.upper()} region slicing failed.")
             raise RuntimeError(f"{file_format.upper()} region slicing failed.")
@@ -160,9 +154,7 @@ def process_bam_to_fastq(
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logging.info(f"Executing filtering with command: {command_filter}")
 
-        success = run_command(
-            str(command_filter), str(log_file_filter), critical=True
-        )
+        success = run_command(str(command_filter), str(log_file_filter), critical=True)
         if not success:
             logging.error("BAM/CRAM filtering failed.")
             raise RuntimeError("BAM/CRAM filtering failed.")
@@ -177,9 +169,7 @@ def process_bam_to_fastq(
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logging.info(f"Executing BAM merging with command: {command_merge}")
 
-        success = run_command(
-            str(command_merge), str(log_file_merge), critical=True
-        )
+        success = run_command(str(command_merge), str(log_file_merge), critical=True)
         if not success:
             logging.error("BAM merging failed.")
             raise RuntimeError("BAM merging failed.")
@@ -271,16 +261,22 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
     )
     logging.info(f"Calculating VNTR coverage with command: {depth_command}")
     success = run_command(
-        str(depth_command), str(coverage_output.with_suffix('.depth.log')), critical=True
+        str(depth_command),
+        str(coverage_output.with_suffix(".depth.log")),
+        critical=True,
     )
     if not success:
         logging.error("VNTR coverage calculation failed.")
         raise RuntimeError("VNTR coverage calculation failed.")
 
     try:
-        with open(coverage_output, 'r') as f:
-            coverage_values = [int(line.strip().split('\t')[2]) for line in f if line.strip()]
-        mean_coverage = sum(coverage_values) / len(coverage_values) if coverage_values else 0
+        with open(coverage_output, "r") as f:
+            coverage_values = [
+                int(line.strip().split("\t")[2]) for line in f if line.strip()
+            ]
+        mean_coverage = (
+            sum(coverage_values) / len(coverage_values) if coverage_values else 0
+        )
         logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
         return mean_coverage
     except Exception as e:
@@ -295,7 +291,7 @@ def downsample_bam_if_needed(
     threads,
     config,
     coverage_dir,
-    coverage_prefix
+    coverage_prefix,
 ):
     """
     Check the current coverage of 'bam_path' in the VNTR region and
@@ -314,6 +310,7 @@ def downsample_bam_if_needed(
         Path: The path to the (optionally) downsampled BAM.
     """
     from pathlib import Path
+
     bam_path = Path(bam_path)  # ensure it's a Path object
 
     # 1) Calculate current coverage
@@ -328,19 +325,23 @@ def downsample_bam_if_needed(
         threads=threads,
         config=config,
         output_dir=coverage_dir,
-        output_name=coverage_prefix
+        output_name=coverage_prefix,
     )
 
     # 2) If coverage is below or equal to max_coverage, do nothing
     if current_coverage <= max_coverage:
-        logging.info(f"Current coverage ({current_coverage:.2f}) <= max_coverage ({max_coverage}). "
-                     "No downsampling needed.")
+        logging.info(
+            f"Current coverage ({current_coverage:.2f}) <= max_coverage ({max_coverage}). "
+            "No downsampling needed."
+        )
         return bam_path
 
     # 3) Otherwise, compute downsampling fraction
     fraction = max_coverage / current_coverage
-    logging.info(f"Current coverage: {current_coverage:.2f}, max coverage: {max_coverage}, "
-                 f"downsampling fraction: {fraction:.4f}")
+    logging.info(
+        f"Current coverage: {current_coverage:.2f}, max coverage: {max_coverage}, "
+        f"downsampling fraction: {fraction:.4f}"
+    )
 
     # 4) Run samtools to downsample
     samtools_path = config["tools"]["samtools"]
@@ -349,12 +350,16 @@ def downsample_bam_if_needed(
     subsample_param = f"{seed}.{int(fraction * 1000):03d}"
 
     cmd_view = [
-        samtools_path, "view",
-        "-s", subsample_param,
-        "-@", str(threads),
+        samtools_path,
+        "view",
+        "-s",
+        subsample_param,
+        "-@",
+        str(threads),
         "-b",
-        "-o", str(downsampled_bam),
-        str(bam_path)
+        "-o",
+        str(downsampled_bam),
+        str(bam_path),
     ]
     logging.info(f"Downsampling BAM with command: {' '.join(cmd_view)}")
     try:
@@ -366,10 +371,13 @@ def downsample_bam_if_needed(
     # 5) Sort & index the downsampled BAM
     sorted_down_bam = downsampled_bam.with_suffix(".sorted.bam")
     cmd_sort = [
-        samtools_path, "sort",
-        "-@", str(threads),
-        "-o", str(sorted_down_bam),
-        str(downsampled_bam)
+        samtools_path,
+        "sort",
+        "-@",
+        str(threads),
+        "-o",
+        str(sorted_down_bam),
+        str(downsampled_bam),
     ]
     try:
         subprocess.run(cmd_sort, check=True)

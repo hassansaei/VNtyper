@@ -19,7 +19,9 @@ class Settings:
     RATE_LIMIT_SIMPLE_SECONDS: int = int(os.getenv("RATE_LIMIT_SIMPLE_SECONDS", 60))
     RATE_LIMIT_HIGH_TIMES: int = int(os.getenv("RATE_LIMIT_HIGH_TIMES", 10))
     RATE_LIMIT_HIGH_SECONDS: int = int(os.getenv("RATE_LIMIT_HIGH_SECONDS", 60))
-    RATE_LIMITING_REDIS_DB: int = int(os.getenv("RATE_LIMITING_REDIS_DB", 2))  # Use DB 2 for rate limiting
+    RATE_LIMITING_REDIS_DB: int = int(
+        os.getenv("RATE_LIMITING_REDIS_DB", 2)
+    )  # Use DB 2 for rate limiting
 
     # SMTP Configuration
     SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.hoster.com")
@@ -32,7 +34,9 @@ class Settings:
     API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
 
     # Cohort configurations
-    COHORT_RETENTION_DAYS: int = int(os.getenv("COHORT_RETENTION_DAYS", 14))  # Default to 14 days
+    COHORT_RETENTION_DAYS: int = int(
+        os.getenv("COHORT_RETENTION_DAYS", 14)
+    )  # Default to 14 days
     PASSWORD_HASH_SCHEME: str = "bcrypt"
 
     # Max result age for cleanup

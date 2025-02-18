@@ -17,9 +17,9 @@ from vntyper.scripts.utils import run_command, load_config
 # You can adjust the logging level here to control the verbosity.
 # For production, you might set this to logging.INFO or logging.WARNING.
 logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+
 
 def load_advntr_config(config_path=None):
     """
@@ -27,12 +27,14 @@ def load_advntr_config(config_path=None):
     """
     if config_path is None:
         # Default path to advntr_config.json
-        config_path = os.path.join(os.path.dirname(__file__), 'advntr_config.json')
+        config_path = os.path.join(os.path.dirname(__file__), "advntr_config.json")
     return load_config(config_path)
+
 
 # Load the adVNTR settings
 advntr_config = load_advntr_config()
 advntr_settings = advntr_config.get("advntr_settings", {})
+
 
 def run_advntr(db_file, sorted_bam, output, output_name, config):
     """
@@ -120,7 +122,7 @@ def advntr_processing_del(df):
       - Calculates the number of deletion ('D') and insertion ('I') characters in the entire
         variant string. Note that multi-allelic strings (e.g. "D55_6&D56_6&D57_6&D58_6&D59_6&D60_6")
         are treated as a single value; the function aggregates the counts.
-      - Extracts the insertion length information by looking for the first occurrence of a substring 
+      - Extracts the insertion length information by looking for the first occurrence of a substring
         starting with "LEN". For example, for "D18_7&D19_7&D20_7&I20_7_C_LEN16", it extracts "LEN16" and then
         isolates "16" as the insertion length.
       - Splits the extracted value on 'LEN', converts the numeric part to an integer,
@@ -147,32 +149,36 @@ def advntr_processing_del(df):
     logger.debug("Copied input DataFrame for deletion processing.")
 
     # Rename columns for clarity.
-    df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
+    df1.rename(columns={"State": "Variant", "Pvalue\n": "Pvalue"}, inplace=True)
     logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
 
     # Calculate deletion and insertion counts.
-    df1['Deletion_length'] = df1['Variant'].str.count('D')
-    df1['Insertion_length'] = df1['Variant'].str.count('I')
+    df1["Deletion_length"] = df1["Variant"].str.count("D")
+    df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
 
     # Extract insertion length values using regex.
     # Fix: Use [0] to ensure extraction returns a Series rather than a DataFrame.
-    df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
 
     # Fill missing values and split the extracted string on 'LEN'.
-    df1['Insertion_len'] = df1['Insertion_len'].fillna('LEN')
-    df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
+    df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
+    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
 
     # Replace empty strings with '0' (avoiding downcasting warning) and convert to integer.
-    df1['Insertion_len'] = df1['Insertion_len'].astype(str).replace('^$', '0', regex=True)
-    df1['Insertion_len'] = pd.to_numeric(df1['Insertion_len'], errors='coerce').fillna(0).astype(int)
-    df1['Deletion_length'] = df1['Deletion_length'].astype(int)
+    df1["Insertion_len"] = (
+        df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
+    )
+    df1["Insertion_len"] = (
+        pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
+    )
+    df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
 
     # Calculate frameshift as the absolute difference between insertion and deletion lengths.
-    df1['frame'] = abs(df1['Insertion_len'] - df1['Deletion_length']).astype(str)
+    df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
     logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
 
     # Define valid deletion frames based on settings from advntr_settings.
@@ -182,7 +188,7 @@ def advntr_processing_del(df):
     logger.debug(f"Valid deletion frames (first 5): {del_frame[:5].tolist()}")
 
     # Filter DataFrame: keep rows with at least one deletion and a valid frameshift.
-    df1 = df1[(df1['Deletion_length'] >= 1) & df1['frame'].isin(del_frame)]
+    df1 = df1[(df1["Deletion_length"] >= 1) & df1["frame"].isin(del_frame)]
     logger.debug(f"Filtered DataFrame shape after deletion processing: {df1.shape}")
 
     return df1
@@ -198,7 +204,7 @@ def advntr_processing_ins(df):
       - Calculates the number of deletion ('D') and insertion ('I') characters in the entire
         variant string. Note that multi-allelic strings (e.g. "D18_7&D19_7&D20_7&I20_7_C_LEN16")
         are treated as a single value; the function aggregates the counts.
-      - Extracts the insertion length information from the variant string by searching for a substring 
+      - Extracts the insertion length information from the variant string by searching for a substring
         starting with "LEN". In the example "D18_7&D19_7&D20_7&I20_7_C_LEN16", it extracts "LEN16" and isolates "16".
       - Splits the extracted value on 'LEN', converts the numeric part to an integer,
         and computes the frameshift as the absolute difference between insertion length and deletion count.
@@ -224,32 +230,36 @@ def advntr_processing_ins(df):
     logger.debug("Copied input DataFrame for insertion processing.")
 
     # Rename columns for clarity.
-    df1.rename(columns={'State': 'Variant', 'Pvalue\n': 'Pvalue'}, inplace=True)
+    df1.rename(columns={"State": "Variant", "Pvalue\n": "Pvalue"}, inplace=True)
     logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
 
     # Calculate deletion and insertion counts.
-    df1['Deletion_length'] = df1['Variant'].str.count('D')
-    df1['Insertion_length'] = df1['Variant'].str.count('I')
+    df1["Deletion_length"] = df1["Variant"].str.count("D")
+    df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
 
     # Extract insertion length values using regex.
     # Fix: Use [0] to ensure extraction returns a Series rather than a DataFrame.
-    df1['Insertion_len'] = df1['Variant'].str.extract('(LEN.*)')[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
 
     # Fill missing values and split the extracted string on 'LEN'.
-    df1['Insertion_len'] = df1['Insertion_len'].fillna('LEN')
-    df1[['I', 'Insertion_len']] = df1['Insertion_len'].str.split('LEN', expand=True)
+    df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
+    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
 
     # Replace empty strings with '0' (avoiding downcasting warning) and convert to integer.
-    df1['Insertion_len'] = df1['Insertion_len'].astype(str).replace('^$', '0', regex=True)
-    df1['Insertion_len'] = pd.to_numeric(df1['Insertion_len'], errors='coerce').fillna(0).astype(int)
-    df1['Deletion_length'] = df1['Deletion_length'].astype(int)
+    df1["Insertion_len"] = (
+        df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
+    )
+    df1["Insertion_len"] = (
+        pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
+    )
+    df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
 
     # Calculate frameshift as the absolute difference between insertion and deletion lengths.
-    df1['frame'] = abs(df1['Insertion_len'] - df1['Deletion_length']).astype(str)
+    df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
     logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
 
     # Define valid insertion frames based on settings from advntr_settings.
@@ -259,7 +269,7 @@ def advntr_processing_ins(df):
     logger.debug(f"Valid insertion frames (first 5): {ins_frame[:5].tolist()}")
 
     # Filter DataFrame: keep rows with at least one insertion and a valid frameshift.
-    df1 = df1[(df1['Insertion_len'] >= 1) & df1['frame'].isin(ins_frame)]
+    df1 = df1[(df1["Insertion_len"] >= 1) & df1["frame"].isin(ins_frame)]
     logger.debug(f"Filtered DataFrame shape after insertion processing: {df1.shape}")
 
     return df1
@@ -278,45 +288,60 @@ def process_advntr_output(output_path, output, output_name):
         logging.error(f"adVNTR output file {output_path} not found!")
         return
 
-    logging.info('Processing adVNTR result...')
+    logging.info("Processing adVNTR result...")
 
     # Read the output file
-    with open(output_path, 'r') as file:
+    with open(output_path, "r") as file:
         content = file.readlines()
 
     # Define default column names
-    default_columns_advntr_output = ['#VID', 'State', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
+    default_columns_advntr_output = [
+        "#VID",
+        "State",
+        "NumberOfSupportingReads",
+        "MeanCoverage",
+        "Pvalue",
+    ]
 
     # Check if the file is empty or only contains comments
-    if not content or all(line.startswith('#') for line in content):
-        logging.warning('No pathogenic variant was found with adVNTR!')
+    if not content or all(line.startswith("#") for line in content):
+        logging.warning("No pathogenic variant was found with adVNTR!")
 
         # Write the header and a negative result line
-        with open(output_path, 'w') as f:
-            f.write(f'#Input File: {output_name} \n')
-            f.write('#Reference file: None\n')
-            f.write('#P-value cutoff: 0.001\n')
-            f.write('\t'.join(default_columns_advntr_output) + '\n')
-            f.write('Negative\t' + '\t'.join(['None'] * (len(default_columns_advntr_output) - 1)) + '\n')
+        with open(output_path, "w") as f:
+            f.write(f"#Input File: {output_name} \n")
+            f.write("#Reference file: None\n")
+            f.write("#P-value cutoff: 0.001\n")
+            f.write("\t".join(default_columns_advntr_output) + "\n")
+            f.write(
+                "Negative\t"
+                + "\t".join(["None"] * (len(default_columns_advntr_output) - 1))
+                + "\n"
+            )
 
-        logging.info(f'Empty or comment-only output found, written header and negative line to {output_path}')
+        logging.info(
+            f"Empty or comment-only output found, written header and negative line to {output_path}"
+        )
         return
 
     # Read the output file again to update the header
-    with open(output_path, 'r') as file:
+    with open(output_path, "r") as file:
         content = file.readlines()
 
     # Replace #VID with VID in the header line
-    content = [line.replace('#VID', 'VID') if line.startswith('#VID') else line for line in content]
+    content = [
+        line.replace("#VID", "VID") if line.startswith("#VID") else line
+        for line in content
+    ]
 
     # Write the modified content back to the file
-    with open(output_path, 'w') as file:
+    with open(output_path, "w") as file:
         file.writelines(content)
 
     try:
         # Load the data using pandas
-        logging.info('Loading data into DataFrame...')
-        df = pd.read_csv(output_path, sep='\t', comment='#')
+        logging.info("Loading data into DataFrame...")
+        df = pd.read_csv(output_path, sep="\t", comment="#")
         logging.info(f"Data loaded successfully with shape: {df.shape}")
         logging.debug(f"First few rows of the DataFrame:\n{df.head()}")
     except Exception as e:
@@ -325,33 +350,42 @@ def process_advntr_output(output_path, output, output_name):
 
     try:
         # Process deletions and insertions
-        logging.info('Processing deletions...')
+        logging.info("Processing deletions...")
         df_del = advntr_processing_del(df)
 
-        logging.info('Processing insertions...')
+        logging.info("Processing insertions...")
         df_ins = advntr_processing_ins(df)
 
         # Concatenate deletions and insertions
-        logging.info('Concatenating deletions and insertions...')
+        logging.info("Concatenating deletions and insertions...")
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
 
         # Keep relevant columns
-        default_columns_advntr_final = ['VID', 'Variant', 'NumberOfSupportingReads', 'MeanCoverage', 'Pvalue']
+        default_columns_advntr_final = [
+            "VID",
+            "Variant",
+            "NumberOfSupportingReads",
+            "MeanCoverage",
+            "Pvalue",
+        ]
         advntr_concat = advntr_concat[default_columns_advntr_final]
 
         # Remove duplicates
-        logging.info('Removing duplicates...')
-        advntr_concat.drop_duplicates(subset=['VID', 'Variant', 'NumberOfSupportingReads'], inplace=True)
+        logging.info("Removing duplicates...")
+        advntr_concat.drop_duplicates(
+            subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True
+        )
 
         # Save the processed adVNTR results
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
-        advntr_concat.to_csv(output_result_path, sep='\t', index=False)
+        advntr_concat.to_csv(output_result_path, sep="\t", index=False)
         logging.info(f"Processed adVNTR results saved to {output_result_path}")
     except Exception as e:
         logging.error(f"Error during processing of deletions and insertions: {e}")
         return
 
     cleanup_files(output, output_name)
+
 
 def cleanup_files(output, output_name):
     """
@@ -363,4 +397,4 @@ def cleanup_files(output, output_name):
     """
     # Currently, this function is not used.
     # Implement cleanup logic here if needed.
-    logging.info('Intermediate files cleaned up.')
+    logging.info("Intermediate files cleaned up.")

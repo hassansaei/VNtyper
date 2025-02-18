@@ -5,7 +5,7 @@ from setuptools import setup, find_packages
 
 # Load version from version.py
 version = {}
-with open(os.path.join('vntyper', 'version.py')) as f:
+with open(os.path.join("vntyper", "version.py")) as f:
     exec(f.read(), version)
 
 # ===========================
@@ -21,7 +21,7 @@ with open(os.path.join('vntyper', 'version.py')) as f:
 
 setup(
     name="vntyper",
-    version=version['__version__'],
+    version=version["__version__"],
     packages=find_packages(),
     include_package_data=True,  # Include package data as specified in MANIFEST.in or package_data
     install_requires=[
@@ -47,7 +47,7 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.9',
+    python_requires=">=3.9",
     extras_require={
         "dev": [
             "pytest",
@@ -56,14 +56,17 @@ setup(
         ],
     },
     package_data={
-        'vntyper.scripts': ['kestrel_config.json', 'install_references_config.json'],  # Include kestrel_config.json and install_references_config.json
-        'vntyper': [
-            'config.json',  # Include config.json in the vntyper package
-            'templates/report_template.html',  # Include report_template.html
-            'templates/cohort_summary_template.html',  # Include cohort_summary_template.html
-            'dependencies/kestrel/*.jar',  # Include all JAR files in dependencies/kestrel/
-            'modules/shark/shark_config.json',  # Include shark_config.json
-            'modules/advntr/advntr_config.json',  # Include advntr_config.json
+        "vntyper.scripts": [
+            "kestrel_config.json",
+            "install_references_config.json",
+        ],  # Include kestrel_config.json and install_references_config.json
+        "vntyper": [
+            "config.json",  # Include config.json in the vntyper package
+            "templates/report_template.html",  # Include report_template.html
+            "templates/cohort_summary_template.html",  # Include cohort_summary_template.html
+            "dependencies/kestrel/*.jar",  # Include all JAR files in dependencies/kestrel/
+            "modules/shark/shark_config.json",  # Include shark_config.json
+            "modules/advntr/advntr_config.json",  # Include advntr_config.json
         ],
     },
 )

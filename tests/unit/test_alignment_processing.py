@@ -10,10 +10,7 @@ and aligning/sorting FASTQ files.
 import pytest
 import logging
 from pathlib import Path
-from vntyper.scripts.alignment_processing import (
-    check_bwa_index,
-    align_and_sort_fastq
-)
+from vntyper.scripts.alignment_processing import check_bwa_index, align_and_sort_fastq
 
 
 def test_check_bwa_index_all_present(tmp_path, test_config, caplog):
@@ -30,9 +27,9 @@ def test_check_bwa_index_all_present(tmp_path, test_config, caplog):
     with caplog.at_level(logging.WARNING):
         result = check_bwa_index(ref_path)
 
-    assert result is True, (
-        "check_bwa_index should return True when all index files exist."
-    )
+    assert (
+        result is True
+    ), "check_bwa_index should return True when all index files exist."
     assert "Missing BWA index files" not in caplog.text
 
 
@@ -40,9 +37,7 @@ def test_align_and_sort_fastq_missing_tools(tmp_path, test_config):
     """
     Test alignment fails when required tools are not configured.
     """
-    config_for_test = {
-        "tools": {}  # No 'samtools' or 'bwa' keys
-    }
+    config_for_test = {"tools": {}}  # No 'samtools' or 'bwa' keys
 
     output_dir = tmp_path / "align_output"
     output_dir.mkdir()
@@ -59,7 +54,7 @@ def test_align_and_sort_fastq_missing_tools(tmp_path, test_config):
         output_dir=output_dir,
         output_name="test",
         threads=4,
-        config=config_for_test
+        config=config_for_test,
     )
     assert result is None, (
         "Expected None when tools are missing, because 'samtools'/'bwa' "

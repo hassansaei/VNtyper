@@ -13,7 +13,7 @@ from vntyper.scripts.fastq_bam_processing import (
     process_bam_to_fastq,
     process_fastq,
     calculate_vntr_coverage,
-    downsample_bam_if_needed
+    downsample_bam_if_needed,
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
@@ -21,7 +21,7 @@ from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_versions,
     validate_bam_file,
-    validate_fastq_file
+    validate_fastq_file,
 )
 from vntyper.version import __version__ as VERSION
 
@@ -34,11 +34,11 @@ def write_bed_file(regions, bed_file_path):
     - regions (str): Comma-separated regions in 'chr:start-end' format.
     - bed_file_path (Path): Path to the BED file to be written.
     """
-    with open(bed_file_path, 'w', encoding='utf-8') as bed_fh:
-        for region in regions.split(','):
+    with open(bed_file_path, "w", encoding="utf-8") as bed_fh:
+        for region in regions.split(","):
             try:
-                chrom, positions = region.strip().split(':')
-                start, end = positions.strip().split('-')
+                chrom, positions = region.strip().split(":")
+                start, end = positions.strip().split("-")
                 bed_fh.write(f"{chrom}\t{start}\t{end}\n")
             except ValueError:
                 logging.error(
@@ -67,12 +67,12 @@ def run_pipeline(
     keep_intermediates=False,
     delete_intermediates=False,
     archive_results=False,
-    archive_format='zip',
+    archive_format="zip",
     custom_regions=None,
     bed_file=None,
     log_level=logging.INFO,
     sample_name=None,
-    log_file=None
+    log_file=None,
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -105,12 +105,8 @@ def run_pipeline(
         RuntimeError: If alignment fails due to missing indexes.
     """
     if not bwa_reference:
-        logging.error(
-            "BWA reference not provided or determined from configuration."
-        )
-        raise ValueError(
-            "BWA reference not provided or determined from configuration."
-        )
+        logging.error("BWA reference not provided or determined from configuration.")
+        raise ValueError("BWA reference not provided or determined from configuration.")
 
     # DEBUG: BWA reference, output dir
     logging.debug(f"BWA reference set to: {bwa_reference}")
@@ -142,29 +138,28 @@ def run_pipeline(
 
     input_files = {}
     if input_type == "FASTQ":
-        input_files['fastq1'] = os.path.basename(fastq1)
-        input_files['fastq2'] = os.path.basename(fastq2)
+        input_files["fastq1"] = os.path.basename(fastq1)
+        input_files["fastq2"] = os.path.basename(fastq2)
     elif input_type == "BAM":
-        input_files['bam'] = os.path.basename(bam)
+        input_files["bam"] = os.path.basename(bam)
     elif input_type == "CRAM":
-        input_files['cram'] = os.path.basename(cram)
+        input_files["cram"] = os.path.basename(cram)
 
     try:
-        input_count = sum([
-            1 if input_type == "FASTQ" else 0,
-            1 if input_type == "BAM" else 0,
-            1 if input_type == "CRAM" else 0
-        ])
+        input_count = sum(
+            [
+                1 if input_type == "FASTQ" else 0,
+                1 if input_type == "BAM" else 0,
+                1 if input_type == "CRAM" else 0,
+            ]
+        )
         if input_count > 1:
             logging.error(
                 "Multiple input types provided. Provide only one: FASTQ, BAM, or CRAM."
             )
-            raise ValueError(
-                "Provide either BAM, CRAM, or FASTQ files, not multiples."
-            )
+            raise ValueError("Provide either BAM, CRAM, or FASTQ files, not multiples.")
 
-        if (not bam and not cram
-                and (not fastq1 or not fastq2)):
+        if not bam and not cram and (not fastq1 or not fastq2):
             logging.error(
                 "When not providing BAM/CRAM, both --fastq1 and --fastq2 must "
                 "be specified for paired-end sequencing."
@@ -192,12 +187,8 @@ def run_pipeline(
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
-                logging.error(
-                    f"Provided BED file does not exist: {bed_file_path}"
-                )
-                raise FileNotFoundError(
-                    f"BED file not found: {bed_file_path}"
-                )
+                logging.error(f"Provided BED file does not exist: {bed_file_path}")
+                raise FileNotFoundError(f"BED file not found: {bed_file_path}")
             logging.info(f"Using provided BED file: {bed_file_path}")
         elif custom_regions:
             bed_file_path = Path(output_dir) / "custom_regions.bed"
@@ -209,7 +200,9 @@ def run_pipeline(
             else:
                 predefined_regions = config["bam_processing"]["bam_region_hg19"]
 
-            bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
+            bed_file_path = (
+                Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
+            )
             write_bed_file(predefined_regions, bed_file_path)
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
@@ -226,7 +219,7 @@ def run_pipeline(
 
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=bam,
-                output=dirs['fastq_bam_processing'],
+                output=dirs["fastq_bam_processing"],
                 output_name="output",
                 threads=threads,
                 config=config,
@@ -234,7 +227,7 @@ def run_pipeline(
                 fast_mode=fast_mode,
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
-                bed_file=bed_file_path
+                bed_file=bed_file_path,
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
@@ -248,7 +241,7 @@ def run_pipeline(
 
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=cram,
-                output=dirs['fastq_bam_processing'],
+                output=dirs["fastq_bam_processing"],
                 output_name="output",
                 threads=threads,
                 config=config,
@@ -257,7 +250,7 @@ def run_pipeline(
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
-                file_format="cram"
+                file_format="cram",
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from CRAM. Exiting.")
@@ -265,22 +258,24 @@ def run_pipeline(
 
         elif input_type == "FASTQ":
             # If shark is in extra_modules, run the shark_filter
-            if 'shark' in extra_modules:
+            if "shark" in extra_modules:
                 from vntyper.modules.shark.shark_filtering import (
-                    run_shark_filter, load_shark_config
+                    run_shark_filter,
+                    load_shark_config,
                 )
+
                 shark_config = load_shark_config()
                 logging.info("SHARK module included. Running SHARK filtering first.")
                 run_sample_name = sample_name if sample_name else "sample"
                 fastq1, fastq2 = run_shark_filter(
                     fastq_1=fastq1,
                     fastq_2=fastq2,
-                    output_dir=dirs['fastq_bam_processing'],
+                    output_dir=dirs["fastq_bam_processing"],
                     config=shark_config,
                     main_config=config,
                     sample_name=run_sample_name,
                     reference_assembly=reference_assembly,
-                    threads=threads
+                    threads=threads,
                 )
 
             logging.info("Starting FASTQ quality control.")
@@ -288,21 +283,21 @@ def run_pipeline(
                 fastq1,
                 fastq2,
                 threads,
-                dirs['fastq_bam_processing'],
+                dirs["fastq_bam_processing"],
                 "output",
                 config,
             )
             logging.info("FASTQ quality control completed.")
 
-            fastq1 = os.path.join(dirs['fastq_bam_processing'], "output_R1.fastq.gz")
-            fastq2 = os.path.join(dirs['fastq_bam_processing'], "output_R2.fastq.gz")
+            fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
+            fastq2 = os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz")
 
             logging.info("Starting FASTQ alignment.")
             sorted_bam = align_and_sort_fastq(
                 fastq1,
                 fastq2,
                 bwa_reference,
-                dirs['alignment_processing'],
+                dirs["alignment_processing"],
                 "output",
                 threads,
                 config,
@@ -326,7 +321,7 @@ def run_pipeline(
 
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=sorted_bam,
-                output=dirs['fastq_bam_processing'],
+                output=dirs["fastq_bam_processing"],
                 output_name="output",
                 threads=threads,
                 config=config,
@@ -334,7 +329,7 @@ def run_pipeline(
                 fast_mode=fast_mode,
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
-                bed_file=bed_file_path
+                bed_file=bed_file_path,
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
@@ -347,7 +342,7 @@ def run_pipeline(
         elif input_type == "CRAM":
             input_bam = Path(cram)
         else:
-            input_bam = Path(dirs['alignment_processing']) / "output_sorted.bam"
+            input_bam = Path(dirs["alignment_processing"]) / "output_sorted.bam"
 
         if reference_assembly == "hg38":
             vntr_region = config["bam_processing"]["vntr_region_hg38"]
@@ -359,20 +354,20 @@ def run_pipeline(
             region=vntr_region,
             threads=threads,
             config=config,
-            output_dir=dirs['coverage'],
-            output_name="coverage"
+            output_dir=dirs["coverage"],
+            output_name="coverage",
         )
 
         # Kestrel genotyping
         logging.info("Starting Kestrel genotyping.")
-        vcf_out = os.path.join(dirs['kestrel'], "output.vcf")
+        vcf_out = os.path.join(dirs["kestrel"], "output.vcf")
         kestrel_path = config["tools"]["kestrel"]
         reference_vntr = config["reference_data"]["muc1_reference_vntr"]
 
         if fastq1 and fastq2:
             run_kestrel(
                 vcf_path=Path(vcf_out),
-                output_dir=Path(dirs['kestrel']),
+                output_dir=Path(dirs["kestrel"]),
                 fastq_1=fastq1,
                 fastq_2=fastq2,
                 reference_vntr=reference_vntr,
@@ -383,12 +378,14 @@ def run_pipeline(
             )
         else:
             logging.error("FASTQ files required for Kestrel genotyping not provided.")
-            raise ValueError("FASTQ files required for Kestrel genotyping not provided.")
+            raise ValueError(
+                "FASTQ files required for Kestrel genotyping not provided."
+            )
 
         logging.info("Kestrel genotyping completed.")
 
         # adVNTR module
-        if 'advntr' in extra_modules:
+        if "advntr" in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
                 from vntyper.modules.advntr.advntr_genotyping import (
@@ -402,7 +399,7 @@ def run_pipeline(
 
             advntr_config = load_advntr_config()
             advntr_settings = advntr_config.get("advntr_settings", {})
-            advntr_reference = module_args.get('advntr', {}).get('advntr_reference')
+            advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
 
             if not advntr_reference:
                 if reference_assembly == "hg19":
@@ -424,9 +421,7 @@ def run_pipeline(
                     )
                 else:
                     logging.error(f"Invalid advntr_reference: {advntr_reference}")
-                    raise ValueError(
-                        f"Invalid advntr_reference: {advntr_reference}"
-                    )
+                    raise ValueError(f"Invalid advntr_reference: {advntr_reference}")
 
             if not advntr_reference:
                 logging.error("adVNTR reference path not found in configuration.")
@@ -435,37 +430,37 @@ def run_pipeline(
             logging.debug(f"adVNTR reference set to: {advntr_reference}")
 
             # 2) Check if user specified a max coverage for adVNTR:
-            max_cov = module_args.get('advntr', {}).get('max_coverage')
+            max_cov = module_args.get("advntr", {}).get("max_coverage")
 
-            sorted_bam = Path(dirs['fastq_bam_processing']) / "output_sliced.bam"
+            sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
             if sorted_bam and sorted_bam.exists():
                 # 3) If we have a max coverage, downsample before run_advntr:
                 if max_cov:
-                    logging.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
+                    logging.info(
+                        f"Using quick adVNTR mode with max coverage = {max_cov}"
+                    )
                     sorted_bam = downsample_bam_if_needed(
                         bam_path=sorted_bam,
                         max_coverage=max_cov,
                         reference_assembly=reference_assembly,
                         threads=threads,
                         config=config,
-                        coverage_dir=dirs['coverage'],
-                        coverage_prefix="advntr_precheck"
+                        coverage_dir=dirs["coverage"],
+                        coverage_prefix="advntr_precheck",
                     )
 
                 run_advntr(
                     advntr_reference,
                     sorted_bam,
-                    dirs['advntr'],
+                    dirs["advntr"],
                     "output",
                     config=config,
                 )
 
                 output_format = advntr_settings.get("output_format", "tsv")
                 output_ext = ".vcf" if output_format == "vcf" else ".tsv"
-                output_path = os.path.join(
-                    dirs['advntr'], f"output_adVNTR{output_ext}"
-                )
-                process_advntr_output(output_path, dirs['advntr'], "output")
+                output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
+                process_advntr_output(output_path, dirs["advntr"], "output")
                 logging.info("adVNTR genotyping completed.")
             else:
                 logging.error("Sorted BAM required for adVNTR not provided.")
@@ -476,11 +471,11 @@ def run_pipeline(
         # Generate final summary report
         logging.info("Generating summary report.")
         report_file = "summary_report.html"
-        template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
+        template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
 
-        sorted_vcf = os.path.join(dirs['kestrel'], "output_indel.vcf.gz")
-        bam_out = os.path.join(dirs['kestrel'], "output.bam")
-        bed_out = os.path.join(dirs['kestrel'], "output.bed")
+        sorted_vcf = os.path.join(dirs["kestrel"], "output_indel.vcf.gz")
+        bam_out = os.path.join(dirs["kestrel"], "output.bam")
+        bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
 
         # DEBUG: Show the paths about to be passed to generate_summary_report
@@ -503,17 +498,17 @@ def run_pipeline(
             pipeline_version=VERSION,
             mean_vntr_coverage=mean_coverage,
             vcf_file=sorted_vcf,
-            config=config
+            config=config,
         )
         logging.info(f"Summary report generated: {report_file}")
 
         # Archiving
         if archive_results:
             logging.info("Archiving the results folder.")
-            if archive_format == 'zip':
-                fmt = 'zip'
-            elif archive_format == 'tar.gz':
-                fmt = 'gztar'
+            if archive_format == "zip":
+                fmt = "zip"
+            elif archive_format == "tar.gz":
+                fmt = "gztar"
             else:
                 logging.error(f"Unsupported archive format: {archive_format}")
                 raise ValueError(f"Unsupported archive format: {archive_format}")
@@ -524,7 +519,7 @@ def run_pipeline(
                     base_name=archive_name,
                     format=fmt,
                     root_dir=output_dir,
-                    base_dir='.',
+                    base_dir=".",
                 )
                 logging.info(f"Results folder archived at: {archive_path}")
             except Exception as exc:

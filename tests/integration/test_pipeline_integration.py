@@ -90,7 +90,9 @@ def ensure_test_data(test_config):
                 logger.warning(
                     "File %s exists but MD5 mismatch. Expected=%s, Got=%s.\n"
                     "Re-downloading...",
-                    local_path, expected_md5, current_md5
+                    local_path,
+                    expected_md5,
+                    current_md5,
                 )
                 local_path.unlink()
 
@@ -104,9 +106,10 @@ def ensure_test_data(test_config):
             final_md5 = compute_md5(local_path)
             if final_md5.lower() != expected_md5.lower():
                 logger.error(
-                    "Downloaded file %s has incorrect MD5.\n"
-                    "Expected=%s, Got=%s",
-                    local_path, expected_md5, final_md5
+                    "Downloaded file %s has incorrect MD5.\n" "Expected=%s, Got=%s",
+                    local_path,
+                    expected_md5,
+                    final_md5,
                 )
                 pytest.exit(f"MD5 check failed for {local_path}", returncode=1)
             else:
@@ -118,7 +121,7 @@ def ensure_test_data(test_config):
                 pytest.exit(
                     f"File {local_path} not found and no base_url/url_suffix to download!\n"
                     f"server_base_url={server_base_url}, url_suffix={url_suffix}",
-                    returncode=1
+                    returncode=1,
                 )
 
     # This fixture only ensures data integrity; it doesn't return anything.
@@ -195,12 +198,17 @@ def test_fastq_input(tmp_path, test_config, ensure_test_data, fastq_case):
     # 2) Build the CLI command for VNtyper
     command = [
         "vntyper",
-        "--config-path", "vntyper/config.json",
+        "--config-path",
+        "vntyper/config.json",
         "pipeline",
-        "--fastq1", fastq1,
-        "--fastq2", fastq2,
-        "--threads", "4",
-        "--output-dir", str(output_dir),
+        "--fastq1",
+        fastq1,
+        "--fastq2",
+        fastq2,
+        "--threads",
+        "4",
+        "--output-dir",
+        str(output_dir),
     ] + cli_options
 
     logger.info("Command to execute: %s", " ".join(command))
@@ -233,7 +241,9 @@ def test_fastq_input(tmp_path, test_config, ensure_test_data, fastq_case):
 # 2) BAM Tests
 #
 @pytest.mark.integration
-def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, bam_case):
+def test_bam_input_with_kestrel_checks(
+    tmp_path, test_config, ensure_test_data, bam_case
+):
     """
     Parametrized test for all "bam_tests" items from the JSON config,
     which is now under "integration_tests" -> "bam_tests".
@@ -253,7 +263,10 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
       - test_name
     """
     logger = logging.getLogger(__name__)
-    logger.info("Starting test_bam_input_with_kestrel_checks for case: %s", bam_case["test_name"])
+    logger.info(
+        "Starting test_bam_input_with_kestrel_checks for case: %s",
+        bam_case["test_name"],
+    )
 
     bam_path = bam_case["bam"]
     cli_options = bam_case["cli_options"]
@@ -267,12 +280,17 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
     # Build the command, including any extra CLI options from the config
     command = [
         "vntyper",
-        "-l", "DEBUG",
+        "-l",
+        "DEBUG",
         "pipeline",
-        "--bam", bam_path,
-        "--threads", "4",
-        "--reference-assembly", "hg19",
-        "-o", str(output_dir)
+        "--bam",
+        bam_path,
+        "--threads",
+        "4",
+        "--reference-assembly",
+        "hg19",
+        "-o",
+        str(output_dir),
     ] + cli_options
 
     logger.info("Command to execute: %s", " ".join(command))
@@ -310,7 +328,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
 
         with open(kestrel_tsv, "r") as f:
             # Skip comment lines (those starting with '#')
-            reader = csv.DictReader((row for row in f if not row.startswith("#")), delimiter="\t")
+            reader = csv.DictReader(
+                (row for row in f if not row.startswith("#")), delimiter="\t"
+            )
             rows = list(reader)
 
         assert len(rows) > 0, "kestrel_result.tsv is empty after skipping comments."
@@ -336,7 +356,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
 
         # Check Estimated_Depth_AlternateVariant
         if "Estimated_Depth_AlternateVariant" in bam_case["kestrel_assertions"]:
-            expected_alt = bam_case["kestrel_assertions"]["Estimated_Depth_AlternateVariant"]
+            expected_alt = bam_case["kestrel_assertions"][
+                "Estimated_Depth_AlternateVariant"
+            ]
             alt_str = row["Estimated_Depth_AlternateVariant"]
             alt_val = parse_int_allow_none(alt_str)
 
@@ -345,13 +367,15 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
                 assert alt_val is None, f"Expected None, got {alt_val}"
             else:
                 expected_alt_int = int(expected_alt)
-                assert alt_val == expected_alt_int, (
-                    f"Expected alt depth={expected_alt_int}, got {alt_val}"
-                )
+                assert (
+                    alt_val == expected_alt_int
+                ), f"Expected alt depth={expected_alt_int}, got {alt_val}"
 
         # Check Estimated_Depth_Variant_ActiveRegion
         if "Estimated_Depth_Variant_ActiveRegion" in bam_case["kestrel_assertions"]:
-            expected_var = bam_case["kestrel_assertions"]["Estimated_Depth_Variant_ActiveRegion"]
+            expected_var = bam_case["kestrel_assertions"][
+                "Estimated_Depth_Variant_ActiveRegion"
+            ]
             var_str = row["Estimated_Depth_Variant_ActiveRegion"]
             var_val = parse_int_allow_none(var_str)
 
@@ -359,9 +383,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
                 assert var_val is None, f"Expected None, got {var_val}"
             else:
                 expected_var_int = int(expected_var)
-                assert var_val == expected_var_int, (
-                    f"Expected region depth={expected_var_int}, got {var_val}"
-                )
+                assert (
+                    var_val == expected_var_int
+                ), f"Expected region depth={expected_var_int}, got {var_val}"
 
         # Check Depth_Score
         if "Depth_Score" in bam_case["kestrel_assertions"]:
@@ -378,7 +402,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
                 assert row_ds is None, f"Expected Depth_Score=None, got {row_ds}"
             else:
                 # numeric check with tolerance
-                assert row_ds is not None, "Row Depth_Score is None, but config says numeric"
+                assert (
+                    row_ds is not None
+                ), "Row Depth_Score is None, but config says numeric"
                 allowed_variation = abs(config_ds) * (tolerance_pct / 100.0)
                 diff = abs(row_ds - config_ds)
                 assert diff <= allowed_variation, (
@@ -391,7 +417,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
             expected_conf = bam_case["kestrel_assertions"]["Confidence"]
             actual_conf = row["Confidence"]
             if expected_conf == "Negative":
-                logger.info("Test expects a 'Negative' confidence => skipping strict check.")
+                logger.info(
+                    "Test expects a 'Negative' confidence => skipping strict check."
+                )
             else:
                 # Some are "High_Precision*" => partial match check
                 if expected_conf.endswith("*"):
@@ -402,9 +430,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
                     )
                 else:
                     # Exact match check
-                    assert actual_conf == expected_conf, (
-                        f"Expected Confidence='{expected_conf}', got '{actual_conf}'"
-                    )
+                    assert (
+                        actual_conf == expected_conf
+                    ), f"Expected Confidence='{expected_conf}', got '{actual_conf}'"
 
     # 4) Check for IGV report if requested
     if bam_case.get("check_igv_report"):
@@ -449,12 +477,17 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     # Build the command for adVNTR usage
     command = [
         "vntyper",
-        "-l", "DEBUG",
+        "-l",
+        "DEBUG",
         "pipeline",
-        "--bam", bam_path,
-        "--threads", "4",
-        "--reference-assembly", "hg19",
-        "-o", str(output_dir)
+        "--bam",
+        bam_path,
+        "--threads",
+        "4",
+        "--reference-assembly",
+        "hg19",
+        "-o",
+        str(output_dir),
     ] + cli_options
 
     logger.info("Command to execute: %s", " ".join(command))
@@ -495,7 +528,9 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
         logger.info("Skipping adVNTR header line: %s", data_lines[0])
         data_lines.pop(0)
 
-    assert len(data_lines) > 0, f"No data lines found in {vcf_path} after skipping header."
+    assert (
+        len(data_lines) > 0
+    ), f"No data lines found in {vcf_path} after skipping header."
 
     # Now parse the first data line
     columns = data_lines[0].split("\t")
@@ -508,14 +543,14 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     # Compare each field as needed.
     # 0 => VID, 1 => State, 2 => NumberOfSupportingReads, 3 => MeanCoverage, 4 => Pvalue
     actual_vid = columns[0]
-    assert actual_vid == advntr_expected["VID"], (
-        f"Expected VID={advntr_expected['VID']}, got {actual_vid}"
-    )
+    assert (
+        actual_vid == advntr_expected["VID"]
+    ), f"Expected VID={advntr_expected['VID']}, got {actual_vid}"
 
     actual_state = columns[1]
-    assert actual_state == advntr_expected["State"], (
-        f"Expected State={advntr_expected['State']}, got {actual_state}"
-    )
+    assert (
+        actual_state == advntr_expected["State"]
+    ), f"Expected State={advntr_expected['State']}, got {actual_state}"
 
     # NumberOfSupportingReads is an integer in the example; parse as float to handle decimals
     actual_num_reads = float(columns[2])
@@ -525,20 +560,21 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     )
 
     actual_mean_cov = float(columns[3])
-    assert abs(actual_mean_cov - advntr_expected["MeanCoverage"]) < 1e-7, (
-        f"Expected MeanCoverage={advntr_expected['MeanCoverage']}, got {actual_mean_cov}"
-    )
+    assert (
+        abs(actual_mean_cov - advntr_expected["MeanCoverage"]) < 1e-7
+    ), f"Expected MeanCoverage={advntr_expected['MeanCoverage']}, got {actual_mean_cov}"
 
     # Compare p-value with a suitable floating tolerance
     actual_pval = float(columns[4])
-    assert abs(actual_pval - advntr_expected["Pvalue"]) < 1e-12, (
-        f"Expected Pvalue={advntr_expected['Pvalue']}, got {actual_pval}"
-    )
+    assert (
+        abs(actual_pval - advntr_expected["Pvalue"]) < 1e-12
+    ), f"Expected Pvalue={advntr_expected['Pvalue']}, got {actual_pval}"
 
 
 #
 # Parametrization
 #
+
 
 @pytest.fixture(scope="function")
 def fastq_case(request, test_config):
@@ -603,22 +639,19 @@ def pytest_generate_tests(metafunc):
     if "fastq_case" in metafunc.fixturenames:
         fastq_cases = config_data.get("unit_tests", {}).get("fastq_tests", [])
         metafunc.parametrize(
-            "fastq_case", fastq_cases,
-            ids=[c["test_name"] for c in fastq_cases]
+            "fastq_case", fastq_cases, ids=[c["test_name"] for c in fastq_cases]
         )
 
     # For BAM tests
     if "bam_case" in metafunc.fixturenames:
         bam_cases = config_data.get("integration_tests", {}).get("bam_tests", [])
         metafunc.parametrize(
-            "bam_case", bam_cases,
-            ids=[c["test_name"] for c in bam_cases]
+            "bam_case", bam_cases, ids=[c["test_name"] for c in bam_cases]
         )
 
     # For adVNTR tests
     if "advntr_case" in metafunc.fixturenames:
         advntr_cases = config_data.get("integration_tests", {}).get("advntr_tests", [])
         metafunc.parametrize(
-            "advntr_case", advntr_cases,
-            ids=[c["test_name"] for c in advntr_cases]
+            "advntr_case", advntr_cases, ids=[c["test_name"] for c in advntr_cases]
         )

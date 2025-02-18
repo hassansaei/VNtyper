@@ -55,7 +55,7 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         log_file (str, optional): Path to a log file. If None, logs are printed to console.
     """
     logger = logging.getLogger()  # Get the root logger
-    logger.setLevel(log_level)    # Set the overall logging level
+    logger.setLevel(log_level)  # Set the overall logging level
 
     # Clear existing handlers so we don't duplicate logs
     if logger.hasHandlers():
@@ -93,12 +93,8 @@ def create_output_directories(base_output_dir):
         "base": base_output_dir,
         "kestrel": os.path.join(base_output_dir, "kestrel"),
         "advntr": os.path.join(base_output_dir, "advntr"),
-        "fastq_bam_processing": os.path.join(
-            base_output_dir, "fastq_bam_processing"
-        ),
-        "alignment_processing": os.path.join(
-            base_output_dir, "alignment_processing"
-        ),
+        "fastq_bam_processing": os.path.join(base_output_dir, "fastq_bam_processing"),
+        "alignment_processing": os.path.join(base_output_dir, "alignment_processing"),
         "coverage": os.path.join(base_output_dir, "coverage"),
     }
 
@@ -160,7 +156,9 @@ def get_tool_version(command, version_flag):
                 return output.split("\n")[-1].split(": ")[1]
             return "unknown"
         if command.startswith("java"):  # Handling java_path case
-            return output.split("\n")[0]  # Return the first line of the Java version output
+            return output.split("\n")[
+                0
+            ]  # Return the first line of the Java version output
         return "unknown"
 
     except FileNotFoundError:
@@ -263,9 +261,7 @@ def load_config(config_path=None):
             logging.error(f"Error decoding JSON from the config file: {e}")
             raise
         except Exception as e:
-            logging.error(
-                f"Unexpected error loading config file {config_path}: {e}"
-            )
+            logging.error(f"Unexpected error loading config file {config_path}: {e}")
             raise
     else:
         # No config path provided or file does not exist; use default config from package data
@@ -309,9 +305,7 @@ def validate_bam_file(file_path):
             f"Invalid alignment file extension for file: {file_path}. "
             "Must be .bam or .cram"
         )
-        raise ValueError(
-            f"Invalid alignment file extension for file: {file_path}"
-        )
+        raise ValueError(f"Invalid alignment file extension for file: {file_path}")
 
     # Perform samtools quickcheck
     command = f"samtools quickcheck -v {file_path}"
@@ -344,26 +338,18 @@ def validate_fastq_file(file_path):
 
     valid_extensions = (".fastq", ".fastq.gz", ".fq", ".fq.gz")
     if not file_path.endswith(valid_extensions):
-        logging.error(
-            f"Invalid FASTQ file extension for file: {file_path}"
-        )
-        raise ValueError(
-            f"Invalid FASTQ file extension for file: {file_path}"
-        )
+        logging.error(f"Invalid FASTQ file extension for file: {file_path}")
+        raise ValueError(f"Invalid FASTQ file extension for file: {file_path}")
 
     # Check basic FASTQ formatting by reading the first few lines
     try:
         open_func = gzip.open if file_path.endswith(".gz") else open
-        with open_func(file_path, 'rt') as f:
+        with open_func(file_path, "rt") as f:
             for _ in range(4):  # Read first 4 lines of the first read
                 line = f.readline()
                 if not line:
-                    logging.error(
-                        f"FASTQ file is incomplete or empty: {file_path}"
-                    )
-                    raise ValueError(
-                        f"FASTQ file is incomplete or empty: {file_path}"
-                    )
+                    logging.error(f"FASTQ file is incomplete or empty: {file_path}")
+                    raise ValueError(f"FASTQ file is incomplete or empty: {file_path}")
         logging.info(f"FASTQ file validated successfully: {file_path}")
     except Exception as e:
         logging.error(f"Error validating FASTQ file {file_path}: {e}")

@@ -18,7 +18,7 @@ import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
 import plotly.graph_objects as go
 
-matplotlib.use('Agg')
+matplotlib.use("Agg")
 
 
 def load_kestrel_results(kestrel_result_file):
@@ -46,27 +46,28 @@ def load_kestrel_results(kestrel_result_file):
 
     if not os.path.exists(kestrel_result_file):
         logging.warning(f"Kestrel result file not found: {kestrel_result_file}")
-        return pd.DataFrame({'Sample': [sample_id]})
+        return pd.DataFrame({"Sample": [sample_id]})
 
     try:
-        df = pd.read_csv(kestrel_result_file, sep='\t', comment='#')
-        df['Sample'] = sample_id
+        df = pd.read_csv(kestrel_result_file, sep="\t", comment="#")
+        df["Sample"] = sample_id
         columns_to_display = {
-            'Sample': 'Sample',
-            'Motif': 'Motif',
-            'Variant': 'Variant',
-            'POS': 'Position',
-            'REF': 'REF',
-            'ALT': 'ALT',
-            'Motif_sequence': 'Motif\nSequence',
-            'Estimated_Depth_AlternateVariant': 'Depth\n(Variant)',
-            'Estimated_Depth_Variant_ActiveRegion': 'Depth\n(Region)',
-            'Depth_Score': 'Depth\nScore',
-            'Confidence': 'Confidence'
+            "Sample": "Sample",
+            "Motif": "Motif",
+            "Variant": "Variant",
+            "POS": "Position",
+            "REF": "REF",
+            "ALT": "ALT",
+            "Motif_sequence": "Motif\nSequence",
+            "Estimated_Depth_AlternateVariant": "Depth\n(Variant)",
+            "Estimated_Depth_Variant_ActiveRegion": "Depth\n(Region)",
+            "Depth_Score": "Depth\nScore",
+            "Confidence": "Confidence",
         }
         available_columns = {
             col: columns_to_display[col]
-            for col in columns_to_display if col in df.columns
+            for col in columns_to_display
+            if col in df.columns
         }
         missing_columns = set(columns_to_display) - set(available_columns)
         if missing_columns:
@@ -77,28 +78,32 @@ def load_kestrel_results(kestrel_result_file):
             logging.warning(
                 "No expected columns found in Kestrel results, returning minimal DataFrame."
             )
-            return pd.DataFrame({'Sample': [sample_id]})
+            return pd.DataFrame({"Sample": [sample_id]})
         df = df[list(available_columns.keys())]
         df = df.rename(columns=available_columns)
-        if 'Confidence' in df.columns:
-            df['Confidence'] = df['Confidence'].apply(
+        if "Confidence" in df.columns:
+            df["Confidence"] = df["Confidence"].apply(
                 lambda x: (
                     f'<span style="color:orange;font-weight:bold;">{x}</span>'
-                    if x == 'Low_Precision'
-                    else f'<span style="color:red;font-weight:bold;">{x}</span>'
-                    if x in ['High_Precision', 'High_Precision*']
-                    else f'<span style="color:blue;font-weight:bold;">{x}</span>'
-                    if x == 'Negative'
-                    else x
+                    if x == "Low_Precision"
+                    else (
+                        f'<span style="color:red;font-weight:bold;">{x}</span>'
+                        if x in ["High_Precision", "High_Precision*"]
+                        else (
+                            f'<span style="color:blue;font-weight:bold;">{x}</span>'
+                            if x == "Negative"
+                            else x
+                        )
+                    )
                 )
             )
         return df
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse Kestrel result file: {e}")
-        return pd.DataFrame({'Sample': [sample_id]})
+        return pd.DataFrame({"Sample": [sample_id]})
     except Exception as e:
         logging.error(f"Unexpected error loading Kestrel results: {e}")
-        return pd.DataFrame({'Sample': [sample_id]})
+        return pd.DataFrame({"Sample": [sample_id]})
 
 
 def load_advntr_results(advntr_result_file):
@@ -107,7 +112,7 @@ def load_advntr_results(advntr_result_file):
 
     The primary file is expected to be "output_adVNTR_result.tsv". If that file
     does not exist, the sample is marked as Not Performed.
-    
+
     - If the TSV exists and contains data rows, the sample is marked as Positive.
     - If the TSV exists but contains no data rows (only header), the sample is marked as Negative.
     - If no file exists, the sample is marked as Not Performed.
@@ -131,31 +136,35 @@ def load_advntr_results(advntr_result_file):
 
     primary_file = Path(advntr_result_file).with_name("output_adVNTR_result.tsv")
     if not primary_file.exists():
-        logging.warning(f"Primary adVNTR TSV not found for sample {sample_id}. Marking as Not Performed.")
+        logging.warning(
+            f"Primary adVNTR TSV not found for sample {sample_id}. Marking as Not Performed."
+        )
         data = {
             "Sample": [sample_id],
             "VID": [""],
             "Variant": ["Not Performed"],
-            "NumberOfSupportingReads": [float('nan')],
-            "MeanCoverage": [float('nan')],
-            "Pvalue": [float('nan')],
-            "AdvntrState": ["Not Performed"]
+            "NumberOfSupportingReads": [float("nan")],
+            "MeanCoverage": [float("nan")],
+            "Pvalue": [float("nan")],
+            "AdvntrState": ["Not Performed"],
         }
         return pd.DataFrame(data, columns=out_cols), False
 
     try:
-        df = pd.read_csv(primary_file, sep='\t', comment='#')
+        df = pd.read_csv(primary_file, sep="\t", comment="#")
         # If the file has no data rows (only header), mark as Negative.
         if df.empty or len(df) == 0:
-            logging.debug("TSV file exists but has no data rows; marking sample as Negative.")
+            logging.debug(
+                "TSV file exists but has no data rows; marking sample as Negative."
+            )
             data = {
                 "Sample": [sample_id],
                 "VID": [""],
                 "Variant": ["Negative"],
-                "NumberOfSupportingReads": [float('nan')],
-                "MeanCoverage": [float('nan')],
-                "Pvalue": [float('nan')],
-                "AdvntrState": ["Negative"]
+                "NumberOfSupportingReads": [float("nan")],
+                "MeanCoverage": [float("nan")],
+                "Pvalue": [float("nan")],
+                "AdvntrState": ["Negative"],
             }
             return pd.DataFrame(data, columns=out_cols), True
         else:
@@ -169,10 +178,10 @@ def load_advntr_results(advntr_result_file):
             "Sample": [sample_id],
             "VID": [""],
             "Variant": ["Negative"],
-            "NumberOfSupportingReads": [float('nan')],
-            "MeanCoverage": [float('nan')],
-            "Pvalue": [float('nan')],
-            "AdvntrState": ["Negative"]
+            "NumberOfSupportingReads": [float("nan")],
+            "MeanCoverage": [float("nan")],
+            "Pvalue": [float("nan")],
+            "AdvntrState": ["Negative"],
         }
         return pd.DataFrame(data, columns=out_cols), True
     except Exception as e:
@@ -181,10 +190,10 @@ def load_advntr_results(advntr_result_file):
             "Sample": [sample_id],
             "VID": [""],
             "Variant": ["Negative"],
-            "NumberOfSupportingReads": [float('nan')],
-            "MeanCoverage": [float('nan')],
-            "Pvalue": [float('nan')],
-            "AdvntrState": ["Negative"]
+            "NumberOfSupportingReads": [float("nan")],
+            "MeanCoverage": [float("nan")],
+            "Pvalue": [float("nan")],
+            "AdvntrState": ["Negative"],
         }
         return pd.DataFrame(data, columns=out_cols), True
 
@@ -242,18 +251,19 @@ def load_results_from_dirs(input_dirs, filenames, file_loader):
         Concatenated DataFrame of all loaded results.
     """
     dfs = []  # Ensure dfs is defined
-    loading_advntr = any('advntr' in filename.lower() for filename in filenames)
+    loading_advntr = any("advntr" in filename.lower() for filename in filenames)
     if loading_advntr:
         cols = ["VID", "Variant", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
+
         def empty_advntr_row(sample_id):
             data = {
                 "Sample": [sample_id],
                 "VID": [""],
                 "Variant": ["Not Performed"],
-                "NumberOfSupportingReads": [float('nan')],
-                "MeanCoverage": [float('nan')],
-                "Pvalue": [float('nan')],
-                "AdvntrState": ["Not Performed"]
+                "NumberOfSupportingReads": [float("nan")],
+                "MeanCoverage": [float("nan")],
+                "Pvalue": [float("nan")],
+                "AdvntrState": ["Not Performed"],
             }
             return pd.DataFrame(data, columns=["Sample"] + cols + ["AdvntrState"])
 
@@ -262,18 +272,26 @@ def load_results_from_dirs(input_dirs, filenames, file_loader):
         result_files = find_results_files(input_dir, filenames)
         if not result_files:
             if loading_advntr:
-                has_kestrel = (Path(input_dir) / 'kestrel').is_dir()
+                has_kestrel = (Path(input_dir) / "kestrel").is_dir()
                 if has_kestrel:
                     sample_id = Path(input_dir).name
                     dfs.append(empty_advntr_row(sample_id))
                 else:
-                    logging.debug(f"Directory {input_dir} does not appear to be a sample directory. Skipping.")
+                    logging.debug(
+                        f"Directory {input_dir} does not appear to be a sample directory. Skipping."
+                    )
             else:
                 sample_id = Path(input_dir).name
-                dfs.append(pd.DataFrame({
-                    'Sample': [sample_id],
-                    'Message': [f'No {filenames} results found for this sample']
-                }))
+                dfs.append(
+                    pd.DataFrame(
+                        {
+                            "Sample": [sample_id],
+                            "Message": [
+                                f"No {filenames} results found for this sample"
+                            ],
+                        }
+                    )
+                )
         else:
             for file in result_files:
                 logging.info(f"Attempting to load file: {file}")
@@ -283,9 +301,13 @@ def load_results_from_dirs(input_dirs, filenames, file_loader):
                 else:
                     df = result
                 dfs.append(df)
-        logging.info(f"Loaded {len(result_files)} files for {filenames} from {input_dir}")
+        logging.info(
+            f"Loaded {len(result_files)} files for {filenames} from {input_dir}"
+        )
     if not dfs:
-        logging.warning(f"No data found at all for {filenames}. Returning empty DataFrame.")
+        logging.warning(
+            f"No data found at all for {filenames}. Returning empty DataFrame."
+        )
         return pd.DataFrame()
     return pd.concat(dfs, ignore_index=True)
 
@@ -306,14 +328,16 @@ def encode_image_to_base64(image_path):
     """
     try:
         with open(image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
         return f"data:image/png;base64,{encoded_string}"
     except Exception as e:
         logging.error(f"Failed to encode image {image_path}: {e}")
         return ""
 
 
-def generate_donut_chart(values, labels, total, title, colors, plot_path=None, interactive=False):
+def generate_donut_chart(
+    values, labels, total, title, colors, plot_path=None, interactive=False
+):
     """
     Generate and save a donut chart (static or interactive).
 
@@ -346,33 +370,53 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
         logging.warning(f"No data to plot for donut chart '{title}'.")
         return ""
     if interactive:
-        fig = go.Figure(go.Pie(
-            labels=labels,
-            values=values,
-            hole=0.6,
-            marker=dict(colors=colors, line=dict(color='black', width=2)),
-            textinfo='none'
-        ))
+        fig = go.Figure(
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.6,
+                marker=dict(colors=colors, line=dict(color="black", width=2)),
+                textinfo="none",
+            )
+        )
         fig.update_layout(
-            title={'text': title, 'y': 0.95, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top'},
-            annotations=[dict(text=f'<b>{total}</b>', x=0.5, y=0.5, font_size=40, showarrow=False)],
+            title={
+                "text": title,
+                "y": 0.95,
+                "x": 0.5,
+                "xanchor": "center",
+                "yanchor": "top",
+            },
+            annotations=[
+                dict(
+                    text=f"<b>{total}</b>", x=0.5, y=0.5, font_size=40, showarrow=False
+                )
+            ],
             showlegend=False,
             margin=dict(t=50, b=50, l=50, r=50),
             height=500,
-            width=500
+            width=500,
         )
         return pio.to_html(fig, full_html=False)
     else:
         fig, ax = plt.subplots(figsize=(6, 6))
-        wedgeprops = {'width': 0.3, 'edgecolor': 'black', 'linewidth': 2}
+        wedgeprops = {"width": 0.3, "edgecolor": "black", "linewidth": 2}
         try:
-            ax.pie(values, wedgeprops=wedgeprops, startangle=90, colors=colors, labels=labels)
-            ax.text(0, 0, f"{total}", ha='center', va='center', fontsize=24)
+            ax.pie(
+                values,
+                wedgeprops=wedgeprops,
+                startangle=90,
+                colors=colors,
+                labels=labels,
+            )
+            ax.text(0, 0, f"{total}", ha="center", va="center", fontsize=24)
             ax.set_title(title)
             if plot_path:
                 plt.savefig(plot_path)
             else:
-                logging.warning("No plot_path provided for static donut chart, chart not saved.")
+                logging.warning(
+                    "No plot_path provided for static donut chart, chart not saved."
+                )
         except Exception as e:
             logging.error(f"Error generating donut chart: {e}")
         plt.close()
@@ -382,7 +426,9 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
             return ""
 
 
-def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config):
+def generate_cohort_summary_report(
+    output_dir, kestrel_df, advntr_df, summary_file, config
+):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results.
 
@@ -411,93 +457,125 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    if 'Confidence' in kestrel_df.columns:
+    if "Confidence" in kestrel_df.columns:
         try:
-            kestrel_df_conf = kestrel_df['Confidence'].fillna('')
-            kestrel_positive = len(kestrel_df[kestrel_df_conf.str.contains('Low_Precision|High_Precision\\*?', na=False)])
-            kestrel_negative = len(kestrel_df[~kestrel_df_conf.str.contains('Low_Precision|High_Precision\\*?', na=False)])
+            kestrel_df_conf = kestrel_df["Confidence"].fillna("")
+            kestrel_positive = len(
+                kestrel_df[
+                    kestrel_df_conf.str.contains(
+                        "Low_Precision|High_Precision\\*?", na=False
+                    )
+                ]
+            )
+            kestrel_negative = len(
+                kestrel_df[
+                    ~kestrel_df_conf.str.contains(
+                        "Low_Precision|High_Precision\\*?", na=False
+                    )
+                ]
+            )
         except Exception as e:
             logging.error(f"Error processing 'Confidence' values: {e}")
             kestrel_positive = 0
             kestrel_negative = 0
     else:
-        logging.warning("No 'Confidence' column found in Kestrel results. Setting positive/negative counts to 0.")
+        logging.warning(
+            "No 'Confidence' column found in Kestrel results. Setting positive/negative counts to 0."
+        )
         kestrel_positive = 0
         kestrel_negative = 0
 
     total_kestrel = kestrel_positive + kestrel_negative
 
     # Count advntr states based on the "AdvntrState" column.
-    advntr_positive = len(advntr_df[advntr_df["AdvntrState"] == "Positive"]) if "AdvntrState" in advntr_df.columns else 0
-    advntr_negative = len(advntr_df[advntr_df["AdvntrState"] == "Negative"]) if "AdvntrState" in advntr_df.columns else 0
-    advntr_not_performed = len(advntr_df[advntr_df["AdvntrState"] == "Not Performed"]) if "AdvntrState" in advntr_df.columns else 0
+    advntr_positive = (
+        len(advntr_df[advntr_df["AdvntrState"] == "Positive"])
+        if "AdvntrState" in advntr_df.columns
+        else 0
+    )
+    advntr_negative = (
+        len(advntr_df[advntr_df["AdvntrState"] == "Negative"])
+        if "AdvntrState" in advntr_df.columns
+        else 0
+    )
+    advntr_not_performed = (
+        len(advntr_df[advntr_df["AdvntrState"] == "Not Performed"])
+        if "AdvntrState" in advntr_df.columns
+        else 0
+    )
 
     total_advntr = advntr_positive + advntr_negative + advntr_not_performed
 
-    color_list = config.get("visualization", {}).get("donut_colors", ["#56B4E9", "#D55E00", "#999999"])
+    color_list = config.get("visualization", {}).get(
+        "donut_colors", ["#56B4E9", "#D55E00", "#999999"]
+    )
     colors = {
-        'positive': color_list[0],
-        'negative': color_list[1],
-        'no_data': color_list[2]
+        "positive": color_list[0],
+        "negative": color_list[1],
+        "no_data": color_list[2],
     }
 
     kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
     kestrel_plot_base64 = generate_donut_chart(
         values=[kestrel_positive, kestrel_negative],
-        labels=['Positive', 'Negative'],
+        labels=["Positive", "Negative"],
         total=total_kestrel,
-        title='Kestrel Results',
-        colors=[colors['positive'], colors['negative']],
+        title="Kestrel Results",
+        colors=[colors["positive"], colors["negative"]],
         plot_path=kestrel_plot_path,
-        interactive=False
+        interactive=False,
     )
     kestrel_plot_html = generate_donut_chart(
         values=[kestrel_positive, kestrel_negative],
-        labels=['Positive', 'Negative'],
+        labels=["Positive", "Negative"],
         total=total_kestrel,
-        title='Kestrel Results',
-        colors=[colors['positive'], colors['negative']],
+        title="Kestrel Results",
+        colors=[colors["positive"], colors["negative"]],
         plot_path=None,
-        interactive=True
+        interactive=True,
     )
 
     advntr_plot_path = plots_dir / "advntr_summary_plot.png"
     advntr_plot_base64 = generate_donut_chart(
         values=[advntr_positive, advntr_negative, advntr_not_performed],
-        labels=['Positive', 'Negative', 'Not Performed'],
+        labels=["Positive", "Negative", "Not Performed"],
         total=total_advntr,
-        title='adVNTR Results',
-        colors=[colors['positive'], colors['negative'], colors['no_data']],
+        title="adVNTR Results",
+        colors=[colors["positive"], colors["negative"], colors["no_data"]],
         plot_path=advntr_plot_path,
-        interactive=False
+        interactive=False,
     )
     advntr_plot_html = generate_donut_chart(
         values=[advntr_positive, advntr_negative, advntr_not_performed],
-        labels=['Positive', 'Negative', 'Not Performed'],
+        labels=["Positive", "Negative", "Not Performed"],
         total=total_advntr,
-        title='adVNTR Results',
-        colors=[colors['positive'], colors['negative'], colors['no_data']],
+        title="adVNTR Results",
+        colors=[colors["positive"], colors["negative"], colors["no_data"]],
         plot_path=None,
-        interactive=True
+        interactive=True,
     )
 
-    template_dir = config.get('paths', {}).get('template_dir', 'vntyper/templates')
+    template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
-        template = env.get_template('cohort_summary_template.html')
+        template = env.get_template("cohort_summary_template.html")
     except Exception as e:
         logging.error(f"Failed to load Jinja2 template: {e}")
         raise
 
     context = {
-        'report_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'kestrel_positive': kestrel_df.to_html(classes='table table-bordered table-striped', index=False, escape=False),
-        'advntr_positive': advntr_df.to_html(classes='table table-bordered table-striped', index=False, escape=False),
-        'kestrel_plot_base64': kestrel_plot_base64,
-        'advntr_plot_base64': advntr_plot_base64,
-        'kestrel_plot_interactive': kestrel_plot_html,
-        'advntr_plot_interactive': advntr_plot_html,
-        'interactive': True
+        "report_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "kestrel_positive": kestrel_df.to_html(
+            classes="table table-bordered table-striped", index=False, escape=False
+        ),
+        "advntr_positive": advntr_df.to_html(
+            classes="table table-bordered table-striped", index=False, escape=False
+        ),
+        "kestrel_plot_base64": kestrel_plot_base64,
+        "advntr_plot_base64": advntr_plot_base64,
+        "kestrel_plot_interactive": kestrel_plot_html,
+        "advntr_plot_interactive": advntr_plot_html,
+        "interactive": True,
     }
 
     try:
@@ -508,7 +586,7 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
 
     report_file_path = Path(output_dir) / summary_file
     try:
-        with open(report_file_path, 'w') as f:
+        with open(report_file_path, "w") as f:
             f.write(rendered_html)
         logging.info(f"Cohort summary report generated and saved to {report_file_path}")
     except Exception as e:
@@ -549,7 +627,9 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
         for path_str in input_paths:
             path = Path(path_str)
             if not path.exists():
-                logging.warning(f"Input path does not exist and will be skipped: {path}")
+                logging.warning(
+                    f"Input path does not exist and will be skipped: {path}"
+                )
                 continue
             if path.is_dir():
                 logging.info(f"Adding directory to processing list: {path}")
@@ -558,29 +638,44 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
                 logging.info(f"Extracting zip file: {path}")
                 temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
                 try:
-                    with zipfile.ZipFile(path, 'r') as zip_ref:
+                    with zipfile.ZipFile(path, "r") as zip_ref:
                         zip_ref.extractall(temp_dir)
                     temp_path = Path(temp_dir)
-                    logging.info(f"Extracted zip file to temporary directory: {temp_path}")
+                    logging.info(
+                        f"Extracted zip file to temporary directory: {temp_path}"
+                    )
 
                     # **Modification Starts Here**
                     # Identify sample directories within the extracted zip
                     # Assuming that each sample directory contains both 'kestrel/' and 'advntr/' subdirectories
                     sample_dirs = [
-                        p for p in temp_path.iterdir()
-                        if p.is_dir() and (p / 'kestrel').is_dir() and (p / 'advntr').is_dir()
+                        p
+                        for p in temp_path.iterdir()
+                        if p.is_dir()
+                        and (p / "kestrel").is_dir()
+                        and (p / "advntr").is_dir()
                     ]
 
                     if not sample_dirs:
-                        logging.warning(f"No sample directories found in extracted zip file: {path}")
-                        if (temp_path / 'kestrel').is_dir() and (temp_path / 'advntr').is_dir():
+                        logging.warning(
+                            f"No sample directories found in extracted zip file: {path}"
+                        )
+                        if (temp_path / "kestrel").is_dir() and (
+                            temp_path / "advntr"
+                        ).is_dir():
                             processed_dirs.append(temp_path)
-                            logging.info(f"Added top-level directory as a single sample from zip file: {path}")
+                            logging.info(
+                                f"Added top-level directory as a single sample from zip file: {path}"
+                            )
                         else:
-                            logging.error(f"Extracted zip file does not contain valid sample directories: {path}")
+                            logging.error(
+                                f"Extracted zip file does not contain valid sample directories: {path}"
+                            )
                     else:
                         processed_dirs.extend(sample_dirs)
-                        logging.info(f"Added {len(sample_dirs)} sample directories from zip file: {path}")
+                        logging.info(
+                            f"Added {len(sample_dirs)} sample directories from zip file: {path}"
+                        )
                     # **Modification Ends Here**
 
                     temp_dirs.append(temp_dir)
@@ -591,17 +686,21 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
                     logging.error(f"Error extracting zip file {path}: {e}")
                     shutil.rmtree(temp_dir)
             else:
-                logging.warning(f"Unsupported file type (not a directory or zip): {path}")
+                logging.warning(
+                    f"Unsupported file type (not a directory or zip): {path}"
+                )
 
         if not processed_dirs:
-            logging.error("No valid input directories or zip files found for cohort aggregation.")
+            logging.error(
+                "No valid input directories or zip files found for cohort aggregation."
+            )
             return
 
         # Load Kestrel results
         kestrel_df = load_results_from_dirs(
             input_dirs=processed_dirs,
             filenames=["kestrel_result.tsv"],
-            file_loader=load_kestrel_results
+            file_loader=load_kestrel_results,
         )
 
         # Load adVNTR results with the correct filename (only the primary TSV is used)
@@ -609,7 +708,7 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
         advntr_df = load_results_from_dirs(
             input_dirs=processed_dirs,
             filenames=advntr_filenames,
-            file_loader=load_advntr_results
+            file_loader=load_advntr_results,
         )
 
         # Generate the cohort summary report
@@ -618,7 +717,7 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
             kestrel_df=kestrel_df,
             advntr_df=advntr_df,
             summary_file=summary_file,
-            config=config
+            config=config,
         )
 
     finally:

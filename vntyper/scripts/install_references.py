@@ -34,7 +34,7 @@ def load_install_config(config_path: Path) -> Dict[str, Any]:
         sys.exit(1)
 
     try:
-        with config_path.open('r') as f:
+        with config_path.open("r") as f:
             config = json.load(f)
         return config
     except json.JSONDecodeError as e:
@@ -113,10 +113,7 @@ def execute_index_command(index_command: str, fasta_path: Path):
     try:
         args = command.split()
         result = subprocess.run(
-            args,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
         logging.info(f"Successfully executed: {command}")
     except subprocess.CalledProcessError as e:
@@ -144,7 +141,7 @@ def update_config(config_path: Path, references: Dict[str, Path]):
         sys.exit(1)
 
     try:
-        with config_path.open('r') as f:
+        with config_path.open("r") as f:
             config = json.load(f)
     except json.JSONDecodeError as e:
         logging.error(f"Error parsing main config.json: {e}")
@@ -160,7 +157,7 @@ def update_config(config_path: Path, references: Dict[str, Path]):
         config["reference_data"][ref_key] = str(ref_path)
 
     try:
-        with config_path.open('w') as f:
+        with config_path.open("w") as f:
             json.dump(config, f, indent=2)
         logging.info(f"Successfully updated {config_path} with new reference paths.")
     except Exception as e:
@@ -168,9 +165,13 @@ def update_config(config_path: Path, references: Dict[str, Path]):
         sys.exit(1)
 
 
-def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
-                            output_dir: Path, bwa_path: str, skip_indexing: bool,
-                            md5_dict: Dict[str, str]):
+def process_ucsc_references(
+    ucsc_refs: Dict[str, Dict[str, str]],
+    output_dir: Path,
+    bwa_path: str,
+    skip_indexing: bool,
+    md5_dict: Dict[str, str],
+):
     """
     Process UCSC references by downloading and indexing.
 
@@ -198,25 +199,29 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
         md5_dict[str(target_path)] = md5_checksum
         logging.info(f"MD5 checksum for {target_path.name}: {md5_checksum}")
 
-        if target_path.suffix == '.zip':
+        if target_path.suffix == ".zip":
             try:
-                with zipfile.ZipFile(target_path, 'r') as zip_ref:
+                with zipfile.ZipFile(target_path, "r") as zip_ref:
                     zip_ref.extractall(path=target_path)
                 logging.info(f"Successfully extracted {target_path.name}")
             except Exception as e:
                 logging.error(f"Failed to extract {target_path}: {e}")
                 sys.exit(1)
-        elif target_path.suffix == '.gz':
+        elif target_path.suffix == ".gz":
             try:
-                output_path = target_path.with_suffix('')
-                with gzip.open(target_path, 'rb') as f_in:
-                    with open(output_path, 'wb') as f_out:
+                output_path = target_path.with_suffix("")
+                with gzip.open(target_path, "rb") as f_in:
+                    with open(output_path, "wb") as f_out:
                         shutil.copyfileobj(f_in, f_out)
-                logging.info(f"Successfully extracted {target_path.name} to {output_path.name}")
+                logging.info(
+                    f"Successfully extracted {target_path.name} to {output_path.name}"
+                )
             except Exception as e:
                 logging.error(f"Failed to extract {target_path}: {e}")
-                sys.exit(1)    
-        elif target_path.suffixes[-2:] == ['.tar', '.gz'] or target_path.suffix == '.tgz':
+                sys.exit(1)
+        elif (
+            target_path.suffixes[-2:] == [".tar", ".gz"] or target_path.suffix == ".tgz"
+        ):
             try:
                 with tarfile.open(target_path, "r:gz") as tar:
                     tar.extractall(path=target_path)
@@ -230,15 +235,19 @@ def process_ucsc_references(ucsc_refs: Dict[str, Dict[str, str]],
             )
 
         if index_command and not skip_indexing:
-            output_path = target_path.with_suffix('')
+            output_path = target_path.with_suffix("")
             execute_index_command(index_command, output_path)
         elif index_command and skip_indexing:
             logging.info(f"Skipping indexing for {target_path.with_suffix('')}")
 
 
-def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
-                               output_dir: Path, bwa_path: str, skip_indexing: bool,
-                               md5_dict: Dict[str, str]):
+def process_vntyper_references(
+    vntyper_refs: Dict[str, Dict[str, str]],
+    output_dir: Path,
+    bwa_path: str,
+    skip_indexing: bool,
+    md5_dict: Dict[str, str],
+):
     """
     Process VNtyper references by downloading and extracting.
 
@@ -270,15 +279,18 @@ def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
         if extract_to:
             extract_dir = output_dir / extract_to
             extract_dir.mkdir(parents=True, exist_ok=True)
-            if target_path.suffix == '.zip':
+            if target_path.suffix == ".zip":
                 try:
-                    with zipfile.ZipFile(target_path, 'r') as zip_ref:
+                    with zipfile.ZipFile(target_path, "r") as zip_ref:
                         zip_ref.extractall(path=extract_dir)
                     logging.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
                     logging.error(f"Failed to extract {target_path}: {e}")
                     sys.exit(1)
-            elif target_path.suffixes[-2:] == ['.tar', '.gz'] or target_path.suffix == '.tgz':
+            elif (
+                target_path.suffixes[-2:] == [".tar", ".gz"]
+                or target_path.suffix == ".tgz"
+            ):
                 try:
                     with tarfile.open(target_path, "r:gz") as tar:
                         tar.extractall(path=extract_dir)
@@ -297,9 +309,12 @@ def process_vntyper_references(vntyper_refs: Dict[str, Dict[str, str]],
             logging.info(f"Skipping indexing for {target_path}")
 
 
-def process_own_repository_references(own_repo_refs: Dict[str, Any],
-                                      output_dir: Path, skip_indexing: bool,
-                                      md5_dict: Dict[str, str]):
+def process_own_repository_references(
+    own_repo_refs: Dict[str, Any],
+    output_dir: Path,
+    skip_indexing: bool,
+    md5_dict: Dict[str, str],
+):
     """
     Process own repository references by downloading specific FASTA files.
 
@@ -343,7 +358,7 @@ def write_md5_checksums(md5_dict: Dict[str, str], output_dir: Path):
     """
     checksum_file = output_dir / "md5_checksums.txt"
     try:
-        with checksum_file.open('w') as f:
+        with checksum_file.open("w") as f:
             for file_path, md5 in md5_dict.items():
                 relative_path = file_path.replace(str(output_dir) + "/", "")
                 f.write(f"{md5}  {relative_path}\n")
@@ -384,7 +399,9 @@ def setup_logging(output_dir: Path):
     logging.info(f"Logging initialized. Logs will be saved to {log_file}")
 
 
-def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bool = False):
+def main(
+    output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bool = False
+):
     """
     Main function to execute the install_references process.
 
@@ -416,17 +433,23 @@ def main(output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bo
     # Process UCSC references
     if ucsc_refs:
         logging.info("Processing UCSC references...")
-        process_ucsc_references(ucsc_refs, output_dir, bwa_path, skip_indexing, md5_dict)
+        process_ucsc_references(
+            ucsc_refs, output_dir, bwa_path, skip_indexing, md5_dict
+        )
 
     # Process VNtyper references
     if vntyper_refs:
         logging.info("Processing VNtyper references...")
-        process_vntyper_references(vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict)
+        process_vntyper_references(
+            vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict
+        )
 
     # Process own repository references
     if own_repo_refs:
         logging.info("Processing own repository references...")
-        process_own_repository_references(own_repo_refs, output_dir, skip_indexing, md5_dict)
+        process_own_repository_references(
+            own_repo_refs, output_dir, skip_indexing, md5_dict
+        )
 
     # Write MD5 checksums to file
     if md5_dict:
@@ -472,21 +495,23 @@ if __name__ == "__main__":
         description="Install necessary reference files for vntyper."
     )
     parser.add_argument(
-        '-d', '--output-dir',
+        "-d",
+        "--output-dir",
         type=Path,
         required=True,
-        help="Directory where references will be installed."
+        help="Directory where references will be installed.",
     )
     parser.add_argument(
-        '-c', '--config-path',
+        "-c",
+        "--config-path",
         type=Path,
         default=None,
-        help="Path to the main config.json file to update. If not provided, config update is skipped."
+        help="Path to the main config.json file to update. If not provided, config update is skipped.",
     )
     parser.add_argument(
-        '--skip-indexing',
-        action='store_true',
-        help="Skip the indexing step during reference installation."
+        "--skip-indexing",
+        action="store_true",
+        help="Skip the indexing step during reference installation.",
     )
     args = parser.parse_args()
     main(args.output_dir, args.config_path, args.skip_indexing)

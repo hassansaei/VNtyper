@@ -212,7 +212,9 @@ def calculate_vntr_coverage(
                     coverage_values.append(coverage)
                 except ValueError:
                     continue
-    mean_coverage = sum(coverage_values) / len(coverage_values) if coverage_values else 0
+    mean_coverage = (
+        sum(coverage_values) / len(coverage_values) if coverage_values else 0
+    )
     logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
     return mean_coverage
 
@@ -301,14 +303,14 @@ def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
 
     try:
         # Add comment='#' to skip lines starting with '#' or '##'
-        df = pd.read_csv(result_file, sep='\t', comment='#')
+        df = pd.read_csv(result_file, sep="\t", comment="#")
 
         # Verify that required columns exist
         required_columns = [
-            'Estimated_Depth_AlternateVariant',
-            'Estimated_Depth_Variant_ActiveRegion',
-            'Depth_Score',
-            'Confidence'
+            "Estimated_Depth_AlternateVariant",
+            "Estimated_Depth_Variant_ActiveRegion",
+            "Depth_Score",
+            "Confidence",
         ]
         for col in required_columns:
             if col not in df.columns:
@@ -317,18 +319,24 @@ def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
 
         summary = {
             # Use the vntyper output directory name as a fallback
-            'file_analyzed': vntyper_output_dir.name,
-            'Estimated_Depth_AlternateVariant': df['Estimated_Depth_AlternateVariant'].tolist(),
-            'Estimated_Depth_Variant_ActiveRegion': df['Estimated_Depth_Variant_ActiveRegion'].tolist(),
-            'Depth_Score': df['Depth_Score'].tolist(),
-            'Confidence': df['Confidence'].tolist(),
+            "file_analyzed": vntyper_output_dir.name,
+            "Estimated_Depth_AlternateVariant": df[
+                "Estimated_Depth_AlternateVariant"
+            ].tolist(),
+            "Estimated_Depth_Variant_ActiveRegion": df[
+                "Estimated_Depth_Variant_ActiveRegion"
+            ].tolist(),
+            "Depth_Score": df["Depth_Score"].tolist(),
+            "Confidence": df["Confidence"].tolist(),
         }
         return summary
     except pd.errors.ParserError as e:
         logging.error(f"Failed to parse vntyper results from {result_file}: {e}")
         return None
     except Exception as e:
-        logging.error(f"Unexpected error while parsing vntyper results from {result_file}: {e}")
+        logging.error(
+            f"Unexpected error while parsing vntyper results from {result_file}: {e}"
+        )
         return None
 
 
@@ -362,11 +370,12 @@ def summarize_advntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
                 break
         if header is not None:
             from io import StringIO
+
             csv_data = "\n".join(data_lines)
             df = pd.read_csv(StringIO(csv_data), sep="\t", header=None)
             df.columns = header
         else:
-            df = pd.read_csv(advntr_file, sep="\t", comment='#')
+            df = pd.read_csv(advntr_file, sep="\t", comment="#")
         summary = {"advntr_result": df.to_dict(orient="records")}
         return summary
     except Exception as e:
@@ -596,7 +605,10 @@ def main():
         if not (0 < fraction <= 1):
             logging.warning(f"Invalid fraction {fraction}. Skipping.")
             continue
-        output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{int(fraction*100)}p.bam"
+        output_bam = (
+            args.output_dir
+            / f"{args.input_bam.stem}_downsampled_{int(fraction*100)}p.bam"
+        )
         subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
@@ -640,34 +652,65 @@ def main():
             if args.run_advntr:
                 advntr_summary_dict = summarize_advntr_results(vntyper_output_dir)
             if summary:
-                vntyper_summary.append({
-                    'file_analyzed': summary.get('file_analyzed', output_bam.name),
-                    'method': 'fraction',
-                    'value': fraction,
-                    'confidence': ', '.join(map(str, summary.get('Confidence', []))),
-                    'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
-                    'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
-                    'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
-                    'analysis_time_minutes': analysis_time if analysis_time is not None else '',
-                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
-                })
+                vntyper_summary.append(
+                    {
+                        "file_analyzed": summary.get("file_analyzed", output_bam.name),
+                        "method": "fraction",
+                        "value": fraction,
+                        "confidence": ", ".join(
+                            map(str, summary.get("Confidence", []))
+                        ),
+                        "Estimated_Depth_AlternateVariant": ", ".join(
+                            map(
+                                str, summary.get("Estimated_Depth_AlternateVariant", [])
+                            )
+                        ),
+                        "Estimated_Depth_Variant_ActiveRegion": ", ".join(
+                            map(
+                                str,
+                                summary.get("Estimated_Depth_Variant_ActiveRegion", []),
+                            )
+                        ),
+                        "Depth_Score": ", ".join(
+                            map(str, summary.get("Depth_Score", []))
+                        ),
+                        "analysis_time_minutes": (
+                            analysis_time if analysis_time is not None else ""
+                        ),
+                        "advntr_result": (
+                            str(advntr_summary_dict.get("advntr_result"))
+                            if advntr_summary_dict
+                            else ""
+                        ),
+                    }
+                )
             else:
-                vntyper_summary.append({
-                    'file_analyzed': output_bam.name,
-                    'method': 'fraction',
-                    'value': fraction,
-                    'confidence': 'No Results',
-                    'Estimated_Depth_AlternateVariant': '',
-                    'Estimated_Depth_Variant_ActiveRegion': '',
-                    'Depth_Score': '',
-                    'analysis_time_minutes': '',
-                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
-                })
+                vntyper_summary.append(
+                    {
+                        "file_analyzed": output_bam.name,
+                        "method": "fraction",
+                        "value": fraction,
+                        "confidence": "No Results",
+                        "Estimated_Depth_AlternateVariant": "",
+                        "Estimated_Depth_Variant_ActiveRegion": "",
+                        "Depth_Score": "",
+                        "analysis_time_minutes": "",
+                        "advntr_result": (
+                            str(advntr_summary_dict.get("advntr_result"))
+                            if advntr_summary_dict
+                            else ""
+                        ),
+                    }
+                )
 
     # Step 4: Downsample to absolute coverages
     for coverage in args.coverages:
-        fraction = calculate_required_fraction(desired_coverage=coverage, current_coverage=current_coverage)
-        output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
+        fraction = calculate_required_fraction(
+            desired_coverage=coverage, current_coverage=current_coverage
+        )
+        output_bam = (
+            args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
+        )
         subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
@@ -711,45 +754,72 @@ def main():
             if args.run_advntr:
                 advntr_summary_dict = summarize_advntr_results(vntyper_output_dir)
             if summary:
-                vntyper_summary.append({
-                    'file_analyzed': summary.get('file_analyzed', output_bam.name),
-                    'method': 'coverage',
-                    'value': coverage,
-                    'confidence': ', '.join(map(str, summary.get('Confidence', []))),
-                    'Estimated_Depth_AlternateVariant': ', '.join(map(str, summary.get('Estimated_Depth_AlternateVariant', []))),
-                    'Estimated_Depth_Variant_ActiveRegion': ', '.join(map(str, summary.get('Estimated_Depth_Variant_ActiveRegion', []))),
-                    'Depth_Score': ', '.join(map(str, summary.get('Depth_Score', []))),
-                    'analysis_time_minutes': analysis_time if analysis_time is not None else '',
-                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
-                })
+                vntyper_summary.append(
+                    {
+                        "file_analyzed": summary.get("file_analyzed", output_bam.name),
+                        "method": "coverage",
+                        "value": coverage,
+                        "confidence": ", ".join(
+                            map(str, summary.get("Confidence", []))
+                        ),
+                        "Estimated_Depth_AlternateVariant": ", ".join(
+                            map(
+                                str, summary.get("Estimated_Depth_AlternateVariant", [])
+                            )
+                        ),
+                        "Estimated_Depth_Variant_ActiveRegion": ", ".join(
+                            map(
+                                str,
+                                summary.get("Estimated_Depth_Variant_ActiveRegion", []),
+                            )
+                        ),
+                        "Depth_Score": ", ".join(
+                            map(str, summary.get("Depth_Score", []))
+                        ),
+                        "analysis_time_minutes": (
+                            analysis_time if analysis_time is not None else ""
+                        ),
+                        "advntr_result": (
+                            str(advntr_summary_dict.get("advntr_result"))
+                            if advntr_summary_dict
+                            else ""
+                        ),
+                    }
+                )
             else:
-                vntyper_summary.append({
-                    'file_analyzed': output_bam.name,
-                    'method': 'coverage',
-                    'value': coverage,
-                    'confidence': 'No Results',
-                    'Estimated_Depth_AlternateVariant': '',
-                    'Estimated_Depth_Variant_ActiveRegion': '',
-                    'Depth_Score': '',
-                    'analysis_time_minutes': '',
-                    'advntr_result': str(advntr_summary_dict.get('advntr_result')) if advntr_summary_dict else '',
-                })
+                vntyper_summary.append(
+                    {
+                        "file_analyzed": output_bam.name,
+                        "method": "coverage",
+                        "value": coverage,
+                        "confidence": "No Results",
+                        "Estimated_Depth_AlternateVariant": "",
+                        "Estimated_Depth_Variant_ActiveRegion": "",
+                        "Depth_Score": "",
+                        "analysis_time_minutes": "",
+                        "advntr_result": (
+                            str(advntr_summary_dict.get("advntr_result"))
+                            if advntr_summary_dict
+                            else ""
+                        ),
+                    }
+                )
 
     # Step 5: Write summary table if vntyper was run
     if args.run_vntyper:
         summary_csv_path = args.summary_output
         logging.info(f"Writing vntyper summary to {summary_csv_path}")
-        with summary_csv_path.open('w', newline='') as csvfile:
+        with summary_csv_path.open("w", newline="") as csvfile:
             fieldnames = [
-                'file_analyzed',
-                'method',
-                'value',
-                'confidence',
-                'Estimated_Depth_AlternateVariant',
-                'Estimated_Depth_Variant_ActiveRegion',
-                'Depth_Score',
-                'analysis_time_minutes',
-                'advntr_result'
+                "file_analyzed",
+                "method",
+                "value",
+                "confidence",
+                "Estimated_Depth_AlternateVariant",
+                "Estimated_Depth_Variant_ActiveRegion",
+                "Depth_Score",
+                "analysis_time_minutes",
+                "advntr_result",
             ]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
