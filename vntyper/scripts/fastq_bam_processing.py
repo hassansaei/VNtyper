@@ -144,9 +144,7 @@ def process_bam_to_fastq(
     if not fast_mode:
         command_filter = (
             f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
-            f" >(samtools view -b -f 4 -F 264 -@ {threads} - -o {output}/{output_name}_unmapped1.bam) "
-            f" >(samtools view -b -f 8 -F 260 -@ {threads} - -o {output}/{output_name}_unmapped2.bam) "
-            f" >(samtools view -b -f 12 -F 256 -@ {threads} - -o {output}/{output_name}_unmapped3.bam) "
+            f" >(samtools view -b -f 12 -@ {threads} - -o {output}/{output_name}_unmapped.bam) "
             f"> /dev/null"
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
@@ -160,9 +158,7 @@ def process_bam_to_fastq(
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
         command_merge = (
             f"{samtools_path} merge -f -@ {threads} {merged_bam} "
-            f"{final_bam} {output}/{output_name}_unmapped1.bam "
-            f"{output}/{output_name}_unmapped2.bam "
-            f"{output}/{output_name}_unmapped3.bam"
+            f"{output}/{output_name}_unmapped.bam"
         )
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logging.info(f"Executing BAM merging with command: {command_merge}")
@@ -216,9 +212,7 @@ def process_bam_to_fastq(
     if delete_intermediates and not keep_intermediates:
         logging.info("Removing intermediate BAM files...")
         intermediate_files = [
-            Path(output) / f"{output_name}_unmapped1.bam",
-            Path(output) / f"{output_name}_unmapped2.bam",
-            Path(output) / f"{output_name}_unmapped3.bam",
+            Path(output) / f"{output_name}_unmapped.bam",
         ]
         for file in intermediate_files:
             if file.exists():
