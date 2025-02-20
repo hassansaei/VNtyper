@@ -39,5 +39,8 @@
     "motifs_for_alt_gg": ["X"],
     "exclude_alts_combined": ["CCGCC", "CGGCG", "CGGCC"],
     "exclude_motifs_combined": ["6", "6p", "7"]
+  },
+  "flagging_rules": {
+    "False_Positive_4bp_Insertion": "REF == 'C' & ALT == 'CGGCA'"
   }
 }

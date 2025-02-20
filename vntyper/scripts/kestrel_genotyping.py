@@ -419,6 +419,13 @@ def process_kestrel_output(
         output_empty_result(output_dir, header)
         return None
 
+    # Apply flagging rules if defined in the kestrel configuration
+    flagging_rules = kestrel_config.get("flagging_rules", {})
+    if flagging_rules:
+        from vntyper.scripts.flagging import add_flags
+
+        processed_df = add_flags(processed_df, flagging_rules)
+
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
     with open(final_output_path, "w") as f:

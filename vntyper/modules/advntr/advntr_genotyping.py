@@ -356,6 +356,14 @@ def process_advntr_output(output_path, output, output_name):
                 subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True
             )
 
+            # Apply flagging rules if defined in advntr configuration
+            flagging_rules = advntr_config.get("flagging_rules", {})
+            if flagging_rules:
+                logging.info("Applying flagging rules to adVNTR output.")
+                from vntyper.scripts.flagging import add_flags
+
+                advntr_concat = add_flags(advntr_concat, flagging_rules)
+
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat.to_csv(output_result_path, sep="\t", index=False)
         logging.info(f"Processed adVNTR results saved to {output_result_path}")
