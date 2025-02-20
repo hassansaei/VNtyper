@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import statistics  # for median and stdev calculations
+import json
 
 from vntyper.scripts.utils import run_command
 
@@ -410,3 +411,200 @@ def downsample_bam_if_needed(
 
     logging.info(f"Downsampling complete. Using BAM: {sorted_down_bam}")
     return sorted_down_bam
+
+
+def parse_contigs_from_header(header: str) -> list:
+    """
+    Parses the BAM header to extract contig information from lines starting with '@SQ'.
+    Returns a list of dictionaries with keys 'name' and 'length'.
+    """
+    contigs = []
+    for line in header.splitlines():
+        if line.startswith("@SQ"):
+            parts = line.split("\t")
+            contig_info = {}
+            for part in parts:
+                if part.startswith("SN:"):
+                    contig_info["name"] = part.replace("SN:", "")
+                elif part.startswith("LN:"):
+                    try:
+                        contig_info["length"] = int(part.replace("LN:", ""))
+                    except ValueError:
+                        contig_info["length"] = None
+            if "name" in contig_info and contig_info.get("length") is not None:
+                contigs.append(contig_info)
+    return contigs
+
+
+def detect_assembly_from_contigs(header: str, threshold: float = 0.9) -> str:
+    """
+    Detects the reference genome assembly by comparing contig information from the BAM header
+    against known assemblies. Returns the detected assembly name if the match percentage
+    is above the threshold, otherwise returns 'Not detected'.
+    """
+    known_assemblies = {
+        "hg19": {
+            "name": "hg19",
+            "contigs": [
+                {"name": "chr1", "length": 249250621},
+                {"name": "chr2", "length": 243199373},
+                {"name": "chr3", "length": 198022430},
+                {"name": "chr4", "length": 191154276},
+                {"name": "chr5", "length": 180915260},
+                {"name": "chr6", "length": 171115067},
+                {"name": "chr7", "length": 159138663},
+                {"name": "chr8", "length": 146364022},
+                {"name": "chr9", "length": 141213431},
+                {"name": "chr10", "length": 135534747},
+                {"name": "chr11", "length": 135006516},
+                {"name": "chr12", "length": 133851895},
+                {"name": "chr13", "length": 115169878},
+                {"name": "chr14", "length": 107349540},
+                {"name": "chr15", "length": 102531392},
+                {"name": "chr16", "length": 90354753},
+                {"name": "chr17", "length": 81195210},
+                {"name": "chr18", "length": 78077248},
+                {"name": "chr19", "length": 59128983},
+                {"name": "chr20", "length": 63025520},
+                {"name": "chr21", "length": 48129895},
+                {"name": "chr22", "length": 51304566},
+                {"name": "chrX", "length": 155270560},
+                {"name": "chrY", "length": 59373566},
+            ],
+        },
+        "hg38": {
+            "name": "hg38",
+            "contigs": [
+                {"name": "chr1", "length": 248956422},
+                {"name": "chr2", "length": 242193529},
+                {"name": "chr3", "length": 198295559},
+                {"name": "chr4", "length": 190214555},
+                {"name": "chr5", "length": 181538259},
+                {"name": "chr6", "length": 170805979},
+                {"name": "chr7", "length": 159345973},
+                {"name": "chr8", "length": 145138636},
+                {"name": "chr9", "length": 138394717},
+                {"name": "chr10", "length": 133797422},
+                {"name": "chr11", "length": 135086622},
+                {"name": "chr12", "length": 133275309},
+                {"name": "chr13", "length": 114364328},
+                {"name": "chr14", "length": 107043718},
+                {"name": "chr15", "length": 101991189},
+                {"name": "chr16", "length": 90338345},
+                {"name": "chr17", "length": 83257441},
+                {"name": "chr18", "length": 80373285},
+                {"name": "chr19", "length": 58617616},
+                {"name": "chr20", "length": 64444167},
+                {"name": "chr21", "length": 46709983},
+                {"name": "chr22", "length": 50818468},
+                {"name": "chrX", "length": 156040895},
+                {"name": "chrY", "length": 57227415},
+            ],
+        },
+    }
+
+    bam_contigs = parse_contigs_from_header(header)
+    for assembly_key, assembly_data in known_assemblies.items():
+        expected_contigs = assembly_data["contigs"]
+        match_count = 0
+        for expected in expected_contigs:
+            for contig in bam_contigs:
+                if (
+                    contig["name"] == expected["name"]
+                    and contig["length"] == expected["length"]
+                ):
+                    match_count += 1
+                    break
+        match_percentage = match_count / len(expected_contigs)
+        if match_percentage >= threshold:
+            return assembly_data["name"]
+    return "Not detected"
+
+
+def parse_header_pipeline_info(
+    header: str, output_dir: Path, output_name: str = "pipeline_info.json"
+) -> None:
+    """
+    Parses the BAM header to extract assembly and alignment pipeline information.
+    Uses both text matching and contig matching to detect the assembly.
+    Warns if the Dragen pipeline is detected, as it has known issues aligning reads in the VNTR region.
+    Writes the extracted information as a JSON file to the specified output directory.
+
+    Parameters:
+        header (str): The BAM header.
+        output_dir (Path): Directory where the output file will be written.
+        output_name (str): Base name for the output file. Defaults to 'pipeline_info.json'.
+    """
+    lower_header = header.lower()
+
+    # Text matching for assembly detection
+    if "hg19" in lower_header or "hs37" in lower_header or "grch37" in lower_header:
+        assembly_text = "hg19"
+    elif (
+        "hg38" in lower_header
+        or "hs38" in lower_header
+        or "grch38" in lower_header
+        or "hs38dh" in lower_header
+    ):
+        assembly_text = "hg38"
+    else:
+        assembly_text = "Not detected"
+
+    # Contig matching for assembly (assumes detect_assembly_from_contigs is defined/imported)
+    assembly_contig = detect_assembly_from_contigs(header)
+
+    # Determine the alignment pipeline.
+    if "dragen" in lower_header:
+        pipeline = "Dragen"
+    elif "bwa" in lower_header:
+        pipeline = "BWA"
+    else:
+        pipeline = "Unknown"
+
+    # Issue warning if Dragen is used.
+    warning_message = ""
+    if pipeline.lower() == "dragen":
+        warning_message = (
+            "WARNING: The Dragen pipeline has known issues aligning reads in the VNTR region. "
+            "It is recommended to use normal mode."
+        )
+        logging.warning(warning_message)
+
+    # Compose the JSON result.
+    result = {
+        "assembly_text": assembly_text,
+        "assembly_contig": assembly_contig,
+        "alignment_pipeline": pipeline,
+    }
+    if warning_message:
+        result["warning"] = warning_message
+
+    # Write the result as JSON.
+    output_path = output_dir / output_name
+    try:
+        with open(output_path, "w", encoding="utf-8") as out_f:
+            json.dump(result, out_f, indent=4)
+        logging.info(f"Pipeline info written to {output_path}")
+    except Exception as e:
+        logging.error(f"Failed to write pipeline info file: {e}")
+        raise e
+
+
+def extract_bam_header(bam_file: str, config: dict) -> str:
+    """
+    Extracts the header from a BAM file using samtools view -H.
+
+    Args:
+        bam_file (str): Path to the BAM file.
+        config (dict): Configuration dictionary containing tool paths.
+
+    Returns:
+        str: The BAM header.
+
+    Raises:
+        subprocess.CalledProcessError: If samtools fails.
+    """
+    samtools_path = config["tools"]["samtools"]
+    cmd = [samtools_path, "view", "-H", bam_file]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return result.stdout
