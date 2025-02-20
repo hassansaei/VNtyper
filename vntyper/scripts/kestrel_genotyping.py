@@ -98,6 +98,7 @@ def construct_kestrel_command(
     max_hap_states,
     log_level,
     sample_name,
+    additional_settings="",
 ):
     """
     Constructs the command for running Kestrel's mapping-free genotyping.
@@ -123,6 +124,8 @@ def construct_kestrel_command(
         max_hap_states (int): Kestrel param for haplotype states.
         log_level (str): Logging level (DEBUG, INFO, etc.).
         sample_name (str): Sample name for labeling in the VCF.
+        additional_settings (str, optional): Extra command-line options to append.
+            Defaults to an empty string.
 
     Raises:
         ValueError: If either fastq_1 or fastq_2 is missing.
@@ -133,7 +136,7 @@ def construct_kestrel_command(
     if not fastq_1 or not fastq_2:
         raise ValueError("FASTQ input files are missing or invalid.")
 
-    return (
+    base_command = (
         f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
@@ -141,6 +144,9 @@ def construct_kestrel_command(
         f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout "
         f"--loglevel {log_level.upper()} --temploc {output_dir}"
     )
+    if additional_settings:
+        base_command += " " + additional_settings
+    return base_command
 
 
 def generate_header(reference_vntr, version=VERSION):
@@ -251,6 +257,9 @@ def run_kestrel(
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
     log_level_str = logging.getLevelName(log_level)
 
+    # Retrieve additional settings (defaults to empty)
+    additional_settings = kestrel_settings.get("additional_settings", "")
+
     # Try each k-mer size in sequence. Usually just [20], can be more.
     for kmer_size in kmer_sizes:
         kmer_command = construct_kestrel_command(
@@ -267,6 +276,7 @@ def run_kestrel(
             max_hap_states=max_hap_states,
             log_level=log_level_str,
             sample_name=sample_name,
+            additional_settings=additional_settings,
         )
 
         log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
@@ -280,7 +290,6 @@ def run_kestrel(
 
             # Actually run the Kestrel command
             if not run_command(kmer_command, log_file, critical=True):
-                # If run_command() indicates failure
                 logging.error(
                     f"Kestrel failed for k-mer size {kmer_size}. "
                     f"Check {log_file} for details."

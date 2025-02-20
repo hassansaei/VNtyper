@@ -3,7 +3,8 @@
     "java_memory": "12g",
     "kmer_sizes": [20],
     "max_align_states": 30,
-    "max_hap_states": 30
+    "max_hap_states": 30,
+    "additional_settings": ""
   },
   "frame_score_filtering": {
     "replace_value": "C",

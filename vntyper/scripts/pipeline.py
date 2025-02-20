@@ -27,7 +27,12 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 # Import our new summary functions (including end_summary)
-from vntyper.scripts.summary import start_summary, record_step, write_summary, end_summary
+from vntyper.scripts.summary import (
+    start_summary,
+    record_step,
+    write_summary,
+    end_summary,
+)
 
 
 def write_bed_file(regions, bed_file_path):
