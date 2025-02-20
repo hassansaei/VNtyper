@@ -154,7 +154,14 @@ def parse_json_file(file_path):
 
 
 def record_step(
-    summary, step_name, result_file, file_type, command, start_time, end_time, write_summary_path=None
+    summary,
+    step_name,
+    result_file,
+    file_type,
+    command,
+    start_time,
+    end_time,
+    write_summary_path=None,
 ):
     """
     Records a pipeline step in the summary.
@@ -275,7 +282,14 @@ if __name__ == "__main__":
 
     # Record the step (this will calculate the MD5 and parse the file)
     record_step(
-        summary, step_name, result_file, file_type, command, start_time, end_time, write_summary_path="pipeline_summary.json"
+        summary,
+        step_name,
+        result_file,
+        file_type,
+        command,
+        start_time,
+        end_time,
+        write_summary_path="pipeline_summary.json",
     )
 
     # Mark pipeline end
