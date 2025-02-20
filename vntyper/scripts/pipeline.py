@@ -15,6 +15,8 @@ from vntyper.scripts.fastq_bam_processing import (
     process_fastq,
     calculate_vntr_coverage,
     downsample_bam_if_needed,
+    extract_bam_header,
+    parse_header_pipeline_info,
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
@@ -240,7 +242,23 @@ def run_pipeline(
                     bed_file=bed_file_path,
                 )
                 conversion_command = f"process_bam_to_fastq(in_bam={bam}, ...)"
-            else:  # CRAM
+
+                # --- Extract and parse BAM header, then record this step ---
+                header_parse_start = datetime.utcnow()
+                header = extract_bam_header(bam, config)
+                parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]))
+                header_parse_end = datetime.utcnow()
+                record_step(
+                    summary,
+                    "BAM Header Parsing",
+                    str(Path(dirs["fastq_bam_processing"]) / "pipeline_info.json"),
+                    "json",
+                    "parse_header_pipeline_info(extracted header)",
+                    header_parse_start,
+                    header_parse_end,
+                )
+
+            else:  # CRAM branch
                 if cram is None or str(cram).strip().lower() == "none":
                     logging.error("Invalid CRAM input (None).")
                     raise ValueError("Invalid CRAM file input.")
