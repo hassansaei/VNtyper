@@ -556,7 +556,10 @@ def run_pipeline(
                 output_format = advntr_settings.get("output_format", "tsv")
                 output_ext = ".vcf" if output_format == "vcf" else ".tsv"
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
-                process_advntr_output(output_path, dirs["advntr"], "output")
+                process_advntr_output(
+                    output_path, dirs["advntr"], "output", config=config
+                )
+
                 advntr_end = datetime.utcnow()
                 record_step(
                     summary,
