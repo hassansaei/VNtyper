@@ -30,7 +30,7 @@ def start_summary(version=None, input_files=None):
         "pipeline_start": datetime.utcnow().isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
-        "steps": []
+        "steps": [],
     }
 
 
@@ -153,7 +153,9 @@ def parse_json_file(file_path):
         return {"error": f"Error reading JSON file: {e}"}
 
 
-def record_step(summary, step_name, result_file, file_type, command, start_time, end_time):
+def record_step(
+    summary, step_name, result_file, file_type, command, start_time, end_time
+):
     """
     Records a pipeline step in the summary.
 
@@ -193,7 +195,9 @@ def record_step(summary, step_name, result_file, file_type, command, start_time,
         elif file_type.lower() == "json":
             record["parsed_result"] = parse_json_file(result_file)
         else:
-            record["parsed_result"] = {"error": f"Unsupported file type for result parsing: {file_type}"}
+            record["parsed_result"] = {
+                "error": f"Unsupported file type for result parsing: {file_type}"
+            }
     except Exception as e:
         record["parsed_result"] = {"error": f"Error parsing file: {e}"}
 
@@ -251,7 +255,9 @@ def convert_summary_to_tsv(summary, output_tsv_path):
 # Example usage:
 if __name__ == "__main__":
     # This example demonstrates how to create a summary, record a step, and write it out.
-    summary = start_summary(version="1.2.3", input_files={"sample": "sample.fastq", "bam": "sample.bam"})
+    summary = start_summary(
+        version="1.2.3", input_files={"sample": "sample.fastq", "bam": "sample.bam"}
+    )
 
     # Simulate a pipeline step with a sample result file (adjust these values as needed)
     step_name = "Example Step"
@@ -263,7 +269,9 @@ if __name__ == "__main__":
     end_time = datetime.utcnow()
 
     # Record the step (this will calculate the MD5 and parse the file)
-    record_step(summary, step_name, result_file, file_type, command, start_time, end_time)
+    record_step(
+        summary, step_name, result_file, file_type, command, start_time, end_time
+    )
 
     # Mark pipeline end
     end_summary(summary)
