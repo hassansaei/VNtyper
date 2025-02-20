@@ -6,6 +6,9 @@
       "output_format": "vcf",
       "threads": 1,
       "additional_commands": "-aln"
+    },
+    "flagging_rules": {
+         "Low_Coverage": "MeanCoverage < 10"
     }
   }
   
