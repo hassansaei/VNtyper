@@ -41,6 +41,7 @@
     "exclude_motifs_combined": ["6", "6p", "7"]
   },
   "flagging_rules": {
-    "False_Positive_4bp_Insertion": "REF == 'C' & ALT == 'CGGCA'"
+    "False_Positive_4bp_Insertion": "REF == 'C' & ALT == 'CGGCA'",
+    "Low_Depth_Conserved_Motifs": "Depth_Score < 0.2 and Motif in ['D', 'E']"
   }
 }
