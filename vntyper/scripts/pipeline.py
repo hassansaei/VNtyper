@@ -608,9 +608,6 @@ def run_pipeline(
             bam_file=bam_out,
             fasta_file=fasta_reference,
             flanking=config.get("default_values", {}).get("flanking", 50),
-            input_files=input_files,
-            pipeline_version=VERSION,
-            mean_vntr_coverage=mean_coverage,
             vcf_file=sorted_vcf,
             config=config,
         )
