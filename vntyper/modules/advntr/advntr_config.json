@@ -10,7 +10,7 @@
     "flagging_rules": {
          "Low_Coverage": "MeanCoverage < 10",
          "Repeat_Unit_7": "RU == 7",
-         "Poylmorhic_Call": "Variant in ['I26_7_A_LEN25', 'D17_2&D18_2&D19_2&D20_2&D21_2', 'I14_2_C_LEN4', 'I23_6_G_LEN1', 'I21_2_T_LEN1', 'I22_2_C_LEN38', 'I26_7_A_LEN24', 'I60_2_A_LEN2', 'I9_2_C_LEN5']"
+         "Poylmorhic_Call": "Variant in ['I14_2_A_LEN1', 'I11_2_G_LEN1', 'I26_7_A_LEN25', 'D17_2&D18_2&D19_2&D20_2&D21_2', 'I14_2_C_LEN4', 'I23_6_G_LEN1', 'I21_2_T_LEN1', 'I22_2_C_LEN38', 'I26_7_A_LEN24', 'I60_2_A_LEN2', 'I9_2_C_LEN5']"
     }
   }
   
