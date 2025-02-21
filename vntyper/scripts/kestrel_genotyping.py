@@ -140,7 +140,7 @@ def construct_kestrel_command(
         f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {reference_vntr} -o {vcf_out} "
-        f"-s{sample_name} {fastq_1} {fastq_2} "
+        f"-s {sample_name} {fastq_1} {fastq_2} "
         f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout "
         f"--loglevel {log_level.upper()} --temploc {output_dir}"
     )
