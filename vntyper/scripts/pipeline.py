@@ -133,6 +133,8 @@ def run_pipeline(
 
     # Initialize summary to record pipeline steps, including vntyper version and empty input_files.
     summary = start_summary(version=VERSION, input_files={})
+    # Define the summary file path to be used for writing after each step.
+    summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
 
     input_type = None
     if fastq1 and fastq2:
@@ -256,6 +258,7 @@ def run_pipeline(
                     "parse_header_pipeline_info(extracted header)",
                     header_parse_start,
                     header_parse_end,
+                    write_summary_path=summary_file_path,
                 )
 
             else:  # CRAM branch
@@ -288,6 +291,7 @@ def run_pipeline(
                 conversion_command,
                 conversion_start,
                 conversion_end,
+                write_summary_path=summary_file_path,
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from input. Exiting.")
@@ -324,6 +328,7 @@ def run_pipeline(
                     "run_shark_filter(...)",
                     shark_start,
                     shark_end,
+                    write_summary_path=summary_file_path,
                 )
 
             logging.info("Starting FASTQ quality control.")
@@ -345,6 +350,7 @@ def run_pipeline(
                 "process_fastq(...)",
                 qc_start,
                 qc_end,
+                write_summary_path=summary_file_path,
             )
             logging.info("FASTQ quality control completed.")
 
@@ -371,6 +377,7 @@ def run_pipeline(
                 "align_and_sort_fastq(...)",
                 align_start,
                 align_end,
+                write_summary_path=summary_file_path,
             )
             if not sorted_bam:
                 logging.error(
@@ -408,6 +415,7 @@ def run_pipeline(
                 "process_bam_to_fastq(sorted_bam, ...)",
                 conv2_start,
                 conv2_end,
+                write_summary_path=summary_file_path,
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
@@ -446,6 +454,7 @@ def run_pipeline(
             "calculate_vntr_coverage(...)",
             cov_start,
             cov_end,
+            write_summary_path=summary_file_path,
         )
 
         # --- Kestrel Genotyping ---
@@ -481,6 +490,7 @@ def run_pipeline(
             "run_kestrel(...)",
             kestrel_start,
             kestrel_end,
+            write_summary_path=summary_file_path,
         )
         logging.info("Kestrel genotyping completed.")
 
@@ -569,6 +579,7 @@ def run_pipeline(
                     "run_advntr(...), process_advntr_output(...)",
                     advntr_start,
                     advntr_end,
+                    write_summary_path=summary_file_path,
                 )
                 logging.info("adVNTR genotyping completed.")
             else:
