@@ -159,6 +159,7 @@ def process_bam_to_fastq(
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
         command_merge = (
             f"{samtools_path} merge -f -@ {threads} {merged_bam} "
+            f"{output}/{output_name}_sliced.bam "
             f"{output}/{output_name}_unmapped.bam"
         )
         log_file_merge = Path(output) / f"{output_name}_merge.log"
