@@ -1,0 +1,291 @@
+{
+  "algorithm_logic": {
+    "kestrel": {
+      "rules": [
+        {
+          "conditions": {
+            "Confidence": {
+              "operator": "in",
+              "value": ["High_Precision", "High_Precision*"]
+            },
+            "Flag": {
+              "operator": "==",
+              "value": "Not flagged"
+            }
+          },
+          "result": "High_Precision"
+        },
+        {
+          "conditions": {
+            "Confidence": {
+              "operator": "in",
+              "value": ["Low_Precision"]
+            },
+            "Flag": {
+              "operator": "==",
+              "value": "Not flagged"
+            }
+          },
+          "result": "Low_Precision"
+        },
+        {
+          "conditions": {
+            "Confidence": {
+              "operator": "in",
+              "value": ["High_Precision", "High_Precision*"]
+            },
+            "Flag": {
+              "operator": "!=",
+              "value": "Not flagged"
+            }
+          },
+          "result": "High_Precision_flagged"
+        },
+        {
+          "conditions": {
+            "Confidence": {
+              "operator": "in",
+              "value": ["Low_Precision"]
+            },
+            "Flag": {
+              "operator": "!=",
+              "value": "Not flagged"
+            }
+          },
+          "result": "Low_Precision_flagged"
+        }
+      ],
+      "default": "negative"
+    },
+    "advntr": {
+      "rules": [
+        {
+          "conditions": {
+            "Pvalue": {
+              "operator": "!=",
+              "value": "none"
+            },
+            "Flag": {
+              "operator": "==",
+              "value": "Not flagged"
+            }
+          },
+          "result": "positive"
+        },
+        {
+          "conditions": {
+            "Flag": {
+              "operator": "!=",
+              "value": "Not flagged"
+            }
+          },
+          "result": "positive flagged"
+        }
+      ],
+      "default": "negative"
+    }
+  },
+  "screening_summary_rules": [
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision",
+        "advntr_result": "positive",
+        "quality_metrics_pass": true
+      },
+      "message": "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.<br>Quality metrics are acceptable.<br>Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision",
+        "advntr_result": "positive",
+        "quality_metrics_pass": false
+      },
+      "message": "Pathogenic frameshift variant detected by Kestrel with high precision, but quality metrics are below threshold despite adVNTR confirmation.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision",
+        "advntr_result": "negative",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant, but adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is advised."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision",
+        "advntr_result": "negative",
+        "quality_metrics_pass": false
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant, quality metrics are below threshold, and adVNTR did not confirm the variant.<br>Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended due to conflicting results."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision",
+        "advntr_result": "none",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision",
+        "advntr_result": "none",
+        "quality_metrics_pass": false
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant with quality metrics below threshold, and adVNTR genotyping was not performed.<br>Further validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision_flagged",
+        "advntr_result": "positive",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result, but adVNTR confirmed the variant.<br>Review the flagged result and validate using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision_flagged",
+        "advntr_result": "positive",
+        "quality_metrics_pass": false
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result and low-quality metrics, although adVNTR confirmed the variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision_flagged",
+        "advntr_result": "negative",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result, but adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "High_Precision_flagged",
+        "advntr_result": "none",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a high-precision pathogenic variant with a flagged result.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the finding using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision",
+        "advntr_result": "positive",
+        "quality_metrics_pass": true
+      },
+      "message": "Warning: Kestrel detected a pathogenic variant with low precision, and adVNTR confirmed the variant.<br>Validation using alternative methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision",
+        "advntr_result": "positive",
+        "quality_metrics_pass": false
+      },
+      "message": "Warning: Kestrel detected a pathogenic variant with low precision and low-quality metrics, despite adVNTR confirmation.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision",
+        "advntr_result": "negative",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a pathogenic variant with low precision; however, adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is advised."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision",
+        "advntr_result": "negative",
+        "quality_metrics_pass": false
+      },
+      "message": "Kestrel detected a pathogenic variant with low precision and low-quality metrics; adVNTR did not confirm the variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision",
+        "advntr_result": "none",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a pathogenic variant with low precision.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using alternative methods (e.g., SNaPshot, long‐read sequencing)."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision",
+        "advntr_result": "none",
+        "quality_metrics_pass": false
+      },
+      "message": "Kestrel detected a pathogenic variant with low precision and low-quality metrics.<br>Note: adVNTR genotyping was not performed.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision_flagged",
+        "advntr_result": "positive",
+        "quality_metrics_pass": true
+      },
+      "message": "Warning: Kestrel detected a pathogenic variant with low precision and a flagged result, and adVNTR confirmed the variant.<br>Review the flagged result and validate using alternative methods (e.g., SNaPshot, long‐read sequencing)."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision_flagged",
+        "advntr_result": "positive",
+        "quality_metrics_pass": false
+      },
+      "message": "Warning: Kestrel detected a pathogenic variant with low precision, a flagged result, and low-quality metrics.<br>Despite adVNTR confirmation, further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision_flagged",
+        "advntr_result": "negative",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a pathogenic variant with low precision and a flagged result, but adVNTR did not confirm the variant despite acceptable quality metrics.<br>Re-assessment and validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is advised."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "Low_Precision_flagged",
+        "advntr_result": "none",
+        "quality_metrics_pass": true
+      },
+      "message": "Kestrel detected a pathogenic variant with low precision and a flagged result.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": "positive",
+        "quality_metrics_pass": true
+      },
+      "message": "Pathogenic variant identified by adVNTR while Kestrel did not detect any variant.<br>Validation using alternative methods (e.g., SNaPshot, long‐read sequencing) is recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": "positive",
+        "quality_metrics_pass": false
+      },
+      "message": "Pathogenic variant identified by adVNTR with low-quality metrics, while Kestrel did not detect any variant.<br>Further validation using orthogonal methods (e.g., SNaPshot, long‐read sequencing) is strongly recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": "negative",
+        "quality_metrics_pass": true
+      },
+      "message": "No variant detected by either genotyping method.<br>Quality metrics are acceptable."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": "negative",
+        "quality_metrics_pass": false
+      },
+      "message": "No variant detected by either genotyping method; however, quality metrics are below threshold.<br>Re-assessment of sample quality is recommended."
+    },
+    {
+      "conditions": {
+        "kestrel_result": "negative",
+        "advntr_result": "none",
+        "quality_metrics_pass": true
+      },
+      "message": "No variant detected.<br>Note: adVNTR genotyping was not performed."
+    }
+  ],
+  "screening_summary_default": "The screening was negative (no valid Kestrel or adVNTR data)."
+}
