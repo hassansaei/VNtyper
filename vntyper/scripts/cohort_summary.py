@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+vntyper/scripts/cohort_summary.py
+
+This module aggregates outputs from multiple runs into a single cohort summary report.
+It exclusively loads the pipeline_summary.json from each sample directory (found at the top level
+or in subfolders) to construct the cohort tables and donut plots, rather than parsing individual
+result files (e.g. output_adVNTR_result.tsv).
+
+Note: This module no longer defines its own CLI parser as these are now defined in the main CLI script.
+"""
 
 import os
 import logging
@@ -7,309 +17,18 @@ from pathlib import Path
 import zipfile
 import tempfile
 import shutil
+import json
+import base64
 
 import pandas as pd
-import base64
 import matplotlib
 import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.express as px
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
 import plotly.graph_objects as go
 
 matplotlib.use("Agg")
-
-
-def load_kestrel_results(kestrel_result_file):
-    """
-    Load and process Kestrel genotyping results.
-
-    The Kestrel output is expected to be a TSV file containing genotyping
-    information such as motif, variant, position, confidence, and coverage
-    statistics. If the file doesn't exist or cannot be parsed, returns a
-    DataFrame with just the 'Sample' column.
-
-    Parameters
-    ----------
-    kestrel_result_file : str or Path
-        Path to the Kestrel result TSV file.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Processed Kestrel results with human-readable column names and
-        conditional styling applied to the 'Confidence' column.
-    """
-    sample_id = Path(kestrel_result_file).parents[1].name
-    logging.info(f"Loading Kestrel results from {kestrel_result_file}")
-
-    if not os.path.exists(kestrel_result_file):
-        logging.warning(f"Kestrel result file not found: {kestrel_result_file}")
-        return pd.DataFrame({"Sample": [sample_id]})
-
-    try:
-        df = pd.read_csv(kestrel_result_file, sep="\t", comment="#")
-        df["Sample"] = sample_id
-        columns_to_display = {
-            "Sample": "Sample",
-            "Motif": "Motif",
-            "Variant": "Variant",
-            "POS": "Position",
-            "REF": "REF",
-            "ALT": "ALT",
-            "Motif_sequence": "Motif\nSequence",
-            "Estimated_Depth_AlternateVariant": "Depth\n(Variant)",
-            "Estimated_Depth_Variant_ActiveRegion": "Depth\n(Region)",
-            "Depth_Score": "Depth\nScore",
-            "Confidence": "Confidence",
-        }
-        available_columns = {
-            col: columns_to_display[col]
-            for col in columns_to_display
-            if col in df.columns
-        }
-        missing_columns = set(columns_to_display) - set(available_columns)
-        if missing_columns:
-            logging.warning(
-                f"Missing columns in {kestrel_result_file}: {missing_columns}"
-            )
-        if not available_columns:
-            logging.warning(
-                "No expected columns found in Kestrel results, returning minimal DataFrame."
-            )
-            return pd.DataFrame({"Sample": [sample_id]})
-        df = df[list(available_columns.keys())]
-        df = df.rename(columns=available_columns)
-        if "Confidence" in df.columns:
-            df["Confidence"] = df["Confidence"].apply(
-                lambda x: (
-                    f'<span style="color:orange;font-weight:bold;">{x}</span>'
-                    if x == "Low_Precision"
-                    else (
-                        f'<span style="color:red;font-weight:bold;">{x}</span>'
-                        if x in ["High_Precision", "High_Precision*"]
-                        else (
-                            f'<span style="color:blue;font-weight:bold;">{x}</span>'
-                            if x == "Negative"
-                            else x
-                        )
-                    )
-                )
-            )
-        return df
-    except pd.errors.ParserError as e:
-        logging.error(f"Failed to parse Kestrel result file: {e}")
-        return pd.DataFrame({"Sample": [sample_id]})
-    except Exception as e:
-        logging.error(f"Unexpected error loading Kestrel results: {e}")
-        return pd.DataFrame({"Sample": [sample_id]})
-
-
-def load_advntr_results(advntr_result_file):
-    """
-    Load and process adVNTR genotyping results.
-
-    The primary file is expected to be "output_adVNTR_result.tsv". If that file
-    does not exist, the sample is marked as Not Performed.
-
-    - If the TSV exists and contains data rows, the sample is marked as Positive.
-    - If the TSV exists but contains no data rows (only header), the sample is marked as Negative.
-    - If no file exists, the sample is marked as Not Performed.
-
-    Parameters
-    ----------
-    advntr_result_file : str or Path
-        Path to the adVNTR result file (primary TSV).
-
-    Returns
-    -------
-    tuple
-        A tuple (pandas.DataFrame, bool) where:
-        - The DataFrame contains columns: Sample, VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue, AdvntrState.
-        - The bool is True if the TSV was found (even if negative), False if no file.
-    """
-    cols = ["VID", "Variant", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
-    out_cols = ["Sample"] + cols + ["AdvntrState"]
-    sample_id = Path(advntr_result_file).parents[1].name
-    logging.info(f"Loading adVNTR results from {advntr_result_file}")
-
-    primary_file = Path(advntr_result_file).with_name("output_adVNTR_result.tsv")
-    if not primary_file.exists():
-        logging.warning(
-            f"Primary adVNTR TSV not found for sample {sample_id}. Marking as Not Performed."
-        )
-        data = {
-            "Sample": [sample_id],
-            "VID": [""],
-            "Variant": ["Not Performed"],
-            "NumberOfSupportingReads": [float("nan")],
-            "MeanCoverage": [float("nan")],
-            "Pvalue": [float("nan")],
-            "AdvntrState": ["Not Performed"],
-        }
-        return pd.DataFrame(data, columns=out_cols), False
-
-    try:
-        df = pd.read_csv(primary_file, sep="\t", comment="#")
-        # If the file has no data rows (only header), mark as Negative.
-        if df.empty or len(df) == 0:
-            logging.debug(
-                "TSV file exists but has no data rows; marking sample as Negative."
-            )
-            data = {
-                "Sample": [sample_id],
-                "VID": [""],
-                "Variant": ["Negative"],
-                "NumberOfSupportingReads": [float("nan")],
-                "MeanCoverage": [float("nan")],
-                "Pvalue": [float("nan")],
-                "AdvntrState": ["Negative"],
-            }
-            return pd.DataFrame(data, columns=out_cols), True
-        else:
-            df["Sample"] = sample_id
-            df["AdvntrState"] = "Positive"
-            df = df[out_cols]
-            return df, True
-    except pd.errors.ParserError as e:
-        logging.error(f"Failed to parse adVNTR result file: {e}")
-        data = {
-            "Sample": [sample_id],
-            "VID": [""],
-            "Variant": ["Negative"],
-            "NumberOfSupportingReads": [float("nan")],
-            "MeanCoverage": [float("nan")],
-            "Pvalue": [float("nan")],
-            "AdvntrState": ["Negative"],
-        }
-        return pd.DataFrame(data, columns=out_cols), True
-    except Exception as e:
-        logging.error(f"Unexpected error occurred while loading adVNTR results: {e}")
-        data = {
-            "Sample": [sample_id],
-            "VID": [""],
-            "Variant": ["Negative"],
-            "NumberOfSupportingReads": [float("nan")],
-            "MeanCoverage": [float("nan")],
-            "Pvalue": [float("nan")],
-            "AdvntrState": ["Negative"],
-        }
-        return pd.DataFrame(data, columns=out_cols), True
-
-
-def find_results_files(root_dir, filenames):
-    """
-    Recursively find all specified files in a directory tree.
-
-    This function searches recursively through all subdirectories for the specified filenames.
-
-    Parameters
-    ----------
-    root_dir : str or Path
-        Root directory to start the search.
-    filenames : list of str
-        List of filenames to search for.
-
-    Returns
-    -------
-    list
-        List of Path objects matching any of the filenames.
-    """
-    logging.info(f"Searching for {filenames} in directory {root_dir}")
-    result_files = []
-    for root, _, files in os.walk(root_dir):
-        logging.debug(f"Checking directory: {root}")
-        for filename in filenames:
-            if filename in files:
-                file_path = Path(root) / filename
-                logging.info(f"Found {filename} in {file_path}")
-                result_files.append(file_path)
-    return result_files
-
-
-def load_results_from_dirs(input_dirs, filenames, file_loader):
-    """
-    Load results from all matching files across multiple directories.
-
-    If loading adVNTR and no files are found in a given directory, this function
-    attempts to return one row per subfolder, treating each as a sample. If there
-    are no subfolders, it falls back to one row for the directory itself.
-
-    Parameters
-    ----------
-    input_dirs : list
-        List of directories to search.
-    filenames : list of str
-        List of result filenames to search for.
-    file_loader : function
-        Function to load and process each file.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Concatenated DataFrame of all loaded results.
-    """
-    dfs = []  # Ensure dfs is defined
-    loading_advntr = any("advntr" in filename.lower() for filename in filenames)
-    if loading_advntr:
-        cols = ["VID", "Variant", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"]
-
-        def empty_advntr_row(sample_id):
-            data = {
-                "Sample": [sample_id],
-                "VID": [""],
-                "Variant": ["Not Performed"],
-                "NumberOfSupportingReads": [float("nan")],
-                "MeanCoverage": [float("nan")],
-                "Pvalue": [float("nan")],
-                "AdvntrState": ["Not Performed"],
-            }
-            return pd.DataFrame(data, columns=["Sample"] + cols + ["AdvntrState"])
-
-    for input_dir in input_dirs:
-        logging.info(f"Processing input directory: {input_dir}")
-        result_files = find_results_files(input_dir, filenames)
-        if not result_files:
-            if loading_advntr:
-                has_kestrel = (Path(input_dir) / "kestrel").is_dir()
-                if has_kestrel:
-                    sample_id = Path(input_dir).name
-                    dfs.append(empty_advntr_row(sample_id))
-                else:
-                    logging.debug(
-                        f"Directory {input_dir} does not appear to be a sample directory. Skipping."
-                    )
-            else:
-                sample_id = Path(input_dir).name
-                dfs.append(
-                    pd.DataFrame(
-                        {
-                            "Sample": [sample_id],
-                            "Message": [
-                                f"No {filenames} results found for this sample"
-                            ],
-                        }
-                    )
-                )
-        else:
-            for file in result_files:
-                logging.info(f"Attempting to load file: {file}")
-                result = file_loader(file)
-                if isinstance(result, tuple):
-                    df = result[0]
-                else:
-                    df = result
-                dfs.append(df)
-        logging.info(
-            f"Loaded {len(result_files)} files for {filenames} from {input_dir}"
-        )
-    if not dfs:
-        logging.warning(
-            f"No data found at all for {filenames}. Returning empty DataFrame."
-        )
-        return pd.DataFrame()
-    return pd.concat(dfs, ignore_index=True)
 
 
 def encode_image_to_base64(image_path):
@@ -426,6 +145,158 @@ def generate_donut_chart(
             return ""
 
 
+def load_report_config():
+    """
+    Loads the report-specific configuration from 'report_config.json'
+    located in the same directory as this script.
+
+    Returns:
+        dict: The loaded report configuration dictionary.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(script_dir, "report_config.json")
+    try:
+        with open(config_path, "r") as f:
+            report_config = json.load(f)
+        logging.info("Loaded report config from %s", config_path)
+        return report_config
+    except Exception as e:
+        logging.error("Failed to load report config: %s", e)
+        return {}
+
+
+def compute_algorithm_result(df, logic_config):
+    """
+    Computes the algorithm result (for Kestrel or adVNTR) based on the provided logic configuration.
+    Iterates over each rule in logic_config["rules"]. For each condition, compares the plain text value
+    from the DataFrame (using the column name) with the expected value.
+
+    Supported operators are: "==", "!=", "in", and "not in". If expected is a list, membership is checked.
+    Returns the rule's "result" if matched; otherwise returns logic_config["default"].
+
+    Args:
+        df (pandas.DataFrame): DataFrame containing the results.
+        logic_config (dict): Configuration dictionary with rules.
+
+    Returns:
+        str: The computed algorithm result.
+    """
+    if df.empty:
+        logging.debug("DataFrame is empty; returning default result.")
+        return logic_config.get("default", "none")
+    row = df.iloc[0]
+    logging.debug("Data row for evaluation: %s", row.to_dict())
+    logging.debug("Logic configuration: %s", logic_config)
+    for idx, rule in enumerate(logic_config.get("rules", [])):
+        logging.debug("Evaluating rule %s: %s", idx, rule)
+        conditions = rule.get("conditions", {})
+        rule_matches = True
+        for col, expected in conditions.items():
+            if col not in row:
+                logging.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
+                rule_matches = False
+                break
+            actual = str(row.get(col, "")).strip()
+            logging.debug(
+                "Rule %s, column '%s': actual='%s', expected='%s'",
+                idx,
+                col,
+                actual,
+                expected,
+            )
+            if isinstance(expected, dict):
+                op = expected.get("operator")
+                exp_val = expected.get("value")
+                if op == "==":
+                    if actual != str(exp_val).strip():
+                        logging.debug(
+                            "Rule %s: Condition '%s == %s' not met (actual='%s').",
+                            idx,
+                            col,
+                            exp_val,
+                            actual,
+                        )
+                        rule_matches = False
+                        break
+                elif op == "!=":
+                    if actual == str(exp_val).strip():
+                        logging.debug(
+                            "Rule %s: Condition '%s != %s' not met (actual='%s').",
+                            idx,
+                            col,
+                            exp_val,
+                            actual,
+                        )
+                        rule_matches = False
+                        break
+                elif op == "in":
+                    if not isinstance(exp_val, list):
+                        exp_val = [exp_val]
+                    if actual not in exp_val:
+                        logging.debug(
+                            "Rule %s: Condition '%s in %s' not met (actual='%s').",
+                            idx,
+                            col,
+                            exp_val,
+                            actual,
+                        )
+                        rule_matches = False
+                        break
+                elif op == "not in":
+                    if not isinstance(exp_val, list):
+                        exp_val = [exp_val]
+                    if actual in exp_val:
+                        logging.debug(
+                            "Rule %s: Condition '%s not in %s' not met (actual='%s').",
+                            idx,
+                            col,
+                            exp_val,
+                            actual,
+                        )
+                        rule_matches = False
+                        break
+                else:
+                    logging.debug(
+                        "Rule %s: Unsupported operator '%s' for column '%s'.",
+                        idx,
+                        op,
+                        col,
+                    )
+                    rule_matches = False
+                    break
+            else:
+                if isinstance(expected, list):
+                    if actual not in expected:
+                        logging.debug(
+                            "Rule %s: Condition '%s in %s' not met (actual='%s').",
+                            idx,
+                            col,
+                            expected,
+                            actual,
+                        )
+                        rule_matches = False
+                        break
+                else:
+                    if actual != str(expected):
+                        logging.debug(
+                            "Rule %s: Condition '%s == %s' not met (actual='%s').",
+                            idx,
+                            col,
+                            expected,
+                            actual,
+                        )
+                        rule_matches = False
+                        break
+        if rule_matches:
+            result = rule.get("result")
+            logging.debug("Rule %s PASSED; returning result: %s", idx, result)
+            return result
+        else:
+            logging.debug("Rule %s did not pass.", idx)
+    logging.debug("No rule matched; returning default result.")
+    return logic_config.get("default", "none")
+
+
 def generate_cohort_summary_report(
     output_dir, kestrel_df, advntr_df, summary_file, config
 ):
@@ -433,8 +304,7 @@ def generate_cohort_summary_report(
     Generate the cohort summary report combining Kestrel and adVNTR results.
 
     This function creates summary statistics, generates donut charts for each
-    data type, and then renders a Jinja2 template to produce a final HTML
-    report.
+    data type, and then renders a Jinja2 template to produce a final HTML report.
 
     Parameters
     ----------
@@ -457,53 +327,52 @@ def generate_cohort_summary_report(
     plots_dir = Path(output_dir) / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    if "Confidence" in kestrel_df.columns:
-        try:
-            kestrel_df_conf = kestrel_df["Confidence"].fillna("")
-            kestrel_positive = len(
-                kestrel_df[
-                    kestrel_df_conf.str.contains(
-                        "Low_Precision|High_Precision\\*?", na=False
-                    )
-                ]
-            )
-            kestrel_negative = len(
-                kestrel_df[
-                    ~kestrel_df_conf.str.contains(
-                        "Low_Precision|High_Precision\\*?", na=False
-                    )
-                ]
-            )
-        except Exception as e:
-            logging.error(f"Error processing 'Confidence' values: {e}")
-            kestrel_positive = 0
-            kestrel_negative = 0
-    else:
-        logging.warning(
-            "No 'Confidence' column found in Kestrel results. Setting positive/negative counts to 0."
+    # Load report-specific config to get algorithm logic
+    report_cfg = load_report_config()
+    kestrel_logic = report_cfg.get("algorithm_logic", {}).get("kestrel", {})
+    advntr_logic = report_cfg.get("algorithm_logic", {}).get("advntr", {})
+
+    # Group results by sample and compute per-sample algorithm result.
+    if not kestrel_df.empty and "Sample" in kestrel_df.columns:
+        kestrel_sample_results = kestrel_df.groupby("Sample").apply(
+            lambda g: compute_algorithm_result(g, kestrel_logic)
         )
-        kestrel_positive = 0
-        kestrel_negative = 0
+    else:
+        kestrel_sample_results = pd.Series(dtype=str)
+
+    if not advntr_df.empty and "Sample" in advntr_df.columns:
+        advntr_sample_results = advntr_df.groupby("Sample").apply(
+            lambda g: compute_algorithm_result(g, advntr_logic)
+        )
+    else:
+        advntr_sample_results = pd.Series(dtype=str)
+
+    # Aggregate per-sample results for donut plots.
+    kestrel_positive = sum(
+        1
+        for r in kestrel_sample_results
+        if r
+        in [
+            "High_Precision",
+            "High_Precision_flagged",
+            "Low_Precision",
+            "Low_Precision_flagged",
+        ]
+    )
+    kestrel_negative = len(kestrel_sample_results) - kestrel_positive
+
+    if not advntr_df.empty:
+        advntr_positive = sum(
+            1 for r in advntr_sample_results if r in ["positive", "positive flagged"]
+        )
+        advntr_negative = sum(1 for r in advntr_sample_results if r == "negative")
+        advntr_not_performed = 0
+    else:
+        advntr_positive = 0
+        advntr_negative = 0
+        advntr_not_performed = 0
 
     total_kestrel = kestrel_positive + kestrel_negative
-
-    # Count advntr states based on the "AdvntrState" column.
-    advntr_positive = (
-        len(advntr_df[advntr_df["AdvntrState"] == "Positive"])
-        if "AdvntrState" in advntr_df.columns
-        else 0
-    )
-    advntr_negative = (
-        len(advntr_df[advntr_df["AdvntrState"] == "Negative"])
-        if "AdvntrState" in advntr_df.columns
-        else 0
-    )
-    advntr_not_performed = (
-        len(advntr_df[advntr_df["AdvntrState"] == "Not Performed"])
-        if "AdvntrState" in advntr_df.columns
-        else 0
-    )
-
     total_advntr = advntr_positive + advntr_negative + advntr_not_performed
 
     color_list = config.get("visualization", {}).get(
@@ -555,6 +424,63 @@ def generate_cohort_summary_report(
         interactive=True,
     )
 
+    # Style the Kestrel table: apply cell formatting for the "Confidence" column.
+    if "Confidence" in kestrel_df.columns:
+        kestrel_df["Confidence"] = kestrel_df["Confidence"].apply(
+            lambda x: (
+                f'<span style="color:orange;font-weight:bold;">{x}</span>'
+                if x == "Low_Precision"
+                else (
+                    f'<span style="color:red;font-weight:bold;">{x}</span>'
+                    if x in ["High_Precision", "High_Precision*"]
+                    else x
+                )
+            )
+        )
+
+    # Reorder Kestrel DataFrame columns: place Sample first then the remaining columns.
+    desired_kestrel_cols = [
+        "Sample",
+        "Motif",
+        "Variant",
+        "POS",
+        "REF",
+        "ALT",
+        "Motif_sequence",
+        "Estimated_Depth_AlternateVariant",
+        "Estimated_Depth_Variant_ActiveRegion",
+        "Depth_Score",
+        "Confidence",
+        "Flag",
+    ]
+    kestrel_columns = [col for col in desired_kestrel_cols if col in kestrel_df.columns]
+    kestrel_html = kestrel_df[kestrel_columns].to_html(
+        classes="table table-bordered table-striped hover compact order-column table-sm",
+        index=False,
+        escape=False,
+    )
+
+    # Reorder advntr DataFrame columns: ensure Sample is first.
+    desired_advntr_cols = [
+        "Sample",
+        "VID",
+        "Variant",
+        "NumberOfSupportingReads",
+        "MeanCoverage",
+        "Pvalue",
+        "RU",
+        "POS",
+        "REF",
+        "ALT",
+        "Flag",
+    ]
+    advntr_columns = [col for col in desired_advntr_cols if col in advntr_df.columns]
+    advntr_html = advntr_df[advntr_columns].to_html(
+        classes="table table-bordered table-striped hover compact order-column table-sm",
+        index=False,
+        escape=False,
+    )
+
     template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
@@ -565,12 +491,8 @@ def generate_cohort_summary_report(
 
     context = {
         "report_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "kestrel_positive": kestrel_df.to_html(
-            classes="table table-bordered table-striped", index=False, escape=False
-        ),
-        "advntr_positive": advntr_df.to_html(
-            classes="table table-bordered table-striped", index=False, escape=False
-        ),
+        "kestrel_positive": kestrel_html,
+        "advntr_positive": advntr_html,
         "kestrel_plot_base64": kestrel_plot_base64,
         "advntr_plot_base64": advntr_plot_base64,
         "kestrel_plot_interactive": kestrel_plot_html,
@@ -594,15 +516,54 @@ def generate_cohort_summary_report(
         raise
 
 
+def load_pipeline_summary_for_sample(sample_dir):
+    """
+    Load the pipeline_summary.json from a sample directory and extract Kestrel and adVNTR data.
+
+    For the adVNTR step, the algorithm result will later be computed based on the logic
+    defined in report_config.json.
+
+    Parameters
+    ----------
+    sample_dir : str or Path
+        Directory containing the pipeline_summary.json file.
+
+    Returns
+    -------
+    tuple
+        Two lists: (kestrel_data, advntr_data). Each is a list of dictionaries extracted
+        from the pipeline summary. If the file is not found or an error occurs, returns two empty lists.
+    """
+    sample_dir = Path(sample_dir)
+    summary_path = sample_dir / "pipeline_summary.json"
+    if not summary_path.exists():
+        logging.warning(f"Pipeline summary file not found in {sample_dir}")
+        return [], []
+    try:
+        with open(summary_path, "r") as f:
+            summary = json.load(f)
+        kestrel_data = []
+        advntr_data = []
+        for step in summary.get("steps", []):
+            if step.get("step") == "Kestrel Genotyping":
+                kestrel_data = step.get("parsed_result", {}).get("data", [])
+            elif step.get("step") == "adVNTR Genotyping":
+                advntr_data = step.get("parsed_result", {}).get("data", [])
+        return kestrel_data, advntr_data
+    except Exception as e:
+        logging.error(f"Error loading pipeline summary from {sample_dir}: {e}")
+        return [], []
+
+
 def aggregate_cohort(input_paths, output_dir, summary_file, config):
     """
     Aggregate outputs from multiple runs into a single summary file.
 
-    This function processes each input path, which can be either a directory
-    or a zip file. Zip files are extracted to temporary directories for
-    processing. Only the top-level sample directories within extracted zip
-    files are processed to prevent internal subdirectories from being treated
-    as separate samples.
+    This function processes each input path, which can be either a directory or a zip file.
+    Zip files are extracted to temporary directories for processing.
+    Instead of parsing individual result files, this version exclusively loads the pipeline_summary.json
+    from each sample directory (found either at the top level or recursively in subfolders)
+    to construct the cohort tables and donut plots.
 
     Parameters
     ----------
@@ -611,9 +572,9 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
     output_dir : str or Path
         Output directory for the aggregated summary report.
     summary_file : str
-        Name of the summary report file.
+        Name of the cohort summary report file.
     config : dict
-        Configuration dictionary containing paths and other settings.
+        Configuration dictionary containing paths and settings.
 
     Returns
     -------
@@ -621,110 +582,110 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
         Writes the cohort summary report to the specified output directory.
     """
     temp_dirs = []
-    processed_dirs = []
+    processed_dirs = set()  # use a set to avoid duplicate directories
 
-    try:
-        for path_str in input_paths:
-            path = Path(path_str)
-            if not path.exists():
-                logging.warning(
-                    f"Input path does not exist and will be skipped: {path}"
-                )
-                continue
-            if path.is_dir():
-                logging.info(f"Adding directory to processing list: {path}")
-                processed_dirs.append(path)
-            elif zipfile.is_zipfile(path):
-                logging.info(f"Extracting zip file: {path}")
-                temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
-                try:
-                    with zipfile.ZipFile(path, "r") as zip_ref:
-                        zip_ref.extractall(temp_dir)
-                    temp_path = Path(temp_dir)
-                    logging.info(
-                        f"Extracted zip file to temporary directory: {temp_path}"
-                    )
-
-                    # **Modification Starts Here**
-                    # Identify sample directories within the extracted zip
-                    # Assuming that each sample directory contains both 'kestrel/' and 'advntr/' subdirectories
-                    sample_dirs = [
-                        p
-                        for p in temp_path.iterdir()
-                        if p.is_dir()
-                        and (p / "kestrel").is_dir()
-                        and (p / "advntr").is_dir()
-                    ]
-
-                    if not sample_dirs:
-                        logging.warning(
-                            f"No sample directories found in extracted zip file: {path}"
-                        )
-                        if (temp_path / "kestrel").is_dir() and (
-                            temp_path / "advntr"
-                        ).is_dir():
-                            processed_dirs.append(temp_path)
-                            logging.info(
-                                f"Added top-level directory as a single sample from zip file: {path}"
-                            )
-                        else:
-                            logging.error(
-                                f"Extracted zip file does not contain valid sample directories: {path}"
-                            )
-                    else:
-                        processed_dirs.extend(sample_dirs)
-                        logging.info(
-                            f"Added {len(sample_dirs)} sample directories from zip file: {path}"
-                        )
-                    # **Modification Ends Here**
-
-                    temp_dirs.append(temp_dir)
-                except zipfile.BadZipFile as e:
-                    logging.error(f"Bad zip file {path}: {e}")
-                    shutil.rmtree(temp_dir)
-                except Exception as e:
-                    logging.error(f"Error extracting zip file {path}: {e}")
-                    shutil.rmtree(temp_dir)
+    for path_str in input_paths:
+        path = Path(path_str)
+        if not path.exists():
+            logging.warning(f"Input path does not exist and will be skipped: {path}")
+            continue
+        if path.is_dir():
+            if (path / "pipeline_summary.json").exists():
+                logging.info(f"Found pipeline_summary.json in {path}")
+                processed_dirs.add(path)
             else:
-                logging.warning(
-                    f"Unsupported file type (not a directory or zip): {path}"
-                )
-
-        if not processed_dirs:
-            logging.error(
-                "No valid input directories or zip files found for cohort aggregation."
-            )
-            return
-
-        # Load Kestrel results
-        kestrel_df = load_results_from_dirs(
-            input_dirs=processed_dirs,
-            filenames=["kestrel_result.tsv"],
-            file_loader=load_kestrel_results,
-        )
-
-        # Load adVNTR results with the correct filename (only the primary TSV is used)
-        advntr_filenames = ["output_adVNTR_result.tsv"]
-        advntr_df = load_results_from_dirs(
-            input_dirs=processed_dirs,
-            filenames=advntr_filenames,
-            file_loader=load_advntr_results,
-        )
-
-        # Generate the cohort summary report
-        generate_cohort_summary_report(
-            output_dir=output_dir,
-            kestrel_df=kestrel_df,
-            advntr_df=advntr_df,
-            summary_file=summary_file,
-            config=config,
-        )
-
-    finally:
-        # Cleanup temporary directories
-        for temp_dir in temp_dirs:
+                found = False
+                for summary_file_path in path.rglob("pipeline_summary.json"):
+                    sample_dir = summary_file_path.parent
+                    logging.info(f"Found pipeline_summary.json in {sample_dir}")
+                    processed_dirs.add(sample_dir)
+                    found = True
+                if not found:
+                    logging.warning(
+                        f"No pipeline_summary.json found in directory {path}"
+                    )
+        elif zipfile.is_zipfile(path):
+            logging.info(f"Extracting zip file: {path}")
+            temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
             try:
+                with zipfile.ZipFile(path, "r") as zip_ref:
+                    zip_ref.extractall(temp_dir)
+                temp_path = Path(temp_dir)
+                if (temp_path / "pipeline_summary.json").exists():
+                    logging.info(f"Found pipeline_summary.json in {temp_path}")
+                    processed_dirs.add(temp_path)
+                else:
+                    found = False
+                    for summary_file_path in temp_path.rglob("pipeline_summary.json"):
+                        sample_dir = summary_file_path.parent
+                        logging.info(f"Found pipeline_summary.json in {sample_dir}")
+                        processed_dirs.add(sample_dir)
+                        found = True
+                    if not found:
+                        logging.warning(
+                            f"No pipeline_summary.json found in extracted zip file: {path}"
+                        )
+                temp_dirs.append(temp_dir)
+            except zipfile.BadZipFile as e:
+                logging.error(f"Bad zip file {path}: {e}")
                 shutil.rmtree(temp_dir)
-                logging.debug(f"Cleaned up temporary directory: {temp_dir}")
             except Exception as e:
-                logging.error(f"Failed to remove temporary directory {temp_dir}: {e}")
+                logging.error(f"Error extracting zip file {path}: {e}")
+                shutil.rmtree(temp_dir)
+        else:
+            logging.warning(f"Unsupported file type (not a directory or zip): {path}")
+
+    if not processed_dirs:
+        logging.error(
+            "No valid input directories or zip files found for cohort aggregation."
+        )
+        return
+
+    kestrel_list = []
+    advntr_list = []
+    for sample_dir in processed_dirs:
+        sample_id = Path(sample_dir).name
+        logging.info(f"Processing sample directory: {sample_dir}")
+        k_data, a_data = load_pipeline_summary_for_sample(sample_dir)
+        if k_data:
+            for entry in k_data:
+                entry["Sample"] = sample_id
+            kestrel_list.extend(k_data)
+        else:
+            logging.warning(
+                f"No Kestrel data found in pipeline summary for sample {sample_id}."
+            )
+        if a_data:
+            for entry in a_data:
+                entry["Sample"] = sample_id
+            advntr_list.extend(a_data)
+        else:
+            logging.warning(
+                f"No adVNTR data found in pipeline summary for sample {sample_id}."
+            )
+
+    if kestrel_list:
+        kestrel_df = pd.DataFrame(kestrel_list)
+    else:
+        logging.warning("No Kestrel data found in any sample.")
+        kestrel_df = pd.DataFrame()
+    if advntr_list:
+        advntr_df = pd.DataFrame(advntr_list)
+    else:
+        logging.warning("No adVNTR data found in any sample.")
+        advntr_df = pd.DataFrame()
+
+    generate_cohort_summary_report(
+        output_dir=output_dir,
+        kestrel_df=kestrel_df,
+        advntr_df=advntr_df,
+        summary_file=summary_file,
+        config=config,
+    )
+
+    for temp_dir in temp_dirs:
+        try:
+            shutil.rmtree(temp_dir)
+            logging.debug(f"Cleaned up temporary directory: {temp_dir}")
+        except Exception as e:
+            logging.error(f"Failed to remove temporary directory {temp_dir}: {e}")
