@@ -59,7 +59,8 @@ setup(
         "vntyper.scripts": [
             "kestrel_config.json",
             "install_references_config.json",
-        ],  # Include kestrel_config.json and install_references_config.json
+            "report_config.json",
+        ],  # Include kestrel_config.json, install_references_config.json, and report_config.json
         "vntyper": [
             "config.json",  # Include config.json in the vntyper package
             "templates/report_template.html",  # Include report_template.html
