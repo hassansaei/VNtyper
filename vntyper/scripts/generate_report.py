@@ -441,6 +441,8 @@ def generate_summary_report(
     Instead of parsing results from subfolders, the report now loads the output summary file (JSON)
     and renders the report based on that content. The main configuration is passed in via 'config'.
     This module additionally loads its own report-specific configuration from report_config.json.
+    The header information extracted from the BAM Header Parsing step (including warning,
+    alignment_pipeline, assembly_text, and assembly_contig) is included in the report context.
 
     Args:
         output_dir (str): Output directory for the report.
@@ -501,6 +503,19 @@ def generate_summary_report(
     # Extract input_files and pipeline_version from the summary.
     input_files = pipeline_summary.get("input_files", {})
     pipeline_version = pipeline_summary.get("version", "unknown")
+
+    # Extract header info from BAM Header Parsing step (if available)
+    header_info = {}
+    for step in pipeline_summary.get("steps", []):
+        if step.get("step") == "BAM Header Parsing":
+            header_info = step.get("parsed_result", {})
+            break
+
+    # Extract individual header elements robustly.
+    header_warning = header_info.get("warning", "")
+    alignment_pipeline = header_info.get("alignment_pipeline", "")
+    assembly_text = header_info.get("assembly_text", "")
+    assembly_contig = header_info.get("assembly_contig", "")
 
     # Extract mean VNTR coverage from the "Coverage Calculation" step.
     mean_vntr_coverage = None
@@ -771,6 +786,10 @@ def generate_summary_report(
         "report_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "input_files": input_files,
         "pipeline_version": pipeline_version,
+        "header_warning": header_warning,
+        "alignment_pipeline": alignment_pipeline,
+        "assembly_text": assembly_text,
+        "assembly_contig": assembly_contig,
         "mean_vntr_coverage": (
             mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"
         ),
