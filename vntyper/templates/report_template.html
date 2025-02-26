@@ -22,36 +22,29 @@
             position: sticky;
             top: 0;
         }
-
         tr {
             cursor: default;
         }
-
         tr:nth-child(even) {
             background-color: #f2f2f2;
         }
-
         tr:hover {
             background-color: lightblue;
         }
-
         th {
             background-color: lightskyblue;
             color: white;
             cursor: pointer;
         }
-
         .selected {
             background-color: lightblue !important;
             outline: solid thin darkblue !important;
         }
-
         /* Custom table cell style with character limit */
         .table td, .table th {
             text-align: center;
             word-break: break-word;
         }
-
         .table td {
             white-space: nowrap;
             overflow: hidden;
@@ -59,7 +52,6 @@
             max-width: 150px;
             cursor: pointer;
         }
-
         .table td:hover {
             overflow: visible;
             white-space: normal;
@@ -69,20 +61,16 @@
             background-color: #fff;
             border: 1px solid #ddd;
         }
-
         th {
             white-space: pre-wrap;
         }
-
         /* Accordion style */
         .wrap-collabsible {
             margin-bottom: 1.2rem;
         }
-
         input[type='checkbox'] {
             display: none;
         }
-
         .lbl-toggle {
             display: block;
             font-weight: bold;
@@ -97,11 +85,9 @@
             border-radius: 7px;
             transition: all 0.25s ease-out;
         }
-
         .lbl-toggle:hover {
             color: blue;
         }
-
         .lbl-toggle::before {
             content: ' ';
             display: inline-block;
@@ -113,26 +99,21 @@
             transform: translateY(-2px);
             transition: transform .2s ease-out;
         }
-
         .toggle:checked + .lbl-toggle::before {
             transform: rotate(90deg) translateX(-3px);
         }
-
         .collapsible-content {
             max-height: 0px;
             overflow: auto;
             transition: max-height .25s ease-in-out;
         }
-
         .toggle:checked + .lbl-toggle + .collapsible-content {
             max-height: 350px;
         }
-
         .toggle:checked + .lbl-toggle {
             border-bottom-right-radius: 0;
             border-bottom-left-radius: 0;
         }
-
         .collapsible-content .content-inner {
             background: rgba(250, 224, 66, .2);
             border-bottom: 1px solid rgba(250, 224, 66, .45);
@@ -140,15 +121,23 @@
             border-bottom-right-radius: 7px;
             padding: .5rem 1rem;
         }
-
         .summary-box {
             border: 2px solid #666;
             padding: 8px;
             margin: 10px 0;
         }
-
         .summary-positive {
             font-weight: bold;
+        }
+        /* Style for header info section */
+        .header-info {
+            margin-bottom: 1em;
+            padding: 0.5em;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+        .header-info p {
+            margin: 0.5em 0;
         }
     </style>
 
@@ -169,6 +158,25 @@
                     {{ input_files.bam }}
                 {% endif %}
             </p>
+        {% endif %}
+
+        <!-- Display Combined Header Information if available -->
+        {% if alignment_pipeline or assembly_text or assembly_contig or header_warning %}
+            <div class="header-info">
+                {% if alignment_pipeline %}
+                    <p><strong>Alignment pipeline:</strong> {{ alignment_pipeline }}</p>
+                {% endif %}
+                {% if assembly_text %}
+                    <p><strong>Assembly detected from BAM header:</strong> {{ assembly_text }}
+                        {% if assembly_contig %}
+                            (Contig: {{ assembly_contig }})
+                        {% endif %}
+                    </p>
+                {% endif %}
+                {% if header_warning %}
+                    <p style="color: red;"><strong>Warning:</strong> {{ header_warning }}</p>
+                {% endif %}
+            </div>
         {% endif %}
 
         <!-- Coverage Section -->
