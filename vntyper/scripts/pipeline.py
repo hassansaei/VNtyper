@@ -28,12 +28,14 @@ from vntyper.scripts.utils import (
 )
 from vntyper.version import __version__ as VERSION
 
-# Import our new summary functions (including end_summary)
+# Import our new summary functions (including end_summary and CSV/TSV conversion functions)
 from vntyper.scripts.summary import (
     start_summary,
     record_step,
     write_summary,
     end_summary,
+    convert_summary_to_csv,
+    convert_summary_to_tsv,
 )
 
 
@@ -82,6 +84,7 @@ def run_pipeline(
     log_level=logging.INFO,
     sample_name=None,
     log_file=None,
+    summary_formats=None,  # New parameter: list of additional summary output formats (e.g., ['csv', 'tsv'])
 ):
     """
     Main pipeline function that orchestrates the genotyping process.
@@ -107,6 +110,9 @@ def run_pipeline(
         bed_file (Path, optional): BED file for MUC1 analysis.
         log_level (int, optional): Logging level.
         sample_name (str, optional): Sample name for labeling results.
+        log_file (str, optional): Path to the log file.
+        summary_formats (list, optional): Additional summary output formats to generate.
+            Supported formats are 'csv' and 'tsv'. JSON summary is always generated.
 
     Raises:
         ValueError: Various input validation errors.
@@ -589,7 +595,6 @@ def run_pipeline(
             logging.info("adVNTR module not included. Skipping adVNTR genotyping.")
 
         # --- Generate Summary Report and Archiving ---
-        # (These steps are still executed but are not recorded in the summary.)
         logging.info("Generating summary report.")
         report_file = "summary_report.html"
         template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
@@ -644,6 +649,17 @@ def run_pipeline(
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         write_summary(summary, summary_file_path)
         logging.info(f"Pipeline summary written to: {summary_file_path}")
+
+        # Generate additional summary output formats if specified
+        if summary_formats:
+            if "csv" in summary_formats:
+                csv_path = os.path.join(output_dir, "pipeline_summary.csv")
+                convert_summary_to_csv(summary, csv_path)
+                logging.info(f"Pipeline summary CSV written to: {csv_path}")
+            if "tsv" in summary_formats:
+                tsv_path = os.path.join(output_dir, "pipeline_summary.tsv")
+                convert_summary_to_tsv(summary, tsv_path)
+                logging.info(f"Pipeline summary TSV written to: {tsv_path}")
 
     except Exception as exc:
         logging.error(f"An error occurred: {exc}", exc_info=True)
