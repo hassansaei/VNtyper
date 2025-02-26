@@ -264,6 +264,13 @@ def main():
         default=None,
         help="Name of the cohort summary report file.",
     )
+    # New argument for cohort: additional output formats (comma-separated)
+    parser_cohort.add_argument(
+        "--summary-formats",
+        type=str,
+        default="",
+        help="Comma-separated list of additional summary output formats to generate (supported: csv, tsv, json). HTML is always generated.",
+    )
 
     # Subcommand: install-references
     parser_install = subparsers.add_parser(
@@ -650,6 +657,7 @@ def main():
             output_dir=Path(args.output_dir),
             summary_file=args.summary_file,
             config=config,
+            additional_formats=args.summary_formats,  # Pass the new parameter
         )
 
     #

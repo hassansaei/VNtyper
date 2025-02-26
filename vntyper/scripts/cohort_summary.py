@@ -555,7 +555,9 @@ def load_pipeline_summary_for_sample(sample_dir):
         return [], []
 
 
-def aggregate_cohort(input_paths, output_dir, summary_file, config):
+def aggregate_cohort(
+    input_paths, output_dir, summary_file, config, additional_formats=""
+):
     """
     Aggregate outputs from multiple runs into a single summary file.
 
@@ -564,6 +566,9 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
     Instead of parsing individual result files, this version exclusively loads the pipeline_summary.json
     from each sample directory (found either at the top level or recursively in subfolders)
     to construct the cohort tables and donut plots.
+
+    Additionally, if additional output formats are specified, the aggregated cohort
+    data for Kestrel and adVNTR are exported as CSV, TSV, and/or JSON files.
 
     Parameters
     ----------
@@ -575,6 +580,9 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
         Name of the cohort summary report file.
     config : dict
         Configuration dictionary containing paths and settings.
+    additional_formats : str, optional
+        Comma-separated list of additional output formats to generate
+        (supported: csv, tsv, json). HTML is always generated.
 
     Returns
     -------
@@ -689,3 +697,36 @@ def aggregate_cohort(input_paths, output_dir, summary_file, config):
             logging.debug(f"Cleaned up temporary directory: {temp_dir}")
         except Exception as e:
             logging.error(f"Failed to remove temporary directory {temp_dir}: {e}")
+
+    # Generate additional machine-readable cohort summaries if requested
+    # Supported formats: csv, tsv, json (comma-separated)
+    if additional_formats:
+        formats = [
+            fmt.strip().lower() for fmt in additional_formats.split(",") if fmt.strip()
+        ]
+        if not kestrel_df.empty:
+            if "csv" in formats:
+                csv_path = Path(output_dir) / "cohort_kestrel.csv"
+                kestrel_df.to_csv(csv_path, index=False)
+                logging.info(f"Cohort Kestrel CSV written to: {csv_path}")
+            if "tsv" in formats:
+                tsv_path = Path(output_dir) / "cohort_kestrel.tsv"
+                kestrel_df.to_csv(tsv_path, sep="\t", index=False)
+                logging.info(f"Cohort Kestrel TSV written to: {tsv_path}")
+            if "json" in formats:
+                json_path = Path(output_dir) / "cohort_kestrel.json"
+                kestrel_df.to_json(json_path, orient="records", indent=4)
+                logging.info(f"Cohort Kestrel JSON written to: {json_path}")
+        if not advntr_df.empty:
+            if "csv" in formats:
+                csv_path = Path(output_dir) / "cohort_advntr.csv"
+                advntr_df.to_csv(csv_path, index=False)
+                logging.info(f"Cohort adVNTR CSV written to: {csv_path}")
+            if "tsv" in formats:
+                tsv_path = Path(output_dir) / "cohort_advntr.tsv"
+                advntr_df.to_csv(tsv_path, sep="\t", index=False)
+                logging.info(f"Cohort adVNTR TSV written to: {tsv_path}")
+            if "json" in formats:
+                json_path = Path(output_dir) / "cohort_advntr.json"
+                advntr_df.to_json(json_path, orient="records", indent=4)
+                logging.info(f"Cohort adVNTR JSON written to: {json_path}")
