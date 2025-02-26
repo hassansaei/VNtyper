@@ -7,6 +7,10 @@ a parsed result (based on file type), and an MD5 checksum for the result file.
 
 Additionally, the summary object includes the vntyper version, input files,
 and the pipeline end time.
+
+The module also provides functions to convert the summary into CSV/TSV formats.
+These conversion functions now flatten nested data structures (e.g. parsed_result)
+so that all available data is expanded into individual columns.
 """
 
 import csv
@@ -228,22 +232,66 @@ def write_summary(summary, output_path):
         json.dump(summary, f, indent=4)
 
 
+def flatten_dict(d, parent_key="", sep="_"):
+    """
+    Recursively flattens a nested dictionary.
+
+    For any nested dictionary, keys are concatenated with the given separator.
+    For lists, if elements are dictionaries, each is flattened and then joined as a JSON string;
+    otherwise, list elements are joined by commas.
+
+    Args:
+        d (dict): The dictionary to flatten.
+        parent_key (str, optional): The base key string for recursive calls.
+        sep (str, optional): Separator between keys.
+
+    Returns:
+        dict: A flattened dictionary.
+    """
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_dict(v, new_key, sep=sep))
+        elif isinstance(v, list):
+            if all(isinstance(i, dict) for i in v):
+                # Flatten each dict and join the resulting JSON strings
+                flattened_list = [json.dumps(flatten_dict(i, "", sep=sep)) for i in v]
+                items[new_key] = "; ".join(flattened_list)
+            else:
+                items[new_key] = ", ".join(str(i) for i in v)
+        else:
+            items[new_key] = v
+    return items
+
+
 def convert_summary_to_csv(summary, output_csv_path):
     """
     Converts the summary steps into a CSV file.
 
     Each row in the CSV corresponds to a pipeline step.
+    The step records are flattened so that nested data (e.g. parsed_result)
+    are expanded into individual columns.
 
     Args:
         summary (dict): The summary dictionary.
         output_csv_path (str): Path where the CSV file will be written.
     """
-    keys = ["step", "start", "end", "command", "result_file", "file_type", "md5sum"]
+    # Flatten each step record
+    flattened_steps = [flatten_dict(step) for step in summary.get("steps", [])]
+
+    # Determine all keys across the flattened records
+    all_keys = set()
+    for record in flattened_steps:
+        all_keys.update(record.keys())
+    # Use a sorted list of keys for consistent column order
+    all_keys = sorted(list(all_keys))
+
     with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=keys)
+        writer = csv.DictWriter(csvfile, fieldnames=all_keys)
         writer.writeheader()
-        for step in summary.get("steps", []):
-            writer.writerow({key: step.get(key, "") for key in keys})
+        for record in flattened_steps:
+            writer.writerow({key: record.get(key, "") for key in all_keys})
 
 
 def convert_summary_to_tsv(summary, output_tsv_path):
@@ -251,17 +299,24 @@ def convert_summary_to_tsv(summary, output_tsv_path):
     Converts the summary steps into a TSV file.
 
     Each row in the TSV corresponds to a pipeline step.
+    The step records are flattened so that nested data (e.g. parsed_result)
+    are expanded into individual columns.
 
     Args:
         summary (dict): The summary dictionary.
         output_tsv_path (str): Path where the TSV file will be written.
     """
-    keys = ["step", "start", "end", "command", "result_file", "file_type", "md5sum"]
+    flattened_steps = [flatten_dict(step) for step in summary.get("steps", [])]
+    all_keys = set()
+    for record in flattened_steps:
+        all_keys.update(record.keys())
+    all_keys = sorted(list(all_keys))
+
     with open(output_tsv_path, "w", newline="", encoding="utf-8") as tsvfile:
-        writer = csv.DictWriter(tsvfile, fieldnames=keys, delimiter="\t")
+        writer = csv.DictWriter(tsvfile, fieldnames=all_keys, delimiter="\t")
         writer.writeheader()
-        for step in summary.get("steps", []):
-            writer.writerow({key: step.get(key, "") for key in keys})
+        for record in flattened_steps:
+            writer.writerow({key: record.get(key, "") for key in all_keys})
 
 
 # Example usage:

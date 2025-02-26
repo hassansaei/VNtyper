@@ -105,8 +105,7 @@ def main():
         "--extra-modules",
         action="append",
         default=[],
-        help="Optional extra modules to include (e.g., advntr, shark). "
-        "Can be repeated multiple times.",
+        help="Optional extra modules to include (e.g., advntr, shark). Can be repeated multiple times.",
     )
     parser_pipeline.add_argument(
         "--fastq1", type=str, help="Path to the first FASTQ file."
@@ -124,14 +123,12 @@ def main():
         type=str,
         choices=["hg19", "hg38"],
         default=None,
-        help="Specify the reference assembly used for the input "
-        "BAM/CRAM file alignment.",
+        help="Specify the reference assembly used for the input BAM/CRAM file alignment.",
     )
     parser_pipeline.add_argument(
         "--fast-mode",
         action="store_true",
-        help="Enable fast mode (skips filtering for unmapped "
-        "and partially mapped reads).",
+        help="Enable fast mode (skips filtering for unmapped and partially mapped reads).",
     )
     parser_pipeline.add_argument(
         "--keep-intermediates",
@@ -141,13 +138,12 @@ def main():
     parser_pipeline.add_argument(
         "--delete-intermediates",
         action="store_true",
-        help="Delete intermediate files after processing "
-        "(overrides --keep-intermediates).",
+        help="Delete intermediate files after processing (overrides --keep-intermediates).",
     )
     parser_pipeline.add_argument(
         "--archive-results",
         action="store_true",
-        help="Create an archive of the results folder after " "pipeline completion.",
+        help="Create an archive of the results folder after pipeline completion.",
     )
     parser_pipeline.add_argument(
         "--archive-format",
@@ -169,16 +165,14 @@ def main():
         type=str,
         default=None,
         help=(
-            "Set the sample name for labeling results. If not provided, "
-            "defaults to input BAM or FASTQ name."
+            "Set the sample name for labeling results. If not provided, defaults to input BAM or FASTQ name."
         ),
     )
     region_group = parser_pipeline.add_mutually_exclusive_group()
     region_group.add_argument(
         "--custom-regions",
         type=str,
-        help="Define custom regions for MUC1 analysis as comma-separated "
-        "values (e.g., chr1:1000-2000,chr2:3000-4000).",
+        help="Define custom regions for MUC1 analysis as comma-separated values (e.g., chr1:1000-2000,chr2:3000-4000).",
     )
     region_group.add_argument(
         "--bed-file",
@@ -190,6 +184,13 @@ def main():
         type=int,
         default=None,
         help="Max coverage (e.g. 300) for quick adVNTR mode.",
+    )
+    # New argument: additional summary output formats (comma-separated list)
+    parser_pipeline.add_argument(
+        "--summary-formats",
+        type=str,
+        default="",
+        help="Comma-separated list of additional summary output formats to generate (supported: csv, tsv). JSON is always generated.",
     )
 
     # Subcommand: report
@@ -285,8 +286,7 @@ def main():
     parser_online = subparsers.add_parser(
         "online",
         help=(
-            "Subset the BAM and submit it to an online vntyper instance, "
-            "then retrieve results."
+            "Subset the BAM and submit it to an online vntyper instance, then retrieve results."
         ),
         conflict_handler="resolve",
     )
@@ -524,6 +524,15 @@ def main():
                 sample_name_val = "sample"
                 logging.debug(f"sample_name defaulted to: {sample_name_val}")
 
+        # Process the new --summary-formats argument (comma-separated)
+        summary_formats = []
+        if args.summary_formats:
+            summary_formats = [
+                fmt.strip().lower()
+                for fmt in args.summary_formats.split(",")
+                if fmt.strip()
+            ]
+
         run_pipeline(
             bwa_reference=bwa_reference,
             output_dir=Path(args.output_dir),
@@ -546,6 +555,7 @@ def main():
             log_level=log_level_value,  # Pass log_level to run_pipeline
             sample_name=sample_name_val,
             log_file=log_file_str,  # Pass the correctly determined log_file
+            summary_formats=summary_formats,  # New parameter passed
         )
 
     #
