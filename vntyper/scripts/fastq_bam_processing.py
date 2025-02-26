@@ -528,7 +528,8 @@ def parse_header_pipeline_info(
     """
     Parses the BAM header to extract assembly and alignment pipeline information.
     Uses both text matching and contig matching to detect the assembly.
-    Warns if the Dragen pipeline is detected, as it has known issues aligning reads in the VNTR region.
+    Warns if the Dragen pipeline is detected or if the alignment pipeline cannot be detected,
+    recommending the use of BWA aligner.
     Writes the extracted information as a JSON file to the specified output directory.
 
     Parameters:
@@ -562,12 +563,17 @@ def parse_header_pipeline_info(
     else:
         pipeline = "Unknown"
 
-    # Issue warning if Dragen is used.
     warning_message = ""
     if pipeline.lower() == "dragen":
         warning_message = (
             "WARNING: The Dragen pipeline has known issues aligning reads in the VNTR region. "
             "It is recommended to use normal mode."
+        )
+        logging.warning(warning_message)
+    elif pipeline.lower() == "unknown":
+        warning_message = (
+            "WARNING: Alignment pipeline could not be detected from the header. "
+            "It is recommended to use the BWA aligner."
         )
         logging.warning(warning_message)
 
