@@ -173,6 +173,20 @@ def process_bam_to_fastq(
         final_bam = merged_bam
         logging.info("BAM/CRAM filtering and merging completed.")
 
+        # --- NEW CODE: rename merged BAM for adVNTR consistency and re-index ---
+        final_bam_renamed = Path(output) / f"{output_name}_sliced.bam"
+        os.replace(final_bam, final_bam_renamed)  # Overwrites if exists
+        final_bam = final_bam_renamed
+        logging.info(f"Renamed merged BAM file to {final_bam}")
+
+        # Re-index the renamed BAM file
+        command_index = f"{samtools_path} index {final_bam}"
+        log_file_index = Path(output) / f"{output_name}_index.log"
+        logging.info(f"Re-indexing BAM file with command: {command_index}")
+        if not run_command(command_index, str(log_file_index), critical=True):
+            logging.error("Re-indexing BAM file failed.")
+            raise RuntimeError("Re-indexing BAM file failed.")
+
     final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"
     final_fastq_2 = Path(output) / f"{output_name}_R2.fastq.gz"
     final_fastq_other = Path(output) / f"{output_name}_other.fastq.gz"
