@@ -38,6 +38,13 @@ from vntyper.scripts.summary import (
     convert_summary_to_tsv,
 )
 
+# Import cross-match functions from cross_match.py
+from vntyper.scripts.cross_match import (
+    cross_match_variants,
+    write_results_tsv,
+    extract_results_from_pipeline_summary,
+)
+
 
 def write_bed_file(regions, bed_file_path):
     """
@@ -216,7 +223,6 @@ def run_pipeline(
                 predefined_regions = config["bam_processing"]["bam_region_hg38"]
             else:
                 predefined_regions = config["bam_processing"]["bam_region_hg19"]
-
             bed_file_path = (
                 Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
             )
@@ -250,8 +256,6 @@ def run_pipeline(
                     bed_file=bed_file_path,
                 )
                 conversion_command = f"process_bam_to_fastq(in_bam={bam}, ...)"
-
-                # --- Extract and parse BAM header, then record this step ---
                 header_parse_start = datetime.utcnow()
                 header = extract_bam_header(bam, config)
                 parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]))
@@ -266,7 +270,6 @@ def run_pipeline(
                     header_parse_end,
                     write_summary_path=summary_file_path,
                 )
-
             else:  # CRAM branch
                 if cram is None or str(cram).strip().lower() == "none":
                     logging.error("Invalid CRAM input (None).")
@@ -336,7 +339,6 @@ def run_pipeline(
                     shark_end,
                     write_summary_path=summary_file_path,
                 )
-
             logging.info("Starting FASTQ quality control.")
             qc_start = datetime.utcnow()
             process_fastq(
@@ -359,10 +361,8 @@ def run_pipeline(
                 write_summary_path=summary_file_path,
             )
             logging.info("FASTQ quality control completed.")
-
             fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
             fastq2 = os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz")
-
             logging.info("Starting FASTQ alignment.")
             align_start = datetime.utcnow()
             sorted_bam = align_and_sort_fastq(
@@ -395,10 +395,7 @@ def run_pipeline(
                     "Alignment failed due to missing or incomplete BWA reference indices."
                 )
             logging.info("FASTQ alignment completed.")
-
-            logging.info(
-                "Starting BAM to FASTQ conversion (post-alignment) with specified regions."
-            )
+            logging.info("Starting BAM to FASTQ conversion (Post-alignment).")
             conv2_start = datetime.utcnow()
             fastq1, fastq2, _, _ = process_bam_to_fastq(
                 in_bam=sorted_bam,
@@ -500,7 +497,7 @@ def run_pipeline(
         )
         logging.info("Kestrel genotyping completed.")
 
-        # --- adVNTR Genotyping ---
+        # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
         if "advntr" in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
@@ -575,7 +572,6 @@ def run_pipeline(
                 process_advntr_output(
                     output_path, dirs["advntr"], "output", config=config
                 )
-
                 advntr_end = datetime.utcnow()
                 record_step(
                     summary,
@@ -588,6 +584,51 @@ def run_pipeline(
                     write_summary_path=summary_file_path,
                 )
                 logging.info("adVNTR genotyping completed.")
+
+                # --- Cross-Match Variant Comparison ---
+                logging.info(
+                    "Starting cross-match of Kestrel and adVNTR variant calls."
+                )
+                cross_start = datetime.utcnow()
+                # Extract parsed results from the summary
+                kestrel_records, advntr_records = extract_results_from_pipeline_summary(
+                    summary
+                )
+                if not kestrel_records:
+                    logging.error(
+                        "Kestrel genotyping results not found for cross-match."
+                    )
+                    raise ValueError(
+                        "Kestrel genotyping results not found for cross-match."
+                    )
+                if not advntr_records:
+                    logging.error(
+                        "adVNTR genotyping results not found for cross-match."
+                    )
+                    raise ValueError(
+                        "adVNTR genotyping results not found for cross-match."
+                    )
+                crossmatch_summary = cross_match_variants(
+                    kestrel_records, advntr_records, config=config
+                )
+                cross_match_output = os.path.join(
+                    dirs["advntr"], "cross_match_results.tsv"
+                )
+                write_results_tsv(crossmatch_summary["matches"], cross_match_output)
+                cross_end = datetime.utcnow()
+                record_step(
+                    summary,
+                    "Cross-Match Variant Comparison",
+                    cross_match_output,
+                    "tsv",
+                    "cross_match_variants(kestrel_results, advntr_results)",
+                    cross_start,
+                    cross_end,
+                    write_summary_path=summary_file_path,
+                )
+                logging.info(
+                    f"Cross-match variant comparison completed. Overall match: {crossmatch_summary['overall_match']}"
+                )
             else:
                 logging.error("Sorted BAM required for adVNTR not provided.")
                 raise ValueError("Sorted BAM required for adVNTR not provided.")

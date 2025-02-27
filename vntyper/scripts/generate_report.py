@@ -364,7 +364,6 @@ def build_screening_summary(
     summary_text = ""
     try:
         kestrel_logic = report_config.get("algorithm_logic", {}).get("kestrel", {})
-        # Pass the original (unmodified) dataframe for matching:
         computed_kestrel = compute_algorithm_result(kestrel_df, kestrel_logic)
         logging.debug("Computed Kestrel result: %s", computed_kestrel)
 
@@ -756,6 +755,21 @@ def generate_summary_report(
         advntr_html = "<p>adVNTR genotyping was not performed.</p>"
         logging.debug("adVNTR was not performed; adding message to report.")
 
+    # Extract cross-match summary message from the pipeline summary if available.
+    cross_match_message = ""
+    for step in pipeline_summary.get("steps", []):
+        if step.get("step") == "Cross-Match Variant Comparison":
+            data = step.get("parsed_result", {}).get("data", [])
+            if any(item.get("Match") == "Yes" for item in data):
+                cross_match_message = (
+                    "At least one match was found between Kestrel and adVNTR results."
+                )
+            else:
+                cross_match_message = (
+                    "No matches were found between Kestrel and adVNTR results."
+                )
+            break
+
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
         template = env.get_template("report_template.html")
@@ -779,7 +793,7 @@ def generate_summary_report(
         "kestrel_highlight": kestrel_html,
         "advntr_highlight": advntr_html,
         "advntr_available": advntr_available,
-        "log_content": log_content,
+        "log_content": load_pipeline_log(log_file),
         "igv_content": igv_content,
         "table_json": table_json,
         "session_dictionary": session_dictionary,
@@ -810,6 +824,7 @@ def generate_summary_report(
         "passed_filter_color": pf_color,
         "sequencing_str": sequencing_str,
         "summary_text": summary_text,
+        "cross_match_message": cross_match_message,  # New variable for cross-match summary
     }
 
     try:
