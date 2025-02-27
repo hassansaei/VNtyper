@@ -23,3 +23,4 @@ dependencies:
   - plotly=5.24.0
   - openjdk=11.0.23
   - bcftools=1.21
+  - pysam=0.22.1
