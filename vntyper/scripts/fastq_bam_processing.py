@@ -10,6 +10,10 @@ import json
 
 from vntyper.scripts.utils import run_command
 
+from vntyper.scripts.extract_unmapped_from_offset import (
+    extract_unmapped_reads_from_offset,
+)
+
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     """
@@ -120,6 +124,7 @@ def process_bam_to_fastq(
     cram_ref_option = ""
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
+    # Slice/region extraction
     if keep_intermediates and final_bam.exists():
         logging.info(f"Reusing existing BAM slice: {final_bam}")
     else:
@@ -142,25 +147,53 @@ def process_bam_to_fastq(
             raise RuntimeError(f"{file_format.upper()} region slicing failed.")
         logging.info("BAM/CRAM region slicing completed.")
 
+    # Extract & merge unmapped reads if not in fast_mode
     if not fast_mode:
-        command_filter = (
-            f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
-            f" >(samtools view -b -f 12 -@ {threads} - -o {output}/{output_name}_unmapped.bam) "
-            f"> /dev/null"
-        )
-        log_file_filter = Path(output) / f"{output_name}_filter.log"
-        logging.info(f"Executing filtering with command: {command_filter}")
+        unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
-        success = run_command(str(command_filter), str(log_file_filter), critical=True)
-        if not success:
-            logging.error("BAM/CRAM filtering failed.")
-            raise RuntimeError("BAM/CRAM filtering failed.")
+        if file_format.lower() == "bam":
+            # Use the offset-based extraction
+            bam_bai = f"{in_bam}.bai"
+            if not Path(bam_bai).exists():
+                # Index if not present
+                index_cmd = f"{samtools_path} index {in_bam}"
+                log_file_index = Path(output) / f"{output_name}_unmapped_index.log"
+                logging.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
+                success = run_command(
+                    str(index_cmd), str(log_file_index), critical=True
+                )
+                if not success:
+                    raise RuntimeError("Indexing BAM file failed.")
 
+            logging.info("Extracting unmapped reads using offset calculation...")
+            extract_unmapped_reads_from_offset(
+                bam_file=str(in_bam),
+                bai_file=str(bam_bai),
+                output_bam=str(unmapped_bam),
+            )
+        else:
+            # Fallback: CRAM uses samtools for unmapped extraction
+            command_filter = (
+                f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
+                f" >(samtools view -b -f 12 -@ {threads} - -o {unmapped_bam}) "
+                f"> /dev/null"
+            )
+            log_file_filter = Path(output) / f"{output_name}_filter.log"
+            logging.info(f"Executing filtering with command: {command_filter}")
+
+            success = run_command(
+                str(command_filter), str(log_file_filter), critical=True
+            )
+            if not success:
+                logging.error("BAM/CRAM filtering failed.")
+                raise RuntimeError("BAM/CRAM filtering failed.")
+
+        # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
         command_merge = (
             f"{samtools_path} merge -f -@ {threads} {merged_bam} "
-            f"{output}/{output_name}_sliced.bam "
-            f"{output}/{output_name}_unmapped.bam"
+            f"{final_bam} "
+            f"{unmapped_bam}"
         )
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logging.info(f"Executing BAM merging with command: {command_merge}")
@@ -173,13 +206,12 @@ def process_bam_to_fastq(
         final_bam = merged_bam
         logging.info("BAM/CRAM filtering and merging completed.")
 
-        # --- NEW CODE: rename merged BAM for adVNTR consistency and re-index ---
+        # Rename merged BAM for adVNTR consistency and re-index
         final_bam_renamed = Path(output) / f"{output_name}_sliced.bam"
-        os.replace(final_bam, final_bam_renamed)  # Overwrites if exists
+        os.replace(final_bam, final_bam_renamed)
         final_bam = final_bam_renamed
         logging.info(f"Renamed merged BAM file to {final_bam}")
 
-        # Re-index the renamed BAM file
         command_index = f"{samtools_path} index {final_bam}"
         log_file_index = Path(output) / f"{output_name}_index.log"
         logging.info(f"Re-indexing BAM file with command: {command_index}")
@@ -187,6 +219,7 @@ def process_bam_to_fastq(
             logging.error("Re-indexing BAM file failed.")
             raise RuntimeError("Re-indexing BAM file failed.")
 
+    # Convert final BAM to FASTQ
     final_fastq_1 = Path(output) / f"{output_name}_R1.fastq.gz"
     final_fastq_2 = Path(output) / f"{output_name}_R2.fastq.gz"
     final_fastq_other = Path(output) / f"{output_name}_other.fastq.gz"
@@ -225,6 +258,7 @@ def process_bam_to_fastq(
             raise RuntimeError("BAM to FASTQ conversion failed.")
         logging.info("BAM to FASTQ conversion completed.")
 
+    # Clean up intermediates if requested
     if delete_intermediates and not keep_intermediates:
         logging.info("Removing intermediate BAM files...")
         intermediate_files = [
@@ -566,7 +600,7 @@ def parse_header_pipeline_info(
     else:
         assembly_text = "Not detected"
 
-    # Contig matching for assembly (assumes detect_assembly_from_contigs is defined/imported)
+    # Contig matching
     assembly_contig = detect_assembly_from_contigs(header)
 
     # Determine the alignment pipeline.
@@ -591,7 +625,6 @@ def parse_header_pipeline_info(
         )
         logging.warning(warning_message)
 
-    # Compose the JSON result.
     result = {
         "assembly_text": assembly_text,
         "assembly_contig": assembly_contig,
@@ -600,7 +633,6 @@ def parse_header_pipeline_info(
     if warning_message:
         result["warning"] = warning_message
 
-    # Write the result as JSON.
     output_path = output_dir / output_name
     try:
         with open(output_path, "w", encoding="utf-8") as out_f:
