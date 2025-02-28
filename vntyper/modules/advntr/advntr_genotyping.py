@@ -114,7 +114,11 @@ def advntr_processing_del(df):
     Process adVNTR deletions by calculating deletion length, computing the frameshift,
     and filtering variants based on valid frameshift patterns.
 
-    (Documentation unchanged.)
+    Args:
+        df (pd.DataFrame): DataFrame containing adVNTR variant data.
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame containing only those deletions that pass the frameshift filter.
     """
     logger = logging.getLogger(__name__)
     logger.debug("Starting deletion processing.")
@@ -154,7 +158,11 @@ def advntr_processing_ins(df):
     Process adVNTR insertions by calculating insertion length, computing the frameshift,
     and filtering variants based on valid frameshift patterns.
 
-    (Documentation unchanged.)
+    Args:
+        df (pd.DataFrame): DataFrame containing adVNTR variant data.
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame containing only those insertions that pass the frameshift filter.
     """
     logger = logging.getLogger(__name__)
     logger.debug("Starting insertion processing.")
@@ -208,7 +216,6 @@ def load_ru_sequences(ru_fasta_path):
             if line.startswith(">"):
                 if current_ru and seq_lines:
                     ru_dict[current_ru] = "".join(seq_lines)
-                # Assume header is like ">RU7" and extract "7"
                 header = line[1:]
                 if header.startswith("RU"):
                     current_ru = header[2:]
@@ -239,12 +246,10 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
     ref_annotations = []
     alt_annotations = []
 
-    # Define regex patterns for insertion and deletion
     ins_pattern = re.compile(r"^I(\d+)_([0-9]+)_([ACGT])_LEN(\d+)$")
     del_pattern = re.compile(r"^D(\d+)_([0-9]+)$")
 
     for variant in variant_series:
-        # Split multiple variant parts if present (e.g. "D2_2&I2_2_C_LEN5")
         parts = variant.split("&")
         ru_parts = []
         pos_parts = []
@@ -286,7 +291,6 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
                 ref_parts.append(ref_allele)
                 alt_parts.append(alt_allele)
             else:
-                # If pattern doesn't match, mark as unknown
                 ru_parts.append(".")
                 pos_parts.append(".")
                 ref_parts.append(".")
@@ -307,6 +311,12 @@ def process_advntr_output(output_path, output, output_name, config=None):
     'reference_data.code_adVNTR_RUs' FASTA file, the function will annotate each
     variant with the affected repeat unit (RU), position (POS), REF and ALT values.
 
+    The final output always contains the columns:
+      "VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue, RU, POS, REF, ALT, Flag".
+
+    If the VCF data is empty, a negative result is generated immediately with
+    'VID' set to "Negative" and all other columns set to "None", and further processing is skipped.
+
     Args:
         output_path (str): Path to the adVNTR output file.
         output (str): Directory where the final results will be saved.
@@ -322,14 +332,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
     with open(output_path, "r") as file:
         content = file.readlines()
 
-    default_columns_advntr_output = [
-        "#VID",
-        "State",
-        "NumberOfSupportingReads",
-        "MeanCoverage",
-        "Pvalue",
-    ]
-
+    # Replace header to ensure consistency
     content = [
         line.replace("#VID", "VID") if line.startswith("#VID") else line
         for line in content
@@ -346,6 +349,44 @@ def process_advntr_output(output_path, output, output_name, config=None):
         logging.error(f"Error loading data into DataFrame: {e}")
         return
 
+    # Immediately check if the loaded DataFrame is empty
+    final_columns = [
+        "VID",
+        "Variant",
+        "NumberOfSupportingReads",
+        "MeanCoverage",
+        "Pvalue",
+        "RU",
+        "POS",
+        "REF",
+        "ALT",
+        "Flag",
+    ]
+    if df.empty:
+        logging.warning("VCF file is empty. Generating default negative result.")
+        advntr_concat = pd.DataFrame(
+            [
+                {
+                    "VID": "Negative",
+                    "Variant": "None",
+                    "NumberOfSupportingReads": "None",
+                    "MeanCoverage": "None",
+                    "Pvalue": "None",
+                    "RU": "None",
+                    "POS": "None",
+                    "REF": "None",
+                    "ALT": "None",
+                    "Flag": "None",
+                }
+            ]
+        )
+        output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
+        advntr_concat = advntr_concat[final_columns]
+        advntr_concat.to_csv(output_result_path, sep="\t", index=False)
+        logging.info(f"Processed adVNTR results saved to {output_result_path}")
+        cleanup_files(output, output_name)
+        return
+
     try:
         logging.info("Processing deletions...")
         df_del = advntr_processing_del(df)
@@ -360,33 +401,37 @@ def process_advntr_output(output_path, output, output_name, config=None):
             logging.warning(
                 "No pathogenic variant found after filtering. Generating default negative result."
             )
-            negative_data = {
-                "VID": "None",
-                "Variant": "None",
-                "NumberOfSupportingReads": "None",
-                "MeanCoverage": "None",
-                "Pvalue": "Negative",
-                "RU": "None",
-                "POS": "None",
-                "REF": "None",
-                "ALT": "None",
-            }
-            advntr_concat = pd.DataFrame([negative_data])
+            advntr_concat = pd.DataFrame(
+                [
+                    {
+                        "VID": "Negative",
+                        "Variant": "None",
+                        "NumberOfSupportingReads": "None",
+                        "MeanCoverage": "None",
+                        "Pvalue": "None",
+                        "RU": "None",
+                        "POS": "None",
+                        "REF": "None",
+                        "ALT": "None",
+                        "Flag": "None",
+                    }
+                ]
+            )
         else:
-            default_columns_advntr_final = [
+            base_columns = [
                 "VID",
                 "Variant",
                 "NumberOfSupportingReads",
                 "MeanCoverage",
                 "Pvalue",
             ]
-            advntr_concat = advntr_concat[default_columns_advntr_final]
+            advntr_concat = advntr_concat[base_columns]
             logging.info("Removing duplicates...")
             advntr_concat.drop_duplicates(
                 subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True
             )
 
-            # First perform RU-level annotation if possible
+            # Perform RU-level annotation if possible
             if config:
                 ru_fasta_path = config.get("reference_data", {}).get("code_adVNTR_RUs")
                 if ru_fasta_path and os.path.exists(ru_fasta_path):
@@ -398,9 +443,8 @@ def process_advntr_output(output_path, output, output_name, config=None):
                     advntr_concat["POS"] = pos_ann
                     advntr_concat["REF"] = ref_ann
                     advntr_concat["ALT"] = alt_ann
-                    default_columns_advntr_final.extend(["RU", "POS", "REF", "ALT"])
 
-            # Then, apply flagging rules (flagging is now done last)
+            # Apply flagging rules if available
             flagging_rules = advntr_config.get("flagging_rules", {})
             if flagging_rules:
                 logging.info("Applying flagging rules to adVNTR output.")
@@ -408,6 +452,12 @@ def process_advntr_output(output_path, output, output_name, config=None):
 
                 advntr_concat = add_flags(advntr_concat, flagging_rules)
 
+            # Ensure all final columns are present
+            for col in final_columns:
+                if col not in advntr_concat.columns:
+                    advntr_concat[col] = "None"
+
+        advntr_concat = advntr_concat[final_columns]
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat.to_csv(output_result_path, sep="\t", index=False)
         logging.info(f"Processed adVNTR results saved to {output_result_path}")
