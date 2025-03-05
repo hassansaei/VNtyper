@@ -61,9 +61,9 @@
       "rules": [
         {
           "conditions": {
-            "Pvalue": {
+            "VID": {
               "operator": "!=",
-              "value": "none"
+              "value": "Negative"
             },
             "Flag": {
               "operator": "==",
@@ -75,8 +75,8 @@
         {
           "conditions": {
             "Flag": {
-              "operator": "!=",
-              "value": "Not flagged"
+              "operator": "not in",
+              "value": ["Not flagged", "Not applicable", "None"]
             }
           },
           "result": "positive flagged"
