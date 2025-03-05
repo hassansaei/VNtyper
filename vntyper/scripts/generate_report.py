@@ -567,7 +567,16 @@ def generate_summary_report(
         kestrel_df = kestrel_df.rename(
             columns={col: columns_to_display[col] for col in existing_cols}
         )
-        # Create a copy of the original dataframe (without HTML formatting) for matching.
+        # Sort the DataFrame by Depth Score in descending order if available.
+        if "Depth Score" in kestrel_df.columns:
+            try:
+                kestrel_df["Depth Score"] = pd.to_numeric(
+                    kestrel_df["Depth Score"], errors="coerce"
+                )
+            except Exception as e:
+                logging.warning("Could not convert 'Depth Score' to numeric: %s", e)
+            kestrel_df = kestrel_df.sort_values(by="Depth Score", ascending=False)
+        # Create a copy of the sorted dataframe (without HTML formatting) for matching.
         kestrel_df_raw = kestrel_df.copy()
         # Now apply color-coding to the Confidence column for display.
         if "Confidence" in kestrel_df.columns:
@@ -733,6 +742,7 @@ def generate_summary_report(
     )
 
     kestrel_html = kestrel_df.to_html(
+        table_id="kestrel_table",
         classes="table table-bordered table-striped hover compact order-column table-sm",
         index=False,
         escape=False,
@@ -742,7 +752,7 @@ def generate_summary_report(
     if advntr_available:
         if not advntr_df.empty:
             advntr_html = advntr_df.to_html(
-                classes="table table-bordered table-striped hover compact order-column table-sm",
+                classes="table table-bordered table-striped hover compact table-sm",
                 index=False,
             )
             logging.debug("adVNTR results converted to HTML.")
@@ -778,7 +788,7 @@ def generate_summary_report(
         logging.error("Failed to load Jinja2 template: %s", e)
         raise
 
-    # Use the raw (unformatted) kestrel dataframe for matching.
+    # Use the sorted (and raw) kestrel dataframe for matching.
     summary_text = build_screening_summary(
         kestrel_df_raw,
         advntr_df,

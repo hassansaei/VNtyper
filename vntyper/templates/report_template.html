@@ -282,10 +282,22 @@
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
 
-    <!-- Custom JavaScript to initialize DataTables and IGV -->
+    <!-- Updated JavaScript to initialize DataTables with specific ordering for the Kestrel table -->
     <script>
         $(document).ready(function() {
-            $('table').DataTable({
+            // Initialize DataTables for the Kestrel table with specific ordering by the 'Depth Score' column (index 8)
+            $('#kestrel_table').DataTable({
+                "order": [[ 8, "desc" ]],
+                "paging": true,
+                "searching": true,
+                "info": true,
+                "autoWidth": false,
+                "columnDefs": [
+                    { "width": "150px", "targets": "_all" }
+                ]
+            });
+            // Initialize DataTables for any other tables on the page.
+            $('table:not(#kestrel_table)').DataTable({
                 "paging": true,
                 "searching": true,
                 "info": true,
