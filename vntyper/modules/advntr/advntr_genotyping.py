@@ -368,15 +368,15 @@ def process_advntr_output(output_path, output, output_name, config=None):
             [
                 {
                     "VID": "Negative",
-                    "Variant": "None",
-                    "NumberOfSupportingReads": "None",
-                    "MeanCoverage": "None",
-                    "Pvalue": "None",
-                    "RU": "None",
-                    "POS": "None",
-                    "REF": "None",
-                    "ALT": "None",
-                    "Flag": "None",
+                    "Variant": "Not applicable",
+                    "NumberOfSupportingReads": "Not applicable",
+                    "MeanCoverage": "Not applicable",
+                    "Pvalue": "Not applicable",
+                    "RU": "Not applicable",
+                    "POS": "Not applicable",
+                    "REF": "Not applicable",
+                    "ALT": "Not applicable",
+                    "Flag": "Not applicable",
                 }
             ]
         )
@@ -405,15 +405,15 @@ def process_advntr_output(output_path, output, output_name, config=None):
                 [
                     {
                         "VID": "Negative",
-                        "Variant": "None",
-                        "NumberOfSupportingReads": "None",
-                        "MeanCoverage": "None",
-                        "Pvalue": "None",
-                        "RU": "None",
-                        "POS": "None",
-                        "REF": "None",
-                        "ALT": "None",
-                        "Flag": "None",
+                        "Variant": "Not applicable",
+                        "NumberOfSupportingReads": "Not applicable",
+                        "MeanCoverage": "Not applicable",
+                        "Pvalue": "Not applicable",
+                        "RU": "Not applicable",
+                        "POS": "Not applicable",
+                        "REF": "Not applicable",
+                        "ALT": "Not applicable",
+                        "Flag": "Not applicable",
                     }
                 ]
             )
@@ -455,7 +455,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
             # Ensure all final columns are present
             for col in final_columns:
                 if col not in advntr_concat.columns:
-                    advntr_concat[col] = "None"
+                    advntr_concat[col] = "Not applicable"
 
         advntr_concat = advntr_concat[final_columns]
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
