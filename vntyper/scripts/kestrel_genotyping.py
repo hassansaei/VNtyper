@@ -419,12 +419,16 @@ def process_kestrel_output(
         output_empty_result(output_dir, header)
         return None
 
-    # Apply flagging rules if defined in the kestrel configuration
+    # Apply both regular flagging rules and duplicates logic if enabled
     flagging_rules = kestrel_config.get("flagging_rules", {})
-    if flagging_rules:
+    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+
+    if flagging_rules or duplicates_config.get("enabled", False):
         from vntyper.scripts.flagging import add_flags
 
-        processed_df = add_flags(processed_df, flagging_rules)
+        processed_df = add_flags(
+            processed_df, flagging_rules, duplicates_config=duplicates_config
+        )
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
