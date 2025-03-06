@@ -424,9 +424,10 @@ def generate_cohort_summary_report(
         interactive=True,
     )
 
-    # Style the Kestrel table: apply cell formatting for the "Confidence" column.
-    if "Confidence" in kestrel_df.columns:
-        kestrel_df["Confidence"] = kestrel_df["Confidence"].apply(
+    # Create a separate copy for HTML formatting so that machine-readable outputs remain plain.
+    kestrel_df_html = kestrel_df.copy()
+    if "Confidence" in kestrel_df_html.columns:
+        kestrel_df_html["Confidence"] = kestrel_df_html["Confidence"].apply(
             lambda x: (
                 f'<span style="color:orange;font-weight:bold;">{x}</span>'
                 if x == "Low_Precision"
@@ -453,8 +454,10 @@ def generate_cohort_summary_report(
         "Confidence",
         "Flag",
     ]
-    kestrel_columns = [col for col in desired_kestrel_cols if col in kestrel_df.columns]
-    kestrel_html = kestrel_df[kestrel_columns].to_html(
+    kestrel_columns = [
+        col for col in desired_kestrel_cols if col in kestrel_df_html.columns
+    ]
+    kestrel_html = kestrel_df_html[kestrel_columns].to_html(
         classes="table table-bordered table-striped hover compact order-column table-sm",
         index=False,
         escape=False,
