@@ -67,6 +67,13 @@
             {% endif %}
         </div>
 
+        {% if additional_stats %}
+        <h2>Additional Statistics</h2>
+        <div class="table-container">
+            {{ additional_stats | safe }}
+        </div>
+        {% endif %}
+
     </div>
 
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>

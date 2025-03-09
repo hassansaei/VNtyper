@@ -4,8 +4,8 @@ vntyper/scripts/cohort_summary.py
 
 This module aggregates outputs from multiple runs into a single cohort summary report.
 It exclusively loads the pipeline_summary.json from each sample directory (found at the top level
-or in subfolders) to construct the cohort tables and donut plots, rather than parsing individual
-result files (e.g. output_adVNTR_result.tsv).
+or in subfolders) to construct the cohort tables, donut plots, and additional statistics
+(including runtimes, coverage, versions, assembly, and pipeline information).
 
 Note: This module no longer defines its own CLI parser as these are now defined in the main CLI script.
 """
@@ -344,11 +344,87 @@ def aggregate_sample_category(results):
         return "Negative"
 
 
+def load_pipeline_summary_for_sample(sample_dir):
+    """
+    Load the pipeline_summary.json from a sample directory and extract Kestrel,
+    adVNTR data and additional statistics (runtime, coverage, version, assembly, pipeline).
+
+    For the adVNTR step, the algorithm result will later be computed based on the logic
+    defined in report_config.json.
+
+    Parameters
+    ----------
+    sample_dir : str or Path
+        Directory containing the pipeline_summary.json file.
+
+    Returns
+    -------
+    tuple
+        Three elements: (kestrel_data, advntr_data, additional_stats).
+        additional_stats is a dict with keys:
+          - runtime: pipeline run duration (in seconds)
+          - version: pipeline version
+          - assembly: assembly text from BAM Header Parsing
+          - pipeline: alignment pipeline from BAM Header Parsing
+          - coverage: coverage metrics dict (mean, median, stdev, min, max)
+    """
+    sample_dir = Path(sample_dir)
+    summary_path = sample_dir / "pipeline_summary.json"
+    if not summary_path.exists():
+        logging.warning(f"Pipeline summary file not found in {sample_dir}")
+        return [], [], {}
+    try:
+        with open(summary_path, "r") as f:
+            summary = json.load(f)
+        kestrel_data = []
+        advntr_data = []
+        additional_stats = {}
+
+        # Compute runtime from top-level timestamps if available
+        pipeline_start = summary.get("pipeline_start")
+        pipeline_end = summary.get("pipeline_end")
+        if pipeline_start and pipeline_end:
+            start_dt = datetime.fromisoformat(pipeline_start)
+            end_dt = datetime.fromisoformat(pipeline_end)
+            runtime_sec = (end_dt - start_dt).total_seconds()
+            additional_stats["runtime"] = f"{runtime_sec:.2f} seconds"
+        else:
+            additional_stats["runtime"] = "N/A"
+
+        # Pipeline version from top-level field
+        additional_stats["version"] = summary.get("version", "N/A")
+
+        # Initialize defaults for assembly, pipeline and coverage
+        additional_stats["assembly"] = "N/A"
+        additional_stats["pipeline"] = "N/A"
+        additional_stats["coverage"] = {}
+
+        for step in summary.get("steps", []):
+            if step.get("step") == "Kestrel Genotyping":
+                kestrel_data = step.get("parsed_result", {}).get("data", [])
+            elif step.get("step") == "adVNTR Genotyping":
+                advntr_data = step.get("parsed_result", {}).get("data", [])
+            elif step.get("step") == "BAM Header Parsing":
+                parsed = step.get("parsed_result", {})
+                additional_stats["assembly"] = parsed.get("assembly_text", "N/A")
+                additional_stats["pipeline"] = parsed.get("alignment_pipeline", "N/A")
+            elif step.get("step") == "Coverage Calculation":
+                parsed = step.get("parsed_result", {})
+                data_list = parsed.get("data", [])
+                if data_list:
+                    additional_stats["coverage"] = data_list[0]
+        return kestrel_data, advntr_data, additional_stats
+    except Exception as e:
+        logging.error(f"Error loading pipeline summary from {sample_dir}: {e}")
+        return [], [], {}
+
+
 def generate_cohort_summary_report(
-    output_dir, kestrel_df, advntr_df, summary_file, config
+    output_dir, kestrel_df, advntr_df, summary_file, config, additional_stats_html=""
 ):
     """
-    Generate the cohort summary report combining Kestrel and adVNTR results.
+    Generate the cohort summary report combining Kestrel and adVNTR results along with
+    additional statistics (runtimes, coverage, version, assembly, and pipeline).
 
     This function creates summary statistics, generates donut charts for each
     data type, and then renders a Jinja2 template to produce a final HTML report.
@@ -365,6 +441,8 @@ def generate_cohort_summary_report(
         Name of the summary report file.
     config : dict
         Configuration dictionary containing paths and settings.
+    additional_stats_html : str, optional
+        HTML table string containing additional statistics.
 
     Returns
     -------
@@ -552,6 +630,7 @@ def generate_cohort_summary_report(
         "advntr_plot_base64": advntr_plot_base64,
         "kestrel_plot_interactive": kestrel_plot_html,
         "advntr_plot_interactive": advntr_plot_html,
+        "additional_stats": additional_stats_html,
         "interactive": True,
     }
 
@@ -571,45 +650,6 @@ def generate_cohort_summary_report(
         raise
 
 
-def load_pipeline_summary_for_sample(sample_dir):
-    """
-    Load the pipeline_summary.json from a sample directory and extract Kestrel and adVNTR data.
-
-    For the adVNTR step, the algorithm result will later be computed based on the logic
-    defined in report_config.json.
-
-    Parameters
-    ----------
-    sample_dir : str or Path
-        Directory containing the pipeline_summary.json file.
-
-    Returns
-    -------
-    tuple
-        Two lists: (kestrel_data, advntr_data). Each is a list of dictionaries extracted
-        from the pipeline summary. If the file is not found or an error occurs, returns two empty lists.
-    """
-    sample_dir = Path(sample_dir)
-    summary_path = sample_dir / "pipeline_summary.json"
-    if not summary_path.exists():
-        logging.warning(f"Pipeline summary file not found in {sample_dir}")
-        return [], []
-    try:
-        with open(summary_path, "r") as f:
-            summary = json.load(f)
-        kestrel_data = []
-        advntr_data = []
-        for step in summary.get("steps", []):
-            if step.get("step") == "Kestrel Genotyping":
-                kestrel_data = step.get("parsed_result", {}).get("data", [])
-            elif step.get("step") == "adVNTR Genotyping":
-                advntr_data = step.get("parsed_result", {}).get("data", [])
-        return kestrel_data, advntr_data
-    except Exception as e:
-        logging.error(f"Error loading pipeline summary from {sample_dir}: {e}")
-        return [], []
-
-
 def aggregate_cohort(
     input_paths, output_dir, summary_file, config, additional_formats=""
 ):
@@ -620,7 +660,7 @@ def aggregate_cohort(
     Zip files are extracted to temporary directories for processing.
     Instead of parsing individual result files, this version exclusively loads the pipeline_summary.json
     from each sample directory (found either at the top level or recursively in subfolders)
-    to construct the cohort tables and donut plots.
+    to construct the cohort tables, donut plots, and additional statistics.
 
     Additionally, if additional output formats are specified, the aggregated cohort
     data for Kestrel and adVNTR are exported as CSV, TSV, and/or JSON files.
@@ -646,6 +686,7 @@ def aggregate_cohort(
     """
     temp_dirs = []
     processed_dirs = set()  # use a set to avoid duplicate directories
+    additional_stats_list = []
 
     for path_str in input_paths:
         path = Path(path_str)
@@ -709,7 +750,7 @@ def aggregate_cohort(
     for sample_dir in processed_dirs:
         sample_id = Path(sample_dir).name
         logging.info(f"Processing sample directory: {sample_dir}")
-        k_data, a_data = load_pipeline_summary_for_sample(sample_dir)
+        k_data, a_data, add_stats = load_pipeline_summary_for_sample(sample_dir)
         if k_data:
             for entry in k_data:
                 entry["Sample"] = sample_id
@@ -726,6 +767,9 @@ def aggregate_cohort(
             logging.warning(
                 f"No adVNTR data found in pipeline summary for sample {sample_id}."
             )
+        if add_stats:
+            add_stats["Sample"] = sample_id
+            additional_stats_list.append(add_stats)
 
     if kestrel_list:
         kestrel_df = pd.DataFrame(kestrel_list)
@@ -738,12 +782,37 @@ def aggregate_cohort(
         logging.warning("No adVNTR data found in any sample.")
         advntr_df = pd.DataFrame()
 
+    # Create additional statistics DataFrame and HTML table if any stats were gathered.
+    if additional_stats_list:
+        additional_stats_df = pd.DataFrame(additional_stats_list)
+        # For coverage, flatten the dict (if available)
+        if "coverage" in additional_stats_df.columns:
+            coverage_df = additional_stats_df["coverage"].apply(pd.Series)
+            coverage_df = coverage_df.add_prefix("cov_")
+            additional_stats_df = pd.concat(
+                [additional_stats_df.drop(columns=["coverage"]), coverage_df], axis=1
+            )
+        # Reorder columns to place "Sample" first if it exists
+        if "Sample" in additional_stats_df.columns:
+            cols = ["Sample"] + [
+                col for col in additional_stats_df.columns if col != "Sample"
+            ]
+            additional_stats_df = additional_stats_df[cols]
+        additional_stats_html = additional_stats_df.to_html(
+            classes="table table-bordered table-striped hover compact order-column table-sm",
+            index=False,
+            escape=False,
+        )
+    else:
+        additional_stats_html = ""
+
     generate_cohort_summary_report(
         output_dir=output_dir,
         kestrel_df=kestrel_df,
         advntr_df=advntr_df,
         summary_file=summary_file,
         config=config,
+        additional_stats_html=additional_stats_html,
     )
 
     for temp_dir in temp_dirs:
