@@ -72,8 +72,9 @@
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
     <script>
+        // DataTables initialization
         $(document).ready(function() {
-            $('table').DataTable({
+            var table = $('table').DataTable({
                 "paging": true,
                 "searching": true,
                 "info": true,
@@ -81,6 +82,24 @@
                 "columnDefs": [
                     { "width": "150px", "targets": "_all" }
                 ]
+            });
+            
+            // Function to round numeric values to 4 decimal places
+            function roundValue(val) {
+                var num = parseFloat(val);
+                if (!isNaN(num)) {
+                    // toFixed returns a string, then remove trailing zeros and optional dot.
+                    return parseFloat(num.toFixed(4)).toString();
+                }
+                return val;
+            }
+            
+            // Iterate over all table cells and round numeric values.
+            $('table td').each(function() {
+                var text = $(this).text().trim();
+                if ($.isNumeric(text)) {
+                    $(this).text(roundValue(text));
+                }
             });
         });
     </script>
