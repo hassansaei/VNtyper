@@ -179,57 +179,64 @@
             </div>
         {% endif %}
 
+        <!-- Custom switch for toggling flagged values -->
+        <div class="custom-control custom-switch text-left mb-3">
+            <input type="checkbox" class="custom-control-input" id="toggleFlagged">
+            <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
+        </div>
+
         <!-- Coverage Section -->
         <h2>VNTR Region Coverage</h2>
         <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</p>
 
         <!-- Conditionally show fastp metrics if available -->
         {% if fastp_available %}
-        <h2>fastp Quality Metrics</h2>
-        <p><strong>Sequencing Setup:</strong> {{ sequencing_str }}</p>
-        <table class="table table-bordered table-sm">
-            <thead>
-                <tr>
-                    <th>Metric</th>
-                    <th>Value</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>Duplication Rate (Cutoff: 10%)</td>
-                    <td>
-                        {% if duplication_rate is not none %}
-                            {{ (duplication_rate * 100)|round(2) }}%
-                        {% else %}
-                            N/A
-                        {% endif %}
-                    </td>                    
-                    <td>{{ duplication_rate_icon }}</td>
-                </tr>
-                <tr>
-                    <td>Q20 Rate (Cutoff: 80%)</td>
-                    <td>{{ (q20_rate * 100)|round(2) if q20_rate is not none else 'N/A' }}%</td>
-                    <td>{{ q20_icon }}</td>
-                </tr>
-                <tr>
-                    <td>Q30 Rate (Cutoff: 70%)</td>
-                    <td>{{ (q30_rate * 100)|round(2) if q30_rate is not none else 'N/A' }}%</td>
-                    <td>{{ q30_icon }}</td>
-                </tr>
-                <tr>
-                    <td>Passed Filter Rate (Cutoff: 80%)</td>
-                    <td>{{ (passed_filter_rate * 100)|round(2) if passed_filter_rate is not none else 'N/A' }}%</td>
-                    <td>{{ passed_filter_icon }}</td>
-                </tr>
-            </tbody>
-        </table>
+            <h2>fastp Quality Metrics</h2>
+            <p><strong>Sequencing Setup:</strong> {{ sequencing_str }}</p>
+            <table class="table table-bordered table-sm">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Duplication Rate (Cutoff: 10%)</td>
+                        <td>
+                            {% if duplication_rate is not none %}
+                                {{ (duplication_rate * 100)|round(2) }}%
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>                    
+                        <td>{{ duplication_rate_icon }}</td>
+                    </tr>
+                    <tr>
+                        <td>Q20 Rate (Cutoff: 80%)</td>
+                        <td>{{ (q20_rate * 100)|round(2) if q20_rate is not none else 'N/A' }}%</td>
+                        <td>{{ q20_icon }}</td>
+                    </tr>
+                    <tr>
+                        <td>Q30 Rate (Cutoff: 70%)</td>
+                        <td>{{ (q30_rate * 100)|round(2) if q30_rate is not none else 'N/A' }}%</td>
+                        <td>{{ q30_icon }}</td>
+                    </tr>
+                    <tr>
+                        <td>Passed Filter Rate (Cutoff: 80%)</td>
+                        <td>{{ (passed_filter_rate * 100)|round(2) if passed_filter_rate is not none else 'N/A' }}%</td>
+                        <td>{{ passed_filter_icon }}</td>
+                    </tr>
+                </tbody>
+            </table>
         {% endif %}
 
         <h2>Screening Summary</h2>
-        <p class="summary-box {% if 'negative' not in summary_text %}summary-positive{% endif %}">{{ summary_text|safe }}</p>
+        <p class="summary-box {% if 'negative' not in summary_text %}summary-positive{% endif %}">
+            {{ summary_text|safe }}
+        </p>
 
-        <!-- Display Cross-Match Summary if message exists and variants were identified by both algorithms -->
         {% if cross_match_message and advntr_available %}
             <h2>Cross-Match Summary</h2>
             <p class="summary-box {% if 'match' in cross_match_message|lower %}summary-positive{% endif %}">
@@ -275,36 +282,102 @@
                 </div>
             </div>
         </div>
-
     </div>
 
-    <!-- jQuery and DataTables script -->
+    <!-- jQuery and DataTables scripts -->
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
+    <!-- Bootstrap Bundle for tooltips -->
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
 
-    <!-- Updated JavaScript to initialize DataTables with specific ordering for the Kestrel table -->
+    <!-- Custom filtering and flag update functions -->
     <script>
-        $(document).ready(function() {
-            // Initialize DataTables for the Kestrel table with specific ordering by the 'Depth Score' column (index 8)
-            $('#kestrel_table').DataTable({
-                "order": [[ 8, "desc" ]],
-                "paging": true,
-                "searching": true,
-                "info": true,
-                "autoWidth": false,
-                "columnDefs": [
-                    { "width": "150px", "targets": "_all" }
-                ]
+        // Custom filter: apply flag filtering only for tables that have a "Flag" header.
+        $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+            var $table = $(settings.nTable);
+            var lastHeader = $table.find('thead th:last').text().trim();
+            if(lastHeader !== "Flag") {
+                return true;
+            }
+            var showFlagged = $('#toggleFlagged').prop('checked');
+            var row = settings.aoData[dataIndex].nTr;
+            var flagCell = $(row).find('td:last');
+            var originalFlag = flagCell.attr('data-original') || flagCell.text().trim();
+            if(originalFlag === "") {
+                return true;
+            }
+            return showFlagged || originalFlag === "Not flagged" || originalFlag === "Not applicable";
+        });
+
+        // Function to round numeric values to 4 decimal places.
+        function roundValue(val) {
+            var num = parseFloat(val);
+            if (!isNaN(num)) {
+                return parseFloat(num.toFixed(4)).toString();
+            }
+            return val;
+        }
+
+        // Apply rounding to all table cells.
+        function applyRounding(tableElement) {
+            $(tableElement).find('td').each(function() {
+                var text = $(this).text().trim();
+                if ($.isNumeric(text)) {
+                    $(this).text(roundValue(text));
+                }
             });
-            // Initialize DataTables for any other tables on the page.
-            $('table:not(#kestrel_table)').DataTable({
+        }
+
+        // Update the flag column for tables with a "Flag" header.
+        function updateFlagColumn(tableElement) {
+            var $table = $(tableElement);
+            var lastHeader = $table.find('thead th:last').text().trim();
+            if(lastHeader !== "Flag") {
+                return;
+            }
+            $table.find('tr').each(function() {
+                var $cells = $(this).find('td');
+                if ($cells.length) {
+                    var $flagCell = $cells.last();
+                    var originalText = $flagCell.attr('data-original');
+                    if (typeof originalText === "undefined") {
+                        originalText = $flagCell.text().trim();
+                        $flagCell.attr('data-original', originalText);
+                    }
+                    if (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "") {
+                        $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:green;font-size:16px;">&#10003;</span>');
+                    } else {
+                        $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:red;font-size:16px;">&#10006;</span>');
+                    }
+                }
+            });
+            $('[data-toggle="tooltip"]').tooltip({container: 'body'});
+        }
+
+        $(document).ready(function() {
+            // Initialize DataTables for tables on the page.
+            $('table').DataTable({
                 "paging": true,
                 "searching": true,
                 "info": true,
                 "autoWidth": false,
                 "columnDefs": [
                     { "width": "150px", "targets": "_all" }
-                ]
+                ],
+                "preDrawCallback": function(settings) {
+                    updateFlagColumn(this.api().table().node());
+                },
+                "drawCallback": function(settings) {
+                    applyRounding(this.api().table().node());
+                }
+            });
+            
+            // Update the switch label and redraw all tables when toggling.
+            $('#toggleFlagged').change(function() {
+                var isChecked = $(this).prop('checked');
+                var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
+                $('label[for="toggleFlagged"]').text(newLabel);
+                $('table').DataTable().draw();
             });
         });
 
@@ -370,9 +443,7 @@
                     row.classList.add("selected");
                     const uniqueId = rowID.substring(4);
                     const session = sessionDictionary[uniqueId];
-                    igvBrowser.loadSession({
-                        url: session
-                    });
+                    igvBrowser.loadSession({ url: session });
                 };
 
                 for (let j = 1; j < headers.length; j++) {
