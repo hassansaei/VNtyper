@@ -19,6 +19,7 @@ import tempfile
 import shutil
 import json
 import base64
+import hashlib
 
 import pandas as pd
 import matplotlib
@@ -651,7 +652,12 @@ def generate_cohort_summary_report(
 
 
 def aggregate_cohort(
-    input_paths, output_dir, summary_file, config, additional_formats=""
+    input_paths,
+    output_dir,
+    summary_file,
+    config,
+    additional_formats="",
+    pseudonymize_samples=False,
 ):
     """
     Aggregate outputs from multiple runs into a single summary file.
@@ -664,6 +670,13 @@ def aggregate_cohort(
 
     Additionally, if additional output formats are specified, the aggregated cohort
     data for Kestrel and adVNTR are exported as CSV, TSV, and/or JSON files.
+
+    Additional Parameters
+    ---------------------
+    pseudonymize_samples : bool or str, optional
+        If a value is provided, pseudonymize sample names using the given value as the prefix.
+        The pseudonym will be the prefix concatenated with the first 5 characters of the MD5 hash
+        of the original sample name.
 
     Parameters
     ----------
@@ -688,6 +701,7 @@ def aggregate_cohort(
     processed_dirs = set()  # use a set to avoid duplicate directories
     additional_stats_list = []
 
+    # Identify valid directories/zip files (no changes here)
     for path_str in input_paths:
         path = Path(path_str)
         if not path.exists():
@@ -745,30 +759,41 @@ def aggregate_cohort(
         )
         return
 
+    # If pseudonymization is requested, build a mapping from original to pseudonym names.
+    sample_mapping = {}
+
     kestrel_list = []
     advntr_list = []
     for sample_dir in processed_dirs:
-        sample_id = Path(sample_dir).name
-        logging.info(f"Processing sample directory: {sample_dir}")
+        original_sample = Path(sample_dir).name
+        if pseudonymize_samples:
+            # Compute MD5 hash of the original sample name and take first 5 characters.
+            hash_suffix = hashlib.md5(original_sample.encode()).hexdigest()[:5]
+            pseudonym = f"{pseudonymize_samples}{hash_suffix}"
+            sample_mapping[pseudonym] = original_sample
+        else:
+            pseudonym = original_sample
+
+        logging.info(f"Processing sample directory: {sample_dir} as {pseudonym}")
         k_data, a_data, add_stats = load_pipeline_summary_for_sample(sample_dir)
         if k_data:
             for entry in k_data:
-                entry["Sample"] = sample_id
+                entry["Sample"] = pseudonym
             kestrel_list.extend(k_data)
         else:
             logging.warning(
-                f"No Kestrel data found in pipeline summary for sample {sample_id}."
+                f"No Kestrel data found in pipeline summary for sample {original_sample}."
             )
         if a_data:
             for entry in a_data:
-                entry["Sample"] = sample_id
+                entry["Sample"] = pseudonym
             advntr_list.extend(a_data)
         else:
             logging.warning(
-                f"No adVNTR data found in pipeline summary for sample {sample_id}."
+                f"No adVNTR data found in pipeline summary for sample {original_sample}."
             )
         if add_stats:
-            add_stats["Sample"] = sample_id
+            add_stats["Sample"] = pseudonym
             additional_stats_list.append(add_stats)
 
     if kestrel_list:
@@ -823,7 +848,6 @@ def aggregate_cohort(
             logging.error(f"Failed to remove temporary directory {temp_dir}: {e}")
 
     # Generate additional machine-readable cohort summaries if requested
-    # Supported formats: csv, tsv, json (comma-separated)
     if additional_formats:
         formats = [
             fmt.strip().lower() for fmt in additional_formats.split(",") if fmt.strip()
@@ -854,3 +878,15 @@ def aggregate_cohort(
                 json_path = Path(output_dir) / "cohort_advntr.json"
                 advntr_df.to_json(json_path, orient="records", indent=4)
                 logging.info(f"Cohort adVNTR JSON written to: {json_path}")
+
+    # If pseudonymization was enabled, output the pseudonymization table.
+    if pseudonymize_samples and sample_mapping:
+        pseudonym_table_path = Path(output_dir) / "pseudonymization_table.tsv"
+        try:
+            with open(pseudonym_table_path, "w") as pt:
+                pt.write("Pseudonym\tOriginal\n")
+                for pseudonym, original in sample_mapping.items():
+                    pt.write(f"{pseudonym}\t{original}\n")
+            logging.info(f"Pseudonymization table written to: {pseudonym_table_path}")
+        except Exception as e:
+            logging.error(f"Failed to write pseudonymization table: {e}")
