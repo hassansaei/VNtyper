@@ -38,6 +38,12 @@
     <div class="container">
         <h1>Cohort Summary Report</h1>
         <p><strong>Report Date:</strong> {{ report_date }}</p>
+        <!-- Custom switch for toggling flagged values, aligned to the left.
+             Default state is unchecked (flagged rows hidden) -->
+        <div class="custom-control custom-switch text-left mb-3">
+            <input type="checkbox" class="custom-control-input" id="toggleFlagged">
+            <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
+        </div>
 
         <h2>Kestrel Results</h2>
         <div class="table-container">
@@ -79,34 +85,58 @@
     <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
     <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
     <script>
-        // DataTables initialization
+        // DataTables custom filter to show/hide flagged rows based on switch state.
+        $.fn.dataTable.ext.search.push(
+            function(settings, data, dataIndex) {
+                var showFlagged = $('#toggleFlagged').prop('checked');
+                // Assuming the last column is the Flag column.
+                var flag = data[data.length - 1].trim();
+                // If the switch is checked, show all rows; otherwise, only show rows where flag is "Not flagged" or "Not applicable".
+                return showFlagged || flag === "Not flagged" || flag === "Not applicable";
+            }
+        );
+
+        // Rounding function to round numeric values to 4 decimal places.
+        function roundValue(val) {
+            var num = parseFloat(val);
+            if (!isNaN(num)) {
+                return parseFloat(num.toFixed(4)).toString();
+            }
+            return val;
+        }
+
+        // Apply rounding to all table cells in the given table.
+        function applyRounding(tableElement) {
+            $(tableElement).find('td').each(function() {
+                var text = $(this).text().trim();
+                if ($.isNumeric(text)) {
+                    $(this).text(roundValue(text));
+                }
+            });
+        }
+
         $(document).ready(function() {
-            var table = $('table').DataTable({
+            // Initialize DataTables for all tables with a draw callback.
+            var dataTables = $('table').DataTable({
                 "paging": true,
                 "searching": true,
                 "info": true,
                 "autoWidth": false,
                 "columnDefs": [
                     { "width": "150px", "targets": "_all" }
-                ]
+                ],
+                "drawCallback": function(settings) {
+                    // Apply rounding after each table draw.
+                    applyRounding(this.api().table().node());
+                }
             });
             
-            // Function to round numeric values to 4 decimal places
-            function roundValue(val) {
-                var num = parseFloat(val);
-                if (!isNaN(num)) {
-                    // toFixed returns a string, then remove trailing zeros and optional dot.
-                    return parseFloat(num.toFixed(4)).toString();
-                }
-                return val;
-            }
-            
-            // Iterate over all table cells and round numeric values.
-            $('table td').each(function() {
-                var text = $(this).text().trim();
-                if ($.isNumeric(text)) {
-                    $(this).text(roundValue(text));
-                }
+            // Update the switch label based on its state and re-draw tables on change.
+            $('#toggleFlagged').change(function() {
+                var isChecked = $(this).prop('checked');
+                var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
+                $('label[for="toggleFlagged"]').text(newLabel);
+                $('table').DataTable().draw();
             });
         });
     </script>
