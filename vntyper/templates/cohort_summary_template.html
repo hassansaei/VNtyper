@@ -1,144 +1,193 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Cohort Summary Report</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
-    <style>
-        body { margin: 20px; }
-        h1, h2, h3 { text-align: center; margin-top: 20px; }
-        .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
-        .table-container { width: 90%; margin: 0 auto; text-align: center; }
-        .plot { margin: 20px auto; display: block; max-width: 500px; }
-        .table td, .table th { text-align: center; word-break: break-word; }
-        th { white-space: pre-wrap; }
-        
-        /* New CSS for truncating text and showing full text on hover */
-        .table td {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 150px; /* Adjust this value based on your needs */
-            cursor: pointer;
-        }
+  <meta charset="UTF-8">
+  <title>Cohort Summary Report</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.min.css">
+  <style>
+    body { margin: 20px; }
+    h1, h2, h3 { text-align: center; margin-top: 20px; }
+    .container { max-width: 1600px; margin-left: auto; margin-right: auto; }
+    .table-container { width: 90%; margin: 0 auto; text-align: center; }
+    .plot { margin: 20px auto; display: block; max-width: 500px; }
+    .table td, .table th { text-align: center; word-break: break-word; }
+    th { white-space: pre-wrap; }
     
-        .table td:hover {
-            overflow: visible;
-            white-space: normal;
-            max-width: none;
-            position: relative;
-            z-index: 10;
-            background-color: #fff;
-            border: 1px solid #ddd;
-        }
-    </style>
+    /* New CSS for truncating text and showing full text on hover */
+    .table td {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 150px; /* Adjust this value based on your needs */
+      cursor: pointer;
+    }
+  
+    .table td:hover {
+      overflow: visible;
+      white-space: normal;
+      max-width: none;
+      position: relative;
+      z-index: 10;
+      background-color: #fff;
+      border: 1px solid #ddd;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Cohort Summary Report</h1>
-        <p><strong>Report Date:</strong> {{ report_date }}</p>
-        <!-- Custom switch for toggling flagged values, aligned to the left.
-             Default state is unchecked (flagged rows hidden) -->
-        <div class="custom-control custom-switch text-left mb-3">
-            <input type="checkbox" class="custom-control-input" id="toggleFlagged">
-            <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
-        </div>
-
-        <h2>Kestrel Results</h2>
-        <div class="table-container">
-            {{ kestrel_positive | safe }}
-        </div>
-
-        <h2>Kestrel Summary Plot</h2>
-        <div class="plot">
-            {% if interactive %}
-                {{ kestrel_plot_interactive | safe }}
-            {% else %}
-                <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
-            {% endif %}
-        </div>
-
-        <h2>adVNTR Results</h2>
-        <div class="table-container">
-            {{ advntr_positive | safe }}
-        </div>
-
-        <h2>adVNTR Summary Plot</h2>
-        <div class="plot">
-            {% if interactive %}
-                {{ advntr_plot_interactive | safe }}
-            {% else %}
-                <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
-            {% endif %}
-        </div>
-
-        {% if additional_stats %}
-        <h2>Additional Statistics</h2>
-        <div class="table-container">
-            {{ additional_stats | safe }}
-        </div>
-        {% endif %}
-
+  <div class="container">
+    <h1>Cohort Summary Report</h1>
+    <p><strong>Report Date:</strong> {{ report_date }}</p>
+    <!-- Custom switch for toggling flagged values, aligned to the left.
+         Default state is unchecked (flagged rows hidden) -->
+    <div class="custom-control custom-switch text-left mb-3">
+      <input type="checkbox" class="custom-control-input" id="toggleFlagged">
+      <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
-    <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
-    <script>
-        // DataTables custom filter to show/hide flagged rows based on switch state.
-        $.fn.dataTable.ext.search.push(
-            function(settings, data, dataIndex) {
-                var showFlagged = $('#toggleFlagged').prop('checked');
-                // Assuming the last column is the Flag column.
-                var flag = data[data.length - 1].trim();
-                // If the switch is checked, show all rows; otherwise, only show rows where flag is "Not flagged" or "Not applicable".
-                return showFlagged || flag === "Not flagged" || flag === "Not applicable";
-            }
-        );
+    <h2>Kestrel Results</h2>
+    <div class="table-container">
+      {{ kestrel_positive | safe }}
+    </div>
 
-        // Rounding function to round numeric values to 4 decimal places.
-        function roundValue(val) {
-            var num = parseFloat(val);
-            if (!isNaN(num)) {
-                return parseFloat(num.toFixed(4)).toString();
-            }
-            return val;
+    <h2>Kestrel Summary Plot</h2>
+    <div class="plot">
+      {% if interactive %}
+        {{ kestrel_plot_interactive | safe }}
+      {% else %}
+        <img src="{{ kestrel_plot_base64 }}" alt="Kestrel Summary Plot" class="img-fluid plot">
+      {% endif %}
+    </div>
+
+    <h2>adVNTR Results</h2>
+    <div class="table-container">
+      {{ advntr_positive | safe }}
+    </div>
+
+    <h2>adVNTR Summary Plot</h2>
+    <div class="plot">
+      {% if interactive %}
+        {{ advntr_plot_interactive | safe }}
+      {% else %}
+        <img src="{{ advntr_plot_base64 }}" alt="adVNTR Summary Plot" class="img-fluid plot">
+      {% endif %}
+    </div>
+
+    {% if additional_stats %}
+    <h2>Additional Statistics</h2>
+    <div class="table-container">
+      {{ additional_stats | safe }}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- jQuery -->
+  <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+  <!-- Bootstrap Bundle (includes Popper) for tooltips -->
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+  <!-- DataTables -->
+  <script src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.min.js"></script>
+  <script>
+    // Custom filter: only apply flag filtering if the table has a "Flag" column.
+    $.fn.dataTable.ext.search.push(
+      function(settings, data, dataIndex) {
+        var $table = $(settings.nTable);
+        var lastHeader = $table.find('thead th:last').text().trim();
+        if(lastHeader !== "Flag") {
+          // If table doesn't have a Flag column, do not filter.
+          return true;
         }
-
-        // Apply rounding to all table cells in the given table.
-        function applyRounding(tableElement) {
-            $(tableElement).find('td').each(function() {
-                var text = $(this).text().trim();
-                if ($.isNumeric(text)) {
-                    $(this).text(roundValue(text));
-                }
-            });
+        var showFlagged = $('#toggleFlagged').prop('checked');
+        var row = settings.aoData[dataIndex].nTr;
+        var flagCell = $(row).find('td:last');
+        var originalFlag = flagCell.attr('data-original');
+        if (typeof originalFlag === "undefined") {
+          originalFlag = flagCell.text().trim();
         }
+        if (originalFlag === "") {
+          return true;
+        }
+        // When switch is unchecked, only show rows where flag is "Not flagged" or "Not applicable".
+        return showFlagged || originalFlag === "Not flagged" || originalFlag === "Not applicable";
+      }
+    );
 
-        $(document).ready(function() {
-            // Initialize DataTables for all tables with a draw callback.
-            var dataTables = $('table').DataTable({
-                "paging": true,
-                "searching": true,
-                "info": true,
-                "autoWidth": false,
-                "columnDefs": [
-                    { "width": "150px", "targets": "_all" }
-                ],
-                "drawCallback": function(settings) {
-                    // Apply rounding after each table draw.
-                    applyRounding(this.api().table().node());
-                }
-            });
-            
-            // Update the switch label based on its state and re-draw tables on change.
-            $('#toggleFlagged').change(function() {
-                var isChecked = $(this).prop('checked');
-                var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
-                $('label[for="toggleFlagged"]').text(newLabel);
-                $('table').DataTable().draw();
-            });
-        });
-    </script>
+    // Function to round numeric values to 4 decimal places.
+    function roundValue(val) {
+      var num = parseFloat(val);
+      if (!isNaN(num)) {
+        return parseFloat(num.toFixed(4)).toString();
+      }
+      return val;
+    }
+
+    // Apply rounding to all table cells.
+    function applyRounding(tableElement) {
+      $(tableElement).find('td').each(function() {
+        var text = $(this).text().trim();
+        if ($.isNumeric(text)) {
+          $(this).text(roundValue(text));
+        }
+      });
+    }
+
+    // Update the flag column for tables that have a "Flag" header.
+    function updateFlagColumn(tableElement) {
+      var $table = $(tableElement);
+      var lastHeader = $table.find('thead th:last').text().trim();
+      if(lastHeader !== "Flag") {
+        // Do nothing if this table doesn't have a "Flag" column.
+        return;
+      }
+      $table.find('tr').each(function() {
+        var $cells = $(this).find('td');
+        if ($cells.length) {
+          var $flagCell = $cells.last();
+          // Store the original flag value if not already set.
+          var originalText = $flagCell.attr('data-original');
+          if (typeof originalText === "undefined") {
+            originalText = $flagCell.text().trim();
+            $flagCell.attr('data-original', originalText);
+          }
+          // Determine symbol and styling.
+          if (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "") {
+            $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:green;font-size:16px;">&#10003;</span>');
+          } else {
+            $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:red;font-size:16px;">&#10006;</span>');
+          }
+        }
+      });
+      // Initialize Bootstrap tooltips.
+      $('[data-toggle="tooltip"]').tooltip({container: 'body'});
+    }
+
+    $(document).ready(function() {
+      // Initialize DataTables with preDrawCallback to update flag column only for tables with a Flag column.
+      var dataTables = $('table').DataTable({
+        "paging": true,
+        "searching": true,
+        "info": true,
+        "autoWidth": false,
+        "columnDefs": [
+          { "width": "150px", "targets": "_all" }
+        ],
+        "preDrawCallback": function(settings) {
+          updateFlagColumn(this.api().table().node());
+        },
+        "drawCallback": function(settings) {
+          var tableNode = this.api().table().node();
+          applyRounding(tableNode);
+        }
+      });
+      
+      // Update the switch label and redraw the table when toggling.
+      $('#toggleFlagged').change(function() {
+        var isChecked = $(this).prop('checked');
+        var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
+        $('label[for="toggleFlagged"]').text(newLabel);
+        $('table').DataTable().draw();
+      });
+    });
+  </script>
 </body>
 </html>
