@@ -271,6 +271,15 @@ def main():
         default="",
         help="Comma-separated list of additional summary output formats to generate (supported: csv, tsv, json). HTML is always generated.",
     )
+    # New flag: pseudonymize sample names in cohort mode.
+    # This argument optionally accepts a basename; if not provided, the default "sample_" is used.
+    parser_cohort.add_argument(
+        "--pseudonymize-samples",
+        nargs="?",
+        const="sample_",
+        default=None,
+        help="Pseudonymize sample names to protect sensitive information. Optionally provide a basename for pseudonyms (default is 'sample_').",
+    )
 
     # Subcommand: install-references
     parser_install = subparsers.add_parser(
@@ -630,19 +639,15 @@ def main():
     # -------------------------------------------------------------------------
     #
     elif args.command == "cohort":
-        # No need to set up logging here; it's already set up in cli.py
-
         if args.summary_file is None:
             args.summary_file = get_conf("summary_file", "cohort_summary.html")
             logging.debug(f"summary_file set to {args.summary_file}")
 
         # Prepare the list of input paths
         input_paths = []
-
         if args.input_dirs:
             input_paths.extend(args.input_dirs)
             logging.debug(f"Added input_dirs: {args.input_dirs}")
-
         if args.input_file:
             if not args.input_file.exists():
                 logging.error(f"The input file {args.input_file} does not exist.")
@@ -657,7 +662,8 @@ def main():
             output_dir=Path(args.output_dir),
             summary_file=args.summary_file,
             config=config,
-            additional_formats=args.summary_formats,  # Pass the new parameter
+            additional_formats=args.summary_formats,  # Pass the new parameter for extra formats
+            pseudonymize_samples=args.pseudonymize_samples,  # Pass the new pseudonymize flag (value or None)
         )
 
     #
