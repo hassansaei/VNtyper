@@ -175,11 +175,11 @@ def compute_algorithm_result(df, logic_config):
     Returns the rule's "result" if matched; otherwise returns logic_config["default"].
 
     Args:
-        df (pandas.DataFrame): DataFrame containing the results.
+        df (pandas.DataFrame): DataFrame containing the results (generally a single row).
         logic_config (dict): Configuration dictionary with rules.
 
     Returns:
-        str: The computed algorithm result.
+        str: The computed algorithm result (e.g., 'High_Precision', 'positive', etc.).
     """
     if df.empty:
         logging.debug("DataFrame is empty; returning default result.")
@@ -297,6 +297,53 @@ def compute_algorithm_result(df, logic_config):
     return logic_config.get("default", "none")
 
 
+# --------------------------------------------------------------------------
+# New helper functions to correctly aggregate row-level results into
+# sample-level categories (Positive, Positive_Flagged, Negative).
+# --------------------------------------------------------------------------
+def unify_kestrel_result(row_result):
+    """
+    Convert a row-level Kestrel result (e.g. 'High_Precision', 'Low_Precision_flagged')
+    into a broader category: 'Positive', 'Positive_Flagged', or 'Negative'.
+    """
+    if row_result in ["High_Precision", "Low_Precision"]:
+        return "Positive"
+    elif row_result in ["High_Precision_flagged", "Low_Precision_flagged"]:
+        return "Positive_Flagged"
+    else:
+        return "Negative"
+
+
+def unify_advntr_result(row_result):
+    """
+    Convert a row-level adVNTR result (e.g. 'positive', 'positive flagged')
+    into a broader category: 'Positive', 'Positive_Flagged', or 'Negative'.
+    """
+    if row_result == "positive":
+        return "Positive"
+    elif row_result == "positive flagged":
+        return "Positive_Flagged"
+    else:
+        return "Negative"
+
+
+def aggregate_sample_category(results):
+    """
+    Given a list of final row-level categories for a sample (each in
+    {'Positive', 'Positive_Flagged', 'Negative'}), pick the highest category
+    following the rule:
+      - If there's at least one 'Positive' => 'Positive'
+      - Else if there's at least one 'Positive_Flagged' => 'Positive_Flagged'
+      - Else => 'Negative'
+    """
+    if any(r == "Positive" for r in results):
+        return "Positive"
+    elif any(r == "Positive_Flagged" for r in results):
+        return "Positive_Flagged"
+    else:
+        return "Negative"
+
+
 def generate_cohort_summary_report(
     output_dir, kestrel_df, advntr_df, summary_file, config
 ):
@@ -332,94 +379,99 @@ def generate_cohort_summary_report(
     kestrel_logic = report_cfg.get("algorithm_logic", {}).get("kestrel", {})
     advntr_logic = report_cfg.get("algorithm_logic", {}).get("advntr", {})
 
-    # Group results by sample and compute per-sample algorithm result.
+    # -----------------------------
+    # Compute sample-level results
+    # -----------------------------
+    # For each row in Kestrel, compute row-level result, unify it, then group by sample.
     if not kestrel_df.empty and "Sample" in kestrel_df.columns:
-        kestrel_sample_results = kestrel_df.groupby("Sample").apply(
-            lambda g: compute_algorithm_result(g, kestrel_logic)
+        kestrel_df["__row_result"] = kestrel_df.apply(
+            lambda row: compute_algorithm_result(pd.DataFrame([row]), kestrel_logic),
+            axis=1,
+        )
+        kestrel_df["__unified"] = kestrel_df["__row_result"].apply(unify_kestrel_result)
+        kestrel_sample_results = (
+            kestrel_df.groupby("Sample")["__unified"]
+            .apply(list)
+            .apply(aggregate_sample_category)
         )
     else:
         kestrel_sample_results = pd.Series(dtype=str)
 
+    # For each row in adVNTR, compute row-level result, unify it, then group by sample.
     if not advntr_df.empty and "Sample" in advntr_df.columns:
-        advntr_sample_results = advntr_df.groupby("Sample").apply(
-            lambda g: compute_algorithm_result(g, advntr_logic)
+        advntr_df["__row_result"] = advntr_df.apply(
+            lambda row: compute_algorithm_result(pd.DataFrame([row]), advntr_logic),
+            axis=1,
+        )
+        advntr_df["__unified"] = advntr_df["__row_result"].apply(unify_advntr_result)
+        advntr_sample_results = (
+            advntr_df.groupby("Sample")["__unified"]
+            .apply(list)
+            .apply(aggregate_sample_category)
         )
     else:
         advntr_sample_results = pd.Series(dtype=str)
 
-    # Aggregate per-sample results for donut plots.
-    kestrel_positive = sum(
-        1
-        for r in kestrel_sample_results
-        if r
-        in [
-            "High_Precision",
-            "High_Precision_flagged",
-            "Low_Precision",
-            "Low_Precision_flagged",
-        ]
-    )
-    kestrel_negative = len(kestrel_sample_results) - kestrel_positive
+    # -------------------------
+    # Count final sample-level
+    # -------------------------
+    # Kestrel
+    kestrel_counts = kestrel_sample_results.value_counts()
+    k_pos = kestrel_counts.get("Positive", 0)
+    k_pos_flag = kestrel_counts.get("Positive_Flagged", 0)
+    k_neg = kestrel_counts.get("Negative", 0)
+    total_kestrel = k_pos + k_pos_flag + k_neg
 
-    if not advntr_df.empty:
-        advntr_positive = sum(
-            1 for r in advntr_sample_results if r in ["positive", "positive flagged"]
-        )
-        advntr_negative = sum(1 for r in advntr_sample_results if r == "negative")
-        advntr_not_performed = 0
-    else:
-        advntr_positive = 0
-        advntr_negative = 0
-        advntr_not_performed = 0
+    # adVNTR
+    advntr_counts = advntr_sample_results.value_counts()
+    a_pos = advntr_counts.get("Positive", 0)
+    a_pos_flag = advntr_counts.get("Positive_Flagged", 0)
+    a_neg = advntr_counts.get("Negative", 0)
+    total_advntr = a_pos + a_pos_flag + a_neg
 
-    total_kestrel = kestrel_positive + kestrel_negative
-    total_advntr = advntr_positive + advntr_negative + advntr_not_performed
+    # --------------------------------------------------------------------
+    # Updated color assignments: Positive=Blue, Flagged=Orange, Negative=Dark Grey
+    # --------------------------------------------------------------------
+    color_list = ["#FF0000", "#FFA500", "#404040"]  # Exactly 3 colors
 
-    color_list = config.get("visualization", {}).get(
-        "donut_colors", ["#56B4E9", "#D55E00", "#999999"]
-    )
-    colors = {
-        "positive": color_list[0],
-        "negative": color_list[1],
-        "no_data": color_list[2],
-    }
-
+    # Generate Kestrel donut chart with 3 categories
     kestrel_plot_path = plots_dir / "kestrel_summary_plot.png"
     kestrel_plot_base64 = generate_donut_chart(
-        values=[kestrel_positive, kestrel_negative],
-        labels=["Positive", "Negative"],
+        values=[k_pos, k_pos_flag, k_neg],
+        labels=["Positive", "Positive (Flagged)", "Negative"],
         total=total_kestrel,
         title="Kestrel Results",
-        colors=[colors["positive"], colors["negative"]],
+        colors=color_list,
         plot_path=kestrel_plot_path,
         interactive=False,
     )
     kestrel_plot_html = generate_donut_chart(
-        values=[kestrel_positive, kestrel_negative],
-        labels=["Positive", "Negative"],
+        values=[k_pos, k_pos_flag, k_neg],
+        labels=["Positive", "Positive (Flagged)", "Negative"],
         total=total_kestrel,
         title="Kestrel Results",
-        colors=[colors["positive"], colors["negative"]],
+        colors=color_list,
         plot_path=None,
         interactive=True,
     )
 
+    # Generate adVNTR donut chart with 3 categories
     advntr_plot_path = plots_dir / "advntr_summary_plot.png"
     advntr_plot_base64 = generate_donut_chart(
-        values=[advntr_positive, advntr_negative, advntr_not_performed],
-        labels=["Positive", "Negative", "Not Performed"],
+        values=[a_pos, a_pos_flag, a_neg],
+        labels=["Positive", "Positive (Flagged)", "Negative"],
         total=total_advntr,
         title="adVNTR Results",
-        colors=[colors["positive"], colors["negative"], colors["no_data"]],
+        colors=color_list,
         plot_path=advntr_plot_path,
         interactive=False,
     )
     advntr_plot_html = generate_donut_chart(
-        values=[advntr_positive, advntr_negative, advntr_not_performed],
-        labels=["Positive", "Negative", "Not Performed"],
+        values=[a_pos, a_pos_flag, a_neg],
+        labels=["Positive", "Positive (Flagged)", "Negative"],
         total=total_advntr,
         title="adVNTR Results",
-        colors=[colors["positive"], colors["negative"], colors["no_data"]],
+        colors=color_list,
         plot_path=None,
         interactive=True,
     )
