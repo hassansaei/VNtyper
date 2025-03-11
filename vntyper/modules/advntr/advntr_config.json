@@ -10,7 +10,7 @@
     "flagging_rules": {
          "Low_Coverage": "NumberOfSupportingReads < 10",
          "Repeat_Unit_7": "RU == 7",
-         "Polymorphic_Call": "Variant in ['I14_2_A_LEN1', 'I11_2_G_LEN1', 'I26_7_A_LEN25', 'D17_2&D18_2&D19_2&D20_2&D21_2', 'I14_2_C_LEN4', 'I23_6_G_LEN1', 'I21_2_T_LEN1', 'I22_2_C_LEN38', 'I26_7_A_LEN24', 'I60_2_A_LEN2', 'I9_2_C_LEN5']"
+         "Polymorphic_Call": "Variant in ['I10_2_A_LEN1', 'D8_2&D9_2&I9_2_A_LEN9', 'D2_2&I2_2_C_LEN5', 'I39_2_A_LEN4', 'D46_2&D47_2&I47_2_A_LEN4', 'I52_2_A_LEN7', 'I45_2_A_LEN4', 'D49_2&I49_2_A_LEN12', 'D45_2&I45_2_A_LEN2', 'D14_2&I14_2_G_LEN14', 'D58_2&D59_2', 'I60_2_A_LEN10', 'I14_2_G_LEN16', 'I18_2_T_LEN1', 'I21_2_G_LEN4', 'D29_2&I29_2_A_LEN2', 'D8_2&I8_2_A_LEN20', 'D17_2&I17_2_G_LEN3', 'D29_2&I29_2_A_LEN2', 'D20_2&D21_2', 'D21_2&D22_2', 'I14_2_A_LEN1', 'I11_2_G_LEN1', 'I26_7_A_LEN25', 'D17_2&D18_2&D19_2&D20_2&D21_2', 'I14_2_C_LEN4', 'I23_6_G_LEN1', 'I21_2_T_LEN1', 'I22_2_C_LEN38', 'I26_7_A_LEN24', 'I60_2_A_LEN2', 'I9_2_C_LEN5']"
     }
   }
   
