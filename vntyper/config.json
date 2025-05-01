@@ -58,6 +58,7 @@
   },
   "thresholds": {
     "mean_vntr_coverage": 100,
+    "percent_vntr_uncovered": 50.0,
     "duplication_rate": 0.1,
     "q20_rate": 0.8,
     "q30_rate": 0.7,
