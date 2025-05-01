@@ -295,7 +295,8 @@ def calculate_vntr_coverage(
             Defaults to "<output_name>_summary.tsv" in output_dir.
 
     Returns:
-        dict: A dictionary containing mean, median, standard deviation, min, and max coverage.
+        dict: A dictionary containing mean, median, standard deviation, min, max coverage, and
+            percentage of VNTR region with zero coverage.
 
     Raises:
         RuntimeError: If coverage calculation fails.
@@ -316,12 +317,43 @@ def calculate_vntr_coverage(
         raise RuntimeError("VNTR coverage calculation failed.")
 
     try:
+        # Parse region string to get total region length
+        try:
+            # Region format is typically 'chr:start-end'
+            region_parts = region.split(":")
+            if len(region_parts) != 2:
+                raise ValueError(f"Invalid region format: {region}")
+
+            pos_range = region_parts[1].split("-")
+            if len(pos_range) != 2:
+                raise ValueError(f"Invalid position range: {region_parts[1]}")
+
+            start_pos = int(pos_range[0])
+            end_pos = int(pos_range[1])
+            total_region_length = end_pos - start_pos + 1
+            logging.debug(f"VNTR region total length: {total_region_length} bp")
+        except (ValueError, IndexError) as e:
+            logging.warning(
+                f"Could not parse region string: {e}. Setting region length to 0."
+            )
+            total_region_length = 0
+
         with open(coverage_output, "r") as f:
             coverage_values = [
                 int(line.strip().split("\t")[2]) for line in f if line.strip()
             ]
         if not coverage_values:
             raise RuntimeError("No coverage data found.")
+
+        # Calculate number of bases with coverage and percentage of uncovered bases
+        covered_bases_count = len(coverage_values)
+        zero_coverage_bases = total_region_length - covered_bases_count
+
+        # Handle edge case of zero region length
+        if total_region_length <= 0:
+            percent_uncovered = 0
+        else:
+            percent_uncovered = (zero_coverage_bases / total_region_length) * 100
 
         mean_coverage = sum(coverage_values) / len(coverage_values)
         median_coverage = statistics.median(coverage_values)
@@ -336,6 +368,11 @@ def calculate_vntr_coverage(
         logging.info(f"Standard deviation: {stdev_coverage:.2f}")
         logging.info(f"Min coverage: {min_coverage}")
         logging.info(f"Max coverage: {max_coverage}")
+        logging.info(f"VNTR region total length: {total_region_length} bp")
+        logging.info(f"VNTR region uncovered bases: {zero_coverage_bases} bp")
+        logging.info(
+            f"Percentage of VNTR region with zero coverage: {percent_uncovered:.2f}%"
+        )
 
         if summary_filename is None:
             summary_filename = Path(output_dir) / f"{output_name}_summary.tsv"
@@ -343,9 +380,11 @@ def calculate_vntr_coverage(
             summary_filename = Path(summary_filename)
 
         with open(summary_filename, "w") as out_f:
-            out_f.write("mean\tmedian\tstdev\tmin\tmax\n")
             out_f.write(
-                f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t{min_coverage}\t{max_coverage}\n"
+                "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
+            )
+            out_f.write(
+                f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t{min_coverage}\t{max_coverage}\t{total_region_length}\t{zero_coverage_bases}\t{percent_uncovered:.2f}\n"
             )
         logging.info(f"Coverage summary written to: {summary_filename}")
 
@@ -355,6 +394,9 @@ def calculate_vntr_coverage(
             "stdev": stdev_coverage,
             "min": min_coverage,
             "max": max_coverage,
+            "region_length": total_region_length,
+            "uncovered_bases": zero_coverage_bases,
+            "percent_uncovered": percent_uncovered,
         }
     except Exception as e:
         logging.error(f"Error calculating coverage summary: {e}")

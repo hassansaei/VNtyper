@@ -286,7 +286,11 @@ Once the pipeline completes, you will have:
 
 - **BAM or FASTQ** slices containing MUC1-specific reads.  
 - **VCF files** or **TSV files** with genotyping results (for Kestrel and optional adVNTR).  
-- **HTML summary report** detailing coverage stats, genotyping calls, and relevant logs.
+- **HTML summary report** including:
+  - **VNTR Region Coverage Statistics**: Detailed coverage metrics specifically for the VNTR region, including mean, median, standard deviation, minimum, and maximum coverage, as well as the percentage of the VNTR region with zero coverage.
+  - **Genotyping Calls**: Results from Kestrel and optional adVNTR analyses.
+  - **Quality Metrics**: When available, includes duplication rate, Q20/Q30 rates, and other quality indicators.
+  - **Pipeline Log**: Comprehensive logging information about the pipeline execution.
 
 ---
 
