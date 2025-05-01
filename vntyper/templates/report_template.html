@@ -187,7 +187,67 @@
 
         <!-- Coverage Section -->
         <h2>VNTR Region Coverage</h2>
-        <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</p>
+        
+        <!-- Radio buttons for toggling coverage metrics view -->
+        <div class="btn-group btn-group-toggle mb-3" data-toggle="buttons">
+            <label class="btn btn-outline-primary active">
+                <input type="radio" name="coverageOptions" id="basicCoverage" checked> Basic
+            </label>
+            <label class="btn btn-outline-primary">
+                <input type="radio" name="coverageOptions" id="detailedCoverage"> Detailed
+            </label>
+        </div>
+        
+        <!-- Basic coverage view (default) -->
+        <div id="basicCoverageView">
+            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</p>
+        </div>
+        
+        <!-- Detailed coverage view (hidden by default) -->
+        <div id="detailedCoverageView" style="display: none;">
+            <table class="table table-sm table-bordered">
+                <thead>
+                    <tr>
+                        <th>Coverage Metric</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Mean Coverage</td>
+                        <td>{{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</td>
+                    </tr>
+                    <tr>
+                        <td>Median Coverage</td>
+                        <td>{{ median_vntr_coverage }}</td>
+                    </tr>
+                    <tr>
+                        <td>Standard Deviation</td>
+                        <td>{{ stdev_vntr_coverage }}</td>
+                    </tr>
+                    <tr>
+                        <td>Minimum Coverage</td>
+                        <td>{{ min_vntr_coverage }}</td>
+                    </tr>
+                    <tr>
+                        <td>Maximum Coverage</td>
+                        <td>{{ max_vntr_coverage }}</td>
+                    </tr>
+                    <tr>
+                        <td>VNTR Region Length</td>
+                        <td>{{ vntr_region_length }} bp</td>
+                    </tr>
+                    <tr>
+                        <td>Uncovered Bases</td>
+                        <td>{{ vntr_uncovered_bases }} bp</td>
+                    </tr>
+                    <tr>
+                        <td>Percentage Uncovered</td>
+                        <td>{{ percent_vntr_uncovered }}%</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
 
         <!-- Conditionally show fastp metrics if available -->
         {% if fastp_available %}
@@ -355,8 +415,8 @@
         }
 
         $(document).ready(function() {
-            // Initialize DataTables for tables on the page.
-            $('table').DataTable({
+            // Initialize DataTables for tables on the page, excluding the coverage details table
+            $('table:not(#detailedCoverageView table)').DataTable({
                 "paging": true,
                 "searching": true,
                 "info": true,
@@ -377,7 +437,22 @@
                 var isChecked = $(this).prop('checked');
                 var newLabel = isChecked ? "Hide flagged values" : "Show flagged values";
                 $('label[for="toggleFlagged"]').text(newLabel);
-                $('table').DataTable().draw();
+                $('table:not(#detailedCoverageView table)').DataTable().draw();
+            });
+            
+            // Handle toggling between basic and detailed coverage views
+            $('#basicCoverage').change(function() {
+                if($(this).prop('checked')) {
+                    $('#basicCoverageView').show();
+                    $('#detailedCoverageView').hide();
+                }
+            });
+            
+            $('#detailedCoverage').change(function() {
+                if($(this).prop('checked')) {
+                    $('#basicCoverageView').hide();
+                    $('#detailedCoverageView').show();
+                }
             });
         });
 
