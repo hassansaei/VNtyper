@@ -7,12 +7,9 @@ import subprocess
 import json
 from datetime import datetime
 from pathlib import Path
-import re
 
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
-
-from vntyper.scripts.utils import load_config
 
 
 def load_pipeline_summary(summary_file_path):
@@ -490,6 +487,7 @@ def generate_summary_report(
 
     thresholds = config.get("thresholds", {})
     mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
+    percent_vntr_uncovered_threshold = thresholds.get("percent_vntr_uncovered", 50.0)
     dup_rate_cutoff = thresholds.get("duplication_rate", 0.1)
     q20_rate_cutoff = thresholds.get("q20_rate", 0.8)
     q30_rate_cutoff = thresholds.get("q30_rate", 0.7)
@@ -516,8 +514,15 @@ def generate_summary_report(
     assembly_text = header_info.get("assembly_text", "")
     assembly_contig = header_info.get("assembly_contig", "")
 
-    # Extract mean VNTR coverage from the "Coverage Calculation" step.
+    # Extract VNTR coverage statistics from the "Coverage Calculation" step.
     mean_vntr_coverage = None
+    median_vntr_coverage = None
+    stdev_vntr_coverage = None
+    min_vntr_coverage = None
+    max_vntr_coverage = None
+    vntr_region_length = None
+    vntr_uncovered_bases = None
+    percent_vntr_uncovered = None
     for step in pipeline_summary.get("steps", []):
         if step.get("step") == "Coverage Calculation":
             coverage_info = step.get("parsed_result", {}).get("data", [])
@@ -527,13 +532,31 @@ def generate_summary_report(
                 and len(coverage_info) > 0
             ):
                 try:
-                    mean_vntr_coverage = float(coverage_info[0].get("mean", 0))
-                    logging.debug(
-                        "Mean VNTR coverage extracted: %s", mean_vntr_coverage
+                    coverage_data = coverage_info[
+                        0
+                    ]  # Get the first coverage data entry
+                    mean_vntr_coverage = float(coverage_data.get("mean", 0))
+                    median_vntr_coverage = float(coverage_data.get("median", 0))
+                    stdev_vntr_coverage = float(coverage_data.get("stdev", 0))
+                    min_vntr_coverage = int(coverage_data.get("min", 0))
+                    max_vntr_coverage = int(coverage_data.get("max", 0))
+                    vntr_region_length = int(coverage_data.get("region_length", 0))
+                    vntr_uncovered_bases = int(coverage_data.get("uncovered_bases", 0))
+                    percent_vntr_uncovered = float(
+                        coverage_data.get("percent_uncovered", 0)
                     )
+                    logging.debug("All VNTR coverage statistics extracted successfully")
+                    logging.debug(f"Mean VNTR coverage: {mean_vntr_coverage}")
+                    logging.debug(f"Median VNTR coverage: {median_vntr_coverage}")
+                    logging.debug(f"StdDev VNTR coverage: {stdev_vntr_coverage}")
+                    logging.debug(f"Min VNTR coverage: {min_vntr_coverage}")
+                    logging.debug(f"Max VNTR coverage: {max_vntr_coverage}")
+                    logging.debug(f"VNTR region length: {vntr_region_length}")
+                    logging.debug(f"VNTR uncovered bases: {vntr_uncovered_bases}")
+                    logging.debug(f"Percent VNTR uncovered: {percent_vntr_uncovered}%")
                 except Exception as e:
-                    logging.error("Error parsing mean VNTR coverage: %s", e)
-                    mean_vntr_coverage = None
+                    logging.error("Error parsing VNTR coverage statistics: %s", e)
+                    # Keep default None values for failed extractions
             break
 
     # Extract Kestrel and adVNTR data from the summary.
@@ -618,7 +641,7 @@ def generate_summary_report(
     else:
         advntr_df = pd.DataFrame()
 
-    log_content = load_pipeline_log(log_file)
+    pipeline_log_content = load_pipeline_log(log_file)
 
     # IGV report generation (if applicable)
     if bed_file and os.path.exists(bed_file):
@@ -658,6 +681,23 @@ def generate_summary_report(
         coverage_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
         coverage_color = "green"
         logging.debug("Mean VNTR coverage is above the threshold.")
+
+    # Check if percent_vntr_uncovered exceeds threshold
+    if (
+        percent_vntr_uncovered is not None
+        and percent_vntr_uncovered > percent_vntr_uncovered_threshold
+    ):
+        uncovered_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
+        uncovered_color = "red"
+        logging.debug(
+            f"Percent VNTR uncovered ({percent_vntr_uncovered}%) exceeds the threshold ({percent_vntr_uncovered_threshold}%)."
+        )
+    else:
+        uncovered_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
+        uncovered_color = "green"
+        logging.debug(
+            f"Percent VNTR uncovered ({percent_vntr_uncovered}%) is below the threshold ({percent_vntr_uncovered_threshold}%)."
+        )
 
     duplication_rate = None
     q20_rate = None
@@ -803,7 +843,7 @@ def generate_summary_report(
         "kestrel_highlight": kestrel_html,
         "advntr_highlight": advntr_html,
         "advntr_available": advntr_available,
-        "log_content": load_pipeline_log(log_file),
+        "log_content": pipeline_log_content,
         "igv_content": igv_content,
         "table_json": table_json,
         "session_dictionary": session_dictionary,
@@ -817,6 +857,35 @@ def generate_summary_report(
         "mean_vntr_coverage": (
             mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"
         ),
+        "median_vntr_coverage": (
+            median_vntr_coverage
+            if median_vntr_coverage is not None
+            else "Not calculated"
+        ),
+        "stdev_vntr_coverage": (
+            stdev_vntr_coverage if stdev_vntr_coverage is not None else "Not calculated"
+        ),
+        "min_vntr_coverage": (
+            min_vntr_coverage if min_vntr_coverage is not None else "Not calculated"
+        ),
+        "max_vntr_coverage": (
+            max_vntr_coverage if max_vntr_coverage is not None else "Not calculated"
+        ),
+        "vntr_region_length": (
+            vntr_region_length if vntr_region_length is not None else "Not calculated"
+        ),
+        "vntr_uncovered_bases": (
+            vntr_uncovered_bases
+            if vntr_uncovered_bases is not None
+            else "Not calculated"
+        ),
+        "percent_vntr_uncovered": (
+            percent_vntr_uncovered
+            if percent_vntr_uncovered is not None
+            else "Not calculated"
+        ),
+        "percent_vntr_uncovered_icon": uncovered_icon,
+        "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
         "fastp_available": fastp_available,
