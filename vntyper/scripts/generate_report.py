@@ -487,6 +487,7 @@ def generate_summary_report(
 
     thresholds = config.get("thresholds", {})
     mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
+    percent_vntr_uncovered_threshold = thresholds.get("percent_vntr_uncovered", 50.0)
     dup_rate_cutoff = thresholds.get("duplication_rate", 0.1)
     q20_rate_cutoff = thresholds.get("q20_rate", 0.8)
     q30_rate_cutoff = thresholds.get("q30_rate", 0.7)
@@ -681,6 +682,23 @@ def generate_summary_report(
         coverage_color = "green"
         logging.debug("Mean VNTR coverage is above the threshold.")
 
+    # Check if percent_vntr_uncovered exceeds threshold
+    if (
+        percent_vntr_uncovered is not None
+        and percent_vntr_uncovered > percent_vntr_uncovered_threshold
+    ):
+        uncovered_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
+        uncovered_color = "red"
+        logging.debug(
+            f"Percent VNTR uncovered ({percent_vntr_uncovered}%) exceeds the threshold ({percent_vntr_uncovered_threshold}%)."
+        )
+    else:
+        uncovered_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
+        uncovered_color = "green"
+        logging.debug(
+            f"Percent VNTR uncovered ({percent_vntr_uncovered}%) is below the threshold ({percent_vntr_uncovered_threshold}%)."
+        )
+
     duplication_rate = None
     q20_rate = None
     q30_rate = None
@@ -866,6 +884,8 @@ def generate_summary_report(
             if percent_vntr_uncovered is not None
             else "Not calculated"
         ),
+        "percent_vntr_uncovered_icon": uncovered_icon,
+        "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
         "fastp_available": fastp_available,
