@@ -179,24 +179,20 @@
             </div>
         {% endif %}
 
-        <!-- Custom switch for toggling flagged values -->
-        <div class="custom-control custom-switch text-left mb-3">
-            <input type="checkbox" class="custom-control-input" id="toggleFlagged">
-            <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
+        <!-- Custom switches for toggling flagged values and detailed coverage -->
+        <div class="d-flex">
+            <div class="custom-control custom-switch text-left mb-3 mr-4">
+                <input type="checkbox" class="custom-control-input" id="toggleFlagged">
+                <label class="custom-control-label" for="toggleFlagged">Show flagged values</label>
+            </div>
+            <div class="custom-control custom-switch text-left mb-3">
+                <input type="checkbox" class="custom-control-input" id="toggleDetailedCoverage">
+                <label class="custom-control-label" for="toggleDetailedCoverage">Show detailed coverage</label>
+            </div>
         </div>
 
         <!-- Coverage Section -->
         <h2>VNTR Region Coverage</h2>
-        
-        <!-- Radio buttons for toggling coverage metrics view -->
-        <div class="btn-group btn-group-toggle mb-3" data-toggle="buttons">
-            <label class="btn btn-outline-primary active">
-                <input type="radio" name="coverageOptions" id="basicCoverage" checked> Basic
-            </label>
-            <label class="btn btn-outline-primary">
-                <input type="radio" name="coverageOptions" id="detailedCoverage"> Detailed
-            </label>
-        </div>
         
         <!-- Basic coverage view (default) -->
         <div id="basicCoverageView">
@@ -441,17 +437,13 @@
             });
             
             // Handle toggling between basic and detailed coverage views
-            $('#basicCoverage').change(function() {
-                if($(this).prop('checked')) {
-                    $('#basicCoverageView').show();
-                    $('#detailedCoverageView').hide();
-                }
-            });
-            
-            $('#detailedCoverage').change(function() {
+            $('#toggleDetailedCoverage').change(function() {
                 if($(this).prop('checked')) {
                     $('#basicCoverageView').hide();
                     $('#detailedCoverageView').show();
+                } else {
+                    $('#basicCoverageView').show();
+                    $('#detailedCoverageView').hide();
                 }
             });
         });
