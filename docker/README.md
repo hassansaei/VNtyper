@@ -57,7 +57,7 @@ Run apptainer interactively:
     apptainer run --pwd /opt/vntyper \
     -B /local/input/folder/:/opt/vntyper/input \
     -B /local/output/folder/:/opt/vntyper/output \
-    vntyper_2.0.0.sif vntyper pipeline \
+    vntyper_latest.sif vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/ 
 ```

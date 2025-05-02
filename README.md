@@ -1,6 +1,6 @@
 # VNtyper 2.0 - A Pipeline to genotype the MUC1-VNTR
 
-**VNtyper 2.0** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This version integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
+**VNtyper 2.0** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This version is a refactored version of VNtyper v1 integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
 
 - We have developed a web server to provide free access to VNtyper, which runs in the background for ease of use.  
   Access it through the following link: [vntyper-online](https://vntyper.org/)
@@ -122,7 +122,7 @@ docker pull saei/vntyper:main
 docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    saei/vntyper:main \
+    saei/vntyper:latest \
     vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/
@@ -146,7 +146,7 @@ docker run -w /opt/vntyper --rm \
 >    docker run --user $(id -u):$(id -g) -w /opt/vntyper --rm \
 >      -v /local/input/folder/:/opt/vntyper/input \
 >      -v /local/output/folder/:/opt/vntyper/output \
->      saei/vntyper:main \
+>      saei/vntyper:latest \
 >      vntyper pipeline \
 >      --bam /opt/vntyper/input/filename.bam \
 >      -o /opt/vntyper/output/filename/
@@ -164,7 +164,7 @@ apptainer pull docker://saei/vntyper:main
 apptainer run --pwd /opt/vntyper \
     -B /local/input/folder/:/opt/vntyper/input \
     -B /local/output/folder/:/opt/vntyper/output \
-    vntyper_main.sif vntyper pipeline \
+    vntyper_latest.sif vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/
 ```
