@@ -121,7 +121,7 @@ def main():
     parser_pipeline.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38"],
+        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
         default=None,
         help="Specify the reference assembly used for the input BAM/CRAM file alignment.",
     )
@@ -319,7 +319,7 @@ def main():
     parser_online.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38"],
+        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
         default=None,
         help="Reference assembly used.",
     )
@@ -518,15 +518,14 @@ def main():
                 "Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag."
             )
             logging.debug("Shark module detected with BAM/CRAM input; exiting.")
-            sys.exit(1)
-
-        # Determine which BWA reference to use from config
-        if args.reference_assembly == "hg19":
-            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg19")
-            logging.debug(f"Using BWA reference hg19: {bwa_reference}")
-        else:
-            bwa_reference = config.get("reference_data", {}).get("bwa_reference_hg38")
-            logging.debug(f"Using BWA reference hg38: {bwa_reference}")
+            sys.exit(1)  # Determine which BWA reference to use from config
+        ref_map = {"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}
+        ucsc_style_ref = ref_map.get(
+            args.reference_assembly, "hg19"
+        )  # Default to hg19 if somehow invalid
+        bwa_key = f"bwa_reference_{ucsc_style_ref}"
+        bwa_reference = config.get("reference_data", {}).get(bwa_key)
+        logging.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")
 
         sample_name_val = args.sample_name
         if sample_name_val is None:
