@@ -618,7 +618,7 @@ def parse_header_pipeline_info(
     """
     Parses the BAM header to extract assembly and alignment pipeline information.
     Uses both text matching and contig matching to detect the assembly.
-    Warns if the Dragen pipeline is detected or if the alignment pipeline cannot be detected,
+    Warns if the Dragen or CLC pipeline is detected or if the alignment pipeline cannot be detected,
     recommending the use of BWA aligner.
     Writes the extracted information as a JSON file to the specified output directory.
 
@@ -640,14 +640,14 @@ def parse_header_pipeline_info(
     ):
         assembly_text = "hg38"
     else:
-        assembly_text = "Not detected"
-
-    # Contig matching
+        assembly_text = "Not detected"  # Contig matching
     assembly_contig = detect_assembly_from_contigs(header)
 
     # Determine the alignment pipeline.
     if "dragen" in lower_header:
         pipeline = "Dragen"
+    elif "clc" in lower_header or "clcbio" in lower_header:
+        pipeline = "CLC"
     elif "bwa" in lower_header:
         pipeline = "BWA"
     else:
@@ -658,6 +658,12 @@ def parse_header_pipeline_info(
         warning_message = (
             "WARNING: The Dragen pipeline has known issues aligning reads in the VNTR region. "
             "It is recommended to use normal mode."
+        )
+        logging.warning(warning_message)
+    elif pipeline.lower() == "clc":
+        warning_message = (
+            "WARNING: The CLC pipeline may have issues aligning reads in the VNTR region (Not tested). "
+            "It is recommended to use normal mode and verify results carefully."
         )
         logging.warning(warning_message)
     elif pipeline.lower() == "unknown":
