@@ -40,8 +40,12 @@
   "bam_processing": {
     "bam_region_hg19": "chr1:155158000-155163000",
     "bam_region_hg38": "chr1:155184000-155194000",
+    "bam_region_GRCh37": "1:155158000-155163000",
+    "bam_region_GRCh38": "1:155184000-155194000",
     "vntr_region_hg19": "chr1:155160500-155162000",
     "vntr_region_hg38": "chr1:155188000-155192500",
+    "vntr_region_GRCh37": "1:155160500-155162000",
+    "vntr_region_GRCh38": "1:155188000-155192500",
     "compression_level": 6,
     "disable_adapter_trimming": true,
     "deduplication": true,

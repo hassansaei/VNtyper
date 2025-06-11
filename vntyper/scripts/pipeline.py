@@ -205,9 +205,7 @@ def run_pipeline(
             logging.error("Incomplete FASTQ inputs provided.")
             raise ValueError(
                 "Both FASTQ files must be provided for paired-end sequencing."
-            )
-
-        # BED file logic
+            )  # BED file logic
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
@@ -219,10 +217,13 @@ def run_pipeline(
             write_bed_file(custom_regions, bed_file_path)
             logging.info(f"Custom regions converted to BED file: {bed_file_path}")
         else:
-            if reference_assembly == "hg38":
-                predefined_regions = config["bam_processing"]["bam_region_hg38"]
-            else:
-                predefined_regions = config["bam_processing"]["bam_region_hg19"]
+            region_key = f"bam_region_{reference_assembly}"
+            predefined_regions = config.get("bam_processing", {}).get(region_key)
+            if not predefined_regions:
+                logging.error(
+                    f"Region key '{region_key}' not found in config.json under 'bam_processing'."
+                )
+                raise ValueError(f"Missing configuration for region: {region_key}")
             bed_file_path = (
                 Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
             )
@@ -422,9 +423,9 @@ def run_pipeline(
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
-                raise ValueError("Failed to generate FASTQ files from BAM.")
-
-        # --- Coverage Calculation ---
+                raise ValueError(
+                    "Failed to generate FASTQ files from BAM."
+                )  # --- Coverage Calculation ---
         logging.info("Calculating mean coverage over the VNTR region.")
         if input_type == "BAM":
             input_bam = Path(bam)
@@ -433,10 +434,15 @@ def run_pipeline(
         else:
             input_bam = Path(dirs["alignment_processing"]) / "output_sorted.bam"
 
-        if reference_assembly == "hg38":
-            vntr_region = config["bam_processing"]["vntr_region_hg38"]
-        else:
-            vntr_region = config["bam_processing"]["vntr_region_hg19"]
+        vntr_region_key = f"vntr_region_{reference_assembly}"
+        vntr_region = config.get("bam_processing", {}).get(vntr_region_key)
+        if not vntr_region:
+            logging.error(
+                f"Region key '{vntr_region_key}' not found in config.json under 'bam_processing'."
+            )
+            raise ValueError(
+                f"Missing configuration for VNTR region: {vntr_region_key}"
+            )
 
         cov_start = datetime.utcnow()
         coverage_stats = calculate_vntr_coverage(
@@ -495,9 +501,9 @@ def run_pipeline(
             kestrel_end,
             write_summary_path=summary_file_path,
         )
-        logging.info("Kestrel genotyping completed.")
-
-        # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
+        logging.info(
+            "Kestrel genotyping completed."
+        )  # --- adVNTR Genotyping and Cross-Match (only if advntr requested and performed) ---
         if "advntr" in extra_modules:
             logging.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
@@ -515,14 +521,15 @@ def run_pipeline(
             advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
 
             if not advntr_reference:
-                if reference_assembly == "hg19":
-                    advntr_reference = config.get("reference_data", {}).get(
-                        "advntr_reference_vntr_hg19"
-                    )
-                else:
-                    advntr_reference = config.get("reference_data", {}).get(
-                        "advntr_reference_vntr_hg38"
-                    )
+                ref_map = {
+                    "hg19": "hg19",
+                    "GRCh37": "hg19",
+                    "hg38": "hg38",
+                    "GRCh38": "hg38",
+                }
+                ucsc_style_ref = ref_map.get(reference_assembly, "hg19")
+                advntr_key = f"advntr_reference_vntr_{ucsc_style_ref}"
+                advntr_reference = config.get("reference_data", {}).get(advntr_key)
             else:
                 if advntr_reference == "hg19":
                     advntr_reference = config.get("reference_data", {}).get(
