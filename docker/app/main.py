@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Optional, Union, List
 from uuid import uuid4
 from datetime import datetime
+from enum import Enum
 
 import redis
 import redis.asyncio as aioredis
@@ -33,6 +34,15 @@ from .tasks import run_vntyper_job, run_cohort_analysis_job
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
+
+
+# Define valid reference assembly options
+class ReferenceAssembly(str, Enum):
+    HG19 = "hg19"
+    HG38 = "hg38"
+    GRCH37 = "GRCh37"
+    GRCH38 = "GRCh38"
+
 
 # Environment variables for default directories
 DEFAULT_INPUT_DIR = settings.DEFAULT_INPUT_DIR
@@ -289,7 +299,7 @@ async def run_vntyper(
     bam_file: UploadFile = File(..., description="BAM file to process"),
     bai_file: UploadFile = File(None, description="Optional BAI index file"),
     thread: int = Form(4),
-    reference_assembly: str = Form("hg38"),
+    reference_assembly: ReferenceAssembly = Form(ReferenceAssembly.HG38),
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
@@ -311,12 +321,10 @@ async def run_vntyper(
 
     This endpoint allows users to submit a VNtyper job for VNTR analysis. Users can upload BAM files and specify analysis parameters such as threading, reference assembly, and more.
 
-    **Parameters:**
-
-    - **bam_file**: The BAM file to be processed.
+    **Parameters:**    - **bam_file**: The BAM file to be processed.
     - **bai_file**: Optional BAI index file corresponding to the BAM file.
     - **thread**: Number of threads to use for processing.
-    - **reference_assembly**: Reference genome assembly to use (e.g., 'hg38', 'hg19').
+    - **reference_assembly**: Reference genome assembly to use ('hg19', 'hg38', 'GRCh37', 'GRCh38').
     - **fast_mode**: Boolean flag to enable fast mode processing.
     - **keep_intermediates**: Boolean flag to keep intermediate files.
     - **archive_results**: Boolean flag to archive results.
@@ -422,9 +430,9 @@ async def run_vntyper(
 
     # Extract client IP and User-Agent
     client_ip = request.client.host
-    user_agent = request.headers.get("User-Agent", "unknown")
-
-    # ---------------------------------------------------------------------
+    user_agent = request.headers.get(
+        "User-Agent", "unknown"
+    )  # ---------------------------------------------------------------------
     # If advntr_mode is True, use vntyper_long_queue; else the default queue.
     # ---------------------------------------------------------------------
     if advntr_mode:
@@ -433,7 +441,7 @@ async def run_vntyper(
                 "bam_path": bam_path,
                 "output_dir": job_output_dir,
                 "thread": thread,
-                "reference_assembly": reference_assembly,
+                "reference_assembly": reference_assembly.value,
                 "fast_mode": fast_mode,
                 "keep_intermediates": keep_intermediates,
                 "archive_results": archive_results,
@@ -453,7 +461,7 @@ async def run_vntyper(
             bam_path=bam_path,
             output_dir=job_output_dir,
             thread=thread,
-            reference_assembly=reference_assembly,
+            reference_assembly=reference_assembly.value,
             fast_mode=fast_mode,
             keep_intermediates=keep_intermediates,
             archive_results=archive_results,
