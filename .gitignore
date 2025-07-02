@@ -188,3 +188,7 @@ fastp.json
 
 # apptainer files
 *.sif
+
+# claude files and folders
+.claude/
+CLAUDE.md
