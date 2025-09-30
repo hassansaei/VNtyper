@@ -87,8 +87,8 @@ def process_bam_to_fastq(
         output_name (str): Base name for the output files.
         threads (int): Number of threads to use.
         config (dict): Configuration dictionary containing tool paths and parameters.
-        reference_assembly (str, optional): Reference assembly used ("hg19" or "hg38").
-            Defaults to "hg19".
+        reference_assembly (str, optional): Reference assembly used
+            ("hg19", "hg38", "GRCh37", or "GRCh38"). Defaults to "hg19".
         fast_mode (bool, optional): If True, skips filtering of unmapped and partially
             mapped reads. Defaults to False.
         delete_intermediates (bool, optional): If True, deletes intermediate files after
@@ -114,11 +114,14 @@ def process_bam_to_fastq(
         bam_region = f"-L {bed_file}"
         logging.debug(f"BAM regions set using BED file: {bam_region}")
     else:
-        bam_region = (
-            config["bam_processing"]["bam_region_hg38"]
-            if reference_assembly == "hg38"
-            else config["bam_processing"]["bam_region_hg19"]
-        )
+        region_key = f"bam_region_{reference_assembly}"
+        bam_region = config.get("bam_processing", {}).get(region_key)
+        if not bam_region:
+            logging.error(
+                f"Region key '{region_key}' not found in config.json. "
+                f"Supported assemblies: hg19, hg38, GRCh37, GRCh38"
+            )
+            raise ValueError(f"Missing configuration for region: {region_key}")
         logging.debug(f"BAM region set to: {bam_region}")
 
     cram_ref_option = ""
@@ -419,7 +422,8 @@ def downsample_bam_if_needed(
     Args:
         bam_path (str or Path): Path to the input BAM file.
         max_coverage (int): The maximum coverage threshold (e.g., 300).
-        reference_assembly (str): "hg19" or "hg38" to pick correct region.
+        reference_assembly (str): Reference assembly ("hg19", "hg38", "GRCh37", or "GRCh38")
+            to pick correct region.
         threads (int): Number of threads to use.
         config (dict): Configuration dictionary with samtools paths, etc.
         coverage_dir (Path or str): Directory where coverage logs can be written.
@@ -432,10 +436,14 @@ def downsample_bam_if_needed(
 
     bam_path = Path(bam_path)  # ensure it's a Path object
 
-    if reference_assembly == "hg38":
-        region = config["bam_processing"]["vntr_region_hg38"]
-    else:
-        region = config["bam_processing"]["vntr_region_hg19"]
+    region_key = f"vntr_region_{reference_assembly}"
+    region = config.get("bam_processing", {}).get(region_key)
+    if not region:
+        logging.error(
+            f"VNTR region key '{region_key}' not found in config.json. "
+            f"Supported assemblies: hg19, hg38, GRCh37, GRCh38"
+        )
+        raise ValueError(f"Missing configuration for VNTR region: {region_key}")
 
     current_coverage = calculate_vntr_coverage(
         bam_file=str(bam_path),
@@ -563,6 +571,36 @@ def detect_assembly_from_contigs(header: str, threshold: float = 0.9) -> str:
                 {"name": "chrY", "length": 59373566},
             ],
         },
+        "GRCh37": {
+            "name": "GRCh37",
+            "contigs": [
+                {"name": "1", "length": 249250621},
+                {"name": "2", "length": 243199373},
+                {"name": "3", "length": 198022430},
+                {"name": "4", "length": 191154276},
+                {"name": "5", "length": 180915260},
+                {"name": "6", "length": 171115067},
+                {"name": "7", "length": 159138663},
+                {"name": "8", "length": 146364022},
+                {"name": "9", "length": 141213431},
+                {"name": "10", "length": 135534747},
+                {"name": "11", "length": 135006516},
+                {"name": "12", "length": 133851895},
+                {"name": "13", "length": 115169878},
+                {"name": "14", "length": 107349540},
+                {"name": "15", "length": 102531392},
+                {"name": "16", "length": 90354753},
+                {"name": "17", "length": 81195210},
+                {"name": "18", "length": 78077248},
+                {"name": "19", "length": 59128983},
+                {"name": "20", "length": 63025520},
+                {"name": "21", "length": 48129895},
+                {"name": "22", "length": 51304566},
+                {"name": "X", "length": 155270560},
+                {"name": "Y", "length": 59373566},
+                {"name": "MT", "length": 16569},
+            ],
+        },
         "hg38": {
             "name": "hg38",
             "contigs": [
@@ -590,6 +628,36 @@ def detect_assembly_from_contigs(header: str, threshold: float = 0.9) -> str:
                 {"name": "chr22", "length": 50818468},
                 {"name": "chrX", "length": 156040895},
                 {"name": "chrY", "length": 57227415},
+            ],
+        },
+        "GRCh38": {
+            "name": "GRCh38",
+            "contigs": [
+                {"name": "1", "length": 248956422},
+                {"name": "2", "length": 242193529},
+                {"name": "3", "length": 198295559},
+                {"name": "4", "length": 190214555},
+                {"name": "5", "length": 181538259},
+                {"name": "6", "length": 170805979},
+                {"name": "7", "length": 159345973},
+                {"name": "8", "length": 145138636},
+                {"name": "9", "length": 138394717},
+                {"name": "10", "length": 133797422},
+                {"name": "11", "length": 135086622},
+                {"name": "12", "length": 133275309},
+                {"name": "13", "length": 114364328},
+                {"name": "14", "length": 107043718},
+                {"name": "15", "length": 101991189},
+                {"name": "16", "length": 90338345},
+                {"name": "17", "length": 83257441},
+                {"name": "18", "length": 80373285},
+                {"name": "19", "length": 58617616},
+                {"name": "20", "length": 64444167},
+                {"name": "21", "length": 46709983},
+                {"name": "22", "length": 50818468},
+                {"name": "X", "length": 156040895},
+                {"name": "Y", "length": 57227415},
+                {"name": "MT", "length": 16569},
             ],
         },
     }
