@@ -192,3 +192,4 @@ fastp.json
 # claude files and folders
 .claude/
 CLAUDE.md
+docs/
