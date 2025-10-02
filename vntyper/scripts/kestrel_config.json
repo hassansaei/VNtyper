@@ -2,8 +2,8 @@
   "kestrel_settings": {
     "java_memory": "12g",
     "kmer_sizes": [20],
-    "max_align_states": 30,
-    "max_hap_states": 30,
+    "max_align_states": 60,
+    "max_hap_states": 60,
     "additional_settings": ""
   },
   "frame_score_filtering": {
@@ -30,7 +30,7 @@
   "alt_filtering": {
     "gg_alt_value": "GG",
     "gg_depth_score_threshold": 0.00469,
-    "exclude_alts": ["CG", "TG"]
+    "exclude_alts": []
   },
   "motif_filtering": {
     "position_threshold": 60,
