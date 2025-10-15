@@ -13,7 +13,6 @@ import gzip
 import shutil
 import subprocess
 import hashlib
-from datetime import datetime
 
 
 def load_install_config(config_path: Path) -> Dict[str, Any]:
@@ -112,7 +111,7 @@ def execute_index_command(index_command: str, fasta_path: Path):
     logging.info(f"Executing indexing command: {command}")
     try:
         args = command.split()
-        result = subprocess.run(
+        subprocess.run(
             args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
         logging.info(f"Successfully executed: {command}")
@@ -121,6 +120,242 @@ def execute_index_command(index_command: str, fasta_path: Path):
             f"Indexing command failed for {fasta_path}: {e.stderr.decode().strip()}"
         )
         sys.exit(1)
+
+
+###############################################################################
+# Multi-Aligner Support Functions
+###############################################################################
+
+
+def check_executable_available(executable: str) -> bool:
+    """
+    Check if an executable is available in the system PATH.
+
+    Args:
+        executable (str): Name or path of the executable to check.
+
+    Returns:
+        bool: True if executable is available, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["which", executable],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0:
+            logging.debug(f"Found executable: {executable} at {result.stdout.strip()}")
+            return True
+        else:
+            logging.debug(f"Executable not found: {executable}")
+            return False
+    except Exception as e:
+        logging.debug(f"Error checking executable {executable}: {e}")
+        return False
+
+
+def get_enabled_aligners(aligner_config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    Get dictionary of enabled aligners from configuration.
+
+    Args:
+        aligner_config (dict): Dictionary of aligner configurations.
+
+    Returns:
+        dict: Dictionary of enabled aligners with their configurations.
+    """
+    enabled = {}
+    for aligner_name, aligner_info in aligner_config.items():
+        if aligner_info.get("enabled", False):
+            executable = aligner_info.get("executable", aligner_name)
+            if check_executable_available(executable):
+                enabled[aligner_name] = aligner_info
+                logging.info(f"  ✓ {aligner_name}: {aligner_info.get('description', 'No description')}")
+            else:
+                logging.warning(
+                    f"  ✗ {aligner_name} is enabled in config but executable '{executable}' not found. "
+                    f"Skipping this aligner."
+                )
+    return enabled
+
+
+def detect_index_conflicts(aligners: Dict[str, Dict[str, Any]]) -> List[str]:
+    """
+    Detect potential conflicts between aligner index file extensions.
+
+    Args:
+        aligners (dict): Dictionary of aligner configurations.
+
+    Returns:
+        list: List of warning messages about conflicts (empty if none).
+    """
+    warnings = []
+    extension_map = {}
+
+    for aligner_name, aligner_info in aligners.items():
+        index_files = aligner_info.get("index_files", [])
+        for ext in index_files:
+            if ext in extension_map:
+                warnings.append(
+                    f"Index file extension '{ext}' is used by both "
+                    f"'{extension_map[ext]}' and '{aligner_name}'. "
+                    f"This may cause conflicts."
+                )
+            else:
+                extension_map[ext] = aligner_name
+
+    return warnings
+
+
+def check_index_exists(
+    ref_path: Path,
+    aligner_name: str,
+    aligner_info: Dict[str, Any]
+) -> bool:
+    """
+    Check if all required index files exist for an aligner.
+
+    Args:
+        ref_path (Path): Path to the reference FASTA file.
+        aligner_name (str): Name of the aligner.
+        aligner_info (dict): Aligner configuration dictionary.
+
+    Returns:
+        bool: True if all index files exist, False otherwise.
+    """
+    index_files = aligner_info.get("index_files", [])
+
+    if aligner_info.get("index_dir_required", False):
+        # DRAGMAP-style: check for directory with index files
+        index_dir = ref_path.parent / f"{ref_path.stem}_{aligner_name}_index"
+        if not index_dir.exists():
+            return False
+        for index_file in index_files:
+            if not (index_dir / index_file).exists():
+                return False
+        return True
+    elif aligner_info.get("requires_index_base", False):
+        # Bowtie2-style: check for index base + extensions
+        index_base = ref_path.parent / f"{ref_path.stem}_{aligner_name}"
+        for ext in index_files:
+            if not Path(str(index_base) + ext).exists():
+                return False
+        return True
+    else:
+        # Standard: check for ref_path + extension
+        for ext in index_files:
+            index_file_path = Path(str(ref_path) + ext)
+            if not index_file_path.exists():
+                logging.debug(f"Missing index file: {index_file_path}")
+                return False
+        return True
+
+
+def execute_aligner_index(
+    ref_path: Path,
+    aligner_name: str,
+    aligner_info: Dict[str, Any],
+    threads: int = 4
+) -> bool:
+    """
+    Execute indexing for a specific aligner.
+
+    Args:
+        ref_path (Path): Path to the reference FASTA file.
+        aligner_name (str): Name of the aligner.
+        aligner_info (dict): Aligner configuration dictionary.
+        threads (int): Number of threads to use (if supported).
+
+    Returns:
+        bool: True if indexing succeeded, False otherwise.
+    """
+    index_command_template = aligner_info.get("index_command", "")
+    if not index_command_template:
+        logging.error(f"No index_command specified for {aligner_name}")
+        return False
+
+    # Prepare command parameters
+    params = {
+        "ref_path": str(ref_path),
+        "threads": threads if aligner_info.get("supports_threading", False) else aligner_info.get("threads_default", 4)
+    }
+
+    # Handle special cases
+    if aligner_info.get("index_dir_required", False):
+        # DRAGMAP: needs separate index directory
+        index_dir = ref_path.parent / f"{ref_path.stem}_{aligner_name}_index"
+        index_dir.mkdir(parents=True, exist_ok=True)
+        params["index_dir"] = str(index_dir)
+
+    if aligner_info.get("requires_index_base", False):
+        # Bowtie2: needs separate index base name
+        index_base = ref_path.parent / f"{ref_path.stem}_{aligner_name}"
+        params["index_base"] = str(index_base)
+
+    # Format command
+    try:
+        command = index_command_template.format(**params)
+    except KeyError as e:
+        logging.error(f"Missing parameter in index command for {aligner_name}: {e}")
+        return False
+
+    logging.info(f"  Indexing with {aligner_name}...")
+    logging.debug(f"  Command: {command}")
+
+    try:
+        subprocess.run(
+            command,
+            shell=True,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        logging.info(f"  ✓ {aligner_name} indexing complete")
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error(
+            f"  ✗ {aligner_name} indexing failed: {e.stderr.strip()}"
+        )
+        return False
+
+
+def index_reference_with_aligners(
+    ref_path: Path,
+    aligners: Dict[str, Dict[str, Any]],
+    threads: int = 4,
+    force_reindex: bool = False
+) -> Dict[str, bool]:
+    """
+    Index a reference file with multiple aligners.
+
+    Args:
+        ref_path (Path): Path to the reference FASTA file.
+        aligners (dict): Dictionary of aligner configurations.
+        threads (int): Number of threads to use for indexing.
+        force_reindex (bool): Force re-indexing even if indices exist.
+
+    Returns:
+        dict: Dictionary mapping aligner names to success status (True/False).
+    """
+    results = {}
+
+    logging.info(f"Indexing reference: {ref_path.name}")
+    logging.info(f"  Using {len(aligners)} aligner(s) with {threads} threads")
+
+    for aligner_name, aligner_info in aligners.items():
+        # Check if index already exists
+        if not force_reindex and check_index_exists(ref_path, aligner_name, aligner_info):
+            logging.info(f"  ✓ {aligner_name} index already exists, skipping")
+            results[aligner_name] = True
+            continue
+
+        # Execute indexing
+        success = execute_aligner_index(ref_path, aligner_name, aligner_info, threads)
+        results[aligner_name] = success
+
+    return results
 
 
 def update_config(config_path: Path, references: Dict[str, Path]):
@@ -171,6 +406,8 @@ def process_ucsc_references(
     bwa_path: str,
     skip_indexing: bool,
     md5_dict: Dict[str, str],
+    aligners: Optional[Dict[str, Dict[str, Any]]] = None,
+    index_threads: int = 4,
 ):
     """
     Process UCSC references by downloading and indexing.
@@ -178,9 +415,11 @@ def process_ucsc_references(
     Args:
         ucsc_refs (dict): Dictionary of UCSC references.
         output_dir (Path): Base output directory.
-        bwa_path (str): Path to the bwa executable.
+        bwa_path (str): Path to the bwa executable (legacy, kept for compatibility).
         skip_indexing (bool): Whether to skip the indexing step.
         md5_dict (dict): Dictionary to store MD5 checksums.
+        aligners (dict, optional): Dictionary of aligner configurations for multi-aligner indexing.
+        index_threads (int): Number of threads to use for indexing.
     """
     for ref_name, ref_info in ucsc_refs.items():
         url = ref_info.get("url")
@@ -234,10 +473,22 @@ def process_ucsc_references(
                 f"Unsupported archive format for {target_path}. Skipping extraction."
             )
 
-        if index_command and not skip_indexing:
+        # Multi-aligner indexing
+        if not skip_indexing:
             output_path = target_path.with_suffix("")
-            execute_index_command(index_command, output_path)
-        elif index_command and skip_indexing:
+
+            if aligners:
+                # Use multi-aligner indexing
+                index_reference_with_aligners(
+                    output_path, aligners, threads=index_threads, force_reindex=False
+                )
+            elif index_command:
+                # Fall back to legacy single indexing command
+                logging.warning(
+                    f"No aligners configured, using legacy index_command for {output_path.name}"
+                )
+                execute_index_command(index_command, output_path)
+        elif skip_indexing:
             logging.info(f"Skipping indexing for {target_path.with_suffix('')}")
 
 
@@ -400,7 +651,11 @@ def setup_logging(output_dir: Path):
 
 
 def main(
-    output_dir: Path, config_path: Optional[Path] = None, skip_indexing: bool = False
+    output_dir: Path,
+    config_path: Optional[Path] = None,
+    skip_indexing: bool = False,
+    index_threads: int = 4,
+    aligners_to_use: Optional[List[str]] = None,
 ):
     """
     Main function to execute the install_references process.
@@ -409,6 +664,8 @@ def main(
         output_dir (Path): Directory where references will be installed.
         config_path (Optional[Path]): Path to the main config.json file to update.
         skip_indexing (bool): Whether to skip the indexing step.
+        index_threads (int): Number of threads to use for indexing.
+        aligners_to_use (list, optional): List of specific aligners to use (overrides config).
     """
     script_dir = Path(__file__).parent
     install_config_path = script_dir / "install_references_config.json"
@@ -421,6 +678,9 @@ def main(
     own_repo_refs = install_config.get("own_repository_references", {})
     bwa_path = install_config.get("bwa_path", "bwa")  # Default to 'bwa'
 
+    # Load aligner configurations
+    aligner_config = install_config.get("aligners", {})
+
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -429,20 +689,73 @@ def main(
 
     setup_logging(output_dir)
 
+    # Initialize aligners
+    enabled_aligners = {}
+    if not skip_indexing and aligner_config:
+        logging.info("="*80)
+        logging.info("ALIGNER CONFIGURATION")
+        logging.info("="*80)
+        logging.info("Checking available aligners:")
+
+        # Get enabled aligners
+        all_enabled = get_enabled_aligners(aligner_config)
+
+        # Filter by user-specified aligners if provided
+        if aligners_to_use:
+            for aligner_name in aligners_to_use:
+                if aligner_name in all_enabled:
+                    enabled_aligners[aligner_name] = all_enabled[aligner_name]
+                elif aligner_name in aligner_config:
+                    logging.warning(
+                        f"  ✗ {aligner_name} was specified but is not available or not enabled"
+                    )
+                else:
+                    logging.error(f"  ✗ Unknown aligner: {aligner_name}")
+        else:
+            enabled_aligners = all_enabled
+
+        if not enabled_aligners:
+            logging.warning("No aligners available. Indexing will be skipped.")
+            logging.warning(
+                "To enable aligners, install them and ensure they are in your PATH, "
+                "or set enabled:true in install_references_config.json"
+            )
+        else:
+            logging.info(f"\nWill use {len(enabled_aligners)} aligner(s) for indexing:")
+            for name in enabled_aligners.keys():
+                logging.info(f"  • {name}")
+
+            # Detect index file conflicts
+            conflicts = detect_index_conflicts(enabled_aligners)
+            if conflicts:
+                logging.warning("\n⚠ Index file conflicts detected:")
+                for warning in conflicts:
+                    logging.warning(f"  • {warning}")
+                logging.warning(
+                    "  These conflicts may cause issues if aligners overwrite each other's index files."
+                )
+            else:
+                logging.info("  ✓ No index file conflicts detected")
+
+        logging.info("="*80)
+        logging.info("")
+
     md5_dict = {}
 
     # Process UCSC references
     if ucsc_refs:
         logging.info("Processing UCSC references...")
         process_ucsc_references(
-            ucsc_refs, output_dir, bwa_path, skip_indexing, md5_dict
+            ucsc_refs, output_dir, bwa_path, skip_indexing, md5_dict,
+            aligners=enabled_aligners, index_threads=index_threads
         )
 
     # Process NCBI references
     if ncbi_refs:
         logging.info("Processing NCBI references...")
         process_ucsc_references(
-            ncbi_refs, output_dir, bwa_path, skip_indexing, md5_dict
+            ncbi_refs, output_dir, bwa_path, skip_indexing, md5_dict,
+            aligners=enabled_aligners, index_threads=index_threads
         )
 
     # Process VNtyper references
@@ -505,7 +818,22 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Install necessary reference files for vntyper."
+        description="Install necessary reference files for vntyper with multi-aligner support.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Install all references with all enabled aligners
+  python install_references.py -d reference/
+
+  # Install with specific aligners only
+  python install_references.py -d reference/ --aligners bwa minimap2
+
+  # Install with 8 threads
+  python install_references.py -d reference/ --threads 8
+
+  # Skip indexing
+  python install_references.py -d reference/ --skip-indexing
+        """
     )
     parser.add_argument(
         "-d",
@@ -526,5 +854,27 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip the indexing step during reference installation.",
     )
+    parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=4,
+        help="Number of threads to use for indexing (default: 4).",
+    )
+    parser.add_argument(
+        "--aligners",
+        nargs="+",
+        default=None,
+        metavar="ALIGNER",
+        help="Specific aligners to use (e.g., bwa bwa-mem2 minimap2 bowtie2 dragmap). "
+             "If not specified, all enabled aligners in config will be used.",
+    )
+
     args = parser.parse_args()
-    main(args.output_dir, args.config_path, args.skip_indexing)
+    main(
+        args.output_dir,
+        args.config_path,
+        args.skip_indexing,
+        args.threads,
+        args.aligners
+    )
