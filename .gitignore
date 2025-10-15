@@ -196,4 +196,5 @@ CLAUDE.md
 
 # local development documentation and sensitive configs
 docs/
+forbidden_strings.txt
 reference/forbidden_strings.txt
