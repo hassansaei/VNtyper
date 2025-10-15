@@ -187,6 +187,234 @@ def extract_unmapped_reads_from_offset(bam_file, bai_file, output_bam):
 
 
 ###############################################################################
+# 1c) Reference Download and BWA Remapping Functions
+###############################################################################
+
+
+# Reference path mapping (assembly name → file path)
+REFERENCE_PATHS = {
+    "hg19": "reference/alignment/chr1.hg19.fa",
+    "hg38": "reference/alignment/chr1.hg38.fa",
+    "GRCh37": "reference/alignment/chr1.GRCh37.fna",
+    "GRCh38": "reference/alignment/chr1.GRCh38.fna"
+}
+
+
+def get_reference_path(assembly):
+    """
+    Get the file path for a reference assembly.
+
+    Args:
+        assembly: Reference assembly name (hg19, hg38, GRCh37, GRCh38)
+
+    Returns:
+        Path: Path to the reference FASTA file
+
+    Raises:
+        ValueError: If assembly is not supported
+    """
+    if assembly not in REFERENCE_PATHS:
+        raise ValueError(
+            f"Unsupported reference assembly: {assembly}. "
+            f"Supported: {list(REFERENCE_PATHS.keys())}"
+        )
+    return REFERENCE_PATHS[assembly]
+
+
+def check_bwa_index(reference_path):
+    """
+    Check if BWA index files exist for the reference.
+
+    Args:
+        reference_path: Path to reference FASTA file
+
+    Returns:
+        bool: True if all BWA index files exist, False otherwise
+    """
+    required_extensions = [".amb", ".ann", ".bwt", ".pac", ".sa"]
+    for ext in required_extensions:
+        index_file = reference_path + ext
+        if not os.path.exists(index_file):
+            logging.debug(f"Missing BWA index file: {index_file}")
+            return False
+    return True
+
+
+def download_and_index_reference(assembly, script_dir):
+    """
+    Download and index a reference genome if not already present.
+
+    Uses the install_references.py infrastructure to download and index.
+
+    Args:
+        assembly: Reference assembly name (hg19, hg38, GRCh37, GRCh38)
+        script_dir: Directory containing pseudonymize.py
+
+    Raises:
+        RuntimeError: If download or indexing fails
+    """
+    logging.info(f"Downloading and indexing {assembly} reference...")
+    logging.info("This will take several minutes (~10-15 min for download + indexing)")
+
+    # Determine repository root (parent of script_dir which is reference/)
+    repo_root = os.path.dirname(script_dir)
+
+    # Run install_references to download and index
+    install_script = os.path.join(
+        repo_root, "vntyper", "scripts", "install_references.py"
+    )
+
+    if not os.path.exists(install_script):
+        raise RuntimeError(
+            f"install_references.py not found at {install_script}. "
+            "Cannot auto-download reference."
+        )
+
+    cmd = [
+        "python", install_script,
+        "--output-dir", os.path.join(repo_root, "reference"),
+        "--skip-indexing"  # We'll index separately to show progress
+    ]
+
+    logging.info(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        logging.error(f"Reference download failed: {result.stderr}")
+        raise RuntimeError(f"Failed to download {assembly} reference")
+
+    logging.info(f"Successfully downloaded {assembly} reference")
+
+
+def index_reference(reference_path):
+    """
+    Create BWA index for a reference genome.
+
+    Args:
+        reference_path: Path to reference FASTA file
+
+    Raises:
+        RuntimeError: If indexing fails
+    """
+    logging.info(f"Creating BWA index for {reference_path}...")
+    logging.info("This will take 5-10 minutes for chromosome 1...")
+
+    cmd = ["bwa", "index", reference_path]
+    logging.info(f"Running: {' '.join(cmd)}")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        logging.error(f"BWA indexing failed: {result.stderr}")
+        raise RuntimeError(f"Failed to index {reference_path}")
+
+    logging.info("BWA indexing completed successfully")
+
+
+def ensure_reference_ready(assembly, auto_download=True):
+    """
+    Ensure reference genome is downloaded and indexed.
+
+    Checks if reference exists and has BWA index. If not, optionally downloads
+    and indexes it.
+
+    Args:
+        assembly: Reference assembly name (hg19, hg38, GRCh37, GRCh38)
+        auto_download: If True, auto-download and index if missing
+
+    Returns:
+        str: Path to the ready reference file
+
+    Raises:
+        FileNotFoundError: If reference missing and auto_download=False
+        RuntimeError: If download or indexing fails
+    """
+    reference_path = get_reference_path(assembly)
+
+    # Check if reference file exists
+    if not os.path.exists(reference_path):
+        if not auto_download:
+            raise FileNotFoundError(
+                f"Reference file not found: {reference_path}\n"
+                f"Run: python vntyper/scripts/install_references.py "
+                f"--output-dir reference"
+            )
+
+        # Download reference
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        download_and_index_reference(assembly, script_dir)
+
+        # Verify download succeeded
+        if not os.path.exists(reference_path):
+            raise RuntimeError(
+                f"Reference download completed but file not found: {reference_path}"
+            )
+
+    # Check if BWA index exists
+    if not check_bwa_index(reference_path):
+        logging.info(f"BWA index not found for {assembly}, creating index...")
+        index_reference(reference_path)
+
+        # Verify indexing succeeded
+        if not check_bwa_index(reference_path):
+            raise RuntimeError(f"BWA indexing failed for {reference_path}")
+
+    logging.info(f"Reference ready: {reference_path}")
+    return reference_path
+
+
+def remap_fastq_to_reference(fastq1, fastq2, reference_path, output_bam, threads=4):
+    """
+    Align paired-end FASTQs to reference genome using BWA MEM.
+
+    Performs the following steps:
+    1. BWA MEM alignment
+    2. Conversion to BAM format
+    3. Coordinate sorting
+    4. BAM indexing
+
+    Args:
+        fastq1: Path to R1 FASTQ file
+        fastq2: Path to R2 FASTQ file
+        reference_path: Path to reference FASTA (must be BWA indexed)
+        output_bam: Path for output sorted BAM file
+        threads: Number of threads for alignment and sorting
+
+    Raises:
+        RuntimeError: If alignment, sorting, or indexing fails
+    """
+    logging.info(f"Remapping {os.path.basename(fastq1)} to {reference_path}...")
+
+    # BWA MEM command
+    bwa_cmd = f"bwa mem -t {threads} {reference_path} {fastq1} {fastq2}"
+
+    # Samtools view and sort command
+    samtools_cmd = f"samtools view -@ {threads} -b | samtools sort -@ {threads} -o {output_bam}"
+
+    # Full pipeline
+    full_cmd = f"{bwa_cmd} | {samtools_cmd}"
+
+    logging.info(f"Running BWA alignment: {full_cmd}")
+
+    result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        logging.error(f"BWA alignment failed: {result.stderr}")
+        raise RuntimeError(f"Failed to remap FASTQs to {reference_path}")
+
+    # Index the output BAM
+    logging.info(f"Indexing {output_bam}...")
+    index_cmd = ["samtools", "index", output_bam]
+    result = subprocess.run(index_cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        logging.error(f"BAM indexing failed: {result.stderr}")
+        raise RuntimeError(f"Failed to index {output_bam}")
+
+    logging.info(f"Successfully remapped to {output_bam}")
+
+
+###############################################################################
 # 2) Anonymization Functions
 ###############################################################################
 
@@ -564,7 +792,7 @@ def anonymize_or_copy_task(file_path, out_path, extension, new_sample_id,
 def write_json_resources(output_dir, json_out, filter_mode="all"):
     """Write JSON resource file with file metadata.
 
-    Gathers files in output_dir, but only .bam, .bai, .fastq.gz.
+    Gathers files in output_dir recursively, but only .bam, .bai, .fastq.gz.
     If filter_mode == "all", we include all such files.
     If filter_mode == "subset", we only include files that also have "_subset" in their name.
     Then compute MD5 for each, and generate:
@@ -589,11 +817,11 @@ def write_json_resources(output_dir, json_out, filter_mode="all"):
     logging.info(f"Generating JSON resource file at {json_out} (filter={filter_mode})")
     valid_exts = (".bam", ".bai", ".fastq.gz")
 
-    # Gather top-level files in output_dir
+    # Gather files recursively in output_dir
     file_list = []
-    for fname in os.listdir(output_dir):
-        full_path = os.path.join(output_dir, fname)
-        if os.path.isfile(full_path):
+    for root, dirs, files in os.walk(output_dir):
+        for fname in files:
+            full_path = os.path.join(root, fname)
             file_list.append(full_path)
 
     file_resources = []
@@ -742,6 +970,7 @@ def pseudonymize_files(
     ref_mapping_file=None,
     do_subset=False,
     do_revert=False,
+    remap_to_reference=None,
     json_out=None,
     json_filter="all",
     forbidden_strings_file=None,
@@ -754,9 +983,33 @@ def pseudonymize_files(
     - Step 2: Anonymize BAMs / copy FASTQs in parallel.
     - Step 3: Write CSV with old_core->new_core_name.
     - Step 4: If do_subset, sequentially subset (and optionally revert).
-    - Step 5: Write a JSON resource file with final outputs (only .bam, .bai, .fastq.gz),
+    - Step 5: If remap_to_reference, remap FASTQs to new reference genome.
+    - Step 6: Write a JSON resource file with final outputs (only .bam, .bai, .fastq.gz),
       using filter_mode=all or subset as specified by json_filter.
     """
+    # Parse remap_to_reference (comma-separated list)
+    remap_references = []
+    if remap_to_reference:
+        # Split by comma and strip whitespace
+        remap_references = [ref.strip() for ref in remap_to_reference.split(',')]
+
+        # Validate all references
+        valid_refs = ["hg19", "hg38", "GRCh37", "GRCh38"]
+        for ref in remap_references:
+            if ref not in valid_refs:
+                raise ValueError(
+                    f"Invalid reference '{ref}'. Valid references: {', '.join(valid_refs)}"
+                )
+
+        # Remapping requires FASTQ generation
+        if not do_revert:
+            raise ValueError(
+                "--remap-to-reference requires --revert-fastq to be specified. "
+                "FASTQs must be generated before remapping."
+            )
+
+        logging.info(f"Will remap FASTQs to {len(remap_references)} reference(s): {', '.join(remap_references)}")
+
     os.makedirs(output_dir, exist_ok=True)
     files_by_core = collect_files(input_dir)
 
@@ -917,14 +1170,80 @@ def pseudonymize_files(
 
                     # Step 3e: Revert to FASTQ if requested
                     if do_revert:
+                        # Create fastqs subdirectory
+                        fastq_dir = os.path.join(output_dir, "fastqs")
+                        os.makedirs(fastq_dir, exist_ok=True)
+
                         r1 = os.path.join(
-                            output_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz"
+                            fastq_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz"
                         )
                         r2 = os.path.join(
-                            output_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz"
+                            fastq_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz"
                         )
                         logging.info("Step 5/5: Reverting merged BAM to FASTQ...")
                         revert_only(final_subset, r1, r2)
+
+                        # Step 3f: Remap FASTQs to multiple references if requested
+                        if remap_references:
+                            logging.info(
+                                f"Step 6/6: Remapping FASTQs to {len(remap_references)} reference(s)..."
+                            )
+
+                            for idx, target_ref in enumerate(remap_references, 1):
+                                logging.info(
+                                    f"  Remapping [{idx}/{len(remap_references)}]: {target_ref}..."
+                                )
+
+                                # Ensure reference is ready (download/index if needed)
+                                try:
+                                    reference_path = ensure_reference_ready(
+                                        target_ref,
+                                        auto_download=True
+                                    )
+                                except Exception as e:
+                                    logging.error(f"Failed to prepare {target_ref} reference: {e}")
+                                    logging.warning(
+                                        f"Skipping {target_ref} remapping for {new_core_name}. "
+                                        "FASTQs are still available for manual remapping."
+                                    )
+                                    continue
+
+                                # Create remapped subdirectory organized by mapper/reference
+                                # Structure: remapped/bwa/<reference>/
+                                mapper = "bwa"
+                                remapped_dir = os.path.join(output_dir, "remapped", mapper, target_ref)
+                                os.makedirs(remapped_dir, exist_ok=True)
+
+                                # Remap FASTQs to this reference
+                                remapped_bam = os.path.join(
+                                    remapped_dir,
+                                    f"{new_core_name}_{target_ref}_bwa.bam"
+                                )
+
+                                try:
+                                    remap_fastq_to_reference(
+                                        fastq1=r1,
+                                        fastq2=r2,
+                                        reference_path=reference_path,
+                                        output_bam=remapped_bam,
+                                        threads=max_workers if max_workers else 4
+                                    )
+
+                                    # Get stats
+                                    read_count = subprocess.check_output(
+                                        ["samtools", "view", "-c", remapped_bam],
+                                        text=True
+                                    ).strip()
+
+                                    logging.info(
+                                        f"  ✓ {target_ref}: {read_count} reads → {remapped_bam}"
+                                    )
+                                except Exception as e:
+                                    logging.error(f"Remapping to {target_ref} failed: {e}")
+                                    logging.warning(
+                                        f"Skipping {target_ref} remapping for {new_core_name}. "
+                                        "FASTQs are still available for manual remapping."
+                                    )
     else:
         logging.warning(
             "--subset-muc1 not specified. No output files will be generated "
@@ -1010,6 +1329,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--remap-to-reference",
+        default=None,
+        help="Remap anonymized FASTQs to specified reference genome(s). "
+             "Accepts comma-separated list (e.g., 'hg19,hg38,GRCh37,GRCh38' or just 'hg38'). "
+             "Requires --revert-fastq. Auto-downloads references if missing. "
+             "Produces remapped BAM files in output directory.",
+    )
+
+    parser.add_argument(
         "--forbidden-strings",
         default=None,
         help="File containing strings that must not appear in output (one per line). "
@@ -1072,6 +1400,7 @@ Examples:
         ref_mapping_file=args.ref_mapping_file,
         do_subset=args.subset_muc1,
         do_revert=args.revert_fastq,
+        remap_to_reference=args.remap_to_reference,
         json_out=args.json_out,
         json_filter=args.json_filter,
         forbidden_strings_file=args.forbidden_strings,

@@ -1,0 +1,25 @@
+{
+  "references": {
+    "hg19": {
+      "path": "reference/alignment/chr1.hg19.fa",
+      "region": "chr1:155158000-155163000"
+    },
+    "hg38": {
+      "path": "reference/alignment/chr1.hg38.fa",
+      "region": "chr1:155184000-155194000"
+    },
+    "GRCh37": {
+      "path": "reference/alignment/chr1.GRCh37.fna",
+      "region": "1:155158000-155163000"
+    },
+    "GRCh38": {
+      "path": "reference/alignment/chr1.GRCh38.fna",
+      "region": "1:155184000-155194000"
+    }
+  },
+  "bwa": {
+    "threads": 4,
+    "required_index_files": [".amb", ".ann", ".bwt", ".pac", ".sa"]
+  },
+  "forbidden_strings_file": "forbidden_strings.txt"
+}
