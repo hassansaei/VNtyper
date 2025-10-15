@@ -259,6 +259,176 @@ Tested on 7 BAM files (~14 GB total):
 - **Verification** - Always check output files do not contain identifying information
 - **Paired reads** - Subsetting uses `samtools view -P` to preserve mate pairs
 
+### Multi-Reference Remapping
+
+`pseudonymize.py` supports remapping anonymized FASTQs to multiple reference genomes, which is useful for validating reference consistency and testing pipelines across different assemblies.
+
+#### Configuration File
+
+Create a JSON configuration file (`pseudonymize_config.json`) to define reference paths and alignment settings:
+
+```json
+{
+  "references": {
+    "hg19": {
+      "path": "reference/alignment/chr1.hg19.fa",
+      "region": "chr1:155158000-155163000"
+    },
+    "hg38": {
+      "path": "reference/alignment/chr1.hg38.fa",
+      "region": "chr1:155184000-155194000"
+    },
+    "GRCh37": {
+      "path": "reference/alignment/chr1.GRCh37.fna",
+      "region": "1:155158000-155163000"
+    },
+    "GRCh38": {
+      "path": "reference/alignment/chr1.GRCh38.fna",
+      "region": "1:155184000-155194000"
+    }
+  },
+  "bwa": {
+    "threads": 4,
+    "required_index_files": [".amb", ".ann", ".bwt", ".pac", ".sa"]
+  },
+  "forbidden_strings_file": "forbidden_strings.txt"
+}
+```
+
+#### Usage with Multi-Reference Remapping
+
+```bash
+# Remap to all 4 reference genomes
+python pseudonymize.py \
+  --input-dir raw_bams/ \
+  --output-dir tests/data_anonymized/ \
+  --ref-assembly hg19 \
+  --subset-muc1 \
+  --revert-fastq \
+  --remap-to-reference hg19,hg38,GRCh37,GRCh38 \
+  --forbidden-strings forbidden_strings.txt \
+  --log-file tests/data_anonymized/pseudonymize.log \
+  --workers 4
+```
+
+#### Output Directory Structure
+
+When using multi-reference remapping, files are organized by type and reference:
+
+```
+output_dir/
+├── pseudonymize.log              # Comprehensive logging
+├── console.log                   # Console output
+├── pseudonymization_table.csv    # Original → pseudonym mapping
+├── pseudonymization_output.json  # Manifest with MD5 checksums
+│
+├── example_XXXX_hg19_subset.bam        # Subset BAMs (at root level)
+├── example_XXXX_hg19_subset.bam.bai
+│
+├── fastqs/                              # All FASTQs in subdirectory
+│   ├── example_XXXX_hg19_subset_R1.fastq.gz
+│   ├── example_XXXX_hg19_subset_R2.fastq.gz
+│   └── ...
+│
+└── remapped/                            # Remapped BAMs organized by mapper/reference
+    └── bwa/                             # Mapper subdirectory (extensible to minimap2, bowtie2, etc.)
+        ├── hg19/
+        │   ├── example_XXXX_hg19_bwa.bam
+        │   ├── example_XXXX_hg19_bwa.bam.bai
+        │   └── ...
+        ├── hg38/
+        │   ├── example_XXXX_hg38_bwa.bam
+        │   ├── example_XXXX_hg38_bwa.bam.bai
+        │   └── ...
+        ├── GRCh37/
+        │   ├── example_XXXX_GRCh37_bwa.bam
+        │   ├── example_XXXX_GRCh37_bwa.bam.bai
+        │   └── ...
+        └── GRCh38/
+            ├── example_XXXX_GRCh38_bwa.bam
+            ├── example_XXXX_GRCh38_bwa.bam.bai
+            └── ...
+```
+
+**Directory organization rationale:**
+- **Root level**: Subset BAMs (primary outputs from subsetting workflow)
+- **fastqs/**: All FASTQ files in one subdirectory for easy access
+- **remapped/\<mapper\>/\<reference\>/**: Organized by mapper AND reference for extensibility
+  - Supports future addition of other mappers (minimap2, bowtie2, etc.)
+  - Keeps outputs from different references cleanly separated
+  - BAM naming: `{sample}_{reference}_{mapper}.bam` (e.g., `example_6449_hg38_bwa.bam`)
+
+#### Remapping Features
+
+**Automatic BWA index verification:**
+- Checks for required index files (`.amb`, `.ann`, `.bwt`, `.pac`, `.sa`)
+- Automatically runs `bwa index` if indices are missing
+- Verifies reference FASTA exists before indexing
+
+**Efficient parallel alignment:**
+- Uses BWA MEM with multi-threading (`-t 4` by default)
+- Pipes directly to samtools for sorting and compression
+- Generates BAI indices automatically
+
+**VNtyper-optimized extraction:**
+- Uses VNtyper's efficient offset-based unmapped read extraction
+- Preserves both mapped (MUC1 region) and unmapped reads
+- Maintains read pairing throughout workflow
+
+**Logging and verification:**
+- Comprehensive logging to both file and console
+- Reports read counts after each remapping step
+- Includes alignment statistics in logs
+
+#### Reference Index Installation
+
+Before running multi-reference remapping, ensure all references are indexed:
+
+```bash
+# Index individual references
+bwa index reference/alignment/chr1.hg19.fa
+bwa index reference/alignment/chr1.hg38.fa
+bwa index reference/alignment/chr1.GRCh37.fna
+bwa index reference/alignment/chr1.GRCh38.fna
+
+# Verify indices
+ls -lh reference/alignment/*.{amb,ann,bwt,pac,sa}
+```
+
+Index creation takes ~5 minutes per reference for chr1 subsets (~240MB each).
+
+#### Forbidden Strings File
+
+Create a text file listing identifiers to remove during anonymization (one per line):
+
+```
+# forbidden_strings.txt - Sample identifiers to anonymize
+# Comments starting with # are ignored
+
+NPH1149
+NPH1908593
+NTI1179
+SAMPLE_ID_123
+PATIENT_456
+```
+
+The script automatically scans BAM headers and read groups to extract forbidden strings if not provided.
+
+#### Performance with Multi-Reference Remapping
+
+**Example workload**: 7 BAM files remapped to 4 references each (28 total alignments)
+
+- **Per-sample subset + anonymize**: 10-40 seconds
+- **Per-reference alignment**: 20-30 seconds (BWA MEM with 4 threads)
+- **Total time**: ~2-3 hours for 7 samples × 4 references
+- **Output size**: ~50MB subset BAMs + ~200MB remapped BAMs
+
+**Optimization tips:**
+- Use `--workers N` to parallelize sample processing
+- BWA threading (`bwa.threads` in config) speeds up individual alignments
+- SSD storage significantly improves I/O performance
+- Consider increasing `bwa.threads` to 8-16 for faster alignments
+
 ## 3. Adapted adVNTR references
 
 The referneces in vntr_db_advntr.zip have been created by removing all non-Muc1 entries from the hg9 database and adding the MUC1 reference with the same ID to the hgg38 database where it was missing and changing the start position to the corresponding start position after finding this with UCSC BLAT usng the left sequence.
