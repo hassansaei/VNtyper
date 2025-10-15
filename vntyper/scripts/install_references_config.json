@@ -15,6 +15,21 @@
     }
   },
 
+  "ncbi_references": {
+    "GRCh37": {
+      "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
+      "target_path": "alignment/chr1.GRCh37.fna.gz",
+      "index_command": "bwa index {path}",
+      "description": "NCBI GRCh37.p13 chromosome 1 (uses '1' not 'chr1' in FASTA header)"
+    },
+    "GRCh38": {
+      "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
+      "target_path": "alignment/chr1.GRCh38.fna.gz",
+      "index_command": "bwa index {path}",
+      "description": "NCBI GRCh38.p14 chromosome 1 (uses '1' not 'chr1' in FASTA header)"
+    }
+  },
+
   "vntyper_references": {
     "vntr_db_advntr": {
       "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_db_advntr.zip",

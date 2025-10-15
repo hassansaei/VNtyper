@@ -416,6 +416,7 @@ def main(
     install_config = load_install_config(install_config_path)
 
     ucsc_refs = install_config.get("ucsc_references", {})
+    ncbi_refs = install_config.get("ncbi_references", {})
     vntyper_refs = install_config.get("vntyper_references", {})
     own_repo_refs = install_config.get("own_repository_references", {})
     bwa_path = install_config.get("bwa_path", "bwa")  # Default to 'bwa'
@@ -435,6 +436,13 @@ def main(
         logging.info("Processing UCSC references...")
         process_ucsc_references(
             ucsc_refs, output_dir, bwa_path, skip_indexing, md5_dict
+        )
+
+    # Process NCBI references
+    if ncbi_refs:
+        logging.info("Processing NCBI references...")
+        process_ucsc_references(
+            ncbi_refs, output_dir, bwa_path, skip_indexing, md5_dict
         )
 
     # Process VNtyper references
@@ -463,6 +471,11 @@ def main(
         for ref_key, ref_info in ucsc_refs.items():
             ref_path = output_dir / ref_info.get("target_path")
             updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
+
+        # Collect all references from NCBI
+        for ref_key, ref_info in ncbi_refs.items():
+            ref_path = output_dir / ref_info.get("target_path")
+            updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
 
         # Collect all references from VNtyper
         for ref_key, ref_info in vntyper_refs.items():
