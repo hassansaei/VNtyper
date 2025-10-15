@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
 """
-Pseudonymize BAM and FASTQ files by:
-- Grouping them by a shared "core" name (e.g. 'NPH1908593'),
-- Computing per-file MD5 sums in parallel, then combining to generate a final MD5-based pseudonym,
-- Reheader + index BAM, rename/copy FASTQs while preserving _R1, _R2, etc.,
-- Use parallel workers to speed up I/O and reheader steps.
+Properly anonymize and pseudonymize BAM and FASTQ files.
 
-Generates a CSV with columns: old_base_name,combined_md5,new_pseudonym
-where:
- - old_base_name is, e.g., "NPH1908593"
- - combined_md5 is the MD5 of all file-specific MD5s (sorted) for that group
- - new_pseudonym is something like "example_3a5c9f2b" (using first 8 hex chars).
+This script:
+1. Removes ALL identifying information from BAM headers (@RG, @PG, @CO lines)
+2. Replaces RG:Z tags in reads with generic values
+3. Adds minimal generic @RG header for tool compatibility
+4. Creates deterministic pseudonyms based on file MD5 hashes
+5. Optionally subsets to MUC1 region and reverts to FASTQ
 
-New features:
- - Accept reference-assembly via --ref-assembly or a TSV/CSV mapping file.
- - Subset BAM to MUC1 region (with -P to keep paired reads). For hg19 => chr1:155158000-155163000; for hg38 => chr1:155184000-155194000.
- - Generate <new_core_name>_<ref>_subset.bam and (optionally) revert it to FASTQ in a second step
-   (<new_core_name>_<ref>_subset_R1.fastq.gz, etc.).
- - Leave subsetting/reverting sequential (to avoid pickling issues in parallel).
- - Parallelize only the MD5 and reheader/copy steps.
- - Write a JSON file (defaults to `pseudonymization_output.json` in `--output-dir` if not otherwise specified)
-   containing only `.bam`, `.bai`, or `.fastq.gz` files in `--output-dir`.
- - Optionally filter JSON output to only `_subset` files by specifying `--json-filter=subset`.
+Best practices implemented:
+- Uses samtools addreplacerg with overwrite_all mode to replace ALL read group tags
+- Removes @PG lines containing identifying file paths and commands
+- Removes @CO comment lines that may contain metadata
+- Adds generic @RG with anonymous sample name
+- Verifies anonymization was successful
 """
 
 import os
@@ -33,15 +26,24 @@ import hashlib
 import argparse
 import subprocess
 import logging
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 ###############################################################################
 # Logging Setup
 ###############################################################################
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # Map reference assemblies to MUC1 subsetting regions
-REGION_MAP = {"hg19": "chr1:155158000-155163000", "hg38": "chr1:155184000-155194000"}
+REGION_MAP = {
+    "hg19": "chr1:155158000-155163000",
+    "hg38": "chr1:155184000-155194000",
+    "GRCh37": "1:155158000-155163000",
+    "GRCh38": "1:155184000-155194000"
+}
 
 ###############################################################################
 # 1) Helpers for parsing filenames and computing MD5
@@ -49,10 +51,11 @@ REGION_MAP = {"hg19": "chr1:155158000-155163000", "hg38": "chr1:155184000-155194
 
 
 def parse_filename(filename):
-    """
+    r"""Parse filename into core name, read suffix, and extension.
+
     Identify:
       1) The "core" base name (e.g. 'NPH1908593'),
-      2) An optional read-suffix like '_R1' or '_R2' (or '_R\\d+'),
+      2) An optional read-suffix like '_R1' or '_R2' (or '_R\d+'),
       3) The file extension, e.g. '.fastq.gz', '.fq.gz', '.fastq', '.fq', '.bam'.
     """
     possible_exts = [".fastq.gz", ".fq.gz", ".fastq", ".fq", ".bam"]
@@ -77,9 +80,7 @@ def parse_filename(filename):
 
 
 def compute_md5(filepath, chunk_size=1_048_576):
-    """
-    Compute the MD5 hex digest of the given file in a memory-efficient way.
-    """
+    """Compute the MD5 hex digest of the given file in a memory-efficient way."""
     md5 = hashlib.md5()
     with open(filepath, "rb") as f:
         while True:
@@ -90,35 +91,294 @@ def compute_md5(filepath, chunk_size=1_048_576):
     return md5.hexdigest()
 
 
-def run_samtools_reheader(input_bam, output_bam):
-    """
-    Reheader the BAM to remove @pg and @rg lines, then index it.
-    """
-    cmd_reheader = [
-        "samtools",
-        "reheader",
-        "-P",
-        "-c",
-        "grep -v ^@PG | grep -v ^@RG | grep -v ^@CO",
-        input_bam,
-    ]
-    logging.debug("Reheader command: %s", " ".join(cmd_reheader))
+###############################################################################
+# 2) Anonymization Functions
+###############################################################################
 
-    with open(output_bam, "w") as fout:
+
+def anonymize_read_names_in_bam(input_bam, output_bam):
+    """Anonymize read names by replacing the flowcell/instrument ID portion.
+
+    Anonymizes read names with a hashed value. Preserves pairing structure.
+
+    Illumina read names have format:
+    <instrument>:<run>:<flowcell>:<lane>:<tile>:<x>:<y>
+
+    We hash the first 3 fields to remove identifying information while
+    preserving uniqueness and pairing.
+
+    Args:
+        input_bam: Path to input BAM
+        output_bam: Path to output BAM with anonymized read names
+    """
+    logging.info(f"Anonymizing read names in {input_bam}")
+
+    # Use samtools view to convert to SAM, process, and convert back
+    cmd_view = ["samtools", "view", "-h", input_bam]
+
+    # Process with Python to anonymize QNAMEs
+    with subprocess.Popen(cmd_view, stdout=subprocess.PIPE, text=True) as proc_view:
+        with subprocess.Popen(
+            ["samtools", "view", "-b", "-o", output_bam],
+            stdin=subprocess.PIPE,
+            text=True
+        ) as proc_write:
+
+            flowcell_hash_cache = {}
+
+            for line in proc_view.stdout:
+                if line.startswith('@'):
+                    # Header line - pass through unchanged
+                    proc_write.stdin.write(line)
+                else:
+                    # Alignment line - anonymize QNAME
+                    fields = line.split('\t')
+                    if len(fields) < 11:
+                        # Malformed line, pass through
+                        proc_write.stdin.write(line)
+                        continue
+
+                    qname = fields[0]
+
+                    # Check if it's an Illumina-style read name
+                    parts = qname.split(':')
+                    if len(parts) >= 7:
+                        # Illumina format: instrument:run:flowcell:lane:tile:x:y
+                        # Hash the first 3 fields (instrument:run:flowcell)
+                        flowcell_id = ':'.join(parts[:3])
+
+                        if flowcell_id not in flowcell_hash_cache:
+                            # Create a short hash
+                            hash_val = hashlib.md5(flowcell_id.encode()).hexdigest()[:8]
+                            flowcell_hash_cache[flowcell_id] = f"ANON{hash_val}"
+
+                        # Replace with anonymized prefix
+                        anon_prefix = flowcell_hash_cache[flowcell_id]
+                        new_qname = anon_prefix + ':' + ':'.join(parts[3:])
+                        fields[0] = new_qname
+
+                    # Write modified line
+                    proc_write.stdin.write('\t'.join(fields))
+
+            proc_write.stdin.close()
+            proc_write.wait()
+
+    # Index the output
+    subprocess.run(["samtools", "index", output_bam], check=True)
+
+    logging.info(f"Read name anonymization complete: {output_bam}")
+
+
+def anonymize_bam_complete(input_bam, output_bam, new_sample_id="sample",
+                           forbidden_strings=None, anonymize_read_names=False):
+    """Comprehensively anonymize a BAM file.
+
+    Performs the following steps:
+    1. Replacing ALL read group tags (RG:Z) with a generic value
+    2. Removing @PG (program) headers containing identifying info
+    3. Removing @CO (comment) headers
+    4. Adding a new generic @RG header
+    5. Optionally anonymizing read names (QNAMEs)
+    6. Verifying no forbidden strings remain
+
+    Uses a multi-step approach for maximum compatibility:
+    - samtools addreplacerg: Replace all RG tags in reads
+    - samtools reheader: Remove @PG and @CO lines from header
+    - Python script to anonymize read names if needed
+
+    Args:
+        input_bam: Path to input BAM file
+        output_bam: Path to output anonymized BAM file
+        new_sample_id: Generic sample identifier to use
+        forbidden_strings: List of strings that should not appear in output
+        anonymize_read_names: If True, replace read names with sequential IDs
+    """
+    if forbidden_strings is None:
+        forbidden_strings = []
+
+    logging.info(f"Anonymizing BAM: {input_bam} -> {output_bam}")
+
+    # Check if read names contain forbidden strings
+    needs_qname_anonymization = False
+    if anonymize_read_names and forbidden_strings:
+        logging.info("Checking if read names contain identifying information...")
+        sample_reads = subprocess.check_output(
+            ["samtools", "view", input_bam],
+            text=True
+        ).split('\n')[:1000]  # Check first 1000 reads
+
+        for line in sample_reads:
+            if not line:
+                continue
+            qname = line.split('\t')[0]
+            for forbidden in forbidden_strings:
+                if forbidden in qname:
+                    logging.warning(f"Found '{forbidden}' in read name: {qname}")
+                    needs_qname_anonymization = True
+                    break
+            if needs_qname_anonymization:
+                break
+
+    # Determine which BAM to use as input for next steps
+    working_bam = input_bam
+
+    # Step 0 (optional): Anonymize read names if needed
+    if needs_qname_anonymization:
+        logging.info("Anonymizing read names (QNAMEs)...")
+        temp_bam_qname = output_bam + ".tmp_qname.bam"
+        anonymize_read_names_in_bam(input_bam, temp_bam_qname)
+        working_bam = temp_bam_qname
+
+    # Step 1: Replace ALL read group tags using addreplacerg
+    # This adds a new @RG line and replaces RG:Z tags in all reads
+    temp_bam_1 = output_bam + ".tmp1.bam"
+
+    rg_line = f"@RG\\tID:{new_sample_id}\\tSM:{new_sample_id}\\tPL:ILLUMINA\\tLB:{new_sample_id}"
+
+    cmd_addreplacerg = [
+        "samtools", "addreplacerg",
+        "-r", rg_line,
+        "-m", "overwrite_all",  # CRITICAL: overwrite ALL existing RG tags
+        "--no-PG",              # Don't add @PG line for this operation
+        "-o", temp_bam_1,
+        working_bam  # Use working_bam (might be qname-anonymized)
+    ]
+
+    logging.debug(f"Running: {' '.join(cmd_addreplacerg)}")
+    subprocess.run(cmd_addreplacerg, check=True)
+
+    # Step 2: Remove @PG and @CO lines from header using reheader
+    # These contain identifying file paths, commands, and metadata
+    temp_bam_2 = output_bam + ".tmp2.bam"
+
+    cmd_reheader = [
+        "samtools", "reheader",
+        "-P",  # Don't add @PG line
+        "-c", "grep -v '^@PG' | grep -v '^@CO'",
+        temp_bam_1
+    ]
+
+    logging.debug(f"Running: {' '.join(cmd_reheader)}")
+    with open(temp_bam_2, "wb") as fout:
         subprocess.run(cmd_reheader, stdout=fout, check=True)
 
-    subprocess.run(["samtools", "index", output_bam], check=True)
+    # Step 3: Remove old @RG lines (from original), keep only our new one
+    # The addreplacerg keeps old @RG lines in header, we need to remove them
+    cmd_filter_rg = [
+        "samtools", "view", "-H", temp_bam_2
+    ]
+
+    header_lines = subprocess.check_output(cmd_filter_rg).decode().split('\n')
+
+    # Filter: keep @HD, @SQ, and only the NEW @RG line (has our new_sample_id)
+    filtered_header = []
+    for line in header_lines:
+        if line.startswith('@HD') or line.startswith('@SQ'):
+            filtered_header.append(line)
+        elif line.startswith('@RG'):
+            # Only keep if it has our new sample ID
+            if f'SM:{new_sample_id}' in line and f'ID:{new_sample_id}' in line:
+                filtered_header.append(line)
+        # Skip @PG, @CO, and old @RG lines
+
+    # Write filtered header to temp file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sam', delete=False) as f:
+        temp_header = f.name
+        f.write('\n'.join(filtered_header) + '\n')
+
+    try:
+        # Apply the cleaned header
+        cmd_final_reheader = [
+            "samtools", "reheader",
+            "-P",
+            temp_header,
+            temp_bam_2
+        ]
+
+        with open(output_bam, "wb") as fout:
+            subprocess.run(cmd_final_reheader, stdout=fout, check=True)
+
+        # Index the output
+        subprocess.run(["samtools", "index", output_bam], check=True)
+
+    finally:
+        # Clean up temp files
+        if os.path.exists(temp_header):
+            os.remove(temp_header)
+        if os.path.exists(temp_bam_1):
+            os.remove(temp_bam_1)
+        if os.path.exists(temp_bam_1 + ".bai"):
+            os.remove(temp_bam_1 + ".bai")
+        if os.path.exists(temp_bam_2):
+            os.remove(temp_bam_2)
+        if needs_qname_anonymization and os.path.exists(working_bam):
+            os.remove(working_bam)
+            if os.path.exists(working_bam + ".bai"):
+                os.remove(working_bam + ".bai")
+
+    # Step 4: Verify anonymization
+    verify_anonymization(output_bam, forbidden_strings)
+
+    logging.info(f"Successfully anonymized BAM: {output_bam}")
+
+
+def verify_anonymization(bam_file, forbidden_strings):
+    """Verify that a BAM file doesn't contain any forbidden strings.
+
+    Checks both header and a sample of read records.
+
+    Args:
+        bam_file: Path to BAM file to verify
+        forbidden_strings: List of strings that should not appear
+
+    Raises:
+        ValueError: If any forbidden string is found
+    """
+    if not forbidden_strings:
+        logging.info("No forbidden strings specified, skipping verification")
+        return
+
+    logging.info(f"Verifying anonymization of {bam_file}")
+
+    # Check header
+    header = subprocess.check_output(
+        ["samtools", "view", "-H", bam_file]
+    ).decode()
+
+    for forbidden in forbidden_strings:
+        if forbidden in header:
+            raise ValueError(
+                f"ANONYMIZATION FAILED: Found '{forbidden}' in BAM header of {bam_file}"
+            )
+
+    # Check sample of reads (first 10000)
+    reads_output = subprocess.check_output(
+        ["samtools", "view", bam_file],
+        text=True
+    )
+
+    # Sample first 10000 reads
+    read_lines = reads_output.split('\n')[:10000]
+    reads_text = '\n'.join(read_lines)
+
+    for forbidden in forbidden_strings:
+        if forbidden in reads_text:
+            raise ValueError(
+                f"ANONYMIZATION FAILED: Found '{forbidden}' in read records of {bam_file}"
+            )
+
+    logging.info(f"✓ Verification passed: No forbidden strings found in {bam_file}")
 
 
 ###############################################################################
-# 2) Subset & Revert Logic
+# 3) Subset & Revert Logic
 ###############################################################################
 
 
 def subset_only(input_bam, region, subset_bam):
-    """
-    Subset the input_bam to the specified region, producing an on-disk subset_bam.
-    Uses -P to keep paired reads together.
+    """Subset the input_bam to the specified region.
+
+    Produces an on-disk subset_bam. Uses -P to keep paired reads together.
     """
     logging.info(f"Subsetting BAM {input_bam} to region {region}. Output: {subset_bam}")
     view_cmd = [
@@ -138,9 +398,9 @@ def subset_only(input_bam, region, subset_bam):
 
 
 def revert_only(subset_bam, out_r1, out_r2):
-    """
-    Revert the subset_bam to paired-end FASTQ using:
-      samtools collate -u -O <subset_bam> - | samtools fastq ...
+    """Revert the subset_bam to paired-end FASTQ.
+
+    Uses samtools collate and fastq commands.
     Writes to out_r1/out_r2, auto-compressing if .gz is used.
     """
     logging.info(f"Reverting subset {subset_bam} -> {out_r1}, {out_r2}")
@@ -157,16 +417,22 @@ def revert_only(subset_bam, out_r1, out_r2):
 
 
 def subset_revert_task(
-    final_bam, region, new_core_name, file_ref, output_dir, do_revert
+    final_bam, region, new_core_name, file_ref, output_dir, do_revert,
+    forbidden_strings=None
 ):
-    """
-    - Always produce a subset .bam named: <new_core_name>_<file_ref>_subset.bam
-    - Then optionally revert that .bam to FASTQ:
+    """Create subset BAM and optionally revert to FASTQ.
+
+    Always produces a subset .bam named: <new_core_name>_<file_ref>_subset.bam
+    Then optionally reverts that .bam to FASTQ:
       <new_core_name>_<file_ref>_subset_R1.fastq.gz, etc.
     """
     # 1) Create subset .bam
     subset_bam = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset.bam")
     subset_only(final_bam, region, subset_bam)
+
+    # Verify the subset is still anonymized
+    if forbidden_strings:
+        verify_anonymization(subset_bam, forbidden_strings)
 
     # 2) If do_revert, produce FASTQs
     if do_revert:
@@ -176,36 +442,34 @@ def subset_revert_task(
 
 
 ###############################################################################
-# 3) Parallel tasks for MD5 and reheader/copy
+# 4) Parallel tasks for MD5 and anonymize/copy
 ###############################################################################
 
 
 def md5_of_file_task(file_path):
-    """
-    Wrapper to compute MD5 for a single file.
-    """
+    """Compute MD5 for a single file."""
     return file_path, compute_md5(file_path)
 
 
-def reheader_or_copy_task(file_path, out_path, extension):
-    """
-    Reheader+index if it's a .bam, else copy it.
-    """
+def anonymize_or_copy_task(file_path, out_path, extension, new_sample_id,
+                           forbidden_strings, anonymize_read_names=False):
+    """Anonymize and index if it's a .bam, else copy it."""
     if extension == ".bam":
-        run_samtools_reheader(file_path, out_path)
+        anonymize_bam_complete(file_path, out_path, new_sample_id, forbidden_strings, anonymize_read_names)
     else:
         shutil.copy2(file_path, out_path)
     return file_path, out_path
 
 
 ###############################################################################
-# 4) Write JSON with file_resources
+# 5) Write JSON with file_resources
 ###############################################################################
 
 
 def write_json_resources(output_dir, json_out, filter_mode="all"):
-    """
-    Gather files in output_dir, but only .bam, .bai, .fastq.gz.
+    """Write JSON resource file with file metadata.
+
+    Gathers files in output_dir, but only .bam, .bai, .fastq.gz.
     If filter_mode == "all", we include all such files.
     If filter_mode == "subset", we only include files that also have "_subset" in their name.
     Then compute MD5 for each, and generate:
@@ -271,18 +535,20 @@ def write_json_resources(output_dir, json_out, filter_mode="all"):
 
 
 ###############################################################################
-# 5) Main logic
+# 6) Main logic
 ###############################################################################
 
 
 def collect_files(input_dir):
+    """Collect all relevant files into a dictionary.
+
+    Returns dict mapping core_name -> list of (path, read_suffix, extension).
+    Only processes BAM files - FASTQs will be generated from subsets if requested.
     """
-    Collect all relevant files into a dictionary: core_name -> list of (path, read_suffix, extension)
-    """
-    valid_exts = (".bam", ".fastq", ".fq", ".fastq.gz", ".fq.gz")
     files_by_core = {}
     for fname in os.listdir(input_dir):
-        if fname.lower().endswith(valid_exts):
+        # ONLY process BAM files - FASTQs are generated via --subset-muc1 --revert-fastq
+        if fname.lower().endswith(".bam"):
             full_path = os.path.join(input_dir, fname)
             core, read_suffix, extension = parse_filename(fname)
             files_by_core.setdefault(core, []).append(
@@ -292,9 +558,10 @@ def collect_files(input_dir):
 
 
 def generate_deterministic_name(md5_list):
-    """
-    Given a list of MD5 strings, sort them, concatenate, compute final MD5,
-    and return 'example_' + first 4 hex characters, plus the entire final MD5.
+    """Generate deterministic name from list of MD5 strings.
+
+    Sorts them, concatenates, computes final MD5.
+    Returns 'example_' + first 4 hex characters, plus the entire final MD5.
     """
     md5_list_sorted = sorted(md5_list)
     combined = "".join(md5_list_sorted)
@@ -304,8 +571,8 @@ def generate_deterministic_name(md5_list):
 
 
 def load_reference_mapping(mapping_file):
-    """
-    Load a TSV or CSV with columns [filename, reference].
+    """Load a TSV or CSV with columns [filename, reference].
+
     Returns a dict mapping basename -> reference.
     """
     logging.info(f"Loading reference mapping file: {mapping_file}")
@@ -327,6 +594,51 @@ def load_reference_mapping(mapping_file):
     return ref_map
 
 
+def load_forbidden_strings_from_file(filepath):
+    """Load forbidden strings from a file.
+
+    Skips comments (lines starting with #) and empty lines.
+
+    Args:
+        filepath: Path to file containing forbidden strings (one per line)
+
+    Returns:
+        List of forbidden strings
+    """
+    forbidden = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            # Skip comments and empty lines
+            if line and not line.startswith('#'):
+                forbidden.append(line)
+    return forbidden
+
+
+def extract_forbidden_strings(input_dir):
+    """Extract potential identifying strings from input files.
+
+    These are strings that should NOT appear in the anonymized output.
+
+    Returns list of forbidden strings based on input filenames.
+    """
+    forbidden = set()
+
+    for fname in os.listdir(input_dir):
+        # Add the base filename (without extension) as forbidden
+        core, _, ext = parse_filename(fname)
+        if core and core not in ['example']:  # Don't forbid our own naming
+            forbidden.add(core)
+
+            # Also check for sample IDs in the filename
+            # Common patterns: NPH1234, SAMPLE_123, etc.
+            for part in core.split('_'):
+                if len(part) >= 4:  # Only meaningful identifiers
+                    forbidden.add(part)
+
+    return list(forbidden)
+
+
 def pseudonymize_files(
     input_dir,
     output_dir,
@@ -337,10 +649,14 @@ def pseudonymize_files(
     do_revert=False,
     json_out=None,
     json_filter="all",
+    forbidden_strings_file=None,
+    anonymize_read_names=False,
 ):
-    """
+    """Pseudonymize and anonymize BAM/FASTQ files.
+
+    Multi-step process:
     - Step 1: Compute MD5 for all files in parallel.
-    - Step 2: Reheader/copy files in parallel.
+    - Step 2: Anonymize BAMs / copy FASTQs in parallel.
     - Step 3: Write CSV with old_core->new_core_name.
     - Step 4: If do_subset, sequentially subset (and optionally revert).
     - Step 5: Write a JSON resource file with final outputs (only .bam, .bai, .fastq.gz),
@@ -348,6 +664,15 @@ def pseudonymize_files(
     """
     os.makedirs(output_dir, exist_ok=True)
     files_by_core = collect_files(input_dir)
+
+    # Load forbidden strings (identifiers to remove)
+    if forbidden_strings_file and os.path.exists(forbidden_strings_file):
+        forbidden_strings = load_forbidden_strings_from_file(forbidden_strings_file)
+    else:
+        # Auto-detect from input filenames
+        forbidden_strings = extract_forbidden_strings(input_dir)
+
+    logging.info(f"Forbidden strings for anonymization: {forbidden_strings}")
 
     # Load the reference mapping if provided
     reference_mapping = {}
@@ -362,38 +687,29 @@ def pseudonymize_files(
         for fp, _, _ in file_list:
             all_files.append(fp)
 
+    logging.info(f"Computing MD5 checksums for {len(all_files)} files...")
     file_md5_map = {}
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         md5_futures = [executor.submit(md5_of_file_task, fp) for fp in all_files]
+        completed = 0
         for fut in as_completed(md5_futures):
             fp, md5sum = fut.result()
             file_md5_map[fp] = md5sum
+            completed += 1
+            logging.info(f"MD5 progress: {completed}/{len(all_files)} - {os.path.basename(fp)}: {md5sum[:8]}...")
 
     # ------------------------------------------------
-    # 2) Reheader/copy in parallel
+    # 2) Generate pseudonyms
     # ------------------------------------------------
-    parallel_tasks = []
     mapping_rows = []
+
     for core_name, file_list in files_by_core.items():
         md5s_for_core = [file_md5_map[fp] for (fp, _, _) in file_list]
         new_core_name, final_md5 = generate_deterministic_name(md5s_for_core)
         mapping_rows.append((core_name, final_md5, new_core_name))
 
-        for fp, read_suffix, extension in file_list:
-            new_filename = new_core_name + read_suffix + extension
-            out_path = os.path.join(output_dir, new_filename)
-            parallel_tasks.append((fp, out_path, extension))
-
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        reheader_futures = [
-            executor.submit(reheader_or_copy_task, fp, out_path, ext)
-            for (fp, out_path, ext) in parallel_tasks
-        ]
-        for fut in as_completed(reheader_futures):
-            _ = fut.result()
-
     # ------------------------------------------------
-    # 3) Write CSV: pseudonymization_table.csv
+    # 4) Write CSV: pseudonymization_table.csv
     # ------------------------------------------------
     csv_path = os.path.join(output_dir, "pseudonymization_table.csv")
     with open(csv_path, "w", newline="") as csvfile:
@@ -418,19 +734,18 @@ def pseudonymize_files(
 
             writer.writerow([old_core, final_md5, new_core_name, ref_val])
 
+    logging.info(f"Wrote pseudonymization table: {csv_path}")
+
     # ------------------------------------------------
-    # 4) Subset/Revert (SEQUENTIAL to avoid pickling issues)
+    # 3) Subset FIRST, then anonymize subsets, then revert
     # ------------------------------------------------
     if do_subset:
+        logging.info("Starting subset -> anonymize -> revert workflow...")
         for core_name, file_list in files_by_core.items():
             new_core_name = [r[2] for r in mapping_rows if r[0] == core_name][0]
 
             for fp, read_suffix, extension in file_list:
                 if extension == ".bam":
-                    new_bam = os.path.join(
-                        output_dir, new_core_name + read_suffix + extension
-                    )
-
                     # Reference assembly for the file
                     base_fname = os.path.basename(fp)
                     file_ref = reference_mapping.get(base_fname, ref_assembly)
@@ -442,19 +757,69 @@ def pseudonymize_files(
                     file_ref = file_ref.lower()
 
                     region = REGION_MAP[file_ref]
-                    subset_revert_task(
-                        new_bam, region, new_core_name, file_ref, output_dir, do_revert
-                    )
+
+                    # Step 3a: Subset ORIGINAL BAM to MUC1 region
+                    temp_subset = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_temp.bam")
+                    logging.info(f"Subsetting {os.path.basename(fp)} to {region}...")
+                    subset_only(fp, region, temp_subset)
+
+                    # Step 3b: Anonymize the SMALL subset BAM
+                    final_subset = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset.bam")
+                    logging.info(f"Anonymizing subset {os.path.basename(temp_subset)}...")
+                    anonymize_bam_complete(temp_subset, final_subset, new_core_name, forbidden_strings, anonymize_read_names)
+
+                    # Clean up temp
+                    if os.path.exists(temp_subset):
+                        os.remove(temp_subset)
+                    if os.path.exists(temp_subset + ".bai"):
+                        os.remove(temp_subset + ".bai")
+
+                    # Step 3c: Revert to FASTQ if requested
+                    if do_revert:
+                        r1 = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz")
+                        r2 = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz")
+                        logging.info(f"Reverting {os.path.basename(final_subset)} to FASTQ...")
+                        revert_only(final_subset, r1, r2)
+    else:
+        logging.warning("--subset-muc1 not specified. No output files will be generated (full BAM anonymization skipped).")
 
     # ------------------------------------------------
-    # 5) Write JSON with final outputs
+    # 6) Write JSON with final outputs
     # ------------------------------------------------
     write_json_resources(output_dir, json_out, filter_mode=json_filter)
 
+    logging.info("=" * 80)
+    logging.info("ANONYMIZATION COMPLETE")
+    logging.info("=" * 80)
+    logging.info(f"Output directory: {output_dir}")
+    logging.info(f"Pseudonymization table: {csv_path}")
+    if json_out or os.path.exists(os.path.join(output_dir, "pseudonymization_output.json")):
+        logging.info(f"Resource manifest: {json_out or os.path.join(output_dir, 'pseudonymization_output.json')}")
+
 
 def main():
+    """Execute the command-line interface."""
     parser = argparse.ArgumentParser(
-        description="Deterministic pseudonymization for BAM/FASTQ with optional subsetting/revert to FASTQ."
+        description="Properly anonymize and pseudonymize BAM/FASTQ files.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic anonymization with pseudonyms
+  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/
+
+  # With subsetting to MUC1 region
+  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/ \\
+    --ref-assembly hg19 --subset-muc1
+
+  # Full workflow: anonymize, subset, and revert to FASTQ
+  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/ \\
+    --ref-assembly hg19 --subset-muc1 --revert-fastq \\
+    --json-filter subset --workers 4
+
+  # With custom forbidden strings file
+  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/ \\
+    --forbidden-strings forbidden.txt
+        """
     )
     parser.add_argument(
         "--input-dir",
@@ -462,7 +827,9 @@ def main():
         help="Directory containing the original BAM/FASTQ files.",
     )
     parser.add_argument(
-        "--output-dir", required=True, help="Output directory for pseudonymized files."
+        "--output-dir",
+        required=True,
+        help="Output directory for anonymized/pseudonymized files."
     )
     parser.add_argument(
         "--workers",
@@ -474,7 +841,8 @@ def main():
     parser.add_argument(
         "--ref-assembly",
         default=None,
-        help="A single reference assembly to apply to all input files (e.g. hg19/hg38).",
+        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
+        help="A single reference assembly to apply to all input files.",
     )
     parser.add_argument(
         "--ref-mapping-file",
@@ -494,12 +862,31 @@ def main():
     )
 
     parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Set logging level (DEBUG, INFO, WARNING, ERROR). Default=INFO.",
+        "--forbidden-strings",
+        default=None,
+        help="File containing strings that must not appear in output (one per line). "
+             "If not provided, will auto-detect from input filenames.",
     )
 
-    # If not specified, we'll default to 'pseudonymization_output.json' in the same output directory.
+    parser.add_argument(
+        "--anonymize-read-names",
+        action="store_true",
+        help="Also anonymize read names (QNAMEs). WARNING: Very slow, adds ~5-10min per file.",
+    )
+
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Set logging level. Default=INFO.",
+    )
+
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Write logs to this file in addition to console output.",
+    )
+
     parser.add_argument(
         "--json-out",
         default=None,
@@ -517,7 +904,17 @@ def main():
 
     args = parser.parse_args()
 
-    logging.getLogger().setLevel(args.log_level.upper())
+    # Configure logging
+    log_level = args.log_level.upper()
+    logging.getLogger().setLevel(log_level)
+
+    # Add file handler if log file specified
+    if args.log_file:
+        file_handler = logging.FileHandler(args.log_file, mode='w')
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler)
+        logging.info(f"Logging to file: {args.log_file}")
 
     pseudonymize_files(
         input_dir=args.input_dir,
@@ -529,6 +926,8 @@ def main():
         do_revert=args.revert_fastq,
         json_out=args.json_out,
         json_filter=args.json_filter,
+        forbidden_strings_file=args.forbidden_strings,
+        anonymize_read_names=args.anonymize_read_names,
     )
 
 

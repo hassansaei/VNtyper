@@ -185,6 +185,7 @@ fastp.json
 
 # tests data folder
 /tests/data/
+/tests/data_anonymized/
 
 # apptainer files
 *.sif
@@ -192,4 +193,7 @@ fastp.json
 # claude files and folders
 .claude/
 CLAUDE.md
+
+# local development documentation and sensitive configs
 docs/
+reference/forbidden_strings.txt
