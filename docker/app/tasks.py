@@ -133,7 +133,7 @@ def run_vntyper_job(
             bam_path,
             "-o",
             output_dir,
-            "--thread",
+            "--threads",
             str(thread),
             "--reference-assembly",
             reference_assembly,
