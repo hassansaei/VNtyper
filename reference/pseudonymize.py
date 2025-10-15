@@ -29,6 +29,15 @@ import logging
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+# Required for offset-based unmapped read extraction
+try:
+    import pysam
+except ImportError:
+    raise ImportError(
+        "pysam is required for offset-based unmapped read extraction.\n"
+        "Install it with: pip install pysam"
+    )
+
 ###############################################################################
 # Logging Setup
 ###############################################################################
@@ -89,6 +98,92 @@ def compute_md5(filepath, chunk_size=1_048_576):
                 break
             md5.update(data)
     return md5.hexdigest()
+
+
+###############################################################################
+# 1b) Unmapped Read Extraction Using BAI Offset
+###############################################################################
+
+
+def read_uint32(f):
+    """Read 4 bytes from file 'f' in little-endian format as an unsigned integer."""
+    return int.from_bytes(f.read(4), byteorder="little", signed=False)
+
+
+def read_uint64(f):
+    """Read 8 bytes from file 'f' in little-endian format as an unsigned integer."""
+    return int.from_bytes(f.read(8), byteorder="little", signed=False)
+
+
+def get_last_chunk_end(bai_filename):
+    """Find the maximum virtual offset among all mapped regions in BAI index.
+
+    This is the key to efficient unmapped read extraction: BAM files store
+    mapped reads first, then unmapped reads at the end. The BAI index contains
+    virtual offsets for all mapped chunks. By finding the MAX offset, we know
+    where mapped reads end and can seek directly to unmapped reads.
+
+    Args:
+        bai_filename: Path to BAI index file
+
+    Returns:
+        int: Maximum virtual offset among all mapped regions
+    """
+    max_vo = 0
+    with open(bai_filename, "rb") as bai:
+        # Read magic (4 bytes) and number of references (4 bytes)
+        bai.read(4)  # skip magic
+        n_ref = read_uint32(bai)
+        for _ in range(n_ref):
+            n_bins = read_uint32(bai)
+            for _ in range(n_bins):
+                read_uint32(bai)  # bin number, not used here
+                n_chunks = read_uint32(bai)
+                for _ in range(n_chunks):
+                    # Each chunk: 8 bytes for chunk_beg, 8 bytes for chunk_end
+                    read_uint64(bai)  # chunk_beg, not used
+                    chunk_end = read_uint64(bai)
+                    if chunk_end > max_vo:
+                        max_vo = chunk_end
+            # Read number of linear index entries and skip them
+            n_intv = read_uint32(bai)
+            bai.seek(n_intv * 8, os.SEEK_CUR)
+    return max_vo
+
+
+def extract_unmapped_reads_from_offset(bam_file, bai_file, output_bam):
+    """
+    Extract unmapped reads from a BAM file using the offset-based approach.
+
+    This is MUCH more efficient than `samtools view -f 4` because:
+    1. BAM files store reads sequentially: mapped reads first, unmapped at end
+    2. We read the BAI index to find the maximum virtual offset of mapped regions
+    3. We seek directly to that offset and read only unmapped reads
+    4. This avoids scanning the entire multi-GB file
+
+    This is the exact approach used by VNtyper for efficient unmapped read extraction.
+
+    Args:
+        bam_file: Path to input BAM file
+        bai_file: Path to corresponding BAI index file
+        output_bam: Path for output BAM file (unmapped reads only)
+
+    Raises:
+        IOError: If reading/writing fails or BAI file is invalid
+    """
+    last_vo = get_last_chunk_end(bai_file)
+    logging.info(f"Last mapped virtual offset (from BAI): {last_vo}")
+
+    with pysam.AlignmentFile(bam_file, "rb") as inbam:
+        # Seek to the computed virtual offset - jump directly to unmapped reads!
+        inbam.seek(last_vo)
+        with pysam.AlignmentFile(output_bam, "wb", header=inbam.header) as outbam:
+            count = 0
+            for read in inbam:
+                if read.is_unmapped:
+                    outbam.write(read)
+                    count += 1
+            logging.info(f"Extracted {count} unmapped reads to {output_bam}")
 
 
 ###############################################################################
@@ -737,10 +832,10 @@ def pseudonymize_files(
     logging.info(f"Wrote pseudonymization table: {csv_path}")
 
     # ------------------------------------------------
-    # 3) Subset FIRST, then anonymize subsets, then revert
+    # 3) Subset + Extract Unmapped + Merge + Anonymize + Revert
     # ------------------------------------------------
     if do_subset:
-        logging.info("Starting subset -> anonymize -> revert workflow...")
+        logging.info("Starting optimized workflow: subset MUC1 → extract unmapped → merge → anonymize → revert")
         for core_name, file_list in files_by_core.items():
             new_core_name = [r[2] for r in mapping_rows if r[0] == core_name][0]
 
@@ -759,29 +854,82 @@ def pseudonymize_files(
                     region = REGION_MAP[file_ref]
 
                     # Step 3a: Subset ORIGINAL BAM to MUC1 region
-                    temp_subset = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_temp.bam")
-                    logging.info(f"Subsetting {os.path.basename(fp)} to {region}...")
-                    subset_only(fp, region, temp_subset)
+                    temp_muc1_subset = os.path.join(output_dir, f"{new_core_name}_{file_ref}_muc1_temp.bam")
+                    logging.info(f"Step 1/5: Subsetting {os.path.basename(fp)} to {region}...")
+                    subset_only(fp, region, temp_muc1_subset)
 
-                    # Step 3b: Anonymize the SMALL subset BAM
+                    # Step 3b: Extract unmapped reads using offset-based approach (VNtyper method)
+                    temp_unmapped = os.path.join(
+                        output_dir, f"{new_core_name}_{file_ref}_unmapped_temp.bam"
+                    )
+                    logging.info("Step 2/5: Extracting unmapped reads using BAI offset method...")
+
+                    # Ensure BAI file exists
+                    bai_file = fp + ".bai"
+                    if not os.path.exists(bai_file):
+                        logging.info(f"Indexing BAM file: {fp}")
+                        subprocess.run(["samtools", "index", fp], check=True)
+
+                    # Extract unmapped reads efficiently
+                    extract_unmapped_reads_from_offset(
+                        bam_file=fp,
+                        bai_file=bai_file,
+                        output_bam=temp_unmapped
+                    )
+
+                    # Step 3c: Merge MUC1 subset + unmapped reads
+                    temp_merged = os.path.join(
+                        output_dir, f"{new_core_name}_{file_ref}_merged_temp.bam"
+                    )
+                    logging.info("Step 3/5: Merging MUC1 subset + unmapped reads...")
+
+                    cmd_merge = [
+                        "samtools", "merge",
+                        "-f",  # force overwrite
+                        temp_merged,
+                        temp_muc1_subset,
+                        temp_unmapped
+                    ]
+                    subprocess.run(cmd_merge, check=True)
+
+                    # Index the merged BAM
+                    subprocess.run(["samtools", "index", temp_merged], check=True)
+
+                    # Clean up intermediate files
+                    os.remove(temp_muc1_subset)
+                    if os.path.exists(temp_muc1_subset + ".bai"):
+                        os.remove(temp_muc1_subset + ".bai")
+                    os.remove(temp_unmapped)
+
+                    # Step 3d: Anonymize the merged BAM
                     final_subset = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset.bam")
-                    logging.info(f"Anonymizing subset {os.path.basename(temp_subset)}...")
-                    anonymize_bam_complete(temp_subset, final_subset, new_core_name, forbidden_strings, anonymize_read_names)
+                    logging.info("Step 4/5: Anonymizing merged BAM...")
+                    anonymize_bam_complete(
+                        temp_merged, final_subset, new_core_name,
+                        forbidden_strings, anonymize_read_names
+                    )
 
-                    # Clean up temp
-                    if os.path.exists(temp_subset):
-                        os.remove(temp_subset)
-                    if os.path.exists(temp_subset + ".bai"):
-                        os.remove(temp_subset + ".bai")
+                    # Clean up temp merged file
+                    if os.path.exists(temp_merged):
+                        os.remove(temp_merged)
+                        if os.path.exists(temp_merged + ".bai"):
+                            os.remove(temp_merged + ".bai")
 
-                    # Step 3c: Revert to FASTQ if requested
+                    # Step 3e: Revert to FASTQ if requested
                     if do_revert:
-                        r1 = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz")
-                        r2 = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz")
-                        logging.info(f"Reverting {os.path.basename(final_subset)} to FASTQ...")
+                        r1 = os.path.join(
+                            output_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz"
+                        )
+                        r2 = os.path.join(
+                            output_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz"
+                        )
+                        logging.info("Step 5/5: Reverting merged BAM to FASTQ...")
                         revert_only(final_subset, r1, r2)
     else:
-        logging.warning("--subset-muc1 not specified. No output files will be generated (full BAM anonymization skipped).")
+        logging.warning(
+            "--subset-muc1 not specified. No output files will be generated "
+            "(full BAM anonymization skipped)."
+        )
 
     # ------------------------------------------------
     # 6) Write JSON with final outputs
