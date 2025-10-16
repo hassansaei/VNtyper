@@ -185,7 +185,7 @@ fastp.json
 
 # tests data folder
 /tests/data/
-/tests/data_anonymized/
+/tests/backup/
 
 # apptainer files
 *.sif
