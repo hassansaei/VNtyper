@@ -363,7 +363,7 @@ def ensure_reference_ready(assembly, auto_download=True):
     return reference_path
 
 
-def remap_fastq_to_reference(fastq1, fastq2, reference_path, output_bam, threads=4):
+def remap_fastq_to_reference(fastq1, fastq2, reference_path, output_bam, threads=8):
     """
     Align paired-end FASTQs to reference genome using BWA MEM.
 
@@ -378,28 +378,23 @@ def remap_fastq_to_reference(fastq1, fastq2, reference_path, output_bam, threads
         fastq2: Path to R2 FASTQ file
         reference_path: Path to reference FASTA (must be BWA indexed)
         output_bam: Path for output sorted BAM file
-        threads: Number of threads for alignment and sorting
+        threads: Number of threads for alignment and sorting (default: 8)
 
     Raises:
         RuntimeError: If alignment, sorting, or indexing fails
     """
     logging.info(f"Remapping {os.path.basename(fastq1)} to {reference_path}...")
 
-    # BWA MEM command
-    bwa_cmd = f"bwa mem -t {threads} {reference_path} {fastq1} {fastq2}"
-
-    # Samtools view and sort command
-    samtools_cmd = f"samtools view -@ {threads} -b | samtools sort -@ {threads} -o {output_bam}"
-
-    # Full pipeline
-    full_cmd = f"{bwa_cmd} | {samtools_cmd}"
+    # BWA MEM command piped directly to samtools sort
+    # Modern samtools infers BAM format from .bam extension
+    full_cmd = f"bwa mem -t {threads} {reference_path} {fastq1} {fastq2} | samtools sort -@ {threads} -o {output_bam} -"
 
     logging.info(f"Running BWA alignment: {full_cmd}")
 
-    result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
+    # Stream output to console in real-time (don't buffer)
+    result = subprocess.run(full_cmd, shell=True)
 
     if result.returncode != 0:
-        logging.error(f"BWA alignment failed: {result.stderr}")
         raise RuntimeError(f"Failed to remap FASTQs to {reference_path}")
 
     # Index the output BAM
@@ -785,16 +780,17 @@ def remap_with_aligner(
         except KeyError as e:
             raise RuntimeError(f"Missing parameter in alignment command for {aligner_name}: {e}")
 
-        # Add samtools pipeline for sorting and compression
-        samtools_cmd = f"samtools view -@ {threads} -b | samtools sort -@ {threads} -o {output_bam}"
-        full_cmd = f"{align_cmd} | {samtools_cmd}"
+        # Pipe aligner output directly to samtools sort
+        # Modern samtools infers BAM format from .bam extension
+        full_cmd = f"{align_cmd} | samtools sort -@ {threads} -o {output_bam} -"
 
         logging.debug(f"  Command: {full_cmd}")
 
-        result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
+        # Stream output to console in real-time (don't buffer)
+        result = subprocess.run(full_cmd, shell=True)
 
         if result.returncode != 0:
-            raise RuntimeError(f"{aligner_name} alignment failed: {result.stderr}")
+            raise RuntimeError(f"{aligner_name} alignment failed")
 
         # Index the BAM
         subprocess.run(["samtools", "index", output_bam], check=True)
@@ -1703,19 +1699,19 @@ def main():
         epilog="""
 Examples:
   # Basic anonymization with pseudonyms
-  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/
+  python pseudonymize.py --input-dir raw_data/ --output-dir anonymized/
 
   # With subsetting to MUC1 region
-  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/ \\
+  python pseudonymize.py --input-dir raw_data/ --output-dir anonymized/ \\
     --ref-assembly hg19 --subset-muc1
 
   # Full workflow: anonymize, subset, and revert to FASTQ
-  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/ \\
+  python pseudonymize.py --input-dir raw_data/ --output-dir anonymized/ \\
     --ref-assembly hg19 --subset-muc1 --revert-fastq \\
     --json-filter subset --workers 4
 
   # With custom forbidden strings file
-  python pseudonymize_fixed.py --input-dir raw_data/ --output-dir anonymized/ \\
+  python pseudonymize.py --input-dir raw_data/ --output-dir anonymized/ \\
     --forbidden-strings forbidden.txt
         """
     )
