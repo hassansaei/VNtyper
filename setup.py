@@ -25,8 +25,8 @@ setup(
     packages=find_packages(),
     include_package_data=True,  # Include package data as specified in MANIFEST.in or package_data
     install_requires=[
-        "pandas>=2.2.0",
-        "numpy>=2.0.2",
+        "pandas>=2.2.0,<2.3.0",
+        "numpy>=1.26.0,<2.0.0",
         "regex>=2024.7.24",
         "biopython>=1.84",
         "setuptools>=72.2.0",
