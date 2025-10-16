@@ -1735,7 +1735,7 @@ Examples:
     parser.add_argument(
         "--ref-assembly",
         default=None,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
+        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
         help="A single reference assembly to apply to all input files.",
     )
     parser.add_argument(
