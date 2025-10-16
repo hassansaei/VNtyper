@@ -270,6 +270,7 @@ def test_bam_input_with_kestrel_checks(
 
     bam_path = bam_case["bam"]
     cli_options = bam_case["cli_options"]
+    reference_assembly = bam_case.get("reference_assembly", "hg19")
     output_dir = tmp_path / bam_case["test_name"]
 
     # Clean up old output
@@ -288,7 +289,7 @@ def test_bam_input_with_kestrel_checks(
         "--threads",
         "4",
         "--reference-assembly",
-        "hg19",
+        reference_assembly,
         "-o",
         str(output_dir),
     ] + cli_options
@@ -467,6 +468,7 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     bam_path = advntr_case["bam"]
     cli_options = advntr_case["cli_options"]
     expected_vcf = advntr_case["expected_vcf"]
+    reference_assembly = advntr_case.get("reference_assembly", "hg19")
     output_dir = tmp_path / advntr_case["test_name"]
 
     # Clean up old output
@@ -485,7 +487,7 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
         "--threads",
         "4",
         "--reference-assembly",
-        "hg19",
+        reference_assembly,
         "-o",
         str(output_dir),
     ] + cli_options

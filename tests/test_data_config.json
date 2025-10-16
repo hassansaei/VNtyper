@@ -192,6 +192,7 @@
       {
         "test_name": "example_b178_hg19_subset_fast",
         "bam": "tests/data/example_b178_hg19_subset.bam",
+        "reference_assembly": "hg19",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
@@ -212,6 +213,7 @@
       {
         "test_name": "example_a5c1_hg19_subset_fast",
         "bam": "tests/data/example_a5c1_hg19_subset.bam",
+        "reference_assembly": "hg19",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
@@ -232,6 +234,7 @@
       {
         "test_name": "example_66bf_hg19_subset_fast",
         "bam": "tests/data/example_66bf_hg19_subset.bam",
+        "reference_assembly": "hg19",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
@@ -252,6 +255,7 @@
       {
         "test_name": "example_7a61_hg19_subset_fast",
         "bam": "tests/data/example_7a61_hg19_subset.bam",
+        "reference_assembly": "hg19",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
@@ -272,6 +276,49 @@
       {
         "test_name": "example_dfc3_hg19_subset_fast",
         "bam": "tests/data/example_dfc3_hg19_subset.bam",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 206,
+          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_dfc3_GRCh37_fast",
+        "bam": "tests/data/remapped/bwa/GRCh37/example_dfc3_GRCh37_bwa.bam",
+        "reference_assembly": "GRCh37",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 206,
+          "Estimated_Depth_Variant_ActiveRegion": 18976,
+          "Depth_Score": {
+            "value": 0.010855817875210793,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_dfc3_GRCh38_fast",
+        "bam": "tests/data/remapped/bwa/GRCh38/example_dfc3_GRCh38_bwa.bam",
+        "reference_assembly": "GRCh38",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
@@ -294,6 +341,7 @@
       {
         "test_name": "example_a5c1_hg19_subset_advntr",
         "bam": "tests/data/example_a5c1_hg19_subset.bam",
+        "reference_assembly": "hg19",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
