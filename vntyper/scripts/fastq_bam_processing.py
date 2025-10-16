@@ -13,6 +13,7 @@ from vntyper.scripts.utils import run_command
 from vntyper.scripts.extract_unmapped_from_offset import (
     extract_unmapped_reads_from_offset,
 )
+from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
@@ -114,14 +115,13 @@ def process_bam_to_fastq(
         bam_region = f"-L {bed_file}"
         logging.debug(f"BAM regions set using BED file: {bam_region}")
     else:
-        region_key = f"bam_region_{reference_assembly}"
-        bam_region = config.get("bam_processing", {}).get(region_key)
-        if not bam_region:
-            logging.error(
-                f"Region key '{region_key}' not found in config.json. "
-                f"Supported assemblies: hg19, hg38, GRCh37, GRCh38"
-            )
-            raise ValueError(f"Missing configuration for region: {region_key}")
+        # Use dynamic region resolution with fallback to legacy format
+        bam_region = get_region_string_with_fallback(
+            bam_file=str(in_bam),
+            reference_assembly=reference_assembly,
+            region_type="bam_region",
+            config=config
+        )
         logging.debug(f"BAM region set to: {bam_region}")
 
     cram_ref_option = ""
@@ -387,7 +387,9 @@ def calculate_vntr_coverage(
                 "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
             )
             out_f.write(
-                f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t{min_coverage}\t{max_coverage}\t{total_region_length}\t{zero_coverage_bases}\t{percent_uncovered:.2f}\n"
+                f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t"
+                f"{min_coverage}\t{max_coverage}\t{total_region_length}\t"
+                f"{zero_coverage_bases}\t{percent_uncovered:.2f}\n"
             )
         logging.info(f"Coverage summary written to: {summary_filename}")
 
@@ -436,14 +438,13 @@ def downsample_bam_if_needed(
 
     bam_path = Path(bam_path)  # ensure it's a Path object
 
-    region_key = f"vntr_region_{reference_assembly}"
-    region = config.get("bam_processing", {}).get(region_key)
-    if not region:
-        logging.error(
-            f"VNTR region key '{region_key}' not found in config.json. "
-            f"Supported assemblies: hg19, hg38, GRCh37, GRCh38"
-        )
-        raise ValueError(f"Missing configuration for VNTR region: {region_key}")
+    # Use dynamic region resolution with fallback to legacy format
+    region = get_region_string_with_fallback(
+        bam_file=str(bam_path),
+        reference_assembly=reference_assembly,
+        region_type="vntr_region",
+        config=config
+    )
 
     current_coverage = calculate_vntr_coverage(
         bam_file=str(bam_path),
@@ -535,132 +536,31 @@ def parse_contigs_from_header(header: str) -> list:
     return contigs
 
 
-def detect_assembly_from_contigs(header: str, threshold: float = 0.9) -> str:
+def detect_assembly_from_contigs(header: str, config: dict, threshold: float = None) -> str:
     """
     Detects the reference genome assembly by comparing contig information from the BAM header
-    against known assemblies. Returns the detected assembly name if the match percentage
+    against known assemblies from config. Returns the detected assembly name if the match percentage
     is above the threshold, otherwise returns 'Not detected'.
+
+    Args:
+        header (str): BAM header string
+        config (dict): Configuration dictionary containing assembly_detection section
+        threshold (float, optional): Match percentage threshold (0.0-1.0).
+            If not provided, uses value from config (default 0.9)
+
+    Returns:
+        str: Detected assembly name or "Not detected"
     """
-    known_assemblies = {
-        "hg19": {
-            "name": "hg19",
-            "contigs": [
-                {"name": "chr1", "length": 249250621},
-                {"name": "chr2", "length": 243199373},
-                {"name": "chr3", "length": 198022430},
-                {"name": "chr4", "length": 191154276},
-                {"name": "chr5", "length": 180915260},
-                {"name": "chr6", "length": 171115067},
-                {"name": "chr7", "length": 159138663},
-                {"name": "chr8", "length": 146364022},
-                {"name": "chr9", "length": 141213431},
-                {"name": "chr10", "length": 135534747},
-                {"name": "chr11", "length": 135006516},
-                {"name": "chr12", "length": 133851895},
-                {"name": "chr13", "length": 115169878},
-                {"name": "chr14", "length": 107349540},
-                {"name": "chr15", "length": 102531392},
-                {"name": "chr16", "length": 90354753},
-                {"name": "chr17", "length": 81195210},
-                {"name": "chr18", "length": 78077248},
-                {"name": "chr19", "length": 59128983},
-                {"name": "chr20", "length": 63025520},
-                {"name": "chr21", "length": 48129895},
-                {"name": "chr22", "length": 51304566},
-                {"name": "chrX", "length": 155270560},
-                {"name": "chrY", "length": 59373566},
-            ],
-        },
-        "GRCh37": {
-            "name": "GRCh37",
-            "contigs": [
-                {"name": "1", "length": 249250621},
-                {"name": "2", "length": 243199373},
-                {"name": "3", "length": 198022430},
-                {"name": "4", "length": 191154276},
-                {"name": "5", "length": 180915260},
-                {"name": "6", "length": 171115067},
-                {"name": "7", "length": 159138663},
-                {"name": "8", "length": 146364022},
-                {"name": "9", "length": 141213431},
-                {"name": "10", "length": 135534747},
-                {"name": "11", "length": 135006516},
-                {"name": "12", "length": 133851895},
-                {"name": "13", "length": 115169878},
-                {"name": "14", "length": 107349540},
-                {"name": "15", "length": 102531392},
-                {"name": "16", "length": 90354753},
-                {"name": "17", "length": 81195210},
-                {"name": "18", "length": 78077248},
-                {"name": "19", "length": 59128983},
-                {"name": "20", "length": 63025520},
-                {"name": "21", "length": 48129895},
-                {"name": "22", "length": 51304566},
-                {"name": "X", "length": 155270560},
-                {"name": "Y", "length": 59373566},
-                {"name": "MT", "length": 16569},
-            ],
-        },
-        "hg38": {
-            "name": "hg38",
-            "contigs": [
-                {"name": "chr1", "length": 248956422},
-                {"name": "chr2", "length": 242193529},
-                {"name": "chr3", "length": 198295559},
-                {"name": "chr4", "length": 190214555},
-                {"name": "chr5", "length": 181538259},
-                {"name": "chr6", "length": 170805979},
-                {"name": "chr7", "length": 159345973},
-                {"name": "chr8", "length": 145138636},
-                {"name": "chr9", "length": 138394717},
-                {"name": "chr10", "length": 133797422},
-                {"name": "chr11", "length": 135086622},
-                {"name": "chr12", "length": 133275309},
-                {"name": "chr13", "length": 114364328},
-                {"name": "chr14", "length": 107043718},
-                {"name": "chr15", "length": 101991189},
-                {"name": "chr16", "length": 90338345},
-                {"name": "chr17", "length": 83257441},
-                {"name": "chr18", "length": 80373285},
-                {"name": "chr19", "length": 58617616},
-                {"name": "chr20", "length": 64444167},
-                {"name": "chr21", "length": 46709983},
-                {"name": "chr22", "length": 50818468},
-                {"name": "chrX", "length": 156040895},
-                {"name": "chrY", "length": 57227415},
-            ],
-        },
-        "GRCh38": {
-            "name": "GRCh38",
-            "contigs": [
-                {"name": "1", "length": 248956422},
-                {"name": "2", "length": 242193529},
-                {"name": "3", "length": 198295559},
-                {"name": "4", "length": 190214555},
-                {"name": "5", "length": 181538259},
-                {"name": "6", "length": 170805979},
-                {"name": "7", "length": 159345973},
-                {"name": "8", "length": 145138636},
-                {"name": "9", "length": 138394717},
-                {"name": "10", "length": 133797422},
-                {"name": "11", "length": 135086622},
-                {"name": "12", "length": 133275309},
-                {"name": "13", "length": 114364328},
-                {"name": "14", "length": 107043718},
-                {"name": "15", "length": 101991189},
-                {"name": "16", "length": 90338345},
-                {"name": "17", "length": 83257441},
-                {"name": "18", "length": 80373285},
-                {"name": "19", "length": 58617616},
-                {"name": "20", "length": 64444167},
-                {"name": "21", "length": 46709983},
-                {"name": "22", "length": 50818468},
-                {"name": "X", "length": 156040895},
-                {"name": "Y", "length": 57227415},
-                {"name": "MT", "length": 16569},
-            ],
-        },
-    }
+    # Load known assemblies and threshold from config
+    assembly_config = config.get("assembly_detection", {})
+    known_assemblies = assembly_config.get("known_assemblies", {})
+
+    if threshold is None:
+        threshold = assembly_config.get("detection_threshold", 0.9)
+
+    if not known_assemblies:
+        logging.warning("No known_assemblies found in config. Assembly detection disabled.")
+        return "Not detected"
 
     bam_contigs = parse_contigs_from_header(header)
     for assembly_key, assembly_data in known_assemblies.items():
@@ -681,7 +581,7 @@ def detect_assembly_from_contigs(header: str, threshold: float = 0.9) -> str:
 
 
 def parse_header_pipeline_info(
-    header: str, output_dir: Path, output_name: str = "pipeline_info.json"
+    header: str, output_dir: Path, config: dict, output_name: str = "pipeline_info.json"
 ) -> None:
     """
     Parses the BAM header to extract assembly and alignment pipeline information.
@@ -693,6 +593,7 @@ def parse_header_pipeline_info(
     Parameters:
         header (str): The BAM header.
         output_dir (Path): Directory where the output file will be written.
+        config (dict): Configuration dictionary containing assembly_detection section.
         output_name (str): Base name for the output file. Defaults to 'pipeline_info.json'.
     """
     lower_header = header.lower()
@@ -709,7 +610,7 @@ def parse_header_pipeline_info(
         assembly_text = "hg38"
     else:
         assembly_text = "Not detected"  # Contig matching
-    assembly_contig = detect_assembly_from_contigs(header)
+    assembly_contig = detect_assembly_from_contigs(header, config)
 
     # Determine the alignment pipeline.
     if "dragen" in lower_header:

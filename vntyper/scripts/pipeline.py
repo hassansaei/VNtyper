@@ -18,6 +18,7 @@ from vntyper.scripts.fastq_bam_processing import (
     extract_bam_header,
     parse_header_pipeline_info,
 )
+from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.utils import (
@@ -217,13 +218,25 @@ def run_pipeline(
             write_bed_file(custom_regions, bed_file_path)
             logging.info(f"Custom regions converted to BED file: {bed_file_path}")
         else:
-            region_key = f"bam_region_{reference_assembly}"
-            predefined_regions = config.get("bam_processing", {}).get(region_key)
-            if not predefined_regions:
-                logging.error(
-                    f"Region key '{region_key}' not found in config.json under 'bam_processing'."
+            # Use dynamic region resolution for BAM/CRAM, fallback to legacy for FASTQ
+            if input_type in ["BAM", "CRAM"]:
+                input_file = bam if input_type == "BAM" else cram
+                predefined_regions = get_region_string_with_fallback(
+                    bam_file=input_file,
+                    reference_assembly=reference_assembly,
+                    region_type="bam_region",
+                    config=config
                 )
-                raise ValueError(f"Missing configuration for region: {region_key}")
+            else:
+                # FASTQ input - use fallback to legacy format (no BAM available yet)
+                region_key = f"bam_region_{reference_assembly}"
+                predefined_regions = config.get("bam_processing", {}).get(region_key)
+                if not predefined_regions:
+                    logging.error(
+                        f"Region key '{region_key}' not found in config.json under 'bam_processing'."
+                    )
+                    raise ValueError(f"Missing configuration for region: {region_key}")
+
             bed_file_path = (
                 Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
             )
@@ -259,7 +272,7 @@ def run_pipeline(
                 conversion_command = f"process_bam_to_fastq(in_bam={bam}, ...)"
                 header_parse_start = datetime.utcnow()
                 header = extract_bam_header(bam, config)
-                parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]))
+                parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]), config)
                 header_parse_end = datetime.utcnow()
                 record_step(
                     summary,
@@ -434,18 +447,16 @@ def run_pipeline(
         else:
             input_bam = Path(dirs["alignment_processing"]) / "output_sorted.bam"
 
-        vntr_region_key = f"vntr_region_{reference_assembly}"
-        vntr_region = config.get("bam_processing", {}).get(vntr_region_key)
-        if not vntr_region:
-            logging.error(
-                f"Region key '{vntr_region_key}' not found in config.json under 'bam_processing'."
-            )
-            raise ValueError(
-                f"Missing configuration for VNTR region: {vntr_region_key}"
-            )
+        # Use dynamic region resolution with fallback to legacy format
+        vntr_region = get_region_string_with_fallback(
+            bam_file=str(input_bam),
+            reference_assembly=reference_assembly,
+            region_type="vntr_region",
+            config=config
+        )
 
         cov_start = datetime.utcnow()
-        coverage_stats = calculate_vntr_coverage(
+        calculate_vntr_coverage(
             bam_file=str(input_bam),
             region=vntr_region,
             threads=threads,
@@ -454,7 +465,6 @@ def run_pipeline(
             output_name="coverage",
         )
         cov_end = datetime.utcnow()
-        mean_coverage = coverage_stats["mean"]
         record_step(
             summary,
             "Coverage Calculation",

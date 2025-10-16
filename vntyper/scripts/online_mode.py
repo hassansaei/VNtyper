@@ -4,6 +4,8 @@ import time
 import requests
 from pathlib import Path
 
+from vntyper.scripts.region_utils import get_region_string_with_fallback
+
 
 def subset_bam(bam_path, region, output_bam):
     """
@@ -188,12 +190,13 @@ def run_online_mode(
     # Get the API base URL from config
     api_url = config.get("api", {}).get("base_url", "http://vntyper.org/api")
 
-    # Determine region from config based on reference_assembly
-    bam_processing = config.get("bam_processing", {})
-    region_key = f"bam_region_{reference_assembly}"
-    if region_key not in bam_processing:
-        raise RuntimeError(f"No region configured for {reference_assembly}")
-    region = bam_processing[region_key]
+    # Use dynamic region resolution with fallback to legacy format
+    region = get_region_string_with_fallback(
+        bam_file=bam,
+        reference_assembly=reference_assembly,
+        region_type="bam_region",
+        config=config
+    )
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
