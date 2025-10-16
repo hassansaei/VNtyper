@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # vntyper/scripts/file_processing.py
 
-import pandas as pd
 import json
 import importlib.resources as pkg_resources
 
