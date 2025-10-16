@@ -190,7 +190,10 @@ def main():
         "--summary-formats",
         type=str,
         default="",
-        help="Comma-separated list of additional summary output formats to generate (supported: csv, tsv). JSON is always generated.",
+        help=(
+            "Comma-separated list of additional summary output formats to generate "
+            "(supported: csv, tsv). JSON is always generated."
+        ),
     )
 
     # Subcommand: report
@@ -269,7 +272,10 @@ def main():
         "--summary-formats",
         type=str,
         default="",
-        help="Comma-separated list of additional summary output formats to generate (supported: csv, tsv, json). HTML is always generated.",
+        help=(
+            "Comma-separated list of additional summary output formats to generate "
+            "(supported: csv, tsv, json). HTML is always generated."
+        ),
     )
     # New flag: pseudonymize sample names in cohort mode.
     # This argument optionally accepts a basename; if not provided, the default "sample_" is used.
@@ -278,7 +284,10 @@ def main():
         nargs="?",
         const="sample_",
         default=None,
-        help="Pseudonymize sample names to protect sensitive information. Optionally provide a basename for pseudonyms (default is 'sample_').",
+        help=(
+            "Pseudonymize sample names to protect sensitive information. "
+            "Optionally provide a basename for pseudonyms (default is 'sample_')."
+        ),
     )
 
     # Subcommand: install-references
@@ -295,7 +304,34 @@ def main():
         help="Directory where references will be installed.",
     )
     parser_install.add_argument(
-        "--skip-indexing", action="store_true", help="Skip the bwa indexing step."
+        "--skip-indexing", action="store_true", help="Skip the indexing step."
+    )
+    parser_install.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=4,
+        help="Number of threads to use for indexing (default: 4).",
+    )
+    parser_install.add_argument(
+        "--aligners",
+        nargs="+",
+        default=None,
+        metavar="ALIGNER",
+        help=(
+            "Specific aligners to use (e.g., bwa bwa-mem2 minimap2). "
+            "If not specified, only BWA will be used (default)."
+        ),
+    )
+    parser_install.add_argument(
+        "--references",
+        nargs="+",
+        default=None,
+        metavar="REFERENCE",
+        help=(
+            "Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). "
+            "Default: hg19 hg38 (UCSC references only)."
+        ),
     )
 
     # Subcommand: online
@@ -427,6 +463,9 @@ def main():
             output_dir=args.output_dir,
             config_path=args.config_path,
             skip_indexing=args.skip_indexing,
+            index_threads=args.threads,
+            aligners_to_use=args.aligners,
+            references_to_process=args.references,
         )
         sys.exit(0)
 

@@ -656,6 +656,7 @@ def main(
     skip_indexing: bool = False,
     index_threads: int = 4,
     aligners_to_use: Optional[List[str]] = None,
+    references_to_process: Optional[List[str]] = None,
 ):
     """
     Main function to execute the install_references process.
@@ -666,6 +667,7 @@ def main(
         skip_indexing (bool): Whether to skip the indexing step.
         index_threads (int): Number of threads to use for indexing.
         aligners_to_use (list, optional): List of specific aligners to use (overrides config).
+        references_to_process (list, optional): List of specific references to process (e.g., ['hg19', 'hg38']).
     """
     script_dir = Path(__file__).parent
     install_config_path = script_dir / "install_references_config.json"
@@ -689,6 +691,33 @@ def main(
 
     setup_logging(output_dir)
 
+    # Filter references (after logging is set up)
+    # Default to hg19 and hg38 (UCSC) for backward compatibility
+    if references_to_process is None:
+        references_to_process = ["hg19", "hg38"]
+        logging.info("No references specified, using default: hg19, hg38")
+
+    all_available_refs = set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(vntyper_refs.keys())
+    requested_refs = set(references_to_process)
+    found_refs = requested_refs & all_available_refs
+    missing_refs = requested_refs - all_available_refs
+
+    if missing_refs:
+        logging.warning(
+            f"Requested references not found in config: {', '.join(sorted(missing_refs))}"
+        )
+        logging.warning(f"Available references: {', '.join(sorted(all_available_refs))}")
+
+    if not found_refs:
+        logging.error("None of the requested references were found in the configuration.")
+        sys.exit(1)
+
+    logging.info(f"Processing references: {', '.join(sorted(found_refs))}")
+
+    ucsc_refs = {k: v for k, v in ucsc_refs.items() if k in references_to_process}
+    ncbi_refs = {k: v for k, v in ncbi_refs.items() if k in references_to_process}
+    vntyper_refs = {k: v for k, v in vntyper_refs.items() if k in references_to_process}
+
     # Initialize aligners
     enabled_aligners = {}
     if not skip_indexing and aligner_config:
@@ -700,7 +729,7 @@ def main(
         # Get enabled aligners
         all_enabled = get_enabled_aligners(aligner_config)
 
-        # Filter by user-specified aligners if provided
+        # Filter by user-specified aligners if provided, otherwise default to BWA only
         if aligners_to_use:
             for aligner_name in aligners_to_use:
                 if aligner_name in all_enabled:
@@ -712,7 +741,12 @@ def main(
                 else:
                     logging.error(f"  ✗ Unknown aligner: {aligner_name}")
         else:
-            enabled_aligners = all_enabled
+            # Default to BWA only
+            if "bwa" in all_enabled:
+                enabled_aligners["bwa"] = all_enabled["bwa"]
+                logging.info("  Using default aligner: bwa")
+            else:
+                logging.warning("  Default aligner 'bwa' not available")
 
         if not enabled_aligners:
             logging.warning("No aligners available. Indexing will be skipped.")
@@ -825,8 +859,14 @@ Examples:
   # Install all references with all enabled aligners
   python install_references.py -d reference/
 
+  # Install specific reference only (e.g., hg19)
+  python install_references.py -d reference/ --references hg19
+
   # Install with specific aligners only
   python install_references.py -d reference/ --aligners bwa minimap2
+
+  # Install hg19 with BWA aligner and 8 threads
+  python install_references.py -d reference/ --references hg19 --aligners bwa --threads 8
 
   # Install with 8 threads
   python install_references.py -d reference/ --threads 8
@@ -866,8 +906,16 @@ Examples:
         nargs="+",
         default=None,
         metavar="ALIGNER",
-        help="Specific aligners to use (e.g., bwa bwa-mem2 minimap2 bowtie2 dragmap). "
-             "If not specified, all enabled aligners in config will be used.",
+        help="Specific aligners to use (e.g., bwa bwa-mem2 minimap2). "
+             "If not specified, only BWA will be used (default).",
+    )
+    parser.add_argument(
+        "--references",
+        nargs="+",
+        default=None,
+        metavar="REFERENCE",
+        help="Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). "
+             "Default: hg19 hg38 (UCSC references only).",
     )
 
     args = parser.parse_args()
@@ -876,5 +924,6 @@ Examples:
         args.config_path,
         args.skip_indexing,
         args.threads,
-        args.aligners
+        args.aligners,
+        args.references
     )

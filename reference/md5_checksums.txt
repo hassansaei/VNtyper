@@ -1,8 +1,4 @@
 e103808b81f7d0a52353dee92d2ff164  alignment/chr1.hg19.fa.gz
-f069c41e7cc8c2d3a7655cbb2d4186b8  alignment/chr1.hg38.fa.gz
-6c9d752771ea45602cb21d1f2d52bbad  alignment/chr1.GRCh37.fna.gz
-1b2a6fc818510dac5f98236ed2b23477  alignment/chr1.GRCh38.fna.gz
-d544a3c34fa80552940f28917378fd3f  vntr_db_advntr.zip
 00f893e20c4cd0b58c943b8808dd2b1f  All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
 b012123c1425afe5137bf435389e7d0b  MUC1_motifs_Rev_com.fa
 8153ade4982291f85220a4b3063584a0  code-adVNTR_RUs.fa

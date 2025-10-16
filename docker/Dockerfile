@@ -60,7 +60,7 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
     conda activate envadvntr && \
     bash vntyper/dependencies/advntr/install_advntr.sh -o"
 
-# Install VNtyper references during build
+# Install VNtyper references during build (hg19 and hg38 UCSC by default)
 RUN conda run -n vntyper vntyper --config-path /opt/vntyper/config/config.json install-references \
     --output-dir $REFERENCE_DIR
 
