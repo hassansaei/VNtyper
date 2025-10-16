@@ -48,7 +48,7 @@
       "description": "Bowtie2: memory-efficient, very accurate, good for diverse read lengths"
     },
     "dragmap": {
-      "enabled": false,
+      "enabled": true,
       "executable": "dragen-os",
       "index_command": "dragen-os --build-hash-table true --ht-reference {ref_path} --output-directory {index_dir} --num-threads {threads}",
       "index_dir_required": true,

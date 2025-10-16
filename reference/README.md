@@ -358,15 +358,58 @@ output_dir/
   - Keeps outputs from different references cleanly separated
   - BAM naming: `{sample}_{reference}_{mapper}.bam` (e.g., `example_6449_hg38_bwa.bam`)
 
+#### Multi-Aligner Support
+
+`pseudonymize.py` supports multiple alignment tools for remapping. Use `--aligners` to specify which aligners to use:
+
+**Supported aligners:**
+- **BWA** (default) - Standard, well-tested aligner
+- **BWA-MEM2** - 1.3-3x faster than BWA, drop-in replacement
+- **Minimap2** - Versatile, fast for both short and long reads
+- **Bowtie2** - Memory-efficient, very accurate
+- **DRAGMAP** - DRAGEN-compatible (currently disabled due to stdout piping issues)
+
+**Usage with specific aligners:**
+```bash
+# Use only BWA (default)
+python pseudonymize.py --input-dir raw/ --output-dir out/ \
+  --subset-muc1 --revert-fastq --remap-to-reference hg38
+
+# Use multiple aligners
+python pseudonymize.py --input-dir raw/ --output-dir out/ \
+  --subset-muc1 --revert-fastq --remap-to-reference hg38 \
+  --aligners bwa bwa-mem2 minimap2
+```
+
+**Zero-length read filtering:**
+- Automatically filters zero-length reads for minimap2 (prevents crashes)
+- Uses `seqtk` if available (fast), falls back to Python implementation
+- No filtering needed for BWA/BWA-MEM2/Bowtie2 (handle gracefully)
+
+**Aligner configuration:**
+Edit `reference/pseudonymize_config.json` to enable/disable aligners or modify settings:
+```json
+{
+  "aligners": {
+    "bwa": {
+      "enabled": true,
+      "executable": "bwa",
+      "alignment_command": "bwa mem -t {threads} {ref_path} {r1} {r2}",
+      ...
+    }
+  }
+}
+```
+
 #### Remapping Features
 
-**Automatic BWA index verification:**
-- Checks for required index files (`.amb`, `.ann`, `.bwt`, `.pac`, `.sa`)
-- Automatically runs `bwa index` if indices are missing
-- Verifies reference FASTA exists before indexing
+**Automatic index verification:**
+- Checks for required index files for each aligner
+- Warns if indices are missing
+- Use `install_references.py` to generate indices (see below)
 
 **Efficient parallel alignment:**
-- Uses BWA MEM with multi-threading (`-t 4` by default)
+- Uses multi-threading for all supported aligners
 - Pipes directly to samtools for sorting and compression
 - Generates BAI indices automatically
 
@@ -380,22 +423,57 @@ output_dir/
 - Reports read counts after each remapping step
 - Includes alignment statistics in logs
 
-#### Reference Index Installation
+#### Reference Index Installation with install_references.py
 
-Before running multi-reference remapping, ensure all references are indexed:
+Use `vntyper/scripts/install_references.py` to automatically download and index references for all supported aligners:
 
+**Basic usage:**
 ```bash
-# Index individual references
-bwa index reference/alignment/chr1.hg19.fa
-bwa index reference/alignment/chr1.hg38.fa
-bwa index reference/alignment/chr1.GRCh37.fna
-bwa index reference/alignment/chr1.GRCh38.fna
+# Index all references with all enabled aligners
+python vntyper/scripts/install_references.py -d reference/
 
-# Verify indices
-ls -lh reference/alignment/*.{amb,ann,bwt,pac,sa}
+# Index specific aligners only
+python vntyper/scripts/install_references.py -d reference/ --aligners bwa bwa-mem2 minimap2
+
+# Use more threads (faster)
+python vntyper/scripts/install_references.py -d reference/ --threads 16
 ```
 
-Index creation takes ~5 minutes per reference for chr1 subsets (~240MB each).
+**Configuration:**
+Edit `vntyper/scripts/install_references_config.json` to:
+- Enable/disable specific aligners for indexing
+- Modify NCBI reference URLs and checksums
+- Adjust index parameters
+
+**Supported index types:**
+- **in_place**: BWA, BWA-MEM2 (`.amb`, `.ann`, `.bwt`, `.pac`, `.sa` files)
+- **separate_file**: Minimap2 (`.mmi` file)
+- **index_base**: Bowtie2 (`.bt2` files with base prefix)
+- **index_directory**: DRAGMAP (directory with hash tables)
+
+**Performance:**
+- BWA/BWA-MEM2: ~5 minutes per reference
+- Minimap2: ~2 minutes per reference
+- Bowtie2: ~5 minutes per reference
+- DRAGMAP: ~10 minutes per reference (disabled by default)
+
+**Manual indexing (alternative):**
+```bash
+# BWA
+bwa index reference/alignment/chr1.hg19.fa
+
+# BWA-MEM2
+bwa-mem2 index reference/alignment/chr1.hg38.fa
+
+# Minimap2
+minimap2 -d reference/alignment/chr1.GRCh37.fna.mmi reference/alignment/chr1.GRCh37.fna
+
+# Bowtie2
+bowtie2-build reference/alignment/chr1.GRCh38.fna reference/alignment/chr1.GRCh38_bowtie2
+
+# Verify indices
+ls -lh reference/alignment/
+```
 
 #### Forbidden Strings File
 
