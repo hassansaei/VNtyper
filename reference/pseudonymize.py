@@ -415,6 +415,401 @@ def remap_fastq_to_reference(fastq1, fastq2, reference_path, output_bam, threads
 
 
 ###############################################################################
+# 1d) Multi-Aligner Support Functions
+###############################################################################
+
+
+def load_aligner_config(config_file="reference/pseudonymize_config.json"):
+    """
+    Load aligner configurations from pseudonymize_config.json.
+
+    Args:
+        config_file: Path to configuration file
+
+    Returns:
+        dict: Dictionary of aligner configurations
+    """
+    if not os.path.exists(config_file):
+        logging.warning(f"Aligner config file not found: {config_file}")
+        return {}
+
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        return config.get("aligners", {})
+    except Exception as e:
+        logging.warning(f"Failed to load aligner config: {e}")
+        return {}
+
+
+def check_aligner_available(executable):
+    """
+    Check if an aligner executable is available in PATH.
+
+    Args:
+        executable: Name or path of executable
+
+    Returns:
+        bool: True if available, False otherwise
+    """
+    try:
+        result = subprocess.run(
+            ["which", executable],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def get_available_aligners(aligner_config, user_specified=None):
+    """
+    Get list of available aligners from configuration.
+
+    Args:
+        aligner_config: Dictionary of aligner configurations
+        user_specified: List of user-specified aligner names (or None for all enabled)
+
+    Returns:
+        dict: Dictionary of available aligner names to their configs
+    """
+    available = {}
+
+    for aligner_name, aligner_info in aligner_config.items():
+        # Skip if not enabled in config
+        if not aligner_info.get("enabled", False):
+            continue
+
+        # Skip if user specified aligners and this isn't one of them
+        if user_specified and aligner_name not in user_specified:
+            continue
+
+        # Check if executable is available
+        executable = aligner_info.get("executable", aligner_name)
+        if check_aligner_available(executable):
+            available[aligner_name] = aligner_info
+        else:
+            if user_specified and aligner_name in user_specified:
+                logging.warning(
+                    f"Aligner '{aligner_name}' was specified but executable '{executable}' not found in PATH"
+                )
+
+    return available
+
+
+def check_aligner_index(ref_path, aligner_name, aligner_info):
+    """
+    Check if aligner index files exist for a reference.
+
+    Args:
+        ref_path: Path to reference FASTA file
+        aligner_name: Name of aligner
+        aligner_info: Aligner configuration dictionary
+
+    Returns:
+        bool: True if all index files exist, False otherwise
+    """
+    index_type = aligner_info.get("index_type", "in_place")
+    index_files = aligner_info.get("index_files", [])
+
+    if index_type == "in_place":
+        # BWA, BWA-MEM2 style: ref.fa.amb, ref.fa.bwt, etc.
+        for ext in index_files:
+            if not os.path.exists(ref_path + ext):
+                return False
+        return True
+
+    elif index_type == "separate_file":
+        # Minimap2 style: ref.fa.mmi
+        pattern = aligner_info.get("index_path_pattern", "{ref_path}.mmi")
+        index_path = pattern.format(ref_path=ref_path)
+        return os.path.exists(index_path)
+
+    elif index_type == "index_base":
+        # Bowtie2 style: ref_bowtie2.1.bt2, ref_bowtie2.2.bt2, etc.
+        ref_dir = os.path.dirname(ref_path)
+        ref_stem = os.path.splitext(os.path.basename(ref_path))[0]
+        pattern = aligner_info.get("index_base_pattern", "{ref_dir}/{ref_stem}_{aligner}")
+        index_base = pattern.format(ref_dir=ref_dir, ref_stem=ref_stem, aligner=aligner_name)
+
+        for ext in index_files:
+            if not os.path.exists(index_base + ext):
+                return False
+        return True
+
+    elif index_type == "index_directory":
+        # DRAGMAP style: ref_dragmap_index/hash_table.cfg, etc.
+        ref_dir = os.path.dirname(ref_path)
+        ref_stem = os.path.splitext(os.path.basename(ref_path))[0]
+        pattern = aligner_info.get("index_dir_pattern", "{ref_dir}/{ref_stem}_{aligner}_index")
+        index_dir = pattern.format(ref_dir=ref_dir, ref_stem=ref_stem, aligner=aligner_name)
+
+        if not os.path.exists(index_dir):
+            return False
+
+        for index_file in index_files:
+            if not os.path.exists(os.path.join(index_dir, index_file)):
+                return False
+        return True
+
+    return False
+
+
+def get_aligner_index_path(ref_path, aligner_name, aligner_info):
+    """
+    Get the index path/base for an aligner.
+
+    Args:
+        ref_path: Path to reference FASTA
+        aligner_name: Name of aligner
+        aligner_info: Aligner configuration
+
+    Returns:
+        str: Index path, index base, or index directory depending on aligner type
+    """
+    index_type = aligner_info.get("index_type", "in_place")
+
+    if index_type == "in_place":
+        # BWA, BWA-MEM2: just use ref_path
+        return ref_path
+
+    elif index_type == "separate_file":
+        # Minimap2: ref.fa.mmi
+        pattern = aligner_info.get("index_path_pattern", "{ref_path}.mmi")
+        return pattern.format(ref_path=ref_path)
+
+    elif index_type == "index_base":
+        # Bowtie2: ref_bowtie2
+        ref_dir = os.path.dirname(ref_path)
+        ref_stem = os.path.splitext(os.path.basename(ref_path))[0]
+        pattern = aligner_info.get("index_base_pattern", "{ref_dir}/{ref_stem}_{aligner}")
+        return pattern.format(ref_dir=ref_dir, ref_stem=ref_stem, aligner=aligner_name)
+
+    elif index_type == "index_directory":
+        # DRAGMAP: ref_dragmap_index/
+        ref_dir = os.path.dirname(ref_path)
+        ref_stem = os.path.splitext(os.path.basename(ref_path))[0]
+        pattern = aligner_info.get("index_dir_pattern", "{ref_dir}/{ref_stem}_{aligner}_index")
+        return pattern.format(ref_dir=ref_dir, ref_stem=ref_stem, aligner=aligner_name)
+
+    return ref_path
+
+
+def filter_zero_length_reads_seqtk(fastq1, fastq2, output_fastq1, output_fastq2, min_length=1):
+    """
+    Filter out zero-length and very short reads using seqtk (fast, industry-standard).
+
+    seqtk is a fast and lightweight tool for FASTQ processing. This function uses
+    seqtk to filter out reads shorter than min_length while maintaining pairing.
+
+    Args:
+        fastq1: Path to input R1 FASTQ (can be gzipped)
+        fastq2: Path to input R2 FASTQ (can be gzipped)
+        output_fastq1: Path for filtered R1 FASTQ (gzipped)
+        output_fastq2: Path for filtered R2 FASTQ (gzipped)
+        min_length: Minimum read length to keep (default: 1, filters only zero-length)
+
+    Raises:
+        RuntimeError: If seqtk filtering fails
+    """
+    # Use seqtk seq -L to filter by minimum length
+    # seqtk seq -L <min_len> filters out sequences shorter than min_len
+    cmd_r1 = f"seqtk seq -L {min_length} {fastq1} | gzip > {output_fastq1}"
+    cmd_r2 = f"seqtk seq -L {min_length} {fastq2} | gzip > {output_fastq2}"
+
+    # Filter R1
+    result = subprocess.run(cmd_r1, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"seqtk filtering failed for R1: {result.stderr}")
+
+    # Filter R2
+    result = subprocess.run(cmd_r2, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"seqtk filtering failed for R2: {result.stderr}")
+
+
+def filter_zero_length_reads_python(fastq1, fastq2, output_fastq1, output_fastq2):
+    """
+    Filter out zero-length reads from paired-end FASTQs using Python (fallback method).
+
+    Some BAM to FASTQ conversions (samtools fastq) can produce zero-length reads,
+    which cause minimap2 to crash with assertion failures. This function filters
+    out such reads while maintaining pairing.
+
+    Note: This is slower than seqtk but doesn't require external dependencies.
+
+    Args:
+        fastq1: Path to input R1 FASTQ (can be gzipped)
+        fastq2: Path to input R2 FASTQ (can be gzipped)
+        output_fastq1: Path for filtered R1 FASTQ (gzipped)
+        output_fastq2: Path for filtered R2 FASTQ (gzipped)
+
+    Returns:
+        tuple: (num_kept, num_filtered) - number of read pairs kept and filtered
+    """
+    import gzip
+
+    # Determine if input is gzipped
+    open_func = gzip.open if fastq1.endswith('.gz') else open
+
+    num_kept = 0
+    num_filtered = 0
+
+    with open_func(fastq1, 'rt') as f1, open_func(fastq2, 'rt') as f2, \
+         gzip.open(output_fastq1, 'wt') as out1, gzip.open(output_fastq2, 'wt') as out2:
+
+        while True:
+            # Read 4 lines from each file (one FASTQ record)
+            try:
+                # R1 record
+                r1_header = f1.readline().rstrip()
+                r1_seq = f1.readline().rstrip()
+                r1_plus = f1.readline().rstrip()
+                r1_qual = f1.readline().rstrip()
+
+                # R2 record
+                r2_header = f2.readline().rstrip()
+                r2_seq = f2.readline().rstrip()
+                r2_plus = f2.readline().rstrip()
+                r2_qual = f2.readline().rstrip()
+
+                # Check if we've reached EOF
+                if not r1_header or not r2_header:
+                    break
+
+                # Filter out if either read has zero length
+                if len(r1_seq) == 0 or len(r2_seq) == 0:
+                    num_filtered += 1
+                    continue
+
+                # Write both reads
+                out1.write(f"{r1_header}\n{r1_seq}\n{r1_plus}\n{r1_qual}\n")
+                out2.write(f"{r2_header}\n{r2_seq}\n{r2_plus}\n{r2_qual}\n")
+                num_kept += 1
+
+            except Exception:
+                break
+
+    logging.info(f"  Python filter: kept {num_kept} pairs, filtered {num_filtered} pairs")
+    return num_kept, num_filtered
+
+
+def remap_with_aligner(
+    fastq1, fastq2, reference_path, output_bam,
+    aligner_name, aligner_info, threads=4
+):
+    """
+    Remap paired-end FASTQs using specified aligner.
+
+    Args:
+        fastq1: Path to R1 FASTQ
+        fastq2: Path to R2 FASTQ
+        reference_path: Path to reference FASTA
+        output_bam: Path for output BAM
+        aligner_name: Name of aligner to use
+        aligner_info: Aligner configuration dictionary
+        threads: Number of threads
+
+    Raises:
+        RuntimeError: If alignment fails
+    """
+    logging.info(f"  Aligning with {aligner_name}...")
+
+    # Check if we need to filter zero-length reads (for minimap2 and other sensitive aligners)
+    # This is needed because samtools fastq can produce zero-length reads that crash minimap2
+    needs_filtering = aligner_name in ["minimap2"]
+
+    working_fastq1 = fastq1
+    working_fastq2 = fastq2
+    filtered_fastq1 = None
+    filtered_fastq2 = None
+
+    if needs_filtering:
+        # Create temporary filtered FASTQs
+        temp_dir = tempfile.gettempdir()
+        filtered_fastq1 = os.path.join(temp_dir, f"filtered_R1_{os.getpid()}.fastq.gz")
+        filtered_fastq2 = os.path.join(temp_dir, f"filtered_R2_{os.getpid()}.fastq.gz")
+
+        logging.debug(f"  Filtering zero-length reads for {aligner_name}...")
+
+        # Try seqtk first (fast), fallback to Python if not available
+        seqtk_available = check_aligner_available("seqtk")
+
+        if seqtk_available:
+            logging.debug("  Using seqtk for filtering (fast)")
+            try:
+                filter_zero_length_reads_seqtk(
+                    fastq1, fastq2, filtered_fastq1, filtered_fastq2, min_length=1
+                )
+                logging.info("  Filtered zero-length reads using seqtk")
+            except RuntimeError as e:
+                logging.warning(f"  seqtk filtering failed: {e}, falling back to Python method")
+                filter_zero_length_reads_python(
+                    fastq1, fastq2, filtered_fastq1, filtered_fastq2
+                )
+        else:
+            logging.debug("  Using Python for filtering (slower, seqtk not available)")
+            filter_zero_length_reads_python(
+                fastq1, fastq2, filtered_fastq1, filtered_fastq2
+            )
+
+        working_fastq1 = filtered_fastq1
+        working_fastq2 = filtered_fastq2
+
+    try:
+        # Get index path for this aligner
+        index_path = get_aligner_index_path(reference_path, aligner_name, aligner_info)
+
+        # Prepare command parameters
+        index_type = aligner_info.get("index_type", "in_place")
+        params = {
+            "ref_path": reference_path,
+            "r1": working_fastq1,
+            "r2": working_fastq2,
+            "threads": threads
+        }
+
+        if index_type == "separate_file":
+            params["index_path"] = index_path
+        elif index_type == "index_base":
+            params["index_base"] = index_path
+        elif index_type == "index_directory":
+            params["index_dir"] = index_path
+
+        # Format alignment command
+        align_cmd_template = aligner_info.get("alignment_command", "")
+        try:
+            align_cmd = align_cmd_template.format(**params)
+        except KeyError as e:
+            raise RuntimeError(f"Missing parameter in alignment command for {aligner_name}: {e}")
+
+        # Add samtools pipeline for sorting and compression
+        samtools_cmd = f"samtools view -@ {threads} -b | samtools sort -@ {threads} -o {output_bam}"
+        full_cmd = f"{align_cmd} | {samtools_cmd}"
+
+        logging.debug(f"  Command: {full_cmd}")
+
+        result = subprocess.run(full_cmd, shell=True, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            raise RuntimeError(f"{aligner_name} alignment failed: {result.stderr}")
+
+        # Index the BAM
+        subprocess.run(["samtools", "index", output_bam], check=True)
+
+        logging.info(f"  ✓ {aligner_name} alignment complete")
+
+    finally:
+        # Clean up temporary filtered FASTQs
+        if filtered_fastq1 and os.path.exists(filtered_fastq1):
+            os.remove(filtered_fastq1)
+        if filtered_fastq2 and os.path.exists(filtered_fastq2):
+            os.remove(filtered_fastq2)
+
+
+###############################################################################
 # 2) Anonymization Functions
 ###############################################################################
 
@@ -971,6 +1366,7 @@ def pseudonymize_files(
     do_subset=False,
     do_revert=False,
     remap_to_reference=None,
+    aligners=None,
     json_out=None,
     json_filter="all",
     forbidden_strings_file=None,
@@ -1183,67 +1579,102 @@ def pseudonymize_files(
                         logging.info("Step 5/5: Reverting merged BAM to FASTQ...")
                         revert_only(final_subset, r1, r2)
 
-                        # Step 3f: Remap FASTQs to multiple references if requested
+                        # Step 3f: Remap FASTQs to multiple references with multiple aligners
                         if remap_references:
-                            logging.info(
-                                f"Step 6/6: Remapping FASTQs to {len(remap_references)} reference(s)..."
+                            # Load aligner configuration
+                            aligner_config = load_aligner_config()
+                            # Default to BWA if no aligners specified
+                            selected_aligners = aligners if aligners else ["bwa"]
+                            available_aligners = get_available_aligners(
+                                aligner_config, user_specified=selected_aligners
                             )
 
-                            for idx, target_ref in enumerate(remap_references, 1):
+                            if not available_aligners:
+                                logging.warning(
+                                    "No aligners available for remapping. Skipping remapping step. "
+                                    "Install aligners (bwa, bwa-mem2, minimap2, bowtie2) and ensure they are in PATH."
+                                )
+                            else:
                                 logging.info(
-                                    f"  Remapping [{idx}/{len(remap_references)}]: {target_ref}..."
+                                    f"Step 6/6: Remapping FASTQs to {len(remap_references)} reference(s) "
+                                    f"with {len(available_aligners)} aligner(s)..."
                                 )
+                                logging.info(f"  Aligners: {', '.join(available_aligners.keys())}")
 
-                                # Ensure reference is ready (download/index if needed)
-                                try:
-                                    reference_path = ensure_reference_ready(
-                                        target_ref,
-                                        auto_download=True
-                                    )
-                                except Exception as e:
-                                    logging.error(f"Failed to prepare {target_ref} reference: {e}")
-                                    logging.warning(
-                                        f"Skipping {target_ref} remapping for {new_core_name}. "
-                                        "FASTQs are still available for manual remapping."
-                                    )
-                                    continue
-
-                                # Create remapped subdirectory organized by mapper/reference
-                                # Structure: remapped/bwa/<reference>/
-                                mapper = "bwa"
-                                remapped_dir = os.path.join(output_dir, "remapped", mapper, target_ref)
-                                os.makedirs(remapped_dir, exist_ok=True)
-
-                                # Remap FASTQs to this reference
-                                remapped_bam = os.path.join(
-                                    remapped_dir,
-                                    f"{new_core_name}_{target_ref}_bwa.bam"
-                                )
-
-                                try:
-                                    remap_fastq_to_reference(
-                                        fastq1=r1,
-                                        fastq2=r2,
-                                        reference_path=reference_path,
-                                        output_bam=remapped_bam,
-                                        threads=max_workers if max_workers else 4
-                                    )
-
-                                    # Get stats
-                                    read_count = subprocess.check_output(
-                                        ["samtools", "view", "-c", remapped_bam],
-                                        text=True
-                                    ).strip()
-
+                                for ref_idx, target_ref in enumerate(remap_references, 1):
                                     logging.info(
-                                        f"  ✓ {target_ref}: {read_count} reads → {remapped_bam}"
+                                        f"  Reference [{ref_idx}/{len(remap_references)}]: {target_ref}"
                                     )
-                                except Exception as e:
-                                    logging.error(f"Remapping to {target_ref} failed: {e}")
-                                    logging.warning(
-                                        f"Skipping {target_ref} remapping for {new_core_name}. "
-                                        "FASTQs are still available for manual remapping."
-                                    )
+
+                                    # Ensure reference is ready (download/index if needed)
+                                    try:
+                                        reference_path = ensure_reference_ready(
+                                            target_ref,
+                                            auto_download=True
+                                        )
+                                    except Exception as e:
+                                        logging.error(f"Failed to prepare {target_ref} reference: {e}")
+                                        logging.warning(
+                                            f"Skipping {target_ref} remapping for {new_core_name}. "
+                                            "FASTQs are still available for manual remapping."
+                                        )
+                                        continue
+
+                                    # Remap with each available aligner
+                                    for aligner_idx, (aligner_name, aligner_info) in enumerate(
+                                        available_aligners.items(), 1
+                                    ):
+                                        logging.info(
+                                            f"    Aligner [{aligner_idx}/{len(available_aligners)}]: {aligner_name}"
+                                        )
+
+                                        # Check if aligner index exists for this reference
+                                        if not check_aligner_index(reference_path, aligner_name, aligner_info):
+                                            logging.warning(
+                                                f"    ✗ {aligner_name} index not found for {target_ref}. "
+                                                f"Run: python vntyper/scripts/install_references.py -d reference/ "
+                                                f"--aligners {aligner_name}"
+                                            )
+                                            logging.warning(f"    Skipping {aligner_name} for {target_ref}")
+                                            continue
+
+                                        # Create remapped subdirectory organized by aligner/reference
+                                        # Structure: remapped/<aligner>/<reference>/
+                                        remapped_dir = os.path.join(output_dir, "remapped", aligner_name, target_ref)
+                                        os.makedirs(remapped_dir, exist_ok=True)
+
+                                        # Remap FASTQs with this aligner
+                                        remapped_bam = os.path.join(
+                                            remapped_dir,
+                                            f"{new_core_name}_{target_ref}_{aligner_name}.bam"
+                                        )
+
+                                        try:
+                                            remap_with_aligner(
+                                                fastq1=r1,
+                                                fastq2=r2,
+                                                reference_path=reference_path,
+                                                output_bam=remapped_bam,
+                                                aligner_name=aligner_name,
+                                                aligner_info=aligner_info,
+                                                threads=max_workers if max_workers else 4
+                                            )
+
+                                            # Get stats
+                                            read_count = subprocess.check_output(
+                                                ["samtools", "view", "-c", remapped_bam],
+                                                text=True
+                                            ).strip()
+
+                                            logging.info(
+                                                f"    ✓ {aligner_name} → {target_ref}: {read_count} reads"
+                                            )
+                                        except Exception as e:
+                                            logging.error(f"    ✗ {aligner_name} alignment to {target_ref} failed: {e}")
+                                            logging.warning(
+                                                f"    Skipping {aligner_name} remapping to {target_ref} "
+                                                f"for {new_core_name}"
+                                            )
     else:
         logging.warning(
             "--subset-muc1 not specified. No output files will be generated "
@@ -1338,6 +1769,16 @@ Examples:
     )
 
     parser.add_argument(
+        "--aligners",
+        nargs="+",
+        default=None,
+        metavar="ALIGNER",
+        help="Specific aligners to use for remapping (e.g., bwa bwa-mem2 minimap2 bowtie2 dragmap). "
+             "If not specified, uses all available aligners from pseudonymize_config.json. "
+             "Only works with --remap-to-reference.",
+    )
+
+    parser.add_argument(
         "--forbidden-strings",
         default=None,
         help="File containing strings that must not appear in output (one per line). "
@@ -1401,6 +1842,7 @@ Examples:
         do_subset=args.subset_muc1,
         do_revert=args.revert_fastq,
         remap_to_reference=args.remap_to_reference,
+        aligners=args.aligners,
         json_out=args.json_out,
         json_filter=args.json_filter,
         forbidden_strings_file=args.forbidden_strings,
