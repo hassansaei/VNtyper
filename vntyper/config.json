@@ -38,14 +38,44 @@
     "bwa_index_extensions": [".amb", ".ann", ".bwt", ".pac", ".sa"]
   },
   "bam_processing": {
+    "assemblies": {
+      "hg19": {
+        "alias": "GRCh37",
+        "bam_region_coords": "155158000-155163000",
+        "vntr_region_coords": "155160500-155162000",
+        "chromosome": 1
+      },
+      "hg38": {
+        "alias": "GRCh38",
+        "bam_region_coords": "155184000-155194000",
+        "vntr_region_coords": "155188000-155192500",
+        "chromosome": 1
+      }
+    },
+    "known_chromosome_naming": {
+      "hg19": {
+        "ucsc": "chr1",
+        "no_prefix": "1",
+        "ncbi": "NC_000001.10"
+      },
+      "hg38": {
+        "ucsc": "chr1",
+        "no_prefix": "1",
+        "ncbi": "NC_000001.11"
+      }
+    },
     "bam_region_hg19": "chr1:155158000-155163000",
     "bam_region_hg38": "chr1:155184000-155194000",
-    "bam_region_GRCh37": "1:155158000-155163000",
-    "bam_region_GRCh38": "1:155184000-155194000",
+    "bam_region_hg19_nochr": "1:155158000-155163000",
+    "bam_region_hg38_nochr": "1:155184000-155194000",
+    "bam_region_GRCh37": "NC_000001.10:155158000-155163000",
+    "bam_region_GRCh38": "NC_000001.11:155184000-155194000",
     "vntr_region_hg19": "chr1:155160500-155162000",
     "vntr_region_hg38": "chr1:155188000-155192500",
-    "vntr_region_GRCh37": "1:155160500-155162000",
-    "vntr_region_GRCh38": "1:155188000-155192500",
+    "vntr_region_hg19_nochr": "1:155160500-155162000",
+    "vntr_region_hg38_nochr": "1:155188000-155192500",
+    "vntr_region_GRCh37": "NC_000001.10:155160500-155162000",
+    "vntr_region_GRCh38": "NC_000001.11:155188000-155192500",
     "compression_level": 6,
     "disable_adapter_trimming": true,
     "deduplication": true,
@@ -87,6 +117,117 @@
   },
   "cross_match": {
     "match_logic": "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
+  },
+  "assembly_detection": {
+    "detection_threshold": 0.9,
+    "known_assemblies": {
+      "hg19": {
+        "name": "hg19",
+        "contigs": [
+          {"name": "chr1", "length": 249250621}, {"name": "chr2", "length": 243199373},
+          {"name": "chr3", "length": 198022430}, {"name": "chr4", "length": 191154276},
+          {"name": "chr5", "length": 180915260}, {"name": "chr6", "length": 171115067},
+          {"name": "chr7", "length": 159138663}, {"name": "chr8", "length": 146364022},
+          {"name": "chr9", "length": 141213431}, {"name": "chr10", "length": 135534747},
+          {"name": "chr11", "length": 135006516}, {"name": "chr12", "length": 133851895},
+          {"name": "chr13", "length": 115169878}, {"name": "chr14", "length": 107349540},
+          {"name": "chr15", "length": 102531392}, {"name": "chr16", "length": 90354753},
+          {"name": "chr17", "length": 81195210}, {"name": "chr18", "length": 78077248},
+          {"name": "chr19", "length": 59128983}, {"name": "chr20", "length": 63025520},
+          {"name": "chr21", "length": 48129895}, {"name": "chr22", "length": 51304566},
+          {"name": "chrX", "length": 155270560}, {"name": "chrY", "length": 59373566}
+        ]
+      },
+      "GRCh37": {
+        "name": "GRCh37",
+        "contigs": [
+          {"name": "1", "length": 249250621}, {"name": "2", "length": 243199373},
+          {"name": "3", "length": 198022430}, {"name": "4", "length": 191154276},
+          {"name": "5", "length": 180915260}, {"name": "6", "length": 171115067},
+          {"name": "7", "length": 159138663}, {"name": "8", "length": 146364022},
+          {"name": "9", "length": 141213431}, {"name": "10", "length": 135534747},
+          {"name": "11", "length": 135006516}, {"name": "12", "length": 133851895},
+          {"name": "13", "length": 115169878}, {"name": "14", "length": 107349540},
+          {"name": "15", "length": 102531392}, {"name": "16", "length": 90354753},
+          {"name": "17", "length": 81195210}, {"name": "18", "length": 78077248},
+          {"name": "19", "length": 59128983}, {"name": "20", "length": 63025520},
+          {"name": "21", "length": 48129895}, {"name": "22", "length": 51304566},
+          {"name": "X", "length": 155270560}, {"name": "Y", "length": 59373566},
+          {"name": "MT", "length": 16569}
+        ]
+      },
+      "hg38": {
+        "name": "hg38",
+        "contigs": [
+          {"name": "chr1", "length": 248956422}, {"name": "chr2", "length": 242193529},
+          {"name": "chr3", "length": 198295559}, {"name": "chr4", "length": 190214555},
+          {"name": "chr5", "length": 181538259}, {"name": "chr6", "length": 170805979},
+          {"name": "chr7", "length": 159345973}, {"name": "chr8", "length": 145138636},
+          {"name": "chr9", "length": 138394717}, {"name": "chr10", "length": 133797422},
+          {"name": "chr11", "length": 135086622}, {"name": "chr12", "length": 133275309},
+          {"name": "chr13", "length": 114364328}, {"name": "chr14", "length": 107043718},
+          {"name": "chr15", "length": 101991189}, {"name": "chr16", "length": 90338345},
+          {"name": "chr17", "length": 83257441}, {"name": "chr18", "length": 80373285},
+          {"name": "chr19", "length": 58617616}, {"name": "chr20", "length": 64444167},
+          {"name": "chr21", "length": 46709983}, {"name": "chr22", "length": 50818468},
+          {"name": "chrX", "length": 156040895}, {"name": "chrY", "length": 57227415}
+        ]
+      },
+      "GRCh38": {
+        "name": "GRCh38",
+        "contigs": [
+          {"name": "1", "length": 248956422}, {"name": "2", "length": 242193529},
+          {"name": "3", "length": 198295559}, {"name": "4", "length": 190214555},
+          {"name": "5", "length": 181538259}, {"name": "6", "length": 170805979},
+          {"name": "7", "length": 159345973}, {"name": "8", "length": 145138636},
+          {"name": "9", "length": 138394717}, {"name": "10", "length": 133797422},
+          {"name": "11", "length": 135086622}, {"name": "12", "length": 133275309},
+          {"name": "13", "length": 114364328}, {"name": "14", "length": 107043718},
+          {"name": "15", "length": 101991189}, {"name": "16", "length": 90338345},
+          {"name": "17", "length": 83257441}, {"name": "18", "length": 80373285},
+          {"name": "19", "length": 58617616}, {"name": "20", "length": 64444167},
+          {"name": "21", "length": 46709983}, {"name": "22", "length": 50818468},
+          {"name": "X", "length": 156040895}, {"name": "Y", "length": 57227415},
+          {"name": "MT", "length": 16569}
+        ]
+      },
+      "GRCh37_NCBI": {
+        "name": "GRCh37",
+        "contigs": [
+          {"name": "NC_000001.10", "length": 249250621}, {"name": "NC_000002.11", "length": 243199373},
+          {"name": "NC_000003.11", "length": 198022430}, {"name": "NC_000004.11", "length": 191154276},
+          {"name": "NC_000005.9", "length": 180915260}, {"name": "NC_000006.11", "length": 171115067},
+          {"name": "NC_000007.13", "length": 159138663}, {"name": "NC_000008.10", "length": 146364022},
+          {"name": "NC_000009.11", "length": 141213431}, {"name": "NC_000010.10", "length": 135534747},
+          {"name": "NC_000011.9", "length": 135006516}, {"name": "NC_000012.11", "length": 133851895},
+          {"name": "NC_000013.10", "length": 115169878}, {"name": "NC_000014.8", "length": 107349540},
+          {"name": "NC_000015.9", "length": 102531392}, {"name": "NC_000016.9", "length": 90354753},
+          {"name": "NC_000017.10", "length": 81195210}, {"name": "NC_000018.9", "length": 78077248},
+          {"name": "NC_000019.9", "length": 59128983}, {"name": "NC_000020.10", "length": 63025520},
+          {"name": "NC_000021.8", "length": 48129895}, {"name": "NC_000022.10", "length": 51304566},
+          {"name": "NC_000023.10", "length": 155270560}, {"name": "NC_000024.9", "length": 59373566},
+          {"name": "NC_012920.1", "length": 16569}
+        ]
+      },
+      "GRCh38_NCBI": {
+        "name": "GRCh38",
+        "contigs": [
+          {"name": "NC_000001.11", "length": 248956422}, {"name": "NC_000002.12", "length": 242193529},
+          {"name": "NC_000003.12", "length": 198295559}, {"name": "NC_000004.12", "length": 190214555},
+          {"name": "NC_000005.10", "length": 181538259}, {"name": "NC_000006.12", "length": 170805979},
+          {"name": "NC_000007.14", "length": 159345973}, {"name": "NC_000008.11", "length": 145138636},
+          {"name": "NC_000009.12", "length": 138394717}, {"name": "NC_000010.11", "length": 133797422},
+          {"name": "NC_000011.10", "length": 135086622}, {"name": "NC_000012.12", "length": 133275309},
+          {"name": "NC_000013.11", "length": 114364328}, {"name": "NC_000014.9", "length": 107043718},
+          {"name": "NC_000015.10", "length": 101991189}, {"name": "NC_000016.10", "length": 90338345},
+          {"name": "NC_000017.11", "length": 83257441}, {"name": "NC_000018.10", "length": 80373285},
+          {"name": "NC_000019.10", "length": 58617616}, {"name": "NC_000020.11", "length": 64444167},
+          {"name": "NC_000021.9", "length": 46709983}, {"name": "NC_000022.11", "length": 50818468},
+          {"name": "NC_000023.11", "length": 156040895}, {"name": "NC_000024.10", "length": 57227415},
+          {"name": "NC_012920.1", "length": 16569}
+        ]
+      }
+    }
   },
   "welcome_message": "==========================================================================================================\nGiven alignment (BAM) or raw file (FASTQ), this tool genotypes MUC1 coding-VNTR \n-- For rapid genotyping, BAM files are preferred!\n-- User can Skip code-adVNTR genotyping step using --ignore_advntr option (This step will take a while..)\nThis is free non-commercial software.\n=========================================================================================================="
 }

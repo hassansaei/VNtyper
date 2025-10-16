@@ -119,7 +119,7 @@ def main():
     parser_pipeline.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
+        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
         default=None,
         help="Specify the reference assembly used for the input BAM/CRAM file alignment.",
     )
@@ -353,7 +353,7 @@ def main():
     parser_online.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
+        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
         default=None,
         help="Reference assembly used.",
     )
@@ -556,7 +556,10 @@ def main():
             )
             logging.debug("Shark module detected with BAM/CRAM input; exiting.")
             sys.exit(1)  # Determine which BWA reference to use from config
-        ref_map = {"hg19": "hg19", "GRCh37": "hg19", "hg38": "hg38", "GRCh38": "hg38"}
+        ref_map = {
+            "hg19": "hg19", "GRCh37": "hg19", "hg19_nochr": "hg19",
+            "hg38": "hg38", "GRCh38": "hg38", "hg38_nochr": "hg38"
+        }
         ucsc_style_ref = ref_map.get(
             args.reference_assembly, "hg19"
         )  # Default to hg19 if somehow invalid
