@@ -123,7 +123,8 @@ def calculate_depth_score_and_assign_confidence(
         df["Depth_Score"] >= high_threshold
     )
 
-    # Condition 3: Low Precision if alt_depth is between mid_low and mid_high, and Depth_Score between low_threshold and high_threshold
+    # Condition 3: Low Precision if alt_depth is between mid_low and mid_high,
+    # and Depth_Score between low_threshold and high_threshold
     cond3 = df["Estimated_Depth_AlternateVariant"].between(
         alt_mid_low, alt_mid_high
     ) & df["Depth_Score"].between(low_threshold, high_threshold)

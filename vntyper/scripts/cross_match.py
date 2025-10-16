@@ -63,11 +63,11 @@ def compute_allele_change(ref, alt, variant_type):
     alt = str(alt)
     if variant_type.lower() in ["insertion", "duplication"]:
         if alt.startswith(ref):
-            return alt[len(ref) :]
+            return alt[len(ref):]
         return alt
     elif variant_type.lower() == "deletion":
         if ref.startswith(alt):
-            return ref[len(alt) :]
+            return ref[len(alt):]
         return ref
     return ""
 

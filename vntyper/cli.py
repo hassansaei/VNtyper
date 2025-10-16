@@ -10,10 +10,8 @@ import sys
 from pathlib import Path
 
 from vntyper.scripts.cohort_summary import aggregate_cohort
-from vntyper.scripts.fastq_bam_processing import process_bam_to_fastq, process_fastq
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.install_references import main as install_references_main
-from vntyper.scripts.kestrel_genotyping import run_kestrel
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.utils import setup_logging
 from vntyper.version import __version__ as VERSION

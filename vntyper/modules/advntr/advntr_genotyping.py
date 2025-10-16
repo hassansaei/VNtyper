@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import subprocess as sp
-from pathlib import Path
 
 import numpy as np
 import pandas as pd

@@ -24,7 +24,6 @@ import hashlib
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
-import plotly.express as px
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
 import plotly.graph_objects as go
