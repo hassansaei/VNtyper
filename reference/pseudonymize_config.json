@@ -29,7 +29,7 @@
       "description": "BWA-MEM: standard short read aligner, widely used and well-tested"
     },
     "bwa-mem2": {
-      "enabled": true,
+      "enabled": false,
       "executable": "bwa-mem2",
       "index_files": [".0123", ".amb", ".ann", ".bwt.2bit.64", ".pac"],
       "alignment_command": "bwa-mem2 mem -t {threads} {ref_path} {r1} {r2}",
@@ -38,7 +38,7 @@
       "description": "BWA-MEM2: 1.3-3x faster than BWA-MEM, drop-in replacement"
     },
     "minimap2": {
-      "enabled": true,
+      "enabled": false,
       "executable": "minimap2",
       "index_files": [".mmi"],
       "alignment_command": "minimap2 -ax sr -t {threads} {index_path} {r1} {r2}",
@@ -48,7 +48,7 @@
       "description": "Minimap2: versatile aligner, fast for both short and long reads"
     },
     "bowtie2": {
-      "enabled": true,
+      "enabled": false,
       "executable": "bowtie2",
       "index_files": [".1.bt2", ".2.bt2", ".3.bt2", ".4.bt2", ".rev.1.bt2", ".rev.2.bt2"],
       "alignment_command": "bowtie2 -x {index_base} -1 {r1} -2 {r2} --threads {threads}",
@@ -65,7 +65,7 @@
       "alignment_command": "dragen-os -r {index_dir} -1 {r1} -2 {r2} --num-threads {threads}",
       "threads_default": 8,
       "index_type": "index_directory",
-      "description": "DRAGMAP: DRAGEN-compatible mapper, highest accuracy (resource intensive)"
+      "description": "DRAGMAP: DRAGEN-compatible mapper, highest accuracy (resource intensive, DISABLED: stdout piping issues)"
     }
   },
 
