@@ -1,4 +1,5 @@
-e103808b81f7d0a52353dee92d2ff164  alignment/chr1.hg19.fa.gz
+9e6a75ae671e8320161598a2b537f735  alignment/chr1.hg19_ensembl.fa.gz
+6f157cbdaed6fcc811dfdef69f22b505  alignment/chr1.hg38_ensembl.fa.gz
 00f893e20c4cd0b58c943b8808dd2b1f  All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
 b012123c1425afe5137bf435389e7d0b  MUC1_motifs_Rev_com.fa
 8153ade4982291f85220a4b3063584a0  code-adVNTR_RUs.fa

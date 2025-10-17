@@ -17,15 +17,15 @@ Best practices implemented:
 - Verifies anonymization was successful
 """
 
+import argparse
+import csv
+import hashlib
+import json
+import logging
 import os
 import re
-import csv
-import json
 import shutil
-import hashlib
-import argparse
 import subprocess
-import logging
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -34,24 +34,22 @@ try:
     import pysam
 except ImportError:
     raise ImportError(
-        "pysam is required for offset-based unmapped read extraction.\n"
-        "Install it with: pip install pysam"
+        "pysam is required for offset-based unmapped read extraction.\nInstall it with: pip install pysam"
     )
 
 ###############################################################################
 # Logging Setup
 ###############################################################################
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Map reference assemblies to MUC1 subsetting regions
 REGION_MAP = {
     "hg19": "chr1:155158000-155163000",
     "hg38": "chr1:155184000-155194000",
-    "GRCh37": "1:155158000-155163000",
-    "GRCh38": "1:155184000-155194000"
+    "grch37": "NC_000001.10:155158000-155163000",  # NCBI accession for GRCh37
+    "grch38": "NC_000001.11:155184000-155194000",  # NCBI accession for GRCh38
+    "hg19_ensembl": "1:155158000-155163000",  # ENSEMBL simple numeric (no chr prefix)
+    "hg38_ensembl": "1:155184000-155194000",  # ENSEMBL simple numeric (no chr prefix)
 }
 
 ###############################################################################
@@ -196,7 +194,9 @@ REFERENCE_PATHS = {
     "hg19": "reference/alignment/chr1.hg19.fa",
     "hg38": "reference/alignment/chr1.hg38.fa",
     "GRCh37": "reference/alignment/chr1.GRCh37.fna",
-    "GRCh38": "reference/alignment/chr1.GRCh38.fna"
+    "GRCh38": "reference/alignment/chr1.GRCh38.fna",
+    "hg19_ensembl": "reference/alignment/chr1.hg19_ensembl.fa",
+    "hg38_ensembl": "reference/alignment/chr1.hg38_ensembl.fa",
 }
 
 
@@ -214,10 +214,7 @@ def get_reference_path(assembly):
         ValueError: If assembly is not supported
     """
     if assembly not in REFERENCE_PATHS:
-        raise ValueError(
-            f"Unsupported reference assembly: {assembly}. "
-            f"Supported: {list(REFERENCE_PATHS.keys())}"
-        )
+        raise ValueError(f"Unsupported reference assembly: {assembly}. Supported: {list(REFERENCE_PATHS.keys())}")
     return REFERENCE_PATHS[assembly]
 
 
@@ -260,20 +257,17 @@ def download_and_index_reference(assembly, script_dir):
     repo_root = os.path.dirname(script_dir)
 
     # Run install_references to download and index
-    install_script = os.path.join(
-        repo_root, "vntyper", "scripts", "install_references.py"
-    )
+    install_script = os.path.join(repo_root, "vntyper", "scripts", "install_references.py")
 
     if not os.path.exists(install_script):
-        raise RuntimeError(
-            f"install_references.py not found at {install_script}. "
-            "Cannot auto-download reference."
-        )
+        raise RuntimeError(f"install_references.py not found at {install_script}. Cannot auto-download reference.")
 
     cmd = [
-        "python", install_script,
-        "--output-dir", os.path.join(repo_root, "reference"),
-        "--skip-indexing"  # We'll index separately to show progress
+        "python",
+        install_script,
+        "--output-dir",
+        os.path.join(repo_root, "reference"),
+        "--skip-indexing",  # We'll index separately to show progress
     ]
 
     logging.info(f"Running: {' '.join(cmd)}")
@@ -346,9 +340,7 @@ def ensure_reference_ready(assembly, auto_download=True):
 
         # Verify download succeeded
         if not os.path.exists(reference_path):
-            raise RuntimeError(
-                f"Reference download completed but file not found: {reference_path}"
-            )
+            raise RuntimeError(f"Reference download completed but file not found: {reference_path}")
 
     # Check if BWA index exists
     if not check_bwa_index(reference_path):
@@ -429,7 +421,7 @@ def load_aligner_config(config_file="reference/pseudonymize_config.json"):
         return {}
 
     try:
-        with open(config_file, 'r') as f:
+        with open(config_file) as f:
             config = json.load(f)
         return config.get("aligners", {})
     except Exception as e:
@@ -448,12 +440,7 @@ def check_aligner_available(executable):
         bool: True if available, False otherwise
     """
     try:
-        result = subprocess.run(
-            ["which", executable],
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        result = subprocess.run(["which", executable], capture_output=True, text=True, check=False)
         return result.returncode == 0
     except Exception:
         return False
@@ -647,14 +634,17 @@ def filter_zero_length_reads_python(fastq1, fastq2, output_fastq1, output_fastq2
     import gzip
 
     # Determine if input is gzipped
-    open_func = gzip.open if fastq1.endswith('.gz') else open
+    open_func = gzip.open if fastq1.endswith(".gz") else open
 
     num_kept = 0
     num_filtered = 0
 
-    with open_func(fastq1, 'rt') as f1, open_func(fastq2, 'rt') as f2, \
-         gzip.open(output_fastq1, 'wt') as out1, gzip.open(output_fastq2, 'wt') as out2:
-
+    with (
+        open_func(fastq1, "rt") as f1,
+        open_func(fastq2, "rt") as f2,
+        gzip.open(output_fastq1, "wt") as out1,
+        gzip.open(output_fastq2, "wt") as out2,
+    ):
         while True:
             # Read 4 lines from each file (one FASTQ record)
             try:
@@ -691,10 +681,7 @@ def filter_zero_length_reads_python(fastq1, fastq2, output_fastq1, output_fastq2
     return num_kept, num_filtered
 
 
-def remap_with_aligner(
-    fastq1, fastq2, reference_path, output_bam,
-    aligner_name, aligner_info, threads=4
-):
+def remap_with_aligner(fastq1, fastq2, reference_path, output_bam, aligner_name, aligner_info, threads=4):
     """
     Remap paired-end FASTQs using specified aligner.
 
@@ -735,20 +722,14 @@ def remap_with_aligner(
         if seqtk_available:
             logging.debug("  Using seqtk for filtering (fast)")
             try:
-                filter_zero_length_reads_seqtk(
-                    fastq1, fastq2, filtered_fastq1, filtered_fastq2, min_length=1
-                )
+                filter_zero_length_reads_seqtk(fastq1, fastq2, filtered_fastq1, filtered_fastq2, min_length=1)
                 logging.info("  Filtered zero-length reads using seqtk")
             except RuntimeError as e:
                 logging.warning(f"  seqtk filtering failed: {e}, falling back to Python method")
-                filter_zero_length_reads_python(
-                    fastq1, fastq2, filtered_fastq1, filtered_fastq2
-                )
+                filter_zero_length_reads_python(fastq1, fastq2, filtered_fastq1, filtered_fastq2)
         else:
             logging.debug("  Using Python for filtering (slower, seqtk not available)")
-            filter_zero_length_reads_python(
-                fastq1, fastq2, filtered_fastq1, filtered_fastq2
-            )
+            filter_zero_length_reads_python(fastq1, fastq2, filtered_fastq1, filtered_fastq2)
 
         working_fastq1 = filtered_fastq1
         working_fastq2 = filtered_fastq2
@@ -759,12 +740,7 @@ def remap_with_aligner(
 
         # Prepare command parameters
         index_type = aligner_info.get("index_type", "in_place")
-        params = {
-            "ref_path": reference_path,
-            "r1": working_fastq1,
-            "r2": working_fastq2,
-            "threads": threads
-        }
+        params = {"ref_path": reference_path, "r1": working_fastq1, "r2": working_fastq2, "threads": threads}
 
         if index_type == "separate_file":
             params["index_path"] = index_path
@@ -831,51 +807,48 @@ def anonymize_read_names_in_bam(input_bam, output_bam):
     cmd_view = ["samtools", "view", "-h", input_bam]
 
     # Process with Python to anonymize QNAMEs
-    with subprocess.Popen(cmd_view, stdout=subprocess.PIPE, text=True) as proc_view:
-        with subprocess.Popen(
-            ["samtools", "view", "-b", "-o", output_bam],
-            stdin=subprocess.PIPE,
-            text=True
-        ) as proc_write:
+    with (
+        subprocess.Popen(cmd_view, stdout=subprocess.PIPE, text=True) as proc_view,
+        subprocess.Popen(["samtools", "view", "-b", "-o", output_bam], stdin=subprocess.PIPE, text=True) as proc_write,
+    ):
+        flowcell_hash_cache = {}
 
-            flowcell_hash_cache = {}
-
-            for line in proc_view.stdout:
-                if line.startswith('@'):
-                    # Header line - pass through unchanged
+        for line in proc_view.stdout:
+            if line.startswith("@"):
+                # Header line - pass through unchanged
+                proc_write.stdin.write(line)
+            else:
+                # Alignment line - anonymize QNAME
+                fields = line.split("\t")
+                if len(fields) < 11:
+                    # Malformed line, pass through
                     proc_write.stdin.write(line)
-                else:
-                    # Alignment line - anonymize QNAME
-                    fields = line.split('\t')
-                    if len(fields) < 11:
-                        # Malformed line, pass through
-                        proc_write.stdin.write(line)
-                        continue
+                    continue
 
-                    qname = fields[0]
+                qname = fields[0]
 
-                    # Check if it's an Illumina-style read name
-                    parts = qname.split(':')
-                    if len(parts) >= 7:
-                        # Illumina format: instrument:run:flowcell:lane:tile:x:y
-                        # Hash the first 3 fields (instrument:run:flowcell)
-                        flowcell_id = ':'.join(parts[:3])
+                # Check if it's an Illumina-style read name
+                parts = qname.split(":")
+                if len(parts) >= 7:
+                    # Illumina format: instrument:run:flowcell:lane:tile:x:y
+                    # Hash the first 3 fields (instrument:run:flowcell)
+                    flowcell_id = ":".join(parts[:3])
 
-                        if flowcell_id not in flowcell_hash_cache:
-                            # Create a short hash
-                            hash_val = hashlib.md5(flowcell_id.encode()).hexdigest()[:8]
-                            flowcell_hash_cache[flowcell_id] = f"ANON{hash_val}"
+                    if flowcell_id not in flowcell_hash_cache:
+                        # Create a short hash
+                        hash_val = hashlib.md5(flowcell_id.encode()).hexdigest()[:8]
+                        flowcell_hash_cache[flowcell_id] = f"ANON{hash_val}"
 
-                        # Replace with anonymized prefix
-                        anon_prefix = flowcell_hash_cache[flowcell_id]
-                        new_qname = anon_prefix + ':' + ':'.join(parts[3:])
-                        fields[0] = new_qname
+                    # Replace with anonymized prefix
+                    anon_prefix = flowcell_hash_cache[flowcell_id]
+                    new_qname = anon_prefix + ":" + ":".join(parts[3:])
+                    fields[0] = new_qname
 
-                    # Write modified line
-                    proc_write.stdin.write('\t'.join(fields))
+                # Write modified line
+                proc_write.stdin.write("\t".join(fields))
 
-            proc_write.stdin.close()
-            proc_write.wait()
+        proc_write.stdin.close()
+        proc_write.wait()
 
     # Index the output
     subprocess.run(["samtools", "index", output_bam], check=True)
@@ -883,8 +856,9 @@ def anonymize_read_names_in_bam(input_bam, output_bam):
     logging.info(f"Read name anonymization complete: {output_bam}")
 
 
-def anonymize_bam_complete(input_bam, output_bam, new_sample_id="sample",
-                           forbidden_strings=None, anonymize_read_names=False):
+def anonymize_bam_complete(
+    input_bam, output_bam, new_sample_id="sample", forbidden_strings=None, anonymize_read_names=False
+):
     """Comprehensively anonymize a BAM file.
 
     Performs the following steps:
@@ -916,15 +890,14 @@ def anonymize_bam_complete(input_bam, output_bam, new_sample_id="sample",
     needs_qname_anonymization = False
     if anonymize_read_names and forbidden_strings:
         logging.info("Checking if read names contain identifying information...")
-        sample_reads = subprocess.check_output(
-            ["samtools", "view", input_bam],
-            text=True
-        ).split('\n')[:1000]  # Check first 1000 reads
+        sample_reads = subprocess.check_output(["samtools", "view", input_bam], text=True).split("\n")[
+            :1000
+        ]  # Check first 1000 reads
 
         for line in sample_reads:
             if not line:
                 continue
-            qname = line.split('\t')[0]
+            qname = line.split("\t")[0]
             for forbidden in forbidden_strings:
                 if forbidden in qname:
                     logging.warning(f"Found '{forbidden}' in read name: {qname}")
@@ -950,12 +923,16 @@ def anonymize_bam_complete(input_bam, output_bam, new_sample_id="sample",
     rg_line = f"@RG\\tID:{new_sample_id}\\tSM:{new_sample_id}\\tPL:ILLUMINA\\tLB:{new_sample_id}"
 
     cmd_addreplacerg = [
-        "samtools", "addreplacerg",
-        "-r", rg_line,
-        "-m", "overwrite_all",  # CRITICAL: overwrite ALL existing RG tags
-        "--no-PG",              # Don't add @PG line for this operation
-        "-o", temp_bam_1,
-        working_bam  # Use working_bam (might be qname-anonymized)
+        "samtools",
+        "addreplacerg",
+        "-r",
+        rg_line,
+        "-m",
+        "overwrite_all",  # CRITICAL: overwrite ALL existing RG tags
+        "--no-PG",  # Don't add @PG line for this operation
+        "-o",
+        temp_bam_1,
+        working_bam,  # Use working_bam (might be qname-anonymized)
     ]
 
     logging.debug(f"Running: {' '.join(cmd_addreplacerg)}")
@@ -966,10 +943,12 @@ def anonymize_bam_complete(input_bam, output_bam, new_sample_id="sample",
     temp_bam_2 = output_bam + ".tmp2.bam"
 
     cmd_reheader = [
-        "samtools", "reheader",
+        "samtools",
+        "reheader",
         "-P",  # Don't add @PG line
-        "-c", "grep -v '^@PG' | grep -v '^@CO'",
-        temp_bam_1
+        "-c",
+        "grep -v '^@PG' | grep -v '^@CO'",
+        temp_bam_1,
     ]
 
     logging.debug(f"Running: {' '.join(cmd_reheader)}")
@@ -978,36 +957,29 @@ def anonymize_bam_complete(input_bam, output_bam, new_sample_id="sample",
 
     # Step 3: Remove old @RG lines (from original), keep only our new one
     # The addreplacerg keeps old @RG lines in header, we need to remove them
-    cmd_filter_rg = [
-        "samtools", "view", "-H", temp_bam_2
-    ]
+    cmd_filter_rg = ["samtools", "view", "-H", temp_bam_2]
 
-    header_lines = subprocess.check_output(cmd_filter_rg).decode().split('\n')
+    header_lines = subprocess.check_output(cmd_filter_rg).decode().split("\n")
 
     # Filter: keep @HD, @SQ, and only the NEW @RG line (has our new_sample_id)
     filtered_header = []
     for line in header_lines:
-        if line.startswith('@HD') or line.startswith('@SQ'):
+        if line.startswith("@HD") or line.startswith("@SQ"):
             filtered_header.append(line)
-        elif line.startswith('@RG'):
+        elif line.startswith("@RG"):
             # Only keep if it has our new sample ID
-            if f'SM:{new_sample_id}' in line and f'ID:{new_sample_id}' in line:
+            if f"SM:{new_sample_id}" in line and f"ID:{new_sample_id}" in line:
                 filtered_header.append(line)
         # Skip @PG, @CO, and old @RG lines
 
     # Write filtered header to temp file
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sam', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".sam", delete=False) as f:
         temp_header = f.name
-        f.write('\n'.join(filtered_header) + '\n')
+        f.write("\n".join(filtered_header) + "\n")
 
     try:
         # Apply the cleaned header
-        cmd_final_reheader = [
-            "samtools", "reheader",
-            "-P",
-            temp_header,
-            temp_bam_2
-        ]
+        cmd_final_reheader = ["samtools", "reheader", "-P", temp_header, temp_bam_2]
 
         with open(output_bam, "wb") as fout:
             subprocess.run(cmd_final_reheader, stdout=fout, check=True)
@@ -1055,31 +1027,22 @@ def verify_anonymization(bam_file, forbidden_strings):
     logging.info(f"Verifying anonymization of {bam_file}")
 
     # Check header
-    header = subprocess.check_output(
-        ["samtools", "view", "-H", bam_file]
-    ).decode()
+    header = subprocess.check_output(["samtools", "view", "-H", bam_file]).decode()
 
     for forbidden in forbidden_strings:
         if forbidden in header:
-            raise ValueError(
-                f"ANONYMIZATION FAILED: Found '{forbidden}' in BAM header of {bam_file}"
-            )
+            raise ValueError(f"ANONYMIZATION FAILED: Found '{forbidden}' in BAM header of {bam_file}")
 
     # Check sample of reads (first 10000)
-    reads_output = subprocess.check_output(
-        ["samtools", "view", bam_file],
-        text=True
-    )
+    reads_output = subprocess.check_output(["samtools", "view", bam_file], text=True)
 
     # Sample first 10000 reads
-    read_lines = reads_output.split('\n')[:10000]
-    reads_text = '\n'.join(read_lines)
+    read_lines = reads_output.split("\n")[:10000]
+    reads_text = "\n".join(read_lines)
 
     for forbidden in forbidden_strings:
         if forbidden in reads_text:
-            raise ValueError(
-                f"ANONYMIZATION FAILED: Found '{forbidden}' in read records of {bam_file}"
-            )
+            raise ValueError(f"ANONYMIZATION FAILED: Found '{forbidden}' in read records of {bam_file}")
 
     logging.info(f"✓ Verification passed: No forbidden strings found in {bam_file}")
 
@@ -1119,21 +1082,14 @@ def revert_only(subset_bam, out_r1, out_r2):
     """
     logging.info(f"Reverting subset {subset_bam} -> {out_r1}, {out_r2}")
     cmd_str = (
-        f"samtools collate -u -O {subset_bam} - | "
-        f"samtools fastq "
-        f"-1 {out_r1} "
-        f"-2 {out_r2} "
-        "-0 /dev/null -s /dev/null -n"
+        f"samtools collate -u -O {subset_bam} - | samtools fastq -1 {out_r1} -2 {out_r2} -0 /dev/null -s /dev/null -n"
     )
     logging.debug("Revert command: %s", cmd_str)
 
     subprocess.run(cmd_str, shell=True, check=True)
 
 
-def subset_revert_task(
-    final_bam, region, new_core_name, file_ref, output_dir, do_revert,
-    forbidden_strings=None
-):
+def subset_revert_task(final_bam, region, new_core_name, file_ref, output_dir, do_revert, forbidden_strings=None):
     """Create subset BAM and optionally revert to FASTQ.
 
     Always produces a subset .bam named: <new_core_name>_<file_ref>_subset.bam
@@ -1165,8 +1121,9 @@ def md5_of_file_task(file_path):
     return file_path, compute_md5(file_path)
 
 
-def anonymize_or_copy_task(file_path, out_path, extension, new_sample_id,
-                           forbidden_strings, anonymize_read_names=False):
+def anonymize_or_copy_task(
+    file_path, out_path, extension, new_sample_id, forbidden_strings, anonymize_read_names=False
+):
     """Anonymize and index if it's a .bam, else copy it."""
     if extension == ".bam":
         anonymize_bam_complete(file_path, out_path, new_sample_id, forbidden_strings, anonymize_read_names)
@@ -1265,9 +1222,7 @@ def collect_files(input_dir):
         if fname.lower().endswith(".bam"):
             full_path = os.path.join(input_dir, fname)
             core, read_suffix, extension = parse_filename(fname)
-            files_by_core.setdefault(core, []).append(
-                (full_path, read_suffix, extension)
-            )
+            files_by_core.setdefault(core, []).append((full_path, read_suffix, extension))
     return files_by_core
 
 
@@ -1293,12 +1248,12 @@ def load_reference_mapping(mapping_file):
     ref_map = {}
     delimiter = ","
 
-    with open(mapping_file, "r") as f:
+    with open(mapping_file) as f:
         first_line = f.readline()
         if "\t" in first_line and "," not in first_line:
             delimiter = "\t"
 
-    with open(mapping_file, "r") as f:
+    with open(mapping_file) as f:
         reader = csv.reader(f, delimiter=delimiter)
         for row in reader:
             if len(row) < 2:
@@ -1320,11 +1275,11 @@ def load_forbidden_strings_from_file(filepath):
         List of forbidden strings
     """
     forbidden = []
-    with open(filepath, 'r') as f:
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
             # Skip comments and empty lines
-            if line and not line.startswith('#'):
+            if line and not line.startswith("#"):
                 forbidden.append(line)
     return forbidden
 
@@ -1341,12 +1296,12 @@ def extract_forbidden_strings(input_dir):
     for fname in os.listdir(input_dir):
         # Add the base filename (without extension) as forbidden
         core, _, ext = parse_filename(fname)
-        if core and core not in ['example']:  # Don't forbid our own naming
+        if core and core not in ["example"]:  # Don't forbid our own naming
             forbidden.add(core)
 
             # Also check for sample IDs in the filename
             # Common patterns: NPH1234, SAMPLE_123, etc.
-            for part in core.split('_'):
+            for part in core.split("_"):
                 if len(part) >= 4:  # Only meaningful identifiers
                     forbidden.add(part)
 
@@ -1383,15 +1338,13 @@ def pseudonymize_files(
     remap_references = []
     if remap_to_reference:
         # Split by comma and strip whitespace
-        remap_references = [ref.strip() for ref in remap_to_reference.split(',')]
+        remap_references = [ref.strip() for ref in remap_to_reference.split(",")]
 
         # Validate all references
-        valid_refs = ["hg19", "hg38", "GRCh37", "GRCh38"]
+        valid_refs = ["hg19", "hg38", "GRCh37", "GRCh38", "hg19_ensembl", "hg38_ensembl"]
         for ref in remap_references:
             if ref not in valid_refs:
-                raise ValueError(
-                    f"Invalid reference '{ref}'. Valid references: {', '.join(valid_refs)}"
-                )
+                raise ValueError(f"Invalid reference '{ref}'. Valid references: {', '.join(valid_refs)}")
 
         # Remapping requires FASTQ generation
         if not do_revert:
@@ -1454,9 +1407,7 @@ def pseudonymize_files(
     csv_path = os.path.join(output_dir, "pseudonymization_table.csv")
     with open(csv_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(
-            ["old_base_name", "combined_md5", "new_pseudonym", "reference_used"]
-        )
+        writer.writerow(["old_base_name", "combined_md5", "new_pseudonym", "reference_used"])
 
         for row in sorted(mapping_rows, key=lambda x: x[0]):
             old_core, final_md5, new_core_name = row
@@ -1490,9 +1441,7 @@ def pseudonymize_files(
                     base_fname = os.path.basename(fp)
                     file_ref = reference_mapping.get(base_fname, ref_assembly)
                     if not file_ref or file_ref.lower() not in REGION_MAP:
-                        logging.warning(
-                            f"Unknown or no reference for {base_fname}, defaulting to hg19 region."
-                        )
+                        logging.warning(f"Unknown or no reference for {base_fname}, defaulting to hg19 region.")
                         file_ref = "hg19"
                     file_ref = file_ref.lower()
 
@@ -1504,9 +1453,7 @@ def pseudonymize_files(
                     subset_only(fp, region, temp_muc1_subset)
 
                     # Step 3b: Extract unmapped reads using offset-based approach (VNtyper method)
-                    temp_unmapped = os.path.join(
-                        output_dir, f"{new_core_name}_{file_ref}_unmapped_temp.bam"
-                    )
+                    temp_unmapped = os.path.join(output_dir, f"{new_core_name}_{file_ref}_unmapped_temp.bam")
                     logging.info("Step 2/5: Extracting unmapped reads using BAI offset method...")
 
                     # Ensure BAI file exists
@@ -1516,24 +1463,19 @@ def pseudonymize_files(
                         subprocess.run(["samtools", "index", fp], check=True)
 
                     # Extract unmapped reads efficiently
-                    extract_unmapped_reads_from_offset(
-                        bam_file=fp,
-                        bai_file=bai_file,
-                        output_bam=temp_unmapped
-                    )
+                    extract_unmapped_reads_from_offset(bam_file=fp, bai_file=bai_file, output_bam=temp_unmapped)
 
                     # Step 3c: Merge MUC1 subset + unmapped reads
-                    temp_merged = os.path.join(
-                        output_dir, f"{new_core_name}_{file_ref}_merged_temp.bam"
-                    )
+                    temp_merged = os.path.join(output_dir, f"{new_core_name}_{file_ref}_merged_temp.bam")
                     logging.info("Step 3/5: Merging MUC1 subset + unmapped reads...")
 
                     cmd_merge = [
-                        "samtools", "merge",
+                        "samtools",
+                        "merge",
                         "-f",  # force overwrite
                         temp_merged,
                         temp_muc1_subset,
-                        temp_unmapped
+                        temp_unmapped,
                     ]
                     subprocess.run(cmd_merge, check=True)
 
@@ -1550,8 +1492,7 @@ def pseudonymize_files(
                     final_subset = os.path.join(output_dir, f"{new_core_name}_{file_ref}_subset.bam")
                     logging.info("Step 4/5: Anonymizing merged BAM...")
                     anonymize_bam_complete(
-                        temp_merged, final_subset, new_core_name,
-                        forbidden_strings, anonymize_read_names
+                        temp_merged, final_subset, new_core_name, forbidden_strings, anonymize_read_names
                     )
 
                     # Clean up temp merged file
@@ -1566,12 +1507,8 @@ def pseudonymize_files(
                         fastq_dir = os.path.join(output_dir, "fastqs")
                         os.makedirs(fastq_dir, exist_ok=True)
 
-                        r1 = os.path.join(
-                            fastq_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz"
-                        )
-                        r2 = os.path.join(
-                            fastq_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz"
-                        )
+                        r1 = os.path.join(fastq_dir, f"{new_core_name}_{file_ref}_subset_R1.fastq.gz")
+                        r2 = os.path.join(fastq_dir, f"{new_core_name}_{file_ref}_subset_R2.fastq.gz")
                         logging.info("Step 5/5: Reverting merged BAM to FASTQ...")
                         revert_only(final_subset, r1, r2)
 
@@ -1598,16 +1535,11 @@ def pseudonymize_files(
                                 logging.info(f"  Aligners: {', '.join(available_aligners.keys())}")
 
                                 for ref_idx, target_ref in enumerate(remap_references, 1):
-                                    logging.info(
-                                        f"  Reference [{ref_idx}/{len(remap_references)}]: {target_ref}"
-                                    )
+                                    logging.info(f"  Reference [{ref_idx}/{len(remap_references)}]: {target_ref}")
 
                                     # Ensure reference is ready (download/index if needed)
                                     try:
-                                        reference_path = ensure_reference_ready(
-                                            target_ref,
-                                            auto_download=True
-                                        )
+                                        reference_path = ensure_reference_ready(target_ref, auto_download=True)
                                     except Exception as e:
                                         logging.error(f"Failed to prepare {target_ref} reference: {e}")
                                         logging.warning(
@@ -1641,8 +1573,7 @@ def pseudonymize_files(
 
                                         # Remap FASTQs with this aligner
                                         remapped_bam = os.path.join(
-                                            remapped_dir,
-                                            f"{new_core_name}_{target_ref}_{aligner_name}.bam"
+                                            remapped_dir, f"{new_core_name}_{target_ref}_{aligner_name}.bam"
                                         )
 
                                         try:
@@ -1653,18 +1584,15 @@ def pseudonymize_files(
                                                 output_bam=remapped_bam,
                                                 aligner_name=aligner_name,
                                                 aligner_info=aligner_info,
-                                                threads=max_workers if max_workers else 4
+                                                threads=max_workers if max_workers else 4,
                                             )
 
                                             # Get stats
                                             read_count = subprocess.check_output(
-                                                ["samtools", "view", "-c", remapped_bam],
-                                                text=True
+                                                ["samtools", "view", "-c", remapped_bam], text=True
                                             ).strip()
 
-                                            logging.info(
-                                                f"    ✓ {aligner_name} → {target_ref}: {read_count} reads"
-                                            )
+                                            logging.info(f"    ✓ {aligner_name} → {target_ref}: {read_count} reads")
                                         except Exception as e:
                                             logging.error(f"    ✗ {aligner_name} alignment to {target_ref} failed: {e}")
                                             logging.warning(
@@ -1673,8 +1601,7 @@ def pseudonymize_files(
                                             )
     else:
         logging.warning(
-            "--subset-muc1 not specified. No output files will be generated "
-            "(full BAM anonymization skipped)."
+            "--subset-muc1 not specified. No output files will be generated (full BAM anonymization skipped)."
         )
 
     # ------------------------------------------------
@@ -1713,18 +1640,14 @@ Examples:
   # With custom forbidden strings file
   python pseudonymize.py --input-dir raw_data/ --output-dir anonymized/ \\
     --forbidden-strings forbidden.txt
-        """
+        """,
     )
     parser.add_argument(
         "--input-dir",
         required=True,
         help="Directory containing the original BAM/FASTQ files.",
     )
-    parser.add_argument(
-        "--output-dir",
-        required=True,
-        help="Output directory for anonymized/pseudonymized files."
-    )
+    parser.add_argument("--output-dir", required=True, help="Output directory for anonymized/pseudonymized files.")
     parser.add_argument(
         "--workers",
         type=int,
@@ -1735,7 +1658,7 @@ Examples:
     parser.add_argument(
         "--ref-assembly",
         default=None,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38"],
+        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_ensembl", "hg38_ensembl"],
         help="A single reference assembly to apply to all input files.",
     )
     parser.add_argument(
@@ -1759,9 +1682,9 @@ Examples:
         "--remap-to-reference",
         default=None,
         help="Remap anonymized FASTQs to specified reference genome(s). "
-             "Accepts comma-separated list (e.g., 'hg19,hg38,GRCh37,GRCh38' or just 'hg38'). "
-             "Requires --revert-fastq. Auto-downloads references if missing. "
-             "Produces remapped BAM files in output directory.",
+        "Accepts comma-separated list (e.g., 'hg19,hg38,GRCh37,GRCh38' or just 'hg38'). "
+        "Requires --revert-fastq. Auto-downloads references if missing. "
+        "Produces remapped BAM files in output directory.",
     )
 
     parser.add_argument(
@@ -1770,15 +1693,15 @@ Examples:
         default=None,
         metavar="ALIGNER",
         help="Specific aligners to use for remapping (e.g., bwa bwa-mem2 minimap2 bowtie2 dragmap). "
-             "If not specified, uses all available aligners from pseudonymize_config.json. "
-             "Only works with --remap-to-reference.",
+        "If not specified, uses all available aligners from pseudonymize_config.json. "
+        "Only works with --remap-to-reference.",
     )
 
     parser.add_argument(
         "--forbidden-strings",
         default=None,
         help="File containing strings that must not appear in output (one per line). "
-             "If not provided, will auto-detect from input filenames.",
+        "If not provided, will auto-detect from input filenames.",
     )
 
     parser.add_argument(
@@ -1823,9 +1746,9 @@ Examples:
 
     # Add file handler if log file specified
     if args.log_file:
-        file_handler = logging.FileHandler(args.log_file, mode='w')
+        file_handler = logging.FileHandler(args.log_file, mode="w")
         file_handler.setLevel(log_level)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
         logging.getLogger().addHandler(file_handler)
         logging.info(f"Logging to file: {args.log_file}")
 
