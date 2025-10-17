@@ -9,14 +9,12 @@ import subprocess as sp
 import numpy as np
 import pandas as pd
 
-from vntyper.scripts.utils import run_command, load_config
+from vntyper.scripts.utils import load_config, run_command
 
 # -------------------------------------------------------------------------
 # Configure logging
 # -------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 
 def load_advntr_config(config_path=None):
@@ -133,12 +131,8 @@ def advntr_processing_del(df):
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
     df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
-    df1["Insertion_len"] = (
-        df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
-    )
-    df1["Insertion_len"] = (
-        pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
-    )
+    df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
+    df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
     df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
     df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
@@ -177,12 +171,8 @@ def advntr_processing_ins(df):
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
     df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
-    df1["Insertion_len"] = (
-        df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
-    )
-    df1["Insertion_len"] = (
-        pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
-    )
+    df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
+    df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
     df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
     df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
@@ -207,7 +197,7 @@ def load_ru_sequences(ru_fasta_path):
         dict: A dictionary mapping RU identifier (as string) to its sequence.
     """
     ru_dict = {}
-    with open(ru_fasta_path, "r") as f:
+    with open(ru_fasta_path) as f:
         current_ru = None
         seq_lines = []
         for line in f:
@@ -216,10 +206,7 @@ def load_ru_sequences(ru_fasta_path):
                 if current_ru and seq_lines:
                     ru_dict[current_ru] = "".join(seq_lines)
                 header = line[1:]
-                if header.startswith("RU"):
-                    current_ru = header[2:]
-                else:
-                    current_ru = header
+                current_ru = header[2:] if header.startswith("RU") else header
                 seq_lines = []
             else:
                 seq_lines.append(line)
@@ -264,10 +251,7 @@ def annotate_advntr_variants(variant_series, ru_fasta_path):
                 inserted_base = ins_match.group(3)
                 ins_len = int(ins_match.group(4))
                 ru_seq = ru_dict.get(ru_val, "")
-                if ru_seq and pos_val - 1 < len(ru_seq):
-                    ref_base = ru_seq[pos_val - 1]
-                else:
-                    ref_base = "."
+                ref_base = ru_seq[pos_val - 1] if ru_seq and pos_val - 1 < len(ru_seq) else "."
                 alt_val = ref_base + inserted_base * ins_len
                 ru_parts.append(ru_val)
                 pos_parts.append(str(pos_val))
@@ -328,14 +312,11 @@ def process_advntr_output(output_path, output, output_name, config=None):
 
     logging.info("Processing adVNTR result...")
 
-    with open(output_path, "r") as file:
+    with open(output_path) as file:
         content = file.readlines()
 
     # Replace header to ensure consistency
-    content = [
-        line.replace("#VID", "VID") if line.startswith("#VID") else line
-        for line in content
-    ]
+    content = [line.replace("#VID", "VID") if line.startswith("#VID") else line for line in content]
     with open(output_path, "w") as file:
         file.writelines(content)
 
@@ -397,9 +378,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
 
         if advntr_concat.empty:
-            logging.warning(
-                "No pathogenic variant found after filtering. Generating default negative result."
-            )
+            logging.warning("No pathogenic variant found after filtering. Generating default negative result.")
             advntr_concat = pd.DataFrame(
                 [
                     {
@@ -426,9 +405,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
             ]
             advntr_concat = advntr_concat[base_columns]
             logging.info("Removing duplicates...")
-            advntr_concat.drop_duplicates(
-                subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True
-            )
+            advntr_concat.drop_duplicates(subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True)
 
             # Perform RU-level annotation if possible
             if config:

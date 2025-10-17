@@ -19,6 +19,7 @@ Example flagging rule:
 
 import logging
 import re
+
 import pandas as pd
 
 
@@ -36,9 +37,7 @@ def regex_match(pattern, value):
     try:
         return bool(re.search(pattern, str(value)))
     except Exception as e:
-        logging.error(
-            f"Error in regex_match with pattern {pattern} and value {value}: {e}"
-        )
+        logging.error(f"Error in regex_match with pattern {pattern} and value {value}: {e}")
         return False
 
 
@@ -63,20 +62,14 @@ def evaluate_condition(row, condition):
         result = eval(condition, {"__builtins__": {}}, local_vars)
         return bool(result)
     except NameError as ne:
-        logging.warning(
-            f"NameError while evaluating condition '{condition}' with row {row.to_dict()}: {ne}"
-        )
+        logging.warning(f"NameError while evaluating condition '{condition}' with row {row.to_dict()}: {ne}")
         return False
     except Exception as e:
-        logging.error(
-            f"Error evaluating condition '{condition}' with row {row.to_dict()}: {e}"
-        )
+        logging.error(f"Error evaluating condition '{condition}' with row {row.to_dict()}: {e}")
         return False
 
 
-def add_flags(
-    df: pd.DataFrame, flag_rules: dict, duplicates_config: dict = None
-) -> pd.DataFrame:
+def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict = None) -> pd.DataFrame:
     """
     Applies flagging rules to the DataFrame and adds a 'Flag' column with the matched flags.
 
@@ -120,7 +113,7 @@ def add_flags(
     # Evaluate each flag rule
     for flag, condition in flag_rules.items():
         logging.debug(f"Evaluating flag rule '{flag}': {condition}")
-        mask = df_copy.apply(lambda row: evaluate_condition(row, condition), axis=1)
+        mask = df_copy.apply(lambda row, cond=condition: evaluate_condition(row, cond), axis=1)
         matching_count = mask.sum()
         logging.debug(f"Flag rule '{flag}' matched {matching_count} rows.")
         for i, condition_met in enumerate(mask):
@@ -130,9 +123,7 @@ def add_flags(
 
     # Create the 'Flag' column as a comma-separated string of flags for each row,
     # or 'Not flagged' if no flags were applied.
-    df_copy["Flag"] = [
-        ", ".join(flag_list) if flag_list else "Not flagged" for flag_list in flags
-    ]
+    df_copy["Flag"] = [", ".join(flag_list) if flag_list else "Not flagged" for flag_list in flags]
     logging.debug("Added 'Flag' column to DataFrame with flag values.")
 
     # Mark potential duplicates if configured
@@ -157,14 +148,10 @@ def add_flags(
             group_cols=group_cols,
             sort_cols=sort_cols,
             sort_ascending=sort_ascending,
-            duplicate_flag_name=duplicates_config.get(
-                "flag_name", "Potential_Duplicate"
-            ),
+            duplicate_flag_name=duplicates_config.get("flag_name", "Potential_Duplicate"),
         )
     else:
-        logging.debug(
-            "No duplicates_config or 'enabled' is False; skipping duplicate flagging."
-        )
+        logging.debug("No duplicates_config or 'enabled' is False; skipping duplicate flagging.")
 
     return df_copy
 
@@ -220,7 +207,7 @@ def mark_potential_duplicates(
 
     # Prepare a list for the new flags
     new_flags = []
-    for idx, row in df_copy.iterrows():
+    for _idx, row in df_copy.iterrows():
         if row["__is_duplicate"]:
             new_flags.append([duplicate_flag_name])
         else:
@@ -229,14 +216,12 @@ def mark_potential_duplicates(
     logging.debug("Combining existing flags with new duplicate flags.")
     combined_flags = []
     for i, row in enumerate(df_copy.itertuples(index=False)):
-        existing_flag = getattr(row, "Flag")
+        existing_flag = row.Flag
         dup_flag_list = new_flags[i]
 
         if existing_flag == "Not flagged":
             # If not flagged and is a duplicate, set the new flag
-            combined_flags.append(
-                ", ".join(dup_flag_list) if dup_flag_list else "Not flagged"
-            )
+            combined_flags.append(", ".join(dup_flag_list) if dup_flag_list else "Not flagged")
         else:
             # If already flagged, append the new flag if it's a duplicate
             if dup_flag_list:
@@ -249,9 +234,7 @@ def mark_potential_duplicates(
     # Restore original ordering
     logging.debug("Restoring original row order.")
     df_copy.sort_values(by="__original_index", inplace=True)
-    df_copy.drop(
-        columns=["__original_index", "__dup_indicator", "__is_duplicate"], inplace=True
-    )
+    df_copy.drop(columns=["__original_index", "__dup_indicator", "__is_duplicate"], inplace=True)
 
     logging.debug(f"Done marking potential duplicates. Final shape: {df_copy.shape}")
     return df_copy
