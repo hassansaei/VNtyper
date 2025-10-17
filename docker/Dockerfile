@@ -88,10 +88,11 @@ RUN conda run -n vntyper vntyper --config-path /opt/vntyper/vntyper/config.json 
     --output-dir $REFERENCE_DIR
 
 # Install FastAPI, Uvicorn, Celery, Redis, and other dependencies with BuildKit cache
+# Note: Using fastapi[standard] to include fastapi-cli for 'fastapi dev' command
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     conda run -n vntyper pip install --no-cache-dir \
-        fastapi==0.115.3 \
-        uvicorn==0.32.0 \
+        "fastapi[standard]==0.115.3" \
+        "uvicorn[standard]==0.32.0" \
         redis==5.2.0 \
         celery==5.4.0 \
         python-multipart==0.0.12 \
