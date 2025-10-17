@@ -22,6 +22,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -141,6 +142,24 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+# CORS configuration for development
+# Only allow localhost origins when ENVIRONMENT is 'development' or 'local'
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+if ENVIRONMENT in ["development", "local"]:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info(f"CORS enabled for {ENVIRONMENT} environment with origins: localhost:3000, localhost:8000")
 
 
 @app.on_event("startup")
@@ -1059,3 +1078,4 @@ def get_cohort_jobs(
         "alias": cohort_data.get("alias", ""),
         "job_ids": list(job_ids),
     }
+# Test auto-reload at Thu Oct  2 08:10:18 CEST 2025
