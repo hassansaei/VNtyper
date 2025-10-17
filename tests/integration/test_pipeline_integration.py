@@ -48,83 +48,141 @@ def test_config():
 def ensure_test_data(test_config):
     """
     Session-scoped fixture that ensures all test data is present and valid (by MD5).
-    If a file is missing, or if the existing file's MD5 does not match the
-    expected value from the config, the file is re-downloaded.
 
-    This fixture only ensures data integrity before tests run.
-    No return value is needed.
+    This version supports both:
+    1. Archive-based downloads (data.zip from Zenodo)
+    2. Individual file downloads (legacy support)
+
+    If 'archive_file' is specified in config, it will download and extract the archive
+    when any file is missing or has MD5 mismatch. Otherwise, it falls back to individual
+    file downloads.
 
     Args:
-        test_config (dict): The loaded JSON config, which includes a
-            "file_resources" list of dicts, each containing:
-            - local_path
-            - filename
-            - url_suffix
-            - md5sum
+        test_config (dict): The loaded JSON config with:
+            - archive_file (optional): dict with url, extract_to
+            - file_resources: list of file dicts with local_path, filename, md5sum
     """
     logger = logging.getLogger(__name__)
+    import zipfile
+    import tempfile
 
-    # Obtain the server base URL and the file resources from the config
-    server_base_url = test_config.get("server_base_url", "")
     file_resources = test_config.get("file_resources", [])
+    archive_config = test_config.get("archive_file")
 
-    # Loop over each resource and verify or download
+    # Check if we need to download anything
+    need_download = False
     for resource in file_resources:
         local_dir = Path(resource["local_path"])
         filename = resource["filename"]
         local_path = local_dir / filename
-
-        url_suffix = resource.get("url_suffix", "")
         expected_md5 = resource["md5sum"]
 
-        logger.info("Handling resource: %s", local_path)
+        if not local_path.exists():
+            logger.info("File %s is missing.", local_path)
+            need_download = True
+            break
 
-        # If the file exists, check its MD5. If it matches, skip download.
-        # Otherwise, remove it to trigger a fresh download.
-        if local_path.exists():
-            current_md5 = compute_md5(local_path)
-            if current_md5.lower() == expected_md5.lower():
-                logger.info("File %s exists and MD5 verified.", local_path)
-                continue
+        current_md5 = compute_md5(local_path)
+        if current_md5.lower() != expected_md5.lower():
+            logger.warning(
+                "File %s has MD5 mismatch. Expected=%s, Got=%s",
+                local_path, expected_md5, current_md5
+            )
+            need_download = True
+            break
+
+    if not need_download:
+        logger.info("All test data files verified. No download needed.")
+        return
+
+    # Need to download - use archive if configured
+    if archive_config:
+        archive_url = archive_config["url"]
+        extract_to = Path(archive_config["extract_to"])
+
+        logger.info("Downloading test data archive from %s", archive_url)
+
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+
+        try:
+            # Download archive
+            download_file(archive_url, tmp_path)
+            logger.info("Archive downloaded to %s", tmp_path)
+
+            # Extract archive
+            logger.info("Extracting archive to %s", extract_to)
+            extract_to.mkdir(parents=True, exist_ok=True)
+
+            with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_to)
+
+            logger.info("Archive extracted successfully")
+
+            # Verify all files after extraction
+            for resource in file_resources:
+                local_dir = Path(resource["local_path"])
+                filename = resource["filename"]
+                local_path = local_dir / filename
+                expected_md5 = resource["md5sum"]
+
+                if not local_path.exists():
+                    pytest.exit(
+                        f"File {local_path} not found after archive extraction!",
+                        returncode=1
+                    )
+
+                current_md5 = compute_md5(local_path)
+                if current_md5.lower() != expected_md5.lower():
+                    pytest.exit(
+                        f"File {local_path} MD5 mismatch after extraction.\n"
+                        f"Expected={expected_md5}, Got={current_md5}",
+                        returncode=1
+                    )
+                logger.info("Verified %s", local_path)
+        finally:
+            # Clean up temp file
+            if tmp_path.exists():
+                tmp_path.unlink()
+    else:
+        # Legacy: download individual files
+        logger.info("Using legacy individual file download mode")
+        server_base_url = test_config.get("server_base_url", "")
+
+        for resource in file_resources:
+            local_dir = Path(resource["local_path"])
+            filename = resource["filename"]
+            local_path = local_dir / filename
+            url_suffix = resource.get("url_suffix", "")
+            expected_md5 = resource["md5sum"]
+
+            if local_path.exists():
+                current_md5 = compute_md5(local_path)
+                if current_md5.lower() == expected_md5.lower():
+                    logger.info("File %s exists and MD5 verified.", local_path)
+                    continue
+                else:
+                    logger.warning("File %s MD5 mismatch, re-downloading.", local_path)
+                    local_path.unlink()
+
+            if server_base_url and url_suffix:
+                full_url = server_base_url.rstrip("/") + "/" + url_suffix.lstrip("/")
+                logger.info("Downloading %s from %s", filename, full_url)
+                download_file(full_url, local_path)
+
+                final_md5 = compute_md5(local_path)
+                if final_md5.lower() != expected_md5.lower():
+                    pytest.exit(
+                        f"Downloaded file {local_path} MD5 mismatch.\n"
+                        f"Expected={expected_md5}, Got={final_md5}",
+                        returncode=1
+                    )
             else:
-                logger.warning(
-                    "File %s exists but MD5 mismatch. Expected=%s, Got=%s.\n"
-                    "Re-downloading...",
-                    local_path,
-                    expected_md5,
-                    current_md5,
-                )
-                local_path.unlink()
-
-        # If file is missing (or removed) and we have a valid URL, download it.
-        if server_base_url and url_suffix:
-            full_url = server_base_url.rstrip("/") + "/" + url_suffix.lstrip("/")
-            logger.info("Downloading file from %s to %s", full_url, local_path)
-            download_file(full_url, local_path)
-
-            # Verify the MD5 of the newly downloaded file.
-            final_md5 = compute_md5(local_path)
-            if final_md5.lower() != expected_md5.lower():
-                logger.error(
-                    "Downloaded file %s has incorrect MD5.\n" "Expected=%s, Got=%s",
-                    local_path,
-                    expected_md5,
-                    final_md5,
-                )
-                pytest.exit(f"MD5 check failed for {local_path}", returncode=1)
-            else:
-                logger.info("Successfully downloaded and verified %s", local_path)
-        else:
-            # If there's no valid download URL and the file doesn't exist,
-            # we cannot proceed.
-            if not local_path.exists():
                 pytest.exit(
-                    f"File {local_path} not found and no base_url/url_suffix to download!\n"
-                    f"server_base_url={server_base_url}, url_suffix={url_suffix}",
-                    returncode=1,
+                    f"File {local_path} not found and no download URL configured!",
+                    returncode=1
                 )
 
-    # This fixture only ensures data integrity; it doesn't return anything.
     return
 
 

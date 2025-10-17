@@ -1,5 +1,11 @@
 {
   "server_base_url": "https://zenodo.org/records/17377082/files/",
+  "archive_file": {
+    "filename": "data.zip",
+    "url": "https://zenodo.org/records/17377082/files/data.zip?download=1",
+    "extract_to": "tests/data",
+    "md5sum": null
+  },
   "file_resources": [
     {
       "local_path": "tests/data",
