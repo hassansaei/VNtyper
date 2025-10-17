@@ -7,11 +7,7 @@ LABEL org.opencontainers.image.title="VNtyper" \
       org.opencontainers.image.description="VNtyper 2.0 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1" \
       org.opencontainers.image.vendor="VNtyper Project" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.source="https://github.com/hassansaei/VNtyper" \
-      org.opencontainers.image.url="https://github.com/hassansaei/VNtyper" \
-      org.opencontainers.image.documentation="https://github.com/hassansaei/VNtyper" \
-      com.vntyper.type="bioinformatics" \
-      com.vntyper.pipeline="genotyping"
+      org.opencontainers.image.source="https://github.com/berntpopp/VNtyper"
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -32,48 +28,41 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         unzip \
         zip \
         curl \
-        ca-certificates \
         && rm -rf /var/lib/apt/lists/*
 
-# Install mamba for faster conda package installation with BuildKit cache
-RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
-    conda install -y mamba -n base -c conda-forge && \
-    conda clean -afy
+# Install mamba for faster conda package installation
+RUN conda install -y mamba -n base -c conda-forge
 
 # Define build arguments with default values
-ARG REPO_URL=https://github.com/hassansaei/VNtyper.git
 ARG REPO_DIR=/opt/vntyper
 
-# Set default repository URL and directory
-ENV REPO_URL=${REPO_URL}
+# Set repository directory
 ENV REPO_DIR=${REPO_DIR}
 
-# Clone the VNtyper repository using environment variables
-RUN git clone ${REPO_URL} ${REPO_DIR}
+# Create the working directory
+RUN mkdir -p ${REPO_DIR}
 
 # Set the working directory
 WORKDIR ${REPO_DIR}
 
-# Copy VNtyper environment files (using RUN cp to work from cloned repo)
+# Copy the entire VNtyper codebase from local context
+COPY . ${REPO_DIR}/
+
+# Copy VNtyper environment files
 RUN cp conda/environment_vntyper.yml /tmp/environment_vntyper.yml && \
     cp conda/environment_envadvntr.yml /tmp/environment_envadvntr.yml && \
     cp conda/environment_shark.yml /tmp/environment_shark.yml
 
-# Create and install conda environments with BuildKit cache mounts
-RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
-    --mount=type=cache,target=/root/.conda/pkgs,sharing=locked \
-    mamba env create -f /tmp/environment_vntyper.yml && \
+# Create and install conda environments
+RUN mamba env create -f /tmp/environment_vntyper.yml && \
     mamba env create -f /tmp/environment_envadvntr.yml && \
     mamba env create -f /tmp/environment_shark.yml && \
     conda clean -afy && \
-    find /opt/conda/envs -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true && \
-    find /opt/conda/envs -type f -name '*.pyc' -delete 2>/dev/null || true && \
-    find /opt/conda/envs -type f -name '*.pyo' -delete 2>/dev/null || true && \
     rm /tmp/environment_vntyper.yml /tmp/environment_envadvntr.yml /tmp/environment_shark.yml
 
 # Install VNtyper using pip within the vntyper environment with BuildKit cache
-RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    conda run -n vntyper pip install --no-cache-dir .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    conda run -n vntyper pip install .
 
 # Make adVNTR installation script executable
 RUN chmod +x vntyper/dependencies/advntr/install_advntr.sh
@@ -84,21 +73,13 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
     bash vntyper/dependencies/advntr/install_advntr.sh -o"
 
 # Install VNtyper references during build (hg19 and hg38 UCSC by default)
-RUN conda run -n vntyper vntyper --config-path /opt/vntyper/vntyper/config.json install-references \
+# Fixed config path from /opt/vntyper/config/config.json to /opt/vntyper/vntyper/config.json
+RUN conda run -n vntyper vntyper --config-path $REPO_DIR/vntyper/config.json install-references \
     --output-dir $REFERENCE_DIR
 
 # Install FastAPI, Uvicorn, Celery, Redis, and other dependencies with BuildKit cache
-RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    conda run -n vntyper pip install --no-cache-dir \
-        fastapi==0.115.3 \
-        uvicorn==0.32.0 \
-        redis==5.2.0 \
-        celery==5.4.0 \
-        python-multipart==0.0.12 \
-        fastapi-limiter==0.1.6 \
-        email_validator==2.2.0 \
-        'passlib[bcrypt]==1.7.4' \
-        pydantic==2.10.0
+RUN --mount=type=cache,target=/root/.cache/pip \
+    conda run -n vntyper pip install fastapi==0.115.3 uvicorn==0.32.0 redis==5.2.0 celery==5.4.0 python-multipart==0.0.12 fastapi-limiter==0.1.6 email_validator==2.2.0 passlib[bcrypt]==1.7.4 pydantic==2.10.0
 
 # Set up default input, output, and reference directories
 RUN mkdir -p $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR
@@ -112,8 +93,7 @@ ARG USER_GID=1001
 RUN groupadd --gid $USER_GID $USERNAME && \
     useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash --create-home $USERNAME
 
-# Copy entrypoint and app files (using COPY for better practice, but files are in cloned repo)
-# Note: These files come from the cloned repo, so we use RUN cp from within the repo
+# Set up entrypoint
 RUN cp docker/entrypoint.sh /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/entrypoint.sh
 
@@ -121,7 +101,7 @@ RUN cp docker/entrypoint.sh /usr/local/bin/entrypoint.sh && \
 RUN cp -r docker/app /opt/vntyper/app
 
 # Set ownership of directories and app to appuser
-RUN chown -R $USERNAME:$USERNAME $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR /opt/vntyper/app /opt
+RUN chown -R $USERNAME:$USERNAME $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR $REFERENCE_DIR /opt/vntyper/app
 
 # Expose FastAPI port
 EXPOSE 8000
