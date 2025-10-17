@@ -7,6 +7,7 @@ The BAI index is used to find the maximum virtual offset (chunk_end) among all m
 
 import logging
 import os
+
 import pysam
 
 

@@ -36,8 +36,9 @@
   - Logs both to the console and a dedicated log file.
   - Generates MD5 checksums for all downloaded and processed files.
 
-- **Flexible Installation:**
-  - Supports installation via `pip` using `setup.py`.
+- **Modern Packaging:**
+  - Uses modern Python packaging with `pyproject.toml` (PEP 517/518/621).
+  - No `setup.py` required - fully compatible with pip ≥21.3.
   - Provides Conda environment setup for easy dependency management.
 
 - **Subcommands:**
@@ -54,9 +55,9 @@
 
 ## Installation
 
-VNtyper 2.0 can be installed using either `pip` with `setup.py` or via Conda environments for streamlined dependency management.
+VNtyper 2.0 uses modern Python packaging with `pyproject.toml` and can be installed using `pip` (≥21.3) or via Conda environments for streamlined dependency management.
 
-### Using `setup.py` and `pip`
+### Using `pip`
 
 1. **Clone the Repository:**
 
@@ -66,6 +67,17 @@ VNtyper 2.0 can be installed using either `pip` with `setup.py` or via Conda env
    cd vntyper
    pip install .
    ```
+
+2. **For Development:**
+
+   ```bash
+   # Install in editable mode with development dependencies
+   pip install -e .[dev]
+   ```
+
+   This installs VNtyper with additional tools for development:
+   - **Ruff**: Fast linter and formatter (replaces flake8 + black)
+   - **pytest**: Testing framework with coverage support
 
 ---
 
@@ -222,46 +234,43 @@ You can easily set up these dependencies via the provided Conda environment file
 
 ## Linting and Code Formatting
 
-VNtyper adheres to PEP8 style guidelines to ensure clean, readable, and maintainable code. We recommend the following tools:
+VNtyper adheres to PEP8 style guidelines to ensure clean, readable, and maintainable code. We use **Ruff**, a modern, extremely fast linter and formatter written in Rust that replaces both flake8 and black.
 
-### Using flake8 for Linting
+### Quick Start with Makefile
 
-**flake8** is used to check for style violations. Note that flake8 only reports issues—it does not automatically fix them.
+VNtyper provides a Makefile for common development tasks:
 
-1. **Install flake8:**  
-   You can install it as part of the development extras:
+```bash
+# Show all available commands
+make help
 
-   ```bash
-   pip install -e .[dev]
-   ```
+# Install in development mode
+make install-dev
 
-   *Or install it directly:*
+# Run linter
+make lint
 
-   ```bash
-   pip install flake8
-   ```
+# Format code (auto-fix issues)
+make format
 
-2. **Run flake8:**  
-   To check your code, run the following command from the project root:
+# Check formatting without making changes
+make format-check
 
-   ```bash
-   flake8 .
-   ```
+# Run tests
+make test          # All tests
+make test-unit     # Unit tests only
+make test-cov      # With coverage report
 
-   This command will recursively scan your project and report any PEP8 issues.
+# Clean build artifacts
+make clean
+```
 
-### Automatic Code Formatting with Black
+### Modern Python Packaging
 
-For automatic formatting, we use **Black**, which is already included in the development extras.
-
-1. **Run Black:**  
-   Simply execute the following command in the project root:
-
-   ```bash
-   black .
-   ```
-
-   Black will automatically reformat your code according to its opinionated style, which is also compliant with PEP8.
+VNtyper uses `pyproject.toml` for all project configuration (PEP 517/518/621):
+- **No `setup.py` required**: Modern pip (≥21.3) and setuptools (≥64) fully support `pyproject.toml`
+- **Single source of truth**: All configuration (build, dependencies, tools) in one file
+- **Editable installs**: Fully supported via PEP 660
 
 ---
 

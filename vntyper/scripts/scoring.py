@@ -26,8 +26,9 @@ References:
 """
 
 import logging
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 
 def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
@@ -54,9 +55,7 @@ def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
-        logging.debug(
-            "DataFrame is empty. Exiting split_depth_and_calculate_frame_score."
-        )
+        logging.debug("DataFrame is empty. Exiting split_depth_and_calculate_frame_score.")
         return df
 
     # Step 1) Split 'Sample' into 3 parts

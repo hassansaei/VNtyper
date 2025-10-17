@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # vntyper/scripts/generate_report.py
 
-import os
-import logging
-import subprocess
 import json
+import logging
+import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -27,7 +27,7 @@ def load_pipeline_summary(summary_file_path):
         logging.error("Pipeline summary file not found: %s", summary_file_path)
         return {}
     try:
-        with open(summary_file_path, "r") as f:
+        with open(summary_file_path) as f:
             summary = json.load(f)
         logging.debug("Pipeline summary loaded successfully.")
         return summary
@@ -36,9 +36,7 @@ def load_pipeline_summary(summary_file_path):
         return {}
 
 
-def run_igv_report(
-    bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None
-):
+def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf_file=None, config=None):
     """
     Wrapper around `create_report` IGV command. If config is provided and flanking
     is not explicitly set, we fall back to config's default_values.flanking.
@@ -76,19 +74,13 @@ def run_igv_report(
     if bam_file:
         tracks.append(str(bam_file))
     if not tracks:
-        logging.warning(
-            "No valid tracks (VCF or BAM) provided to IGV. The IGV report may be empty."
-        )
+        logging.warning("No valid tracks (VCF or BAM) provided to IGV. The IGV report may be empty.")
     igv_report_cmd.extend(tracks)
     igv_report_cmd.extend(["--output", output_html])
 
-    logging.debug(
-        "IGV report command: %s", " ".join([str(x) for x in igv_report_cmd if x])
-    )
+    logging.debug("IGV report command: %s", " ".join([str(x) for x in igv_report_cmd if x]))
     try:
-        logging.info(
-            "Running IGV report: %s", " ".join([str(x) for x in igv_report_cmd if x])
-        )
+        logging.info("Running IGV report: %s", " ".join([str(x) for x in igv_report_cmd if x]))
         subprocess.run(igv_report_cmd, check=True)
         logging.info("IGV report successfully generated at %s", output_html)
     except subprocess.CalledProcessError as e:
@@ -107,7 +99,7 @@ def extract_igv_content(igv_report_html):
     """
     logging.debug("extract_igv_content called with igv_report_html=%s", igv_report_html)
     try:
-        with open(igv_report_html, "r") as f:
+        with open(igv_report_html) as f:
             content = f.read()
 
         igv_start = content.find('<div id="container"')
@@ -119,21 +111,15 @@ def extract_igv_content(igv_report_html):
 
         igv_content = content[igv_start:igv_end].strip()
 
-        table_json_start = content.find("const tableJson = ") + len(
-            "const tableJson = "
-        )
+        table_json_start = content.find("const tableJson = ") + len("const tableJson = ")
         table_json_end = content.find("\n", table_json_start)
         table_json = content[table_json_start:table_json_end].strip()
 
-        session_dict_start = content.find("const sessionDictionary = ") + len(
-            "const sessionDictionary = "
-        )
+        session_dict_start = content.find("const sessionDictionary = ") + len("const sessionDictionary = ")
         session_dict_end = content.find("\n", session_dict_start)
         session_dictionary = content[session_dict_start:session_dict_end].strip()
 
-        logging.info(
-            "Successfully extracted IGV content, tableJson, and sessionDictionary."
-        )
+        logging.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
         return igv_content, table_json, session_dictionary
     except FileNotFoundError:
         logging.error("IGV report file not found: %s", igv_report_html)
@@ -153,7 +139,7 @@ def load_fastp_output(fastp_file):
         logging.warning("fastp output file not found: %s", fastp_file)
         return {}
     try:
-        with open(fastp_file, "r") as f:
+        with open(fastp_file) as f:
             data = json.load(f)
         logging.debug("fastp output successfully loaded.")
         return data
@@ -175,7 +161,7 @@ def load_pipeline_log(log_file):
         logging.warning("Pipeline log file not found: %s", log_file)
         return "Pipeline log file not found."
     try:
-        with open(log_file, "r") as f:
+        with open(log_file) as f:
             content = f.read()
         logging.debug("Pipeline log successfully loaded.")
         return content
@@ -195,7 +181,7 @@ def load_report_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "report_config.json")
     try:
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             report_config = json.load(f)
         logging.info("Loaded report config from %s", config_path)
         return report_config
@@ -365,18 +351,11 @@ def build_screening_summary(
         logging.debug("Computed Kestrel result: %s", computed_kestrel)
 
         advntr_logic = report_config.get("algorithm_logic", {}).get("advntr", {})
-        computed_advntr = (
-            compute_algorithm_result(advntr_df, advntr_logic)
-            if advntr_available
-            else "none"
-        )
+        computed_advntr = compute_algorithm_result(advntr_df, advntr_logic) if advntr_available else "none"
         logging.debug("Computed adVNTR result: %s", computed_advntr)
 
         quality_metrics_pass = True
-        if (
-            mean_vntr_coverage is not None
-            and mean_vntr_coverage < mean_vntr_cov_threshold
-        ):
+        if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
             quality_metrics_pass = False
         logging.debug("Quality metrics pass: %s", quality_metrics_pass)
 
@@ -400,10 +379,7 @@ def build_screening_summary(
 
         for rule in unified_rules:
             conditions = rule.get("conditions", {})
-            if all(
-                condition_matches(current_conditions.get(key), conditions.get(key))
-                for key in conditions
-            ):
+            if all(condition_matches(current_conditions.get(key), conditions.get(key)) for key in conditions):
                 summary_text = rule.get("message", "")
                 logging.debug("Unified rule matched: %s", conditions)
                 break
@@ -473,9 +449,7 @@ def generate_summary_report(
     )
 
     if config is None:
-        raise ValueError(
-            "Config dictionary must be provided to generate_summary_report"
-        )
+        raise ValueError("Config dictionary must be provided to generate_summary_report")
 
     # Load the script-specific report configuration.
     report_config = load_report_config()
@@ -526,15 +500,9 @@ def generate_summary_report(
     for step in pipeline_summary.get("steps", []):
         if step.get("step") == "Coverage Calculation":
             coverage_info = step.get("parsed_result", {}).get("data", [])
-            if (
-                coverage_info
-                and isinstance(coverage_info, list)
-                and len(coverage_info) > 0
-            ):
+            if coverage_info and isinstance(coverage_info, list) and len(coverage_info) > 0:
                 try:
-                    coverage_data = coverage_info[
-                        0
-                    ]  # Get the first coverage data entry
+                    coverage_data = coverage_info[0]  # Get the first coverage data entry
                     mean_vntr_coverage = float(coverage_data.get("mean", 0))
                     median_vntr_coverage = float(coverage_data.get("median", 0))
                     stdev_vntr_coverage = float(coverage_data.get("stdev", 0))
@@ -542,9 +510,7 @@ def generate_summary_report(
                     max_vntr_coverage = int(coverage_data.get("max", 0))
                     vntr_region_length = int(coverage_data.get("region_length", 0))
                     vntr_uncovered_bases = int(coverage_data.get("uncovered_bases", 0))
-                    percent_vntr_uncovered = float(
-                        coverage_data.get("percent_uncovered", 0)
-                    )
+                    percent_vntr_uncovered = float(coverage_data.get("percent_uncovered", 0))
                     logging.debug("All VNTR coverage statistics extracted successfully")
                     logging.debug(f"Mean VNTR coverage: {mean_vntr_coverage}")
                     logging.debug(f"Median VNTR coverage: {median_vntr_coverage}")
@@ -587,15 +553,11 @@ def generate_summary_report(
         }
         existing_cols = [col for col in columns_to_display if col in kestrel_df.columns]
         kestrel_df = kestrel_df[existing_cols]
-        kestrel_df = kestrel_df.rename(
-            columns={col: columns_to_display[col] for col in existing_cols}
-        )
+        kestrel_df = kestrel_df.rename(columns={col: columns_to_display[col] for col in existing_cols})
         # Sort the DataFrame by Depth Score in descending order if available.
         if "Depth Score" in kestrel_df.columns:
             try:
-                kestrel_df["Depth Score"] = pd.to_numeric(
-                    kestrel_df["Depth Score"], errors="coerce"
-                )
+                kestrel_df["Depth Score"] = pd.to_numeric(kestrel_df["Depth Score"], errors="coerce")
             except Exception as e:
                 logging.warning("Could not convert 'Depth Score' to numeric: %s", e)
             kestrel_df = kestrel_df.sort_values(by="Depth Score", ascending=False)
@@ -634,9 +596,7 @@ def generate_summary_report(
             "ALT",
             "Flag",
         ]
-        advntr_df = advntr_df[
-            [col for col in advntr_columns if col in advntr_df.columns]
-        ]
+        advntr_df = advntr_df[[col for col in advntr_columns if col in advntr_df.columns]]
         logging.debug("adVNTR data extracted from summary and formatted.")
     else:
         advntr_df = pd.DataFrame()
@@ -657,15 +617,11 @@ def generate_summary_report(
             config=config,
         )
     else:
-        logging.warning(
-            "BED file does not exist or not provided. Skipping IGV report generation."
-        )
+        logging.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None
 
     if igv_report_file and igv_report_file.exists():
-        igv_content, table_json, session_dictionary = extract_igv_content(
-            igv_report_file
-        )
+        igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
     else:
         logging.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
@@ -683,10 +639,7 @@ def generate_summary_report(
         logging.debug("Mean VNTR coverage is above the threshold.")
 
     # Check if percent_vntr_uncovered exceeds threshold
-    if (
-        percent_vntr_uncovered is not None
-        and percent_vntr_uncovered > percent_vntr_uncovered_threshold
-    ):
+    if percent_vntr_uncovered is not None and percent_vntr_uncovered > percent_vntr_uncovered_threshold:
         uncovered_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
         uncovered_color = "red"
         logging.debug(
@@ -725,9 +678,7 @@ def generate_summary_report(
             logging.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
         else:
             passed_filter_rate = None
-            logging.debug(
-                "Total reads before filtering is zero; passed filter rate set to None."
-            )
+            logging.debug("Total reads before filtering is zero; passed filter rate set to None.")
         sequencing_str = summary_fastp.get("sequencing", "")
         logging.debug("Sequencing setup: %s", sequencing_str)
 
@@ -772,14 +723,10 @@ def generate_summary_report(
                     "green",
                 )
 
-    dup_icon, dup_color = warn_icon(
-        duplication_rate, dup_rate_cutoff, higher_better=False
-    )
+    dup_icon, dup_color = warn_icon(duplication_rate, dup_rate_cutoff, higher_better=False)
     q20_icon, q20_color = warn_icon(q20_rate, q20_rate_cutoff, higher_better=True)
     q30_icon, q30_color = warn_icon(q30_rate, q30_rate_cutoff, higher_better=True)
-    pf_icon, pf_color = warn_icon(
-        passed_filter_rate, passed_filter_rate_cutoff, higher_better=True
-    )
+    pf_icon, pf_color = warn_icon(passed_filter_rate, passed_filter_rate_cutoff, higher_better=True)
 
     kestrel_html = kestrel_df.to_html(
         table_id="kestrel_table",
@@ -798,9 +745,7 @@ def generate_summary_report(
             logging.debug("adVNTR results converted to HTML.")
         else:
             advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
-            logging.debug(
-                "adVNTR was performed but no variants identified; adding negative message."
-            )
+            logging.debug("adVNTR was performed but no variants identified; adding negative message.")
     else:
         advntr_html = "<p>adVNTR genotyping was not performed.</p>"
         logging.debug("adVNTR was not performed; adding message to report.")
@@ -811,13 +756,9 @@ def generate_summary_report(
         if step.get("step") == "Cross-Match Variant Comparison":
             data = step.get("parsed_result", {}).get("data", [])
             if any(item.get("Match") == "Yes" for item in data):
-                cross_match_message = (
-                    "At least one match was found between Kestrel and adVNTR results."
-                )
+                cross_match_message = "At least one match was found between Kestrel and adVNTR results."
             else:
-                cross_match_message = (
-                    "No matches were found between Kestrel and adVNTR results."
-                )
+                cross_match_message = "No matches were found between Kestrel and adVNTR results."
             break
 
     env = Environment(loader=FileSystemLoader(template_dir))
@@ -854,36 +795,14 @@ def generate_summary_report(
         "alignment_pipeline": alignment_pipeline,
         "assembly_text": assembly_text,
         "assembly_contig": assembly_contig,
-        "mean_vntr_coverage": (
-            mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"
-        ),
-        "median_vntr_coverage": (
-            median_vntr_coverage
-            if median_vntr_coverage is not None
-            else "Not calculated"
-        ),
-        "stdev_vntr_coverage": (
-            stdev_vntr_coverage if stdev_vntr_coverage is not None else "Not calculated"
-        ),
-        "min_vntr_coverage": (
-            min_vntr_coverage if min_vntr_coverage is not None else "Not calculated"
-        ),
-        "max_vntr_coverage": (
-            max_vntr_coverage if max_vntr_coverage is not None else "Not calculated"
-        ),
-        "vntr_region_length": (
-            vntr_region_length if vntr_region_length is not None else "Not calculated"
-        ),
-        "vntr_uncovered_bases": (
-            vntr_uncovered_bases
-            if vntr_uncovered_bases is not None
-            else "Not calculated"
-        ),
-        "percent_vntr_uncovered": (
-            percent_vntr_uncovered
-            if percent_vntr_uncovered is not None
-            else "Not calculated"
-        ),
+        "mean_vntr_coverage": (mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"),
+        "median_vntr_coverage": (median_vntr_coverage if median_vntr_coverage is not None else "Not calculated"),
+        "stdev_vntr_coverage": (stdev_vntr_coverage if stdev_vntr_coverage is not None else "Not calculated"),
+        "min_vntr_coverage": (min_vntr_coverage if min_vntr_coverage is not None else "Not calculated"),
+        "max_vntr_coverage": (max_vntr_coverage if max_vntr_coverage is not None else "Not calculated"),
+        "vntr_region_length": (vntr_region_length if vntr_region_length is not None else "Not calculated"),
+        "vntr_uncovered_bases": (vntr_uncovered_bases if vntr_uncovered_bases is not None else "Not calculated"),
+        "percent_vntr_uncovered": (percent_vntr_uncovered if percent_vntr_uncovered is not None else "Not calculated"),
         "percent_vntr_uncovered_icon": uncovered_icon,
         "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
