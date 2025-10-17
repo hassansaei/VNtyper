@@ -22,12 +22,7 @@ import logging
 _chromosome_cache = {}
 
 
-def get_region_string(
-    bam_file: str,
-    reference_assembly: str,
-    region_type: str,
-    config: dict
-) -> str:
+def get_region_string(bam_file: str, reference_assembly: str, region_type: str, config: dict) -> str:
     """
     Build a region string dynamically based on BAM chromosome naming.
 
@@ -63,22 +58,17 @@ def get_region_string(
 
     # Resolve assembly alias to coordinate set
     coord_assembly = resolve_assembly_alias(reference_assembly)
-    logging.debug(
-        f"Resolved assembly '{reference_assembly}' to coord set '{coord_assembly}'"
-    )
+    logging.debug(f"Resolved assembly '{reference_assembly}' to coord set '{coord_assembly}'")
 
     # Get coordinates from config
     assemblies = config.get("bam_processing", {}).get("assemblies", {})
     if not assemblies:
-        raise KeyError(
-            "Configuration missing 'bam_processing' -> 'assemblies' section"
-        )
+        raise KeyError("Configuration missing 'bam_processing' -> 'assemblies' section")
 
     assembly_config = assemblies.get(coord_assembly)
     if not assembly_config:
         raise ValueError(
-            f"Assembly '{coord_assembly}' not found in configuration. "
-            f"Supported assemblies: {list(assemblies.keys())}"
+            f"Assembly '{coord_assembly}' not found in configuration. Supported assemblies: {list(assemblies.keys())}"
         )
 
     coordinates = assembly_config.get(region_type)
@@ -95,16 +85,11 @@ def get_region_string(
     cache_key = (bam_file, reference_assembly, chromosome_number)
     if cache_key in _chromosome_cache:
         chromosome_name = _chromosome_cache[cache_key]
-        logging.debug(
-            f"Using cached chromosome name: {chromosome_name} for {bam_file}"
-        )
+        logging.debug(f"Using cached chromosome name: {chromosome_name} for {bam_file}")
     else:
         # Get actual chromosome name from BAM
         chromosome_name = get_chromosome_name_from_bam(
-            bam_file=bam_file,
-            config=config,
-            chromosome_number=chromosome_number,
-            reference_assembly=reference_assembly
+            bam_file=bam_file, config=config, chromosome_number=chromosome_number, reference_assembly=reference_assembly
         )
         # Cache the result
         _chromosome_cache[cache_key] = chromosome_name
@@ -112,10 +97,7 @@ def get_region_string(
 
     # Build final region string
     region = build_region_string(chromosome_name, coordinates)
-    logging.debug(
-        f"Built region string: {region} for {region_type} "
-        f"in assembly {reference_assembly}"
-    )
+    logging.debug(f"Built region string: {region} for {region_type} in assembly {reference_assembly}")
 
     return region
 
@@ -143,26 +125,18 @@ def build_region_string(chromosome_name: str, coordinates: str) -> str:
         "NC_000001.10:155158000-155163000"
     """
     if not chromosome_name or not coordinates:
-        raise ValueError(
-            f"Invalid inputs: chromosome_name='{chromosome_name}', "
-            f"coordinates='{coordinates}'"
-        )
+        raise ValueError(f"Invalid inputs: chromosome_name='{chromosome_name}', coordinates='{coordinates}'")
 
     # Validate coordinate format
     if "-" not in coordinates:
-        raise ValueError(
-            f"Invalid coordinate format: '{coordinates}'. "
-            f"Expected format: 'start-end'"
-        )
+        raise ValueError(f"Invalid coordinate format: '{coordinates}'. Expected format: 'start-end'")
 
     try:
         start, end = coordinates.split("-")
         int(start)  # Validate as integer
-        int(end)    # Validate as integer
+        int(end)  # Validate as integer
     except ValueError as e:
-        raise ValueError(
-            f"Invalid coordinate values in '{coordinates}': {e}"
-        )
+        raise ValueError(f"Invalid coordinate values in '{coordinates}': {e}") from e
 
     return f"{chromosome_name}:{coordinates}"
 
@@ -171,51 +145,35 @@ def resolve_assembly_alias(reference_assembly: str) -> str:
     """
     Map assembly aliases to their canonical coordinate set names.
 
-    Mappings:
-    - hg19, GRCh37, hg19_nochr → hg19 coordinate space
-    - hg38, GRCh38, hg38_nochr → hg38 coordinate space
+    Uses the centralized reference registry to resolve assemblies to
+    their coordinate systems (GRCh37 or GRCh38).
 
     Args:
         reference_assembly (str): User-specified assembly name
 
     Returns:
-        str: Canonical assembly name for coordinate lookup ("hg19" or "hg38")
+        str: Coordinate system name ("GRCh37" or "GRCh38")
 
     Examples:
+        >>> resolve_assembly_alias("hg19")
+        "GRCh37"
         >>> resolve_assembly_alias("GRCh37")
-        "hg19"
-        >>> resolve_assembly_alias("hg19_nochr")
-        "hg19"
+        "GRCh37"
+        >>> resolve_assembly_alias("hg38")
+        "GRCh38"
         >>> resolve_assembly_alias("GRCh38")
-        "hg38"
-        >>> resolve_assembly_alias("hg38_nochr")
-        "hg38"
+        "GRCh38"
     """
-    assembly_map = {
-        "hg19": "hg19",
-        "GRCh37": "hg19",
-        "hg19_nochr": "hg19",
-        "hg38": "hg38",
-        "GRCh38": "hg38",
-        "hg38_nochr": "hg38"
-    }
+    from vntyper.scripts.reference_registry import get_coordinate_system
 
-    canonical = assembly_map.get(reference_assembly)
-    if canonical is None:
-        logging.warning(
-            f"Unknown assembly '{reference_assembly}', defaulting to 'hg19'"
-        )
-        return "hg19"
-
-    return canonical
+    try:
+        return get_coordinate_system(reference_assembly)
+    except ValueError as e:
+        logging.warning(f"Unknown assembly '{reference_assembly}', defaulting to 'GRCh37': {e}")
+        return "GRCh37"
 
 
-def get_region_string_with_fallback(
-    bam_file: str,
-    reference_assembly: str,
-    region_type: str,
-    config: dict
-) -> str:
+def get_region_string_with_fallback(bam_file: str, reference_assembly: str, region_type: str, config: dict) -> str:
     """
     Get region string with fallback to legacy config format.
 
@@ -237,24 +195,15 @@ def get_region_string_with_fallback(
     """
     try:
         # Normalize region_type to include "_coords" suffix
-        if not region_type.endswith("_coords"):
-            region_type_with_coords = f"{region_type}_coords"
-        else:
-            region_type_with_coords = region_type
+        region_type_with_coords = f"{region_type}_coords" if not region_type.endswith("_coords") else region_type
 
         # Try new dynamic resolution
         return get_region_string(
-            bam_file=bam_file,
-            reference_assembly=reference_assembly,
-            region_type=region_type_with_coords,
-            config=config
+            bam_file=bam_file, reference_assembly=reference_assembly, region_type=region_type_with_coords, config=config
         )
 
     except (KeyError, ValueError) as e:
-        logging.warning(
-            f"Dynamic region resolution failed: {e}. "
-            f"Falling back to legacy config lookup."
-        )
+        logging.warning(f"Dynamic region resolution failed: {e}. Falling back to legacy config lookup.")
 
         # Fall back to old method: look up hardcoded region in config
         region_key = f"{region_type.replace('_coords', '')}_{reference_assembly}"
@@ -265,11 +214,9 @@ def get_region_string_with_fallback(
                 f"Region not found in configuration. "
                 f"Tried key: '{region_key}'. "
                 f"Neither new nor legacy format available."
-            )
+            ) from e
 
-        logging.info(
-            f"Using legacy region format: {region_key} = {region}"
-        )
+        logging.info(f"Using legacy region format: {region_key} = {region}")
         return region
 
 
@@ -298,10 +245,7 @@ def get_cache_info() -> dict:
 
     Example:
         >>> info = get_cache_info()
-        >>> print(info['size'])
+        >>> print(info["size"])
         3
     """
-    return {
-        "size": len(_chromosome_cache),
-        "entries": list(_chromosome_cache.keys())
-    }
+    return {"size": len(_chromosome_cache), "entries": list(_chromosome_cache.keys())}

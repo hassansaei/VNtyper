@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 # vntyper/scripts/install_references.py
 
+import gzip
+import hashlib
 import json
 import logging
-import sys
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-from urllib.request import urlretrieve
-import tarfile
-import zipfile
-import gzip
 import shutil
 import subprocess
-import hashlib
+import sys
+import tarfile
+import zipfile
+from pathlib import Path
+from typing import Any, Optional
+from urllib.request import urlretrieve
 
 
-def load_install_config(config_path: Path) -> Dict[str, Any]:
+def load_install_config(config_path: Path) -> dict[str, Any]:
     """
     Load the installation configuration from a JSON file.
 
@@ -111,14 +111,10 @@ def execute_index_command(index_command: str, fasta_path: Path):
     logging.info(f"Executing indexing command: {command}")
     try:
         args = command.split()
-        subprocess.run(
-            args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        subprocess.run(args, check=True, capture_output=True)
         logging.info(f"Successfully executed: {command}")
     except subprocess.CalledProcessError as e:
-        logging.error(
-            f"Indexing command failed for {fasta_path}: {e.stderr.decode().strip()}"
-        )
+        logging.error(f"Indexing command failed for {fasta_path}: {e.stderr.decode().strip()}")
         sys.exit(1)
 
 
@@ -138,12 +134,7 @@ def check_executable_available(executable: str) -> bool:
         bool: True if executable is available, False otherwise.
     """
     try:
-        result = subprocess.run(
-            ["which", executable],
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        result = subprocess.run(["which", executable], capture_output=True, text=True, check=False)
         if result.returncode == 0:
             logging.debug(f"Found executable: {executable} at {result.stdout.strip()}")
             return True
@@ -155,7 +146,7 @@ def check_executable_available(executable: str) -> bool:
         return False
 
 
-def get_enabled_aligners(aligner_config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def get_enabled_aligners(aligner_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
     Get dictionary of enabled aligners from configuration.
 
@@ -180,7 +171,7 @@ def get_enabled_aligners(aligner_config: Dict[str, Any]) -> Dict[str, Dict[str, 
     return enabled
 
 
-def detect_index_conflicts(aligners: Dict[str, Dict[str, Any]]) -> List[str]:
+def detect_index_conflicts(aligners: dict[str, dict[str, Any]]) -> list[str]:
     """
     Detect potential conflicts between aligner index file extensions.
 
@@ -208,11 +199,7 @@ def detect_index_conflicts(aligners: Dict[str, Dict[str, Any]]) -> List[str]:
     return warnings
 
 
-def check_index_exists(
-    ref_path: Path,
-    aligner_name: str,
-    aligner_info: Dict[str, Any]
-) -> bool:
+def check_index_exists(ref_path: Path, aligner_name: str, aligner_info: dict[str, Any]) -> bool:
     """
     Check if all required index files exist for an aligner.
 
@@ -231,17 +218,11 @@ def check_index_exists(
         index_dir = ref_path.parent / f"{ref_path.stem}_{aligner_name}_index"
         if not index_dir.exists():
             return False
-        for index_file in index_files:
-            if not (index_dir / index_file).exists():
-                return False
-        return True
+        return all((index_dir / index_file).exists() for index_file in index_files)
     elif aligner_info.get("requires_index_base", False):
         # Bowtie2-style: check for index base + extensions
         index_base = ref_path.parent / f"{ref_path.stem}_{aligner_name}"
-        for ext in index_files:
-            if not Path(str(index_base) + ext).exists():
-                return False
-        return True
+        return all(Path(str(index_base) + ext).exists() for ext in index_files)
     else:
         # Standard: check for ref_path + extension
         for ext in index_files:
@@ -252,12 +233,7 @@ def check_index_exists(
         return True
 
 
-def execute_aligner_index(
-    ref_path: Path,
-    aligner_name: str,
-    aligner_info: Dict[str, Any],
-    threads: int = 4
-) -> bool:
+def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[str, Any], threads: int = 4) -> bool:
     """
     Execute indexing for a specific aligner.
 
@@ -278,7 +254,7 @@ def execute_aligner_index(
     # Prepare command parameters
     params = {
         "ref_path": str(ref_path),
-        "threads": threads if aligner_info.get("supports_threading", False) else aligner_info.get("threads_default", 4)
+        "threads": threads if aligner_info.get("supports_threading", False) else aligner_info.get("threads_default", 4),
     }
 
     # Handle special cases
@@ -304,29 +280,17 @@ def execute_aligner_index(
     logging.debug(f"  Command: {command}")
 
     try:
-        subprocess.run(
-            command,
-            shell=True,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         logging.info(f"  ✓ {aligner_name} indexing complete")
         return True
     except subprocess.CalledProcessError as e:
-        logging.error(
-            f"  ✗ {aligner_name} indexing failed: {e.stderr.strip()}"
-        )
+        logging.error(f"  ✗ {aligner_name} indexing failed: {e.stderr.strip()}")
         return False
 
 
 def index_reference_with_aligners(
-    ref_path: Path,
-    aligners: Dict[str, Dict[str, Any]],
-    threads: int = 4,
-    force_reindex: bool = False
-) -> Dict[str, bool]:
+    ref_path: Path, aligners: dict[str, dict[str, Any]], threads: int = 4, force_reindex: bool = False
+) -> dict[str, bool]:
     """
     Index a reference file with multiple aligners.
 
@@ -358,7 +322,7 @@ def index_reference_with_aligners(
     return results
 
 
-def update_config(config_path: Path, references: Dict[str, Path]):
+def update_config(config_path: Path, references: dict[str, Path]):
     """
     Update the main config.json with paths to the downloaded references.
 
@@ -370,9 +334,7 @@ def update_config(config_path: Path, references: Dict[str, Path]):
         SystemExit: If updating the config fails.
     """
     if not config_path.exists():
-        logging.error(
-            f"Main config file {config_path} does not exist. Cannot update references."
-        )
+        logging.error(f"Main config file {config_path} does not exist. Cannot update references.")
         sys.exit(1)
 
     try:
@@ -401,12 +363,12 @@ def update_config(config_path: Path, references: Dict[str, Path]):
 
 
 def process_ucsc_references(
-    ucsc_refs: Dict[str, Dict[str, str]],
+    ucsc_refs: dict[str, dict[str, str]],
     output_dir: Path,
     bwa_path: str,
     skip_indexing: bool,
-    md5_dict: Dict[str, str],
-    aligners: Optional[Dict[str, Dict[str, Any]]] = None,
+    md5_dict: dict[str, str],
+    aligners: Optional[dict[str, dict[str, Any]]] = None,
     index_threads: int = 4,
 ):
     """
@@ -427,9 +389,7 @@ def process_ucsc_references(
         index_command = ref_info.get("index_command", None)
 
         if not url or not ref_info.get("target_path"):
-            logging.warning(
-                f"Missing URL or target_path for UCSC reference {ref_name}. Skipping."
-            )
+            logging.warning(f"Missing URL or target_path for UCSC reference {ref_name}. Skipping.")
             continue
 
         download_file(url, target_path)
@@ -449,18 +409,13 @@ def process_ucsc_references(
         elif target_path.suffix == ".gz":
             try:
                 output_path = target_path.with_suffix("")
-                with gzip.open(target_path, "rb") as f_in:
-                    with open(output_path, "wb") as f_out:
-                        shutil.copyfileobj(f_in, f_out)
-                logging.info(
-                    f"Successfully extracted {target_path.name} to {output_path.name}"
-                )
+                with gzip.open(target_path, "rb") as f_in, open(output_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                logging.info(f"Successfully extracted {target_path.name} to {output_path.name}")
             except Exception as e:
                 logging.error(f"Failed to extract {target_path}: {e}")
                 sys.exit(1)
-        elif (
-            target_path.suffixes[-2:] == [".tar", ".gz"] or target_path.suffix == ".tgz"
-        ):
+        elif target_path.suffixes[-2:] == [".tar", ".gz"] or target_path.suffix == ".tgz":
             try:
                 with tarfile.open(target_path, "r:gz") as tar:
                     tar.extractall(path=target_path)
@@ -469,9 +424,7 @@ def process_ucsc_references(
                 logging.error(f"Failed to extract {target_path}: {e}")
                 sys.exit(1)
         else:
-            logging.warning(
-                f"Unsupported archive format for {target_path}. Skipping extraction."
-            )
+            logging.warning(f"Unsupported archive format for {target_path}. Skipping extraction.")
 
         # Multi-aligner indexing
         if not skip_indexing:
@@ -479,25 +432,21 @@ def process_ucsc_references(
 
             if aligners:
                 # Use multi-aligner indexing
-                index_reference_with_aligners(
-                    output_path, aligners, threads=index_threads, force_reindex=False
-                )
+                index_reference_with_aligners(output_path, aligners, threads=index_threads, force_reindex=False)
             elif index_command:
                 # Fall back to legacy single indexing command
-                logging.warning(
-                    f"No aligners configured, using legacy index_command for {output_path.name}"
-                )
+                logging.warning(f"No aligners configured, using legacy index_command for {output_path.name}")
                 execute_index_command(index_command, output_path)
         elif skip_indexing:
             logging.info(f"Skipping indexing for {target_path.with_suffix('')}")
 
 
 def process_vntyper_references(
-    vntyper_refs: Dict[str, Dict[str, str]],
+    vntyper_refs: dict[str, dict[str, str]],
     output_dir: Path,
     bwa_path: str,
     skip_indexing: bool,
-    md5_dict: Dict[str, str],
+    md5_dict: dict[str, str],
 ):
     """
     Process VNtyper references by downloading and extracting.
@@ -516,9 +465,7 @@ def process_vntyper_references(
         index_command = ref_info.get("index_command", None)
 
         if not url or not ref_info.get("target_path"):
-            logging.warning(
-                f"Missing URL or target_path for VNtyper reference {ref_name}. Skipping."
-            )
+            logging.warning(f"Missing URL or target_path for VNtyper reference {ref_name}. Skipping.")
             continue
 
         download_file(url, target_path)
@@ -538,10 +485,7 @@ def process_vntyper_references(
                 except Exception as e:
                     logging.error(f"Failed to extract {target_path}: {e}")
                     sys.exit(1)
-            elif (
-                target_path.suffixes[-2:] == [".tar", ".gz"]
-                or target_path.suffix == ".tgz"
-            ):
+            elif target_path.suffixes[-2:] == [".tar", ".gz"] or target_path.suffix == ".tgz":
                 try:
                     with tarfile.open(target_path, "r:gz") as tar:
                         tar.extractall(path=extract_dir)
@@ -550,9 +494,7 @@ def process_vntyper_references(
                     logging.error(f"Failed to extract {target_path}: {e}")
                     sys.exit(1)
             else:
-                logging.warning(
-                    f"Unsupported archive format for {target_path}. Skipping extraction."
-                )
+                logging.warning(f"Unsupported archive format for {target_path}. Skipping extraction.")
 
         if index_command and not skip_indexing:
             execute_index_command(index_command, target_path)
@@ -561,10 +503,10 @@ def process_vntyper_references(
 
 
 def process_own_repository_references(
-    own_repo_refs: Dict[str, Any],
+    own_repo_refs: dict[str, Any],
     output_dir: Path,
     skip_indexing: bool,
-    md5_dict: Dict[str, str],
+    md5_dict: dict[str, str],
 ):
     """
     Process own repository references by downloading specific FASTA files.
@@ -575,16 +517,14 @@ def process_own_repository_references(
         skip_indexing (bool): Whether to skip the indexing step.
         md5_dict (dict): Dictionary to store MD5 checksums.
     """
-    raw_files: List[Dict[str, str]] = own_repo_refs.get("raw_files", [])
+    raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
     for file_info in raw_files:
         url = file_info.get("url")
         target_path = output_dir / file_info.get("target_path")
         index_command = file_info.get("index_command", None)
 
         if not url or not file_info.get("target_path"):
-            logging.warning(
-                "Missing URL or target_path for own repository raw file. Skipping."
-            )
+            logging.warning("Missing URL or target_path for own repository raw file. Skipping.")
             continue
 
         download_file(url, target_path)
@@ -599,7 +539,7 @@ def process_own_repository_references(
             logging.info(f"Skipping indexing for {target_path}")
 
 
-def write_md5_checksums(md5_dict: Dict[str, str], output_dir: Path):
+def write_md5_checksums(md5_dict: dict[str, str], output_dir: Path):
     """
     Write the MD5 checksums to a file in the output directory.
 
@@ -655,8 +595,8 @@ def main(
     config_path: Optional[Path] = None,
     skip_indexing: bool = False,
     index_threads: int = 4,
-    aligners_to_use: Optional[List[str]] = None,
-    references_to_process: Optional[List[str]] = None,
+    aligners_to_use: Optional[list[str]] = None,
+    references_to_process: Optional[list[str]] = None,
 ):
     """
     Main function to execute the install_references process.
@@ -676,6 +616,7 @@ def main(
 
     ucsc_refs = install_config.get("ucsc_references", {})
     ncbi_refs = install_config.get("ncbi_references", {})
+    ensembl_refs = install_config.get("ensembl_references", {})
     vntyper_refs = install_config.get("vntyper_references", {})
     own_repo_refs = install_config.get("own_repository_references", {})
     bwa_path = install_config.get("bwa_path", "bwa")  # Default to 'bwa'
@@ -697,15 +638,15 @@ def main(
         references_to_process = ["hg19", "hg38"]
         logging.info("No references specified, using default: hg19, hg38")
 
-    all_available_refs = set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(vntyper_refs.keys())
+    all_available_refs = (
+        set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
+    )
     requested_refs = set(references_to_process)
     found_refs = requested_refs & all_available_refs
     missing_refs = requested_refs - all_available_refs
 
     if missing_refs:
-        logging.warning(
-            f"Requested references not found in config: {', '.join(sorted(missing_refs))}"
-        )
+        logging.warning(f"Requested references not found in config: {', '.join(sorted(missing_refs))}")
         logging.warning(f"Available references: {', '.join(sorted(all_available_refs))}")
 
     if not found_refs:
@@ -716,14 +657,15 @@ def main(
 
     ucsc_refs = {k: v for k, v in ucsc_refs.items() if k in references_to_process}
     ncbi_refs = {k: v for k, v in ncbi_refs.items() if k in references_to_process}
+    ensembl_refs = {k: v for k, v in ensembl_refs.items() if k in references_to_process}
     vntyper_refs = {k: v for k, v in vntyper_refs.items() if k in references_to_process}
 
     # Initialize aligners
     enabled_aligners = {}
     if not skip_indexing and aligner_config:
-        logging.info("="*80)
+        logging.info("=" * 80)
         logging.info("ALIGNER CONFIGURATION")
-        logging.info("="*80)
+        logging.info("=" * 80)
         logging.info("Checking available aligners:")
 
         # Get enabled aligners
@@ -735,9 +677,7 @@ def main(
                 if aligner_name in all_enabled:
                     enabled_aligners[aligner_name] = all_enabled[aligner_name]
                 elif aligner_name in aligner_config:
-                    logging.warning(
-                        f"  ✗ {aligner_name} was specified but is not available or not enabled"
-                    )
+                    logging.warning(f"  ✗ {aligner_name} was specified but is not available or not enabled")
                 else:
                     logging.error(f"  ✗ Unknown aligner: {aligner_name}")
         else:
@@ -756,7 +696,7 @@ def main(
             )
         else:
             logging.info(f"\nWill use {len(enabled_aligners)} aligner(s) for indexing:")
-            for name in enabled_aligners.keys():
+            for name in enabled_aligners:
                 logging.info(f"  • {name}")
 
             # Detect index file conflicts
@@ -765,13 +705,11 @@ def main(
                 logging.warning("\n⚠ Index file conflicts detected:")
                 for warning in conflicts:
                     logging.warning(f"  • {warning}")
-                logging.warning(
-                    "  These conflicts may cause issues if aligners overwrite each other's index files."
-                )
+                logging.warning("  These conflicts may cause issues if aligners overwrite each other's index files.")
             else:
                 logging.info("  ✓ No index file conflicts detected")
 
-        logging.info("="*80)
+        logging.info("=" * 80)
         logging.info("")
 
     md5_dict = {}
@@ -780,31 +718,50 @@ def main(
     if ucsc_refs:
         logging.info("Processing UCSC references...")
         process_ucsc_references(
-            ucsc_refs, output_dir, bwa_path, skip_indexing, md5_dict,
-            aligners=enabled_aligners, index_threads=index_threads
+            ucsc_refs,
+            output_dir,
+            bwa_path,
+            skip_indexing,
+            md5_dict,
+            aligners=enabled_aligners,
+            index_threads=index_threads,
         )
 
     # Process NCBI references
     if ncbi_refs:
         logging.info("Processing NCBI references...")
         process_ucsc_references(
-            ncbi_refs, output_dir, bwa_path, skip_indexing, md5_dict,
-            aligners=enabled_aligners, index_threads=index_threads
+            ncbi_refs,
+            output_dir,
+            bwa_path,
+            skip_indexing,
+            md5_dict,
+            aligners=enabled_aligners,
+            index_threads=index_threads,
+        )
+
+    # Process ENSEMBL references
+    if ensembl_refs:
+        logging.info("Processing ENSEMBL references...")
+        process_ucsc_references(
+            ensembl_refs,
+            output_dir,
+            bwa_path,
+            skip_indexing,
+            md5_dict,
+            aligners=enabled_aligners,
+            index_threads=index_threads,
         )
 
     # Process VNtyper references
     if vntyper_refs:
         logging.info("Processing VNtyper references...")
-        process_vntyper_references(
-            vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict
-        )
+        process_vntyper_references(vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict)
 
     # Process own repository references
     if own_repo_refs:
         logging.info("Processing own repository references...")
-        process_own_repository_references(
-            own_repo_refs, output_dir, skip_indexing, md5_dict
-        )
+        process_own_repository_references(own_repo_refs, output_dir, skip_indexing, md5_dict)
 
     # Write MD5 checksums to file
     if md5_dict:
@@ -824,13 +781,18 @@ def main(
             ref_path = output_dir / ref_info.get("target_path")
             updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
 
+        # Collect all references from ENSEMBL
+        for ref_key, ref_info in ensembl_refs.items():
+            ref_path = output_dir / ref_info.get("target_path")
+            updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
+
         # Collect all references from VNtyper
         for ref_key, ref_info in vntyper_refs.items():
             ref_path = output_dir / ref_info.get("target_path")
             updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
 
         # Collect references from own repository
-        raw_files: List[Dict[str, str]] = own_repo_refs.get("raw_files", [])
+        raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
         for file_info in raw_files:
             ref_name = Path(file_info.get("target_path")).stem
             ref_path = output_dir / file_info.get("target_path")
@@ -839,9 +801,7 @@ def main(
         update_config(config_path, updated_references)
     else:
         if config_path:
-            logging.warning(
-                f"Config file {config_path} does not exist. Skipping config update."
-            )
+            logging.warning(f"Config file {config_path} does not exist. Skipping config update.")
         else:
             logging.info("No config_path provided. Skipping config update.")
 
@@ -873,7 +833,7 @@ Examples:
 
   # Skip indexing
   python install_references.py -d reference/ --skip-indexing
-        """
+        """,
     )
     parser.add_argument(
         "-d",
@@ -907,23 +867,16 @@ Examples:
         default=None,
         metavar="ALIGNER",
         help="Specific aligners to use (e.g., bwa bwa-mem2 minimap2). "
-             "If not specified, only BWA will be used (default).",
+        "If not specified, only BWA will be used (default).",
     )
     parser.add_argument(
         "--references",
         nargs="+",
         default=None,
         metavar="REFERENCE",
-        help="Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). "
-             "Default: hg19 hg38 (UCSC references only).",
+        help="Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl). "
+        "Default: hg19 hg38 (UCSC references only).",
     )
 
     args = parser.parse_args()
-    main(
-        args.output_dir,
-        args.config_path,
-        args.skip_indexing,
-        args.threads,
-        args.aligners,
-        args.references
-    )
+    main(args.output_dir, args.config_path, args.skip_indexing, args.threads, args.aligners, args.references)

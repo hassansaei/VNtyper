@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # vntyper/scripts/alignment_processing.py
 
+import importlib.resources as pkg_resources
+import json
 import logging
 from pathlib import Path
 from typing import Optional
 
-import json
-import importlib.resources as pkg_resources
 from vntyper.scripts.utils import run_command
 
 
@@ -40,10 +40,7 @@ def check_bwa_index(reference: Path) -> bool:
 
     if missing_files:
         # Log a warning with the list of missing index files
-        logging.warning(
-            f"Missing BWA index files for reference {reference}: "
-            f"{[str(f) for f in missing_files]}"
-        )
+        logging.warning(f"Missing BWA index files for reference {reference}: {[str(f) for f in missing_files]}")
         return False
     return True
 
@@ -114,8 +111,7 @@ def align_and_sort_fastq(
 
     if not sorted_bam_out.exists():
         logging.error(
-            f"Sorted BAM file {sorted_bam_out} not created. "
-            f"BWA alignment or Samtools sorting might have failed."
+            f"Sorted BAM file {sorted_bam_out} not created. BWA alignment or Samtools sorting might have failed."
         )
         return None
 
@@ -131,10 +127,7 @@ def align_and_sort_fastq(
 
     index_file = sorted_bam_out.with_suffix(".bam.bai")
     if not index_file.exists():
-        logging.error(
-            f"BAM index file {index_file} not created. "
-            f"Samtools indexing might have failed."
-        )
+        logging.error(f"BAM index file {index_file} not created. Samtools indexing might have failed.")
         return None
 
     logging.info("Samtools indexing completed successfully.")

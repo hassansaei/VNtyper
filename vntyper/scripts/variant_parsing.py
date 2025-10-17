@@ -70,9 +70,7 @@ def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def filter_by_alt_values_and_finalize(
-    df: pd.DataFrame, kestrel_config: dict
-) -> pd.DataFrame:
+def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) -> pd.DataFrame:
     """
     Applies final filtering rules based on ALT values, e.g., removing certain
     ALTs or requiring a minimal Depth_Score if ALT='GG'.

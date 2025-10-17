@@ -30,30 +30,30 @@ from datetime import datetime
 
 import pandas as pd
 
+from vntyper.scripts.confidence_assignment import (
+    calculate_depth_score_and_assign_confidence,
+)
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
+    motif_correction_and_annotation,  # Moved from the main script
     preprocessing_deletion,
     preprocessing_insertion,
-    motif_correction_and_annotation,  # Moved from the main script
+)
+from vntyper.scripts.scoring import (
+    extract_frameshifts,
+    split_depth_and_calculate_frame_score,
+    split_frame_score,
 )
 from vntyper.scripts.utils import load_config, run_command
-from vntyper.version import __version__ as VERSION
 
 # Modularized functions for variant parsing/scoring/confidence
 from vntyper.scripts.variant_parsing import (
-    read_vcf_without_comments,
     filter_by_alt_values_and_finalize,
+    read_vcf_without_comments,
 )
-from vntyper.scripts.scoring import (
-    split_depth_and_calculate_frame_score,
-    split_frame_score,
-    extract_frameshifts,
-)
-from vntyper.scripts.confidence_assignment import (
-    calculate_depth_score_and_assign_confidence,
-)
+from vntyper.version import __version__ as VERSION
 
 
 def load_kestrel_config(config_path=None):
@@ -289,16 +289,10 @@ def run_kestrel(
 
             # Actually run the Kestrel command
             if not run_command(kmer_command, log_file, critical=True):
-                logging.error(
-                    f"Kestrel failed for k-mer size {kmer_size}. "
-                    f"Check {log_file} for details."
-                )
+                logging.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
                 raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
 
-            logging.info(
-                f"Mapping-free genotyping of MUC1-VNTR "
-                f"with k-mer size {kmer_size} done!"
-            )
+            logging.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
             # Now that Kestrel completed, confirm the VCF is present
             if vcf_path.is_file():
@@ -307,15 +301,11 @@ def run_kestrel(
                 convert_sam_to_bam_and_index(sam_file, output_dir)
 
                 # Postprocess final output
-                process_kestrel_output(
-                    output_dir, vcf_path, reference_vntr, kestrel_config, config
-                )
+                process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
                 break  # Stop after the first successful k-mer size
 
 
-def process_kestrel_output(
-    output_dir, vcf_path, reference_vntr, kestrel_config, config
-):
+def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config):
     """
     Processes the Kestrel output VCF files after Kestrel finishes.
 
@@ -348,7 +338,7 @@ def process_kestrel_output(
 
     # Step 2) Fix the file format line from "VCF4.2" -> "VCFv4.2"
     fixed_indel_vcf = indel_vcf + ".fixed"
-    with open(indel_vcf, "r") as fin, open(fixed_indel_vcf, "w") as fout:
+    with open(indel_vcf) as fin, open(fixed_indel_vcf, "w") as fout:
         for line in fin:
             if line.startswith("##fileformat=VCF4.2"):
                 fout.write("##fileformat=VCFv4.2\n")
@@ -384,16 +374,8 @@ def process_kestrel_output(
     muc1_ref = load_muc1_reference(reference_vntr)
 
     # Preprocess insertion/deletion
-    insertion_df = (
-        preprocessing_insertion(vcf_insertion, muc1_ref)
-        if not vcf_insertion.empty
-        else pd.DataFrame()
-    )
-    deletion_df = (
-        preprocessing_deletion(vcf_deletion, muc1_ref)
-        if not vcf_deletion.empty
-        else pd.DataFrame()
-    )
+    insertion_df = preprocessing_insertion(vcf_insertion, muc1_ref) if not vcf_insertion.empty else pd.DataFrame()
+    deletion_df = preprocessing_deletion(vcf_deletion, muc1_ref) if not vcf_deletion.empty else pd.DataFrame()
 
     combined_df = pd.concat([insertion_df, deletion_df], axis=0)
     # Sort deterministically
@@ -409,9 +391,7 @@ def process_kestrel_output(
     merged_motifs = load_additional_motifs(config)
 
     # Perform frame scoring, depth scoring, confidence assignment, etc.
-    processed_df = process_kmer_results(
-        combined_df, merged_motifs, output_dir, kestrel_config
-    )
+    processed_df = process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
 
     if processed_df.empty:
         logging.warning("Final processed DataFrame is empty. Writing empty result.")
@@ -425,9 +405,7 @@ def process_kestrel_output(
     if flagging_rules or duplicates_config.get("enabled", False):
         from vntyper.scripts.flagging import add_flags
 
-        processed_df = add_flags(
-            processed_df, flagging_rules, duplicates_config=duplicates_config
-        )
+        processed_df = add_flags(processed_df, flagging_rules, duplicates_config=duplicates_config)
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
@@ -563,10 +541,7 @@ def generate_bed_file(df, output_dir):
     """
     # We only generate a BED if columns 'Motif_fasta' & 'POS_fasta' exist
     if "Motif_fasta" not in df.columns or "POS_fasta" not in df.columns:
-        logging.warning(
-            "Missing 'Motif_fasta' or 'POS_fasta' in DataFrame. "
-            "Skipping BED file generation."
-        )
+        logging.warning("Missing 'Motif_fasta' or 'POS_fasta' in DataFrame. Skipping BED file generation.")
         return None
 
     if df.empty:

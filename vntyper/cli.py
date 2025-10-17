@@ -12,12 +12,15 @@ from pathlib import Path
 from vntyper.scripts.cohort_summary import aggregate_cohort
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.install_references import main as install_references_main
-from vntyper.scripts.pipeline import run_pipeline
-from vntyper.scripts.utils import setup_logging
-from vntyper.version import __version__ as VERSION
 
 # Import the online mode function
 from vntyper.scripts.online_mode import run_online_mode
+from vntyper.scripts.pipeline import run_pipeline
+
+# Import reference registry for assembly choices
+from vntyper.scripts.reference_registry import list_assemblies
+from vntyper.scripts.utils import setup_logging
+from vntyper.version import __version__ as VERSION
 
 
 def load_config(config_path=None):
@@ -31,7 +34,7 @@ def load_config(config_path=None):
         dict: The loaded configuration dictionary.
     """
     if config_path is not None and Path(config_path).exists():
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         logging.debug(f"Loaded configuration from {config_path}")
     else:
@@ -62,20 +65,13 @@ def main():
         help="Set the logging level (e.g., DEBUG, INFO, WARNING, ERROR)",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
-    parent_parser.add_argument(
-        "-f", "--log-file", help="Set the log output file (default is stdout)"
-    )
-    parent_parser.add_argument(
-        "-v", "--version", action="version", version=f"%(prog)s {VERSION}"
-    )
+    parent_parser.add_argument("-f", "--log-file", help="Set the log output file (default is stdout)")
+    parent_parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {VERSION}")
     parent_parser.add_argument(
         "--config-path",
         type=Path,
         default=None,
-        help=(
-            "Path to the configuration file (config.json). "
-            "If not provided, the default config will be used."
-        ),
+        help=("Path to the configuration file (config.json). If not provided, the default config will be used."),
         required=False,
     )
 
@@ -105,23 +101,18 @@ def main():
         default=[],
         help="Optional extra modules to include (e.g., advntr, shark). Can be repeated multiple times.",
     )
-    parser_pipeline.add_argument(
-        "--fastq1", type=str, help="Path to the first FASTQ file."
-    )
-    parser_pipeline.add_argument(
-        "--fastq2", type=str, help="Path to the second FASTQ file."
-    )
+    parser_pipeline.add_argument("--fastq1", type=str, help="Path to the first FASTQ file.")
+    parser_pipeline.add_argument("--fastq2", type=str, help="Path to the second FASTQ file.")
     parser_pipeline.add_argument("--bam", type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument("--cram", type=str, help="Path to the CRAM file.")
-    parser_pipeline.add_argument(
-        "--threads", type=int, default=None, help="Number of threads to use."
-    )
+    parser_pipeline.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
     parser_pipeline.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
+        choices=list_assemblies(include_deprecated=False),  # Only canonical names
         default=None,
-        help="Specify the reference assembly used for the input BAM/CRAM file alignment.",
+        help="Reference assembly for BAM/CRAM alignment. "
+        "Options: hg19, hg38 (UCSC), hg19_ncbi, hg38_ncbi (NCBI RefSeq), hg19_ensembl, hg38_ensembl (ENSEMBL).",
     )
     parser_pipeline.add_argument(
         "--fast-mode",
@@ -162,9 +153,7 @@ def main():
         "--sample-name",
         type=str,
         default=None,
-        help=(
-            "Set the sample name for labeling results. If not provided, defaults to input BAM or FASTQ name."
-        ),
+        help=("Set the sample name for labeling results. If not provided, defaults to input BAM or FASTQ name."),
     )
     region_group = parser_pipeline.add_mutually_exclusive_group()
     region_group.add_argument(
@@ -213,15 +202,9 @@ def main():
         default=None,
         help="If provided, search this directory (and its subdirs) for standard pipeline output filenames.",
     )
-    parser_report.add_argument(
-        "--report-file", type=str, default=None, help="Name of the output report file."
-    )
-    parser_report.add_argument(
-        "--bed-file", type=Path, help="Path to the BED file for IGV reports."
-    )
-    parser_report.add_argument(
-        "--bam-file", type=Path, help="Path to the BAM file for IGV reports."
-    )
+    parser_report.add_argument("--report-file", type=str, default=None, help="Name of the output report file.")
+    parser_report.add_argument("--bed-file", type=Path, help="Path to the BED file for IGV reports.")
+    parser_report.add_argument("--bam-file", type=Path, help="Path to the BAM file for IGV reports.")
     parser_report.add_argument(
         "--reference-fasta",
         type=Path,
@@ -301,9 +284,7 @@ def main():
         required=True,
         help="Directory where references will be installed.",
     )
-    parser_install.add_argument(
-        "--skip-indexing", action="store_true", help="Skip the indexing step."
-    )
+    parser_install.add_argument("--skip-indexing", action="store_true", help="Skip the indexing step.")
     parser_install.add_argument(
         "-t",
         "--threads",
@@ -317,8 +298,7 @@ def main():
         default=None,
         metavar="ALIGNER",
         help=(
-            "Specific aligners to use (e.g., bwa bwa-mem2 minimap2). "
-            "If not specified, only BWA will be used (default)."
+            "Specific aligners to use (e.g., bwa bwa-mem2 minimap2). If not specified, only BWA will be used (default)."
         ),
     )
     parser_install.add_argument(
@@ -327,22 +307,17 @@ def main():
         default=None,
         metavar="REFERENCE",
         help=(
-            "Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). "
-            "Default: hg19 hg38 (UCSC references only)."
+            "Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). Default: hg19 hg38 (UCSC references only)."
         ),
     )
 
     # Subcommand: online
     parser_online = subparsers.add_parser(
         "online",
-        help=(
-            "Subset the BAM and submit it to an online vntyper instance, then retrieve results."
-        ),
+        help=("Subset the BAM and submit it to an online vntyper instance, then retrieve results."),
         conflict_handler="resolve",
     )
-    parser_online.add_argument(
-        "--bam", type=str, required=True, help="Path to the input BAM file."
-    )
+    parser_online.add_argument("--bam", type=str, required=True, help="Path to the input BAM file.")
     parser_online.add_argument(
         "-o",
         "--output-dir",
@@ -353,13 +328,11 @@ def main():
     parser_online.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
+        choices=list_assemblies(include_deprecated=False),  # Only canonical names
         default=None,
-        help="Reference assembly used.",
+        help="Reference assembly used (hg19, hg38, GRCh37, GRCh38, hg19_ncbi, hg38_ncbi, hg19_ensembl, hg38_ensembl).",
     )
-    parser_online.add_argument(
-        "--threads", type=int, default=None, help="Number of threads to use."
-    )
+    parser_online.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
     parser_online.add_argument(
         "--email",
         type=str,
@@ -395,9 +368,7 @@ def main():
     # Load the main configuration based on the provided config path
     try:
         # IMPORTANT: Use `initial_config` as fallback when `--config-path` is not provided
-        config = (
-            load_config(args.config_path) if args.config_path else load_config(None)
-        )
+        config = load_config(args.config_path) if args.config_path else load_config(None)
         logging.debug("Configuration loaded successfully.")
     except Exception as exc:
         logging.critical(f"Failed to load configuration: {exc}")
@@ -438,22 +409,14 @@ def main():
 
     # Setup logging now (only once) with the determined log level and log file
     setup_logging(log_level=log_level_value, log_file=log_file_str)
-    logging.debug(
-        f"Logging has been set up with level {log_level_value} and log_file {log_file_str}"
-    )
+    logging.debug(f"Logging has been set up with level {log_level_value} and log_file {log_file_str}")
 
     # Log current logging handlers and their levels
     for handler in logging.getLogger().handlers:
         handler_type = handler.__class__.__name__
         handler_level = logging.getLevelName(handler.level)
-        handler_file = (
-            getattr(handler, "baseFilename", "N/A")
-            if isinstance(handler, logging.FileHandler)
-            else "N/A"
-        )
-        logging.debug(
-            f"Handler: {handler_type}, Level: {handler_level}, File: {handler_file}"
-        )
+        handler_file = getattr(handler, "baseFilename", "N/A") if isinstance(handler, logging.FileHandler) else "N/A"
+        logging.debug(f"Handler: {handler_type}, Level: {handler_level}, File: {handler_file}")
 
     # Subcommand: install-references
     if args.command == "install-references":
@@ -498,9 +461,7 @@ def main():
         import itertools
 
         flattened_modules = list(
-            itertools.chain.from_iterable(
-                m if isinstance(m, list) else [m] for m in args.extra_modules
-            )
+            itertools.chain.from_iterable(m if isinstance(m, list) else [m] for m in args.extra_modules)
         )
         logging.debug(f"extra_modules flattened to {flattened_modules}")
 
@@ -517,14 +478,9 @@ def main():
             logging.debug("Multiple input types detected.")
             sys.exit(1)
 
-        if (
-            not args.bam
-            and not args.cram
-            and (args.fastq1 is None or args.fastq2 is None)
-        ):
+        if not args.bam and not args.cram and (args.fastq1 is None or args.fastq2 is None):
             parser.error(
-                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must "
-                "be specified for paired-end sequencing."
+                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing."
             )
             logging.debug("Missing FASTQ files for paired-end sequencing.")
             sys.exit(1)
@@ -551,18 +507,22 @@ def main():
 
         # (#62) If user tries to use 'shark' in BAM/CRAM mode, exit with a warning
         if (args.bam or args.cram) and ("shark" in flattened_modules):
-            logging.warning(
-                "Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag."
-            )
+            logging.warning("Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag.")
             logging.debug("Shark module detected with BAM/CRAM input; exiting.")
-            sys.exit(1)  # Determine which BWA reference to use from config
-        ref_map = {
-            "hg19": "hg19", "GRCh37": "hg19", "hg19_nochr": "hg19",
-            "hg38": "hg38", "GRCh38": "hg38", "hg38_nochr": "hg38"
-        }
-        ucsc_style_ref = ref_map.get(
-            args.reference_assembly, "hg19"
-        )  # Default to hg19 if somehow invalid
+            sys.exit(1)
+
+        # Determine which BWA reference to use from config using registry
+        from vntyper.scripts.reference_registry import get_coordinate_system
+
+        try:
+            coord_system = get_coordinate_system(args.reference_assembly)
+        except ValueError:
+            logging.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
+            coord_system = "GRCh37"
+
+        # Map coordinate system to UCSC-style name for BWA reference lookup
+        ucsc_map = {"GRCh37": "hg19", "GRCh38": "hg38"}
+        ucsc_style_ref = ucsc_map.get(coord_system, "hg19")
         bwa_key = f"bwa_reference_{ucsc_style_ref}"
         bwa_reference = config.get("reference_data", {}).get(bwa_key)
         logging.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")
@@ -582,11 +542,7 @@ def main():
         # Process the new --summary-formats argument (comma-separated)
         summary_formats = []
         if args.summary_formats:
-            summary_formats = [
-                fmt.strip().lower()
-                for fmt in args.summary_formats.split(",")
-                if fmt.strip()
-            ]
+            summary_formats = [fmt.strip().lower() for fmt in args.summary_formats.split(",") if fmt.strip()]
 
         run_pipeline(
             bwa_reference=bwa_reference,
@@ -657,9 +613,7 @@ def main():
         # Now call generate_summary_report
         generate_summary_report(
             output_dir=Path(args.output_dir),
-            template_dir=config.get("paths", {}).get(
-                "template_dir", "vntyper/templates"
-            ),
+            template_dir=config.get("paths", {}).get("template_dir", "vntyper/templates"),
             report_file=args.report_file,
             bed_file=args.bed_file,
             bam_file=args.bam_file,
@@ -691,7 +645,7 @@ def main():
             if not args.input_file.exists():
                 logging.error(f"The input file {args.input_file} does not exist.")
                 sys.exit(1)
-            with open(args.input_file, "r") as f:
+            with open(args.input_file) as f:
                 file_lines = [line.strip() for line in f if line.strip()]
                 input_paths.extend(file_lines)
             logging.debug(f"Added input_file entries: {file_lines}")

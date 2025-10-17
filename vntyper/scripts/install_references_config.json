@@ -57,13 +57,28 @@
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
       "target_path": "alignment/chr1.GRCh37.fna.gz",
       "index_command": "bwa index {path}",
-      "description": "NCBI GRCh37.p13 chromosome 1 (uses '1' not 'chr1' in FASTA header)"
+      "description": "NCBI GRCh37.p13 chromosome 1 (uses NC_000001.10 accession in FASTA header)"
     },
     "GRCh38": {
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
       "target_path": "alignment/chr1.GRCh38.fna.gz",
       "index_command": "bwa index {path}",
-      "description": "NCBI GRCh38.p14 chromosome 1 (uses '1' not 'chr1' in FASTA header)"
+      "description": "NCBI GRCh38.p14 chromosome 1 (uses NC_000001.11 accession in FASTA header)"
+    }
+  },
+
+  "ensembl_references": {
+    "hg19_ensembl": {
+      "url": "https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz",
+      "target_path": "alignment/chr1.hg19_ensembl.fa.gz",
+      "index_command": "bwa index {path}",
+      "description": "ENSEMBL GRCh37 chromosome 1 (uses '1' in FASTA header, no chr prefix)"
+    },
+    "hg38_ensembl": {
+      "url": "https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.1.fa.gz",
+      "target_path": "alignment/chr1.hg38_ensembl.fa.gz",
+      "index_command": "bwa index {path}",
+      "description": "ENSEMBL GRCh38 chromosome 1 (uses '1' in FASTA header, no chr prefix)"
     }
   },
 

@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 
-from vntyper.scripts.utils import run_command, load_config
+from vntyper.scripts.utils import load_config, run_command
 
 
 def load_shark_config(config_path=None):

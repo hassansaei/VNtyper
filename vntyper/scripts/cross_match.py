@@ -18,8 +18,7 @@ import csv
 import logging
 
 DEFAULT_MATCH_LOGIC = (
-    "Kestrel_Allele_Change == Advntr_Allele_Change and "
-    "Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
+    "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
 )
 
 
@@ -63,11 +62,11 @@ def compute_allele_change(ref, alt, variant_type):
     alt = str(alt)
     if variant_type.lower() in ["insertion", "duplication"]:
         if alt.startswith(ref):
-            return alt[len(ref):]
+            return alt[len(ref) :]
         return alt
     elif variant_type.lower() == "deletion":
         if ref.startswith(alt):
-            return ref[len(alt):]
+            return ref[len(alt) :]
         return ref
     return ""
 
@@ -93,9 +92,7 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
             "overall_match" - "Yes" if at least one combination matched, else "No".
     """
     if config is not None:
-        match_logic = config.get("cross_match", {}).get(
-            "match_logic", DEFAULT_MATCH_LOGIC
-        )
+        match_logic = config.get("cross_match", {}).get("match_logic", DEFAULT_MATCH_LOGIC)
     else:
         match_logic = DEFAULT_MATCH_LOGIC
 
@@ -104,21 +101,15 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
 
     # Precompute allele change for Kestrel records.
     for k in kestrel_records:
-        k_variant = k.get("Variant", "").strip() or determine_variant_type(
-            k.get("REF", ""), k.get("ALT", "")
-        )
+        k_variant = k.get("Variant", "").strip() or determine_variant_type(k.get("REF", ""), k.get("ALT", ""))
         k["Variant_Type"] = k_variant
-        k["Allele_Change"] = compute_allele_change(
-            k.get("REF", ""), k.get("ALT", ""), k_variant
-        )
+        k["Allele_Change"] = compute_allele_change(k.get("REF", ""), k.get("ALT", ""), k_variant)
 
     # Precompute allele change for adVNTR records.
     for a in advntr_records:
         a_variant = determine_variant_type(a.get("REF", ""), a.get("ALT", ""))
         a["Variant_Type"] = a_variant
-        a["Allele_Change"] = compute_allele_change(
-            a.get("REF", ""), a.get("ALT", ""), a_variant
-        )
+        a["Allele_Change"] = compute_allele_change(a.get("REF", ""), a.get("ALT", ""), a_variant)
 
     # Evaluate each combination.
     for k in kestrel_records:

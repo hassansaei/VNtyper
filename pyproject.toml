@@ -1,0 +1,159 @@
+[build-system]
+requires = ["setuptools>=72.2.0", "wheel>=0.43.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vntyper"
+dynamic = ["version"]
+description = "VNtyper: A tool for genotyping MUC1-VNTR"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Hassan Saei", email = "hassan.saei@inserm.fr"},
+    {name = "Bernt Popp", email = "bernt.popp.md@gmail.com"},
+]
+keywords = ["bioinformatics", "genomics", "VNTR", "MUC1", "genotyping"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pandas>=2.2.0,<2.3.0",
+    "numpy>=1.26.0,<2.0.0",
+    "regex>=2024.7.24",
+    "biopython>=1.84",
+    "setuptools>=72.2.0",
+    "pysam>=0.22.1",
+    "jinja2>=3.1.0",
+    "matplotlib>=3.9.0",
+    "seaborn>=0.13.0",
+    "igv-reports>=1.13.0",
+    "plotly>=5.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hassansaei/vntyper"
+Repository = "https://github.com/hassansaei/vntyper"
+Issues = "https://github.com/hassansaei/vntyper/issues"
+Documentation = "https://github.com/hassansaei/vntyper#readme"
+
+[project.scripts]
+vntyper = "vntyper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vntyper*"]
+namespaces = false
+
+[tool.setuptools.dynamic]
+version = {attr = "vntyper.version.__version__"}
+
+[tool.setuptools.package-data]
+"vntyper.scripts" = [
+    "kestrel_config.json",
+    "install_references_config.json",
+    "report_config.json",
+]
+"vntyper" = [
+    "config.json",
+    "templates/report_template.html",
+    "templates/cohort_summary_template.html",
+    "dependencies/kestrel/*.jar",
+    "modules/shark/shark_config.json",
+    "modules/advntr/advntr_config.json",
+]
+
+# ===========================
+# Ruff Configuration
+# ===========================
+[tool.ruff]
+# Same line length as previous .flake8 config
+line-length = 120
+indent-width = 4
+
+# Target Python 3.9 (minimum supported version)
+target-version = "py39"
+
+# Exclude common directories
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+# Ruff's default select = ["E4", "E7", "E9", "F"]
+# Extend with additional modern Python rules (more composable)
+extend-select = [
+    "W",    # pycodestyle warnings
+    "B",    # flake8-bugbear (detect common bugs)
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modern Python syntax)
+    "SIM",  # flake8-simplify (simplify code)
+]
+
+# Ignore docstring rules for now (can enable gradually)
+# Note: E501 (line too long) is automatically ignored when formatter is enabled
+ignore = [
+    "D100", "D104",  # Missing docstrings (enable later if desired)
+    "D200", "D202", "D205", "D400", "D401",  # Docstring formatting
+]
+
+# Allow auto-fix for all rules by default
+fixable = ["ALL"]
+unfixable = []
+
+# Per-file ignores
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "E402"]  # Allow unused imports
+"tests/**/*.py" = ["S101"]        # Allow assert statements in tests
+
+[tool.ruff.format]
+# Use double quotes (Python default)
+quote-style = "double"
+
+# Use spaces (not tabs)
+indent-style = "space"
+
+# Auto-detect line endings
+line-ending = "auto"
+
+# Format code examples in docstrings
+docstring-code-format = true
+docstring-code-line-length = 100
+
+# ===========================
+# Pytest Configuration
+# ===========================
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+]
+addopts = "-v --tb=short"

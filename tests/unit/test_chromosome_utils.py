@@ -25,10 +25,10 @@ class TestDetectNamingConvention:
         contigs = ["chr1", "chr2", "chr3", "chrX", "chrY", "chrM"]
         assert detect_naming_convention(contigs) == "ucsc"
 
-    def test_detect_no_prefix_naming(self):
-        """Test detection of no-prefix numeric naming (1, 2, ...)."""
+    def test_detect_ensembl_naming(self):
+        """Test detection of ENSEMBL simple numeric naming (1, 2, ...)."""
         contigs = ["1", "2", "3", "X", "Y", "MT"]
-        assert detect_naming_convention(contigs) == "no_prefix"
+        assert detect_naming_convention(contigs) == "ensembl"
 
     def test_detect_ncbi_naming(self):
         """Test detection of NCBI accession naming."""
@@ -50,7 +50,7 @@ class TestDetectNamingConvention:
         contigs = ["chr1", "2", "NC_000003.11"]
         # Should return unknown since no single convention dominates
         result = detect_naming_convention(contigs)
-        assert result in ["unknown", "ucsc", "no_prefix", "ncbi"]
+        assert result in ["unknown", "ucsc", "ensembl", "ncbi"]
 
 
 class TestValidateChromosomeName:
@@ -101,16 +101,16 @@ class TestBuildChromosomeName:
         result = _build_chromosome_name(23, "ucsc", "hg19", config)
         assert result == "chrX"
 
-    def test_build_no_prefix_chr1(self):
-        """Test building no-prefix numeric chr1 name."""
+    def test_build_ensembl_chr1(self):
+        """Test building ENSEMBL simple numeric chr1 name."""
         config = {}
-        result = _build_chromosome_name(1, "no_prefix", "hg19", config)
+        result = _build_chromosome_name(1, "ensembl", "hg19", config)
         assert result == "1"
 
-    def test_build_no_prefix_chrX(self):
-        """Test building no-prefix X name."""
+    def test_build_ensembl_chrX(self):
+        """Test building ENSEMBL X name."""
         config = {}
-        result = _build_chromosome_name(23, "no_prefix", "hg19", config)
+        result = _build_chromosome_name(23, "ensembl", "hg19", config)
         assert result == "X"
 
     def test_build_ncbi_grch37(self):
@@ -118,7 +118,7 @@ class TestBuildChromosomeName:
         config = {
             "bam_processing": {
                 "known_chromosome_naming": {
-                    "hg19": {"ncbi": "NC_000001.10"}
+                    "GRCh37": {"ncbi": "NC_000001.10"}
                 }
             }
         }
@@ -130,7 +130,7 @@ class TestBuildChromosomeName:
         config = {
             "bam_processing": {
                 "known_chromosome_naming": {
-                    "hg38": {"ncbi": "NC_000001.11"}
+                    "GRCh38": {"ncbi": "NC_000001.11"}
                 }
             }
         }
@@ -202,7 +202,7 @@ class TestGetChromosomeNameFromBam:
         config = {
             "bam_processing": {
                 "known_chromosome_naming": {
-                    "hg19": {"ncbi": "NC_000001.10"}
+                    "GRCh37": {"ncbi": "NC_000001.10"}
                 }
             }
         }

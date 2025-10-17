@@ -6,21 +6,38 @@ import os
 import shutil
 import sys
 import timeit
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
+
+# Import cross-match functions from cross_match.py
+from vntyper.scripts.cross_match import (
+    cross_match_variants,
+    extract_results_from_pipeline_summary,
+    write_results_tsv,
+)
 from vntyper.scripts.fastq_bam_processing import (
-    process_bam_to_fastq,
-    process_fastq,
     calculate_vntr_coverage,
     downsample_bam_if_needed,
     extract_bam_header,
     parse_header_pipeline_info,
+    process_bam_to_fastq,
+    process_fastq,
 )
-from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+from vntyper.scripts.region_utils import get_region_string_with_fallback
+
+# Import our new summary functions (including end_summary and CSV/TSV conversion functions)
+from vntyper.scripts.summary import (
+    convert_summary_to_csv,
+    convert_summary_to_tsv,
+    end_summary,
+    record_step,
+    start_summary,
+    write_summary,
+)
 from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_versions,
@@ -28,23 +45,6 @@ from vntyper.scripts.utils import (
     validate_fastq_file,
 )
 from vntyper.version import __version__ as VERSION
-
-# Import our new summary functions (including end_summary and CSV/TSV conversion functions)
-from vntyper.scripts.summary import (
-    start_summary,
-    record_step,
-    write_summary,
-    end_summary,
-    convert_summary_to_csv,
-    convert_summary_to_tsv,
-)
-
-# Import cross-match functions from cross_match.py
-from vntyper.scripts.cross_match import (
-    cross_match_variants,
-    write_results_tsv,
-    extract_results_from_pipeline_summary,
-)
 
 
 def write_bed_file(regions, bed_file_path):
@@ -61,13 +61,9 @@ def write_bed_file(regions, bed_file_path):
                 chrom, positions = region.strip().split(":")
                 start, end = positions.strip().split("-")
                 bed_fh.write(f"{chrom}\t{start}\t{end}\n")
-            except ValueError:
-                logging.error(
-                    f"Invalid region format: {region}. Expected format 'chr:start-end'."
-                )
-                raise ValueError(
-                    f"Invalid region format: {region}. Expected format 'chr:start-end'."
-                )
+            except ValueError as e:
+                logging.error(f"Invalid region format: {region}. Expected format 'chr:start-end'.")
+                raise ValueError(f"Invalid region format: {region}. Expected format 'chr:start-end'.") from e
 
 
 def run_pipeline(
@@ -138,9 +134,7 @@ def run_pipeline(
     logging.info(f"Created output directories in: {output_dir}")
 
     tool_versions = get_tool_versions(config)
-    logging.info(
-        f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}"
-    )
+    logging.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
     overall_start = timeit.default_timer()
     logging.info("Pipeline execution started.")
@@ -181,9 +175,7 @@ def run_pipeline(
             ]
         )
         if input_count > 1:
-            logging.error(
-                "Multiple input types provided. Provide only one: FASTQ, BAM, or CRAM."
-            )
+            logging.error("Multiple input types provided. Provide only one: FASTQ, BAM, or CRAM.")
             raise ValueError("Provide either BAM, CRAM, or FASTQ files, not multiples.")
 
         if not bam and not cram and (not fastq1 or not fastq2):
@@ -204,9 +196,7 @@ def run_pipeline(
             validate_fastq_file(fastq2)
         else:
             logging.error("Incomplete FASTQ inputs provided.")
-            raise ValueError(
-                "Both FASTQ files must be provided for paired-end sequencing."
-            )  # BED file logic
+            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")  # BED file logic
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
@@ -222,24 +212,17 @@ def run_pipeline(
             if input_type in ["BAM", "CRAM"]:
                 input_file = bam if input_type == "BAM" else cram
                 predefined_regions = get_region_string_with_fallback(
-                    bam_file=input_file,
-                    reference_assembly=reference_assembly,
-                    region_type="bam_region",
-                    config=config
+                    bam_file=input_file, reference_assembly=reference_assembly, region_type="bam_region", config=config
                 )
             else:
                 # FASTQ input - use fallback to legacy format (no BAM available yet)
                 region_key = f"bam_region_{reference_assembly}"
                 predefined_regions = config.get("bam_processing", {}).get(region_key)
                 if not predefined_regions:
-                    logging.error(
-                        f"Region key '{region_key}' not found in config.json under 'bam_processing'."
-                    )
+                    logging.error(f"Region key '{region_key}' not found in config.json under 'bam_processing'.")
                     raise ValueError(f"Missing configuration for region: {region_key}")
 
-            bed_file_path = (
-                Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
-            )
+            bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
             write_bed_file(predefined_regions, bed_file_path)
             logging.info(f"Predefined regions converted to BED file: {bed_file_path}")
 
@@ -248,9 +231,7 @@ def run_pipeline(
 
         # --- Input Conversion ---
         if input_type in ["BAM", "CRAM"]:
-            logging.info(
-                f"Starting {input_type} to FASTQ conversion with specified regions."
-            )
+            logging.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
             conversion_start = datetime.utcnow()
             if input_type == "BAM":
                 if bam is None or str(bam).strip().lower() == "none":
@@ -302,9 +283,7 @@ def run_pipeline(
                     bed_file=bed_file_path,
                     file_format="cram",
                 )
-                conversion_command = (
-                    f"process_bam_to_fastq(in_bam={cram}, file_format='cram', ...)"
-                )
+                conversion_command = f"process_bam_to_fastq(in_bam={cram}, file_format='cram', ...)"
             conversion_end = datetime.utcnow()
             record_step(
                 summary,
@@ -324,8 +303,8 @@ def run_pipeline(
             # --- SHARK Filtering Module ---
             if "shark" in extra_modules:
                 from vntyper.modules.shark.shark_filtering import (
-                    run_shark_filter,
                     load_shark_config,
+                    run_shark_filter,
                 )
 
                 shark_config = load_shark_config()
@@ -405,9 +384,7 @@ def run_pipeline(
                     "are missing or incomplete. Please run 'bwa index <reference.fa>' "
                     "to generate them."
                 )
-                raise RuntimeError(
-                    "Alignment failed due to missing or incomplete BWA reference indices."
-                )
+                raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
             logging.info("FASTQ alignment completed.")
             logging.info("Starting BAM to FASTQ conversion (Post-alignment).")
             conv2_start = datetime.utcnow()
@@ -436,9 +413,7 @@ def run_pipeline(
             )
             if not fastq1 or not fastq2:
                 logging.error("Failed to generate FASTQ files from BAM. Exiting.")
-                raise ValueError(
-                    "Failed to generate FASTQ files from BAM."
-                )  # --- Coverage Calculation ---
+                raise ValueError("Failed to generate FASTQ files from BAM.")  # --- Coverage Calculation ---
         logging.info("Calculating mean coverage over the VNTR region.")
         if input_type == "BAM":
             input_bam = Path(bam)
@@ -449,10 +424,7 @@ def run_pipeline(
 
         # Use dynamic region resolution with fallback to legacy format
         vntr_region = get_region_string_with_fallback(
-            bam_file=str(input_bam),
-            reference_assembly=reference_assembly,
-            region_type="vntr_region",
-            config=config
+            bam_file=str(input_bam), reference_assembly=reference_assembly, region_type="vntr_region", config=config
         )
 
         cov_start = datetime.utcnow()
@@ -497,9 +469,7 @@ def run_pipeline(
             )
         else:
             logging.error("FASTQ files required for Kestrel genotyping not provided.")
-            raise ValueError(
-                "FASTQ files required for Kestrel genotyping not provided."
-            )
+            raise ValueError("FASTQ files required for Kestrel genotyping not provided.")
         kestrel_end = datetime.utcnow()
         record_step(
             summary,
@@ -542,13 +512,9 @@ def run_pipeline(
                 advntr_reference = config.get("reference_data", {}).get(advntr_key)
             else:
                 if advntr_reference == "hg19":
-                    advntr_reference = config.get("reference_data", {}).get(
-                        "advntr_reference_vntr_hg19"
-                    )
+                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
                 elif advntr_reference == "hg38":
-                    advntr_reference = config.get("reference_data", {}).get(
-                        "advntr_reference_vntr_hg38"
-                    )
+                    advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg38")
                 else:
                     logging.error(f"Invalid advntr_reference: {advntr_reference}")
                     raise ValueError(f"Invalid advntr_reference: {advntr_reference}")
@@ -563,9 +529,7 @@ def run_pipeline(
             sorted_bam = Path(dirs["fastq_bam_processing"]) / "output_sliced.bam"
             if sorted_bam and sorted_bam.exists():
                 if max_cov:
-                    logging.info(
-                        f"Using quick adVNTR mode with max coverage = {max_cov}"
-                    )
+                    logging.info(f"Using quick adVNTR mode with max coverage = {max_cov}")
                     sorted_bam = downsample_bam_if_needed(
                         bam_path=sorted_bam,
                         max_coverage=max_cov,
@@ -586,9 +550,7 @@ def run_pipeline(
                 output_format = advntr_settings.get("output_format", "tsv")
                 output_ext = ".vcf" if output_format == "vcf" else ".tsv"
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
-                process_advntr_output(
-                    output_path, dirs["advntr"], "output", config=config
-                )
+                process_advntr_output(output_path, dirs["advntr"], "output", config=config)
                 advntr_end = datetime.utcnow()
                 record_step(
                     summary,
@@ -603,34 +565,18 @@ def run_pipeline(
                 logging.info("adVNTR genotyping completed.")
 
                 # --- Cross-Match Variant Comparison ---
-                logging.info(
-                    "Starting cross-match of Kestrel and adVNTR variant calls."
-                )
+                logging.info("Starting cross-match of Kestrel and adVNTR variant calls.")
                 cross_start = datetime.utcnow()
                 # Extract parsed results from the summary
-                kestrel_records, advntr_records = extract_results_from_pipeline_summary(
-                    summary
-                )
+                kestrel_records, advntr_records = extract_results_from_pipeline_summary(summary)
                 if not kestrel_records:
-                    logging.error(
-                        "Kestrel genotyping results not found for cross-match."
-                    )
-                    raise ValueError(
-                        "Kestrel genotyping results not found for cross-match."
-                    )
+                    logging.error("Kestrel genotyping results not found for cross-match.")
+                    raise ValueError("Kestrel genotyping results not found for cross-match.")
                 if not advntr_records:
-                    logging.error(
-                        "adVNTR genotyping results not found for cross-match."
-                    )
-                    raise ValueError(
-                        "adVNTR genotyping results not found for cross-match."
-                    )
-                crossmatch_summary = cross_match_variants(
-                    kestrel_records, advntr_records, config=config
-                )
-                cross_match_output = os.path.join(
-                    dirs["advntr"], "cross_match_results.tsv"
-                )
+                    logging.error("adVNTR genotyping results not found for cross-match.")
+                    raise ValueError("adVNTR genotyping results not found for cross-match.")
+                crossmatch_summary = cross_match_variants(kestrel_records, advntr_records, config=config)
+                cross_match_output = os.path.join(dirs["advntr"], "cross_match_results.tsv")
                 write_results_tsv(crossmatch_summary["matches"], cross_match_output)
                 cross_end = datetime.utcnow()
                 record_step(

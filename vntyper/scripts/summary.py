@@ -14,8 +14,8 @@ so that all available data is expanded into individual columns.
 """
 
 import csv
-import json
 import hashlib
+import json
 from datetime import datetime
 
 
@@ -84,7 +84,7 @@ def parse_tsv(file_path):
     header = None
 
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -120,7 +120,7 @@ def parse_csv(file_path):
     header = None
 
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if not row:
@@ -151,7 +151,7 @@ def parse_json_file(file_path):
         dict: The parsed JSON data, or an error dict if reading fails.
     """
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         return {"error": f"Error reading JSON file: {e}"}
@@ -208,9 +208,7 @@ def record_step(
         elif file_type.lower() == "json":
             record["parsed_result"] = parse_json_file(result_file)
         else:
-            record["parsed_result"] = {
-                "error": f"Unsupported file type for result parsing: {file_type}"
-            }
+            record["parsed_result"] = {"error": f"Unsupported file type for result parsing: {file_type}"}
     except Exception as e:
         record["parsed_result"] = {"error": f"Error parsing file: {e}"}
 
@@ -322,9 +320,7 @@ def convert_summary_to_tsv(summary, output_tsv_path):
 # Example usage:
 if __name__ == "__main__":
     # This example demonstrates how to create a summary, record a step, and write it out.
-    summary = start_summary(
-        version="1.2.3", input_files={"sample": "sample.fastq", "bam": "sample.bam"}
-    )
+    summary = start_summary(version="1.2.3", input_files={"sample": "sample.fastq", "bam": "sample.bam"})
 
     # Simulate a pipeline step with a sample result file (adjust these values as needed)
     step_name = "Example Step"
