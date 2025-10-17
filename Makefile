@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-cov clean build
+.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-cov clean build docker-build docker-build-optimized docker-scan docker-scan-critical docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -32,6 +32,13 @@ help:
 	@echo "$(GREEN)Build & Maintenance:$(RESET)"
 	@echo "  make clean            - Remove build artifacts and cache"
 	@echo "  make build            - Build distribution packages"
+	@echo ""
+	@echo "$(GREEN)Docker:$(RESET)"
+	@echo "  make docker-build          - Build Docker image (standard)"
+	@echo "  make docker-build-optimized - Build optimized multi-stage Docker image"
+	@echo "  make docker-scan           - Scan Docker image for vulnerabilities (all severities)"
+	@echo "  make docker-scan-critical  - Scan Docker image for CRITICAL vulnerabilities only"
+	@echo "  make docker-clean          - Remove all VNtyper Docker images"
 	@echo ""
 
 # Installation targets
@@ -114,3 +121,39 @@ all: format lint test
 
 check: format-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
+
+# Docker targets
+#Docker configuration
+DOCKER_IMAGE_NAME := vntyper
+DOCKER_IMAGE_TAG := latest
+DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
+
+docker-build:
+	@echo "$(BLUE)Building Docker image with BuildKit optimizations...$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.local -t $(DOCKER_IMAGE) .
+	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
+
+docker-scan:
+	@echo "$(BLUE)Scanning Docker image for vulnerabilities...$(RESET)"
+	@if ! command -v trivy >/dev/null 2>&1; then \
+		echo "$(RED)Error: trivy is not installed$(RESET)"; \
+		echo "Install with: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"; \
+		exit 1; \
+	fi
+	@trivy image --severity LOW,MEDIUM,HIGH,CRITICAL $(DOCKER_IMAGE)
+	@echo "$(GREEN)✓ Vulnerability scan complete$(RESET)"
+
+docker-scan-critical:
+	@echo "$(BLUE)Scanning Docker image for CRITICAL vulnerabilities...$(RESET)"
+	@if ! command -v trivy >/dev/null 2>&1; then \
+		echo "$(RED)Error: trivy is not installed$(RESET)"; \
+		echo "Install with: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"; \
+		exit 1; \
+	fi
+	@trivy image --severity CRITICAL --exit-code 1 $(DOCKER_IMAGE)
+	@echo "$(GREEN)✓ No CRITICAL vulnerabilities found$(RESET)"
+
+docker-clean:
+	@echo "$(BLUE)Removing VNtyper Docker images...$(RESET)"
+	@docker images | grep '$(DOCKER_IMAGE_NAME)' | awk '{print $$3}' | xargs -r docker rmi -f || true
+	@echo "$(GREEN)✓ Docker images removed$(RESET)"
