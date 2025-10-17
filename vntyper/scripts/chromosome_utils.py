@@ -24,20 +24,20 @@ def detect_naming_convention(contig_names: list[str]) -> str:
 
     This function examines contig names to determine if they follow:
     - UCSC convention: chr1, chr2, ..., chrX, chrY, chrM
-    - No-prefix numeric: 1, 2, ..., X, Y, MT (used by Ensembl/GRCh)
+    - ENSEMBL simple numeric: 1, 2, ..., X, Y, MT
     - NCBI accessions: NC_000001.XX, NC_000002.XX, ...
 
     Args:
         contig_names (List[str]): List of contig names from BAM header
 
     Returns:
-        str: Convention identifier ("ucsc", "no_prefix", "ncbi", "unknown")
+        str: Convention identifier ("ucsc", "ensembl", "ncbi", "unknown")
 
     Examples:
         >>> detect_naming_convention(["chr1", "chr2", "chrX"])
         'ucsc'
         >>> detect_naming_convention(["1", "2", "X"])
-        'no_prefix'
+        'ensembl'
         >>> detect_naming_convention(["NC_000001.10", "NC_000002.11"])
         'ncbi'
     """
@@ -47,7 +47,7 @@ def detect_naming_convention(contig_names: list[str]) -> str:
 
     # Count naming patterns
     ucsc_count = 0
-    no_prefix_count = 0
+    ensembl_count = 0
     ncbi_count = 0
 
     for name in contig_names:
@@ -57,9 +57,9 @@ def detect_naming_convention(contig_names: list[str]) -> str:
         # NCBI: NC_XXXXXX.YY format
         elif re.match(r"^NC_\d{6}\.\d+$", name):
             ncbi_count += 1
-        # No-prefix numeric: just digits or X, Y, MT
+        # ENSEMBL simple numeric: just digits or X, Y, MT
         elif re.match(r"^([0-9]+|X|Y|MT?)$", name, re.IGNORECASE):
-            no_prefix_count += 1
+            ensembl_count += 1
 
     # Determine convention based on majority
     total = len(contig_names)
@@ -71,13 +71,12 @@ def detect_naming_convention(contig_names: list[str]) -> str:
     elif ncbi_count / total >= threshold:
         logging.debug(f"Detected NCBI naming convention ({ncbi_count}/{total} contigs)")
         return "ncbi"
-    elif no_prefix_count / total >= threshold:
-        logging.debug(f"Detected no-prefix naming convention ({no_prefix_count}/{total} contigs)")
-        return "no_prefix"
+    elif ensembl_count / total >= threshold:
+        logging.debug(f"Detected ENSEMBL naming convention ({ensembl_count}/{total} contigs)")
+        return "ensembl"
     else:
         logging.warning(
-            f"Could not determine naming convention. "
-            f"UCSC: {ucsc_count}, No-prefix: {no_prefix_count}, NCBI: {ncbi_count}"
+            f"Could not determine naming convention. UCSC: {ucsc_count}, ENSEMBL: {ensembl_count}, NCBI: {ncbi_count}"
         )
         return "unknown"
 
@@ -163,7 +162,7 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
 
     Args:
         chromosome_number (int): Chromosome number (1-22, 23=X, 24=Y, 25=MT)
-        convention (str): Naming convention ("ucsc", "no_prefix", "ncbi")
+        convention (str): Naming convention ("ucsc", "ensembl", "ncbi")
         reference_assembly (str): Reference assembly name
         config (dict): Configuration dictionary
 
@@ -191,23 +190,21 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
     if convention == "ucsc":
         return f"chr{chr_suffix}"
 
-    elif convention == "no_prefix":
+    elif convention == "ensembl":
         return chr_suffix if chromosome_number >= 23 else str(chromosome_number)
 
     elif convention == "ncbi":
         # Look up NCBI accession from config
         known_naming = config.get("bam_processing", {}).get("known_chromosome_naming", {})
 
-        # Map reference assembly to coordinate set (hg19=GRCh37, hg38=GRCh38)
-        assembly_map = {
-            "hg19": "hg19",
-            "GRCh37": "hg19",
-            "hg38": "hg38",
-            "GRCh38": "hg38",
-            "hg19_nochr": "hg19",
-            "hg38_nochr": "hg38",
-        }
-        coord_assembly = assembly_map.get(reference_assembly, "hg19")
+        # Map reference assembly to coordinate set (use registry)
+        from vntyper.scripts.reference_registry import get_coordinate_system
+
+        try:
+            coord_assembly = get_coordinate_system(reference_assembly)
+        except ValueError:
+            logging.warning(f"Unknown assembly '{reference_assembly}', defaulting to GRCh37")
+            coord_assembly = "GRCh37"
 
         # Get NCBI accession from config
         naming_info = known_naming.get(coord_assembly, {})
@@ -221,8 +218,8 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
             return _construct_ncbi_accession(chromosome_number, coord_assembly)
 
     else:
-        # Unknown convention - return no-prefix format as fallback
-        logging.warning(f"Unknown naming convention '{convention}', using no-prefix format")
+        # Unknown convention - return ENSEMBL simple numeric format as fallback
+        logging.warning(f"Unknown naming convention '{convention}', using ENSEMBL simple numeric format")
         return chr_suffix if chromosome_number >= 23 else str(chromosome_number)
 
 
@@ -345,8 +342,8 @@ def validate_chromosome_name(chromosome_name: str) -> bool:
     patterns = [
         r"^chr[0-9]+$",  # UCSC: chr1, chr2, ...
         r"^chr[XYM]$",  # UCSC: chrX, chrY, chrM
-        r"^[0-9]+$",  # Simple: 1, 2, ...
-        r"^[XYMT]+$",  # Simple: X, Y, MT
+        r"^[0-9]+$",  # ENSEMBL: 1, 2, ...
+        r"^[XYMT]+$",  # ENSEMBL: X, Y, MT
         r"^NC_\d{6}\.\d+$",  # NCBI: NC_000001.10
     ]
 

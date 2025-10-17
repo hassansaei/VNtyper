@@ -616,6 +616,7 @@ def main(
 
     ucsc_refs = install_config.get("ucsc_references", {})
     ncbi_refs = install_config.get("ncbi_references", {})
+    ensembl_refs = install_config.get("ensembl_references", {})
     vntyper_refs = install_config.get("vntyper_references", {})
     own_repo_refs = install_config.get("own_repository_references", {})
     bwa_path = install_config.get("bwa_path", "bwa")  # Default to 'bwa'
@@ -637,7 +638,9 @@ def main(
         references_to_process = ["hg19", "hg38"]
         logging.info("No references specified, using default: hg19, hg38")
 
-    all_available_refs = set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(vntyper_refs.keys())
+    all_available_refs = (
+        set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
+    )
     requested_refs = set(references_to_process)
     found_refs = requested_refs & all_available_refs
     missing_refs = requested_refs - all_available_refs
@@ -654,6 +657,7 @@ def main(
 
     ucsc_refs = {k: v for k, v in ucsc_refs.items() if k in references_to_process}
     ncbi_refs = {k: v for k, v in ncbi_refs.items() if k in references_to_process}
+    ensembl_refs = {k: v for k, v in ensembl_refs.items() if k in references_to_process}
     vntyper_refs = {k: v for k, v in vntyper_refs.items() if k in references_to_process}
 
     # Initialize aligners
@@ -736,6 +740,19 @@ def main(
             index_threads=index_threads,
         )
 
+    # Process ENSEMBL references
+    if ensembl_refs:
+        logging.info("Processing ENSEMBL references...")
+        process_ucsc_references(
+            ensembl_refs,
+            output_dir,
+            bwa_path,
+            skip_indexing,
+            md5_dict,
+            aligners=enabled_aligners,
+            index_threads=index_threads,
+        )
+
     # Process VNtyper references
     if vntyper_refs:
         logging.info("Processing VNtyper references...")
@@ -763,6 +780,11 @@ def main(
         for ref_key, ref_info in ncbi_refs.items():
             ref_path = output_dir / ref_info.get("target_path")
             updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
+
+        # Collect all references from ENSEMBL
+        for ref_key, ref_info in ensembl_refs.items():
+            ref_path = output_dir / ref_info.get("target_path")
+            updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
 
         # Collect all references from VNtyper
         for ref_key, ref_info in vntyper_refs.items():
@@ -852,7 +874,7 @@ Examples:
         nargs="+",
         default=None,
         metavar="REFERENCE",
-        help="Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). "
+        help="Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl). "
         "Default: hg19 hg38 (UCSC references only).",
     )
 

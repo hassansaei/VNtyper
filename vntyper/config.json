@@ -39,41 +39,44 @@
   },
   "bam_processing": {
     "assemblies": {
-      "hg19": {
-        "alias": "GRCh37",
+      "GRCh37": {
         "bam_region_coords": "155158000-155163000",
         "vntr_region_coords": "155160500-155162000",
         "chromosome": 1
       },
-      "hg38": {
-        "alias": "GRCh38",
+      "GRCh38": {
         "bam_region_coords": "155184000-155194000",
         "vntr_region_coords": "155188000-155192500",
         "chromosome": 1
       }
     },
     "known_chromosome_naming": {
-      "hg19": {
+      "GRCh37": {
         "ucsc": "chr1",
-        "no_prefix": "1",
+        "ensembl": "1",
         "ncbi": "NC_000001.10"
       },
-      "hg38": {
+      "GRCh38": {
         "ucsc": "chr1",
-        "no_prefix": "1",
+        "ensembl": "1",
         "ncbi": "NC_000001.11"
       }
     },
+    "_comment_legacy_regions": "LEGACY: The hardcoded region strings below are maintained for backward compatibility only. New code should use the dynamic region resolution via reference_registry.py.",
     "bam_region_hg19": "chr1:155158000-155163000",
     "bam_region_hg38": "chr1:155184000-155194000",
-    "bam_region_hg19_nochr": "1:155158000-155163000",
-    "bam_region_hg38_nochr": "1:155184000-155194000",
+    "bam_region_hg19_ensembl": "1:155158000-155163000",
+    "bam_region_hg38_ensembl": "1:155184000-155194000",
+    "bam_region_hg19_ncbi": "NC_000001.10:155158000-155163000",
+    "bam_region_hg38_ncbi": "NC_000001.11:155184000-155194000",
     "bam_region_GRCh37": "NC_000001.10:155158000-155163000",
     "bam_region_GRCh38": "NC_000001.11:155184000-155194000",
     "vntr_region_hg19": "chr1:155160500-155162000",
     "vntr_region_hg38": "chr1:155188000-155192500",
-    "vntr_region_hg19_nochr": "1:155160500-155162000",
-    "vntr_region_hg38_nochr": "1:155188000-155192500",
+    "vntr_region_hg19_ensembl": "1:155160500-155162000",
+    "vntr_region_hg38_ensembl": "1:155188000-155192500",
+    "vntr_region_hg19_ncbi": "NC_000001.10:155160500-155162000",
+    "vntr_region_hg38_ncbi": "NC_000001.11:155188000-155192500",
     "vntr_region_GRCh37": "NC_000001.10:155160500-155162000",
     "vntr_region_GRCh38": "NC_000001.11:155188000-155192500",
     "compression_level": 6,
