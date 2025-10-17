@@ -5,49 +5,49 @@
       "local_path": "tests/data",
       "filename": "example_6449_hg19_subset.bam",
       "url_suffix": "example_6449_hg19_subset.bam",
-      "md5sum": "b38830ca45eeeee968d6eb63a1ff0923"
+      "md5sum": "6ab88a202de65ac9024d5e3454fa84dd"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6449_hg19_subset.bam.bai",
       "url_suffix": "example_6449_hg19_subset.bam.bai",
-      "md5sum": "488b44d53fbe22d9f6eedbe9b67b3f9a"
+      "md5sum": "b47c8ccc21230b5bea1cef120286f82e"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6449_hg19_subset_R1.fastq.gz",
       "url_suffix": "example_6449_hg19_subset_R1.fastq.gz",
-      "md5sum": "adbc33174a319fdb9c39e4ca5b01c81b"
+      "md5sum": "9bb0811e9245de3b91c5e01f13128fc7"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6449_hg19_subset_R2.fastq.gz",
       "url_suffix": "example_6449_hg19_subset_R2.fastq.gz",
-      "md5sum": "64a614d33f768674102409af70a4c871"
+      "md5sum": "5eb5a1a7cd985fe652bbc7443b0688e6"
     },
     {
       "local_path": "tests/data",
       "filename": "example_a5c1_hg19_subset.bam",
       "url_suffix": "example_a5c1_hg19_subset.bam",
-      "md5sum": "8a0704cd607d32ae87f4fd6ace9ef0dd"
+      "md5sum": "9969dd5ef7798104c633d96e032de882"
     },
     {
       "local_path": "tests/data",
       "filename": "example_a5c1_hg19_subset.bam.bai",
       "url_suffix": "example_a5c1_hg19_subset.bam.bai",
-      "md5sum": "06940bccbaf3d379dcb8d5ab43e03ba4"
+      "md5sum": "6e63ae15696d7bd253cc0c2f5846a560"
     },
     {
       "local_path": "tests/data",
       "filename": "example_a5c1_hg19_subset_R1.fastq.gz",
       "url_suffix": "example_a5c1_hg19_subset_R1.fastq.gz",
-      "md5sum": "78c776e04b0374a0caa26bea302e1dce"
+      "md5sum": "4fb4eb11c659fb42f2c5220ce66cd26a"
     },
     {
       "local_path": "tests/data",
       "filename": "example_a5c1_hg19_subset_R2.fastq.gz",
       "url_suffix": "example_a5c1_hg19_subset_R2.fastq.gz",
-      "md5sum": "641e47ab3dfa4fb95cad2c024172d7ae"
+      "md5sum": "7b5de61e9bea3dd267439c821e86e116"
     },
     {
       "local_path": "tests/data",
@@ -77,97 +77,97 @@
       "local_path": "tests/data",
       "filename": "example_b178_hg19_subset.bam",
       "url_suffix": "example_b178_hg19_subset.bam",
-      "md5sum": "c2561dd1b6d296db753f114a34892d9d"
+      "md5sum": "df0bda7325519806fe6d6e1e531b7dbf"
     },
     {
       "local_path": "tests/data",
       "filename": "example_b178_hg19_subset.bam.bai",
       "url_suffix": "example_b178_hg19_subset.bam.bai",
-      "md5sum": "4ec89a6e350bc4567899d1484d05df3a"
+      "md5sum": "3621418c69eb9937fad3550cfdc0efc0"
     },
     {
       "local_path": "tests/data",
       "filename": "example_b178_hg19_subset_R1.fastq.gz",
       "url_suffix": "example_b178_hg19_subset_R1.fastq.gz",
-      "md5sum": "52c9e696735d632ef97ff5d0fa7dadb9"
+      "md5sum": "a91a13b29a8b3e2b1a54071d39b4ef24"
     },
     {
       "local_path": "tests/data",
       "filename": "example_b178_hg19_subset_R2.fastq.gz",
       "url_suffix": "example_b178_hg19_subset_R2.fastq.gz",
-      "md5sum": "efa7dcea34787c12ed43501ac459c849"
+      "md5sum": "8aac8f27328be367c74d2d78925c7502"
     },
     {
       "local_path": "tests/data",
       "filename": "example_dfc3_hg19_subset.bam",
       "url_suffix": "example_dfc3_hg19_subset.bam",
-      "md5sum": "fc439aeabc026641fb57592eab73f43a"
+      "md5sum": "d8c9decd02ca0aa6c46385de66214c6f"
     },
     {
       "local_path": "tests/data",
       "filename": "example_dfc3_hg19_subset.bam.bai",
       "url_suffix": "example_dfc3_hg19_subset.bam.bai",
-      "md5sum": "b881320edc9d8e6ca42bb30a3c8a2cb1"
+      "md5sum": "d3ba9fa3b523b3c0b1e0911fdb960dab"
     },
     {
       "local_path": "tests/data",
       "filename": "example_dfc3_hg19_subset_R1.fastq.gz",
       "url_suffix": "example_dfc3_hg19_subset_R1.fastq.gz",
-      "md5sum": "eef7bde1cef03ec1da9ad573536c9273"
+      "md5sum": "ea9208f3df7457d767b3ff2494efc73b"
     },
     {
       "local_path": "tests/data",
       "filename": "example_dfc3_hg19_subset_R2.fastq.gz",
       "url_suffix": "example_dfc3_hg19_subset_R2.fastq.gz",
-      "md5sum": "bf73c778f2390751d9916cbe0810ff82"
+      "md5sum": "e88914f8276f9571a9618282bd1604fe"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6c28_hg19_subset.bam",
       "url_suffix": "example_6c28_hg19_subset.bam",
-      "md5sum": "d60849cda86a2c2dbd2a90446897f194"
+      "md5sum": "7a6246c9ad7462289411ba12e0e01cc4"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6c28_hg19_subset.bam.bai",
       "url_suffix": "example_6c28_hg19_subset.bam.bai",
-      "md5sum": "6978e6d2396f77e453d189f5c75c995b"
+      "md5sum": "a02cead3dd0124e0596c68e8673e526e"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6c28_hg19_subset_R1.fastq.gz",
       "url_suffix": "example_6c28_hg19_subset_R1.fastq.gz",
-      "md5sum": "12bfbd54a1770d18170ef1e7af68c785"
+      "md5sum": "cc28213b9bea12500c86aaff57bf56ec"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6c28_hg19_subset_R2.fastq.gz",
       "url_suffix": "example_6c28_hg19_subset_R2.fastq.gz",
-      "md5sum": "705995f1d972b32f9e65c9fef5b33b2a"
+      "md5sum": "3258c8d6abb781ccc6af5d5dd0e45e99"
     },
     {
       "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset.bam",
       "url_suffix": "example_7a61_hg19_subset.bam",
-      "md5sum": "ac69c6d08fc884c63b0499db7d0eeada"
+      "md5sum": "7f5e0a3d1ab97f8121412ff31cba77b8"
     },
     {
       "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset.bam.bai",
       "url_suffix": "example_7a61_hg19_subset.bam.bai",
-      "md5sum": "e880a278e3937602ad12d69a307f0385"
+      "md5sum": "15c2d7e647f31d6eae88dbdda1b4837d"
     },
     {
       "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset_R1.fastq.gz",
       "url_suffix": "example_7a61_hg19_subset_R1.fastq.gz",
-      "md5sum": "a246603229e8e5f13dd2aab89ac8a558"
+      "md5sum": "6eee2fce39c08e5404a8deb1b094ba9f"
     },
     {
       "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset_R2.fastq.gz",
       "url_suffix": "example_7a61_hg19_subset_R2.fastq.gz",
-      "md5sum": "4215c0b90d3e5d659e883dcabe3ef04d"
+      "md5sum": "d3b3e6cc6f19988740521f91d4b9f7d6"
     }
   ],
   "unit_tests": {
@@ -319,6 +319,27 @@
         "test_name": "example_dfc3_GRCh38_fast",
         "bam": "tests/data/remapped/bwa/GRCh38/example_dfc3_GRCh38_bwa.bam",
         "reference_assembly": "GRCh38",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 206,
+          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_dfc3_hg38_ensembl_fast",
+        "bam": "tests/data/remapped/bwa/hg38_ensembl/example_dfc3_hg38_ensembl_bwa.bam",
+        "reference_assembly": "hg38_ensembl",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
