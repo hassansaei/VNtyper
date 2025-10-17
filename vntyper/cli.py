@@ -16,6 +16,9 @@ from vntyper.scripts.install_references import main as install_references_main
 # Import the online mode function
 from vntyper.scripts.online_mode import run_online_mode
 from vntyper.scripts.pipeline import run_pipeline
+
+# Import reference registry for assembly choices
+from vntyper.scripts.reference_registry import list_assemblies
 from vntyper.scripts.utils import setup_logging
 from vntyper.version import __version__ as VERSION
 
@@ -106,9 +109,10 @@ def main():
     parser_pipeline.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
+        choices=list_assemblies(include_deprecated=False),  # Only canonical names
         default=None,
-        help="Specify the reference assembly used for the input BAM/CRAM file alignment.",
+        help="Reference assembly for BAM/CRAM alignment. "
+        "Options: hg19, hg38 (UCSC), hg19_ncbi, hg38_ncbi (NCBI RefSeq), hg19_ensembl, hg38_ensembl (ENSEMBL).",
     )
     parser_pipeline.add_argument(
         "--fast-mode",
@@ -324,9 +328,9 @@ def main():
     parser_online.add_argument(
         "--reference-assembly",
         type=str,
-        choices=["hg19", "hg38", "GRCh37", "GRCh38", "hg19_nochr", "hg38_nochr"],
+        choices=list_assemblies(include_deprecated=False),  # Only canonical names
         default=None,
-        help="Reference assembly used.",
+        help="Reference assembly used (hg19, hg38, GRCh37, GRCh38, hg19_ncbi, hg38_ncbi, hg19_ensembl, hg38_ensembl).",
     )
     parser_online.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
     parser_online.add_argument(
@@ -505,16 +509,20 @@ def main():
         if (args.bam or args.cram) and ("shark" in flattened_modules):
             logging.warning("Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag.")
             logging.debug("Shark module detected with BAM/CRAM input; exiting.")
-            sys.exit(1)  # Determine which BWA reference to use from config
-        ref_map = {
-            "hg19": "hg19",
-            "GRCh37": "hg19",
-            "hg19_nochr": "hg19",
-            "hg38": "hg38",
-            "GRCh38": "hg38",
-            "hg38_nochr": "hg38",
-        }
-        ucsc_style_ref = ref_map.get(args.reference_assembly, "hg19")  # Default to hg19 if somehow invalid
+            sys.exit(1)
+
+        # Determine which BWA reference to use from config using registry
+        from vntyper.scripts.reference_registry import get_coordinate_system
+
+        try:
+            coord_system = get_coordinate_system(args.reference_assembly)
+        except ValueError:
+            logging.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
+            coord_system = "GRCh37"
+
+        # Map coordinate system to UCSC-style name for BWA reference lookup
+        ucsc_map = {"GRCh37": "hg19", "GRCh38": "hg38"}
+        ucsc_style_ref = ucsc_map.get(coord_system, "hg19")
         bwa_key = f"bwa_reference_{ucsc_style_ref}"
         bwa_reference = config.get("reference_data", {}).get(bwa_key)
         logging.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")

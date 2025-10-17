@@ -145,41 +145,32 @@ def resolve_assembly_alias(reference_assembly: str) -> str:
     """
     Map assembly aliases to their canonical coordinate set names.
 
-    Mappings:
-    - hg19, GRCh37, hg19_nochr → hg19 coordinate space
-    - hg38, GRCh38, hg38_nochr → hg38 coordinate space
+    Uses the centralized reference registry to resolve assemblies to
+    their coordinate systems (GRCh37 or GRCh38).
 
     Args:
         reference_assembly (str): User-specified assembly name
 
     Returns:
-        str: Canonical assembly name for coordinate lookup ("hg19" or "hg38")
+        str: Coordinate system name ("GRCh37" or "GRCh38")
 
     Examples:
+        >>> resolve_assembly_alias("hg19")
+        "GRCh37"
         >>> resolve_assembly_alias("GRCh37")
-        "hg19"
-        >>> resolve_assembly_alias("hg19_nochr")
-        "hg19"
+        "GRCh37"
+        >>> resolve_assembly_alias("hg38")
+        "GRCh38"
         >>> resolve_assembly_alias("GRCh38")
-        "hg38"
-        >>> resolve_assembly_alias("hg38_nochr")
-        "hg38"
+        "GRCh38"
     """
-    assembly_map = {
-        "hg19": "hg19",
-        "GRCh37": "hg19",
-        "hg19_nochr": "hg19",
-        "hg38": "hg38",
-        "GRCh38": "hg38",
-        "hg38_nochr": "hg38",
-    }
+    from vntyper.scripts.reference_registry import get_coordinate_system
 
-    canonical = assembly_map.get(reference_assembly)
-    if canonical is None:
-        logging.warning(f"Unknown assembly '{reference_assembly}', defaulting to 'hg19'")
-        return "hg19"
-
-    return canonical
+    try:
+        return get_coordinate_system(reference_assembly)
+    except ValueError as e:
+        logging.warning(f"Unknown assembly '{reference_assembly}', defaulting to 'GRCh37': {e}")
+        return "GRCh37"
 
 
 def get_region_string_with_fallback(bam_file: str, reference_assembly: str, region_type: str, config: dict) -> str:
