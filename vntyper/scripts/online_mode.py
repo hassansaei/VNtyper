@@ -1,8 +1,9 @@
 import logging
 import subprocess
 import time
-import requests
 from pathlib import Path
+
+import requests
 
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -62,16 +63,6 @@ def submit_job(
     Raises:
         RuntimeError: If submission fails.
     """
-    files = {
-        "bam_file": ("subset.bam", open(subset_bam, "rb"), "application/octet-stream")
-    }
-    if subset_bai:
-        files["bai_file"] = (
-            "subset.bam.bai",
-            open(subset_bai, "rb"),
-            "application/octet-stream",
-        )
-
     data = {
         "thread": threads,
         "reference_assembly": reference_assembly,
@@ -88,16 +79,18 @@ def submit_job(
 
     submit_url = f"{api_url}/run-job/"
     logging.info(f"Submitting job to {submit_url}")
-    try:
-        resp = requests.post(submit_url, files=files, data=data, timeout=60)
-    finally:
-        for f in files.values():
-            f[1].close()
+
+    with open(subset_bam, "rb") as bam_file:
+        files = {"bam_file": ("subset.bam", bam_file, "application/octet-stream")}
+        if subset_bai:
+            with open(subset_bai, "rb") as bai_file:
+                files["bai_file"] = ("subset.bam.bai", bai_file, "application/octet-stream")
+                resp = requests.post(submit_url, files=files, data=data, timeout=60)
+        else:
+            resp = requests.post(submit_url, files=files, data=data, timeout=60)
 
     if resp.status_code != 200:
-        raise RuntimeError(
-            f"Failed to submit job. Status: {resp.status_code}, Detail: {resp.text}"
-        )
+        raise RuntimeError(f"Failed to submit job. Status: {resp.status_code}, Detail: {resp.text}")
     return resp.json()
 
 
@@ -120,9 +113,7 @@ def poll_job_status(api_url, job_id):
         logging.info(f"Checking job status for {job_id}")
         resp = requests.get(status_url, timeout=30)
         if resp.status_code != 200:
-            raise RuntimeError(
-                f"Failed to get job status. Status: {resp.status_code}, Detail: {resp.text}"
-            )
+            raise RuntimeError(f"Failed to get job status. Status: {resp.status_code}, Detail: {resp.text}")
         data = resp.json()
         status = data.get("status", "")
         if status in ["completed", "failed"]:
@@ -147,9 +138,7 @@ def download_results(api_url, job_id, output_dir):
     logging.info(f"Downloading results from {dl_url}")
     resp = requests.get(dl_url, timeout=60)
     if resp.status_code != 200:
-        raise RuntimeError(
-            f"Failed to download results. Status: {resp.status_code}, Detail: {resp.text}"
-        )
+        raise RuntimeError(f"Failed to download results. Status: {resp.status_code}, Detail: {resp.text}")
     zip_path = output_dir / f"{job_id}.zip"
     with open(zip_path, "wb") as f:
         f.write(resp.content)
@@ -192,10 +181,7 @@ def run_online_mode(
 
     # Use dynamic region resolution with fallback to legacy format
     region = get_region_string_with_fallback(
-        bam_file=bam,
-        reference_assembly=reference_assembly,
-        region_type="bam_region",
-        config=config
+        bam_file=bam, reference_assembly=reference_assembly, region_type="bam_region", config=config
     )
 
     output_path = Path(output_dir)
@@ -203,7 +189,7 @@ def run_online_mode(
     job_id_file = output_path / "job_id.txt"
 
     if resume and job_id_file.exists():
-        with open(job_id_file, "r") as f:
+        with open(job_id_file) as f:
             job_id = f.read().strip()
         status = poll_job_status(api_url, job_id)
         if status == "completed":

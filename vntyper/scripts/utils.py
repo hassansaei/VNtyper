@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # vntyper/scripts/utils.py
 
-import os
+import gzip
+import importlib.resources as pkg_resources
 import json
 import logging
+import os
 import shlex
 import subprocess
 import sys
-import gzip
-import importlib.resources as pkg_resources
 
 
 def run_command(command, log_file, critical=False):
@@ -61,9 +61,7 @@ def setup_logging(log_level=logging.INFO, log_file=None):
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     # If writing logs to a file, create a FileHandler, set its level, and attach
     if log_file:
@@ -156,9 +154,7 @@ def get_tool_version(command, version_flag):
                 return output.split("\n")[-1].split(": ")[1]
             return "unknown"
         if command.startswith("java"):  # Handling java_path case
-            return output.split("\n")[
-                0
-            ]  # Return the first line of the Java version output
+            return output.split("\n")[0]  # Return the first line of the Java version output
         return "unknown"
 
     except FileNotFoundError:
@@ -205,7 +201,7 @@ def get_tool_versions(config):
         version_flag = version_commands.get(tool, "")
         # Special handling for kestrel as it needs the java_path in front
         if tool == "kestrel":
-            command = f'{tools.get("java_path", "java")} {version_flag}'
+            command = f"{tools.get('java_path', 'java')} {version_flag}"
         versions[tool] = get_tool_version(command, version_flag)
 
     return versions
@@ -227,11 +223,7 @@ def search(regex: str, df, case=False):
     try:
         textlikes = df.select_dtypes(include=[object, "object"])
         result_df = df[
-            textlikes.apply(
-                lambda column: column.str.contains(
-                    regex, regex=True, case=case, na=False
-                )
-            ).any(axis=1)
+            textlikes.apply(lambda column: column.str.contains(regex, regex=True, case=case, na=False)).any(axis=1)
         ]
         logging.debug("Regex search completed.")
         return result_df
@@ -253,7 +245,7 @@ def load_config(config_path=None):
     if config_path is not None and os.path.exists(config_path):
         # User provided a config path
         try:
-            with open(config_path, "r") as config_file:
+            with open(config_path) as config_file:
                 config = json.load(config_file)
                 logging.info(f"Configuration loaded from {config_path}")
                 return config
@@ -301,10 +293,7 @@ def validate_bam_file(file_path):
 
     # Modified to allow both .bam and .cram extensions
     if not (file_path.endswith(".bam") or file_path.endswith(".cram")):
-        logging.error(
-            f"Invalid alignment file extension for file: {file_path}. "
-            "Must be .bam or .cram"
-        )
+        logging.error(f"Invalid alignment file extension for file: {file_path}. Must be .bam or .cram")
         raise ValueError(f"Invalid alignment file extension for file: {file_path}")
 
     # Perform samtools quickcheck

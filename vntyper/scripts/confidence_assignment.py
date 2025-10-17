@@ -24,13 +24,12 @@ References:
 """
 
 import logging
-import pandas as pd
+
 import numpy as np  # Import NumPy directly
+import pandas as pd
 
 
-def calculate_depth_score_and_assign_confidence(
-    df: pd.DataFrame, kestrel_config: dict
-) -> pd.DataFrame:
+def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config: dict) -> pd.DataFrame:
     """
     Calculates Depth_Score for each variant and assigns a confidence label
     based on coverage thresholds defined in kestrel_config['confidence_assignment'].
@@ -80,9 +79,7 @@ def calculate_depth_score_and_assign_confidence(
     # Fallback for confidence levels
     low_prec_label = confidence_levels.get("low_precision", "Low_Precision")
     high_prec_label = confidence_levels.get("high_precision", "High_Precision")
-    high_prec_star_label = confidence_levels.get(
-        "high_precision_star", "High_Precision*"
-    )
+    high_prec_star_label = confidence_levels.get("high_precision_star", "High_Precision*")
 
     # Default to 0.2 for 'low' and 0.4 for 'high' if not specified
     low_threshold = thresholds.get("low", 0.2)
@@ -102,10 +99,7 @@ def calculate_depth_score_and_assign_confidence(
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     # Step 2: Calculate Depth_Score (avoid division by zero -> np.nan)
-    df["Depth_Score"] = (
-        df["Estimated_Depth_AlternateVariant"]
-        / df["Estimated_Depth_Variant_ActiveRegion"]
-    )
+    df["Depth_Score"] = df["Estimated_Depth_AlternateVariant"] / df["Estimated_Depth_Variant_ActiveRegion"]
     # Replace any infinite values (resulting from division by zero) with NaN
     df["Depth_Score"] = df["Depth_Score"].replace([np.inf, -np.inf], np.nan)
 
@@ -114,28 +108,24 @@ def calculate_depth_score_and_assign_confidence(
     df["Confidence"] = "Negative"
 
     # Condition 1: Low Precision if Depth_Score <= low_threshold OR region depth <= var_region_threshold
-    cond1 = (df["Depth_Score"] <= low_threshold) | (
-        df["Estimated_Depth_Variant_ActiveRegion"] <= var_region_threshold
-    )
+    cond1 = (df["Depth_Score"] <= low_threshold) | (df["Estimated_Depth_Variant_ActiveRegion"] <= var_region_threshold)
 
     # Condition 2: High Precision STAR if alt depth >= alt_mid_high AND Depth_Score >= high_threshold
-    cond2 = (df["Estimated_Depth_AlternateVariant"] >= alt_mid_high) & (
-        df["Depth_Score"] >= high_threshold
-    )
+    cond2 = (df["Estimated_Depth_AlternateVariant"] >= alt_mid_high) & (df["Depth_Score"] >= high_threshold)
 
     # Condition 3: Low Precision if alt_depth is between mid_low and mid_high,
     # and Depth_Score between low_threshold and high_threshold
-    cond3 = df["Estimated_Depth_AlternateVariant"].between(
-        alt_mid_low, alt_mid_high
-    ) & df["Depth_Score"].between(low_threshold, high_threshold)
+    cond3 = df["Estimated_Depth_AlternateVariant"].between(alt_mid_low, alt_mid_high) & df["Depth_Score"].between(
+        low_threshold, high_threshold
+    )
 
     # Condition 4: Low Precision if alt depth <= alt_low
     cond4 = df["Estimated_Depth_AlternateVariant"] <= alt_low
 
     # Condition 5: High Precision if alt_depth is between mid_low and mid_high and Depth_Score >= high_threshold
-    cond5 = df["Estimated_Depth_AlternateVariant"].between(
-        alt_mid_low, alt_mid_high, inclusive="left"
-    ) & (df["Depth_Score"] >= high_threshold)
+    cond5 = df["Estimated_Depth_AlternateVariant"].between(alt_mid_low, alt_mid_high, inclusive="left") & (
+        df["Depth_Score"] >= high_threshold
+    )
 
     # Apply conditions in order (later conditions can overwrite earlier ones)
     df.loc[cond1, "Confidence"] = low_prec_label

@@ -10,23 +10,23 @@ or in subfolders) to construct the cohort tables, donut plots, and additional st
 Note: This module no longer defines its own CLI parser as these are now defined in the main CLI script.
 """
 
-import os
-import logging
-from datetime import datetime
-from pathlib import Path
-import zipfile
-import tempfile
-import shutil
-import json
 import base64
 import hashlib
+import json
+import logging
+import os
+import shutil
+import tempfile
+import zipfile
+from datetime import datetime
+from pathlib import Path
 
-import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
+import pandas as pd
+import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
-import plotly.graph_objects as go
 
 matplotlib.use("Agg")
 
@@ -54,9 +54,7 @@ def encode_image_to_base64(image_path):
         return ""
 
 
-def generate_donut_chart(
-    values, labels, total, title, colors, plot_path=None, interactive=False
-):
+def generate_donut_chart(values, labels, total, title, colors, plot_path=None, interactive=False):
     """
     Generate and save a donut chart (static or interactive).
 
@@ -106,11 +104,7 @@ def generate_donut_chart(
                 "xanchor": "center",
                 "yanchor": "top",
             },
-            annotations=[
-                dict(
-                    text=f"<b>{total}</b>", x=0.5, y=0.5, font_size=40, showarrow=False
-                )
-            ],
+            annotations=[dict(text=f"<b>{total}</b>", x=0.5, y=0.5, font_size=40, showarrow=False)],
             showlegend=False,
             margin=dict(t=50, b=50, l=50, r=50),
             height=500,
@@ -133,9 +127,7 @@ def generate_donut_chart(
             if plot_path:
                 plt.savefig(plot_path)
             else:
-                logging.warning(
-                    "No plot_path provided for static donut chart, chart not saved."
-                )
+                logging.warning("No plot_path provided for static donut chart, chart not saved.")
         except Exception as e:
             logging.error(f"Error generating donut chart: {e}")
         plt.close()
@@ -156,7 +148,7 @@ def load_report_config():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_path = os.path.join(script_dir, "report_config.json")
     try:
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             report_config = json.load(f)
         logging.info("Loaded report config from %s", config_path)
         return report_config
@@ -374,7 +366,7 @@ def load_pipeline_summary_for_sample(sample_dir):
         logging.warning(f"Pipeline summary file not found in {sample_dir}")
         return [], [], {}
     try:
-        with open(summary_path, "r") as f:
+        with open(summary_path) as f:
             summary = json.load(f)
         kestrel_data = []
         advntr_data = []
@@ -419,9 +411,7 @@ def load_pipeline_summary_for_sample(sample_dir):
         return [], [], {}
 
 
-def generate_cohort_summary_report(
-    output_dir, kestrel_df, advntr_df, summary_file, config, additional_stats_html=""
-):
+def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config, additional_stats_html=""):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
     additional statistics (runtimes, coverage, version, assembly, and pipeline).
@@ -467,11 +457,7 @@ def generate_cohort_summary_report(
             axis=1,
         )
         kestrel_df["__unified"] = kestrel_df["__row_result"].apply(unify_kestrel_result)
-        kestrel_sample_results = (
-            kestrel_df.groupby("Sample")["__unified"]
-            .apply(list)
-            .apply(aggregate_sample_category)
-        )
+        kestrel_sample_results = kestrel_df.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
     else:
         kestrel_sample_results = pd.Series(dtype=str)
 
@@ -482,11 +468,7 @@ def generate_cohort_summary_report(
             axis=1,
         )
         advntr_df["__unified"] = advntr_df["__row_result"].apply(unify_advntr_result)
-        advntr_sample_results = (
-            advntr_df.groupby("Sample")["__unified"]
-            .apply(list)
-            .apply(aggregate_sample_category)
-        )
+        advntr_sample_results = advntr_df.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
     else:
         advntr_sample_results = pd.Series(dtype=str)
 
@@ -584,9 +566,7 @@ def generate_cohort_summary_report(
         "Confidence",
         "Flag",
     ]
-    kestrel_columns = [
-        col for col in desired_kestrel_cols if col in kestrel_df_html.columns
-    ]
+    kestrel_columns = [col for col in desired_kestrel_cols if col in kestrel_df_html.columns]
     kestrel_html = kestrel_df_html[kestrel_columns].to_html(
         classes="table table-bordered table-striped hover compact order-column table-sm",
         index=False,
@@ -718,9 +698,7 @@ def aggregate_cohort(
                     processed_dirs.add(sample_dir)
                     found = True
                 if not found:
-                    logging.warning(
-                        f"No pipeline_summary.json found in directory {path}"
-                    )
+                    logging.warning(f"No pipeline_summary.json found in directory {path}")
         elif zipfile.is_zipfile(path):
             logging.info(f"Extracting zip file: {path}")
             temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
@@ -739,9 +717,7 @@ def aggregate_cohort(
                         processed_dirs.add(sample_dir)
                         found = True
                     if not found:
-                        logging.warning(
-                            f"No pipeline_summary.json found in extracted zip file: {path}"
-                        )
+                        logging.warning(f"No pipeline_summary.json found in extracted zip file: {path}")
                 temp_dirs.append(temp_dir)
             except zipfile.BadZipFile as e:
                 logging.error(f"Bad zip file {path}: {e}")
@@ -753,9 +729,7 @@ def aggregate_cohort(
             logging.warning(f"Unsupported file type (not a directory or zip): {path}")
 
     if not processed_dirs:
-        logging.error(
-            "No valid input directories or zip files found for cohort aggregation."
-        )
+        logging.error("No valid input directories or zip files found for cohort aggregation.")
         return
 
     # If pseudonymization is requested, build a mapping from original to pseudonym names.
@@ -780,17 +754,13 @@ def aggregate_cohort(
                 entry["Sample"] = pseudonym
             kestrel_list.extend(k_data)
         else:
-            logging.warning(
-                f"No Kestrel data found in pipeline summary for sample {original_sample}."
-            )
+            logging.warning(f"No Kestrel data found in pipeline summary for sample {original_sample}.")
         if a_data:
             for entry in a_data:
                 entry["Sample"] = pseudonym
             advntr_list.extend(a_data)
         else:
-            logging.warning(
-                f"No adVNTR data found in pipeline summary for sample {original_sample}."
-            )
+            logging.warning(f"No adVNTR data found in pipeline summary for sample {original_sample}.")
         if add_stats:
             add_stats["Sample"] = pseudonym
             additional_stats_list.append(add_stats)
@@ -813,14 +783,10 @@ def aggregate_cohort(
         if "coverage" in additional_stats_df.columns:
             coverage_df = additional_stats_df["coverage"].apply(pd.Series)
             coverage_df = coverage_df.add_prefix("cov_")
-            additional_stats_df = pd.concat(
-                [additional_stats_df.drop(columns=["coverage"]), coverage_df], axis=1
-            )
+            additional_stats_df = pd.concat([additional_stats_df.drop(columns=["coverage"]), coverage_df], axis=1)
         # Reorder columns to place "Sample" first if it exists
         if "Sample" in additional_stats_df.columns:
-            cols = ["Sample"] + [
-                col for col in additional_stats_df.columns if col != "Sample"
-            ]
+            cols = ["Sample"] + [col for col in additional_stats_df.columns if col != "Sample"]
             additional_stats_df = additional_stats_df[cols]
         additional_stats_html = additional_stats_df.to_html(
             classes="table table-bordered table-striped hover compact order-column table-sm",
@@ -848,9 +814,7 @@ def aggregate_cohort(
 
     # Generate additional machine-readable cohort summaries if requested
     if additional_formats:
-        formats = [
-            fmt.strip().lower() for fmt in additional_formats.split(",") if fmt.strip()
-        ]
+        formats = [fmt.strip().lower() for fmt in additional_formats.split(",") if fmt.strip()]
         if not kestrel_df.empty:
             if "csv" in formats:
                 csv_path = Path(output_dir) / "cohort_kestrel.csv"

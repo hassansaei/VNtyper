@@ -57,35 +57,27 @@ class TestBuildRegionString:
 
 
 class TestResolveAssemblyAlias:
-    """Test assembly alias resolution."""
+    """Test assembly alias resolution to coordinate systems."""
 
-    def test_resolve_hg19(self):
-        """Test resolving hg19 (no change)."""
-        assert resolve_assembly_alias("hg19") == "hg19"
+    def test_resolve_hg19_to_grch37(self):
+        """Test resolving hg19 to GRCh37 coordinate system."""
+        assert resolve_assembly_alias("hg19") == "GRCh37"
 
-    def test_resolve_grch37_to_hg19(self):
-        """Test resolving GRCh37 to hg19."""
-        assert resolve_assembly_alias("GRCh37") == "hg19"
+    def test_resolve_grch37(self):
+        """Test resolving GRCh37 (no change)."""
+        assert resolve_assembly_alias("GRCh37") == "GRCh37"
 
-    def test_resolve_hg38(self):
-        """Test resolving hg38 (no change)."""
-        assert resolve_assembly_alias("hg38") == "hg38"
+    def test_resolve_hg38_to_grch38(self):
+        """Test resolving hg38 to GRCh38 coordinate system."""
+        assert resolve_assembly_alias("hg38") == "GRCh38"
 
-    def test_resolve_grch38_to_hg38(self):
-        """Test resolving GRCh38 to hg38."""
-        assert resolve_assembly_alias("GRCh38") == "hg38"
+    def test_resolve_grch38(self):
+        """Test resolving GRCh38 (no change)."""
+        assert resolve_assembly_alias("GRCh38") == "GRCh38"
 
     def test_unknown_assembly(self):
-        """Test handling of unknown assembly (defaults to hg19)."""
-        assert resolve_assembly_alias("unknown") == "hg19"
-
-    def test_resolve_hg19_nochr(self):
-        """Test resolving hg19_nochr to hg19."""
-        assert resolve_assembly_alias("hg19_nochr") == "hg19"
-
-    def test_resolve_hg38_nochr(self):
-        """Test resolving hg38_nochr to hg38."""
-        assert resolve_assembly_alias("hg38_nochr") == "hg38"
+        """Test handling of unknown assembly (defaults to GRCh37)."""
+        assert resolve_assembly_alias("unknown") == "GRCh37"
 
 
 class TestGetRegionString:
@@ -99,7 +91,7 @@ class TestGetRegionString:
         config = {
             "bam_processing": {
                 "assemblies": {
-                    "hg19": {
+                    "GRCh37": {
                         "bam_region_coords": "155158000-155163000",
                         "vntr_region_coords": "155160500-155162000",
                         "chromosome": 1
@@ -121,13 +113,13 @@ class TestGetRegionString:
         config = {
             "bam_processing": {
                 "assemblies": {
-                    "hg19": {
+                    "GRCh37": {
                         "bam_region_coords": "155158000-155163000",
                         "chromosome": 1
                     }
                 },
                 "known_chromosome_naming": {
-                    "hg19": {"ncbi": "NC_000001.10"}
+                    "GRCh37": {"ncbi": "NC_000001.10"}
                 }
             }
         }
@@ -145,7 +137,7 @@ class TestGetRegionString:
         config = {
             "bam_processing": {
                 "assemblies": {
-                    "hg38": {
+                    "GRCh38": {
                         "bam_region_coords": "155184000-155194000",
                         "chromosome": 1
                     }
@@ -166,7 +158,7 @@ class TestGetRegionString:
         config = {
             "bam_processing": {
                 "assemblies": {
-                    "hg19": {
+                    "GRCh37": {
                         "bam_region_coords": "155158000-155163000",
                         "vntr_region_coords": "155160500-155162000",
                         "chromosome": 1
@@ -206,7 +198,7 @@ class TestGetRegionString:
         config = {
             "bam_processing": {
                 "assemblies": {
-                    "hg19": {
+                    "GRCh37": {
                         "chromosome": 1
                     }
                 }
@@ -230,7 +222,7 @@ class TestGetRegionStringWithFallback:
         config = {
             "bam_processing": {
                 "assemblies": {
-                    "hg19": {
+                    "GRCh37": {
                         "bam_region_coords": "155158000-155163000",
                         "chromosome": 1
                     }

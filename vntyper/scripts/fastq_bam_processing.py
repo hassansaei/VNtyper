@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 # vntyper/scripts/fastq_bam_processing.py
 
+import json
 import logging
 import os
-from pathlib import Path
-import subprocess
 import statistics  # for median and stdev calculations
-import json
-
-from vntyper.scripts.utils import run_command
+import subprocess
+from pathlib import Path
 
 from vntyper.scripts.extract_unmapped_from_offset import (
     extract_unmapped_reads_from_offset,
 )
 from vntyper.scripts.region_utils import get_region_string_with_fallback
+from vntyper.scripts.utils import run_command
 
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
@@ -117,10 +116,7 @@ def process_bam_to_fastq(
     else:
         # Use dynamic region resolution with fallback to legacy format
         bam_region = get_region_string_with_fallback(
-            bam_file=str(in_bam),
-            reference_assembly=reference_assembly,
-            region_type="bam_region",
-            config=config
+            bam_file=str(in_bam), reference_assembly=reference_assembly, region_type="bam_region", config=config
         )
         logging.debug(f"BAM region set to: {bam_region}")
 
@@ -162,9 +158,7 @@ def process_bam_to_fastq(
                 index_cmd = f"{samtools_path} index {in_bam}"
                 log_file_index = Path(output) / f"{output_name}_unmapped_index.log"
                 logging.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
-                success = run_command(
-                    str(index_cmd), str(log_file_index), critical=True
-                )
+                success = run_command(str(index_cmd), str(log_file_index), critical=True)
                 if not success:
                     raise RuntimeError("Indexing BAM file failed.")
 
@@ -184,20 +178,14 @@ def process_bam_to_fastq(
             log_file_filter = Path(output) / f"{output_name}_filter.log"
             logging.info(f"Executing filtering with command: {command_filter}")
 
-            success = run_command(
-                str(command_filter), str(log_file_filter), critical=True
-            )
+            success = run_command(str(command_filter), str(log_file_filter), critical=True)
             if not success:
                 logging.error("BAM/CRAM filtering failed.")
                 raise RuntimeError("BAM/CRAM filtering failed.")
 
         # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
-        command_merge = (
-            f"{samtools_path} merge -f -@ {threads} {merged_bam} "
-            f"{final_bam} "
-            f"{unmapped_bam}"
-        )
+        command_merge = f"{samtools_path} merge -f -@ {threads} {merged_bam} {final_bam} {unmapped_bam}"
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logging.info(f"Executing BAM merging with command: {command_merge}")
 
@@ -249,13 +237,9 @@ def process_bam_to_fastq(
             f"-s {final_fastq_single}"
         )
         log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
-        logging.info(
-            f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}"
-        )
+        logging.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
 
-        success = run_command(
-            str(command_sort_fastq), str(log_file_sort_fastq), critical=True
-        )
+        success = run_command(str(command_sort_fastq), str(log_file_sort_fastq), critical=True)
         if not success:
             logging.error("BAM to FASTQ conversion failed.")
             raise RuntimeError("BAM to FASTQ conversion failed.")
@@ -281,9 +265,7 @@ def process_bam_to_fastq(
     )
 
 
-def calculate_vntr_coverage(
-    bam_file, region, threads, config, output_dir, output_name, summary_filename=None
-):
+def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, output_name, summary_filename=None):
     """
     Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
 
@@ -306,9 +288,7 @@ def calculate_vntr_coverage(
     """
     samtools_path = config["tools"]["samtools"]
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
-    depth_command = (
-        f"{samtools_path} depth -@ {threads} -r {region} {bam_file} > {coverage_output}"
-    )
+    depth_command = f"{samtools_path} depth -@ {threads} -r {region} {bam_file} > {coverage_output}"
     logging.info(f"Calculating VNTR coverage with command: {depth_command}")
     success = run_command(
         str(depth_command),
@@ -336,15 +316,11 @@ def calculate_vntr_coverage(
             total_region_length = end_pos - start_pos + 1
             logging.debug(f"VNTR region total length: {total_region_length} bp")
         except (ValueError, IndexError) as e:
-            logging.warning(
-                f"Could not parse region string: {e}. Setting region length to 0."
-            )
+            logging.warning(f"Could not parse region string: {e}. Setting region length to 0.")
             total_region_length = 0
 
-        with open(coverage_output, "r") as f:
-            coverage_values = [
-                int(line.strip().split("\t")[2]) for line in f if line.strip()
-            ]
+        with open(coverage_output) as f:
+            coverage_values = [int(line.strip().split("\t")[2]) for line in f if line.strip()]
         if not coverage_values:
             raise RuntimeError("No coverage data found.")
 
@@ -353,16 +329,11 @@ def calculate_vntr_coverage(
         zero_coverage_bases = total_region_length - covered_bases_count
 
         # Handle edge case of zero region length
-        if total_region_length <= 0:
-            percent_uncovered = 0
-        else:
-            percent_uncovered = (zero_coverage_bases / total_region_length) * 100
+        percent_uncovered = 0 if total_region_length <= 0 else zero_coverage_bases / total_region_length * 100
 
         mean_coverage = sum(coverage_values) / len(coverage_values)
         median_coverage = statistics.median(coverage_values)
-        stdev_coverage = (
-            statistics.stdev(coverage_values) if len(coverage_values) > 1 else 0
-        )
+        stdev_coverage = statistics.stdev(coverage_values) if len(coverage_values) > 1 else 0
         min_coverage = min(coverage_values)
         max_coverage = max(coverage_values)
 
@@ -373,9 +344,7 @@ def calculate_vntr_coverage(
         logging.info(f"Max coverage: {max_coverage}")
         logging.info(f"VNTR region total length: {total_region_length} bp")
         logging.info(f"VNTR region uncovered bases: {zero_coverage_bases} bp")
-        logging.info(
-            f"Percentage of VNTR region with zero coverage: {percent_uncovered:.2f}%"
-        )
+        logging.info(f"Percentage of VNTR region with zero coverage: {percent_uncovered:.2f}%")
 
         if summary_filename is None:
             summary_filename = Path(output_dir) / f"{output_name}_summary.tsv"
@@ -383,9 +352,7 @@ def calculate_vntr_coverage(
             summary_filename = Path(summary_filename)
 
         with open(summary_filename, "w") as out_f:
-            out_f.write(
-                "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-            )
+            out_f.write("mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n")
             out_f.write(
                 f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t"
                 f"{min_coverage}\t{max_coverage}\t{total_region_length}\t"
@@ -405,7 +372,7 @@ def calculate_vntr_coverage(
         }
     except Exception as e:
         logging.error(f"Error calculating coverage summary: {e}")
-        raise RuntimeError(f"Error calculating coverage summary: {e}")
+        raise RuntimeError(f"Error calculating coverage summary: {e}") from e
 
 
 def downsample_bam_if_needed(
@@ -440,10 +407,7 @@ def downsample_bam_if_needed(
 
     # Use dynamic region resolution with fallback to legacy format
     region = get_region_string_with_fallback(
-        bam_file=str(bam_path),
-        reference_assembly=reference_assembly,
-        region_type="vntr_region",
-        config=config
+        bam_file=str(bam_path), reference_assembly=reference_assembly, region_type="vntr_region", config=config
     )
 
     current_coverage = calculate_vntr_coverage(
@@ -563,15 +527,12 @@ def detect_assembly_from_contigs(header: str, config: dict, threshold: float = N
         return "Not detected"
 
     bam_contigs = parse_contigs_from_header(header)
-    for assembly_key, assembly_data in known_assemblies.items():
+    for _assembly_key, assembly_data in known_assemblies.items():
         expected_contigs = assembly_data["contigs"]
         match_count = 0
         for expected in expected_contigs:
             for contig in bam_contigs:
-                if (
-                    contig["name"] == expected["name"]
-                    and contig["length"] == expected["length"]
-                ):
+                if contig["name"] == expected["name"] and contig["length"] == expected["length"]:
                     match_count += 1
                     break
         match_percentage = match_count / len(expected_contigs)
@@ -601,12 +562,7 @@ def parse_header_pipeline_info(
     # Text matching for assembly detection
     if "hg19" in lower_header or "hs37" in lower_header or "grch37" in lower_header:
         assembly_text = "hg19"
-    elif (
-        "hg38" in lower_header
-        or "hs38" in lower_header
-        or "grch38" in lower_header
-        or "hs38dh" in lower_header
-    ):
+    elif "hg38" in lower_header or "hs38" in lower_header or "grch38" in lower_header or "hs38dh" in lower_header:
         assembly_text = "hg38"
     else:
         assembly_text = "Not detected"  # Contig matching

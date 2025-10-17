@@ -27,6 +27,7 @@ References:
 """
 
 import logging
+
 import pandas as pd
 from Bio import SeqIO
 
@@ -185,19 +186,12 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         combined_df = pd.DataFrame(columns=working_df.columns)
         pass
 
-    if (
-        "Motifs" not in working_df.columns
-        or working_df["Motifs"].str.count("-").max() != 1
-    ):
+    if "Motifs" not in working_df.columns or working_df["Motifs"].str.count("-").max() != 1:
         logging.error("Cannot split 'Motifs' into left-right. Old code returns empty.")
         combined_df = pd.DataFrame(columns=working_df.columns)
     else:
-        working_df[["Motif_left", "Motif_right"]] = working_df["Motifs"].str.split(
-            "-", expand=True
-        )
-        working_df["POS"] = (
-            pd.to_numeric(working_df["POS"], errors="coerce").fillna(-1).astype(int)
-        )
+        working_df[["Motif_left", "Motif_right"]] = working_df["Motifs"].str.split("-", expand=True)
+        working_df["POS"] = pd.to_numeric(working_df["POS"], errors="coerce").fillna(-1).astype(int)
 
         # Left vs. Right
         motif_left = working_df[working_df["POS"] < position_threshold].copy()
@@ -207,9 +201,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         if not motif_left.empty:
             motif_left.rename(columns={"Motif_right": "Motif"}, inplace=True)
             if "Motif_sequence" in motif_left.columns:
-                motif_left.drop(
-                    columns=["Motif_sequence"], inplace=True, errors="ignore"
-                )
+                motif_left.drop(columns=["Motif_sequence"], inplace=True, errors="ignore")
             motif_left = motif_left.merge(merged_motifs, on="Motif", how="left")
 
             keep_cols = [
@@ -227,18 +219,14 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 "original_index",
             ]
             motif_left = motif_left[keep_cols]
-            motif_left.sort_values(
-                ["Depth_Score", "POS"], ascending=[False, False], inplace=True
-            )
+            motif_left.sort_values(["Depth_Score", "POS"], ascending=[False, False], inplace=True)
             motif_left.drop_duplicates("ALT", keep="first", inplace=True)
 
         # Merge + filter right
         if not motif_right.empty:
             motif_right.rename(columns={"Motif_left": "Motif"}, inplace=True)
             if "Motif_sequence" in motif_right.columns:
-                motif_right.drop(
-                    columns=["Motif_sequence"], inplace=True, errors="ignore"
-                )
+                motif_right.drop(columns=["Motif_sequence"], inplace=True, errors="ignore")
             motif_right = motif_right.merge(merged_motifs, on="Motif", how="left")
 
             keep_cols = [
@@ -258,21 +246,13 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             motif_right = motif_right[keep_cols]
 
             # 'GG' logic
-            if (
-                motif_right["ALT"]
-                .str.contains(r"\b" + alt_for_motif_right_gg + r"\b")
-                .any()
-            ):
-                motif_right = motif_right[
-                    ~motif_right["Motif"].isin(exclude_motifs_right)
-                ]
+            if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
+                motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
                 motif_right = motif_right[motif_right["ALT"] == alt_for_motif_right_gg]
                 motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
                 motif_right.drop_duplicates("ALT", keep="first", inplace=True)
                 if motif_right["Motif"].isin(motifs_for_alt_gg).any():
-                    motif_right = motif_right[
-                        motif_right["Motif"].isin(motifs_for_alt_gg)
-                    ]
+                    motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
             else:
                 motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
                 motif_right.drop_duplicates("ALT", keep="first", inplace=True)
@@ -285,9 +265,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         combined_df = combined_df[~combined_df["Motif"].isin(exclude_motifs_combined)]
 
         # Adjust POS => create POS_fasta
-        combined_df["POS"] = (
-            pd.to_numeric(combined_df["POS"], errors="coerce").fillna(-1).astype(int)
-        )
+        combined_df["POS"] = pd.to_numeric(combined_df["POS"], errors="coerce").fillna(-1).astype(int)
         combined_df["POS_fasta"] = combined_df["POS"]
         combined_df.update(
             combined_df["POS"].mask(
@@ -298,9 +276,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     # =============== End Original Logic ===============
 
     # Mark pass/fail based on original_index
-    pass_mask = original_df["original_index"].isin(
-        combined_df.get("original_index", [])
-    )
+    pass_mask = original_df["original_index"].isin(combined_df.get("original_index", []))
     original_df["motif_filter_pass"] = pass_mask
 
     # Ensure final columns exist in the main DF even for failing rows
@@ -328,7 +304,5 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     original_df.drop(columns=["original_index"], inplace=True, errors="ignore")
 
     logging.debug("Exiting motif_correction_and_annotation")
-    logging.debug(
-        f"Final row count: {len(original_df)}, columns: {original_df.columns.tolist()}"
-    )
+    logging.debug(f"Final row count: {len(original_df)}, columns: {original_df.columns.tolist()}")
     return original_df
