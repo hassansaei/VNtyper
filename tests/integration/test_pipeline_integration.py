@@ -451,16 +451,18 @@ def test_bam_input_with_kestrel_checks(
 @pytest.mark.integration
 def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     """
-    A new integration test specifically for the adVNTR module.
-    We expect a specialized VCF output (e.g. output_adVNTR.vcf)
-    and then validate the columns.
+    Integration test for the adVNTR module.
+
+    This test validates the filtered adVNTR results from output_adVNTR_result.tsv,
+    which contains the best/most significant variant (lowest p-value) after adVNTR
+    filtering. This ensures we test the final processed output rather than raw VCF.
 
     The 'advntr_case' fixture yields a single test scenario with:
-      - bam
-      - cli_options (including extra modules for adVNTR)
-      - expected_vcf
-      - advntr_assertions (the expected columns and values)
-      - test_name
+      - bam: path to input BAM file
+      - cli_options: CLI flags including extra modules for adVNTR
+      - expected_vcf: output filename (e.g., output_adVNTR_result.tsv)
+      - advntr_assertions: expected values for VID, State, reads, coverage, p-value
+      - test_name: unique identifier for this test case
     """
     logger = logging.getLogger(__name__)
     logger.info("Starting test_advntr_input for case: %s", advntr_case["test_name"])
@@ -506,44 +508,49 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
         f"STDERR:\n{result.stderr}"
     )
 
-    # MINIMAL CHANGE: now look for the VCF inside the 'advntr' subfolder
+    # Look for the filtered adVNTR results TSV inside the 'advntr' subfolder
     advntr_dir = output_dir / "advntr"
-    vcf_path = advntr_dir / expected_vcf
+    result_path = advntr_dir / expected_vcf
 
-    logger.info("Looking for %s", vcf_path)
-    assert vcf_path.exists(), (
-        f"Expected adVNTR VCF {expected_vcf} was not generated in the 'advntr/' folder.\n"
-        f"Output folder contents: {list(output_dir.iterdir())}"
+    logger.info("Looking for adVNTR result file: %s", result_path)
+    assert result_path.exists(), (
+        f"Expected adVNTR result file {expected_vcf} was not generated in the 'advntr/' folder.\n"
+        f"Output folder contents: {list(output_dir.iterdir())}\n"
+        f"adVNTR folder contents: {list(advntr_dir.iterdir()) if advntr_dir.exists() else 'N/A'}"
     )
 
-    # Parse the adVNTR output, skipping lines starting with '#'
+    # Parse the adVNTR output, skipping comment lines starting with '#'
     data_lines = []
-    with open(vcf_path, "r") as f:
+    with open(result_path, "r") as f:
         for line in f:
             line = line.strip()
             if line.startswith("#"):
                 continue  # skip comment lines
             data_lines.append(line)
 
-    # If the next line is the header (VID State NumberOfSupportingReads ...), skip it too.
+    # Skip the header line (VID Variant NumberOfSupportingReads MeanCoverage Pvalue ...)
     if data_lines and data_lines[0].startswith("VID"):
         logger.info("Skipping adVNTR header line: %s", data_lines[0])
         data_lines.pop(0)
 
     assert (
         len(data_lines) > 0
-    ), f"No data lines found in {vcf_path} after skipping header."
+    ), f"No data lines found in {result_path} after skipping header."
 
-    # Now parse the first data line
+    # Parse the first data line (should be the best/filtered result)
     columns = data_lines[0].split("\t")
-    # Typical line example:
-    # 25561  I22_2_G_LEN1  11  153.986111111  6.78296229901e-07
+    logger.info("Parsed adVNTR result columns: %s", columns)
+    # Typical line example from output_adVNTR_result.tsv:
+    # 25561  I22_2_G_LEN1  13  144.234722222  3.46346905707e-09  2  22  T  TG  Not flagged
+    # We need at least the first 5 columns: VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue
     assert len(columns) >= 5, "Expected at least 5 columns in adVNTR output."
 
     advntr_expected = advntr_case["advntr_assertions"]
 
     # Compare each field as needed.
-    # 0 => VID, 1 => State, 2 => NumberOfSupportingReads, 3 => MeanCoverage, 4 => Pvalue
+    # Column indices: 0 => VID, 1 => Variant (called "State" in assertions),
+    #                 2 => NumberOfSupportingReads, 3 => MeanCoverage, 4 => Pvalue
+    # Note: TSV has additional columns after index 4 (RU, POS, REF, ALT, Flag)
     actual_vid = columns[0]
     assert (
         actual_vid == advntr_expected["VID"]
