@@ -351,13 +351,13 @@
           "--advntr-max-coverage",
           "300"
         ],
-        "expected_vcf": "output_adVNTR.vcf",
+        "expected_vcf": "output_adVNTR_result.tsv",
         "advntr_assertions": {
           "VID": "25561",
           "State": "I22_2_G_LEN1",
-          "NumberOfSupportingReads": 11,
-          "MeanCoverage": 153.986111111,
-          "Pvalue": 6.78296229901e-07
+          "NumberOfSupportingReads": 13,
+          "MeanCoverage": 144.234722222,
+          "Pvalue": 3.46346905707e-09
         }
       }
     ]
