@@ -28,6 +28,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         unzip \
         zip \
         curl \
+        ca-certificates \
         && rm -rf /var/lib/apt/lists/*
 
 # Install mamba for faster conda package installation
@@ -61,7 +62,8 @@ RUN mamba env create -f /tmp/environment_vntyper.yml && \
     rm /tmp/environment_vntyper.yml /tmp/environment_envadvntr.yml /tmp/environment_shark.yml
 
 # Install VNtyper using pip within the vntyper environment with BuildKit cache
-RUN --mount=type=cache,target=/root/.cache/pip \
+# Removed --no-cache-dir to leverage BuildKit cache mount
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     conda run -n vntyper pip install .
 
 # Make adVNTR installation script executable
@@ -79,8 +81,9 @@ RUN conda run -n vntyper vntyper --config-path $REPO_DIR/vntyper/config.json ins
 
 # Install FastAPI, Uvicorn, Celery, Redis, and other dependencies with BuildKit cache
 # Note: Using fastapi[standard] to include fastapi-cli for 'fastapi dev' command
-RUN --mount=type=cache,target=/root/.cache/pip \
-    conda run -n vntyper pip install --no-cache-dir \
+# Removed --no-cache-dir to leverage BuildKit cache mount
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    conda run -n vntyper pip install \
         "fastapi[standard]==0.115.3" \
         "uvicorn[standard]==0.32.0" \
         redis==5.2.0 \

@@ -73,7 +73,7 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
 
 # Install VNtyper using pip within the vntyper environment with BuildKit cache
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    conda run -n vntyper pip install --no-cache-dir .
+    conda run -n vntyper pip install .
 
 # Make adVNTR installation script executable
 RUN chmod +x vntyper/dependencies/advntr/install_advntr.sh
@@ -90,7 +90,7 @@ RUN conda run -n vntyper vntyper --config-path /opt/vntyper/vntyper/config.json 
 # Install FastAPI, Uvicorn, Celery, Redis, and other dependencies with BuildKit cache
 # Note: Using fastapi[standard] to include fastapi-cli for 'fastapi dev' command
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    conda run -n vntyper pip install --no-cache-dir \
+    conda run -n vntyper pip install \
         "fastapi[standard]==0.115.3" \
         "uvicorn[standard]==0.32.0" \
         redis==5.2.0 \
