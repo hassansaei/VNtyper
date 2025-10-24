@@ -141,8 +141,13 @@ COPY --from=builder /opt/vntyper /opt/vntyper
 # Extract adVNTR database if zip exists but directory doesn't
 # This ensures the database is available even if extraction didn't persist from builder
 RUN if [ -f /opt/vntyper/reference/vntr_db_advntr.zip ] && [ ! -d /opt/vntyper/reference/vntr_db_advntr ]; then \
-        python3 -c "import zipfile; zipfile.ZipFile('/opt/vntyper/reference/vntr_db_advntr.zip').extractall('/opt/vntyper/reference')" && \
-        echo "Extracted adVNTR database"; \
+        python3 -c "import sys, zipfile; \
+try: \
+    zipfile.ZipFile('/opt/vntyper/reference/vntr_db_advntr.zip').extractall('/opt/vntyper/reference'); \
+    print('Successfully extracted adVNTR database') \
+except Exception as e: \
+    print('ERROR: Failed to extract adVNTR database:', e, file=sys.stderr); \
+    sys.exit(1)"; \
     elif [ -d /opt/vntyper/reference/vntr_db_advntr ]; then \
         echo "adVNTR database already extracted"; \
     else \

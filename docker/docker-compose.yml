@@ -23,6 +23,8 @@ services:
 
   api:
     build:
+      # Use parent directory as context to access vntyper/ package
+      # Security: Sensitive files excluded via .dockerignore in project root
       context: ..
       dockerfile: docker/Dockerfile
     image: vntyper:latest
@@ -52,6 +54,8 @@ services:
 
   worker:
     build:
+      # Use parent directory as context to access vntyper/ package
+      # Security: Sensitive files excluded via .dockerignore in project root
       context: ..
       dockerfile: docker/Dockerfile
     image: vntyper:latest
@@ -75,6 +79,8 @@ services:
 
   beat:
     build:
+      # Use parent directory as context to access vntyper/ package
+      # Security: Sensitive files excluded via .dockerignore in project root
       context: ..
       dockerfile: docker/Dockerfile
     image: vntyper:latest
