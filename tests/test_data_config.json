@@ -387,7 +387,10 @@
           "VID": "25561",
           "State": "I22_2_G_LEN1",
           "NumberOfSupportingReads": 11,
-          "MeanCoverage": 144.234722222,
+          "MeanCoverage": {
+            "value": 153.986111111,
+            "tolerance_percentage": 10
+          },
           "Pvalue": 3.46346905707e-09
         }
       }
