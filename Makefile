@@ -37,6 +37,7 @@ help:
 	@echo "$(GREEN)Docker:$(RESET)"
 	@echo "  make docker-build          - Build multi-stage Docker image (production-ready)"
 	@echo "  make docker-test           - Test Docker container with Zenodo data (fast, local)"
+	@echo "                               Run specific tests: bash docker/test_docker.sh example_66bf advntr"
 	@echo "  make docker-scan           - Scan Docker image for vulnerabilities (all severities)"
 	@echo "  make docker-scan-critical  - Scan Docker image for CRITICAL vulnerabilities only"
 	@echo "  make docker-clean          - Remove all VNtyper Docker images"
