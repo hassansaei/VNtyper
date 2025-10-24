@@ -7,14 +7,17 @@ Unit tests for the scoring functionality in vntyper/scripts/scoring.py.
 Validates frame-score calculations, depth splitting, and frameshift extraction.
 """
 
-import pytest
 import pandas as pd
+import pytest
 
 from vntyper.scripts.scoring import (
+    extract_frameshifts,
     split_depth_and_calculate_frame_score,
     split_frame_score,
-    extract_frameshifts,
 )
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize(

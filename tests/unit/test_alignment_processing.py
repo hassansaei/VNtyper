@@ -7,10 +7,15 @@ Tests include functionality for checking BWA index completeness
 and aligning/sorting FASTQ files.
 """
 
-import pytest
 import logging
 from pathlib import Path
-from vntyper.scripts.alignment_processing import check_bwa_index, align_and_sort_fastq
+
+import pytest
+
+from vntyper.scripts.alignment_processing import align_and_sort_fastq, check_bwa_index
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 def test_check_bwa_index_all_present(tmp_path, test_config, caplog):

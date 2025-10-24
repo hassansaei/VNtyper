@@ -13,26 +13,30 @@ Tests cover:
 """
 
 import pytest
+
 from vntyper.scripts.reference_registry import (
-    # Main functions
-    normalize_assembly_name,
-    get_coordinate_system,
-    get_reference_source,
-    get_coordinates,
-    get_assembly_metadata,
-    get_reference_source_info,
-    list_assemblies,
-    is_deprecated,
-    get_all_coordinate_systems,
-    get_all_reference_sources,
-    resolve_chromosome_name,
-    validate_registry,
     # Data structures (for validation)
     ASSEMBLY_ALIASES,
     ASSEMBLY_METADATA,
     COORDINATE_SYSTEMS,
     REFERENCE_SOURCES,
+    get_all_coordinate_systems,
+    get_all_reference_sources,
+    get_assembly_metadata,
+    get_coordinate_system,
+    get_coordinates,
+    get_reference_source,
+    get_reference_source_info,
+    is_deprecated,
+    list_assemblies,
+    # Main functions
+    normalize_assembly_name,
+    resolve_chromosome_name,
+    validate_registry,
 )
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 # =============================================================================
