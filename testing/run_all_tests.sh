@@ -108,43 +108,43 @@ echo "Baseline:    $BASELINE_SIZE"
 echo "Multi-stage: $MULTISTAGE_SIZE"
 
 log_info "Testing conda environments..."
-for env in vntyper envadvntr shark; do
-    docker run --rm vntyper:multistage bash -c "conda run -n $env python --version"
+for env in vntyper envadvntr shark_env; do
+    docker run --rm --entrypoint bash vntyper:multistage -c "conda run -n $env python --version"
     log_info "✅ $env environment OK"
 done
 
 log_info "Testing Java (CRITICAL for Kestrel)..."
-docker run --rm vntyper:multistage bash -c "conda run -n vntyper java -version" 2>&1 | grep -q "openjdk"
+docker run --rm --entrypoint bash vntyper:multistage -c "conda run -n vntyper java -version" 2>&1 | grep -q "openjdk"
 log_info "✅ Java available"
 
 log_info "Testing bioinformatics tools..."
 for tool in bwa samtools fastp bcftools; do
-    docker run --rm vntyper:multistage bash -c "conda run -n vntyper which $tool" > /dev/null
-    docker run --rm vntyper:multistage bash -c "conda run -n vntyper $tool --version" > /dev/null 2>&1
+    docker run --rm --entrypoint bash vntyper:multistage -c "conda run -n vntyper which $tool" > /dev/null
+    docker run --rm --entrypoint bash vntyper:multistage -c "conda run -n vntyper $tool --version" > /dev/null 2>&1
     log_info "✅ $tool functional"
 done
 
 log_info "Testing Python packages..."
-docker run --rm vntyper:multistage bash -c "conda run -n vntyper python -c 'import pandas, numpy, pysam, Bio, vntyper'"
+docker run --rm --entrypoint bash vntyper:multistage -c "conda run -n vntyper python -c 'import pandas, numpy, pysam, Bio, vntyper'"
 log_info "✅ Python packages OK"
 
 log_info "Testing VNtyper CLI..."
-docker run --rm vntyper:multistage vntyper --version
-docker run --rm vntyper:multistage vntyper --help | grep -q "usage:"
+docker run --rm --entrypoint bash vntyper:multistage -c "vntyper --version"
+docker run --rm --entrypoint bash vntyper:multistage -c "vntyper --help" | grep -q "usage:"
 log_info "✅ VNtyper CLI functional"
 
 log_info "Testing file permissions..."
-docker run --rm vntyper:multistage bash -c "whoami" | grep -q "appuser"
-docker run --rm vntyper:multistage bash -c "touch /opt/vntyper/output/test.txt && rm /opt/vntyper/output/test.txt"
+docker run --rm --entrypoint bash vntyper:multistage -c "whoami" | grep -q "appuser"
+docker run --rm --entrypoint bash vntyper:multistage -c "touch /opt/vntyper/output/test.txt && rm /opt/vntyper/output/test.txt"
 log_info "✅ Permissions OK (running as appuser)"
 
 log_info "Testing FastAPI dependencies..."
-docker run --rm vntyper:multistage bash -c "conda run -n vntyper python -c 'import fastapi, uvicorn, celery, redis'"
+docker run --rm --entrypoint bash vntyper:multistage -c "conda run -n vntyper python -c 'import fastapi, uvicorn, celery, redis'"
 log_info "✅ Web stack dependencies OK"
 
 log_info "Running unit tests on multi-stage image..."
-docker run --rm -v "$(pwd)":/workspace -w /workspace vntyper:multistage \
-    bash -c "conda run -n vntyper pytest -m unit -v" > testing/phase2/unit_tests.log 2>&1
+docker run --rm --entrypoint bash -v "$(pwd)":/workspace -w /workspace vntyper:multistage \
+    -c "conda run -n vntyper pytest -m unit -v" > testing/phase2/unit_tests.log 2>&1
 
 UNIT_RESULT=$?
 if [ $UNIT_RESULT -eq 0 ]; then
@@ -155,7 +155,7 @@ fi
 
 log_info "Checking for build tools in runtime (should be absent)..."
 FOUND_GCC=0
-docker run --rm vntyper:multistage bash -c "which gcc" > /dev/null 2>&1 && FOUND_GCC=1 || true
+docker run --rm --entrypoint bash vntyper:multistage -c "which gcc" > /dev/null 2>&1 && FOUND_GCC=1 || true
 if [ $FOUND_GCC -eq 0 ]; then
     log_info "✅ No build tools in runtime image (good!)"
 else
