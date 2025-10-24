@@ -182,7 +182,7 @@ def detect_index_conflicts(aligners: dict[str, dict[str, Any]]) -> list[str]:
         list: List of warning messages about conflicts (empty if none).
     """
     warnings = []
-    extension_map = {}
+    extension_map: dict[str, str] = {}
 
     for aligner_name, aligner_info in aligners.items():
         index_files = aligner_info.get("index_files", [])
@@ -385,12 +385,14 @@ def process_ucsc_references(
     """
     for ref_name, ref_info in ucsc_refs.items():
         url = ref_info.get("url")
-        target_path = output_dir / ref_info.get("target_path")
+        target_path_str = ref_info.get("target_path")
         index_command = ref_info.get("index_command", None)
 
-        if not url or not ref_info.get("target_path"):
+        if not url or not target_path_str:
             logging.warning(f"Missing URL or target_path for UCSC reference {ref_name}. Skipping.")
             continue
+
+        target_path = output_dir / target_path_str
 
         download_file(url, target_path)
 
@@ -460,13 +462,15 @@ def process_vntyper_references(
     """
     for ref_name, ref_info in vntyper_refs.items():
         url = ref_info.get("url")
-        target_path = output_dir / ref_info.get("target_path")
+        target_path_str = ref_info.get("target_path")
         extract_to = ref_info.get("extract_to", None)
         index_command = ref_info.get("index_command", None)
 
-        if not url or not ref_info.get("target_path"):
+        if not url or not target_path_str:
             logging.warning(f"Missing URL or target_path for VNtyper reference {ref_name}. Skipping.")
             continue
+
+        target_path = output_dir / target_path_str
 
         download_file(url, target_path)
 
@@ -520,12 +524,14 @@ def process_own_repository_references(
     raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
     for file_info in raw_files:
         url = file_info.get("url")
-        target_path = output_dir / file_info.get("target_path")
+        target_path_str = file_info.get("target_path")
         index_command = file_info.get("index_command", None)
 
-        if not url or not file_info.get("target_path"):
+        if not url or not target_path_str:
             logging.warning("Missing URL or target_path for own repository raw file. Skipping.")
             continue
+
+        target_path = output_dir / target_path_str
 
         download_file(url, target_path)
 
@@ -712,7 +718,7 @@ def main(
         logging.info("=" * 80)
         logging.info("")
 
-    md5_dict = {}
+    md5_dict: dict[str, str] = {}
 
     # Process UCSC references
     if ucsc_refs:
@@ -773,30 +779,40 @@ def main(
 
         # Collect all references from UCSC
         for ref_key, ref_info in ucsc_refs.items():
-            ref_path = output_dir / ref_info.get("target_path")
-            updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
+            ucsc_target = ref_info.get("target_path")
+            if ucsc_target:
+                ref_path = output_dir / ucsc_target
+                updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
 
         # Collect all references from NCBI
         for ref_key, ref_info in ncbi_refs.items():
-            ref_path = output_dir / ref_info.get("target_path")
-            updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
+            ncbi_target = ref_info.get("target_path")
+            if ncbi_target:
+                ref_path = output_dir / ncbi_target
+                updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
 
         # Collect all references from ENSEMBL
         for ref_key, ref_info in ensembl_refs.items():
-            ref_path = output_dir / ref_info.get("target_path")
-            updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
+            ensembl_target = ref_info.get("target_path")
+            if ensembl_target:
+                ref_path = output_dir / ensembl_target
+                updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
 
         # Collect all references from VNtyper
         for ref_key, ref_info in vntyper_refs.items():
-            ref_path = output_dir / ref_info.get("target_path")
-            updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
+            vntyper_target = ref_info.get("target_path")
+            if vntyper_target:
+                ref_path = output_dir / vntyper_target
+                updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
 
         # Collect references from own repository
         raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
         for file_info in raw_files:
-            ref_name = Path(file_info.get("target_path")).stem
-            ref_path = output_dir / file_info.get("target_path")
-            updated_references[f"own_repo_{ref_name}"] = ref_path.resolve()
+            own_target = file_info.get("target_path")
+            if own_target:
+                ref_name = Path(own_target).stem
+                ref_path = output_dir / own_target
+                updated_references[f"own_repo_{ref_name}"] = ref_path.resolve()
 
         update_config(config_path, updated_references)
     else:

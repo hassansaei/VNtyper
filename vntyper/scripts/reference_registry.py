@@ -20,7 +20,29 @@ eliminating duplication and improving maintainability.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, TypedDict, cast
+
+# =============================================================================
+# Type Definitions
+# =============================================================================
+
+
+class AssemblyMetadataDict(TypedDict):
+    """Type definition for assembly metadata dictionary."""
+
+    coordinate_system: str
+    reference_source: str
+    description: str
+    deprecated: bool
+
+
+class CoordinateSystemDict(TypedDict):
+    """Type definition for coordinate system dictionary."""
+
+    chromosome: int
+    bam_region_coords: str
+    vntr_region_coords: str
+
 
 # =============================================================================
 # Coordinate Systems (Biological Truth - Single Source of Truth)
@@ -209,7 +231,8 @@ def get_coordinate_system(assembly_name: str) -> str:
     if not metadata:
         raise ValueError(f"No metadata found for assembly '{canonical}'")
 
-    return metadata["coordinate_system"]
+    # Cast is safe here because we validate the structure in validate_registry()
+    return cast(str, metadata["coordinate_system"])
 
 
 def get_reference_source(assembly_name: str) -> str:
@@ -239,7 +262,8 @@ def get_reference_source(assembly_name: str) -> str:
     if not metadata:
         raise ValueError(f"No metadata found for assembly '{canonical}'")
 
-    return metadata["reference_source"]
+    # Cast is safe here because we validate the structure in validate_registry()
+    return cast(str, metadata["reference_source"])
 
 
 def get_coordinates(assembly_name: str, region_type: str) -> str:
@@ -274,7 +298,8 @@ def get_coordinates(assembly_name: str, region_type: str) -> str:
         available = ", ".join(coord_data.keys())
         raise ValueError(f"Region type '{region_type}' not found. Available types: {available}")
 
-    return coordinates
+    # Cast is safe here because we validate the structure in validate_registry()
+    return cast(str, coordinates)
 
 
 def get_assembly_metadata(assembly_name: str) -> dict:
