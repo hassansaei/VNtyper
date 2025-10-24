@@ -23,6 +23,8 @@ help:
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format code with Ruff"
 	@echo "  make format-check     - Check code formatting without changes"
+	@echo "  make typecheck        - Run mypy type checker on vntyper package"
+	@echo "  make typecheck-tests  - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
 	@echo "  make test             - Run all tests"
@@ -79,6 +81,22 @@ format-check:
 	ruff check vntyper/
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
+# Type checking targets
+typecheck:
+	@echo "$(BLUE)Running mypy type checker on vntyper package...$(RESET)"
+	mypy vntyper/ --ignore-missing-imports
+	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
+typecheck-tests:
+	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
+	mypy tests/ --ignore-missing-imports
+	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
+typecheck-all:
+	@echo "$(BLUE)Running mypy type checker on all code...$(RESET)"
+	mypy vntyper/ tests/ --ignore-missing-imports
+	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
 # Testing targets
 test:
 	@echo "$(BLUE)Running all tests...$(RESET)"
@@ -116,13 +134,16 @@ build:
 	@echo "$(GREEN)✓ Build complete - packages in dist/$(RESET)"
 
 # Combined targets for convenience
-.PHONY: all check
+.PHONY: all check check-all
 
-all: format lint test
+all: format lint typecheck test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check: format-check test
+check: format-check typecheck test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
+
+check-all: format-check lint typecheck-all test
+	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
 
 # Docker targets
 #Docker configuration
