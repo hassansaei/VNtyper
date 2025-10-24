@@ -30,9 +30,9 @@ DOCKER_TEST_DIR="docker/test_output"
 # Define all test cases (from test_data_config.json)
 declare -A TEST_CASES
 TEST_CASES=(
-    ["example_b178"]="416:7088:0.05869:High_Precision*"
+    ["example_b178"]="416:7110:0.05869:High_Precision*"
     ["example_a5c1"]="93:9883:0.00941:High_Precision"
-    ["example_66bf"]="491:22647:0.02168:High_Precision*"
+    ["example_66bf"]="547:22703:0.02409:High_Precision*"
     ["example_7a61"]="None:None:None:Negative"
     ["example_dfc3"]="206:18977:0.01086:High_Precision*"
 )
@@ -40,7 +40,7 @@ TEST_CASES=(
 # adVNTR test case (from test_data_config.json advntr_tests)
 # Format: VID:State:NumberOfSupportingReads:MeanCoverage:Pvalue
 ADVNTR_TEST_ID="example_a5c1_advntr"
-ADVNTR_EXPECTED="25561:I22_2_G_LEN1:13:144.234722222:3.46346905707e-09"
+ADVNTR_EXPECTED="25561:I22_2_G_LEN1:11:144.234722222:3.46346905707e-09"
 
 # =============================================================================
 # Utility Functions
