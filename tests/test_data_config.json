@@ -207,7 +207,10 @@
         "expected_archive": true,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": 416,
-          "Estimated_Depth_Variant_ActiveRegion": 7088,
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7110,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.05869074492099323,
             "tolerance_percentage": 5
@@ -248,7 +251,10 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 491,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 547,
+            "tolerance_percentage": 5
+          },
           "Estimated_Depth_Variant_ActiveRegion": 22647,
           "Depth_Score": {
             "value": 0.02168057579370336,
@@ -291,7 +297,10 @@
         "expected_archive": true,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
@@ -312,7 +321,10 @@
         "expected_archive": true,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18976,
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19182,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855817875210793,
             "tolerance_percentage": 5
@@ -333,7 +345,10 @@
         "expected_archive": true,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
@@ -354,7 +369,10 @@
         "expected_archive": true,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
