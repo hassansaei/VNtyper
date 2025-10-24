@@ -1,0 +1,112 @@
+name: CI Tests
+
+# Run on push to main/develop and on all pull requests
+on:
+  push:
+    branches: [main, develop, docker-modernization-2025]
+  pull_request:
+    branches: [main, develop]
+
+# Ensure only one workflow runs at a time for each PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Code Quality (Linting)
+  lint:
+    name: Lint (Ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run linting (make lint)
+        run: make lint
+
+  # Job 2: Type Checking
+  typecheck:
+    name: Type Check (mypy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run type checking (make typecheck)
+        run: make typecheck
+
+  # Job 3: Unit Tests (fast, multiple Python versions)
+  test-unit:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run unit tests (make test-unit)
+        run: make test-unit
+
+      - name: Display test summary
+        if: always()
+        run: |
+          echo "✓ Unit tests completed for Python ${{ matrix.python-version }}"
+
+  # Job 4: Summary (all checks must pass)
+  ci-success:
+    name: CI Success
+    needs: [lint, typecheck, test-unit]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.typecheck.result }}" != "success" ]] || \
+             [[ "${{ needs.test-unit.result }}" != "success" ]]; then
+            echo "❌ One or more CI jobs failed"
+            exit 1
+          else
+            echo "✅ All CI checks passed!"
+          fi
