@@ -613,9 +613,20 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     )
 
     actual_mean_cov = float(columns[3])
-    assert abs(actual_mean_cov - advntr_expected["MeanCoverage"]) < 1e-7, (
-        f"Expected MeanCoverage={advntr_expected['MeanCoverage']}, got {actual_mean_cov}"
-    )
+    # Handle MeanCoverage with optional tolerance (similar to Kestrel depth assertions)
+    if isinstance(advntr_expected["MeanCoverage"], dict):
+        expected_val = advntr_expected["MeanCoverage"]["value"]
+        tolerance_pct = advntr_expected["MeanCoverage"].get("tolerance_percentage", 0)
+        tolerance = expected_val * (tolerance_pct / 100.0)
+        assert abs(actual_mean_cov - expected_val) <= tolerance, (
+            f"MeanCoverage mismatch. Got={actual_mean_cov}, Expected ~{expected_val} "
+            f"±{tolerance} ({tolerance_pct}%)"
+        )
+    else:
+        # Backward compatibility: exact match with tiny float tolerance
+        assert abs(actual_mean_cov - advntr_expected["MeanCoverage"]) < 1e-7, (
+            f"Expected MeanCoverage={advntr_expected['MeanCoverage']}, got {actual_mean_cov}"
+        )
 
     # Compare p-value with a suitable floating tolerance
     actual_pval = float(columns[4])
