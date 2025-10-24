@@ -187,6 +187,10 @@ fastp.json
 /tests/data/
 /tests/backup/
 
+# docker test output
+/docker/test_output/
+/testing/
+
 # apptainer files
 *.sif
 
