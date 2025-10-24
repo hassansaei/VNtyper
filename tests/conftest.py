@@ -133,11 +133,7 @@ def pytest_runtest_makereport(item, call):
 
     # Only log at the end of the call phase (actual test execution)
     if rep.when == "call":
-        status_emoji = {
-            "passed": "✓",
-            "failed": "✗",
-            "skipped": "⊘"
-        }.get(rep.outcome, "?")
+        status_emoji = {"passed": "✓", "failed": "✗", "skipped": "⊘"}.get(rep.outcome, "?")
 
         duration_str = f" ({rep.duration:.2f}s)" if hasattr(rep, "duration") else ""
 

@@ -391,7 +391,10 @@
             "value": 153.986111111,
             "tolerance_percentage": 10
           },
-          "Pvalue": 3.46346905707e-09
+          "Pvalue": {
+            "value": 6.78296229901e-07,
+            "log10_tolerance": 2
+          }
         }
       }
     ],

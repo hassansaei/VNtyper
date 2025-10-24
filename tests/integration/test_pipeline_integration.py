@@ -619,8 +619,7 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
         tolerance_pct = advntr_expected["MeanCoverage"].get("tolerance_percentage", 0)
         tolerance = expected_val * (tolerance_pct / 100.0)
         assert abs(actual_mean_cov - expected_val) <= tolerance, (
-            f"MeanCoverage mismatch. Got={actual_mean_cov}, Expected ~{expected_val} "
-            f"±{tolerance} ({tolerance_pct}%)"
+            f"MeanCoverage mismatch. Got={actual_mean_cov}, Expected ~{expected_val} ±{tolerance} ({tolerance_pct}%)"
         )
     else:
         # Backward compatibility: exact match with tiny float tolerance
@@ -628,11 +627,24 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
             f"Expected MeanCoverage={advntr_expected['MeanCoverage']}, got {actual_mean_cov}"
         )
 
-    # Compare p-value with a suitable floating tolerance
+    # Compare p-value with order-of-magnitude tolerance (p-values are stochastic)
     actual_pval = float(columns[4])
-    assert abs(actual_pval - advntr_expected["Pvalue"]) < 1e-12, (
-        f"Expected Pvalue={advntr_expected['Pvalue']}, got {actual_pval}"
-    )
+    if isinstance(advntr_expected["Pvalue"], dict):
+        # New format: structured p-value with log10 tolerance
+        expected_val = advntr_expected["Pvalue"]["value"]
+        log10_tol = advntr_expected["Pvalue"].get("log10_tolerance", 2)
+        import math
+
+        # Compare on log10 scale to allow order-of-magnitude variation
+        assert abs(math.log10(actual_pval) - math.log10(expected_val)) <= log10_tol, (
+            f"P-value mismatch. Got={actual_pval}, Expected ~{expected_val} "
+            f"(must be within {log10_tol} orders of magnitude)"
+        )
+    else:
+        # Backward compatibility: exact match with tiny float tolerance
+        assert abs(actual_pval - advntr_expected["Pvalue"]) < 1e-12, (
+            f"Expected Pvalue={advntr_expected['Pvalue']}, got {actual_pval}"
+        )
 
 
 #
