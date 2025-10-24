@@ -73,13 +73,15 @@ class DockerOperations:
     - Enable BuildKit for 30-50% faster builds
     """
 
-    def __init__(self, image_name: str = "vntyper:latest", default_timeout: int = 300):
+    def __init__(self, image_name: str = "vntyper:latest", default_timeout: int = 1800):
         """
         Initialize Docker operations.
 
         Args:
             image_name: Docker image name
             default_timeout: Default timeout for operations (seconds)
+                           Default is 1800s (30 minutes) to accommodate long-running
+                           tests like adVNTR which can take ~25 minutes
 
         Raises:
             DockerNotFoundError: If Docker not installed
@@ -254,7 +256,8 @@ class DockerOperations:
             reference_assembly: Reference assembly (hg19, hg38, GRCh37, GRCh38)
             threads: Number of threads
             extra_modules: Extra modules (e.g., ["advntr"])
-            timeout: Pipeline timeout (default: 300s)
+            timeout: Pipeline timeout (default: 1800s / 30 minutes)
+                    Note: adVNTR tests can take ~25 minutes
 
         Returns:
             subprocess.CompletedProcess
@@ -298,7 +301,7 @@ class DockerOperations:
             log.info(f"  Extra modules: {', '.join(extra_modules)}")
 
         return self.run_command(
-            command=vntyper_cmd, volumes=volumes, timeout=timeout or 300
+            command=vntyper_cmd, volumes=volumes, timeout=timeout or self.default_timeout
         )
 
     def check_health(self) -> bool:
