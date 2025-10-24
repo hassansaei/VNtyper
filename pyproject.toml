@@ -45,6 +45,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3.0",  # Prevent stuck tests
+    "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "types-requests>=2.0.0",
