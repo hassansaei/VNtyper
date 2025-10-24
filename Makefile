@@ -191,11 +191,11 @@ docker-build:
 
 docker-test:
 	@echo "$(BLUE)Testing Docker container with Zenodo test data...$(RESET)"
-	@if [ ! -f docker/test_docker.sh ]; then \
-		echo "$(RED)Error: docker/test_docker.sh not found$(RESET)"; \
+	@if [ ! -f docker/test_docker.py ]; then \
+		echo "$(RED)Error: docker/test_docker.py not found$(RESET)"; \
 		exit 1; \
 	fi
-	@bash docker/test_docker.sh
+	@python3 docker/test_docker.py
 	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
 docker-scan:

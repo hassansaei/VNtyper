@@ -42,21 +42,21 @@ apptainer pull docker://saei/vntyper:latest
 # Test with built-in test data (uses Zenodo dataset)
 make docker-test
 
-# Or run manually
-bash docker/test_docker.sh
+# Or run manually with Python
+python3 docker/test_docker.py
 ```
 
 ### **Test Specific Components**
 
 ```bash
 # Test only adVNTR module
-bash docker/test_docker.sh advntr
+python3 docker/test_docker.py advntr
 
 # Test specific sample
-bash docker/test_docker.sh example_66bf
+python3 docker/test_docker.py example_66bf_hg19_subset_fast
 
-# Test multiple components
-bash docker/test_docker.sh example_66bf advntr
+# Test multiple samples
+python3 docker/test_docker.py example_66bf_hg19_subset_fast example_7a61_hg19_subset_fast
 ```
 
 ### **Verify Installation**
