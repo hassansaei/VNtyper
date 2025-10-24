@@ -243,7 +243,7 @@
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.02168057579370336,
+            "value": 0.02409373210588909,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
@@ -386,7 +386,7 @@
         "advntr_assertions": {
           "VID": "25561",
           "State": "I22_2_G_LEN1",
-          "NumberOfSupportingReads": 13,
+          "NumberOfSupportingReads": 11,
           "MeanCoverage": 144.234722222,
           "Pvalue": 3.46346905707e-09
         }
