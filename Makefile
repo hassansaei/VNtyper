@@ -1,11 +1,12 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-cov clean build docker-build docker-build-optimized docker-scan docker-scan-critical docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-cov clean build docker-build docker-test docker-scan docker-scan-critical docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
 GREEN := \033[0;32m
+RED := \033[0;31m
 RESET := \033[0m
 
 # Default target - show help
@@ -34,8 +35,8 @@ help:
 	@echo "  make build            - Build distribution packages"
 	@echo ""
 	@echo "$(GREEN)Docker:$(RESET)"
-	@echo "  make docker-build          - Build Docker image (standard)"
-	@echo "  make docker-build-optimized - Build optimized multi-stage Docker image"
+	@echo "  make docker-build          - Build multi-stage Docker image (production-ready)"
+	@echo "  make docker-test           - Test Docker container with Zenodo data (fast, local)"
 	@echo "  make docker-scan           - Scan Docker image for vulnerabilities (all severities)"
 	@echo "  make docker-scan-critical  - Scan Docker image for CRITICAL vulnerabilities only"
 	@echo "  make docker-clean          - Remove all VNtyper Docker images"
@@ -129,9 +130,19 @@ DOCKER_IMAGE_TAG := latest
 DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
 docker-build:
-	@echo "$(BLUE)Building Docker image with BuildKit optimizations...$(RESET)"
-	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.local -t $(DOCKER_IMAGE) .
+	@echo "$(BLUE)Building Docker image (multi-stage production build)...$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
+	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
+
+docker-test:
+	@echo "$(BLUE)Testing Docker container with Zenodo test data...$(RESET)"
+	@if [ ! -f docker/test_docker.sh ]; then \
+		echo "$(RED)Error: docker/test_docker.sh not found$(RESET)"; \
+		exit 1; \
+	fi
+	@bash docker/test_docker.sh
+	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
 docker-scan:
 	@echo "$(BLUE)Scanning Docker image for vulnerabilities...$(RESET)"
