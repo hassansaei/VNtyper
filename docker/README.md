@@ -1,41 +1,76 @@
 # VNtyper Docker Container
 
-A Docker container for **VNtyper**, enabling easy execution of the tool with customizable configurations and external data handling.
+A production-ready Docker container for **VNtyper** with multi-stage build optimization (60-70% smaller image size).
 
 ## **Building the Docker Image**
 
-1. **Clone the VNtyper Repository:**
+### **Quick Start**
 
-   ```bash
-   git clone https://github.com/hassansaei/VNtyper.git
-   cd VNtyper
-   ```
+```bash
+# Clone repository
+git clone https://github.com/hassansaei/VNtyper.git
+cd VNtyper
 
-2. **Create the `entrypoint.sh` Script:**
+# Build with BuildKit (recommended)
+DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t vntyper:latest .
 
-   Save the `entrypoint.sh` content provided above into a file named `entrypoint.sh` in the VNtyper directory.
+# Or use Make
+make docker-build
+```
 
-3. **(Optional) Create the `config.json` File:**
+### **Pull Pre-built Image**
 
-   If you wish to use a configuration file, save the provided JSON content into `docker/config.json`.
+```bash
+# From Docker Hub
+docker pull saei/vntyper:latest
 
-4. **Build the Docker Image:**
+# From GitHub Container Registry
+docker pull ghcr.io/hassansaei/vntyper:latest
+```
 
-   ```bash
-   docker build --no-cache --build-arg REPO_URL=https://github.com/hassansaei/VNtyper.git \
-               --build-arg REPO_DIR=/opt/vntyper \
-               -t vntyper:latest .
-   ```
-5. **Pull the Docker Image from Docker Hub:**
+### **Generate Apptainer Image**
 
-    ```bash
-    docker pull saei/vntyper:latest
-    ```
-6. **Generate apptainer Image from Docker Image:**
+```bash
+apptainer pull docker://saei/vntyper:latest
+```
 
-    ```bash
-    apptainer pull docker://saei/vntyper:latest
-    ```
+## **Testing the Build**
+
+### **Quick Test**
+
+```bash
+# Test with built-in test data (uses Zenodo dataset)
+make docker-test
+
+# Or run manually
+bash docker/test_docker.sh
+```
+
+### **Test Specific Components**
+
+```bash
+# Test only adVNTR module
+bash docker/test_docker.sh advntr
+
+# Test specific sample
+bash docker/test_docker.sh example_66bf
+
+# Test multiple components
+bash docker/test_docker.sh example_66bf advntr
+```
+
+### **Verify Installation**
+
+```bash
+# Check VNtyper version
+docker run --rm vntyper:latest vntyper --version
+
+# Check Java runtime
+docker run --rm vntyper:latest java -version
+
+# Check bioinformatics tools
+docker run --rm vntyper:latest samtools --version
+```
 
 ## **Running the Docker Container**
 
