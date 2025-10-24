@@ -7,7 +7,7 @@ import os
 import statistics  # for median and stdev calculations
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from vntyper.scripts.extract_unmapped_from_offset import (
     extract_unmapped_reads_from_offset,
@@ -487,7 +487,7 @@ def parse_contigs_from_header(header: str) -> list:
     for line in header.splitlines():
         if line.startswith("@SQ"):
             parts = line.split("\t")
-            contig_info: dict[str, str | int | None] = {}
+            contig_info: dict[str, Union[str, int, None]] = {}
             for part in parts:
                 if part.startswith("SN:"):
                     contig_info["name"] = part.replace("SN:", "")
