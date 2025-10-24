@@ -94,6 +94,15 @@ RUN chmod +x vntyper/dependencies/advntr/install_advntr.sh && \
 RUN conda run -n vntyper vntyper --config-path /opt/vntyper/vntyper/config.json install-references \
     --output-dir /opt/vntyper/reference
 
+# Extract adVNTR database if it was installed as a zip file
+# Do this in builder stage where we have proper Python environment
+RUN if [ -f /opt/vntyper/reference/vntr_db_advntr.zip ] && [ ! -d /opt/vntyper/reference/vntr_db_advntr ]; then \
+        echo "Extracting adVNTR database in builder stage..."; \
+        conda run -n vntyper python3 -c "import zipfile; z = zipfile.ZipFile('/opt/vntyper/reference/vntr_db_advntr.zip'); z.extractall('/opt/vntyper/reference'); print('Successfully extracted adVNTR database')" && \
+        echo "adVNTR database extracted successfully" || \
+        echo "WARNING: Failed to extract adVNTR database"; \
+    fi
+
 # Install FastAPI and web dependencies
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     conda run -n vntyper pip install \
@@ -138,20 +147,11 @@ COPY --from=builder /opt/conda/envs /opt/conda/envs
 # Using --chown to set ownership during copy for better layer efficiency
 COPY --from=builder /opt/vntyper /opt/vntyper
 
-# Extract adVNTR database if zip exists but directory doesn't
-# This ensures the database is available even if extraction didn't persist from builder
-RUN if [ -f /opt/vntyper/reference/vntr_db_advntr.zip ] && [ ! -d /opt/vntyper/reference/vntr_db_advntr ]; then \
-        python3 -c "import sys, zipfile; \
-try: \
-    zipfile.ZipFile('/opt/vntyper/reference/vntr_db_advntr.zip').extractall('/opt/vntyper/reference'); \
-    print('Successfully extracted adVNTR database') \
-except Exception as e: \
-    print('ERROR: Failed to extract adVNTR database:', e, file=sys.stderr); \
-    sys.exit(1)"; \
-    elif [ -d /opt/vntyper/reference/vntr_db_advntr ]; then \
-        echo "adVNTR database already extracted"; \
+# Verify adVNTR database presence (should have been extracted in builder stage)
+RUN if [ -d /opt/vntyper/reference/vntr_db_advntr ]; then \
+        echo "adVNTR database found and ready"; \
     else \
-        echo "WARNING: adVNTR database zip not found"; \
+        echo "INFO: adVNTR database not found - adVNTR module will not be available (this is optional)"; \
     fi
 
 # Set working directory

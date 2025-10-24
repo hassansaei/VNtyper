@@ -32,7 +32,7 @@ advntr_config = load_advntr_config()
 advntr_settings = advntr_config.get("advntr_settings", {})
 
 
-def run_advntr(db_file, sorted_bam, output, output_name, config):
+def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
 
@@ -92,7 +92,7 @@ def run_advntr(db_file, sorted_bam, output, output_name, config):
 
     try:
         # Run the adVNTR command and log output to the specified log file
-        if not run_command(advntr_command, log_file, critical=True):
+        if not run_command(advntr_command, log_file, critical=True, cwd=cwd):
             logging.error("adVNTR genotyping failed. Check the log for details.")
             return 1
     except sp.CalledProcessError as cpe:
