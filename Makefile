@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-cov clean build docker-build docker-test docker-scan docker-scan-critical docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-advntr test-cov test-quiet test-verbose clean build docker-build docker-test docker-scan docker-scan-critical docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -27,10 +27,13 @@ help:
 	@echo "  make typecheck-tests  - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
-	@echo "  make test             - Run all tests"
-	@echo "  make test-unit        - Run unit tests only"
-	@echo "  make test-integration - Run integration tests only"
+	@echo "  make test             - Run all tests (with live logging)"
+	@echo "  make test-unit        - Run unit tests only (fast)"
+	@echo "  make test-integration - Run integration tests only (with progress tracking)"
+	@echo "  make test-advntr      - Run adVNTR test only"
 	@echo "  make test-cov         - Run tests with coverage report"
+	@echo "  make test-quiet       - Run tests with minimal output"
+	@echo "  make test-verbose     - Run tests with detailed output"
 	@echo ""
 	@echo "$(GREEN)Build & Maintenance:$(RESET)"
 	@echo "  make clean            - Remove build artifacts and cache"
@@ -99,24 +102,42 @@ typecheck-all:
 
 # Testing targets
 test:
-	@echo "$(BLUE)Running all tests...$(RESET)"
+	@echo "$(BLUE)Running all tests (with live logging)...$(RESET)"
+	@echo "$(BLUE)Note: Live logging shows real-time progress for slow tests$(RESET)"
 	pytest
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 test-unit:
-	@echo "$(BLUE)Running unit tests...$(RESET)"
+	@echo "$(BLUE)Running unit tests (fast)...$(RESET)"
 	pytest -m unit
 	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
 
 test-integration:
-	@echo "$(BLUE)Running integration tests...$(RESET)"
+	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
+	@echo "$(BLUE)Note: Integration tests are slow, watch the live log output$(RESET)"
 	pytest -m integration
 	@echo "$(GREEN)✓ Integration tests complete$(RESET)"
+
+test-advntr:
+	@echo "$(BLUE)Running adVNTR test only...$(RESET)"
+	@echo "$(BLUE)Note: This test takes ~9 minutes, live logging shows progress$(RESET)"
+	pytest tests/integration/test_pipeline_integration.py::test_advntr_input -v
+	@echo "$(GREEN)✓ adVNTR test complete$(RESET)"
 
 test-cov:
 	@echo "$(BLUE)Running tests with coverage...$(RESET)"
 	pytest --cov=vntyper --cov-report=html --cov-report=term
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/$(RESET)"
+
+test-quiet:
+	@echo "$(BLUE)Running tests with minimal output...$(RESET)"
+	pytest --log-cli=false -q
+	@echo "$(GREEN)✓ Tests complete$(RESET)"
+
+test-verbose:
+	@echo "$(BLUE)Running tests with detailed output...$(RESET)"
+	pytest -v -s
+	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 # Maintenance targets
 clean:
