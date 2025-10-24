@@ -138,6 +138,17 @@ COPY --from=builder /opt/conda/envs /opt/conda/envs
 # Using --chown to set ownership during copy for better layer efficiency
 COPY --from=builder /opt/vntyper /opt/vntyper
 
+# Extract adVNTR database if zip exists but directory doesn't
+# This ensures the database is available even if extraction didn't persist from builder
+RUN if [ -f /opt/vntyper/reference/vntr_db_advntr.zip ] && [ ! -d /opt/vntyper/reference/vntr_db_advntr ]; then \
+        python3 -c "import zipfile; zipfile.ZipFile('/opt/vntyper/reference/vntr_db_advntr.zip').extractall('/opt/vntyper/reference')" && \
+        echo "Extracted adVNTR database"; \
+    elif [ -d /opt/vntyper/reference/vntr_db_advntr ]; then \
+        echo "adVNTR database already extracted"; \
+    else \
+        echo "WARNING: adVNTR database zip not found"; \
+    fi
+
 # Set working directory
 WORKDIR /opt/vntyper
 
