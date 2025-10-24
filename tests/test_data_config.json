@@ -255,7 +255,10 @@
             "value": 547,
             "tolerance_percentage": 5
           },
-          "Estimated_Depth_Variant_ActiveRegion": 22647,
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 22703,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.02168057579370336,
             "tolerance_percentage": 5
