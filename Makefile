@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-advntr test-cov test-quiet test-verbose clean build docker-build docker-test docker-scan docker-scan-critical docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose clean build docker-build docker-test docker-scan docker-scan-critical docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -27,13 +27,14 @@ help:
 	@echo "  make typecheck-tests  - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
-	@echo "  make test             - Run all tests (with live logging)"
-	@echo "  make test-unit        - Run unit tests only (fast)"
-	@echo "  make test-integration - Run integration tests only (with progress tracking)"
-	@echo "  make test-advntr      - Run adVNTR test only"
-	@echo "  make test-cov         - Run tests with coverage report"
-	@echo "  make test-quiet       - Run tests with minimal output"
-	@echo "  make test-verbose     - Run tests with detailed output"
+	@echo "  make test                    - Run all tests (with live logging)"
+	@echo "  make test-unit               - Run unit tests only (fast)"
+	@echo "  make test-integration        - Run integration tests only (sequential)"
+	@echo "  make test-integration-parallel - Run integration tests in parallel (67-81% faster)"
+	@echo "  make test-advntr             - Run adVNTR test only"
+	@echo "  make test-cov                - Run tests with coverage report"
+	@echo "  make test-quiet              - Run tests with minimal output"
+	@echo "  make test-verbose            - Run tests with detailed output"
 	@echo ""
 	@echo "$(GREEN)Build & Maintenance:$(RESET)"
 	@echo "  make clean            - Remove build artifacts and cache"
@@ -117,6 +118,16 @@ test-integration:
 	@echo "$(BLUE)Note: Integration tests are slow, watch the live log output$(RESET)"
 	pytest -m integration
 	@echo "$(GREEN)✓ Integration tests complete$(RESET)"
+
+test-integration-parallel:
+	@echo "$(BLUE)Running integration tests in parallel (auto-detect CPU cores)...$(RESET)"
+	@echo "$(BLUE)Using pytest-xdist for parallel execution (67-81% faster)$(RESET)"
+	@if ! python -c "import xdist" 2>/dev/null; then \
+		echo "$(RED)Error: pytest-xdist not installed. Run: pip install -e .[dev]$(RESET)"; \
+		exit 1; \
+	fi
+	pytest -n auto --dist loadfile -m integration -v
+	@echo "$(GREEN)✓ Integration tests complete (parallel mode)$(RESET)"
 
 test-advntr:
 	@echo "$(BLUE)Running adVNTR test only...$(RESET)"

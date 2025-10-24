@@ -37,6 +37,39 @@ def test_config():
         return json.load(f)
 
 
+@pytest.fixture(scope="session")
+def test_data_dir():
+    """
+    Session-scoped fixture for test data directory path.
+
+    Computed once per test session and reused across all tests.
+    """
+    return Path("tests/data")
+
+
+@pytest.fixture(scope="session")
+def reference_dir():
+    """
+    Session-scoped fixture for reference directory path.
+
+    Computed once per test session and reused across all tests.
+    """
+    return Path("reference")
+
+
+@pytest.fixture(scope="session")
+def kestrel_jar_path():
+    """
+    Session-scoped fixture for Kestrel JAR path validation.
+
+    Validates once per session instead of once per test.
+    """
+    jar_path = Path("vntyper/dependencies/kestrel/kestrel.jar")
+    if not jar_path.exists():
+        pytest.exit(f"Kestrel JAR not found: {jar_path}", returncode=1)
+    return jar_path
+
+
 # ============================================================================
 # Pytest Hooks for Progress Visibility
 # ============================================================================
