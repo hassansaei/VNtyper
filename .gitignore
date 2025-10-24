@@ -199,6 +199,6 @@ fastp.json
 CLAUDE.md
 
 # local development documentation and sensitive configs
-docs/
+plan/
 forbidden_strings.txt
 reference/forbidden_strings.txt
