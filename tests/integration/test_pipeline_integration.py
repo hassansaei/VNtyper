@@ -632,7 +632,7 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
 @pytest.fixture(scope="function")
 def fastq_case(request, test_config):
     """
-    Yields exactly one item from test_config["unit_tests"]["fastq_tests"].
+    Yields exactly one item from test_config["integration_tests"]["fastq_tests"].
     Each item is a dict describing a particular FASTQ-based scenario.
 
     Returns:
@@ -675,8 +675,8 @@ def pytest_generate_tests(metafunc):
     This allows each test function (e.g., test_fastq_input, test_bam_input_with_kestrel_checks,
     test_advntr_input) to be parametrized with an array of cases from the JSON file.
 
-    We handle three categories:
-      - "unit_tests" -> "fastq_tests"
+    We handle three categories (all under integration_tests):
+      - "integration_tests" -> "fastq_tests"
       - "integration_tests" -> "bam_tests"
       - "integration_tests" -> "advntr_tests"
     """
@@ -690,7 +690,7 @@ def pytest_generate_tests(metafunc):
 
     # For FASTQ tests
     if "fastq_case" in metafunc.fixturenames:
-        fastq_cases = config_data.get("unit_tests", {}).get("fastq_tests", [])
+        fastq_cases = config_data.get("integration_tests", {}).get("fastq_tests", [])
         metafunc.parametrize("fastq_case", fastq_cases, ids=[c["test_name"] for c in fastq_cases])
 
     # For BAM tests

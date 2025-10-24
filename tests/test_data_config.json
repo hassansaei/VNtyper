@@ -176,23 +176,6 @@
       "md5sum": "d3b3e6cc6f19988740521f91d4b9f7d6"
     }
   ],
-  "unit_tests": {
-    "fastq_tests": [
-      {
-        "test_name": "example_6449_hg19_subset_fastq_shark",
-        "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
-        "fastq2": "tests/data/example_6449_hg19_subset_R2.fastq.gz",
-        "cli_options": [
-          "--extra-modules",
-          "shark"
-        ],
-        "expected_files": [
-          "summary_report.html",
-          "kestrel/kestrel_result.tsv"
-        ]
-      }
-    ]
-  },
   "integration_tests": {
     "bam_tests": [
       {
@@ -407,6 +390,21 @@
           "MeanCoverage": 144.234722222,
           "Pvalue": 3.46346905707e-09
         }
+      }
+    ],
+    "fastq_tests": [
+      {
+        "test_name": "example_6449_hg19_subset_fastq_shark",
+        "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+        "fastq2": "tests/data/example_6449_hg19_subset_R2.fastq.gz",
+        "cli_options": [
+          "--extra-modules",
+          "shark"
+        ],
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
       }
     ]
   }
