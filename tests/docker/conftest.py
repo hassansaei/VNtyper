@@ -153,7 +153,14 @@ def run_vntyper_pipeline(
     # Build command
     # Since we bypassed the entrypoint for testing, we need to manually
     # activate the conda environment and run vntyper
-    bam_name = bam_file.name
+    # Convert bam_file to absolute Path if it's a string or relative path
+    bam_file_path = Path(bam_file).resolve()
+    bam_name = bam_file_path.name
+
+    # Calculate relative path from tests/data/ to support subdirectories
+    project_root = Path(__file__).parent.parent.parent
+    test_data_dir = project_root / "tests" / "data"
+    bam_relative_path = bam_file_path.relative_to(test_data_dir)
 
     # VNtyper writes log files next to input BAM, but input is read-only.
     # Copy BAM to output directory first (inside container).
@@ -179,11 +186,12 @@ def run_vntyper_pipeline(
 
     # Copy BAM file and its index to writable location first (input is read-only)
     # VNtyper needs to write log files next to the BAM and samtools needs the index
+    # Use relative path to support subdirectories like remapped/bwa/GRCh37/
     copy_cmd = [
         "/bin/bash",
         "-c",
-        f"cp /opt/vntyper/input/{bam_name} {workdir_bam_path} && "
-        f"if [ -f /opt/vntyper/input/{bam_name}.bai ]; then cp /opt/vntyper/input/{bam_name}.bai {workdir_bam_path}.bai; fi",
+        f"cp /opt/vntyper/input/{bam_relative_path} {workdir_bam_path} && "
+        f"if [ -f /opt/vntyper/input/{bam_relative_path}.bai ]; then cp /opt/vntyper/input/{bam_relative_path}.bai {workdir_bam_path}.bai; fi",
     ]
     copy_result = container.exec(copy_cmd)
     if copy_result.exit_code != 0:
