@@ -148,7 +148,74 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
             extract_to.mkdir(parents=True, exist_ok=True)
 
             with zipfile.ZipFile(tmp_path, "r") as zip_ref:
-                zip_ref.extractall(extract_to)
+                # Get all file names in the archive
+                all_files = zip_ref.namelist()
+                logger.info(f"Archive contains {len(all_files)} entries")
+
+                # Robust detection of dominant top-level directory
+                # This handles cases where the zip has a nested "data/" directory
+                # even if there are other files at root (like README.md)
+                dir_counts = {}
+                files_at_root = 0
+
+                for name in all_files:
+                    # Skip directory entries (they end with /)
+                    if name.endswith("/"):
+                        continue
+
+                    # Check if file is in a subdirectory or at root
+                    if "/" in name:
+                        top_dir = name.split("/", 1)[0] + "/"
+                        dir_counts[top_dir] = dir_counts.get(top_dir, 0) + 1
+                    else:
+                        files_at_root += 1
+
+                # Determine if there's a dominant top-level directory to strip
+                common_prefix = ""
+                if dir_counts:
+                    # Find the directory with the most files
+                    dominant_dir, file_count = max(dir_counts.items(), key=lambda x: x[1])
+                    total_files = sum(dir_counts.values()) + files_at_root
+
+                    logger.info(f"Top-level directories: {dict(dir_counts)}")
+                    logger.info(f"Files at root: {files_at_root}")
+                    logger.info(f"Dominant directory: '{dominant_dir}' with {file_count}/{total_files} files")
+
+                    # If the dominant directory contains at least 90% of all files, strip it
+                    # This handles archives like: data/file1.bam, data/file2.bam, README.md
+                    if file_count / total_files >= 0.9:
+                        common_prefix = dominant_dir
+                        logger.info(f"Will strip '{common_prefix}' from extraction paths")
+
+                if common_prefix:
+                    logger.info("Extracting files while stripping root directory...")
+
+                    # Extract each file, stripping the common prefix
+                    for member in zip_ref.infolist():
+                        # Skip directory entries
+                        if member.filename.endswith("/"):
+                            continue
+
+                        # Remove common prefix from the path
+                        member_path = member.filename
+                        if member_path.startswith(common_prefix):
+                            member_path = member_path[len(common_prefix) :]
+
+                        # Skip files that don't have the prefix (e.g., README.md at root)
+                        if not member_path or member_path == member.filename:
+                            logger.info(f"Skipping file not in dominant directory: {member.filename}")
+                            continue
+
+                        # Extract to target directory
+                        target_path = extract_to / member_path
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        with zip_ref.open(member) as source, open(target_path, "wb") as target:
+                            target.write(source.read())
+                else:
+                    # No dominant directory, extract normally
+                    logger.info("No dominant root directory detected, extracting all files normally...")
+                    zip_ref.extractall(extract_to)
 
             logger.info("Archive extracted successfully")
 
