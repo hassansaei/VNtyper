@@ -97,10 +97,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
-      # Cache test data to avoid re-downloading 290MB archive on every run
-      - name: Cache test data
-        id: cache-test-data
-        uses: actions/cache@v4
+      # Restore test data cache (separate from save to ensure cache is saved even if tests fail)
+      - name: Restore test data cache
+        id: cache-test-data-restore
+        uses: actions/cache/restore@v4
         with:
           path: tests/data
           key: test-data-${{ hashFiles('tests/test_data_config.json') }}
@@ -109,7 +109,7 @@ jobs:
 
       # Download test data if not cached using wget (more reliable for large files)
       - name: Download test data
-        if: steps.cache-test-data.outputs.cache-hit != 'true'
+        if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
         run: |
           echo "Downloading test data (1.1GB archive from Zenodo)..."
           echo "This may take 30-90 minutes depending on Zenodo server load"
@@ -153,6 +153,14 @@ jobs:
           rm -rf /tmp/vntyper-download
         timeout-minutes: 120
 
+      # Save test data cache (runs even if tests fail, ensuring cache is available for next run)
+      - name: Save test data cache
+        uses: actions/cache/save@v4
+        if: always() && steps.cache-test-data-restore.outputs.cache-hit != 'true'
+        with:
+          path: tests/data
+          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+
       - name: Run Docker quick tests
         run: make test-docker-quick
         timeout-minutes: 20
@@ -165,7 +173,7 @@ jobs:
   # Docker Full Test Suite - Run only on main branch
   test-docker-full:
     name: Docker Tests (Full Suite)
-    needs: build-and-push-image
+    needs: [build-and-push-image, test-docker-quick]
     runs-on: ubuntu-latest
     # Only run full suite on main branch or manual trigger
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -185,10 +193,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
-      # Cache test data to avoid re-downloading 290MB archive on every run
-      - name: Cache test data
-        id: cache-test-data-full
-        uses: actions/cache@v4
+      # Restore test data cache (separate from save to ensure cache is saved even if tests fail)
+      - name: Restore test data cache
+        id: cache-test-data-full-restore
+        uses: actions/cache/restore@v4
         with:
           path: tests/data
           key: test-data-${{ hashFiles('tests/test_data_config.json') }}
@@ -197,7 +205,7 @@ jobs:
 
       # Download test data if not cached using wget (more reliable for large files)
       - name: Download test data
-        if: steps.cache-test-data-full.outputs.cache-hit != 'true'
+        if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
         run: |
           echo "Downloading test data (1.1GB archive from Zenodo)..."
           echo "This may take 30-90 minutes depending on Zenodo server load"
@@ -236,6 +244,14 @@ jobs:
           # Cleanup
           rm -rf /tmp/vntyper-download
         timeout-minutes: 120
+
+      # Save test data cache (runs even if tests fail, ensuring cache is available for next run)
+      - name: Save test data cache
+        uses: actions/cache/save@v4
+        if: always() && steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
+        with:
+          path: tests/data
+          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
 
       - name: Run full Docker test suite
         run: make test-docker
