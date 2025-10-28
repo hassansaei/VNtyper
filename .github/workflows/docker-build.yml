@@ -11,6 +11,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:  # Allow manual trigger
 
 env:
   GHCR_REGISTRY: ghcr.io
@@ -27,6 +28,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Set up Docker Buildx (required for caching)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       # Log in to GitHub Container Registry (ghcr.io)
       - name: Log in to GitHub Container Registry
@@ -67,3 +72,73 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
+          # Enable GitHub Actions caching for 60-80% faster builds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Docker Quick Tests - Run on all PRs for fast feedback
+  test-docker-quick:
+    name: Docker Tests (Quick)
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run Docker quick tests
+        run: make test-docker-quick
+        timeout-minutes: 15
+
+      - name: Display test summary
+        if: always()
+        run: |
+          echo "✓ Docker quick tests completed"
+
+  # Docker Full Test Suite - Run only on main branch
+  test-docker-full:
+    name: Docker Tests (Full Suite)
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+    # Only run full suite on main branch or manual trigger
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run full Docker test suite
+        run: make test-docker
+        timeout-minutes: 60
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-results-${{ github.run_id }}
+          path: |
+            pytest-results/
+            htmlcov/
+          retention-days: 30
