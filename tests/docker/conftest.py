@@ -36,7 +36,7 @@ def vntyper_image() -> Generator[str, None, None]:
     project_root = Path(__file__).parent.parent.parent
 
     result = subprocess.run(
-        ["docker", "build", "-t", image_tag, "."],
+        ["docker", "build", "-f", "docker/Dockerfile", "-t", image_tag, "."],
         cwd=str(project_root),
         capture_output=True,
         text=True,
