@@ -36,27 +36,31 @@ apptainer pull docker://saei/vntyper:latest
 
 ## **Testing the Build**
 
-### **Quick Test**
+### **Quick Test** (Recommended)
 
 ```bash
-# Test with built-in test data (uses Zenodo dataset)
+# Run all Docker tests with testcontainers (automatic container management)
 make docker-test
 
-# Or run manually with Python
-python3 docker/test_docker.py
+# Run quick Docker tests (exclude slow adVNTR tests)
+make docker-test-quick
+
+# Or use pytest directly
+pytest -m docker                    # All Docker tests
+pytest -m "docker and not slow"     # Quick tests only
 ```
 
 ### **Test Specific Components**
 
 ```bash
-# Test only adVNTR module
-python3 docker/test_docker.py advntr
+# Test BAM pipeline only
+pytest tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline -v
 
-# Test specific sample
-python3 docker/test_docker.py example_66bf_hg19_subset_fast
+# Test adVNTR module (slow test)
+pytest tests/docker/test_docker_pipeline.py::test_docker_advntr_pipeline -v
 
-# Test multiple samples
-python3 docker/test_docker.py example_66bf_hg19_subset_fast example_7a61_hg19_subset_fast
+# Test container health
+pytest tests/docker/test_docker_pipeline.py::test_docker_container_health -v
 ```
 
 ### **Verify Installation**
@@ -168,3 +172,11 @@ curl -O "http://localhost:8000/download/filename.zip"
     ```bash
     docker logs <container_id>
     ```
+
+## **Testing Architecture**
+
+VNtyper uses [testcontainers-python](https://testcontainers-python.readthedocs.io/) for Docker testing with pytest:
+
+- Automatic container lifecycle management
+- Consistent test behavior between local and Docker environments
+- Standard pytest fixtures and markers

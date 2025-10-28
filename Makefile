@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose clean build docker-build docker-test docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose clean build docker-build docker-test docker-test-quick docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -41,9 +41,10 @@ help:
 	@echo "  make build            - Build distribution packages"
 	@echo ""
 	@echo "$(GREEN)Docker:$(RESET)"
-	@echo "  make docker-build  - Build multi-stage Docker image (production-ready)"
-	@echo "  make docker-test   - Run full test suite with Zenodo data (~30 min)"
-	@echo "  make docker-clean  - Remove all VNtyper Docker images"
+	@echo "  make docker-build      - Build multi-stage Docker image (production-ready)"
+	@echo "  make docker-test       - Run Docker integration tests with testcontainers"
+	@echo "  make docker-test-quick - Run Docker tests (excluding slow adVNTR tests)"
+	@echo "  make docker-clean      - Remove all VNtyper Docker images"
 	@echo ""
 
 # Installation targets
@@ -187,13 +188,24 @@ docker-build:
 	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
 
 docker-test:
-	@echo "$(BLUE)Testing Docker container with Zenodo test data...$(RESET)"
-	@if [ ! -f docker/test_docker.py ]; then \
-		echo "$(RED)Error: docker/test_docker.py not found$(RESET)"; \
+	@echo "$(BLUE)Running Docker integration tests with testcontainers...$(RESET)"
+	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
+	@if ! python -c "import testcontainers" 2>/dev/null; then \
+		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	@python3 docker/test_docker.py
+	pytest -m docker -v
 	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
+
+docker-test-quick:
+	@echo "$(BLUE)Running Docker tests (excluding slow tests)...$(RESET)"
+	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
+	@if ! python -c "import testcontainers" 2>/dev/null; then \
+		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
+		exit 1; \
+	fi
+	pytest -m "docker and not slow" -v
+	@echo "$(GREEN)✓ Docker tests complete (quick mode)$(RESET)"
 
 docker-clean:
 	@echo "$(BLUE)Removing VNtyper Docker images...$(RESET)"
