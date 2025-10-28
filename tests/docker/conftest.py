@@ -1,0 +1,325 @@
+"""
+Docker test fixtures using testcontainers.
+
+This module provides pytest fixtures for Docker-based integration testing.
+Uses testcontainers for automatic container lifecycle management.
+
+Fixtures:
+- vntyper_image: Session-scoped Docker image build
+- vntyper_container: Module-scoped container with volume mounts
+"""
+
+import subprocess
+from collections.abc import Generator
+from pathlib import Path
+from typing import Optional
+
+import pytest
+from testcontainers.core.container import DockerContainer
+
+
+@pytest.fixture(scope="session")
+def vntyper_image() -> Generator[str, None, None]:
+    """
+    Build VNtyper Docker image once per test session.
+
+    Yields:
+        str: Image tag
+
+    Notes:
+        - Built from project root Dockerfile
+        - Cached for entire test session
+        - Automatically cleaned up after session
+    """
+    import subprocess
+
+    # Build image
+    image_tag = "vntyper:test"
+    project_root = Path(__file__).parent.parent.parent
+
+    result = subprocess.run(
+        ["docker", "build", "-f", "docker/Dockerfile", "-t", image_tag, "."],
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Docker build failed: {result.stderr}")
+
+    yield image_tag
+
+    # Cleanup (optional - Docker will handle)
+    # subprocess.run(["docker", "rmi", image_tag], check=False)
+
+
+@pytest.fixture(scope="module")
+def vntyper_container(
+    vntyper_image: str, tmp_path_factory: pytest.TempPathFactory
+) -> Generator[tuple[DockerContainer, Path], None, None]:
+    """
+    Create VNtyper container with volume mounts.
+
+    Args:
+        vntyper_image: Docker image tag from vntyper_image fixture
+        tmp_path_factory: Pytest temp directory factory
+
+    Yields:
+        tuple: (DockerContainer, Path) - Running container and mounted output directory
+
+    Notes:
+        - Module-scoped: One container per test module
+        - Mounts test data and output directories
+        - Automatically cleaned up after module
+    """
+    # Get project paths
+    project_root = Path(__file__).parent.parent.parent
+    test_data_dir = project_root / "tests" / "data"  # BAM files are in tests/data/, not tests/test_data/
+
+    # Create temp output directory for this module
+    output_dir = tmp_path_factory.mktemp("docker_output")
+
+    # Set permissions on output directory for container user (appuser, UID 1001)
+    # This is necessary because the container runs as non-root user
+    # Using chmod 777 is acceptable here because:
+    # 1. This is an isolated pytest tmpdir that gets cleaned up after tests
+    # 2. The container user (UID 1001) needs write access
+    # 3. This approach is simpler than chown/chgrp which requires sudo
+    # Note: For production environments, use chmod 775 with group ownership instead
+    subprocess.run(["chmod", "777", str(output_dir)], check=True)
+
+    # Create container with volume mounts
+    container = DockerContainer(vntyper_image)
+
+    # Mount test data (read-only) - using correct path from Docker README
+    container.with_volume_mapping(
+        str(test_data_dir.absolute()),
+        "/opt/vntyper/input",
+        mode="ro",
+    )
+
+    # Mount output directory (read-write) - using correct path from Docker README
+    container.with_volume_mapping(
+        str(output_dir.absolute()),
+        "/opt/vntyper/output",
+        mode="rw",
+    )
+
+    # Override entrypoint and keep container running for testing
+    # The production entrypoint validates commands, but for testing we need
+    # direct shell access to run arbitrary commands via exec()
+    # We bypass the entrypoint but maintain the correct user (appuser, UID 1001)
+    # to preserve file permissions on mounted volumes
+    # Use bash (not sh) for `source` command support
+    container.with_kwargs(
+        entrypoint=["/bin/bash", "-c", "tail -f /dev/null"],
+        user="1001:1001",  # Match the appuser UID:GID from Dockerfile
+        working_dir="/opt/vntyper",  # Set working directory as per Docker README
+    )
+
+    # Start container
+    container.start()
+
+    # Verify container is running
+    if not container.get_wrapped_container():
+        raise RuntimeError("Container failed to start")
+
+    yield container, output_dir
+
+    # Cleanup
+    container.stop()
+
+
+def run_vntyper_pipeline(
+    container: DockerContainer,
+    bam_file: Path,
+    reference: str,
+    output_dir: Path,
+    extra_modules: Optional[list[str]] = None,
+) -> int:
+    """
+    Execute VNtyper pipeline inside Docker container.
+
+    Args:
+        container: Running Docker container
+        bam_file: BAM file path (will be mapped to /data)
+        reference: Reference assembly (hg19, hg38)
+        output_dir: Output directory path (host path where files will appear)
+        extra_modules: Optional list of extra modules (e.g., ["advntr"])
+
+    Returns:
+        int: Exit code from pipeline execution
+
+    Notes:
+        The container has /opt/vntyper/output mounted to the fixture's output directory.
+        This function calculates the container path based on the host output_dir.
+        If output_dir is a subdirectory, the container path will reflect that structure.
+    """
+    # Build command
+    # Since we bypassed the entrypoint for testing, we need to manually
+    # activate the conda environment and run vntyper
+    # Convert bam_file to absolute Path if it's a string or relative path
+    bam_file_path = Path(bam_file).resolve()
+    bam_name = bam_file_path.name
+
+    # Calculate relative path from tests/data/ to support subdirectories
+    project_root = Path(__file__).parent.parent.parent
+    test_data_dir = project_root / "tests" / "data"
+    bam_relative_path = bam_file_path.relative_to(test_data_dir)
+
+    # Determine the container output path
+    # The fixture's base output directory is mounted at /opt/vntyper/output
+    # If output_dir is a subdirectory, we need to preserve that structure
+    output_dir_abs = output_dir.resolve()
+
+    # Find the mounted base directory by looking for docker_output in the path
+    # This works because tmp_path_factory.mktemp("docker_output") creates the base
+    # Note: The actual directory may be "docker_output0", "docker_output1", etc.
+    parts = output_dir_abs.parts
+    container_output_path = "/opt/vntyper/output"
+
+    for i, part in enumerate(parts):
+        if "docker_output" in part:
+            # Everything after docker_output* is the subdirectory structure
+            subdir_parts = parts[i + 1:]
+            if subdir_parts:
+                container_output_path = "/opt/vntyper/output/" + "/".join(subdir_parts)
+            break
+
+    # Create the test-specific subdirectory in the container if needed
+    # The subdirectory exists on the host, but we need to ensure it exists in the container too
+    if container_output_path != "/opt/vntyper/output":
+        mkdir_cmd = [
+            "mkdir",
+            "-p",
+            container_output_path,
+        ]
+        mkdir_result = container.exec(mkdir_cmd)
+        if mkdir_result.exit_code != 0:
+            print(f"Failed to create output directory: {mkdir_result.output.decode() if mkdir_result.output else 'No output'}")
+            return mkdir_result.exit_code
+
+    # VNtyper writes log files next to input BAM, but input is read-only.
+    # Copy BAM to output directory first (inside container).
+    # This also works around the read-only filesystem issue.
+    workdir_bam_path = f"{container_output_path}/input_{bam_name}"
+
+    # Build vntyper command arguments
+    # Use correct paths as per Docker README documentation
+    vntyper_args = [
+        "pipeline",
+        "--bam",
+        workdir_bam_path,  # Use copied BAM in writable location
+        "--reference-assembly",  # Full parameter name to avoid ambiguity
+        reference,
+        "--output-dir",  # Use --output-dir instead of --output
+        container_output_path,  # Write to test-specific subdirectory
+        "--threads",
+        "2",
+    ]
+
+    if extra_modules:
+        vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
+
+    # Copy BAM file and its index to writable location first (input is read-only)
+    # VNtyper needs to write log files next to the BAM and samtools needs the index
+    # Use relative path to support subdirectories like remapped/bwa/GRCh37/
+    copy_cmd = [
+        "/bin/bash",
+        "-c",
+        f"cp /opt/vntyper/input/{bam_relative_path} {workdir_bam_path} && "
+        f"if [ -f /opt/vntyper/input/{bam_relative_path}.bai ]; then cp /opt/vntyper/input/{bam_relative_path}.bai {workdir_bam_path}.bai; fi",
+    ]
+    copy_result = container.exec(copy_cmd)
+    if copy_result.exit_code != 0:
+        print(f"Failed to copy BAM file: {copy_result.output.decode() if copy_result.output else 'No output'}")
+        return copy_result.exit_code
+
+    # Execute via conda run since we bypassed the entrypoint
+    # Use --no-capture-output to stream stdout/stderr properly
+    cmd = [
+        "/bin/bash",
+        "-c",
+        f"source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper vntyper {' '.join(vntyper_args)}",
+    ]
+
+    # Execute command
+    result = container.exec(cmd)
+
+    # Print output if command failed
+    if result.exit_code != 0:
+        print(f"\n=== VNTYPER BAM PIPELINE FAILED (exit code {result.exit_code}) ===")
+        print(f"Command: vntyper {' '.join(vntyper_args)}")
+        print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
+        print("=" * 80)
+
+    return result.exit_code
+
+
+def run_vntyper_fastq_pipeline(
+    container: DockerContainer,
+    fastq1: Path,
+    fastq2: Optional[Path],
+    reference: str,
+    output_dir: Path,
+    extra_modules: Optional[list[str]] = None,
+) -> int:
+    """
+    Execute VNtyper FASTQ pipeline inside Docker container.
+
+    Args:
+        container: Running Docker container
+        fastq1: FASTQ file 1 path (will be mapped to /data)
+        fastq2: Optional FASTQ file 2 path
+        reference: Reference assembly
+        output_dir: Output directory path
+        extra_modules: Optional list of extra modules
+
+    Returns:
+        int: Exit code from pipeline execution
+    """
+    # Build command
+    # Since we bypassed the entrypoint for testing, we need to manually
+    # activate the conda environment and run vntyper
+    fastq1_name = fastq1.name
+
+    # Build vntyper command arguments
+    # Use correct paths as per Docker README documentation
+    vntyper_args = [
+        "pipeline",
+        "--fastq1",  # Use --fastq1 for first fastq file
+        f"/opt/vntyper/input/{fastq1_name}",
+        "--reference-assembly",  # Full parameter name to avoid ambiguity
+        reference,
+        "--output-dir",  # Use --output-dir instead of --output
+        "/opt/vntyper/output",  # Write directly to mounted output directory
+        "--threads",
+        "2",
+    ]
+
+    if fastq2:
+        vntyper_args.extend(["--fastq2", f"/opt/vntyper/input/{fastq2.name}"])
+
+    if extra_modules:
+        vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
+
+    # Execute via conda run since we bypassed the entrypoint
+    # Use --no-capture-output to stream stdout/stderr properly
+    cmd = [
+        "/bin/bash",
+        "-c",
+        f"source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper vntyper {' '.join(vntyper_args)}",
+    ]
+
+    # Execute command
+    result = container.exec(cmd)
+
+    # Debug: print output if command failed
+    if result.exit_code != 0:
+        print(f"\n=== VNTYPER FASTQ PIPELINE FAILED (exit code {result.exit_code}) ===")
+        print(f"Command: vntyper {' '.join(vntyper_args)}")
+        print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
+        print("=" * 80)
+
+    return result.exit_code
