@@ -153,10 +153,11 @@ jobs:
           rm -rf /tmp/vntyper-download
         timeout-minutes: 120
 
-      # Save test data cache (runs even if tests fail, ensuring cache is available for next run)
+      # Save test data cache IMMEDIATELY after download (before tests run)
+      # This ensures cache persists even if tests fail/timeout later
       - name: Save test data cache
         uses: actions/cache/save@v4
-        if: always() && steps.cache-test-data-restore.outputs.cache-hit != 'true'
+        if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
         with:
           path: tests/data
           key: test-data-${{ hashFiles('tests/test_data_config.json') }}
@@ -245,10 +246,11 @@ jobs:
           rm -rf /tmp/vntyper-download
         timeout-minutes: 120
 
-      # Save test data cache (runs even if tests fail, ensuring cache is available for next run)
+      # Save test data cache IMMEDIATELY after download (before tests run)
+      # This ensures cache persists even if tests fail/timeout later
       - name: Save test data cache
         uses: actions/cache/save@v4
-        if: always() && steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
+        if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
         with:
           path: tests/data
           key: test-data-${{ hashFiles('tests/test_data_config.json') }}
