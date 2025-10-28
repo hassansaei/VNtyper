@@ -107,24 +107,51 @@ jobs:
           restore-keys: |
             test-data-
 
-      # Download test data if not cached
+      # Download test data if not cached using wget (more reliable for large files)
       - name: Download test data
         if: steps.cache-test-data.outputs.cache-hit != 'true'
         run: |
+          echo "Downloading test data (1.1GB archive from Zenodo)..."
+          echo "This may take 30-90 minutes depending on Zenodo server load"
+
+          # Use wget with retry and continue capabilities
+          # -c: continue partial downloads
+          # --tries=5: retry up to 5 times
+          # --timeout=60: 60s timeout for connections
+          # --progress=dot:giga: show progress
+          mkdir -p /tmp/vntyper-download
+          wget -c --tries=5 --timeout=60 --progress=dot:giga \
+            -O /tmp/vntyper-download/data.zip \
+            "https://zenodo.org/records/17377082/files/data.zip?download=1" || exit 1
+
+          echo "Extracting archive..."
+          mkdir -p tests/data
+          unzip -q /tmp/vntyper-download/data.zip -d tests/data
+
+          echo "Verifying download..."
           python3 -c "
-          import json, logging
-          from tests.test_data_utils import ensure_test_data_downloaded
+          import json
+          from tests.test_data_utils import compute_md5
+          from pathlib import Path
 
-          logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+          # Just verify key files exist
+          key_files = [
+              'tests/data/example_b178_hg19_subset.bam',
+              'tests/data/example_b178_hg19_subset.bam.bai',
+          ]
 
-          with open('tests/test_data_config.json') as f:
-              config = json.load(f)
+          for f in key_files:
+              p = Path(f)
+              if not p.exists():
+                  raise FileNotFoundError(f'Missing file: {f}')
+              print(f'✓ Verified: {f} ({p.stat().st_size / (1024*1024):.1f} MB)')
 
-          print('Downloading test data (290MB archive from Zenodo)...')
-          ensure_test_data_downloaded(config)
-          print('✓ Test data download complete')
+          print('✓ Test data download and extraction complete')
           "
-        timeout-minutes: 20
+
+          # Cleanup
+          rm -rf /tmp/vntyper-download
+        timeout-minutes: 120
 
       - name: Run Docker quick tests
         run: make test-docker-quick
@@ -168,24 +195,47 @@ jobs:
           restore-keys: |
             test-data-
 
-      # Download test data if not cached
+      # Download test data if not cached using wget (more reliable for large files)
       - name: Download test data
         if: steps.cache-test-data-full.outputs.cache-hit != 'true'
         run: |
+          echo "Downloading test data (1.1GB archive from Zenodo)..."
+          echo "This may take 30-90 minutes depending on Zenodo server load"
+
+          # Use wget with retry and continue capabilities
+          mkdir -p /tmp/vntyper-download
+          wget -c --tries=5 --timeout=60 --progress=dot:giga \
+            -O /tmp/vntyper-download/data.zip \
+            "https://zenodo.org/records/17377082/files/data.zip?download=1" || exit 1
+
+          echo "Extracting archive..."
+          mkdir -p tests/data
+          unzip -q /tmp/vntyper-download/data.zip -d tests/data
+
+          echo "Verifying download..."
           python3 -c "
-          import json, logging
-          from tests.test_data_utils import ensure_test_data_downloaded
+          import json
+          from tests.test_data_utils import compute_md5
+          from pathlib import Path
 
-          logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-
+          # Verify all key test files exist
           with open('tests/test_data_config.json') as f:
               config = json.load(f)
 
-          print('Downloading test data (290MB archive from Zenodo)...')
-          ensure_test_data_downloaded(config)
-          print('✓ Test data download complete')
+          verified = 0
+          for resource in config.get('file_resources', [])[:5]:  # Check first 5 files
+              p = Path(resource['local_path']) / resource['filename']
+              if not p.exists():
+                  raise FileNotFoundError(f'Missing file: {p}')
+              verified += 1
+
+          print(f'✓ Verified {verified} test files')
+          print('✓ Test data download and extraction complete')
           "
-        timeout-minutes: 20
+
+          # Cleanup
+          rm -rf /tmp/vntyper-download
+        timeout-minutes: 120
 
       - name: Run full Docker test suite
         run: make test-docker
