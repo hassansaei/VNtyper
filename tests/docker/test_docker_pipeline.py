@@ -136,17 +136,17 @@ def test_docker_volume_mounts(vntyper_container) -> None:
     Args:
         vntyper_container: Docker container fixture
     """
-    # Test /data mount (test data)
-    result = vntyper_container.exec(["ls", "/data"])
-    assert result.exit_code == 0, "/data mount not accessible"
+    # Test /opt/vntyper/input mount (test data)
+    result = vntyper_container.exec(["ls", "/opt/vntyper/input"])
+    assert result.exit_code == 0, "/opt/vntyper/input mount not accessible"
 
-    # Test /output mount (output directory)
-    result = vntyper_container.exec(["ls", "/output"])
-    assert result.exit_code == 0, "/output mount not accessible"
+    # Test /opt/vntyper/output mount (output directory)
+    result = vntyper_container.exec(["ls", "/opt/vntyper/output"])
+    assert result.exit_code == 0, "/opt/vntyper/output mount not accessible"
 
-    # Test write permission in /output
-    result = vntyper_container.exec(["touch", "/output/test_write.txt"])
-    assert result.exit_code == 0, "/output mount not writable"
+    # Test write permission in /opt/vntyper/output
+    result = vntyper_container.exec(["touch", "/opt/vntyper/output/test_write.txt"])
+    assert result.exit_code == 0, "/opt/vntyper/output mount not writable"
 
 
 @pytest.mark.docker
