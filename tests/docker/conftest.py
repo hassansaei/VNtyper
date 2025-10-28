@@ -11,6 +11,7 @@ Fixtures:
 
 from collections.abc import Generator
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from testcontainers.core.container import DockerContainer
@@ -116,7 +117,7 @@ def run_vntyper_pipeline(
     bam_file: Path,
     reference: str,
     output_dir: Path,
-    extra_modules: list[str] | None = None,
+    extra_modules: Optional[list[str]] = None,
 ) -> int:
     """
     Execute VNtyper pipeline inside Docker container.
@@ -170,10 +171,10 @@ def run_vntyper_pipeline(
 def run_vntyper_fastq_pipeline(
     container: DockerContainer,
     fastq1: Path,
-    fastq2: Path | None,
+    fastq2: Optional[Path],
     reference: str,
     output_dir: Path,
-    extra_modules: list[str] | None = None,
+    extra_modules: Optional[list[str]] = None,
 ) -> int:
     """
     Execute VNtyper FASTQ pipeline inside Docker container.
