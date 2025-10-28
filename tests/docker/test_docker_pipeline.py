@@ -29,7 +29,7 @@ from .conftest import run_vntyper_pipeline
 
 @pytest.mark.docker
 @pytest.mark.parametrize("test_case", get_bam_test_cases(), ids=get_bam_test_ids())
-def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> None:
+def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensure_test_data) -> None:
     """
     Test BAM pipeline in Docker container.
 
@@ -40,6 +40,7 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> No
         test_case: Test configuration from test_data_config.json
         vntyper_container: Docker container fixture (container, output_dir tuple)
         tmp_path: Pytest temp directory
+        ensure_test_data: Session fixture that downloads test data if needed
     """
     # Unpack fixture
     container, output_dir = vntyper_container
@@ -53,6 +54,7 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> No
     # Set permissions so container user (appuser, UID 1001) can write
     # Using chmod 777 is acceptable for isolated pytest tmpdir (see conftest.py for details)
     import subprocess
+
     subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
 
     # Define Docker-specific runner
@@ -80,7 +82,7 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> No
 @pytest.mark.docker
 @pytest.mark.slow
 @pytest.mark.parametrize("test_case", get_advntr_test_cases(), ids=get_advntr_test_ids())
-def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path) -> None:
+def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, ensure_test_data) -> None:
     """
     Test adVNTR module pipeline in Docker container.
 
@@ -91,6 +93,7 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path) ->
         test_case: Test configuration from test_data_config.json
         vntyper_container: Docker container fixture (container, output_dir tuple)
         tmp_path: Pytest temp directory
+        ensure_test_data: Session fixture that downloads test data if needed
     """
     # Unpack fixture
     container, output_dir = vntyper_container
@@ -104,6 +107,7 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path) ->
     # Set permissions so container user (appuser, UID 1001) can write
     # Using chmod 777 is acceptable for isolated pytest tmpdir (see conftest.py for details)
     import subprocess
+
     subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
 
     # Define Docker-specific runner

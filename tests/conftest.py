@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_data_utils import ensure_test_data_downloaded
+
 # ============================================================================
 # Logging Configuration
 # ============================================================================
@@ -68,6 +70,23 @@ def kestrel_jar_path():
     if not jar_path.exists():
         pytest.exit(f"Kestrel JAR not found: {jar_path}", returncode=1)
     return jar_path
+
+
+@pytest.fixture(scope="session")
+def ensure_test_data(test_config):
+    """
+    Session-scoped fixture that ensures all test data is present and valid.
+
+    Downloads test data from Zenodo if files are missing or MD5 checksums don't match.
+    This fixture is used by integration and Docker tests.
+
+    Args:
+        test_config: Test configuration from test_data_config.json
+
+    Returns:
+        None (side effect: downloads and validates test data)
+    """
+    ensure_test_data_downloaded(test_config)
 
 
 # ============================================================================
