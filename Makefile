@@ -188,7 +188,7 @@ docker-build:
 	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
 
 test-docker:
-	@echo "$(BLUE)Running Docker integration tests with testcontainers...$(RESET)"
+	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"
 	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
 	@if ! python -c "import testcontainers" 2>/dev/null; then \
 		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
@@ -198,14 +198,17 @@ test-docker:
 	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
 test-docker-quick:
-	@echo "$(BLUE)Running Docker tests (excluding slow tests)...$(RESET)"
+	@echo "$(BLUE)Running Docker quick test (single test case + health checks)...$(RESET)"
 	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
 	@if ! python -c "import testcontainers" 2>/dev/null; then \
 		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	pytest -m "docker and not slow" -v
-	@echo "$(GREEN)✓ Docker tests complete (quick mode)$(RESET)"
+	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_fast]" \
+	       "tests/docker/test_docker_pipeline.py::test_docker_container_health" \
+	       "tests/docker/test_docker_pipeline.py::test_docker_volume_mounts" \
+	       "tests/docker/test_docker_pipeline.py::test_docker_dependencies" -v
+	@echo "$(GREEN)✓ Docker quick tests complete$(RESET)"
 
 docker-clean:
 	@echo "$(BLUE)Removing VNtyper Docker images...$(RESET)"
