@@ -9,6 +9,7 @@ Fixtures:
 - vntyper_container: Module-scoped container with volume mounts
 """
 
+import subprocess
 from collections.abc import Generator
 from pathlib import Path
 from typing import Optional
@@ -79,25 +80,38 @@ def vntyper_container(
     # Create temp output directory for this module
     output_dir = tmp_path_factory.mktemp("docker_output")
 
+    # Set permissions on output directory for container user (appuser, UID 1001)
+    # This is necessary because the container runs as non-root user
+    subprocess.run(["chmod", "777", str(output_dir)], check=True)
+
     # Create container with volume mounts
     container = DockerContainer(vntyper_image)
 
-    # Mount test data (read-only)
+    # Mount test data (read-only) - using correct path from Docker README
     container.with_volume_mapping(
         str(test_data_dir.absolute()),
-        "/data",
+        "/opt/vntyper/input",
         mode="ro",
     )
 
-    # Mount output directory (read-write)
+    # Mount output directory (read-write) - using correct path from Docker README
     container.with_volume_mapping(
         str(output_dir.absolute()),
-        "/output",
+        "/opt/vntyper/output",
         mode="rw",
     )
 
-    # Keep container running
-    container.with_command("tail -f /dev/null")
+    # Override entrypoint and keep container running for testing
+    # The production entrypoint validates commands, but for testing we need
+    # direct shell access to run arbitrary commands via exec()
+    # We bypass the entrypoint but maintain the correct user (appuser, UID 1001)
+    # to preserve file permissions on mounted volumes
+    # Use bash (not sh) for `source` command support
+    container.with_kwargs(
+        entrypoint=["/bin/bash", "-c", "tail -f /dev/null"],
+        user="1001:1001",  # Match the appuser UID:GID from Dockerfile
+        working_dir="/opt/vntyper",  # Set working directory as per Docker README
+    )
 
     # Start container
     container.start()
@@ -143,24 +157,35 @@ def run_vntyper_pipeline(
         >>> assert exit_code == 0
     """
     # Build command
+    # Since we bypassed the entrypoint for testing, we need to manually
+    # activate the conda environment and run vntyper
     bam_name = bam_file.name
     output_name = output_dir.name
 
-    cmd = [
-        "vntyper",
+    # Build vntyper command arguments
+    # Use correct paths as per Docker README documentation
+    vntyper_args = [
         "pipeline",
         "--bam",
-        f"/data/{bam_name}",
+        f"/opt/vntyper/input/{bam_name}",
         "--reference",
         reference,
         "--output",
-        f"/output/{output_name}",
+        f"/opt/vntyper/output/{output_name}",
         "--threads",
         "2",
     ]
 
     if extra_modules:
-        cmd.extend(["--extra-modules", ",".join(extra_modules)])
+        vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
+
+    # Execute via conda run since we bypassed the entrypoint
+    # Use --no-capture-output to stream stdout/stderr properly
+    cmd = [
+        "/bin/bash",
+        "-c",
+        f"source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper vntyper {' '.join(vntyper_args)}",
+    ]
 
     # Execute command
     result = container.exec(cmd)
@@ -191,27 +216,38 @@ def run_vntyper_fastq_pipeline(
         int: Exit code from pipeline execution
     """
     # Build command
+    # Since we bypassed the entrypoint for testing, we need to manually
+    # activate the conda environment and run vntyper
     fastq1_name = fastq1.name
     output_name = output_dir.name
 
-    cmd = [
-        "vntyper",
+    # Build vntyper command arguments
+    # Use correct paths as per Docker README documentation
+    vntyper_args = [
         "pipeline",
         "--fastq",
-        f"/data/{fastq1_name}",
+        f"/opt/vntyper/input/{fastq1_name}",
         "--reference",
         reference,
         "--output",
-        f"/output/{output_name}",
+        f"/opt/vntyper/output/{output_name}",
         "--threads",
         "2",
     ]
 
     if fastq2:
-        cmd.extend(["--fastq2", f"/data/{fastq2.name}"])
+        vntyper_args.extend(["--fastq2", f"/opt/vntyper/input/{fastq2.name}"])
 
     if extra_modules:
-        cmd.extend(["--extra-modules", ",".join(extra_modules)])
+        vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
+
+    # Execute via conda run since we bypassed the entrypoint
+    # Use --no-capture-output to stream stdout/stderr properly
+    cmd = [
+        "/bin/bash",
+        "-c",
+        f"source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper vntyper {' '.join(vntyper_args)}",
+    ]
 
     # Execute command
     result = container.exec(cmd)
