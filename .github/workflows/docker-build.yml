@@ -97,9 +97,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
+      # Cache test data to avoid re-downloading 290MB archive on every run
+      - name: Cache test data
+        id: cache-test-data
+        uses: actions/cache@v4
+        with:
+          path: tests/data
+          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+          restore-keys: |
+            test-data-
+
+      # Download test data if not cached
+      - name: Download test data
+        if: steps.cache-test-data.outputs.cache-hit != 'true'
+        run: |
+          python3 -c "
+          import json, logging
+          from tests.test_data_utils import ensure_test_data_downloaded
+
+          logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+          with open('tests/test_data_config.json') as f:
+              config = json.load(f)
+
+          print('Downloading test data (290MB archive from Zenodo)...')
+          ensure_test_data_downloaded(config)
+          print('✓ Test data download complete')
+          "
+        timeout-minutes: 20
+
       - name: Run Docker quick tests
         run: make test-docker-quick
-        timeout-minutes: 15
+        timeout-minutes: 20
 
       - name: Display test summary
         if: always()
@@ -128,6 +157,35 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+
+      # Cache test data to avoid re-downloading 290MB archive on every run
+      - name: Cache test data
+        id: cache-test-data-full
+        uses: actions/cache@v4
+        with:
+          path: tests/data
+          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+          restore-keys: |
+            test-data-
+
+      # Download test data if not cached
+      - name: Download test data
+        if: steps.cache-test-data-full.outputs.cache-hit != 'true'
+        run: |
+          python3 -c "
+          import json, logging
+          from tests.test_data_utils import ensure_test_data_downloaded
+
+          logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+          with open('tests/test_data_config.json') as f:
+              config = json.load(f)
+
+          print('Downloading test data (290MB archive from Zenodo)...')
+          ensure_test_data_downloaded(config)
+          print('✓ Test data download complete')
+          "
+        timeout-minutes: 20
 
       - name: Run full Docker test suite
         run: make test-docker

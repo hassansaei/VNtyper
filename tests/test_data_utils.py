@@ -47,13 +47,34 @@ def download_file(url: str, dest_path: Path, timeout: int = 60) -> None:
         requests.HTTPError: If the download fails (non-200 status code).
     """
     logger.info(f"Downloading {url} to {dest_path}")
-    resp = requests.get(url, stream=True, timeout=timeout)
+    # Use tuple timeout: (connection timeout, read timeout)
+    # This ensures the request doesn't hang indefinitely
+    resp = requests.get(url, stream=True, timeout=(timeout, timeout))
     resp.raise_for_status()
+
+    # Get file size if available for progress reporting
+    total_size = int(resp.headers.get("content-length", 0))
+    if total_size > 0:
+        logger.info(f"File size: {total_size / (1024 * 1024):.2f} MB")
+
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    downloaded = 0
+    chunk_size = 65536  # 64KB chunks
+
     with open(dest_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=65536):
-            f.write(chunk)
-    logger.info(f"Download complete: {dest_path}")
+        for chunk in resp.iter_content(chunk_size=chunk_size):
+            if chunk:  # filter out keep-alive chunks
+                f.write(chunk)
+                downloaded += len(chunk)
+
+                # Log progress every 10MB for large files
+                if total_size > 10 * 1024 * 1024 and downloaded % (10 * 1024 * 1024) < chunk_size:
+                    progress = (downloaded / total_size * 100) if total_size > 0 else 0
+                    logger.info(
+                        f"Download progress: {downloaded / (1024 * 1024):.1f} MB / {total_size / (1024 * 1024):.1f} MB ({progress:.1f}%)"
+                    )
+
+    logger.info(f"Download complete: {dest_path} ({downloaded / (1024 * 1024):.2f} MB)")
 
 
 def ensure_test_data_downloaded(test_config: dict) -> None:
