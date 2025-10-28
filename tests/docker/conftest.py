@@ -82,6 +82,11 @@ def vntyper_container(
 
     # Set permissions on output directory for container user (appuser, UID 1001)
     # This is necessary because the container runs as non-root user
+    # Using chmod 777 is acceptable here because:
+    # 1. This is an isolated pytest tmpdir that gets cleaned up after tests
+    # 2. The container user (UID 1001) needs write access
+    # 3. This approach is simpler than chown/chgrp which requires sudo
+    # Note: For production environments, use chmod 775 with group ownership instead
     subprocess.run(["chmod", "777", str(output_dir)], check=True)
 
     # Create container with volume mounts
@@ -148,7 +153,8 @@ def run_vntyper_pipeline(
 
     Notes:
         The container has /opt/vntyper/output mounted to the fixture's output directory.
-        This function writes to /opt/vntyper/output directly, and files appear in output_dir.
+        This function calculates the container path based on the host output_dir.
+        If output_dir is a subdirectory, the container path will reflect that structure.
     """
     # Build command
     # Since we bypassed the entrypoint for testing, we need to manually
@@ -162,10 +168,42 @@ def run_vntyper_pipeline(
     test_data_dir = project_root / "tests" / "data"
     bam_relative_path = bam_file_path.relative_to(test_data_dir)
 
+    # Determine the container output path
+    # The fixture's base output directory is mounted at /opt/vntyper/output
+    # If output_dir is a subdirectory, we need to preserve that structure
+    output_dir_abs = output_dir.resolve()
+
+    # Find the mounted base directory by looking for docker_output in the path
+    # This works because tmp_path_factory.mktemp("docker_output") creates the base
+    # Note: The actual directory may be "docker_output0", "docker_output1", etc.
+    parts = output_dir_abs.parts
+    container_output_path = "/opt/vntyper/output"
+
+    for i, part in enumerate(parts):
+        if "docker_output" in part:
+            # Everything after docker_output* is the subdirectory structure
+            subdir_parts = parts[i + 1:]
+            if subdir_parts:
+                container_output_path = "/opt/vntyper/output/" + "/".join(subdir_parts)
+            break
+
+    # Create the test-specific subdirectory in the container if needed
+    # The subdirectory exists on the host, but we need to ensure it exists in the container too
+    if container_output_path != "/opt/vntyper/output":
+        mkdir_cmd = [
+            "mkdir",
+            "-p",
+            container_output_path,
+        ]
+        mkdir_result = container.exec(mkdir_cmd)
+        if mkdir_result.exit_code != 0:
+            print(f"Failed to create output directory: {mkdir_result.output.decode() if mkdir_result.output else 'No output'}")
+            return mkdir_result.exit_code
+
     # VNtyper writes log files next to input BAM, but input is read-only.
     # Copy BAM to output directory first (inside container).
     # This also works around the read-only filesystem issue.
-    workdir_bam_path = f"/opt/vntyper/output/input_{bam_name}"
+    workdir_bam_path = f"{container_output_path}/input_{bam_name}"
 
     # Build vntyper command arguments
     # Use correct paths as per Docker README documentation
@@ -176,7 +214,7 @@ def run_vntyper_pipeline(
         "--reference-assembly",  # Full parameter name to avoid ambiguity
         reference,
         "--output-dir",  # Use --output-dir instead of --output
-        "/opt/vntyper/output",  # Write directly to mounted output directory
+        container_output_path,  # Write to test-specific subdirectory
         "--threads",
         "2",
     ]

@@ -44,6 +44,17 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> No
     # Unpack fixture
     container, output_dir = vntyper_container
 
+    # Create test-specific subdirectory to avoid output contamination
+    # Each test gets its own isolated output directory
+    test_name = test_case["test_name"]
+    test_output_dir = output_dir / test_name
+    test_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set permissions so container user (appuser, UID 1001) can write
+    # Using chmod 777 is acceptable for isolated pytest tmpdir (see conftest.py for details)
+    import subprocess
+    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+
     # Define Docker-specific runner
     def docker_runner(bam_file: Path, reference: str, output_dir: Path) -> int:
         """Execute pipeline in Docker container."""
@@ -57,8 +68,8 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> No
 
     # Run test using SHARED orchestration logic
     # This is the SAME function used by local tests!
-    # Use the fixture's mounted output directory
-    run_bam_test_case(test_case, docker_runner, output_dir)
+    # Use test-specific subdirectory for isolation
+    run_bam_test_case(test_case, docker_runner, test_output_dir)
 
 
 # ============================================================================
@@ -84,6 +95,17 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path) ->
     # Unpack fixture
     container, output_dir = vntyper_container
 
+    # Create test-specific subdirectory to avoid output contamination
+    # Each test gets its own isolated output directory
+    test_name = test_case["test_name"]
+    test_output_dir = output_dir / test_name
+    test_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set permissions so container user (appuser, UID 1001) can write
+    # Using chmod 777 is acceptable for isolated pytest tmpdir (see conftest.py for details)
+    import subprocess
+    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+
     # Define Docker-specific runner
     def docker_runner(bam_file: Path, reference: str, output_dir: Path, extra_modules: list[str]) -> int:
         """Execute pipeline with adVNTR in Docker container."""
@@ -96,8 +118,8 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path) ->
         )
 
     # Run test using SHARED orchestration logic
-    # Use the fixture's mounted output directory
-    run_advntr_test_case(test_case, docker_runner, output_dir)
+    # Use test-specific subdirectory for isolation
+    run_advntr_test_case(test_case, docker_runner, test_output_dir)
 
 
 # ============================================================================
