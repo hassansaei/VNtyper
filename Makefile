@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose clean build docker-build docker-test docker-test-quick docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -23,8 +23,8 @@ help:
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format code with Ruff"
 	@echo "  make format-check     - Check code formatting without changes"
-	@echo "  make typecheck        - Run mypy type checker on vntyper package"
-	@echo "  make typecheck-tests  - Run mypy type checker on tests"
+	@echo "  make type-check       - Run mypy type checker on vntyper package"
+	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
 	@echo "  make test                    - Run all tests (with live logging)"
@@ -42,8 +42,8 @@ help:
 	@echo ""
 	@echo "$(GREEN)Docker:$(RESET)"
 	@echo "  make docker-build      - Build multi-stage Docker image (production-ready)"
-	@echo "  make docker-test       - Run Docker integration tests with testcontainers"
-	@echo "  make docker-test-quick - Run Docker tests (excluding slow adVNTR tests)"
+	@echo "  make test-docker       - Run Docker integration tests with testcontainers"
+	@echo "  make test-docker-quick - Run Docker tests (excluding slow tests)"
 	@echo "  make docker-clean      - Remove all VNtyper Docker images"
 	@echo ""
 
@@ -84,19 +84,19 @@ format-check:
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
 # Type checking targets
-typecheck:
+type-check:
 	@echo "$(BLUE)Running mypy type checker on vntyper package...$(RESET)"
-	mypy vntyper/ --ignore-missing-imports
+	mypy vntyper/ --python-version 3.9 --ignore-missing-imports
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
-typecheck-tests:
+type-check-tests:
 	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
-	mypy tests/ --ignore-missing-imports
+	mypy tests/ --python-version 3.9 --ignore-missing-imports
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
-typecheck-all:
+type-check-all:
 	@echo "$(BLUE)Running mypy type checker on all code...$(RESET)"
-	mypy vntyper/ tests/ --ignore-missing-imports
+	mypy vntyper/ tests/ --python-version 3.9 --ignore-missing-imports
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 # Testing targets
@@ -166,13 +166,13 @@ build:
 # Combined targets for convenience
 .PHONY: all check check-all
 
-all: format lint typecheck test
+all: format lint type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check: format-check typecheck test
+check: format-check type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check-all: format-check lint typecheck-all test
+check-all: format-check lint type-check-all test
 	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
 
 # Docker targets
@@ -187,7 +187,7 @@ docker-build:
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
 	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
 
-docker-test:
+test-docker:
 	@echo "$(BLUE)Running Docker integration tests with testcontainers...$(RESET)"
 	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
 	@if ! python -c "import testcontainers" 2>/dev/null; then \
@@ -197,7 +197,7 @@ docker-test:
 	pytest -m docker -v
 	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
-docker-test-quick:
+test-docker-quick:
 	@echo "$(BLUE)Running Docker tests (excluding slow tests)...$(RESET)"
 	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
 	@if ! python -c "import testcontainers" 2>/dev/null; then \

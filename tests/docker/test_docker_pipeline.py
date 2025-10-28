@@ -28,7 +28,6 @@ from .conftest import run_vntyper_pipeline
 
 
 @pytest.mark.docker
-@pytest.mark.integration
 @pytest.mark.parametrize("test_case", get_bam_test_cases(), ids=get_bam_test_ids())
 def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> None:
     """
@@ -69,7 +68,6 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path) -> No
 
 
 @pytest.mark.docker
-@pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("test_case", get_advntr_test_cases(), ids=get_advntr_test_ids())
 def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path) -> None:
