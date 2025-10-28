@@ -58,7 +58,7 @@ install-dev:
 	pip install -e .[dev]
 	@echo "$(GREEN)✓ Development installation complete$(RESET)"
 
-# Linting targets (Ruff replaces flake8)
+# Linting targets
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
 	ruff check vntyper/
@@ -69,7 +69,7 @@ lint-stats:
 	ruff check vntyper/ --statistics
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
-# Formatting targets (Ruff replaces black)
+# Formatting targets
 format:
 	@echo "$(BLUE)Formatting code with Ruff...$(RESET)"
 	ruff format vntyper/
