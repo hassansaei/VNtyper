@@ -57,7 +57,7 @@ def vntyper_image() -> Generator[str, None, None]:
 @pytest.fixture(scope="module")
 def vntyper_container(
     vntyper_image: str, tmp_path_factory: pytest.TempPathFactory
-) -> Generator[DockerContainer, None, None]:
+) -> Generator[tuple[DockerContainer, Path], None, None]:
     """
     Create VNtyper container with volume mounts.
 
@@ -66,7 +66,7 @@ def vntyper_container(
         tmp_path_factory: Pytest temp directory factory
 
     Yields:
-        DockerContainer: Running container with mounts configured
+        tuple: (DockerContainer, Path) - Running container and mounted output directory
 
     Notes:
         - Module-scoped: One container per test module
@@ -75,7 +75,7 @@ def vntyper_container(
     """
     # Get project paths
     project_root = Path(__file__).parent.parent.parent
-    test_data_dir = project_root / "tests" / "test_data"
+    test_data_dir = project_root / "tests" / "data"  # BAM files are in tests/data/, not tests/test_data/
 
     # Create temp output directory for this module
     output_dir = tmp_path_factory.mktemp("docker_output")
@@ -120,7 +120,7 @@ def vntyper_container(
     if not container.get_wrapped_container():
         raise RuntimeError("Container failed to start")
 
-    yield container
+    yield container, output_dir
 
     # Cleanup
     container.stop()
@@ -140,44 +140,55 @@ def run_vntyper_pipeline(
         container: Running Docker container
         bam_file: BAM file path (will be mapped to /data)
         reference: Reference assembly (hg19, hg38)
-        output_dir: Output directory path (will be mapped to /output)
+        output_dir: Output directory path (host path where files will appear)
         extra_modules: Optional list of extra modules (e.g., ["advntr"])
 
     Returns:
         int: Exit code from pipeline execution
 
-    Example:
-        >>> exit_code = run_vntyper_pipeline(
-        ...     container,
-        ...     Path("tests/test_data/test.bam"),
-        ...     "hg19",
-        ...     Path("/tmp/output"),
-        ...     extra_modules=["advntr"],
-        ... )
-        >>> assert exit_code == 0
+    Notes:
+        The container has /opt/vntyper/output mounted to the fixture's output directory.
+        This function writes to /opt/vntyper/output directly, and files appear in output_dir.
     """
     # Build command
     # Since we bypassed the entrypoint for testing, we need to manually
     # activate the conda environment and run vntyper
     bam_name = bam_file.name
-    output_name = output_dir.name
+
+    # VNtyper writes log files next to input BAM, but input is read-only.
+    # Copy BAM to output directory first (inside container).
+    # This also works around the read-only filesystem issue.
+    workdir_bam_path = f"/opt/vntyper/output/input_{bam_name}"
 
     # Build vntyper command arguments
     # Use correct paths as per Docker README documentation
     vntyper_args = [
         "pipeline",
         "--bam",
-        f"/opt/vntyper/input/{bam_name}",
-        "--reference",
+        workdir_bam_path,  # Use copied BAM in writable location
+        "--reference-assembly",  # Full parameter name to avoid ambiguity
         reference,
-        "--output",
-        f"/opt/vntyper/output/{output_name}",
+        "--output-dir",  # Use --output-dir instead of --output
+        "/opt/vntyper/output",  # Write directly to mounted output directory
         "--threads",
         "2",
     ]
 
     if extra_modules:
         vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
+
+    # Copy BAM file and its index to writable location first (input is read-only)
+    # VNtyper needs to write log files next to the BAM and samtools needs the index
+    copy_cmd = [
+        "/bin/bash",
+        "-c",
+        f"cp /opt/vntyper/input/{bam_name} {workdir_bam_path} && "
+        f"if [ -f /opt/vntyper/input/{bam_name}.bai ]; then cp /opt/vntyper/input/{bam_name}.bai {workdir_bam_path}.bai; fi",
+    ]
+    copy_result = container.exec(copy_cmd)
+    if copy_result.exit_code != 0:
+        print(f"Failed to copy BAM file: {copy_result.output.decode() if copy_result.output else 'No output'}")
+        return copy_result.exit_code
 
     # Execute via conda run since we bypassed the entrypoint
     # Use --no-capture-output to stream stdout/stderr properly
@@ -189,6 +200,13 @@ def run_vntyper_pipeline(
 
     # Execute command
     result = container.exec(cmd)
+
+    # Print output if command failed
+    if result.exit_code != 0:
+        print(f"\n=== VNTYPER BAM PIPELINE FAILED (exit code {result.exit_code}) ===")
+        print(f"Command: vntyper {' '.join(vntyper_args)}")
+        print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
+        print("=" * 80)
 
     return result.exit_code
 
@@ -219,18 +237,17 @@ def run_vntyper_fastq_pipeline(
     # Since we bypassed the entrypoint for testing, we need to manually
     # activate the conda environment and run vntyper
     fastq1_name = fastq1.name
-    output_name = output_dir.name
 
     # Build vntyper command arguments
     # Use correct paths as per Docker README documentation
     vntyper_args = [
         "pipeline",
-        "--fastq",
+        "--fastq1",  # Use --fastq1 for first fastq file
         f"/opt/vntyper/input/{fastq1_name}",
-        "--reference",
+        "--reference-assembly",  # Full parameter name to avoid ambiguity
         reference,
-        "--output",
-        f"/opt/vntyper/output/{output_name}",
+        "--output-dir",  # Use --output-dir instead of --output
+        "/opt/vntyper/output",  # Write directly to mounted output directory
         "--threads",
         "2",
     ]
@@ -251,5 +268,12 @@ def run_vntyper_fastq_pipeline(
 
     # Execute command
     result = container.exec(cmd)
+
+    # Debug: print output if command failed
+    if result.exit_code != 0:
+        print(f"\n=== VNTYPER FASTQ PIPELINE FAILED (exit code {result.exit_code}) ===")
+        print(f"Command: vntyper {' '.join(vntyper_args)}")
+        print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
+        print("=" * 80)
 
     return result.exit_code
