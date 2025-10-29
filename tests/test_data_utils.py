@@ -3,10 +3,16 @@ Shared test data utilities for downloading and validating test data.
 
 This module provides functions to download test data from Zenodo and validate
 MD5 checksums. It's used by both integration and Docker tests.
+
+Environment Variables:
+    VNTYPER_TEST_DATA_SKIP_DOWNLOAD: If set to "1" or "true", skip automatic downloads
+        and fail fast if data is missing. Used in CI environments where data should
+        be pre-downloaded by the CI workflow.
 """
 
 import hashlib
 import logging
+import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -89,6 +95,10 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
     when any file is missing or has MD5 mismatch. Otherwise, it falls back to individual
     file downloads.
 
+    In CI environments (when VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1), this function will
+    fail immediately if data is missing instead of attempting to download. This ensures
+    fast failure and prevents pytest fixtures from consuming test execution time.
+
     Args:
         test_config: The loaded JSON config with:
             - archive_file (optional): dict with url, extract_to
@@ -97,12 +107,22 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
 
     Raises:
         SystemExit: If download fails or files don't match expected MD5 sums.
+            In CI mode, exits immediately if data is missing without attempting download.
     """
     file_resources = test_config.get("file_resources", [])
     archive_config = test_config.get("archive_file")
 
+    # Check if running in CI mode (download disabled)
+    skip_download = os.environ.get("VNTYPER_TEST_DATA_SKIP_DOWNLOAD", "").lower() in ("1", "true", "yes")
+
+    if skip_download:
+        logger.info("Running in CI mode - automatic downloads disabled (VNTYPER_TEST_DATA_SKIP_DOWNLOAD is set)")
+
     # Check if we need to download anything
     need_download = False
+    missing_files = []
+    mismatched_files = []
+
     for resource in file_resources:
         local_dir = Path(resource["local_path"])
         filename = resource["filename"]
@@ -115,18 +135,47 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
 
         if not local_path.exists():
             logger.info(f"File {local_path} is missing.")
+            missing_files.append(str(local_path))
             need_download = True
-            break
+            continue
 
         current_md5 = compute_md5(local_path)
         if current_md5.lower() != expected_md5.lower():
             logger.warning(f"File {local_path} has MD5 mismatch. Expected={expected_md5}, Got={current_md5}")
+            mismatched_files.append(f"{local_path} (MD5: expected={expected_md5}, got={current_md5})")
             need_download = True
-            break
+            continue
 
     if not need_download:
         logger.info("All test data files verified. No download needed.")
         return
+
+    # If in CI mode and data is missing, fail immediately with helpful message
+    if skip_download:
+        error_msg = ["Test data is missing or invalid, but automatic downloads are disabled in CI mode."]
+        error_msg.append("\nThis indicates a problem with the CI cache or download step.")
+        error_msg.append("\n\nTo fix this:")
+        error_msg.append("  1. Check that the cache key in .github/workflows/*.yml is correct")
+        error_msg.append("  2. Ensure the 'Download test data' step completed successfully")
+        error_msg.append("  3. Verify the extraction path matches what tests expect (tests/data)")
+        error_msg.append("\n\nFor local development, download test data by running:")
+        error_msg.append("  make download-test-data")
+
+        if missing_files:
+            error_msg.append(f"\n\nMissing files ({len(missing_files)}):")
+            for f in missing_files[:10]:  # Show first 10
+                error_msg.append(f"  - {f}")
+            if len(missing_files) > 10:
+                error_msg.append(f"  ... and {len(missing_files) - 10} more")
+
+        if mismatched_files:
+            error_msg.append(f"\n\nFiles with MD5 mismatch ({len(mismatched_files)}):")
+            for f in mismatched_files[:10]:  # Show first 10
+                error_msg.append(f"  - {f}")
+            if len(mismatched_files) > 10:
+                error_msg.append(f"  ... and {len(mismatched_files) - 10} more")
+
+        pytest.exit("\n".join(error_msg), returncode=1)
 
     # Need to download - use archive if configured
     if archive_config:

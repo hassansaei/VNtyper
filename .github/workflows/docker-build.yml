@@ -97,60 +97,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
-      # Restore test data cache (separate from save to ensure cache is saved even if tests fail)
+      # Restore test data cache (uses cache/restore to allow saving even on failure)
       - name: Restore test data cache
         id: cache-test-data-restore
         uses: actions/cache/restore@v4
         with:
           path: tests/data
-          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+          key: test-data-v2-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
           restore-keys: |
-            test-data-
+            test-data-v2-
 
-      # Download test data if not cached using wget (more reliable for large files)
+      # Verify cache contents if cache was restored
+      - name: Verify cached test data
+        if: steps.cache-test-data-restore.outputs.cache-hit == 'true'
+        run: |
+          echo "Cache was restored. Verifying integrity..."
+          python scripts/download_test_data.py --verify-only || {
+            echo "⚠ Cache verification failed. Will re-download."
+            rm -rf tests/data
+            exit 0
+          }
+          echo "✓ Cache is valid"
+
+      # Download test data if not cached or verification failed
+      # Uses the same Python script as local development for consistency
       - name: Download test data
         if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
         run: |
           echo "Downloading test data (1.1GB archive from Zenodo)..."
-          echo "This may take 30-90 minutes depending on Zenodo server load"
+          echo "Using Python download script (same as local development)"
+          echo "This ensures consistent extraction logic between local and CI"
+          echo ""
 
-          # Use wget with retry and continue capabilities
-          # -c: continue partial downloads
-          # --tries=5: retry up to 5 times
-          # --timeout=60: 60s timeout for connections
-          # --progress=dot:giga: show progress
-          mkdir -p /tmp/vntyper-download
-          wget -c --tries=5 --timeout=60 --progress=dot:giga \
-            -O /tmp/vntyper-download/data.zip \
-            "https://zenodo.org/records/17377082/files/data.zip?download=1" || exit 1
-
-          echo "Extracting archive..."
-          mkdir -p tests/data
-          unzip -q /tmp/vntyper-download/data.zip -d tests/data
-
-          echo "Verifying download..."
-          python3 -c "
-          import json
-          from tests.test_data_utils import compute_md5
-          from pathlib import Path
-
-          # Just verify key files exist
-          key_files = [
-              'tests/data/example_b178_hg19_subset.bam',
-              'tests/data/example_b178_hg19_subset.bam.bai',
-          ]
-
-          for f in key_files:
-              p = Path(f)
-              if not p.exists():
-                  raise FileNotFoundError(f'Missing file: {f}')
-              print(f'✓ Verified: {f} ({p.stat().st_size / (1024*1024):.1f} MB)')
-
-          print('✓ Test data download and extraction complete')
-          "
-
-          # Cleanup
-          rm -rf /tmp/vntyper-download
+          # Use the standalone download script
+          # This ensures 100% identical behavior between local and CI
+          python scripts/download_test_data.py --quiet
         timeout-minutes: 120
 
       # Save test data cache IMMEDIATELY after download (before tests run)
@@ -160,9 +141,19 @@ jobs:
         if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
         with:
           path: tests/data
-          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+          key: test-data-v2-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+
+      # Final verification before running tests
+      - name: Final test data verification
+        run: |
+          echo "Running final verification before tests..."
+          python scripts/download_test_data.py --verify-only
+          echo "✓ Test data is ready"
 
       - name: Run Docker quick tests
+        env:
+          # Disable automatic downloads in pytest fixtures (fail fast if data missing)
+          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
         run: make test-docker-quick
         timeout-minutes: 20
 
@@ -194,68 +185,56 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev]
 
-      # Restore test data cache (separate from save to ensure cache is saved even if tests fail)
+      # Restore test data cache (uses cache/restore to allow saving even on failure)
       - name: Restore test data cache
         id: cache-test-data-full-restore
         uses: actions/cache/restore@v4
         with:
           path: tests/data
-          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+          key: test-data-v2-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
           restore-keys: |
-            test-data-
+            test-data-v2-
 
-      # Download test data if not cached using wget (more reliable for large files)
+      # Verify cache contents if cache was restored
+      - name: Verify cached test data
+        if: steps.cache-test-data-full-restore.outputs.cache-hit == 'true'
+        run: |
+          echo "Cache was restored. Verifying integrity..."
+          python scripts/download_test_data.py --verify-only || {
+            echo "⚠ Cache verification failed. Will re-download."
+            rm -rf tests/data
+            exit 0
+          }
+          echo "✓ Cache is valid"
+
+      # Download test data if not cached or verification failed
       - name: Download test data
         if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
         run: |
           echo "Downloading test data (1.1GB archive from Zenodo)..."
-          echo "This may take 30-90 minutes depending on Zenodo server load"
-
-          # Use wget with retry and continue capabilities
-          mkdir -p /tmp/vntyper-download
-          wget -c --tries=5 --timeout=60 --progress=dot:giga \
-            -O /tmp/vntyper-download/data.zip \
-            "https://zenodo.org/records/17377082/files/data.zip?download=1" || exit 1
-
-          echo "Extracting archive..."
-          mkdir -p tests/data
-          unzip -q /tmp/vntyper-download/data.zip -d tests/data
-
-          echo "Verifying download..."
-          python3 -c "
-          import json
-          from tests.test_data_utils import compute_md5
-          from pathlib import Path
-
-          # Verify all key test files exist
-          with open('tests/test_data_config.json') as f:
-              config = json.load(f)
-
-          verified = 0
-          for resource in config.get('file_resources', [])[:5]:  # Check first 5 files
-              p = Path(resource['local_path']) / resource['filename']
-              if not p.exists():
-                  raise FileNotFoundError(f'Missing file: {p}')
-              verified += 1
-
-          print(f'✓ Verified {verified} test files')
-          print('✓ Test data download and extraction complete')
-          "
-
-          # Cleanup
-          rm -rf /tmp/vntyper-download
+          echo "Using Python download script (same as local development)"
+          python scripts/download_test_data.py --quiet
         timeout-minutes: 120
 
       # Save test data cache IMMEDIATELY after download (before tests run)
-      # This ensures cache persists even if tests fail/timeout later
       - name: Save test data cache
         uses: actions/cache/save@v4
         if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
         with:
           path: tests/data
-          key: test-data-${{ hashFiles('tests/test_data_config.json') }}
+          key: test-data-v2-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+
+      # Final verification before running tests
+      - name: Final test data verification
+        run: |
+          echo "Running final verification before tests..."
+          python scripts/download_test_data.py --verify-only
+          echo "✓ Test data is ready"
 
       - name: Run full Docker test suite
+        env:
+          # Disable automatic downloads in pytest fixtures (fail fast if data missing)
+          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
         run: make test-docker
         timeout-minutes: 60
 
