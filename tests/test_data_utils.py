@@ -230,9 +230,9 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
                     logger.info(f"Files at root: {files_at_root}")
                     logger.info(f"Dominant directory: '{dominant_dir}' with {file_count}/{total_files} files")
 
-                    # If the dominant directory contains at least 90% of all files, strip it
-                    # This handles archives like: data/file1.bam, data/file2.bam, README.md
-                    if file_count / total_files >= 0.9:
+                    # If the dominant directory contains >50% of all files, strip it
+                    # Lowered from 0.9 to 0.5 to handle archives with extra root files (README, etc)
+                    if file_count / total_files > 0.5:
                         common_prefix = dominant_dir
                         logger.info(f"Will strip '{common_prefix}' from extraction paths")
 
