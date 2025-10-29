@@ -242,13 +242,14 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
     logger.info("Archive extracted successfully")
 
 
-def verify_test_data(config_path: Path, data_dir: Path) -> tuple[bool, list[str]]:
+def verify_test_data(config_path: Path, data_dir: Path, skip_md5: bool = False) -> tuple[bool, list[str]]:
     """
     Verify test data files exist and have correct MD5 checksums.
 
     Args:
         config_path: Path to test_data_config.json
         data_dir: Base directory for test data
+        skip_md5: If True, only check file existence, skip MD5 validation
 
     Returns:
         Tuple of (all_valid: bool, error_messages: list[str])
@@ -260,7 +261,10 @@ def verify_test_data(config_path: Path, data_dir: Path) -> tuple[bool, list[str]
     errors = []
     verified_count = 0
 
-    logger.info(f"Verifying {len(file_resources)} test data files...")
+    if skip_md5:
+        logger.info(f"Verifying {len(file_resources)} test data files (existence only, MD5 checks skipped)...")
+    else:
+        logger.info(f"Verifying {len(file_resources)} test data files...")
 
     for resource in file_resources:
         # Compute path relative to data_dir
@@ -284,7 +288,7 @@ def verify_test_data(config_path: Path, data_dir: Path) -> tuple[bool, list[str]
             errors.append(f"Missing: {local_path}")
             continue
 
-        if expected_md5:
+        if expected_md5 and not skip_md5:
             current_md5 = compute_md5(local_path)
             if current_md5.lower() != expected_md5.lower():
                 errors.append(f"MD5 mismatch: {local_path} (expected={expected_md5}, got={current_md5})")
@@ -326,10 +330,17 @@ Examples:
     )
     parser.add_argument("--force", action="store_true", help="Force re-download even if files exist")
     parser.add_argument("--verify-only", action="store_true", help="Only verify existing files, don't download")
+    parser.add_argument("--skip-md5", action="store_true", help="Skip MD5 checksum validation (only check file existence)")
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
     parser.add_argument("--verbose", action="store_true", help="Detailed output")
 
     args = parser.parse_args()
+
+    # Check for environment variable to skip MD5 (useful in CI)
+    skip_md5 = args.skip_md5 or os.environ.get("VNTYPER_SKIP_MD5_CHECK", "").lower() in ("1", "true", "yes")
+
+    if skip_md5:
+        logger.warning("MD5 checksum validation is DISABLED - only checking file existence")
 
     # Configure logging level
     if args.quiet:
@@ -358,14 +369,14 @@ Examples:
     # Verify only mode
     if args.verify_only:
         logger.info("Verify-only mode: checking existing files")
-        success, _ = verify_test_data(config_path, data_dir)
+        success, _ = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
         sys.exit(0 if success else 1)
 
     # Check if download needed
     need_download = args.force
     if not need_download:
         logger.info("Checking if test data exists and is valid...")
-        success, _ = verify_test_data(config_path, data_dir)
+        success, _ = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
         if success:
             logger.info("Test data already exists and is valid. Use --force to re-download.")
             sys.exit(0)
@@ -401,7 +412,7 @@ Examples:
         logger.info("VERIFYING DATA")
         logger.info("=" * 80)
 
-        success, errors = verify_test_data(config_path, data_dir)
+        success, errors = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
 
         if not success:
             logger.error("Verification failed after extraction!")
