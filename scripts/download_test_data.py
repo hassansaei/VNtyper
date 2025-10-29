@@ -166,10 +166,11 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
             logger.info(f"Files at root: {files_at_root}")
             logger.info(f"Dominant directory: '{dominant_dir}' with {file_count}/{total_files} files")
 
-            # If dominant directory contains ≥90% of files, strip it
-            if file_count / total_files >= 0.9:
+            # If dominant directory contains >50% of files, strip it
+            # Lowered from 0.9 to 0.5 to handle archives with extra root files (README, etc)
+            if file_count / total_files > 0.5:
                 common_prefix = dominant_dir
-                logger.info(f"Will strip '{common_prefix}' from extraction paths")
+                logger.info(f"Will strip '{common_prefix}' from extraction paths (ratio: {file_count}/{total_files})")
 
         if common_prefix:
             logger.info(f"Extracting files while stripping '{common_prefix}' prefix...")

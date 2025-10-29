@@ -131,7 +131,8 @@ jobs:
 
           # Use the standalone download script
           # This ensures 100% identical behavior between local and CI
-          python scripts/download_test_data.py --quiet
+          # Temporarily without --quiet to see diagnostic logs
+          python scripts/download_test_data.py
         timeout-minutes: 120
 
       # Save test data cache IMMEDIATELY after download (before tests run)
