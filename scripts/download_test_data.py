@@ -135,6 +135,13 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
         all_files = zip_ref.namelist()
         logger.info(f"Archive contains {len(all_files)} entries")
 
+        # List first few files for debugging
+        logger.info("First 10 entries in archive:")
+        for i, name in enumerate(all_files[:10]):
+            logger.info(f"  [{i+1}] {name}")
+        if len(all_files) > 10:
+            logger.info(f"  ... and {len(all_files) - 10} more entries")
+
         # Robust detection of dominant top-level directory
         dir_counts = {}
         files_at_root = 0
@@ -165,7 +172,8 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                 logger.info(f"Will strip '{common_prefix}' from extraction paths")
 
         if common_prefix:
-            logger.info("Extracting files while stripping root directory...")
+            logger.info(f"Extracting files while stripping '{common_prefix}' prefix...")
+            logger.info(f"Target directory: {extract_to.absolute()}")
             extracted_count = 0
             total_members = len([m for m in zip_ref.infolist() if not m.filename.endswith("/")])
 
@@ -174,12 +182,14 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                     continue
 
                 member_path = member.filename
+                original_path = member_path  # Keep for logging
+
                 if member_path.startswith(common_prefix):
                     member_path = member_path[len(common_prefix) :]
 
                 # Skip files not in dominant directory
                 if not member_path or member_path == member.filename:
-                    logger.debug(f"Skipping: {member.filename}")
+                    logger.debug(f"Skipping: {member.filename} (not in dominant directory)")
                     continue
 
                 target_path = extract_to / member_path
@@ -188,17 +198,30 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                 # Log progress for large extractions
                 extracted_count += 1
                 if extracted_count % 10 == 0 or extracted_count == total_members:
-                    logger.info(f"Extracting: {extracted_count}/{total_members} files ({member_path})")
+                    logger.info(f"Extracting [{extracted_count}/{total_members}]: {original_path} → {target_path}")
 
                 # Use shutil.copyfileobj for robust large file extraction
                 try:
                     with zip_ref.open(member) as source, open(target_path, "wb") as target:
                         shutil.copyfileobj(source, target, length=65536)
+
+                    # Verify file was written
+                    if not target_path.exists():
+                        raise RuntimeError(f"File not found after extraction: {target_path}")
+
+                    file_size = target_path.stat().st_size
+                    if file_size == 0:
+                        raise RuntimeError(f"Extracted file is empty: {target_path}")
+
+                    # Log details for first few files
+                    if extracted_count <= 3:
+                        logger.info(f"  ✓ Verified: {target_path.name} ({file_size / (1024*1024):.2f} MB)")
+
                 except Exception as e:
-                    logger.error(f"Failed to extract {member.filename}: {e}")
+                    logger.error(f"Failed to extract {member.filename} to {target_path}: {e}")
                     raise
 
-            logger.info(f"✓ Successfully extracted {extracted_count} files")
+            logger.info(f"✓ Successfully extracted {extracted_count} files to {extract_to.absolute()}")
         else:
             logger.info("Extracting all files normally...")
             zip_ref.extractall(extract_to)
