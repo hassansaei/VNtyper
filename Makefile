@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -27,6 +27,8 @@ help:
 	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
+	@echo "  make download-test-data      - Download test data from Zenodo (1.1GB, ~10-30 min)"
+	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
 	@echo "  make test                    - Run all tests (with live logging)"
 	@echo "  make test-unit               - Run unit tests only (fast)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
@@ -98,6 +100,23 @@ type-check-all:
 	@echo "$(BLUE)Running mypy type checker on all code...$(RESET)"
 	mypy vntyper/ tests/ --python-version 3.9 --ignore-missing-imports
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
+# Test data management targets
+download-test-data:
+	@echo "$(BLUE)Downloading test data from Zenodo (1.1GB)...$(RESET)"
+	@echo "$(BLUE)This may take 10-30 minutes depending on network speed$(RESET)"
+	python scripts/download_test_data.py
+	@echo "$(GREEN)✓ Test data download complete$(RESET)"
+
+download-test-data-force:
+	@echo "$(BLUE)Force downloading test data (even if already present)...$(RESET)"
+	python scripts/download_test_data.py --force
+	@echo "$(GREEN)✓ Test data download complete$(RESET)"
+
+verify-test-data:
+	@echo "$(BLUE)Verifying test data...$(RESET)"
+	python scripts/download_test_data.py --verify-only
+	@echo "$(GREEN)✓ Test data verification complete$(RESET)"
 
 # Testing targets
 test:
