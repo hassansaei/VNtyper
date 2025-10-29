@@ -166,11 +166,20 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
             logger.info(f"Files at root: {files_at_root}")
             logger.info(f"Dominant directory: '{dominant_dir}' with {file_count}/{total_files} files")
 
-            # If dominant directory contains >50% of files, strip it
-            # Lowered from 0.9 to 0.5 to handle archives with extra root files (README, etc)
-            if file_count / total_files > 0.5:
+            # Only strip prefix if:
+            # 1. Dominant directory has >90% of files (very dominant)
+            # 2. OR: Has >80% AND fewer than 5 files at root (just metadata files like README)
+            #
+            # This handles two cases:
+            # - Case 1: data/ with 28 files + README.md at root (96.5% → strip prefix)
+            # - Case 2: remapped/ with 87 files + 36 test files at root (70.7% → DON'T strip)
+            ratio = file_count / total_files
+            if ratio > 0.9 or (ratio > 0.8 and files_at_root < 5):
                 common_prefix = dominant_dir
-                logger.info(f"Will strip '{common_prefix}' from extraction paths (ratio: {file_count}/{total_files})")
+                logger.info(f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})")
+            else:
+                logger.info(f"Mixed archive structure detected (ratio: {ratio:.1%}, root files: {files_at_root})")
+                logger.info("Will extract all files normally (no prefix stripping)")
 
         if common_prefix:
             logger.info(f"Extracting files while stripping '{common_prefix}' prefix...")
@@ -211,8 +220,11 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                         raise RuntimeError(f"File not found after extraction: {target_path}")
 
                     file_size = target_path.stat().st_size
+
+                    # Allow empty files for certain types (log files, etc.)
+                    # They can legitimately be empty (e.g., .quickcheck.log when no issues found)
                     if file_size == 0:
-                        raise RuntimeError(f"Extracted file is empty: {target_path}")
+                        logger.debug(f"Extracted empty file: {target_path.name} (this may be normal for log files)")
 
                     # Log details for first few files
                     if extracted_count <= 3:
