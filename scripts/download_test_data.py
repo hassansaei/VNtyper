@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import logging
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -95,6 +96,14 @@ def download_file_requests(url: str, dest_path: Path, timeout: int = 300) -> Non
 
     logger.info(f"Download complete: {downloaded / (1024 * 1024):.2f} MB")
 
+    # Verify download completed successfully
+    actual_size = dest_path.stat().st_size
+    if total_size > 0 and actual_size != total_size:
+        logger.error(f"Download size mismatch: expected {total_size} bytes, got {actual_size} bytes")
+        raise RuntimeError(f"Incomplete download: {actual_size}/{total_size} bytes")
+
+    logger.info(f"✓ Download verified: {actual_size / (1024 * 1024):.2f} MB")
+
 
 def extract_archive(archive_path: Path, extract_to: Path) -> None:
     """
@@ -109,6 +118,18 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
     """
     logger.info(f"Extracting archive to {extract_to}")
     extract_to.mkdir(parents=True, exist_ok=True)
+
+    # Verify zip file integrity first
+    logger.info("Verifying archive integrity...")
+    try:
+        with zipfile.ZipFile(archive_path, "r") as zip_test:
+            bad_file = zip_test.testzip()
+            if bad_file:
+                raise RuntimeError(f"Corrupted file in archive: {bad_file}")
+        logger.info("✓ Archive integrity verified")
+    except zipfile.BadZipFile as e:
+        logger.error(f"Archive is corrupted: {e}")
+        raise
 
     with zipfile.ZipFile(archive_path, "r") as zip_ref:
         all_files = zip_ref.namelist()
@@ -146,6 +167,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
         if common_prefix:
             logger.info("Extracting files while stripping root directory...")
             extracted_count = 0
+            total_members = len([m for m in zip_ref.infolist() if not m.filename.endswith("/")])
 
             for member in zip_ref.infolist():
                 if member.filename.endswith("/"):  # Skip directory entries
@@ -163,11 +185,20 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                 target_path = extract_to / member_path
                 target_path.parent.mkdir(parents=True, exist_ok=True)
 
-                with zip_ref.open(member) as source, open(target_path, "wb") as target:
-                    target.write(source.read())
+                # Log progress for large extractions
                 extracted_count += 1
+                if extracted_count % 10 == 0 or extracted_count == total_members:
+                    logger.info(f"Extracting: {extracted_count}/{total_members} files ({member_path})")
 
-            logger.info(f"Extracted {extracted_count} files")
+                # Use shutil.copyfileobj for robust large file extraction
+                try:
+                    with zip_ref.open(member) as source, open(target_path, "wb") as target:
+                        shutil.copyfileobj(source, target, length=65536)
+                except Exception as e:
+                    logger.error(f"Failed to extract {member.filename}: {e}")
+                    raise
+
+            logger.info(f"✓ Successfully extracted {extracted_count} files")
         else:
             logger.info("Extracting all files normally...")
             zip_ref.extractall(extract_to)
