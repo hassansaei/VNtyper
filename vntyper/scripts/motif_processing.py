@@ -141,6 +141,78 @@ def load_additional_motifs(config):
     return pd.DataFrame({"Motif": identifiers, "Motif_sequence": sequences})
 
 
+def _apply_uniform_filtering_right_motif(motif_right, exclude_motifs_right, alt_for_motif_right_gg, motifs_for_alt_gg):
+    """
+    Apply uniform depth-score-based filtering for right motif variants.
+
+    This function implements the fix for Issue #136 by using depth-score-first
+    filtering instead of ALT-based filtering. This prevents silent deletion of
+    non-GG frameshift variants (e.g., insG_pos54 mutations).
+
+    Algorithm:
+    1. Remove excluded motifs FIRST (conserved motifs where variants are likely artifacts)
+    2. Sort by Depth_Score DESC, then POS DESC (highest coverage = highest confidence)
+    3. Deduplicate by [POS, REF, ALT] - CRITICAL: position-specific to preserve different biological events
+    4. Preserve motif-specific GG logic (keeps GG only in allowed motifs, preserves ALL non-GG)
+
+    Args:
+        motif_right (pd.DataFrame): Right motif variants (POS >= position_threshold)
+        exclude_motifs_right (list): Motifs to exclude (e.g., conserved motifs)
+        alt_for_motif_right_gg (str): ALT value for GG filtering (typically "GG")
+        motifs_for_alt_gg (list): Allowed motifs for GG variants (typically ["X"])
+
+    Returns:
+        pd.DataFrame: Filtered variants with uniform depth-score-based filtering
+
+    Biological Rationale:
+        - insG_pos54: 176 GC variants + 85 GG variants → keep highest-depth GC (not delete all GC!)
+        - dupC: G>GG, C>CG, T>TG at same position → keep highest-depth variant
+        - Position-specific dedup: POS 60 vs POS 67 are DIFFERENT biological events
+
+    References:
+        - GitHub Issue #136
+        - Hassan Saei's recommendation: "Sort by depth score, deduplicate, not ALT-based filtering"
+    """
+    if motif_right.empty:
+        return motif_right
+
+    # Step 1: Remove excluded motifs FIRST
+    # Biological: Conserved motifs (Q, 8, 9, 7, etc.) are stable → variants likely artifacts
+    motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
+
+    if motif_right.empty:
+        return motif_right
+
+    # Step 2: Sort by Depth_Score DESC, then POS DESC
+    # Biological: Highest coverage first (signal > noise), then position for consistency
+    motif_right = motif_right.sort_values(["Depth_Score", "POS"], ascending=[False, False])
+
+    # Step 3: Deduplicate by [POS, REF, ALT] - CRITICAL FIX!
+    # Why position-specific?
+    #   - POS 60: C>GC (insG at pos 54) vs POS 67: G>GG (dupC) = DIFFERENT biological events
+    #   - Old bug: subset=["REF", "ALT"] would lose one of them
+    #   - New fix: subset=["POS", "REF", "ALT"] preserves both
+    motif_right = motif_right.drop_duplicates(
+        subset=["POS", "REF", "ALT"],
+        keep="first",  # Keeps highest Depth_Score (sorted first)
+    )
+
+    # Step 4: Preserve motif-specific GG logic
+    # Biological: GG variants only allowed in motif "X" (canonical repeat unit)
+    #             All non-GG variants (GC, CG, CT, etc.) are PRESERVED
+    if (motif_right["ALT"] == alt_for_motif_right_gg).any():
+        # Filter GG: keep only if in allowed motifs
+        gg_in_allowed = motif_right[
+            (motif_right["ALT"] == alt_for_motif_right_gg) & (motif_right["Motif"].isin(motifs_for_alt_gg))
+        ]
+        # Preserve ALL non-GG variants (this is the FIX for Issue #136!)
+        non_gg = motif_right[motif_right["ALT"] != alt_for_motif_right_gg]
+        # Combine
+        motif_right = pd.concat([gg_in_allowed, non_gg], ignore_index=True)
+
+    return motif_right
+
+
 def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     """
     Final step of motif annotation: correct positions for left/right motifs,
@@ -151,6 +223,11 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
       - Adds 'motif_filter_pass' boolean,
       - Ensures 'Motif_fasta', 'POS_fasta', and 'Motif' columns
         exist in the final output, even for failing rows.
+
+    Issue #136 Fix:
+      - Supports new uniform filtering via 'use_uniform_filtering' flag
+      - Default: false (legacy behavior for backward compatibility)
+      - When true: applies depth-score-based filtering (fixes insG_pos54 detection)
     """
     logging.debug("Entering motif_correction_and_annotation")
     logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
@@ -168,6 +245,7 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     original_df["original_index"] = original_df.index
 
     mf = kestrel_config["motif_filtering"]
+    use_uniform_filtering = mf.get("use_uniform_filtering", False)  # Issue #136 fix flag
     position_threshold = mf.get("position_threshold", 60)
     exclude_motifs_right = mf.get("exclude_motifs_right", [])
     alt_for_motif_right_gg = mf.get("alt_for_motif_right_gg", "GG")
@@ -245,19 +323,27 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             ]
             motif_right = motif_right[keep_cols]
 
-            # 'GG' logic
-            if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
-                motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
-                motif_right = motif_right[motif_right["ALT"] == alt_for_motif_right_gg]
-                motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
-                motif_right.drop_duplicates("ALT", keep="first", inplace=True)
-                if motif_right["Motif"].isin(motifs_for_alt_gg).any():
-                    motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
+            # Issue #136 Fix: Branch based on use_uniform_filtering flag
+            if use_uniform_filtering:
+                # NEW: Uniform depth-score-based filtering (fixes insG_pos54 detection)
+                motif_right = _apply_uniform_filtering_right_motif(
+                    motif_right, exclude_motifs_right, alt_for_motif_right_gg, motifs_for_alt_gg
+                )
             else:
-                motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
-                motif_right.drop_duplicates("ALT", keep="first", inplace=True)
+                # LEGACY: Original GG logic (kept for backward compatibility)
+                # WARNING: This has the Issue #136 bug - deletes all non-GG variants
+                if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
+                    motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
+                    motif_right = motif_right[motif_right["ALT"] == alt_for_motif_right_gg]
+                    motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
+                    motif_right.drop_duplicates("ALT", keep="first", inplace=True)
+                    if motif_right["Motif"].isin(motifs_for_alt_gg).any():
+                        motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
+                else:
+                    motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
+                    motif_right.drop_duplicates("ALT", keep="first", inplace=True)
 
-            motif_right.drop_duplicates(subset=["REF", "ALT"], inplace=True)
+                motif_right.drop_duplicates(subset=["REF", "ALT"], inplace=True)
 
         # Combine
         combined_df = pd.concat([motif_right, motif_left], axis=0, ignore_index=True)
