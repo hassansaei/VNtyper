@@ -120,7 +120,7 @@ def run_advntr_test_case(
     required_files = [
         "summary_report.html",
         "kestrel/kestrel_result.tsv",
-        "output_adVNTR_result.tsv",
+        "advntr/output_adVNTR_result.tsv",  # adVNTR outputs go in advntr/ subdirectory
     ]
     assert_required_files(output_dir, required_files)
 

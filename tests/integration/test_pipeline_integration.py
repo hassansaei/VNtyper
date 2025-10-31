@@ -22,6 +22,9 @@ from pathlib import Path
 import pytest
 import requests
 
+# Import shared test orchestration for DRY principle
+from tests.test_orchestration import run_advntr_test_case
+
 # Configure logging for the entire module.
 logging.basicConfig(level=logging.INFO)
 
@@ -506,9 +509,9 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     """
     Integration test for the adVNTR module.
 
-    This test validates the filtered adVNTR results from output_adVNTR_result.tsv,
-    which contains the best/most significant variant (lowest p-value) after adVNTR
-    filtering. This ensures we test the final processed output rather than raw VCF.
+    This test uses SHARED orchestration (run_advntr_test_case) to guarantee
+    100% 1to1 congruence with Docker tests. All validation logic is centralized
+    in tests/test_orchestration.py and tests/helpers.py.
 
     The 'advntr_case' fixture yields a single test scenario with:
       - bam: path to input BAM file
@@ -520,10 +523,6 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     logger = logging.getLogger(__name__)
     logger.info("Starting test_advntr_input for case: %s", advntr_case["test_name"])
 
-    bam_path = advntr_case["bam"]
-    cli_options = advntr_case["cli_options"]
-    expected_vcf = advntr_case["expected_vcf"]
-    reference_assembly = advntr_case.get("reference_assembly", "hg19")
     output_dir = tmp_path / advntr_case["test_name"]
 
     # Clean up old output
@@ -531,120 +530,41 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build the command for adVNTR usage
-    command = [
-        "vntyper",
-        "-l",
-        "DEBUG",
-        "pipeline",
-        "--bam",
-        bam_path,
-        "--threads",
-        "4",
-        "--reference-assembly",
-        reference_assembly,
-        "-o",
-        str(output_dir),
-    ] + cli_options
+    # Define local CLI runner (matches Docker runner signature)
+    def local_runner(bam_file: Path, reference: str, output_dir: Path, extra_modules: list[str]) -> int:
+        """Execute vntyper CLI locally via subprocess."""
+        command = [
+            "vntyper",
+            "-l",
+            "DEBUG",
+            "pipeline",
+            "--bam",
+            str(bam_file),
+            "--threads",
+            "4",
+            "--reference-assembly",
+            reference,
+            "-o",
+            str(output_dir),
+        ]
 
-    logger.info("Command to execute: %s", " ".join(command))
-    result = subprocess.run(command, capture_output=True, text=True)
+        # Add extra modules from cli_options
+        if extra_modules:
+            command.extend(["--extra-modules", ",".join(extra_modules)])
 
-    logger.info("Return code: %d", result.returncode)
-    logger.info("STDOUT:\n%s", result.stdout)
-    logger.info("STDERR:\n%s", result.stderr)
+        logger.info("Command to execute: %s", " ".join(command))
+        result = subprocess.run(command, capture_output=True, text=True)
 
-    # Check that the process completed successfully
-    assert result.returncode == 0, (
-        f"Pipeline returned non-zero exit code.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    )
+        logger.info("Return code: %d", result.returncode)
+        logger.info("STDOUT:\n%s", result.stdout)
+        if result.returncode != 0:
+            logger.error("STDERR:\n%s", result.stderr)
 
-    # Look for the filtered adVNTR results TSV inside the 'advntr' subfolder
-    advntr_dir = output_dir / "advntr"
-    result_path = advntr_dir / expected_vcf
+        return result.returncode
 
-    logger.info("Looking for adVNTR result file: %s", result_path)
-    assert result_path.exists(), (
-        f"Expected adVNTR result file {expected_vcf} was not generated in the 'advntr/' folder.\n"
-        f"Output folder contents: {list(output_dir.iterdir())}\n"
-        f"adVNTR folder contents: {list(advntr_dir.iterdir()) if advntr_dir.exists() else 'N/A'}"
-    )
-
-    # Parse the adVNTR output, skipping comment lines starting with '#'
-    data_lines = []
-    with open(result_path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("#"):
-                continue  # skip comment lines
-            data_lines.append(line)
-
-    # Skip the header line (VID Variant NumberOfSupportingReads MeanCoverage Pvalue ...)
-    if data_lines and data_lines[0].startswith("VID"):
-        logger.info("Skipping adVNTR header line: %s", data_lines[0])
-        data_lines.pop(0)
-
-    assert len(data_lines) > 0, f"No data lines found in {result_path} after skipping header."
-
-    # Parse the first data line (should be the best/filtered result)
-    columns = data_lines[0].split("\t")
-    logger.info("Parsed adVNTR result columns: %s", columns)
-    # Typical line example from output_adVNTR_result.tsv:
-    # 25561  I22_2_G_LEN1  13  144.234722222  3.46346905707e-09  2  22  T  TG  Not flagged
-    # We need at least the first 5 columns: VID, Variant, NumberOfSupportingReads, MeanCoverage, Pvalue
-    assert len(columns) >= 5, "Expected at least 5 columns in adVNTR output."
-
-    advntr_expected = advntr_case["advntr_assertions"]
-
-    # Compare each field as needed.
-    # Column indices: 0 => VID, 1 => Variant (called "State" in assertions),
-    #                 2 => NumberOfSupportingReads, 3 => MeanCoverage, 4 => Pvalue
-    # Note: TSV has additional columns after index 4 (RU, POS, REF, ALT, Flag)
-    actual_vid = columns[0]
-    assert actual_vid == advntr_expected["VID"], f"Expected VID={advntr_expected['VID']}, got {actual_vid}"
-
-    actual_state = columns[1]
-    assert actual_state == advntr_expected["State"], f"Expected State={advntr_expected['State']}, got {actual_state}"
-
-    # NumberOfSupportingReads is an integer in the example; parse as float to handle decimals
-    actual_num_reads = float(columns[2])
-    assert abs(actual_num_reads - advntr_expected["NumberOfSupportingReads"]) < 1e-7, (
-        f"Expected NumberOfSupportingReads={advntr_expected['NumberOfSupportingReads']}, got {actual_num_reads}"
-    )
-
-    actual_mean_cov = float(columns[3])
-    # Handle MeanCoverage with optional tolerance (similar to Kestrel depth assertions)
-    if isinstance(advntr_expected["MeanCoverage"], dict):
-        expected_val = advntr_expected["MeanCoverage"]["value"]
-        tolerance_pct = advntr_expected["MeanCoverage"].get("tolerance_percentage", 0)
-        tolerance = expected_val * (tolerance_pct / 100.0)
-        assert abs(actual_mean_cov - expected_val) <= tolerance, (
-            f"MeanCoverage mismatch. Got={actual_mean_cov}, Expected ~{expected_val} ±{tolerance} ({tolerance_pct}%)"
-        )
-    else:
-        # Backward compatibility: exact match with tiny float tolerance
-        assert abs(actual_mean_cov - advntr_expected["MeanCoverage"]) < 1e-7, (
-            f"Expected MeanCoverage={advntr_expected['MeanCoverage']}, got {actual_mean_cov}"
-        )
-
-    # Compare p-value with order-of-magnitude tolerance (p-values are stochastic)
-    actual_pval = float(columns[4])
-    if isinstance(advntr_expected["Pvalue"], dict):
-        # New format: structured p-value with log10 tolerance
-        expected_val = advntr_expected["Pvalue"]["value"]
-        log10_tol = advntr_expected["Pvalue"].get("log10_tolerance", 2)
-        import math
-
-        # Compare on log10 scale to allow order-of-magnitude variation
-        assert abs(math.log10(actual_pval) - math.log10(expected_val)) <= log10_tol, (
-            f"P-value mismatch. Got={actual_pval}, Expected ~{expected_val} "
-            f"(must be within {log10_tol} orders of magnitude)"
-        )
-    else:
-        # Backward compatibility: exact match with tiny float tolerance
-        assert abs(actual_pval - advntr_expected["Pvalue"]) < 1e-12, (
-            f"Expected Pvalue={advntr_expected['Pvalue']}, got {actual_pval}"
-        )
+    # Run test using SHARED orchestration logic (DRY principle)
+    # This guarantees 100% identical validation between local and Docker tests
+    run_advntr_test_case(advntr_case, local_runner, output_dir)
 
 
 #
