@@ -19,6 +19,7 @@ Example flagging rule:
 
 import logging
 import re
+from typing import Optional
 
 import pandas as pd
 
@@ -69,7 +70,7 @@ def evaluate_condition(row, condition):
         return False
 
 
-def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict = None) -> pd.DataFrame:
+def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: Optional[dict] = None) -> pd.DataFrame:
     """
     Applies flagging rules to the DataFrame and adds a 'Flag' column with the matched flags.
 
@@ -107,7 +108,7 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict = None
     logging.debug("Created a copy of the DataFrame for flag processing.")
 
     # Initialize a list to store flags for each row
-    flags = [[] for _ in range(len(df_copy))]
+    flags: list[list[str]] = [[] for _ in range(len(df_copy))]
     logging.debug("Initialized flags list for each row.")
 
     # Evaluate each flag rule
@@ -215,8 +216,10 @@ def mark_potential_duplicates(
 
     logging.debug("Combining existing flags with new duplicate flags.")
     combined_flags = []
-    for i, row in enumerate(df_copy.itertuples(index=False)):
-        existing_flag = row.Flag
+    for i, row_tuple in enumerate(df_copy.itertuples(index=False)):
+        # itertuples returns a named tuple - access Flag attribute safely
+        # Use getattr to avoid mypy errors with dynamic pandas named tuple attributes
+        existing_flag = getattr(row_tuple, "Flag")  # noqa: B009
         dup_flag_list = new_flags[i]
 
         if existing_flag == "Not flagged":

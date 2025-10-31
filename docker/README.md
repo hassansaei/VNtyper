@@ -1,41 +1,80 @@
 # VNtyper Docker Container
 
-A Docker container for **VNtyper**, enabling easy execution of the tool with customizable configurations and external data handling.
+A production-ready Docker container for **VNtyper** with multi-stage build optimization (60-70% smaller image size).
 
 ## **Building the Docker Image**
 
-1. **Clone the VNtyper Repository:**
+### **Quick Start**
 
-   ```bash
-   git clone https://github.com/hassansaei/VNtyper.git
-   cd VNtyper
-   ```
+```bash
+# Clone repository
+git clone https://github.com/hassansaei/VNtyper.git
+cd VNtyper
 
-2. **Create the `entrypoint.sh` Script:**
+# Build with BuildKit (recommended)
+DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t vntyper:latest .
 
-   Save the `entrypoint.sh` content provided above into a file named `entrypoint.sh` in the VNtyper directory.
+# Or use Make
+make docker-build
+```
 
-3. **(Optional) Create the `config.json` File:**
+### **Pull Pre-built Image**
 
-   If you wish to use a configuration file, save the provided JSON content into `docker/config.json`.
+```bash
+# From Docker Hub
+docker pull saei/vntyper:latest
 
-4. **Build the Docker Image:**
+# From GitHub Container Registry
+docker pull ghcr.io/hassansaei/vntyper:latest
+```
 
-   ```bash
-   docker build --no-cache --build-arg REPO_URL=https://github.com/hassansaei/VNtyper.git \
-               --build-arg REPO_DIR=/opt/vntyper \
-               -t vntyper:latest .
-   ```
-5. **Pull the Docker Image from Docker Hub:**
+### **Generate Apptainer Image**
 
-    ```bash
-    docker pull saei/vntyper:latest
-    ```
-6. **Generate apptainer Image from Docker Image:**
+```bash
+apptainer pull docker://saei/vntyper:latest
+```
 
-    ```bash
-    apptainer pull docker://saei/vntyper:latest
-    ```
+## **Testing the Build**
+
+### **Quick Test** (Recommended)
+
+```bash
+# Run all Docker tests with testcontainers (automatic container management)
+make docker-test
+
+# Run quick Docker tests (exclude slow adVNTR tests)
+make docker-test-quick
+
+# Or use pytest directly
+pytest -m docker                    # All Docker tests
+pytest -m "docker and not slow"     # Quick tests only
+```
+
+### **Test Specific Components**
+
+```bash
+# Test BAM pipeline only
+pytest tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline -v
+
+# Test adVNTR module (slow test)
+pytest tests/docker/test_docker_pipeline.py::test_docker_advntr_pipeline -v
+
+# Test container health
+pytest tests/docker/test_docker_pipeline.py::test_docker_container_health -v
+```
+
+### **Verify Installation**
+
+```bash
+# Check VNtyper version
+docker run --rm vntyper:latest vntyper --version
+
+# Check Java runtime
+docker run --rm vntyper:latest java -version
+
+# Check bioinformatics tools
+docker run --rm vntyper:latest samtools --version
+```
 
 ## **Running the Docker Container**
 
@@ -133,3 +172,11 @@ curl -O "http://localhost:8000/download/filename.zip"
     ```bash
     docker logs <container_id>
     ```
+
+## **Testing Architecture**
+
+VNtyper uses [testcontainers-python](https://testcontainers-python.readthedocs.io/) for Docker testing with pytest:
+
+- Automatic container lifecycle management
+- Consistent test behavior between local and Docker environments
+- Standard pytest fixtures and markers

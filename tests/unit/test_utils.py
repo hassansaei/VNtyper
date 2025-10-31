@@ -6,10 +6,15 @@ Unit tests for utility functions.
 Includes testing for command execution and BAM file validation.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from vntyper.scripts.utils import run_command, validate_bam_file
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 def test_run_command_success(tmp_path):

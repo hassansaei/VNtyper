@@ -7,6 +7,7 @@ import os
 import statistics  # for median and stdev calculations
 import subprocess
 from pathlib import Path
+from typing import Optional, Union
 
 from vntyper.scripts.extract_unmapped_from_offset import (
     extract_unmapped_reads_from_offset,
@@ -486,7 +487,7 @@ def parse_contigs_from_header(header: str) -> list:
     for line in header.splitlines():
         if line.startswith("@SQ"):
             parts = line.split("\t")
-            contig_info = {}
+            contig_info: dict[str, Union[str, int, None]] = {}
             for part in parts:
                 if part.startswith("SN:"):
                     contig_info["name"] = part.replace("SN:", "")
@@ -500,7 +501,7 @@ def parse_contigs_from_header(header: str) -> list:
     return contigs
 
 
-def detect_assembly_from_contigs(header: str, config: dict, threshold: float = None) -> str:
+def detect_assembly_from_contigs(header: str, config: dict, threshold: Optional[float] = None) -> str:
     """
     Detects the reference genome assembly by comparing contig information from the BAM header
     against known assemblies from config. Returns the detected assembly name if the match percentage

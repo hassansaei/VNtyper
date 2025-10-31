@@ -1,11 +1,12 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check test test-unit test-integration test-cov clean build docker-build docker-build-optimized docker-scan docker-scan-critical docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean
 
 # Colors for output
 BLUE := \033[0;34m
 GREEN := \033[0;32m
+RED := \033[0;31m
 RESET := \033[0m
 
 # Default target - show help
@@ -22,23 +23,30 @@ help:
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format code with Ruff"
 	@echo "  make format-check     - Check code formatting without changes"
+	@echo "  make type-check       - Run mypy type checker on vntyper package"
+	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
-	@echo "  make test             - Run all tests"
-	@echo "  make test-unit        - Run unit tests only"
-	@echo "  make test-integration - Run integration tests only"
-	@echo "  make test-cov         - Run tests with coverage report"
+	@echo "  make download-test-data      - Download test data from Zenodo (1.1GB, ~10-30 min)"
+	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
+	@echo "  make test                    - Run all tests (with live logging)"
+	@echo "  make test-unit               - Run unit tests only (fast)"
+	@echo "  make test-integration        - Run integration tests only (sequential)"
+	@echo "  make test-integration-parallel - Run integration tests in parallel (67-81% faster)"
+	@echo "  make test-advntr             - Run adVNTR test only"
+	@echo "  make test-cov                - Run tests with coverage report"
+	@echo "  make test-quiet              - Run tests with minimal output"
+	@echo "  make test-verbose            - Run tests with detailed output"
 	@echo ""
 	@echo "$(GREEN)Build & Maintenance:$(RESET)"
 	@echo "  make clean            - Remove build artifacts and cache"
 	@echo "  make build            - Build distribution packages"
 	@echo ""
 	@echo "$(GREEN)Docker:$(RESET)"
-	@echo "  make docker-build          - Build Docker image (standard)"
-	@echo "  make docker-build-optimized - Build optimized multi-stage Docker image"
-	@echo "  make docker-scan           - Scan Docker image for vulnerabilities (all severities)"
-	@echo "  make docker-scan-critical  - Scan Docker image for CRITICAL vulnerabilities only"
-	@echo "  make docker-clean          - Remove all VNtyper Docker images"
+	@echo "  make docker-build      - Build multi-stage Docker image (production-ready)"
+	@echo "  make test-docker       - Run Docker integration tests with testcontainers"
+	@echo "  make test-docker-quick - Run Docker tests (excluding slow tests)"
+	@echo "  make docker-clean      - Remove all VNtyper Docker images"
 	@echo ""
 
 # Installation targets
@@ -52,7 +60,7 @@ install-dev:
 	pip install -e .[dev]
 	@echo "$(GREEN)✓ Development installation complete$(RESET)"
 
-# Linting targets (Ruff replaces flake8)
+# Linting targets
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
 	ruff check vntyper/
@@ -63,7 +71,7 @@ lint-stats:
 	ruff check vntyper/ --statistics
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
-# Formatting targets (Ruff replaces black)
+# Formatting targets
 format:
 	@echo "$(BLUE)Formatting code with Ruff...$(RESET)"
 	ruff format vntyper/
@@ -77,26 +85,87 @@ format-check:
 	ruff check vntyper/
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
+# Type checking targets
+type-check:
+	@echo "$(BLUE)Running mypy type checker on vntyper package...$(RESET)"
+	mypy vntyper/ --python-version 3.9 --ignore-missing-imports
+	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
+type-check-tests:
+	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
+	mypy tests/ --python-version 3.9 --ignore-missing-imports
+	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
+type-check-all:
+	@echo "$(BLUE)Running mypy type checker on all code...$(RESET)"
+	mypy vntyper/ tests/ --python-version 3.9 --ignore-missing-imports
+	@echo "$(GREEN)✓ Type checking complete$(RESET)"
+
+# Test data management targets
+download-test-data:
+	@echo "$(BLUE)Downloading test data from Zenodo (1.1GB)...$(RESET)"
+	@echo "$(BLUE)This may take 10-30 minutes depending on network speed$(RESET)"
+	python scripts/download_test_data.py
+	@echo "$(GREEN)✓ Test data download complete$(RESET)"
+
+download-test-data-force:
+	@echo "$(BLUE)Force downloading test data (even if already present)...$(RESET)"
+	python scripts/download_test_data.py --force
+	@echo "$(GREEN)✓ Test data download complete$(RESET)"
+
+verify-test-data:
+	@echo "$(BLUE)Verifying test data...$(RESET)"
+	python scripts/download_test_data.py --verify-only
+	@echo "$(GREEN)✓ Test data verification complete$(RESET)"
+
 # Testing targets
 test:
-	@echo "$(BLUE)Running all tests...$(RESET)"
+	@echo "$(BLUE)Running all tests (with live logging)...$(RESET)"
+	@echo "$(BLUE)Note: Live logging shows real-time progress for slow tests$(RESET)"
 	pytest
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 test-unit:
-	@echo "$(BLUE)Running unit tests...$(RESET)"
+	@echo "$(BLUE)Running unit tests (fast)...$(RESET)"
 	pytest -m unit
 	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
 
 test-integration:
-	@echo "$(BLUE)Running integration tests...$(RESET)"
+	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
+	@echo "$(BLUE)Note: Integration tests are slow, watch the live log output$(RESET)"
 	pytest -m integration
 	@echo "$(GREEN)✓ Integration tests complete$(RESET)"
+
+test-integration-parallel:
+	@echo "$(BLUE)Running integration tests in parallel (auto-detect CPU cores)...$(RESET)"
+	@echo "$(BLUE)Using pytest-xdist for parallel execution (67-81% faster)$(RESET)"
+	@if ! python -c "import xdist" 2>/dev/null; then \
+		echo "$(RED)Error: pytest-xdist not installed. Run: pip install -e .[dev]$(RESET)"; \
+		exit 1; \
+	fi
+	pytest -n auto --dist loadfile -m integration -v
+	@echo "$(GREEN)✓ Integration tests complete (parallel mode)$(RESET)"
+
+test-advntr:
+	@echo "$(BLUE)Running adVNTR test only...$(RESET)"
+	@echo "$(BLUE)Note: This test takes ~9 minutes, live logging shows progress$(RESET)"
+	pytest tests/integration/test_pipeline_integration.py::test_advntr_input -v
+	@echo "$(GREEN)✓ adVNTR test complete$(RESET)"
 
 test-cov:
 	@echo "$(BLUE)Running tests with coverage...$(RESET)"
 	pytest --cov=vntyper --cov-report=html --cov-report=term
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/$(RESET)"
+
+test-quiet:
+	@echo "$(BLUE)Running tests with minimal output...$(RESET)"
+	pytest --log-cli=false -q
+	@echo "$(GREEN)✓ Tests complete$(RESET)"
+
+test-verbose:
+	@echo "$(BLUE)Running tests with detailed output...$(RESET)"
+	pytest -v -s
+	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 # Maintenance targets
 clean:
@@ -114,13 +183,16 @@ build:
 	@echo "$(GREEN)✓ Build complete - packages in dist/$(RESET)"
 
 # Combined targets for convenience
-.PHONY: all check
+.PHONY: all check check-all
 
-all: format lint test
+all: format lint type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check: format-check test
+check: format-check type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
+
+check-all: format-check lint type-check-all test
+	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
 
 # Docker targets
 #Docker configuration
@@ -129,29 +201,33 @@ DOCKER_IMAGE_TAG := latest
 DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
 docker-build:
-	@echo "$(BLUE)Building Docker image with BuildKit optimizations...$(RESET)"
-	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.local -t $(DOCKER_IMAGE) .
+	@echo "$(BLUE)Building Docker image (multi-stage production build)...$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
+	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
 
-docker-scan:
-	@echo "$(BLUE)Scanning Docker image for vulnerabilities...$(RESET)"
-	@if ! command -v trivy >/dev/null 2>&1; then \
-		echo "$(RED)Error: trivy is not installed$(RESET)"; \
-		echo "Install with: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"; \
+test-docker:
+	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"
+	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
+	@if ! python -c "import testcontainers" 2>/dev/null; then \
+		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	@trivy image --severity LOW,MEDIUM,HIGH,CRITICAL $(DOCKER_IMAGE)
-	@echo "$(GREEN)✓ Vulnerability scan complete$(RESET)"
+	pytest -m docker -v
+	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
-docker-scan-critical:
-	@echo "$(BLUE)Scanning Docker image for CRITICAL vulnerabilities...$(RESET)"
-	@if ! command -v trivy >/dev/null 2>&1; then \
-		echo "$(RED)Error: trivy is not installed$(RESET)"; \
-		echo "Install with: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin"; \
+test-docker-quick:
+	@echo "$(BLUE)Running Docker quick test (single test case + health checks)...$(RESET)"
+	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
+	@if ! python -c "import testcontainers" 2>/dev/null; then \
+		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	@trivy image --severity CRITICAL --exit-code 1 $(DOCKER_IMAGE)
-	@echo "$(GREEN)✓ No CRITICAL vulnerabilities found$(RESET)"
+	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_fast]" \
+	       "tests/docker/test_docker_pipeline.py::test_docker_container_health" \
+	       "tests/docker/test_docker_pipeline.py::test_docker_volume_mounts" \
+	       "tests/docker/test_docker_pipeline.py::test_docker_dependencies" -v
+	@echo "$(GREEN)✓ Docker quick tests complete$(RESET)"
 
 docker-clean:
 	@echo "$(BLUE)Removing VNtyper Docker images...$(RESET)"

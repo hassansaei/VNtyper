@@ -1,7 +1,13 @@
 """Unit tests for GRCh37/GRCh38 support."""
 import json
 from pathlib import Path
+
+import pytest
+
 from vntyper.scripts.fastq_bam_processing import detect_assembly_from_contigs
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 class TestGRChSupport:

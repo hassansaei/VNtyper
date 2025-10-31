@@ -5,16 +5,21 @@ Unit tests for region_utils.py
 Tests region string construction and chromosome name caching functionality.
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from vntyper.scripts.region_utils import (
-    get_region_string,
     build_region_string,
-    resolve_assembly_alias,
-    get_region_string_with_fallback,
     clear_chromosome_cache,
-    get_cache_info
+    get_cache_info,
+    get_region_string,
+    get_region_string_with_fallback,
+    resolve_assembly_alias,
 )
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 class TestBuildRegionString:

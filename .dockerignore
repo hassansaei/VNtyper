@@ -80,6 +80,8 @@ coverage.xml
 
 # VNtyper Test Data (CRITICAL - Saves 1.2GB+)
 # =============================================================================
+tests/
+testing/
 tests/data/
 tests/data_anonymized/
 tests/benchmark/

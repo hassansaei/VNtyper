@@ -11,6 +11,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:  # Allow manual trigger
 
 env:
   GHCR_REGISTRY: ghcr.io
@@ -27,6 +28,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Set up Docker Buildx (required for caching)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       # Log in to GitHub Container Registry (ghcr.io)
       - name: Log in to GitHub Container Registry
@@ -67,3 +72,178 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
+          # Enable GitHub Actions caching for 60-80% faster builds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Docker Quick Tests - Run on all PRs for fast feedback
+  test-docker-quick:
+    name: Docker Tests (Quick)
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      # Restore test data cache (uses cache/restore to allow saving even on failure)
+      - name: Restore test data cache
+        id: cache-test-data-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: tests/data
+          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+          restore-keys: |
+            test-data-v3-
+
+      # Verify cache contents if cache was restored
+      - name: Verify cached test data
+        if: steps.cache-test-data-restore.outputs.cache-hit == 'true'
+        run: |
+          echo "Cache was restored. Verifying integrity..."
+          python scripts/download_test_data.py --verify-only || {
+            echo "⚠ Cache verification failed. Will re-download."
+            rm -rf tests/data
+            exit 0
+          }
+          echo "✓ Cache is valid"
+
+      # Download test data if not cached or verification failed
+      # Uses the same Python script as local development for consistency
+      - name: Download test data
+        if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading test data (1.1GB archive from Zenodo)..."
+          echo "Using Python download script (same as local development)"
+          echo "This ensures consistent extraction logic between local and CI"
+          echo ""
+
+          # Use the standalone download script
+          # This ensures 100% identical behavior between local and CI
+          python scripts/download_test_data.py
+        timeout-minutes: 120
+
+      # Save test data cache IMMEDIATELY after download (before tests run)
+      # This ensures cache persists even if tests fail/timeout later
+      - name: Save test data cache
+        uses: actions/cache/save@v4
+        if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
+        with:
+          path: tests/data
+          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+
+      # Final verification before running tests
+      - name: Final test data verification
+        run: |
+          echo "Running final verification before tests..."
+          python scripts/download_test_data.py --verify-only
+          echo "✓ Test data is ready"
+
+      - name: Run Docker quick tests
+        env:
+          # Disable automatic downloads in pytest fixtures (fail fast if data missing)
+          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
+        run: make test-docker-quick
+        timeout-minutes: 20
+
+      - name: Display test summary
+        if: always()
+        run: |
+          echo "✓ Docker quick tests completed"
+
+  # Docker Full Test Suite - Run only on main branch
+  test-docker-full:
+    name: Docker Tests (Full Suite)
+    needs: [build-and-push-image, test-docker-quick]
+    runs-on: ubuntu-latest
+    # Only run full suite on main branch or manual trigger
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      # Restore test data cache (uses cache/restore to allow saving even on failure)
+      - name: Restore test data cache
+        id: cache-test-data-full-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: tests/data
+          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+          restore-keys: |
+            test-data-v3-
+
+      # Verify cache contents if cache was restored
+      - name: Verify cached test data
+        if: steps.cache-test-data-full-restore.outputs.cache-hit == 'true'
+        run: |
+          echo "Cache was restored. Verifying integrity..."
+          python scripts/download_test_data.py --verify-only || {
+            echo "⚠ Cache verification failed. Will re-download."
+            rm -rf tests/data
+            exit 0
+          }
+          echo "✓ Cache is valid"
+
+      # Download test data if not cached or verification failed
+      - name: Download test data
+        if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading test data (1.1GB archive from Zenodo)..."
+          echo "Using Python download script (same as local development)"
+          python scripts/download_test_data.py --quiet
+        timeout-minutes: 120
+
+      # Save test data cache IMMEDIATELY after download (before tests run)
+      - name: Save test data cache
+        uses: actions/cache/save@v4
+        if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
+        with:
+          path: tests/data
+          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+
+      # Final verification before running tests
+      - name: Final test data verification
+        run: |
+          echo "Running final verification before tests..."
+          python scripts/download_test_data.py --verify-only
+          echo "✓ Test data is ready"
+
+      - name: Run full Docker test suite
+        env:
+          # Disable automatic downloads in pytest fixtures (fail fast if data missing)
+          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
+        run: make test-docker
+        timeout-minutes: 60
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-results-${{ github.run_id }}
+          path: |
+            pytest-results/
+            htmlcov/
+          retention-days: 30

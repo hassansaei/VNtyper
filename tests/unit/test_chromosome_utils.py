@@ -6,15 +6,20 @@ Tests chromosome name detection and resolution functions to ensure
 correct handling of multiple chromosome naming conventions.
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from vntyper.scripts.chromosome_utils import (
+    _build_chromosome_name,
+    _construct_ncbi_accession,
     detect_naming_convention,
     get_chromosome_name_from_bam,
     validate_chromosome_name,
-    _build_chromosome_name,
-    _construct_ncbi_accession
 )
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 class TestDetectNamingConvention:

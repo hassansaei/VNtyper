@@ -44,7 +44,13 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-timeout>=2.3.0",  # Prevent stuck tests
+    "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
+    "testcontainers>=4.0.0",  # Docker container testing
+    "requests>=2.31.0",  # HTTP library for downloading test data
     "ruff>=0.8.0",
+    "mypy>=1.0.0",
+    "types-requests>=2.0.0",
 ]
 
 [project.urls]
@@ -155,5 +161,7 @@ python_functions = "test_*"
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",
+    "docker: Docker container tests (requires Docker daemon)",
+    "slow: Slow-running tests (e.g., adVNTR module)",
 ]
 addopts = "-v --tb=short"

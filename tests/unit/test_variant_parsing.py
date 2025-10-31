@@ -10,9 +10,13 @@ Ensures that ALT-based filtering rules are correctly applied:
   - left/right columns dropped at the end.
 """
 
-import pytest
 import pandas as pd
+import pytest
+
 from vntyper.scripts.variant_parsing import filter_by_alt_values_and_finalize
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 
-def run_command(command, log_file, critical=False):
+def run_command(command, log_file, critical=False, cwd=None):
     """
     Helper function to run a shell command and log its output.
 
@@ -19,11 +19,18 @@ def run_command(command, log_file, critical=False):
         command (str): The command to run.
         log_file (str): The path to the log file where stdout and stderr will be logged.
         critical (bool): If True, the pipeline will stop if the command fails.
+        cwd (str, optional): The working directory to execute the command in.
+            If None, the subprocess will inherit the current working directory.
+            Setting this explicitly is important for tools like Java that need to
+            determine the working directory during initialization.
 
     Returns:
         bool: True if the command succeeded, False otherwise.
     """
     logging.debug(f"Running command: {command}")
+    if cwd is not None:
+        logging.debug(f"Working directory: {cwd}")
+
     with open(log_file, "w") as lf:
         process = subprocess.Popen(
             command,
@@ -31,6 +38,7 @@ def run_command(command, log_file, critical=False):
             executable="/bin/bash",  # Ensure Bash is used for process substitution
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            cwd=cwd,  # Explicitly set the working directory (or None to use inherited)
         )
         for line in process.stdout:
             decoded_line = line.decode()
@@ -268,7 +276,7 @@ def load_config(config_path=None):
             sys.exit(1)
 
 
-def validate_bam_file(file_path):
+def validate_bam_file(file_path, cwd=None):
     """
     Validates the alignment file (BAM or CRAM) for existence, correct extension, and
     integrity using samtools quickcheck.
@@ -279,6 +287,8 @@ def validate_bam_file(file_path):
 
     Args:
         file_path (str): Path to the BAM or CRAM file.
+        cwd (str, optional): Working directory to use when running samtools.
+            Important for environments where the working directory may become invalid.
 
     Raises:
         ValueError: If any validation check fails.
@@ -299,7 +309,7 @@ def validate_bam_file(file_path):
     # Perform samtools quickcheck
     command = f"samtools quickcheck -v {file_path}"
     log_file = f"{file_path}.quickcheck.log"
-    success = run_command(command, log_file, critical=True)
+    success = run_command(command, log_file, critical=True, cwd=cwd)
     if not success:
         logging.error(f"Alignment file failed quickcheck: {file_path}")
         raise ValueError(f"Alignment file failed quickcheck: {file_path}")
