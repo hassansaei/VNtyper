@@ -19,7 +19,8 @@ Functions:
 import logging
 
 # Module-level cache for BAM chromosome resolution
-_chromosome_cache = {}
+# Key: (bam_file, reference_assembly, chromosome_number), Value: chromosome_name
+_chromosome_cache: dict[tuple[str, str, int], str] = {}
 
 
 def get_region_string(bam_file: str, reference_assembly: str, region_type: str, config: dict) -> str:

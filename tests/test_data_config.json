@@ -1,198 +1,685 @@
 {
-  "server_base_url": "https://zenodo.org/records/17377082/files/",
-  "archive_file": {
-    "filename": "data.zip",
-    "url": "https://zenodo.org/records/17377082/files/data.zip?download=1",
-    "extract_to": "tests/data",
-    "md5sum": null
-  },
   "file_resources": [
     {
       "local_path": "tests/data",
       "filename": "example_6449_hg19_subset.bam",
-      "url_suffix": "example_6449_hg19_subset.bam",
+      "url_suffix": "",
       "md5sum": "6ab88a202de65ac9024d5e3454fa84dd"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6449_hg19_subset.bam.bai",
-      "url_suffix": "example_6449_hg19_subset.bam.bai",
+      "url_suffix": "",
       "md5sum": "b47c8ccc21230b5bea1cef120286f82e"
     },
     {
       "local_path": "tests/data",
-      "filename": "example_6449_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_6449_hg19_subset_R1.fastq.gz",
-      "md5sum": "9bb0811e9245de3b91c5e01f13128fc7"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_6449_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_6449_hg19_subset_R2.fastq.gz",
-      "md5sum": "5eb5a1a7cd985fe652bbc7443b0688e6"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_a5c1_hg19_subset.bam",
-      "url_suffix": "example_a5c1_hg19_subset.bam",
-      "md5sum": "9969dd5ef7798104c633d96e032de882"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_a5c1_hg19_subset.bam.bai",
-      "url_suffix": "example_a5c1_hg19_subset.bam.bai",
-      "md5sum": "6e63ae15696d7bd253cc0c2f5846a560"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_a5c1_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_a5c1_hg19_subset_R1.fastq.gz",
-      "md5sum": "4fb4eb11c659fb42f2c5220ce66cd26a"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_a5c1_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_a5c1_hg19_subset_R2.fastq.gz",
-      "md5sum": "7b5de61e9bea3dd267439c821e86e116"
-    },
-    {
-      "local_path": "tests/data",
       "filename": "example_66bf_hg19_subset.bam",
-      "url_suffix": "example_66bf_hg19_subset.bam",
+      "url_suffix": "",
       "md5sum": "5bb148f9008dbb194d2a852aaaba4d21"
     },
     {
       "local_path": "tests/data",
       "filename": "example_66bf_hg19_subset.bam.bai",
-      "url_suffix": "example_66bf_hg19_subset.bam.bai",
+      "url_suffix": "",
       "md5sum": "3811bc603230ea4ddf10b007abfa32b8"
     },
     {
       "local_path": "tests/data",
-      "filename": "example_66bf_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_66bf_hg19_subset_R1.fastq.gz",
-      "md5sum": "8dd8e2c4255e25412c5be5ee367daae4"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_66bf_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_66bf_hg19_subset_R2.fastq.gz",
-      "md5sum": "3f2ea2ee454f2f0113f7474f2d455e45"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_b178_hg19_subset.bam",
-      "url_suffix": "example_b178_hg19_subset.bam",
-      "md5sum": "df0bda7325519806fe6d6e1e531b7dbf"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_b178_hg19_subset.bam.bai",
-      "url_suffix": "example_b178_hg19_subset.bam.bai",
-      "md5sum": "3621418c69eb9937fad3550cfdc0efc0"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_b178_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_b178_hg19_subset_R1.fastq.gz",
-      "md5sum": "a91a13b29a8b3e2b1a54071d39b4ef24"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_b178_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_b178_hg19_subset_R2.fastq.gz",
-      "md5sum": "8aac8f27328be367c74d2d78925c7502"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_dfc3_hg19_subset.bam",
-      "url_suffix": "example_dfc3_hg19_subset.bam",
-      "md5sum": "d8c9decd02ca0aa6c46385de66214c6f"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_dfc3_hg19_subset.bam.bai",
-      "url_suffix": "example_dfc3_hg19_subset.bam.bai",
-      "md5sum": "d3ba9fa3b523b3c0b1e0911fdb960dab"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_dfc3_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_dfc3_hg19_subset_R1.fastq.gz",
-      "md5sum": "ea9208f3df7457d767b3ff2494efc73b"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_dfc3_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_dfc3_hg19_subset_R2.fastq.gz",
-      "md5sum": "e88914f8276f9571a9618282bd1604fe"
-    },
-    {
-      "local_path": "tests/data",
       "filename": "example_6c28_hg19_subset.bam",
-      "url_suffix": "example_6c28_hg19_subset.bam",
+      "url_suffix": "",
       "md5sum": "7a6246c9ad7462289411ba12e0e01cc4"
     },
     {
       "local_path": "tests/data",
       "filename": "example_6c28_hg19_subset.bam.bai",
-      "url_suffix": "example_6c28_hg19_subset.bam.bai",
+      "url_suffix": "",
       "md5sum": "a02cead3dd0124e0596c68e8673e526e"
     },
     {
       "local_path": "tests/data",
-      "filename": "example_6c28_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_6c28_hg19_subset_R1.fastq.gz",
-      "md5sum": "cc28213b9bea12500c86aaff57bf56ec"
-    },
-    {
-      "local_path": "tests/data",
-      "filename": "example_6c28_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_6c28_hg19_subset_R2.fastq.gz",
-      "md5sum": "3258c8d6abb781ccc6af5d5dd0e45e99"
-    },
-    {
-      "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset.bam",
-      "url_suffix": "example_7a61_hg19_subset.bam",
+      "url_suffix": "",
       "md5sum": "7f5e0a3d1ab97f8121412ff31cba77b8"
     },
     {
       "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset.bam.bai",
-      "url_suffix": "example_7a61_hg19_subset.bam.bai",
+      "url_suffix": "",
       "md5sum": "15c2d7e647f31d6eae88dbdda1b4837d"
     },
     {
       "local_path": "tests/data",
+      "filename": "example_a5c1_hg19_subset.bam",
+      "url_suffix": "",
+      "md5sum": "9969dd5ef7798104c633d96e032de882"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_a5c1_hg19_subset.bam.bai",
+      "url_suffix": "",
+      "md5sum": "6e63ae15696d7bd253cc0c2f5846a560"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_b178_hg19_subset.bam",
+      "url_suffix": "",
+      "md5sum": "df0bda7325519806fe6d6e1e531b7dbf"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_b178_hg19_subset.bam.bai",
+      "url_suffix": "",
+      "md5sum": "3621418c69eb9937fad3550cfdc0efc0"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_dfc3_hg19_subset.bam",
+      "url_suffix": "",
+      "md5sum": "d8c9decd02ca0aa6c46385de66214c6f"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_dfc3_hg19_subset.bam.bai",
+      "url_suffix": "",
+      "md5sum": "d3ba9fa3b523b3c0b1e0911fdb960dab"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_6449_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "9bb0811e9245de3b91c5e01f13128fc7"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_6449_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "5eb5a1a7cd985fe652bbc7443b0688e6"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_66bf_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "8dd8e2c4255e25412c5be5ee367daae4"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_66bf_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "3f2ea2ee454f2f0113f7474f2d455e45"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_6c28_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "cc28213b9bea12500c86aaff57bf56ec"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_6c28_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "3258c8d6abb781ccc6af5d5dd0e45e99"
+    },
+    {
+      "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset_R1.fastq.gz",
-      "url_suffix": "example_7a61_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
       "md5sum": "6eee2fce39c08e5404a8deb1b094ba9f"
     },
     {
       "local_path": "tests/data",
       "filename": "example_7a61_hg19_subset_R2.fastq.gz",
-      "url_suffix": "example_7a61_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
       "md5sum": "d3b3e6cc6f19988740521f91d4b9f7d6"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_a5c1_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "4fb4eb11c659fb42f2c5220ce66cd26a"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_a5c1_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "7b5de61e9bea3dd267439c821e86e116"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_b178_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "a91a13b29a8b3e2b1a54071d39b4ef24"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_b178_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "8aac8f27328be367c74d2d78925c7502"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_dfc3_hg19_subset_R1.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "ea9208f3df7457d767b3ff2494efc73b"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_dfc3_hg19_subset_R2.fastq.gz",
+      "url_suffix": "",
+      "md5sum": "e88914f8276f9571a9618282bd1604fe"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_6449_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "d2ce991e527ca27b082f48166d56ba2b"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_6449_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "5d0b03084314cd8a829d0c6207c7f1a4"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_66bf_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "731fd02d13cd0a05cebf4094ea0b825c"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_66bf_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "02931e7e93cf8f4057b00e24d9a9e20c"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_6c28_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "61236416a520473363e3ed1836415342"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_6c28_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "f1946a755c8572f11d19026a1a42ed79"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_7a61_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "43e3fcfc9fe50786533e85ccacdf228e"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_7a61_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "bd2af58bc0eeb1e5ec7b84ffd1ca7ef9"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_a5c1_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "6164a80d302c7152fa16bf45ffa8c8b5"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_a5c1_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "0f5cf02e1c95155d816caae88c6de9c2"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_b178_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "16768685e77c87e129acab9e7ff516ed"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_b178_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "d73c918b800f376d1093c2812c3907b3"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_dfc3_GRCh37_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "ad77aa9d4038aff8f218977dbb30f74d"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh37",
+      "filename": "example_dfc3_GRCh37_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "a843238e02a9352916f2042870c770c4"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_6449_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "dc8b2c32b37cecc19a4ba3b58c1d873d"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_6449_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "4e834b72456af965bc736a4abec3210e"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_66bf_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "e08894aa0798d2192f6ed872ad821b41"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_66bf_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "f9c347836c3f710529e80612972a9bae"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_6c28_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "9f921ac56b1c8b56e19a37176c02c31c"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_6c28_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "bbd701c7f5598285c9084f0f3a62842a"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_7a61_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "5d43257d3101b39dce71d1a00a1a7d65"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_7a61_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "db6584f6891d7555bd5a7973f1499235"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_a5c1_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "6ca80bf3e605f991b316f5a459817885"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_a5c1_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "d27ef47d2bc05cf591599e97fee218e1"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_b178_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "e6b13a41a43d745d530358996573fc0f"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_b178_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "6cbb61cb104abb3c1d80b1e4bcef2712"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_dfc3_GRCh38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "b28320872047f009d36a142da9f02a66"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/GRCh38",
+      "filename": "example_dfc3_GRCh38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "925a60fa0d784718c1b3c308577aa360"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_6449_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "6a5e2d243c560f78a625058347d4465d"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_6449_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "d048f353e40a5e73b0722decbd771e38"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_66bf_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "ba9446d9197e7993751f4cf34d7adf88"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_66bf_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "717907d346742d09b92bbbceddaa5de2"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_6c28_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "f79b1c15b81a24efd99c04aed2ae24e6"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_6c28_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "d22d3a941db6863375c4949024ceba6f"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_7a61_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "fa09883ec552fb7a5bd0c676da0c1804"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_7a61_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "7d98e10824d1db6483a62a24b2bb392e"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_a5c1_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "6a30246075e510742590d89158614eaa"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_a5c1_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "edb5b19d316f6e0170eb8957d0b1ffe3"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_b178_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "37679cfba7007ade57ed7df28a1ec77e"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_b178_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "f8b17f007ad6e1e18baa69a60bacd7e3"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_dfc3_hg19_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "ba6da2e0589d72f8ab5e0c8aef61ad65"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19",
+      "filename": "example_dfc3_hg19_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "bc3d6e9ddcd66a6fb7df5bf97f229c69"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_6449_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "5654f54b2f55dc613d5ac90025b58639"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_6449_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "0bfa18b86a9ae436db4bc42e40f49415"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_66bf_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "240433abaf63913134696972e657944f"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_66bf_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "e050802b52f8f54cea0613f3ee666234"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_6c28_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "9bdf9e9bfd3b450aa88ac2d6b13c6ac5"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_6c28_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "72953fea891bd59a26b41b84f07505c5"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_7a61_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "1b1a010a34fd1fe7edf46f3e353beb95"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_7a61_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "506448724b7fb87511627e878f3ca304"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_a5c1_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "decbecf21f58c12e236715598d830a17"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_a5c1_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "9cef0928f8f8cb00e87ca137d1f5501b"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_b178_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "b4fb7189b6d541a3a36fcf2879b3a39b"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_b178_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "589143f3ab17330bc23c2cf796a2a397"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_dfc3_hg19_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "dd2605ae9caae46b13fac92827618c03"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg19_ensembl",
+      "filename": "example_dfc3_hg19_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "2218c88458c05717aa7eba7e61ef715c"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_6449_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "badfa447e2651178d1467f97588e2dcb"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_6449_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "4a2363baf3bf167c7ac9b605183e1c69"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_66bf_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "bf1083274aef187e5edbac1cfd37bcd7"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_66bf_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "6efbf5ef09ec44ecffed7c9446c52c4e"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_6c28_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "23cafc3e0eefffe3ad812dd3f3332a71"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_6c28_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "39c58bcabd72393bc106deab12df2567"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_7a61_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "0b66e8444eef10b79aa25d0d9b806220"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_7a61_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "eed0de95a57df5594b8736d1464de11d"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_a5c1_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "fd86505241c6246928dc50c29cb533d8"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_a5c1_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "9e677f6605bd28d0bdc0430f5a298733"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_b178_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "4e53d0ab4d911eb4de5eeda560083513"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_b178_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "a4a6e3da817b336bb0f4c69abf2454bd"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_dfc3_hg38_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "d8c4c9213d28d7028e982d1e62ef54f6"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38",
+      "filename": "example_dfc3_hg38_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "58bb65aa43eec932ba26b64e075fa2fc"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_6449_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "e5d37f2a22c1d03d8d566dea1c9d4251"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_6449_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "80298c3923d3d669ac8b7091ac774c24"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_66bf_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "0ec15389fff42b800180cf1d21ffe891"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_66bf_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "f93a8676e0798e860ef3e24561b42e16"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_6c28_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "c46009b7ad970140dd0f54d8070f6081"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_6c28_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "564ad9c0531dda7cae2c8ce9c610d98c"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_7a61_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "be1b834d515ab4ece70c01c293e644e4"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_7a61_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "510e87335d402dce1508fb57db64a0e4"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_a5c1_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "9853fb30f7f43d9fb7a176a6bdded44c"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_a5c1_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "bc626493df4a55823c7c7de9a6aa3720"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_b178_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "e2ff9a752c01add65ee806fed546fc8e"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_b178_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "8e2f023821f4c542a0ea15c8061549d7"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_dfc3_hg38_ensembl_bwa.bam",
+      "url_suffix": "",
+      "md5sum": "48bf0b19de4b466eb6715ba1574d0aad"
+    },
+    {
+      "local_path": "tests/data/remapped/bwa/hg38_ensembl",
+      "filename": "example_dfc3_hg38_ensembl_bwa.bam.bai",
+      "url_suffix": "",
+      "md5sum": "10d1fcd3169c810cad2b941d34471d32"
     }
   ],
-  "unit_tests": {
-    "fastq_tests": [
-      {
-        "test_name": "example_6449_hg19_subset_fastq_shark",
-        "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
-        "fastq2": "tests/data/example_6449_hg19_subset_R2.fastq.gz",
-        "cli_options": [
-          "--extra-modules",
-          "shark"
-        ],
-        "expected_files": [
-          "summary_report.html",
-          "kestrel/kestrel_result.tsv"
-        ]
-      }
-    ]
+  "archive_file": {
+    "filename": "data.zip",
+    "url": "https://zenodo.org/records/17479292/files/data.zip?download=1",
+    "extract_to": "tests/data",
+    "md5sum": null
   },
+  "unit_tests": {},
   "integration_tests": {
     "bam_tests": [
       {
@@ -206,8 +693,14 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 416,
-          "Estimated_Depth_Variant_ActiveRegion": 7088,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7110,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.05869074492099323,
             "tolerance_percentage": 5
@@ -227,8 +720,14 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 93,
-          "Estimated_Depth_Variant_ActiveRegion": 9883,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 93,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 9883,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.009410098148335525,
             "tolerance_percentage": 5
@@ -248,10 +747,16 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 491,
-          "Estimated_Depth_Variant_ActiveRegion": 22647,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 547,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 22703,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
-            "value": 0.02168057579370336,
+            "value": 0.02409373210588909,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
@@ -290,8 +795,14 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
@@ -311,8 +822,14 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18976,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19182,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855817875210793,
             "tolerance_percentage": 5
@@ -332,8 +849,14 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
@@ -353,8 +876,14 @@
         ],
         "expected_archive": true,
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": 206,
-          "Estimated_Depth_Variant_ActiveRegion": 18977,
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
           "Depth_Score": {
             "value": 0.010855245823892079,
             "tolerance_percentage": 5
@@ -382,10 +911,31 @@
         "advntr_assertions": {
           "VID": "25561",
           "State": "I22_2_G_LEN1",
-          "NumberOfSupportingReads": 13,
-          "MeanCoverage": 144.234722222,
-          "Pvalue": 3.46346905707e-09
+          "NumberOfSupportingReads": 58,
+          "MeanCoverage": {
+            "value": 625.018055556,
+            "tolerance_percentage": 10
+          },
+          "Pvalue": {
+            "value": 2.36023054475e-36,
+            "log10_tolerance": 2
+          }
         }
+      }
+    ],
+    "fastq_tests": [
+      {
+        "test_name": "example_6449_hg19_subset_fastq_shark",
+        "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+        "fastq2": "tests/data/example_6449_hg19_subset_R2.fastq.gz",
+        "cli_options": [
+          "--extra-modules",
+          "shark"
+        ],
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
       }
     ]
   }

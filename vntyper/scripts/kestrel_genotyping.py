@@ -216,6 +216,7 @@ def run_kestrel(
     config,
     sample_name,
     log_level=logging.INFO,
+    cwd=None,
 ):
     """
     Main entry point to run the Kestrel jar for MUC1 genotyping, then
@@ -239,6 +240,8 @@ def run_kestrel(
         config (dict): Overall pipeline config (tools, references, etc.).
         sample_name (str): Name to embed in outputs/VCF header.
         log_level (int): Logging level (INFO, DEBUG, etc.).
+        cwd (str, optional): Working directory to use when running Java/Kestrel.
+            Important for Java initialization.
 
     Raises:
         RuntimeError: If Kestrel fails for a given k-mer size.
@@ -288,7 +291,7 @@ def run_kestrel(
             logging.info(f"Launching Kestrel with k-mer size {kmer_size}...")
 
             # Actually run the Kestrel command
-            if not run_command(kmer_command, log_file, critical=True):
+            if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
                 logging.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
                 raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
 

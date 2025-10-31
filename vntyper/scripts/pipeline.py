@@ -123,6 +123,16 @@ def run_pipeline(
         FileNotFoundError: If the specified BED file is not found.
         RuntimeError: If alignment fails due to missing indexes.
     """
+    # Capture the working directory at the start to ensure it remains valid
+    # throughout the pipeline execution, especially for tools like Java that need it
+    try:
+        project_root = os.getcwd()
+        logging.debug(f"Captured project root directory: {project_root}")
+    except (OSError, FileNotFoundError) as e:
+        # If we can't get the current directory, try to use the absolute path of the script
+        project_root = str(Path(__file__).parent.parent.parent)
+        logging.warning(f"Could not determine current working directory ({e}), using fallback: {project_root}")
+
     if not bwa_reference:
         logging.error("BWA reference not provided or determined from configuration.")
         raise ValueError("BWA reference not provided or determined from configuration.")
@@ -188,9 +198,9 @@ def run_pipeline(
 
         # Validate input files
         if input_type == "BAM":
-            validate_bam_file(bam)
+            validate_bam_file(bam, cwd=project_root)
         elif input_type == "CRAM":
-            validate_bam_file(cram)
+            validate_bam_file(cram, cwd=project_root)
         elif input_type == "FASTQ":
             validate_fastq_file(fastq1)
             validate_fastq_file(fastq2)
@@ -466,6 +476,7 @@ def run_pipeline(
                 config=config,
                 sample_name=sample_name,
                 log_level=log_level,
+                cwd=project_root,
             )
         else:
             logging.error("FASTQ files required for Kestrel genotyping not provided.")
@@ -546,6 +557,7 @@ def run_pipeline(
                     dirs["advntr"],
                     "output",
                     config=config,
+                    cwd=project_root,
                 )
                 output_format = advntr_settings.get("output_format", "tsv")
                 output_ext = ".vcf" if output_format == "vcf" else ".tsv"

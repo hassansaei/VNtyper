@@ -5,12 +5,17 @@
 Unit tests for confidence assignment functionality.
 Validates confidence levels based on depth scores and thresholds
 from vntyper/scripts/kestrel_config.json.
+
+# Mark all tests in this module as unit tests
+pytestmark = pytest.mark.unit
 """
 
 import json
-import pytest
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
+import pytest
+
 from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
