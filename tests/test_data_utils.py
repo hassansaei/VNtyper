@@ -204,7 +204,7 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
                 # Robust detection of dominant top-level directory
                 # This handles cases where the zip has a nested "data/" directory
                 # even if there are other files at root (like README.md)
-                dir_counts = {}
+                dir_counts: dict[str, int] = {}
                 files_at_root = 0
 
                 for name in all_files:
