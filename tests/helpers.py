@@ -322,7 +322,7 @@ def validate_advntr_output(output_dir: Path, expected: dict[str, Any]) -> None:
             "Pvalue": {"value": 6.78e-7, "log10_tolerance": 2}
         }
     """
-    advntr_file = output_dir / "output_adVNTR_result.tsv"
+    advntr_file = output_dir / "advntr" / "output_adVNTR_result.tsv"
     assert_file_exists(advntr_file, "adVNTR result file")
 
     # Read TSV
@@ -337,16 +337,19 @@ def validate_advntr_output(output_dir: Path, expected: dict[str, Any]) -> None:
 
     # Validate each field
     for field, expected_val in expected.items():
-        actual_str = row.get(field)
-        assert actual_str is not None, f"adVNTR output missing field: {field}"
+        # Handle "State" → "Variant" column name mapping
+        # The TSV header uses "Variant" but test config uses "State" (legacy name)
+        actual_field = "Variant" if field == "State" else field
+        actual_str = row.get(actual_field)
+        assert actual_str is not None, f"adVNTR output missing field: {actual_field} (looking for test field: {field})"
 
         if field == "VID":
             # String exact match
             assert actual_str == expected_val, f"VID: Expected {expected_val}, got {actual_str}"
 
         elif field == "State":
-            # String exact match
-            assert actual_str == expected_val, f"State: Expected {expected_val}, got {actual_str}"
+            # String exact match (reads from "Variant" column)
+            assert actual_str == expected_val, f"State (Variant): Expected {expected_val}, got {actual_str}"
 
         elif field == "NumberOfSupportingReads":
             # Integer exact match
