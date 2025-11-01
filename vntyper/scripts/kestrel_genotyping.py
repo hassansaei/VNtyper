@@ -655,11 +655,8 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
             filtered_df["haplo_count"] = 0
         filtered_df["haplo_count"] = pd.to_numeric(filtered_df["haplo_count"], errors="coerce").fillna(0)
         
-        def keep_highest_haplo_count(group):
-            """Keep the row with highest haplo_count in each Confidence group."""
-            return group.sort_values("haplo_count", ascending=False).head(1)
-        
-        filtered_df = filtered_df.groupby("Confidence", group_keys=False).apply(keep_highest_haplo_count).reset_index(drop=True)
+        # Keep only the row with the highest haplo_count overall
+        filtered_df = filtered_df.sort_values("haplo_count", ascending=False).head(1).reset_index(drop=True)
         logging.info("After grouping by Confidence and selecting highest haplo_count, %d rows remain.", len(filtered_df))
 
     return filtered_df

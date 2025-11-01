@@ -248,7 +248,6 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             # 'GG' logic
             if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
                 motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
-                motif_right = motif_right[motif_right["ALT"] == alt_for_motif_right_gg]
                 motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
                 motif_right.drop_duplicates("ALT", keep="first", inplace=True)
                 if motif_right["Motif"].isin(motifs_for_alt_gg).any():
