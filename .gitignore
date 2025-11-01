@@ -191,6 +191,9 @@ fastp.json
 /docker/test_output/
 /testing/
 
+# Local Dockerfile (for local development/testing)
+Dockerfile
+
 # apptainer files
 *.sif
 
