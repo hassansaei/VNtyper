@@ -654,9 +654,11 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         if "haplo_count" not in filtered_df.columns:
             filtered_df["haplo_count"] = 0
         filtered_df["haplo_count"] = pd.to_numeric(filtered_df["haplo_count"], errors="coerce").fillna(0)
-        
+
         # Keep only the row with the highest haplo_count overall
         filtered_df = filtered_df.sort_values("haplo_count", ascending=False).head(1).reset_index(drop=True)
-        logging.info("After grouping by Confidence and selecting highest haplo_count, %d rows remain.", len(filtered_df))
+        logging.info(
+            "After grouping by Confidence and selecting highest haplo_count, %d rows remain.", len(filtered_df)
+        )
 
     return filtered_df
