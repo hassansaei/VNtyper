@@ -126,13 +126,17 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     cond5 = df["Estimated_Depth_AlternateVariant"].between(alt_mid_low, alt_mid_high, inclusive="left") & (
         df["Depth_Score"] >= high_threshold
     )
-
+    
+    # Condition 6: Catch-all - Low Precision if Depth_Score is between low_threshold and high_threshold (exclusive)
+    cond6 = (df["Depth_Score"] > low_threshold) & (df["Depth_Score"] < high_threshold) & (df["Confidence"] == "Negative")
+    
     # Apply conditions in order (later conditions can overwrite earlier ones)
     df.loc[cond1, "Confidence"] = low_prec_label
     df.loc[cond2, "Confidence"] = high_prec_star_label
     df.loc[cond3, "Confidence"] = low_prec_label
     df.loc[cond4, "Confidence"] = low_prec_label
-    df.loc[cond5, "Confidence"] = high_prec_label
+    df.loc[cond5, "Confidence"] = high_prec_label    
+    df.loc[cond6, "Confidence"] = low_prec_label
 
     # Step 4: Mark pass/fail: Passing means Confidence != 'Negative'
     df["depth_confidence_pass"] = df["Confidence"] != "Negative"
