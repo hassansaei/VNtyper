@@ -26,6 +26,7 @@ from Saei et al., iScience 26, 107171 (2023).
 
 import logging
 import os
+import shutil
 from datetime import datetime
 
 import pandas as pd
@@ -308,6 +309,54 @@ def run_kestrel(
                 break  # Stop after the first successful k-mer size
 
 
+def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
+    """
+    Attempt to compress and sort a VCF file using bcftools.
+
+    This function follows the Single Responsibility Principle (SRP) by doing
+    exactly one thing: attempting VCF compression. It gracefully handles the
+    case where bcftools is not available.
+
+    Args:
+        input_vcf (str): Path to the input uncompressed VCF file.
+        output_vcf_gz (str): Path to the desired compressed output file.
+        output_dir (str): Directory for log files.
+
+    Returns:
+        bool: True if compression succeeded, False otherwise.
+
+    Notes:
+        - If bcftools is not in PATH, logs a WARNING and returns False
+        - If bcftools command fails, logs an ERROR and returns False
+        - This allows the pipeline to gracefully fall back to uncompressed VCF
+    """
+    # Check if bcftools is available (defensive programming)
+    if shutil.which("bcftools") is None:
+        logging.warning(
+            "bcftools not found in PATH. VCF compression skipped. "
+            "IGV report will use uncompressed VCF. "
+            "For optimal performance, install bcftools: 'conda install bcftools'"
+        )
+        return False
+
+    # Attempt compression using existing run_command infrastructure (DRY principle)
+    log_file = os.path.join(output_dir, "bcftools_sort.log")
+    success = run_command(
+        f"bcftools sort {input_vcf} -o {output_vcf_gz} -W -O z",
+        log_file=log_file,
+    )
+
+    if not success:
+        logging.error(
+            f"bcftools sort command failed. Check {log_file} for details. "
+            "IGV report will use uncompressed VCF."
+        )
+        return False
+
+    logging.info(f"VCF successfully compressed: {output_vcf_gz}")
+    return True
+
+
 def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config):
     """
     Processes the Kestrel output VCF files after Kestrel finishes.
@@ -349,13 +398,12 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
                 fout.write(line)
     os.replace(fixed_indel_vcf, indel_vcf)
 
-    # Step 3) Sort & index using bcftools (currently just sorted .gz)
+    # Step 3) Compress & sort using bcftools (if available)
+    # Uses modular helper function following SRP (Single Responsibility Principle)
     sorted_indel_vcf_gz = indel_vcf + ".gz"
-    run_command(
-        f"bcftools sort {indel_vcf} -o {sorted_indel_vcf_gz} -W -O z",
-        log_file=os.path.join(output_dir, "bcftools_sort.log"),
-    )
-    # Optionally, index with: run_command("bcftools index {sorted_indel_vcf_gz}", ...)
+    _try_compress_vcf_with_bcftools(indel_vcf, sorted_indel_vcf_gz, output_dir)
+    # Note: Compression may fail if bcftools unavailable - this is gracefully handled
+    # The pipeline will continue and use uncompressed VCF for IGV report
 
     # Step 4) Split into insertion and deletion sub-VCFs
     output_ins = os.path.join(output_dir, "output_insertion.vcf")
