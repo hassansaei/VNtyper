@@ -330,20 +330,14 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                     motif_right, exclude_motifs_right, alt_for_motif_right_gg, motifs_for_alt_gg
                 )
             else:
-                # LEGACY: Original GG logic (kept for backward compatibility)
-                # WARNING: This has the Issue #136 bug - deletes all non-GG variants
+                # IMPROVED LEGACY: Hassan's refactored GG logic (PR #140)
+                # Better than old logic but still has limitations vs uniform filtering
                 if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
                     motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
-                    motif_right = motif_right[motif_right["ALT"] == alt_for_motif_right_gg]
                     motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
                     motif_right.drop_duplicates("ALT", keep="first", inplace=True)
                     if motif_right["Motif"].isin(motifs_for_alt_gg).any():
                         motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
-                else:
-                    motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
-                    motif_right.drop_duplicates("ALT", keep="first", inplace=True)
-
-                motif_right.drop_duplicates(subset=["REF", "ALT"], inplace=True)
 
         # Combine
         combined_df = pd.concat([motif_right, motif_left], axis=0, ignore_index=True)

@@ -460,6 +460,7 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
       2) Split frame score into numeric parts, mark frameshifts vs. non-frameshifts
       3) Extract frameshift variants (3n+1 / 3n+2)
       4) Compute Depth_Score, assign confidence
+      4.5) Sort by Depth_Score + add haplo_count
       5) ALT-based filtering logic (e.g., 'GG' threshold)
       6) Motif correction & annotation
       7) Optionally generate a BED file for coverage
@@ -504,6 +505,9 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     df = calculate_depth_score_and_assign_confidence(df, kestrel_config)
     if df.empty:
         return df
+
+    # (4.5) Sort by Depth_Score and add haplo_count after confidence assignment
+    df = sort_by_depth_and_add_haplo_count(df)
 
     # (5) Filter certain ALT values (e.g., discarding 'GG' if below threshold)
     df = filter_by_alt_values_and_finalize(df, kestrel_config)
@@ -564,6 +568,29 @@ def generate_bed_file(df, output_dir):
     return bed_file_path
 
 
+def sort_by_depth_and_add_haplo_count(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sort variants by Depth_Score (descending) and add 'haplo_count' as the
+    size of groups over (POS, REF, ALT). This is done after confidence assignment
+    but before ALT-based filtering and boolean gates.
+    """
+    if df.empty:
+        return df
+
+    if "Depth_Score" in df.columns:
+        df["Depth_Score"] = pd.to_numeric(df["Depth_Score"], errors="coerce")
+
+    if all(col in df.columns for col in ["POS", "REF", "ALT"]):
+        df["haplo_count"] = df.groupby(["POS", "REF", "ALT"])["ALT"].transform("size")
+    else:
+        df["haplo_count"] = pd.NA
+
+    if "Depth_Score" in df.columns:
+        df = df.sort_values(by=["Depth_Score"], ascending=False, kind="mergesort")
+
+    return df
+
+
 def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     """
     Final step: filter the DataFrame based on the boolean columns introduced
@@ -620,5 +647,18 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
 
     filtered_df = df[final_mask].copy()
     logging.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
+
+    # If multiple rows exist after filtering, group by Confidence and keep highest haplo_count per group
+    if len(filtered_df) > 1:
+        # Ensure haplo_count exists and is numeric
+        if "haplo_count" not in filtered_df.columns:
+            filtered_df["haplo_count"] = 0
+        filtered_df["haplo_count"] = pd.to_numeric(filtered_df["haplo_count"], errors="coerce").fillna(0)
+
+        # Keep only the row with the highest haplo_count overall
+        filtered_df = filtered_df.sort_values("haplo_count", ascending=False).head(1).reset_index(drop=True)
+        logging.info(
+            "After grouping by Confidence and selecting highest haplo_count, %d rows remain.", len(filtered_df)
+        )
 
     return filtered_df
