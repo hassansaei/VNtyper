@@ -506,8 +506,8 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     if df.empty:
         return df
 
-    # (4.5) Sort by Depth_Score and add haplo_count after confidence assignment
-    df = sort_by_depth_and_add_haplo_count(df)
+    # (4.5) Add haplo_count after confidence assignment
+    df = add_haplo_count(df)
 
     # (5) Filter certain ALT values (e.g., discarding 'GG' if below threshold)
     df = filter_by_alt_values_and_finalize(df, kestrel_config)
@@ -568,27 +568,128 @@ def generate_bed_file(df, output_dir):
     return bed_file_path
 
 
-def sort_by_depth_and_add_haplo_count(df: pd.DataFrame) -> pd.DataFrame:
+def add_haplo_count(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Sort variants by Depth_Score (descending) and add 'haplo_count' as the
-    size of groups over (POS, REF, ALT). This is done after confidence assignment
-    but before ALT-based filtering and boolean gates.
+    Calculate haplo_count: number of variants sharing (POS, REF, ALT).
+
+    Higher haplo_count = more supporting evidence across haplotypes.
+    This represents how many times the exact same variant (position + alleles)
+    appears across different haplotype calls.
+
+    Example:
+        POS=67, REF=G, ALT=GG appears 389 times → haplo_count=389
+        POS=54, REF=C, ALT=GC appears 176 times → haplo_count=176
+
+    Args:
+        df: DataFrame with POS, REF, ALT columns
+
+    Returns:
+        DataFrame with haplo_count column added
+
+    References:
+        - Issue #136 fix implementation
+        - Streamlined implementation plan (Day 2)
+    """
+    df = df.copy()
+
+    if df.empty:
+        df["haplo_count"] = 0
+        return df
+
+    # Group by exact variant (POS, REF, ALT) and count occurrences
+    if all(col in df.columns for col in ["POS", "REF", "ALT"]):
+        df["haplo_count"] = df.groupby(["POS", "REF", "ALT"])["ALT"].transform("size")
+    else:
+        logging.warning("Missing POS/REF/ALT columns for haplo_count calculation")
+        df["haplo_count"] = 0
+
+    return df
+
+
+def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Select the single best variant (Hassan's requirement: "one representative variant").
+
+    Selection criteria (strict priority order):
+        1. Highest Confidence level (High_Precision* > High_Precision > Low_Precision > Negative)
+        2. Highest haplo_count (most supporting evidence)
+        3. Highest Depth_Score (coverage tie-breaker)
+        4. Lowest POS (genomic position tie-breaker for reproducibility)
+
+    This ensures deterministic, biologically-informed variant selection.
+
+    Args:
+        df: DataFrame with Confidence, haplo_count, Depth_Score, POS columns
+
+    Returns:
+        DataFrame with exactly 1 row (the best variant), or empty if input empty
+
+    References:
+        - Issue #136 fix implementation
+        - PR #140 code review (Critical Issue #2: tie-breaking)
+        - Streamlined implementation plan (Day 3)
+
+    Examples:
+        >>> df = pd.DataFrame(
+        ...     {
+        ...         "Confidence": ["High_Precision", "High_Precision", "Low_Precision"],
+        ...         "haplo_count": [389, 120, 15],
+        ...         "Depth_Score": [0.010, 0.009, 0.006],
+        ...         "POS": [67, 67, 54],
+        ...     }
+        ... )
+        >>> result = select_single_best_variant(df)
+        >>> len(result)
+        1
+        >>> result.iloc[0]["haplo_count"]
+        389
     """
     if df.empty:
         return df
 
-    if "Depth_Score" in df.columns:
-        df["Depth_Score"] = pd.to_numeric(df["Depth_Score"], errors="coerce")
+    # Define Confidence priority mapping
+    confidence_priority = {
+        "High_Precision*": 3,
+        "High_Precision": 2,
+        "Low_Precision": 1,
+        "Negative": 0,
+    }
 
-    if all(col in df.columns for col in ["POS", "REF", "ALT"]):
-        df["haplo_count"] = df.groupby(["POS", "REF", "ALT"])["ALT"].transform("size")
+    df = df.copy()
+    df["_priority"] = df["Confidence"].map(confidence_priority).fillna(0)
+
+    # Ensure numeric types for sorting (create missing columns with default 0)
+    if "haplo_count" not in df.columns:
+        df["haplo_count"] = 0
     else:
-        df["haplo_count"] = pd.NA
+        df["haplo_count"] = pd.to_numeric(df["haplo_count"], errors="coerce").fillna(0)
 
-    if "Depth_Score" in df.columns:
-        df = df.sort_values(by=["Depth_Score"], ascending=False, kind="mergesort")
+    if "Depth_Score" not in df.columns:
+        df["Depth_Score"] = 0
+    else:
+        df["Depth_Score"] = pd.to_numeric(df["Depth_Score"], errors="coerce").fillna(0)
 
-    return df
+    if "POS" not in df.columns:
+        df["POS"] = 0
+    else:
+        df["POS"] = pd.to_numeric(df["POS"], errors="coerce").fillna(0)
+
+    # Multi-key sort (deterministic tie-breaking)
+    # Priority: Confidence DESC, haplo_count DESC, Depth_Score DESC, POS ASC
+    df = df.sort_values(["_priority", "haplo_count", "Depth_Score", "POS"], ascending=[False, False, False, True])
+
+    # Keep only the best variant
+    result = df.head(1).drop(columns=["_priority"])
+
+    logging.info(
+        "Selected best variant: Confidence=%s, haplo_count=%d, Depth_Score=%.5f, POS=%d",
+        result.iloc[0]["Confidence"],
+        int(result.iloc[0]["haplo_count"]),
+        result.iloc[0]["Depth_Score"],
+        int(result.iloc[0]["POS"]),
+    )
+
+    return result
 
 
 def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
@@ -648,17 +749,13 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     filtered_df = df[final_mask].copy()
     logging.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
 
-    # If multiple rows exist after filtering, group by Confidence and keep highest haplo_count per group
+    # Select single best variant using multi-key priority sorting
     if len(filtered_df) > 1:
-        # Ensure haplo_count exists and is numeric
-        if "haplo_count" not in filtered_df.columns:
-            filtered_df["haplo_count"] = 0
-        filtered_df["haplo_count"] = pd.to_numeric(filtered_df["haplo_count"], errors="coerce").fillna(0)
-
-        # Keep only the row with the highest haplo_count overall
-        filtered_df = filtered_df.sort_values("haplo_count", ascending=False).head(1).reset_index(drop=True)
-        logging.info(
-            "After grouping by Confidence and selecting highest haplo_count, %d rows remain.", len(filtered_df)
-        )
+        filtered_df = select_single_best_variant(filtered_df)
+        logging.info("Selected 1 best variant from %d candidates using priority sorting.", len(df[final_mask]))
+    elif len(filtered_df) == 1:
+        logging.info("Only 1 variant passed all filters (no selection needed).")
+    else:
+        logging.info("No variants passed all filters.")
 
     return filtered_df
