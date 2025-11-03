@@ -348,8 +348,7 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
 
     if not success:
         logging.error(
-            f"bcftools sort command failed. Check {log_file} for details. "
-            "IGV report will use uncompressed VCF."
+            f"bcftools sort command failed. Check {log_file} for details. IGV report will use uncompressed VCF."
         )
         return False
 
