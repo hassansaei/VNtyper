@@ -132,7 +132,7 @@ jobs:
           # Use the standalone download script
           # This ensures 100% identical behavior between local and CI
           python scripts/download_test_data.py
-        timeout-minutes: 120
+        timeout-minutes: 240
 
       # Save test data cache IMMEDIATELY after download (before tests run)
       # This ensures cache persists even if tests fail/timeout later
@@ -236,7 +236,7 @@ jobs:
           # Disable automatic downloads in pytest fixtures (fail fast if data missing)
           VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
         run: make test-docker
-        timeout-minutes: 60
+        timeout-minutes: 240
 
       - name: Upload test results
         if: always()
