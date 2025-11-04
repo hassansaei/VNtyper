@@ -68,13 +68,31 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
         fasta_file,
         "--tracks",
     ]
+
+    # Build tracks list with defensive programming (verify files exist)
+    # Follows SOLID principles: defensive checks + clear logging
     tracks = []
+
     if vcf_file:
-        tracks.append(str(vcf_file))
+        # Verify file exists before adding to tracks (defensive programming)
+        if os.path.exists(vcf_file):
+            tracks.append(str(vcf_file))
+            logging.debug(f"Adding VCF track: {vcf_file}")
+        else:
+            logging.warning(f"VCF file specified but not found: {vcf_file}. Skipping VCF track.")
+    else:
+        logging.info("No VCF file provided. IGV report will not include VCF track.")
+
     if bam_file:
-        tracks.append(str(bam_file))
+        if os.path.exists(bam_file):
+            tracks.append(str(bam_file))
+            logging.debug(f"Adding BAM track: {bam_file}")
+        else:
+            logging.warning(f"BAM file specified but not found: {bam_file}. Skipping BAM track.")
+
     if not tracks:
-        logging.warning("No valid tracks (VCF or BAM) provided to IGV. The IGV report may be empty.")
+        logging.error("No valid tracks (VCF or BAM) available for IGV report. Report may be empty or fail.")
+
     igv_report_cmd.extend(tracks)
     igv_report_cmd.extend(["--output", output_html])
 
