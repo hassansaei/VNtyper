@@ -66,6 +66,52 @@ def write_bed_file(regions, bed_file_path):
                 raise ValueError(f"Invalid region format: {region}. Expected format 'chr:start-end'.") from e
 
 
+def _select_best_vcf_file(kestrel_dir):
+    """
+    Select the best available VCF file for IGV report generation.
+
+    This function follows the KISS (Keep It Simple, Stupid) principle by
+    implementing a straightforward preference: compressed VCF if available,
+    otherwise uncompressed VCF.
+
+    Args:
+        kestrel_dir (str): Path to the kestrel output directory.
+
+    Returns:
+        str or None: Path to the best available VCF file, or None if neither exists.
+            Returns compressed .vcf.gz if it exists (preferred),
+            otherwise uncompressed .vcf if it exists,
+            otherwise None.
+
+    Notes:
+        - This function has a single responsibility (SRP): file selection
+        - Logs informatively at different levels based on the outcome
+        - Defensive programming: handles all three cases (compressed, uncompressed, none)
+    """
+    # Prefer compressed VCF (optimal for IGV and file size)
+    vcf_gz = os.path.join(kestrel_dir, "output_indel.vcf.gz")
+    vcf = os.path.join(kestrel_dir, "output_indel.vcf")
+
+    if os.path.exists(vcf_gz):
+        logging.debug(f"Using compressed VCF for IGV report: {vcf_gz}")
+        return vcf_gz
+
+    if os.path.exists(vcf):
+        logging.info(
+            f"Using uncompressed VCF for IGV report: {vcf}. "
+            "Compressed VCF not available (bcftools may not be installed)."
+        )
+        return vcf
+
+    # Neither file exists - this is unusual and should be logged
+    logging.warning(
+        f"No VCF file found in {kestrel_dir}. "
+        "IGV report will be generated without VCF track. "
+        "Expected files: output_indel.vcf.gz or output_indel.vcf"
+    )
+    return None
+
+
 def run_pipeline(
     bwa_reference,
     output_dir,
@@ -615,7 +661,9 @@ def run_pipeline(
         report_file = "summary_report.html"
         template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
 
-        sorted_vcf = os.path.join(dirs["kestrel"], "output_indel.vcf.gz")
+        # Select best available VCF file (compressed preferred, uncompressed fallback)
+        # Uses modular helper following KISS principle and defensive programming
+        vcf_file = _select_best_vcf_file(dirs["kestrel"])
         bam_out = os.path.join(dirs["kestrel"], "output.bam")
         bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
@@ -629,7 +677,7 @@ def run_pipeline(
             bam_file=bam_out,
             fasta_file=fasta_reference,
             flanking=config.get("default_values", {}).get("flanking", 50),
-            vcf_file=sorted_vcf,
+            vcf_file=vcf_file,  # Can be .gz, .vcf, or None - handled gracefully
             config=config,
         )
         logging.info(f"Summary report generated: {report_file}")
