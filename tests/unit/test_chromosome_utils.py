@@ -295,6 +295,26 @@ class TestDetectAssemblyChr1Length:
             f"Chr1 length check should detect hg19/GRCh37 with ENSEMBL naming despite alternates, got {assembly}"
         )
 
+    def test_case_insensitive_chr1_naming(self):
+        """
+        Test case-insensitive chr1 detection.
+
+        Ensures detection works with uppercase/mixed case chr1 names (CHR1, Chr1, etc.)
+        for robustness against non-standard naming conventions.
+        Addresses Sourcery AI suggestion for defensive programming.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        # Test uppercase CHR1
+        contigs_upper = [{"name": "CHR1", "length": 248956422}]
+        assembly = detect_assembly_from_chr1_length(contigs_upper)
+        assert assembly in ["hg38", "GRCh38"], f"Expected hg38/GRCh38 for 'CHR1', got {assembly}"
+
+        # Test mixed case Chr1
+        contigs_mixed = [{"name": "Chr1", "length": 249250621}]
+        assembly = detect_assembly_from_chr1_length(contigs_mixed)
+        assert assembly in ["hg19", "GRCh37"], f"Expected hg19/GRCh37 for 'Chr1', got {assembly}"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
