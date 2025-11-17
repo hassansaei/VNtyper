@@ -68,8 +68,8 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> Optional[str]:
         logging.debug("Empty contigs list provided to detect_assembly_from_chr1_length")
         return None
 
-    # Find chr1 (handles both UCSC "chr1" and ENSEMBL "1" naming)
-    chr1 = next((c for c in contigs if c.get("name") in ["chr1", "1"]), None)
+    # Find chr1 (handles both UCSC "chr1" and ENSEMBL "1" naming, case-insensitive)
+    chr1 = next((c for c in contigs if c.get("name", "").lower() in ["chr1", "1"]), None)
 
     if not chr1:
         logging.debug("Chr1 not found in contigs (tried 'chr1' and '1')")
