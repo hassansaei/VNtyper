@@ -37,13 +37,7 @@ class TestDetectNamingConvention:
 
     def test_detect_ncbi_naming(self):
         """Test detection of NCBI accession naming."""
-        contigs = [
-            "NC_000001.10",
-            "NC_000002.11",
-            "NC_000003.11",
-            "NC_000023.10",
-            "NC_000024.9"
-        ]
+        contigs = ["NC_000001.10", "NC_000002.11", "NC_000003.11", "NC_000023.10", "NC_000024.9"]
         assert detect_naming_convention(contigs) == "ncbi"
 
     def test_empty_contig_list(self):
@@ -120,25 +114,13 @@ class TestBuildChromosomeName:
 
     def test_build_ncbi_grch37(self):
         """Test building NCBI accession for GRCh37."""
-        config = {
-            "bam_processing": {
-                "known_chromosome_naming": {
-                    "GRCh37": {"ncbi": "NC_000001.10"}
-                }
-            }
-        }
+        config = {"bam_processing": {"known_chromosome_naming": {"GRCh37": {"ncbi": "NC_000001.10"}}}}
         result = _build_chromosome_name(1, "ncbi", "GRCh37", config)
         assert result == "NC_000001.10"
 
     def test_build_ncbi_grch38(self):
         """Test building NCBI accession for GRCh38."""
-        config = {
-            "bam_processing": {
-                "known_chromosome_naming": {
-                    "GRCh38": {"ncbi": "NC_000001.11"}
-                }
-            }
-        }
+        config = {"bam_processing": {"known_chromosome_naming": {"GRCh38": {"ncbi": "NC_000001.11"}}}}
         result = _build_chromosome_name(1, "ncbi", "GRCh38", config)
         assert result == "NC_000001.11"
 
@@ -184,40 +166,30 @@ class TestConstructNcbiAccession:
 class TestGetChromosomeNameFromBam:
     """Test getting chromosome name from BAM file."""
 
-    @patch('vntyper.scripts.fastq_bam_processing.extract_bam_header')
-    @patch('vntyper.scripts.fastq_bam_processing.parse_contigs_from_header')
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
     def test_get_ucsc_chr1(self, mock_parse, mock_extract):
         """Test getting UCSC chr1 from BAM."""
         mock_extract.return_value = "@SQ\tSN:chr1\tLN:249250621\n"
         mock_parse.return_value = [{"name": "chr1", "length": 249250621}]
 
         config = {}
-        result = get_chromosome_name_from_bam(
-            "test.bam", config, chromosome_number=1, reference_assembly="hg19"
-        )
+        result = get_chromosome_name_from_bam("test.bam", config, chromosome_number=1, reference_assembly="hg19")
         assert result == "chr1"
 
-    @patch('vntyper.scripts.fastq_bam_processing.extract_bam_header')
-    @patch('vntyper.scripts.fastq_bam_processing.parse_contigs_from_header')
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
     def test_get_ncbi_chr1_grch37(self, mock_parse, mock_extract):
         """Test getting NCBI chr1 from GRCh37 BAM."""
         mock_extract.return_value = "@SQ\tSN:NC_000001.10\tLN:249250621\n"
         mock_parse.return_value = [{"name": "NC_000001.10", "length": 249250621}]
 
-        config = {
-            "bam_processing": {
-                "known_chromosome_naming": {
-                    "GRCh37": {"ncbi": "NC_000001.10"}
-                }
-            }
-        }
-        result = get_chromosome_name_from_bam(
-            "test.bam", config, chromosome_number=1, reference_assembly="GRCh37"
-        )
+        config = {"bam_processing": {"known_chromosome_naming": {"GRCh37": {"ncbi": "NC_000001.10"}}}}
+        result = get_chromosome_name_from_bam("test.bam", config, chromosome_number=1, reference_assembly="GRCh37")
         assert result == "NC_000001.10"
 
-    @patch('vntyper.scripts.fastq_bam_processing.extract_bam_header')
-    @patch('vntyper.scripts.fastq_bam_processing.parse_contigs_from_header')
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
     def test_chromosome_not_found(self, mock_parse, mock_extract):
         """Test error when chromosome not found in BAM."""
         mock_extract.return_value = "@SQ\tSN:chr2\tLN:243199373\n"
@@ -225,20 +197,81 @@ class TestGetChromosomeNameFromBam:
 
         config = {}
         with pytest.raises(ValueError, match="not found in BAM"):
-            get_chromosome_name_from_bam(
-                "test.bam", config, chromosome_number=1, reference_assembly="hg19"
-            )
+            get_chromosome_name_from_bam("test.bam", config, chromosome_number=1, reference_assembly="hg19")
 
-    @patch('vntyper.scripts.fastq_bam_processing.extract_bam_header')
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
     def test_bam_read_error(self, mock_extract):
         """Test error handling when BAM cannot be read."""
         mock_extract.side_effect = Exception("File not found")
 
         config = {}
         with pytest.raises(ValueError, match="Cannot read BAM header"):
-            get_chromosome_name_from_bam(
-                "nonexistent.bam", config, chromosome_number=1
-            )
+            get_chromosome_name_from_bam("nonexistent.bam", config, chromosome_number=1)
+
+
+class TestDetectAssemblyChr1Length:
+    """Test assembly detection via chr1 length (Phase 1 - Issue #139 fix)."""
+
+    def test_detect_hg38_from_chr1_length_ucsc(self):
+        """Chr1 length 248,956,422 should detect hg38/GRCh38 (UCSC naming)."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "chr1", "length": 248956422}]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly in ["hg38", "GRCh38"], f"Expected hg38/GRCh38, got {assembly}"
+
+    def test_detect_hg19_from_chr1_length_ucsc(self):
+        """Chr1 length 249,250,621 should detect hg19/GRCh37 (UCSC naming)."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "chr1", "length": 249250621}]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly in ["hg19", "GRCh37"], f"Expected hg19/GRCh37, got {assembly}"
+
+    def test_detect_hg38_from_chr1_length_ensembl(self):
+        """Should work with ENSEMBL '1' naming."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "1", "length": 248956422}]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly in ["hg38", "GRCh38"], f"Expected hg38/GRCh38, got {assembly}"
+
+    def test_chr1_not_found_returns_none(self):
+        """Should return None if chr1 missing."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "chr2", "length": 242193529}]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly is None, f"Expected None when chr1 missing, got {assembly}"
+
+    def test_unknown_chr1_length_returns_none(self):
+        """Should return None for unknown chr1 length."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "chr1", "length": 999999999}]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly is None, f"Expected None for unknown length, got {assembly}"
+
+    def test_hg38_with_195_contigs_uses_chr1_length(self):
+        """
+        CRITICAL: Real-world hg38 BAM with 195 contigs (Issue #139).
+
+        BAM has 25 canonical + 170 alternates. Chr1 length check should
+        reliably detect hg38 regardless of alternate contigs.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        # Simulate hg38 structure: canonical chr1 + many alternates
+        contigs = [
+            {"name": "chr1", "length": 248956422},  # hg38 chr1 length
+            {"name": "chr1_KI270706v1_random", "length": 175055},
+            {"name": "chr1_KI270707v1_random", "length": 32032},
+            # ... would be 195 total in real BAM, but chr1 is what matters
+        ]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly in ["hg38", "GRCh38"], (
+            f"Chr1 length check should detect hg38 despite alternates, got {assembly}"
+        )
 
 
 if __name__ == "__main__":
