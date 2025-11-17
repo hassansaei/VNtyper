@@ -273,6 +273,28 @@ class TestDetectAssemblyChr1Length:
             f"Chr1 length check should detect hg38 despite alternates, got {assembly}"
         )
 
+    def test_hg19_with_ensembl_naming_and_alternates(self):
+        """
+        Test assembly detection with ENSEMBL naming and alternate contigs.
+
+        Ensures chr1 length detection works robustly with ENSEMBL '1' naming
+        even when alternate contigs are present (e.g., from GENCODE references).
+        Addresses Sourcery AI suggestion for comprehensive naming convention coverage.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        # Simulate ENSEMBL structure: canonical '1' + alternates
+        contigs = [
+            {"name": "1", "length": 249250621},  # hg19/GRCh37 chr1 length
+            {"name": "CHR_HSCHR1_1_CTG3", "length": 165050},  # ENSEMBL alternate
+            {"name": "CHR_HSCHR1_2_CTG3", "length": 176043},  # ENSEMBL alternate
+            # ENSEMBL can have many alternates like UCSC
+        ]
+        assembly = detect_assembly_from_chr1_length(contigs)
+        assert assembly in ["hg19", "GRCh37"], (
+            f"Chr1 length check should detect hg19/GRCh37 with ENSEMBL naming despite alternates, got {assembly}"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
