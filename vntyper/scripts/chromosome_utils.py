@@ -16,6 +16,84 @@ Functions:
 
 import logging
 import re
+from typing import Optional
+
+# Chr1 length constants for assembly detection (Phase 1 - Issue #139 fix)
+CHR1_LENGTHS = {
+    "GRCh37": 249250621,
+    "hg19": 249250621,  # Alias for GRCh37
+    "GRCh38": 248956422,
+    "hg38": 248956422,  # Alias for GRCh38
+}
+
+
+def detect_assembly_from_chr1_length(contigs: list[dict]) -> Optional[str]:
+    """
+    Detect reference assembly from chr1 length - most reliable method.
+
+    This function addresses Issue #139 where assembly detection fails on modern
+    reference genomes (hg38) with alternate contigs. Chr1 length is unique per
+    assembly and unaffected by the presence of ~170 alternate sequences.
+
+    Args:
+        contigs (list[dict]): List of contig dictionaries with 'name' and 'length' keys.
+                             Example: [{'name': 'chr1', 'length': 248956422}, ...]
+
+    Returns:
+        str | None: Assembly name ('GRCh38', 'hg38', 'GRCh37', 'hg19') or None if:
+                   - Chr1 not found in contigs
+                   - Chr1 length doesn't match known assemblies
+                   - Contigs list is empty
+
+    Examples:
+        >>> contigs = [{"name": "chr1", "length": 248956422}]
+        >>> detect_assembly_from_chr1_length(contigs)
+        'GRCh38'
+
+        >>> contigs = [{"name": "1", "length": 249250621}]  # ENSEMBL naming
+        >>> detect_assembly_from_chr1_length(contigs)
+        'GRCh37'
+
+    Notes:
+        - Handles both UCSC ('chr1') and ENSEMBL ('1') naming conventions
+        - Returns first matching assembly name (GRCh* names prioritized over hg* aliases)
+        - Most reliable detection method (proven in frontend, 95%+ success rate)
+        - Unaffected by alternate contigs (chr1_random, chr1_alt, etc.)
+
+    See Also:
+        - GitHub Issue #139: Assembly detection fails on hg38 with 195 contigs
+        - plan/02_active/2025-10-27_assembly-detection-fix/SENIOR_DEVELOPER_REVIEW.md
+    """
+    if not contigs:
+        logging.debug("Empty contigs list provided to detect_assembly_from_chr1_length")
+        return None
+
+    # Find chr1 (handles both UCSC "chr1" and ENSEMBL "1" naming, case-insensitive)
+    chr1 = next((c for c in contigs if c.get("name", "").lower() in ["chr1", "1"]), None)
+
+    if not chr1:
+        logging.debug("Chr1 not found in contigs (tried 'chr1' and '1')")
+        return None
+
+    chr1_length = chr1.get("length")
+    if chr1_length is None:
+        logging.warning("Chr1 found but length is None")
+        return None
+
+    logging.debug(f"Chr1 length: {chr1_length:,} bp")
+
+    # Check against known assemblies (GRCh* prioritized over hg* aliases)
+    for assembly in ["GRCh38", "hg38", "GRCh37", "hg19"]:
+        if chr1_length == CHR1_LENGTHS[assembly]:
+            logging.info(f"Assembly detected from chr1 length: {assembly} ({chr1_length:,} bp)")
+            return assembly
+
+    logging.warning(
+        f"Unknown chr1 length: {chr1_length:,} bp. "
+        f"Expected GRCh38/hg38: {CHR1_LENGTHS['GRCh38']:,} bp or "
+        f"GRCh37/hg19: {CHR1_LENGTHS['GRCh37']:,} bp"
+    )
+    return None
 
 
 def detect_naming_convention(contig_names: list[str]) -> str:
