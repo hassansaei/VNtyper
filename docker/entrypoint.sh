@@ -159,10 +159,8 @@ main() {
             ;;
 
         celery)
-            log_info "Starting Celery worker..."
-            exec conda run -n "${CONDA_ENV}" celery -A app.celery_app worker \
-                --loglevel=info \
-                --concurrency=1
+            log_info "Starting Celery: $*"
+            exec conda run -n "${CONDA_ENV}" "$@"
             ;;
 
         beat)
