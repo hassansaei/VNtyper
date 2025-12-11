@@ -296,9 +296,18 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 "Confidence",
                 "original_index",
             ]
+            if "is_valid_frameshift" in motif_left.columns:
+                keep_cols.append("is_valid_frameshift")
             motif_left = motif_left[keep_cols]
-            motif_left.sort_values(["Depth_Score", "POS"], ascending=[False, False], inplace=True)
-            motif_left.drop_duplicates("ALT", keep="first", inplace=True)
+            if "is_valid_frameshift" in motif_left.columns:
+                motif_left["is_valid_frameshift"] = motif_left["is_valid_frameshift"].fillna(False)
+                sort_cols = ["is_valid_frameshift", "Depth_Score", "POS"]
+                sort_order = [False, False, False]
+            else:
+                sort_cols = ["Depth_Score", "POS"]
+                sort_order = [False, False]
+            motif_left.sort_values(sort_cols, ascending=sort_order, inplace=True)
+            motif_left.drop_duplicates(subset=["POS", "REF", "ALT"], keep="first", inplace=True)
 
         # Merge + filter right
         if not motif_right.empty:
@@ -321,21 +330,41 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 "Confidence",
                 "original_index",
             ]
+            if "is_valid_frameshift" in motif_right.columns:
+                keep_cols.append("is_valid_frameshift")
             motif_right = motif_right[keep_cols]
 
             # Issue #136 Fix: Branch based on use_uniform_filtering flag
+            if "is_valid_frameshift" in motif_right.columns:
+                motif_right["is_valid_frameshift"] = motif_right["is_valid_frameshift"].fillna(False)
+
             if use_uniform_filtering:
                 # NEW: Uniform depth-score-based filtering (fixes insG_pos54 detection)
                 motif_right = _apply_uniform_filtering_right_motif(
                     motif_right, exclude_motifs_right, alt_for_motif_right_gg, motifs_for_alt_gg
                 )
+                if "is_valid_frameshift" in motif_right.columns and not motif_right.empty:
+                    # Re-apply prioritization after uniform filtering to keep valid frameshifts when deduping
+                    motif_right.sort_values(
+                        ["is_valid_frameshift", "Depth_Score", "POS"],
+                        ascending=[False, False, False],
+                        inplace=True,
+                    )
+                    motif_right.drop_duplicates(subset=["POS", "REF", "ALT"], keep="first", inplace=True)
             else:
                 # IMPROVED LEGACY: Hassan's refactored GG logic (PR #140)
                 # Better than old logic but still has limitations vs uniform filtering
                 if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
                     motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
-                    motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
-                    motif_right.drop_duplicates("ALT", keep="first", inplace=True)
+                    if "is_valid_frameshift" in motif_right.columns:
+                        motif_right.sort_values(
+                            ["is_valid_frameshift", "Depth_Score", "POS"],
+                            ascending=[False, False, False],
+                            inplace=True,
+                        )
+                    else:
+                        motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
+                    motif_right.drop_duplicates(subset=["POS", "REF", "ALT"], keep="first", inplace=True)
                     if motif_right["Motif"].isin(motifs_for_alt_gg).any():
                         motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
 
