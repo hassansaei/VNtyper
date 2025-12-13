@@ -1,3 +1,3 @@
 # vntyper/version.py
 
-__version__ = "2.0.0-beta.2"
+__version__ = "2.0.0-beta.3"
