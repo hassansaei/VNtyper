@@ -73,8 +73,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           push: true
           # Enable GitHub Actions caching for 60-80% faster builds
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Using scoped cache to prevent stale reference issues (fixes "failed to compute cache key" errors)
+          # See: https://github.com/docker/buildx/issues/681
+          cache-from: type=gha,scope=build-${{ github.ref_name }}
+          cache-to: type=gha,scope=build-${{ github.ref_name }},mode=max
 
   # Docker Quick Tests - Run on all PRs for fast feedback
   test-docker-quick:

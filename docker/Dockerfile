@@ -118,8 +118,9 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 
 # Copy local entrypoint.sh and app directory to override cloned versions
 # This allows local development changes without pushing to GitHub
-COPY entrypoint.sh /opt/vntyper/docker/entrypoint.sh
-COPY app /opt/vntyper/app
+# Note: Paths are relative to build context (repo root), not Dockerfile location
+COPY docker/entrypoint.sh /opt/vntyper/docker/entrypoint.sh
+COPY docker/app /opt/vntyper/app
 
 # =============================================================================
 # Stage 3: Minimal Runtime Image
