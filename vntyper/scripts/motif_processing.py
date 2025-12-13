@@ -213,6 +213,71 @@ def _apply_uniform_filtering_right_motif(motif_right, exclude_motifs_right, alt_
     return motif_right
 
 
+def _prioritize_frameshift_and_dedupe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sort by frameshift validity and depth score, then deduplicate on genomic locus.
+
+    This helper function standardizes frameshift-aware deduplication across all
+    motif filtering paths (left motifs, right motifs uniform, right motifs legacy).
+    It ensures valid frameshift variants are prioritized over non-frameshift variants
+    when multiple variants share the same genomic position.
+
+    Algorithm:
+        1. Fill missing `is_valid_frameshift` values with False (defensive programming)
+        2. Sort by: is_valid_frameshift DESC, Depth_Score DESC, POS DESC
+           - Frameshift-valid variants first (biologically significant)
+           - Then highest depth score (signal > noise)
+           - Then position for deterministic ordering
+        3. Deduplicate on [POS, REF, ALT] to preserve distinct genomic events
+           - Why not ALT-only? POS 60 C>GC vs POS 67 G>GG are DIFFERENT events
+
+    Args:
+        df: DataFrame with motif variants. Must have columns:
+            - POS, REF, ALT (required for deduplication)
+            - Depth_Score (required for sorting)
+            - is_valid_frameshift (optional, filled with False if missing)
+
+    Returns:
+        DataFrame sorted and deduplicated with frameshift prioritization.
+
+    Example:
+        Two variants at same POS/REF/ALT:
+        - Row 1: is_valid_frameshift=True, Depth_Score=0.010
+        - Row 2: is_valid_frameshift=False, Depth_Score=0.015
+        Result: Row 1 kept (frameshift=True prioritized despite lower depth)
+
+    References:
+        - GitHub Issue #136: Frameshift detection fixes
+        - Sourcery AI review: DRY principle recommendation
+    """
+    if df.empty:
+        return df
+
+    # Create a copy to avoid modifying the original DataFrame
+    result = df.copy()
+
+    # Determine sort columns based on whether is_valid_frameshift exists
+    if "is_valid_frameshift" in result.columns:
+        # Fill missing values with False (variant is not a valid frameshift)
+        result["is_valid_frameshift"] = result["is_valid_frameshift"].fillna(False)
+        sort_cols = ["is_valid_frameshift", "Depth_Score", "POS"]
+        sort_ascending = [False, False, False]  # True first, highest score, highest POS
+    else:
+        sort_cols = ["Depth_Score", "POS"]
+        sort_ascending = [False, False]
+
+    # Sort to prioritize valid frameshifts with highest depth scores
+    result = result.sort_values(sort_cols, ascending=sort_ascending)
+
+    # Deduplicate on genomic locus [POS, REF, ALT] - preserves distinct biological events
+    # Why [POS, REF, ALT] instead of ALT-only?
+    #   - POS 60: C>GC (insG at pos 54) vs POS 67: G>GG (dupC) = DIFFERENT events
+    #   - ALT-only dedup would incorrectly merge these distinct variants
+    result = result.drop_duplicates(subset=["POS", "REF", "ALT"], keep="first")
+
+    return result
+
+
 def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     """
     Final step of motif annotation: correct positions for left/right motifs,
@@ -296,9 +361,12 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 "Confidence",
                 "original_index",
             ]
+            if "is_valid_frameshift" in motif_left.columns:
+                keep_cols.append("is_valid_frameshift")
             motif_left = motif_left[keep_cols]
-            motif_left.sort_values(["Depth_Score", "POS"], ascending=[False, False], inplace=True)
-            motif_left.drop_duplicates("ALT", keep="first", inplace=True)
+
+            # Apply frameshift-aware sorting and deduplication (DRY: uses shared helper)
+            motif_left = _prioritize_frameshift_and_dedupe(motif_left)
 
         # Merge + filter right
         if not motif_right.empty:
@@ -321,6 +389,8 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 "Confidence",
                 "original_index",
             ]
+            if "is_valid_frameshift" in motif_right.columns:
+                keep_cols.append("is_valid_frameshift")
             motif_right = motif_right[keep_cols]
 
             # Issue #136 Fix: Branch based on use_uniform_filtering flag
@@ -329,13 +399,15 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
                 motif_right = _apply_uniform_filtering_right_motif(
                     motif_right, exclude_motifs_right, alt_for_motif_right_gg, motifs_for_alt_gg
                 )
+                # Re-apply frameshift prioritization after uniform filtering (DRY: uses shared helper)
+                motif_right = _prioritize_frameshift_and_dedupe(motif_right)
             else:
                 # IMPROVED LEGACY: Hassan's refactored GG logic (PR #140)
                 # Better than old logic but still has limitations vs uniform filtering
                 if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
                     motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
-                    motif_right.sort_values("Depth_Score", ascending=False, inplace=True)
-                    motif_right.drop_duplicates("ALT", keep="first", inplace=True)
+                    # Apply frameshift-aware sorting and deduplication (DRY: uses shared helper)
+                    motif_right = _prioritize_frameshift_and_dedupe(motif_right)
                     if motif_right["Motif"].isin(motifs_for_alt_gg).any():
                         motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
 

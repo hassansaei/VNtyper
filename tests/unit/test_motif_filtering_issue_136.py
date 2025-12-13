@@ -395,5 +395,194 @@ class TestMotifFilteringIntegration:
         assert len(passing) >= 1  # At least one should pass
 
 
+class TestPrioritizeFrameshiftAndDedupe:
+    """
+    Test suite for _prioritize_frameshift_and_dedupe helper function.
+
+    This function standardizes frameshift-aware deduplication across all
+    motif filtering paths, ensuring DRY principle compliance.
+    """
+
+    def test_empty_dataframe_returns_empty(self):
+        """Empty input should return empty output without errors."""
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        empty_df = pd.DataFrame()
+        result = _prioritize_frameshift_and_dedupe(empty_df)
+        assert result.empty
+
+    def test_frameshift_prioritized_over_depth_score(self):
+        """
+        CRITICAL: Frameshift-valid variants should be kept even with lower depth score.
+
+        Biological: A confirmed frameshift mutation (validated by frame score analysis)
+        is more biologically significant than a higher-depth non-frameshift variant.
+        """
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60, 60],
+                "REF": ["C", "C"],
+                "ALT": ["GC", "GC"],
+                "Depth_Score": [0.010, 0.020],  # Second has higher depth
+                "is_valid_frameshift": [True, False],  # But first is frameshift-valid
+            }
+        )
+
+        result = _prioritize_frameshift_and_dedupe(df)
+
+        # Should keep first row (frameshift=True) despite lower Depth_Score
+        assert len(result) == 1
+        assert result.iloc[0]["is_valid_frameshift"] == True  # noqa: E712 (numpy bool)
+        assert result.iloc[0]["Depth_Score"] == 0.010
+
+    def test_fillna_handles_missing_frameshift_values(self):
+        """
+        Missing is_valid_frameshift values should be filled with False.
+
+        This is defensive programming for rows where frameshift analysis
+        may not have been performed.
+        """
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60, 60],
+                "REF": ["C", "C"],
+                "ALT": ["GC", "GC"],
+                "Depth_Score": [0.010, 0.020],
+                "is_valid_frameshift": [True, pd.NA],  # Second has missing value
+            }
+        )
+
+        result = _prioritize_frameshift_and_dedupe(df)
+
+        # Should keep first row (frameshift=True, missing treated as False)
+        assert len(result) == 1
+        assert result.iloc[0]["is_valid_frameshift"] == True  # noqa: E712 (numpy bool)
+
+    def test_works_without_frameshift_column(self):
+        """
+        Function should work even without is_valid_frameshift column.
+
+        Falls back to sorting by Depth_Score only for backward compatibility.
+        """
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60, 60],
+                "REF": ["C", "C"],
+                "ALT": ["GC", "GC"],
+                "Depth_Score": [0.010, 0.020],  # No is_valid_frameshift column
+            }
+        )
+
+        result = _prioritize_frameshift_and_dedupe(df)
+
+        # Should keep row with higher Depth_Score
+        assert len(result) == 1
+        assert result.iloc[0]["Depth_Score"] == 0.020
+
+    def test_deduplicates_on_pos_ref_alt(self):
+        """
+        Deduplication should use [POS, REF, ALT] to preserve distinct genomic events.
+
+        Critical for Issue #136: POS 60 C>GC vs POS 67 G>GG are DIFFERENT events.
+        """
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60, 67, 60],  # Two at pos 60, one at pos 67
+                "REF": ["C", "G", "C"],
+                "ALT": ["GC", "GG", "GC"],  # Duplicate at pos 60
+                "Depth_Score": [0.015, 0.010, 0.012],
+                "is_valid_frameshift": [True, True, False],
+            }
+        )
+
+        result = _prioritize_frameshift_and_dedupe(df)
+
+        # Should keep 2 rows: one for pos 60 (highest priority), one for pos 67
+        assert len(result) == 2
+        assert any((result["POS"] == 60) & (result["ALT"] == "GC"))
+        assert any((result["POS"] == 67) & (result["ALT"] == "GG"))
+
+    def test_preserves_dataframe_columns(self):
+        """All original columns should be preserved in output."""
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60],
+                "REF": ["C"],
+                "ALT": ["GC"],
+                "Depth_Score": [0.015],
+                "is_valid_frameshift": [True],
+                "Motif": ["X"],
+                "Confidence": ["High"],
+                "extra_column": ["value"],
+            }
+        )
+
+        result = _prioritize_frameshift_and_dedupe(df)
+
+        # All columns should be preserved
+        assert set(result.columns) == set(df.columns)
+        assert result.iloc[0]["Motif"] == "X"
+        assert result.iloc[0]["extra_column"] == "value"
+
+    def test_does_not_modify_original_dataframe(self):
+        """Function should not modify the original DataFrame (immutability)."""
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60, 60],
+                "REF": ["C", "C"],
+                "ALT": ["GC", "GC"],
+                "Depth_Score": [0.010, 0.020],
+                "is_valid_frameshift": [True, False],
+            }
+        )
+
+        original_len = len(df)
+        _prioritize_frameshift_and_dedupe(df)
+
+        # Original should be unchanged
+        assert len(df) == original_len
+
+    def test_sort_order_is_correct(self):
+        """
+        Verify exact sort order: is_valid_frameshift DESC, Depth_Score DESC, POS DESC.
+        """
+        from vntyper.scripts.motif_processing import _prioritize_frameshift_and_dedupe
+
+        df = pd.DataFrame(
+            {
+                "POS": [60, 61, 62, 63],
+                "REF": ["C", "C", "C", "C"],
+                "ALT": ["GC", "GC", "GC", "GC"],  # All different POS, so no dedup
+                "Depth_Score": [0.010, 0.015, 0.012, 0.020],
+                "is_valid_frameshift": [True, False, True, False],
+            }
+        )
+
+        result = _prioritize_frameshift_and_dedupe(df)
+
+        # Expected order:
+        # 1. is_valid_frameshift=True, Depth_Score=0.012, POS=62
+        # 2. is_valid_frameshift=True, Depth_Score=0.010, POS=60
+        # 3. is_valid_frameshift=False, Depth_Score=0.020, POS=63
+        # 4. is_valid_frameshift=False, Depth_Score=0.015, POS=61
+        assert len(result) == 4
+        assert result.iloc[0]["POS"] == 62  # True, 0.012
+        assert result.iloc[1]["POS"] == 60  # True, 0.010
+        assert result.iloc[2]["POS"] == 63  # False, 0.020
+        assert result.iloc[3]["POS"] == 61  # False, 0.015
+
+
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
