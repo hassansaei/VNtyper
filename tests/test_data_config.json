@@ -748,15 +748,15 @@
         "expected_archive": true,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
-            "value": 491,
+            "value": 547,
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 28940,
+            "value": 22703,
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.016966136834830683,
+            "value": 0.0241,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
