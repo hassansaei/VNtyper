@@ -659,8 +659,8 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
 
     Selection criteria (strict priority order):
         1. Highest Confidence level (High_Precision* > High_Precision > Low_Precision > Negative)
-        2. Highest haplo_count (most supporting evidence)
-        3. Highest Depth_Score (coverage tie-breaker)
+        2. Highest Depth_Score (coverage tie-breaker)
+        3. Highest haplo_count (most supporting evidence)
         4. Lowest POS (genomic position tie-breaker for reproducibility)
 
     This ensures deterministic, biologically-informed variant selection.
@@ -723,7 +723,7 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
 
     # Multi-key sort (deterministic tie-breaking)
     # Priority: Confidence DESC, haplo_count DESC, Depth_Score DESC, POS ASC
-    df = df.sort_values(["_priority", "haplo_count", "Depth_Score", "POS"], ascending=[False, False, False, True])
+    df = df.sort_values(["_priority", "Depth_Score", "haplo_count", "POS"], ascending=[False, False, False, True])
 
     # Keep only the best variant
     result = df.head(1).drop(columns=["_priority"])
