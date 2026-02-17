@@ -66,10 +66,11 @@ def test_calculate_depth_score_empty_df(kestrel_config):
     assert out.empty, "Empty input should yield empty output."
 
 
-def test_calculate_depth_score_low_precision(kestrel_config):
+def test_calculate_depth_score_below_threshold_is_negative(kestrel_config):
     """
-    Test that low depth scores result in 'Low_Precision' confidence.
+    Variants with Depth_Score below low_threshold get 'Negative' (filtered out), not Low_Precision.
     """
+    # Depth 10/10000 = 0.001 < low (0.00469 in kestrel_config.json)
     df = pd.DataFrame(
         {
             "Estimated_Depth_AlternateVariant": [10],
@@ -77,17 +78,35 @@ def test_calculate_depth_score_low_precision(kestrel_config):
         }
     )
     out = calculate_depth_score_and_assign_confidence(df, kestrel_config)
+    assert out.loc[0, "Confidence"] == "Negative", (
+        "Depth_Score below low_threshold should be Negative (filtered out)."
+    )
+    assert not out.loc[0, "depth_confidence_pass"]
 
-    # If your code references:
-    #   conf_assign = kestrel_config["confidence_assignment"]
-    # then inside conf_assign["confidence_levels"]["low_precision"] ...
-    low_label = kestrel_config["confidence_assignment"]["confidence_levels"][
-        "low_precision"
-    ]
 
-    assert (
-        out.loc[0, "Confidence"] == low_label
-    ), "Expected Low_Precision for low depth score."
+def test_calculate_depth_score_low_precision(kestrel_config):
+    """
+    Variants with Depth_Score >= low_threshold but in low-precision band get 'Low_Precision'.
+    """
+    low = kestrel_config["confidence_assignment"]["depth_score_thresholds"]["low"]
+    high = kestrel_config["confidence_assignment"]["depth_score_thresholds"]["high"]
+    mid_low = kestrel_config["confidence_assignment"]["alt_depth_thresholds"]["mid_low"]
+    mid_high = kestrel_config["confidence_assignment"]["alt_depth_thresholds"]["mid_high"]
+    # Depth_Score in (low, high) and alt in [mid_low, mid_high] => Low_Precision (cond3)
+    depth_score = (low + high) / 2
+    alt_depth = (mid_low + mid_high) // 2
+    region_depth = int(alt_depth / depth_score) + 1
+    df = pd.DataFrame(
+        {
+            "Estimated_Depth_AlternateVariant": [alt_depth],
+            "Estimated_Depth_Variant_ActiveRegion": [region_depth],
+        }
+    )
+    out = calculate_depth_score_and_assign_confidence(df, kestrel_config)
+    low_label = kestrel_config["confidence_assignment"]["confidence_levels"]["low_precision"]
+    assert out.loc[0, "Confidence"] == low_label, (
+        "Depth_Score in (low, high) with mid alt depth should be Low_Precision."
+    )
 
 
 def test_calculate_depth_score_high_precision(kestrel_config):
