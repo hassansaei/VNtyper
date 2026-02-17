@@ -36,6 +36,7 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
 
     (Refactored)
       - All rows remain in the DataFrame.
+      - Variants with Depth_Score < low_threshold are assigned 'Negative' (filtered out).
       - A new boolean column 'depth_confidence_pass' is True if the row's
         final Confidence is not 'Negative'.
       - Depth_Score is computed as:
@@ -139,6 +140,10 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     df.loc[cond4, "Confidence"] = low_prec_label
     df.loc[cond5, "Confidence"] = high_prec_label
     df.loc[cond6, "Confidence"] = low_prec_label
+
+    # Override: Depth_Score below low_threshold => Negative (filtered out), not Low_Precision.
+    # Ensures all variants (GG and non-GG) with insufficient depth are excluded.
+    df.loc[df["Depth_Score"] < low_threshold, "Confidence"] = "Negative"
 
     # Step 4: Mark pass/fail: Passing means Confidence != 'Negative'
     df["depth_confidence_pass"] = df["Confidence"] != "Negative"
