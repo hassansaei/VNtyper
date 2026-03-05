@@ -25,8 +25,12 @@ References:
 
 import logging
 
-import numpy as np  # Import NumPy directly
+import numpy as np
 import pandas as pd
+
+# Confidence label for variants that fail depth-based filtering.
+# Used as the default and for Depth_Score below the configured low_threshold.
+NEGATIVE_LABEL = "Negative"
 
 
 def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config: dict) -> pd.DataFrame:
@@ -36,6 +40,7 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
 
     (Refactored)
       - All rows remain in the DataFrame.
+      - Variants with Depth_Score < low_threshold are assigned 'Negative' (filtered out).
       - A new boolean column 'depth_confidence_pass' is True if the row's
         final Confidence is not 'Negative'.
       - Depth_Score is computed as:
@@ -104,11 +109,17 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     df["Depth_Score"] = df["Depth_Score"].replace([np.inf, -np.inf], np.nan)
 
     # Step 3: Assign Confidence
-    # Default all rows to 'Negative', then update based on conditions.
-    df["Confidence"] = "Negative"
+    # Default all rows to NEGATIVE_LABEL, then upgrade based on conditions.
+    # Variants with Depth_Score < low_threshold remain Negative (filtered out).
+    df["Confidence"] = NEGATIVE_LABEL
 
-    # Condition 1: Low Precision if Depth_Score <= low_threshold OR region depth <= var_region_threshold
-    cond1 = (df["Depth_Score"] <= low_threshold) | (df["Estimated_Depth_Variant_ActiveRegion"] <= var_region_threshold)
+    # Guard: only variants at or above the minimum depth threshold can receive
+    # a non-Negative confidence label. This ensures all variants (GG and non-GG)
+    # with insufficient depth are excluded from downstream analysis (fixes #147).
+    above_min_threshold = df["Depth_Score"] >= low_threshold
+
+    # Condition 1: Low Precision if Depth_Score == low_threshold OR region depth <= var_region_threshold
+    cond1 = (df["Depth_Score"] == low_threshold) | (df["Estimated_Depth_Variant_ActiveRegion"] <= var_region_threshold)
 
     # Condition 2: High Precision STAR if alt depth >= alt_mid_high AND Depth_Score >= high_threshold
     cond2 = (df["Estimated_Depth_AlternateVariant"] >= alt_mid_high) & (df["Depth_Score"] >= high_threshold)
@@ -128,20 +139,19 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     )
 
     # Condition 6: Catch-all - Low Precision if Depth_Score is between low_threshold and high_threshold (exclusive)
-    # Note: Redundant (df["Confidence"] == "Negative") check removed per Copilot review (PR #140)
-    # All conditions are evaluated BEFORE application, so all rows start as "Negative"
     cond6 = (df["Depth_Score"] > low_threshold) & (df["Depth_Score"] < high_threshold)
 
-    # Apply conditions in order (later conditions can overwrite earlier ones)
-    df.loc[cond1, "Confidence"] = low_prec_label
-    df.loc[cond2, "Confidence"] = high_prec_star_label
-    df.loc[cond3, "Confidence"] = low_prec_label
-    df.loc[cond4, "Confidence"] = low_prec_label
-    df.loc[cond5, "Confidence"] = high_prec_label
-    df.loc[cond6, "Confidence"] = low_prec_label
+    # Apply conditions in order (later conditions can overwrite earlier ones).
+    # The above_min_threshold guard ensures Depth_Score < low_threshold stays Negative.
+    df.loc[cond1 & above_min_threshold, "Confidence"] = low_prec_label
+    df.loc[cond2 & above_min_threshold, "Confidence"] = high_prec_star_label
+    df.loc[cond3 & above_min_threshold, "Confidence"] = low_prec_label
+    df.loc[cond4 & above_min_threshold, "Confidence"] = low_prec_label
+    df.loc[cond5 & above_min_threshold, "Confidence"] = high_prec_label
+    df.loc[cond6 & above_min_threshold, "Confidence"] = low_prec_label
 
-    # Step 4: Mark pass/fail: Passing means Confidence != 'Negative'
-    df["depth_confidence_pass"] = df["Confidence"] != "Negative"
+    # Step 4: Mark pass/fail: Passing means Confidence != NEGATIVE_LABEL
+    df["depth_confidence_pass"] = df["Confidence"] != NEGATIVE_LABEL
 
     logging.debug("Exiting calculate_depth_score_and_assign_confidence")
     logging.debug(f"Final DataFrame shape: {df.shape}")
