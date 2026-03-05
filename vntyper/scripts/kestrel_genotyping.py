@@ -514,8 +514,9 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
       4.5) Sort by Depth_Score + add haplo_count
       5) ALT-based filtering logic (e.g., 'GG' threshold)
       6) Motif correction & annotation
-      7) Optionally generate a BED file for coverage
-      8) Finally, filter out rows that fail any relevant boolean filter columns
+      6.5) Apply flagging rules before selection (fixes #145)
+      7) Final filter + select single best variant
+      8) Generate BED file for coverage
 
     References:
       - Saei et al., iScience 26, 107171 (2023) for empirical cutoffs
