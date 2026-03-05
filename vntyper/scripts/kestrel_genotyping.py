@@ -448,14 +448,18 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
         output_empty_result(output_dir, header)
         return None
 
-    # Apply both regular flagging rules and duplicates logic if enabled
-    flagging_rules = kestrel_config.get("flagging_rules", {})
-    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+    # Flagging is now applied inside process_kmer_results() (step 6.5) so that
+    # flags are available before variant selection (fixes #145). Only re-apply
+    # here if the Flag column is missing (e.g., process_kmer_results was called
+    # without flagging rules configured).
+    if "Flag" not in processed_df.columns:
+        flagging_rules = kestrel_config.get("flagging_rules", {})
+        duplicates_config = kestrel_config.get("duplicate_flagging", {})
 
-    if flagging_rules or duplicates_config.get("enabled", False):
-        from vntyper.scripts.flagging import add_flags
+        if flagging_rules or duplicates_config.get("enabled", False):
+            from vntyper.scripts.flagging import add_flags
 
-        processed_df = add_flags(processed_df, flagging_rules, duplicates_config=duplicates_config)
+            processed_df = add_flags(processed_df, flagging_rules, duplicates_config=duplicates_config)
 
     # Write the final processed results
     final_output_path = os.path.join(output_dir, "kestrel_result.tsv")
@@ -510,8 +514,9 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
       4.5) Sort by Depth_Score + add haplo_count
       5) ALT-based filtering logic (e.g., 'GG' threshold)
       6) Motif correction & annotation
-      7) Optionally generate a BED file for coverage
-      8) Finally, filter out rows that fail any relevant boolean filter columns
+      6.5) Apply flagging rules before selection (fixes #145)
+      7) Final filter + select single best variant
+      8) Generate BED file for coverage
 
     References:
       - Saei et al., iScience 26, 107171 (2023) for empirical cutoffs
@@ -565,6 +570,18 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     df = motif_correction_and_annotation(df, merged_motifs, kestrel_config)
     if df.empty:
         return df
+
+    # (6.5) Apply flagging BEFORE selection so flags inform variant choice.
+    # All columns needed by flagging rules (Depth_Score, Motif, REF, ALT)
+    # are available after step (6). Moving flagging here fixes #145: previously,
+    # a flagged variant could be selected over an unflagged one because
+    # select_single_best_variant ran before add_flags.
+    flagging_rules = kestrel_config.get("flagging_rules", {})
+    duplicates_config = kestrel_config.get("duplicate_flagging", {})
+    if flagging_rules or duplicates_config.get("enabled", False):
+        from vntyper.scripts.flagging import add_flags
+
+        df = add_flags(df, flagging_rules, duplicates_config=duplicates_config)
 
     # (7) Final Filter
     df = filter_final_dataframe(df, output_dir)
@@ -659,9 +676,10 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
 
     Selection criteria (strict priority order):
         1. Highest Confidence level (High_Precision* > High_Precision > Low_Precision > Negative)
-        2. Highest Depth_Score (coverage tie-breaker)
-        3. Highest haplo_count (most supporting evidence)
-        4. Lowest POS (genomic position tie-breaker for reproducibility)
+        2. Unflagged variants preferred over flagged (fixes #145)
+        3. Highest Depth_Score (coverage tie-breaker)
+        4. Highest haplo_count (most supporting evidence)
+        5. Lowest POS (genomic position tie-breaker for reproducibility)
 
     This ensures deterministic, biologically-informed variant selection.
 
@@ -721,12 +739,22 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["POS"] = pd.to_numeric(df["POS"], errors="coerce").fillna(0)
 
+    # Deprioritize flagged variants: unflagged (1) sorts before flagged (0).
+    # If Flag column is absent, all variants are treated as unflagged.
+    if "Flag" in df.columns:
+        df["_is_unflagged"] = (df["Flag"] == "Not flagged").astype(int)
+    else:
+        df["_is_unflagged"] = 1
+
     # Multi-key sort (deterministic tie-breaking)
-    # Priority: Confidence DESC, haplo_count DESC, Depth_Score DESC, POS ASC
-    df = df.sort_values(["_priority", "Depth_Score", "haplo_count", "POS"], ascending=[False, False, False, True])
+    # Priority: Confidence DESC, unflagged DESC, Depth_Score DESC, haplo_count DESC, POS ASC
+    df = df.sort_values(
+        ["_priority", "_is_unflagged", "Depth_Score", "haplo_count", "POS"],
+        ascending=[False, False, False, False, True],
+    )
 
     # Keep only the best variant
-    result = df.head(1).drop(columns=["_priority"])
+    result = df.head(1).drop(columns=["_priority", "_is_unflagged"])
 
     logging.info(
         "Selected best variant: Confidence=%s, haplo_count=%d, Depth_Score=%.5f, POS=%d",
