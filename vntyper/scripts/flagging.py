@@ -207,7 +207,7 @@ def mark_potential_duplicates(
     logging.debug(f"Number of duplicates found: {num_duplicates}")
 
     # Prepare a list for the new flags
-    new_flags = []
+    new_flags: list[list[str]] = []
     for _idx, row in df_copy.iterrows():
         if row["__is_duplicate"]:
             new_flags.append([duplicate_flag_name])
