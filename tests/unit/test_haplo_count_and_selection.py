@@ -378,6 +378,36 @@ class TestFlagDeprioritization:
         assert len(result) == 1
         assert result.iloc[0]["Depth_Score"] == 0.012  # Best Depth_Score among flagged
 
+    def test_all_unflagged_selects_by_depth_score(self):
+        """When Flag column exists but all are 'Not flagged', selection uses Depth_Score."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "High_Precision"],
+                "haplo_count": [200, 100],
+                "Depth_Score": [0.008, 0.012],
+                "POS": [67, 54],
+                "Flag": ["Not flagged", "Not flagged"],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["Depth_Score"] == 0.012
+
+    def test_unexpected_flag_values_treated_as_flagged(self):
+        """Unexpected/missing Flag values are treated as flagged and deprioritized."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "High_Precision"],
+                "haplo_count": [100, 200],
+                "Depth_Score": [0.010, 0.020],
+                "POS": [10, 20],
+                "Flag": ["Not flagged", None],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["Flag"] == "Not flagged"
+
     def test_no_flag_column_treats_all_as_unflagged(self):
         """Without Flag column, all treated as unflagged (backward compatible)."""
         df = pd.DataFrame(
