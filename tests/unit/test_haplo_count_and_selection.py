@@ -156,12 +156,12 @@ class TestSelectSingleBestVariant:
         assert result.iloc[0]["Confidence"] == "High_Precision*"  # Wins on priority
 
     def test_haplo_count_tie_breaker(self):
-        """When Confidence tied, highest haplo_count wins."""
+        """When Confidence and Depth_Score tied, highest haplo_count wins."""
         df = pd.DataFrame(
             {
                 "Confidence": ["High_Precision", "High_Precision", "High_Precision"],
                 "haplo_count": [100, 389, 50],  # Middle has highest
-                "Depth_Score": [0.01, 0.009, 0.011],
+                "Depth_Score": [0.010, 0.010, 0.010],  # All tied
                 "POS": [60, 67, 54],
             }
         )
@@ -259,18 +259,20 @@ class TestSelectSingleBestVariant:
         # High_Precision should win (priority=2 vs 0)
         assert result.iloc[0]["Confidence"] == "High_Precision"
 
-    def test_no_priority_column_in_result(self):
-        """Result should not contain temporary _priority column."""
+    def test_no_internal_columns_in_result(self):
+        """Result should not contain temporary _priority or _is_unflagged columns."""
         df = pd.DataFrame(
             {
                 "Confidence": ["High_Precision", "Low_Precision"],
                 "haplo_count": [100, 50],
                 "Depth_Score": [0.01, 0.005],
                 "POS": [67, 54],
+                "Flag": ["Not flagged", "Low_Depth_Conserved_Motifs"],
             }
         )
         result = select_single_best_variant(df)
         assert "_priority" not in result.columns
+        assert "_is_unflagged" not in result.columns
 
     def test_preserves_all_original_columns(self):
         """Result should preserve all original columns."""
@@ -325,6 +327,98 @@ class TestSelectSingleBestVariant:
         assert result.iloc[0]["ALT"] == "GG"
         assert result.iloc[0]["POS"] == 67
         assert result.iloc[0]["haplo_count"] == 389
+
+
+class TestFlagDeprioritization:
+    """Tests for issue #145: unflagged variants preferred over flagged."""
+
+    def test_unflagged_preferred_same_confidence(self):
+        """Unflagged variant wins over flagged with same confidence, even with lower Depth_Score."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "High_Precision"],
+                "haplo_count": [389, 176],
+                "Depth_Score": [0.010, 0.008],
+                "POS": [67, 54],
+                "Flag": ["Low_Depth_Conserved_Motifs", "Not flagged"],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["POS"] == 54  # Unflagged wins despite lower Depth_Score
+
+    def test_higher_confidence_still_wins_over_unflagged(self):
+        """Higher confidence flagged variant still beats lower confidence unflagged."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision*", "Low_Precision"],
+                "haplo_count": [100, 200],
+                "Depth_Score": [0.010, 0.015],
+                "POS": [67, 54],
+                "Flag": ["Low_Depth_Conserved_Motifs", "Not flagged"],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        # Confidence priority (3) beats unflagged (1 vs 0) at lower priority
+        assert result.iloc[0]["Confidence"] == "High_Precision*"
+
+    def test_all_flagged_selects_best(self):
+        """When all variants are flagged, best by Depth_Score is still selected."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "High_Precision"],
+                "haplo_count": [100, 200],
+                "Depth_Score": [0.012, 0.008],
+                "POS": [67, 54],
+                "Flag": ["Low_Depth_Conserved_Motifs", "False_Positive_4bp_Insertion"],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["Depth_Score"] == 0.012  # Best Depth_Score among flagged
+
+    def test_no_flag_column_treats_all_as_unflagged(self):
+        """Without Flag column, all treated as unflagged (backward compatible)."""
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "High_Precision"],
+                "haplo_count": [100, 200],
+                "Depth_Score": [0.012, 0.008],
+                "POS": [67, 54],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        assert result.iloc[0]["Depth_Score"] == 0.012
+
+    def test_issue_145_scenario(self):
+        """Reproduce the exact scenario from issue #145.
+
+        A flagged High_Precision variant with higher haplo_count was incorrectly
+        selected over an unflagged High_Precision variant with higher Depth_Score.
+        """
+        df = pd.DataFrame(
+            {
+                "Confidence": ["High_Precision", "High_Precision", "High_Precision", "High_Precision"],
+                "haplo_count": [50, 100, 200, 150],
+                "Depth_Score": [0.015, 0.012, 0.008, 0.010],
+                "POS": [54, 60, 67, 70],
+                "REF": ["C", "G", "G", "C"],
+                "ALT": ["GC", "GG", "GG", "CGGCA"],
+                "Flag": [
+                    "Not flagged",
+                    "Not flagged",
+                    "Not flagged",
+                    "False_Positive_4bp_Insertion",
+                ],
+            }
+        )
+        result = select_single_best_variant(df)
+        assert len(result) == 1
+        # POS=54 should win: unflagged + highest Depth_Score among unflagged
+        assert result.iloc[0]["POS"] == 54
+        assert result.iloc[0]["Flag"] == "Not flagged"
 
 
 class TestIntegration:
