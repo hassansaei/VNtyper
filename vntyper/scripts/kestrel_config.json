@@ -46,7 +46,7 @@
     "Low_Depth_Conserved_Motifs": "(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
   },
   "duplicate_flagging": {
-    "enabled": true,
+    "enabled": false,
     "flag_name": "Potential_Duplicate",
     "group_by": ["REF", "ALT"],
     "sort_by": [
