@@ -429,6 +429,9 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
 
     # Mark pass/fail based on original_index
     pass_mask = original_df["original_index"].isin(combined_df.get("original_index", []))
+    # Only set motif_filter_pass=True when also a valid frameshift (so pre-result matrix is consistent)
+    if "is_valid_frameshift" in original_df.columns:
+        pass_mask = pass_mask & original_df["is_valid_frameshift"].fillna(False)
     original_df["motif_filter_pass"] = pass_mask
 
     # Ensure final columns exist in the main DF even for failing rows

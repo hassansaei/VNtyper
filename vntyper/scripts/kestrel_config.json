@@ -37,7 +37,7 @@
     "position_threshold": 60,
     "exclude_motifs_right": ["Q", "8", "9", "7", "6p", "6", "V", "J", "I", "G", "E", "A"],
     "alt_for_motif_right_gg": "GG",
-    "motifs_for_alt_gg": ["X"],
+    "motifs_for_alt_gg": [],
     "exclude_alts_combined": ["CCGCC", "CGGCG", "CGGCC"],
     "exclude_motifs_combined": ["6", "6p", "7"]
   },
