@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean docs-install docs-serve docs-build docs-deploy docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -52,7 +52,7 @@ help:
 	@echo "  make docs-install      - Install documentation dependencies"
 	@echo "  make docs-serve        - Serve docs locally with live reload"
 	@echo "  make docs-build        - Build static documentation site"
-	@echo "  make docs-deploy       - Deploy docs to GitHub Pages"
+	@echo "  make docs-check        - Validate docs build (CI deploys)"
 	@echo "  make docs-clean        - Remove built documentation"
 	@echo ""
 
@@ -256,8 +256,8 @@ docs-build:
 	mkdocs build --strict
 	@echo "$(GREEN)✓ Documentation built in site/$(RESET)"
 
-docs-deploy: docs-build ## Deploy docs (CI handles GitHub Pages; this is for manual use)
-	@echo "$(GREEN)✓ Documentation built. Push to main to trigger GitHub Pages deployment via CI.$(RESET)"
+docs-check: docs-build ## Validate docs build (deployment is handled by CI on push to main)
+	@echo "$(GREEN)✓ Documentation builds cleanly. Push to main to deploy via GitHub Actions.$(RESET)"
 
 docs-clean:
 	@echo "$(BLUE)Cleaning documentation build...$(RESET)"

@@ -1,9 +1,6 @@
 # License
 
-VNtyper 2 is released under the **BSD 3-Clause License** (as specified in the `LICENSE` file).
-
-!!! note
-    The `pyproject.toml` packaging metadata currently declares `license = "MIT"`. The `LICENSE` file in the repository is the authoritative source — the packaging metadata will be corrected in a future release.
+VNtyper 2 is released under the **BSD 3-Clause License**.
 
 ```text
 BSD 3-Clause License

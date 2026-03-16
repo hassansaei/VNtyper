@@ -130,22 +130,17 @@ When you're ready to contribute code:
 
 We follow the **PEP 8** style guide with some project-specific conventions.
 
-- **Use `black`** for code formatting:
+- **Format and lint** with `ruff`:
 
   ```bash
-  black vntyper/
+  make format    # Auto-format and apply fixes
+  make lint      # Check for issues
   ```
 
-- **Lint Your Code** with `flake8`:
+- **Type Checking** with `mypy`:
 
   ```bash
-  flake8 vntyper/
-  ```
-
-- **Type Checking** with `mypy` (if applicable):
-
-  ```bash
-  mypy vntyper/
+  make type-check
   ```
 
 ### Commit Messages
