@@ -56,7 +56,7 @@ adVNTR genotyping typically requires approximately 9 minutes per sample, signifi
 
 ### Overview
 
-[SHARK](https://github.com/AlgoLab/shark) is a rapid read extraction tool that identifies reads likely originating from a target region using k-mer matching against a reference sequence. It operates directly on FASTQ files without requiring alignment.
+The SHARK module in VNtyper is a re-implementation of the SHARK concept for MUC1-targeted read extraction. The original SHARK article (Denti et al., *Bioinformatics* 2021) does not provide a publicly available code repository. VNtyper's SHARK implementation identifies reads likely originating from the MUC1 region using k-mer matching against a reference sequence, operating directly on FASTQ files without requiring alignment.
 
 ### When to Use SHARK
 

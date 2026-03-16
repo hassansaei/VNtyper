@@ -45,3 +45,9 @@ VNtyper relies on the Kestrel variant caller for its mapping-free k-mer-based ge
 If you use the adVNTR module, please also cite:
 
 > Park J, Bakhtiari M, Popp B, et al. Detecting tandem repeat variants in coding regions using code-adVNTR. *iScience*. 2022;25(8):104785. doi:[10.1016/j.isci.2022.104785](https://doi.org/10.1016/j.isci.2022.104785)
+
+## SHARK (optional module)
+
+The SHARK module in VNtyper is a re-implementation of the SHARK concept. If you use it, please cite the original method:
+
+> Denti L, Pirola Y, Monti M, et al. SHARK: Fishing relevant reads in an RNA-Seq sample. *Bioinformatics*. 2021;37(4):464--472. doi:[10.1093/bioinformatics/btaa779](https://doi.org/10.1093/bioinformatics/btaa779)
