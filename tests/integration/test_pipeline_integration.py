@@ -531,7 +531,13 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Define local CLI runner (matches Docker runner signature)
-    def local_runner(bam_file: Path, reference: str, output_dir: Path, extra_modules: list[str]) -> int:
+    def local_runner(
+        bam_file: Path,
+        reference: str,
+        output_dir: Path,
+        extra_modules: list[str],
+        extra_cli_options: list[str],
+    ) -> int:
         """Execute vntyper CLI locally via subprocess."""
         command = [
             "vntyper",
@@ -548,9 +554,12 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
             str(output_dir),
         ]
 
-        # Add extra modules from cli_options
+        # Add extra modules
         if extra_modules:
             command.extend(["--extra-modules", ",".join(extra_modules)])
+
+        # Add remaining CLI options (e.g. --fast-mode, --advntr-max-coverage)
+        command.extend(extra_cli_options)
 
         logger.info("Command to execute: %s", " ".join(command))
         result = subprocess.run(command, capture_output=True, text=True)

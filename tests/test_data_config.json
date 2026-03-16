@@ -911,13 +911,13 @@
         "advntr_assertions": {
           "VID": "25561",
           "State": "I22_2_G_LEN1",
-          "NumberOfSupportingReads": 58,
+          "NumberOfSupportingReads": 11,
           "MeanCoverage": {
-            "value": 625.018055556,
+            "value": 153.986111111,
             "tolerance_percentage": 10
           },
           "Pvalue": {
-            "value": 2.36023054475e-36,
+            "value": 6.78296229901e-07,
             "log10_tolerance": 2
           }
         }
