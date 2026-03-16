@@ -40,7 +40,7 @@ This is the primary output file. Each row represents a genotyped variant.
 | Column | Description |
 |--------|-------------|
 | `Motif` | MUC1 repeat motif identifier (e.g., `1`, `2`, `3`) |
-| `Variant` | Variant type (`insertion` or `deletion`) |
+| `Variant` | Variant type (`Insertion` or `Deletion`) |
 | `POS` | Position within the MUC1 reference sequence |
 | `REF` | Reference allele |
 | `ALT` | Alternate allele |

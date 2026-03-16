@@ -32,4 +32,4 @@ Before opening a new issue, search the existing issues to see if your question h
 
 ## How to Cite
 
-If you use VNtyper in your research, please cite the original publication. See the [Citation](citation.md) page for full details and BibTeX entries.
+If you use VNtyper 2 in your research, please cite the original publication. See the [Citation](citation.md) page for full details and BibTeX entries.

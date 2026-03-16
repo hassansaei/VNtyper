@@ -29,4 +29,4 @@ A complete rewrite and modernization of the VNtyper 2 pipeline.
 
 ## 1.x
 
-The original VNtyper 2 release as described in Saei et al., *iScience* 2023. This version provided the initial alignment-free genotyping approach for MUC1 VNTR using Kestrel and adVNTR.
+The original VNtyper release as described in Saei et al., *iScience* 2023. This version provided the initial alignment-free genotyping approach for MUC1 VNTR using Kestrel and adVNTR.

@@ -42,7 +42,7 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 
 !!! note "SHARK module requires FASTQ input"
     The SHARK filtering module (`--extra-modules shark`) only works with FASTQ input.
-    Attempting to use SHARK with BAM or CRAM input will cause VNtyper 2 to exit with an error.
+    With BAM or CRAM input, the SHARK module is silently skipped even if specified.
 
 ## Input Validation
 

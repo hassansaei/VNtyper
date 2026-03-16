@@ -9,7 +9,7 @@ If you use VNtyper 2 in your research, please cite the following publications.
 ### BibTeX
 
     @article{saei2023vntyper,
-      title={VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing},
+      title={VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data},
       author={Saei, Hassan and others},
       journal={iScience},
       volume={26},

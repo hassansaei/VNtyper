@@ -48,7 +48,7 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 ## Quick Install
 
 ```bash
-pip install vntyper
+pip install git+https://github.com/hassansaei/VNtyper.git
 vntyper install-references -d ./references
 vntyper pipeline --bam sample.bam -o results/
 ```

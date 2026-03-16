@@ -19,10 +19,10 @@ VNtyper 2 requires the following to be installed on your system:
 
 === "pip"
 
-    Install the latest release from PyPI:
+    Install directly from GitHub:
 
     ```bash
-    pip install vntyper
+    pip install git+https://github.com/hassansaei/VNtyper.git
     ```
 
 === "From Source"

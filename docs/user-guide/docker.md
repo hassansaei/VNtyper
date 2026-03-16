@@ -89,7 +89,7 @@ Submit a job:
 
 ```bash
 curl -X POST "http://localhost:8000/run-job/" \
-    -F "bam_file=@sample.bam" \
+    -F "file=@sample.bam" \
     -F "thread=4" \
     -F "reference_assembly=hg38" \
     -F "fast_mode=true" \
