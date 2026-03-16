@@ -256,10 +256,8 @@ docs-build:
 	mkdocs build --strict
 	@echo "$(GREEN)✓ Documentation built in site/$(RESET)"
 
-docs-deploy:
-	@echo "$(BLUE)Deploying documentation to GitHub Pages...$(RESET)"
-	mkdocs gh-deploy --force
-	@echo "$(GREEN)✓ Documentation deployed$(RESET)"
+docs-deploy: docs-build ## Deploy docs (CI handles GitHub Pages; this is for manual use)
+	@echo "$(GREEN)✓ Documentation built. Push to main to trigger GitHub Pages deployment via CI.$(RESET)"
 
 docs-clean:
 	@echo "$(BLUE)Cleaning documentation build...$(RESET)"
