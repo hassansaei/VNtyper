@@ -35,7 +35,7 @@ Handles BAM/CRAM region extraction (MUC1 locus), FASTQ quality control via fastp
 
 ### [Kestrel Genotyping](kestrel.md)
 
-The core genotyping engine. Kestrel performs mapping-free, k-mer-based variant calling against the MUC1 VNTR reference. The postprocessing pipeline filters, scores, and annotates variants through nine distinct steps. This is the most critical component of VNtyper.
+The core genotyping engine. Kestrel performs mapping-free, k-mer-based variant calling against the MUC1 VNTR reference. The postprocessing pipeline filters, scores, and annotates variants through nine distinct steps. This is the most critical component of VNtyper 2.
 
 ### [Scoring and Confidence Assignment](scoring-and-confidence.md)
 

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to VNtyper are documented on this page.
+All notable changes to VNtyper 2 are documented on this page.
 
 ## 2.0.1 (Current)
 
@@ -15,7 +15,7 @@ All notable changes to VNtyper are documented on this page.
 
 ## 2.0.0
 
-A complete rewrite and modernization of the VNtyper pipeline.
+A complete rewrite and modernization of the VNtyper 2 pipeline.
 
 - **Modern Python packaging** using `pyproject.toml` (PEP 517/518/621).
 - **Refactored Kestrel postprocessing** with configurable thresholds via `kestrel_config.json`.
@@ -29,4 +29,4 @@ A complete rewrite and modernization of the VNtyper pipeline.
 
 ## 1.x
 
-The original VNtyper release as described in Saei et al., *iScience* 2023. This version provided the initial alignment-free genotyping approach for MUC1 VNTR using Kestrel and adVNTR.
+The original VNtyper 2 release as described in Saei et al., *iScience* 2023. This version provided the initial alignment-free genotyping approach for MUC1 VNTR using Kestrel and adVNTR.

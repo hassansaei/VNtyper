@@ -1,6 +1,6 @@
 # Snakemake Batch Processing
 
-VNtyper includes a Snakemake workflow for processing multiple BAM files in parallel, with support for cluster execution.
+VNtyper 2 includes a Snakemake workflow for processing multiple BAM files in parallel, with support for cluster execution.
 
 ## Setup
 
@@ -59,9 +59,9 @@ These are set in the `run_vntyper_pipeline` rule and can be adjusted by editing 
 The workflow runs one rule per BAM file:
 
 ```bash
-vntyper pipeline --bam {input.bam} --threads 8 --reference-assembly hg38 \
-    --fast-mode --keep-intermediates -o results/{sample}/ \
-    --config-path vntyper/config.json
+vntyper --config-path vntyper/config.json pipeline \
+    --bam {input.bam} --threads 8 --reference-assembly hg38 \
+    --fast-mode --keep-intermediates -o results/{sample}/
 ```
 
 !!! tip "Customizing the Pipeline Command"

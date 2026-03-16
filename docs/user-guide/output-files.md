@@ -9,7 +9,7 @@ results/
 ├── pipeline_summary.tsv         # Optional (--summary-formats tsv)
 ├── pipeline.log                 # Pipeline execution log
 ├── summary_report.html          # HTML report with IGV visualization
-├── predefined_regions_hg19.bed  # Region BED file used for extraction
+├── predefined_regions_<assembly>.bed  # Region BED file (e.g., hg19, hg38)
 ├── kestrel/
 │   ├── kestrel_result.tsv       # Final genotyping result
 │   ├── kestrel_pre_result.tsv   # Pre-filter variants (all candidates)

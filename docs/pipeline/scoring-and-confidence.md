@@ -1,6 +1,6 @@
 # Scoring and Confidence Assignment
 
-VNtyper uses two complementary scoring systems to evaluate variant calls: the **frame score** (biological validity) and the **depth score** (signal strength). Together, these determine the confidence label assigned to each variant.
+VNtyper 2 uses two complementary scoring systems to evaluate variant calls: the **frame score** (biological validity) and the **depth score** (signal strength). Together, these determine the confidence label assigned to each variant.
 
 ## Frame Score
 

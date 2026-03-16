@@ -1,6 +1,6 @@
 # Input Processing
 
-VNtyper accepts three input formats: aligned BAM files, aligned CRAM files, or paired-end FASTQ files. Each format follows a distinct preprocessing path before entering the genotyping stage.
+VNtyper 2 accepts three input formats: aligned BAM files, aligned CRAM files, or paired-end FASTQ files. Each format follows a distinct preprocessing path before entering the genotyping stage.
 
 ## BAM/CRAM Region Extraction
 
@@ -61,4 +61,4 @@ For BAM/CRAM input, the pipeline parses the header (`@SQ` and `@PG` lines) to ex
 - **Alignment pipeline** -- identified as BWA, Dragen, CLC, or Unknown
 
 !!! warning "Dragen and CLC aligners"
-    The Dragen pipeline has known issues aligning reads in the MUC1 VNTR region. CLC has not been extensively tested. VNtyper recommends BWA-aligned input for optimal results. When a non-BWA aligner is detected, the report includes a warning.
+    The Dragen pipeline has known issues aligning reads in the MUC1 VNTR region. CLC has not been extensively tested. VNtyper 2 recommends BWA-aligned input for optimal results. When a non-BWA aligner is detected, the report includes a warning.

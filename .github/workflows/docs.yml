@@ -30,7 +30,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install "mkdocs-material>=9.5" "pymdown-extensions>=10.0" "mkdocs-minify-plugin>=0.8"
+        run: pip install ".[docs]"
 
       - name: Build documentation
         run: mkdocs build --strict

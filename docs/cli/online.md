@@ -1,6 +1,6 @@
 # online
 
-Subset a BAM file and submit it to an online VNtyper instance (vntyper.org) for analysis, then poll for completion and download results.
+Subset a BAM file and submit it to an online VNtyper 2 instance (vntyper.org) for analysis, then poll for completion and download results.
 
 ## Synopsis
 

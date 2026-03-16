@@ -1,6 +1,6 @@
 # Online Mode
 
-The `online` subcommand submits a BAM file to [vntyper.org](https://vntyper.org) for cloud-based analysis. VNtyper automatically subsets your BAM to the MUC1 region before uploading, so only a small file is transferred.
+The `online` subcommand submits a BAM file to [vntyper.org](https://vntyper.org) for cloud-based analysis. VNtyper 2 automatically subsets your BAM to the MUC1 region before uploading, so only a small file is transferred.
 
 ## Basic Usage
 

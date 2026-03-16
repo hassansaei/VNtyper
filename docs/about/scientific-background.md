@@ -16,9 +16,9 @@ Autosomal Dominant Tubulointerstitial Kidney Disease caused by *MUC1* mutations 
 
 Standard short-read aligners (BWA, Bowtie2) rely on unique mapping positions. Within the highly repetitive VNTR, reads map ambiguously to multiple repeat units, resulting in poor alignment quality and unreliable variant calls. This causes pathogenic frameshift mutations to be routinely missed by conventional variant-calling pipelines (Saei et al., *iScience* 2023).
 
-## VNtyper's Approach
+## VNtyper 2's Approach
 
-VNtyper uses the Kestrel variant caller (Audano et al., *Bioinformatics* 2018), which reconstructs local haplotypes directly from k-mer frequency spectra instead of aligning reads to a reference. This bypasses the alignment bias inherent in repetitive regions. VNtyper further refines raw Kestrel calls with empirical scoring thresholds, depth-based confidence classification, and optional cross-validation via the alignment-based adVNTR tool (Park et al., *iScience* 2022).
+VNtyper 2 uses the Kestrel variant caller (Audano et al., *Bioinformatics* 2018), which reconstructs local haplotypes directly from k-mer frequency spectra instead of aligning reads to a reference. This bypasses the alignment bias inherent in repetitive regions. VNtyper 2 further refines raw Kestrel calls with empirical scoring thresholds, depth-based confidence classification, and optional cross-validation via the alignment-based adVNTR tool (Park et al., *iScience* 2022).
 
 !!! info "Key References"
     - Saei H et al. *iScience* 26, 107171 (2023) — VNtyper method and validation

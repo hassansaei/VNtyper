@@ -1,6 +1,6 @@
 # Input Formats
 
-VNtyper accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly one input type per run.
+VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly one input type per run.
 
 === "BAM"
 
@@ -12,7 +12,7 @@ VNtyper accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly o
 
     - Sorted and indexed (`.bam.bai` or `.bai` must exist alongside the BAM)
     - Aligned to a [supported reference assembly](reference-assemblies.md)
-    - VNtyper validates the file with `samtools quickcheck` before processing
+    - VNtyper 2 validates the file with `samtools quickcheck` before processing
 
 === "CRAM"
 
@@ -37,16 +37,16 @@ VNtyper accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly o
 
     - Paired-end reads: both `--fastq1` and `--fastq2` are required
     - Gzipped (`.fastq.gz`) or uncompressed (`.fastq`) accepted
-    - VNtyper validates FASTQ format (checks first 4 lines for correct structure)
+    - VNtyper 2 validates FASTQ format (checks first 4 lines for correct structure)
     - Reads are processed through fastp for quality control, then aligned with BWA
 
 !!! note "SHARK module requires FASTQ input"
     The SHARK filtering module (`--extra-modules shark`) only works with FASTQ input.
-    Attempting to use SHARK with BAM or CRAM input will cause VNtyper to exit with an error.
+    Attempting to use SHARK with BAM or CRAM input will cause VNtyper 2 to exit with an error.
 
 ## Input Validation
 
-VNtyper performs automatic validation before starting the pipeline:
+VNtyper 2 performs automatic validation before starting the pipeline:
 
 | Input Type | Validation Method |
 |------------|-------------------|

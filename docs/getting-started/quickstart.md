@@ -1,14 +1,14 @@
 # Quick Start
 
-Run your first VNtyper analysis in 5 minutes.
+Run your first VNtyper 2 analysis in 5 minutes.
 
-## 1. Install VNtyper
+## 1. Install VNtyper 2
 
-Follow the [Installation guide](installation.md) to install VNtyper and its dependencies.
+Follow the [Installation guide](installation.md) to install VNtyper 2 and its dependencies.
 
 ## 2. Download Reference Files
 
-VNtyper needs reference sequences and motif databases before it can run. Download them to a local directory:
+VNtyper 2 needs reference sequences and motif databases before it can run. Download them to a local directory:
 
 ```bash
 vntyper install-references -d ./references
@@ -29,7 +29,7 @@ vntyper pipeline \
 ```
 
 !!! tip "Don't have a BAM file?"
-    Download the VNtyper test dataset (~1.1 GB) to try it out:
+    Download the VNtyper 2 test dataset (~1.1 GB) to try it out:
 
     ```bash
     make download-test-data
@@ -88,4 +88,4 @@ Open the generated HTML file in your browser to review:
 ## What's Next?
 
 - **[Reference Setup](reference-setup.md)** --- Configure references for different genome assemblies
-- **[User Guide](../index.md)** --- Explore advanced pipeline options, optional modules (adVNTR, SHARK), and Docker usage
+- **[User Guide](../user-guide/index.md)** --- Explore advanced pipeline options, optional modules (adVNTR, SHARK), and Docker usage

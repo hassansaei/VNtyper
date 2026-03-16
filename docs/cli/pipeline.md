@@ -1,6 +1,6 @@
 # pipeline
 
-Run the full VNtyper genotyping pipeline.
+Run the full VNtyper 2 genotyping pipeline.
 
 ## Synopsis
 

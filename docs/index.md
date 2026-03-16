@@ -8,7 +8,7 @@ hide:
 
 **Genotype MUC1 coding VNTRs for ADTKD-MUC1 diagnosis using short-read sequencing.**
 
-VNtyper is a bioinformatics pipeline that detects frameshift mutations in the MUC1
+VNtyper 2 is a bioinformatics pipeline that detects frameshift mutations in the MUC1
 Variable Number Tandem Repeat (VNTR) region — the genetic cause of Autosomal Dominant
 Tubulointerstitial Kidney Disease (ADTKD-MUC1). It combines mapping-free k-mer
 genotyping (Kestrel) with optional Profile-HMM validation (adVNTR) to deliver

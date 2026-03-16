@@ -1,6 +1,6 @@
 # Report Generation
 
-VNtyper produces two types of reports: a per-sample HTML summary report with embedded IGV visualization, and an optional multi-sample cohort summary report with aggregated statistics.
+VNtyper 2 produces two types of reports: a per-sample HTML summary report with embedded IGV visualization, and an optional multi-sample cohort summary report with aggregated statistics.
 
 ## Sample Report
 
@@ -73,11 +73,11 @@ The cohort summary module (`cohort_summary.py`) aggregates results from multiple
 - **Donut charts** -- interactive Plotly visualizations showing the distribution of results (positive/negative/low precision) across the cohort
 - **Coverage statistics** -- per-sample VNTR coverage metrics
 - **Runtime statistics** -- pipeline execution times
-- **Version and assembly tracking** -- VNtyper versions and detected reference assemblies
+- **Version and assembly tracking** -- VNtyper 2 versions and detected reference assemblies
 
 ### Pseudonymization
 
-The cohort report supports sample pseudonymization by hashing sample identifiers, allowing sharing of aggregated results without exposing patient identifiers. This is implemented using SHA-256 hashing of the original sample names.
+The cohort report supports sample pseudonymization by hashing sample identifiers, allowing sharing of aggregated results without exposing patient identifiers. Each sample name is replaced with a prefix (default `sample_`) followed by the first 5 characters of its MD5 hash.
 
 ### Report Configuration
 

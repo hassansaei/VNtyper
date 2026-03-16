@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-VNtyper requires the following to be installed on your system:
+VNtyper 2 requires the following to be installed on your system:
 
 | Dependency   | Minimum Version | Purpose                          |
 |-------------|-----------------|----------------------------------|
@@ -15,7 +15,7 @@ VNtyper requires the following to be installed on your system:
 !!! warning "External tools required"
     External tools (BWA, samtools, fastp, Java 11) must be installed separately when using pip or source installation. The Docker image includes all dependencies.
 
-## Install VNtyper
+## Install VNtyper 2
 
 === "pip"
 
@@ -47,7 +47,7 @@ VNtyper requires the following to be installed on your system:
     conda env create -f conda/environment_vntyper.yml
     conda activate vntyper
 
-    # Install VNtyper into the environment
+    # Install VNtyper 2 into the environment
     pip install -e .
     ```
 
@@ -80,7 +80,7 @@ VNtyper requires the following to be installed on your system:
 
 ## Verify Installation
 
-Confirm VNtyper is installed correctly:
+Confirm VNtyper 2 is installed correctly:
 
 ```bash
 vntyper --version

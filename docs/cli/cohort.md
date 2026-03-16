@@ -30,8 +30,8 @@ One of `-i/--input-dirs` or `--input-file` is required.
 
 The `--pseudonymize-samples` flag supports two modes:
 
-- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, producing names like `sample_1`, `sample_2`, etc.
-- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, producing names like `patient_1`, `patient_2`, etc.
+- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, producing names like `sample_a3f8c`, `sample_1b2d0` (prefix + first 5 characters of the MD5 hash of the original sample name).
+- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, producing names like `patient_a3f8c`, `patient_1b2d0`.
 
 ## Examples
 

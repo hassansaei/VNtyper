@@ -1,6 +1,6 @@
 # install-references
 
-Download and set up the reference files required by VNtyper.
+Download and set up the reference files required by VNtyper 2.
 
 ## Synopsis
 

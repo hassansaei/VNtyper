@@ -1,10 +1,10 @@
 # CLI Reference
 
-Overview of VNtyper's command-line interface.
+Overview of VNtyper 2's command-line interface.
 
 **Usage:** `vntyper [global-options] <command> [command-options]`
 
-Global options can be placed before or after the subcommand.
+Global options must be placed **before** the subcommand.
 
 ## Global Options
 

@@ -6,7 +6,7 @@ A minimum of approximately **100x coverage** over the MUC1 VNTR region is recomm
 
 ## BAM vs FASTQ -- which is faster?
 
-**BAM input is faster.** When you provide a BAM or CRAM file, VNtyper extracts only the reads overlapping the MUC1 region before processing. Starting from FASTQ files requires an additional alignment step, which adds runtime.
+**BAM input is faster.** When you provide a BAM or CRAM file, VNtyper 2 extracts only the reads overlapping the MUC1 region before processing. Starting from FASTQ files requires an additional alignment step, which adds runtime.
 
 ## Do I need adVNTR?
 
@@ -18,7 +18,7 @@ A variant classified as **Low_Precision** (also called Low Confidence) was detec
 
 ## Can I use GRCh38?
 
-Yes. VNtyper supports both UCSC and NCBI naming conventions. Use the `--reference-assembly` flag with any of the following values:
+Yes. VNtyper 2 supports both UCSC and NCBI naming conventions. Use the `--reference-assembly` flag with any of the following values:
 
 - `hg19` or `GRCh37`
 - `hg38` or `GRCh38`
@@ -52,7 +52,7 @@ vntyper pipeline --fastq1 R1.fastq.gz --fastq2 R2.fastq.gz \
 
 There are two approaches:
 
-1. **Cohort command** -- VNtyper's built-in `cohort` subcommand processes a directory of samples and produces an aggregated summary. See [Cohort Analysis](../user-guide/cohort-analysis.md).
+1. **Cohort command** -- VNtyper 2's built-in `cohort` subcommand processes a directory of samples and produces an aggregated summary. See [Cohort Analysis](../user-guide/cohort-analysis.md).
 2. **Snakemake workflow** -- For large-scale batch processing with parallelization and cluster support, use the provided Snakemake workflow. See [Snakemake](../user-guide/snakemake.md).
 
 ## Where can I get help?

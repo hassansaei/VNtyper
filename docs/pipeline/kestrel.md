@@ -1,6 +1,6 @@
 # Kestrel Genotyping
 
-Kestrel is the primary genotyping engine in VNtyper. It performs mapping-free, k-mer-based variant calling against a MUC1 VNTR reference sequence. The postprocessing pipeline that follows is the most complex and critical component of VNtyper.
+Kestrel is the primary genotyping engine in VNtyper 2. It performs mapping-free, k-mer-based variant calling against a MUC1 VNTR reference sequence. The postprocessing pipeline that follows is the most complex and critical component of VNtyper 2.
 
 ## Why Mapping-Free Genotyping?
 
@@ -37,7 +37,7 @@ Kestrel produces a VCF file with all detected variants and a SAM file of haploty
 
 ## Postprocessing Pipeline
 
-After Kestrel produces its raw VCF, VNtyper applies a nine-step postprocessing pipeline to filter, score, and annotate variants.
+After Kestrel produces its raw VCF, VNtyper 2 applies a nine-step postprocessing pipeline to filter, score, and annotate variants.
 
 ```mermaid
 flowchart TD
@@ -84,7 +84,7 @@ Variants are filtered based on specific ALT allele patterns. Known artifact sequ
 Each variant is annotated with its MUC1 repeat unit motif identity. The MUC1 VNTR consists of ~30-90 tandemly repeated units of approximately 60 bp each, designated by motif identifiers (e.g., X, Y, Z, 1, 2, 3, Q).
 
 !!! info "MUC1 VNTR motif structure"
-    The VNTR reference used by Kestrel encodes junctions between adjacent repeat units as separate "chromosomes" in the FASTA, named as `MotifLeft-MotifRight` (e.g., `X-Y`). A variant at position < 60 falls in the first repeat unit's body and is annotated with the **right** motif name from the pair; a variant at position >= 60 falls in the second repeat unit and is annotated with the **left** motif name. This junction-based naming convention allows VNtyper to map each variant to its specific repeat unit context.
+    The VNTR reference used by Kestrel encodes junctions between adjacent repeat units as separate "chromosomes" in the FASTA, named as `MotifLeft-MotifRight` (e.g., `X-Y`). A variant at position < 60 falls in the first repeat unit's body and is annotated with the **right** motif name from the pair; a variant at position >= 60 falls in the second repeat unit and is annotated with the **left** motif name. This junction-based naming convention allows VNtyper 2 to map each variant to its specific repeat unit context.
 
 Position-based filtering removes conserved motifs (Q, 8, 9, 7, 6p, 6, V, J, I, G, E, A) that rarely vary and are likely artifacts when called.
 
@@ -112,7 +112,7 @@ Only variants where **all** applicable filters are `True` are retained. From the
 
 ### Step 9: Output Generation
 
-The final result is written to `kestrel_result.tsv` with metadata headers (VNtyper version, analysis date, reference file). A BED file (`output.bed`) is generated from the variant position for IGV visualization. An unfiltered pre-result file (`kestrel_pre_result.tsv`) is also saved for debugging.
+The final result is written to `kestrel_result.tsv` with metadata headers (VNtyper 2 version, analysis date, reference file). A BED file (`output.bed`) is generated from the variant position for IGV visualization. An unfiltered pre-result file (`kestrel_pre_result.tsv`) is also saved for debugging.
 
 ## Reference
 

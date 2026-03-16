@@ -1,6 +1,6 @@
 # Docker
 
-VNtyper provides pre-built Docker images with all dependencies included.
+VNtyper 2 provides pre-built Docker images with all dependencies included.
 
 ## Pull Pre-built Images
 

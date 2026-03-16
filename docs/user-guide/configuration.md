@@ -1,6 +1,6 @@
 # Configuration
 
-VNtyper uses two configuration files. To override the default configuration:
+VNtyper 2 uses two configuration files. To override the default configuration:
 
 ```bash
 vntyper --config-path /path/to/custom/config.json pipeline --bam sample.bam -o results/

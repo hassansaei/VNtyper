@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for considering contributing to VNtyper. Your contributions help improve the tool for the entire ADTKD-MUC1 research community. This page explains how to report issues, suggest features, set up a development environment, and submit changes.
+Thank you for considering contributing to VNtyper 2. Your contributions help improve the tool for the entire ADTKD-MUC1 research community. This page explains how to report issues, suggest features, set up a development environment, and submit changes.
 
 ## Reporting Bugs
 
@@ -39,7 +39,7 @@ Feature ideas are welcome. Open a [new issue](https://github.com/hassansaei/VNty
     cd VNtyper
     ```
 
-2. Install VNtyper in editable mode with development dependencies:
+2. Install VNtyper 2 in editable mode with development dependencies:
 
     ```bash
     pip install -e ".[dev]"
@@ -56,7 +56,7 @@ Feature ideas are welcome. Open a [new issue](https://github.com/hassansaei/VNty
 
 ## Code Quality
 
-VNtyper uses **Ruff** for linting and formatting, and **mypy** for static type checking. The following Makefile targets are available:
+VNtyper 2 uses **Ruff** for linting and formatting, and **mypy** for static type checking. The following Makefile targets are available:
 
 | Command              | Purpose                                    |
 |----------------------|--------------------------------------------|
@@ -86,7 +86,7 @@ make test-cov
 
 ## Commit Conventions
 
-VNtyper follows the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification. Each commit message should have the form:
+VNtyper 2 follows the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification. Each commit message should have the form:
 
 ```
 type(scope): subject

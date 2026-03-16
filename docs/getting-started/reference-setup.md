@@ -1,6 +1,6 @@
 # Reference Setup
 
-VNtyper requires reference files before running the pipeline. The `install-references` command downloads and prepares everything automatically.
+VNtyper 2 requires reference files before running the pipeline. The `install-references` command downloads and prepares everything automatically.
 
 ## What Gets Downloaded
 
@@ -88,4 +88,4 @@ references/
 Expect approximately 2 GB of disk space for the default installation (hg19 + hg38 references with BWA indices). Adding NCBI or Ensembl references increases this proportionally.
 
 !!! note "MD5 verification"
-    VNtyper automatically generates MD5 checksums for all downloaded files, writing them to `md5_checksums.txt` in the output directory. Check `install_references.log` for detailed installation progress.
+    VNtyper 2 automatically generates MD5 checksums for all downloaded files, writing them to `md5_checksums.txt` in the output directory. Check `install_references.log` for detailed installation progress.

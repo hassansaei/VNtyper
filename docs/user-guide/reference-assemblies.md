@@ -1,6 +1,6 @@
 # Reference Assemblies
 
-VNtyper supports multiple reference genome assemblies with automatic chromosome naming detection.
+VNtyper 2 supports multiple reference genome assemblies with automatic chromosome naming detection.
 
 ## Supported Assemblies
 
@@ -28,7 +28,7 @@ The BAM extraction region is wider to capture flanking reads. The VNTR region is
 
 ## Auto-Detection from BAM Headers
 
-When processing BAM or CRAM input, VNtyper detects the chromosome naming convention from the file header and constructs the correct region string automatically. For example, a BAM aligned to an Ensembl reference (chromosomes named `1`, `2`, ...) with `--reference-assembly hg19` will produce the region `1:155158000-155163000`.
+When processing BAM or CRAM input, VNtyper 2 detects the chromosome naming convention from the file header and constructs the correct region string automatically. For example, a BAM aligned to an Ensembl reference (chromosomes named `1`, `2`, ...) with `--reference-assembly hg19` will produce the region `1:155158000-155163000`.
 
 ## When to Use `--reference-assembly`
 
@@ -38,7 +38,7 @@ vntyper pipeline --bam sample.bam -o results/ --reference-assembly hg38
 
 Specify this option when:
 
-- Your BAM is aligned to **hg38/GRCh38** (VNtyper defaults to hg19)
+- Your BAM is aligned to **hg38/GRCh38** (VNtyper 2 defaults to hg19)
 - You want to explicitly select the chromosome naming convention (e.g., `hg19_ensembl` for Ensembl-style names)
 - You are using FASTQ input (no BAM header available for auto-detection)
 

@@ -1,6 +1,6 @@
 # Cohort Analysis
 
-The `cohort` subcommand aggregates results from multiple VNtyper pipeline runs into a single summary report with visualizations.
+The `cohort` subcommand aggregates results from multiple VNtyper 2 pipeline runs into a single summary report with visualizations.
 
 ## Basic Usage
 
@@ -22,7 +22,7 @@ This scans each directory for `pipeline_summary.json`, extracts Kestrel and adVN
     vntyper cohort -i results/sample1/ results/sample2/ -o cohort_output/
     ```
 
-    VNtyper searches recursively for `pipeline_summary.json` in each directory.
+    VNtyper 2 searches recursively for `pipeline_summary.json` in each directory.
 
 === "Input file"
 

@@ -1,10 +1,10 @@
-# About VNtyper
+# About VNtyper 2
 
-VNtyper is a bioinformatics pipeline for genotyping MUC1 coding Variable Number Tandem Repeats (VNTRs) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using short-read sequencing data.
+VNtyper 2 is a bioinformatics pipeline for genotyping MUC1 coding Variable Number Tandem Repeats (VNTRs) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using short-read sequencing data.
 
 ## Project
 
-VNtyper was created by **Hassan Saei** and **Bernt Popp** to address the challenge of detecting pathogenic frameshift mutations within the highly repetitive MUC1 VNTR region, where conventional variant-calling pipelines struggle.
+VNtyper 2 was created by **Hassan Saei** and **Bernt Popp** to address the challenge of detecting pathogenic frameshift mutations within the highly repetitive MUC1 VNTR region, where conventional variant-calling pipelines struggle.
 
 The tool combines mapping-free k-mer analysis (Kestrel) with optional alignment-based methods (adVNTR) to provide accurate and reproducible genotyping from standard whole-genome or whole-exome sequencing data.
 

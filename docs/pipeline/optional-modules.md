@@ -1,6 +1,6 @@
 # Optional Modules
 
-VNtyper supports two optional modules that complement the core Kestrel genotyping: **adVNTR** for independent validation using a different algorithmic approach, and **SHARK** for rapid read extraction from large FASTQ datasets.
+VNtyper 2 supports two optional modules that complement the core Kestrel genotyping: **adVNTR** for independent validation using a different algorithmic approach, and **SHARK** for rapid read extraction from large FASTQ datasets.
 
 ## adVNTR
 
@@ -40,7 +40,7 @@ Variants are annotated with repeat unit (RU) identity, position, REF, and ALT us
 
 ### Cross-Matching
 
-When both Kestrel and adVNTR results are available, VNtyper performs a cross-match comparison. For each pair of variants (one from each caller), the pipeline:
+When both Kestrel and adVNTR results are available, VNtyper 2 performs a cross-match comparison. For each pair of variants (one from each caller), the pipeline:
 
 1. Determines variant type (Insertion, Deletion, or Other) based on REF/ALT lengths
 2. Computes the **allele change** -- the net inserted or deleted sequence after removing the shared prefix
@@ -50,13 +50,13 @@ The cross-match result (`cross_match_results.tsv`) records all pairwise comparis
 
 ### Runtime
 
-adVNTR genotyping typically requires approximately 9 minutes per sample, significantly longer than Kestrel. Optional BAM downsampling (`--max-coverage`) can reduce runtime for high-coverage samples.
+adVNTR genotyping typically requires approximately 9 minutes per sample, significantly longer than Kestrel. Optional BAM downsampling (`--advntr-max-coverage`) can reduce runtime for high-coverage samples.
 
 ## SHARK
 
 ### Overview
 
-The SHARK module in VNtyper is a re-implementation of the SHARK concept for MUC1-targeted read extraction. The original SHARK article (Denti et al., *Bioinformatics* 2021) does not provide a publicly available code repository. VNtyper's SHARK implementation identifies reads likely originating from the MUC1 region using k-mer matching against a reference sequence, operating directly on FASTQ files without requiring alignment.
+The SHARK module in VNtyper 2 is a re-implementation of the SHARK concept for MUC1-targeted read extraction. The original SHARK article (Denti et al., *Bioinformatics* 2021) does not provide a publicly available code repository. VNtyper 2's SHARK implementation identifies reads likely originating from the MUC1 region using k-mer matching against a reference sequence, operating directly on FASTQ files without requiring alignment.
 
 ### When to Use SHARK
 
