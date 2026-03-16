@@ -52,12 +52,18 @@ dev = [
     "mypy>=1.0.0",
     "types-requests>=2.0.0",
 ]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5,<10",
+    "pymdown-extensions>=10.0",
+    "mkdocs-minify-plugin>=0.8",
+]
 
 [project.urls]
 Homepage = "https://github.com/hassansaei/vntyper"
 Repository = "https://github.com/hassansaei/vntyper"
 Issues = "https://github.com/hassansaei/vntyper/issues"
-Documentation = "https://github.com/hassansaei/vntyper#readme"
+Documentation = "https://hassansaei.github.io/VNtyper/"
 
 [project.scripts]
 vntyper = "vntyper.cli:main"

@@ -1,0 +1,124 @@
+site_name: VNtyper
+site_url: https://hassansaei.github.io/VNtyper/
+site_description: >-
+  Genotyping MUC1 coding VNTRs for ADTKD-MUC1 diagnosis
+  using short-read sequencing data.
+site_author: Hassan Saei, Bernt Popp
+repo_url: https://github.com/hassansaei/VNtyper
+repo_name: hassansaei/VNtyper
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2023–2026 Hassan Saei, Bernt Popp
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.top
+    - navigation.path
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_mermaid
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.mark
+  - pymdownx.keys
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/hassansaei/VNtyper
+  generator: false
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Reference Setup: getting-started/reference-setup.md
+  - User Guide:
+    - user-guide/index.md
+    - Input Formats: user-guide/input-formats.md
+    - Running the Pipeline: user-guide/running-pipeline.md
+    - Output Files: user-guide/output-files.md
+    - Configuration: user-guide/configuration.md
+    - Reference Assemblies: user-guide/reference-assemblies.md
+    - Docker & Containers: user-guide/docker.md
+    - Cohort Analysis: user-guide/cohort-analysis.md
+    - Online Mode: user-guide/online-mode.md
+    - Snakemake Workflows: user-guide/snakemake.md
+  - CLI Reference:
+    - cli/index.md
+    - pipeline: cli/pipeline.md
+    - install-references: cli/install-references.md
+    - report: cli/report.md
+    - cohort: cli/cohort.md
+    - online: cli/online.md
+  - Pipeline & Methods:
+    - pipeline/index.md
+    - Input Processing: pipeline/input-processing.md
+    - Kestrel Genotyping: pipeline/kestrel.md
+    - Scoring & Confidence: pipeline/scoring-and-confidence.md
+    - Variant Flagging: pipeline/flagging.md
+    - Optional Modules: pipeline/optional-modules.md
+    - Reports & Visualization: pipeline/reports.md
+  - About:
+    - about/index.md
+    - Scientific Background: about/scientific-background.md
+    - Citation: about/citation.md
+    - Changelog: about/changelog.md
+    - Contributing: about/contributing.md
+    - FAQ: about/faq.md
+    - License: about/license.md

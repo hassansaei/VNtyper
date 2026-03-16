@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean docs-install docs-serve docs-build docs-deploy docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -47,6 +47,13 @@ help:
 	@echo "  make test-docker       - Run Docker integration tests with testcontainers"
 	@echo "  make test-docker-quick - Run Docker tests (excluding slow tests)"
 	@echo "  make docker-clean      - Remove all VNtyper Docker images"
+	@echo ""
+	@echo "$(GREEN)Documentation:$(RESET)"
+	@echo "  make docs-install      - Install documentation dependencies"
+	@echo "  make docs-serve        - Serve docs locally with live reload"
+	@echo "  make docs-build        - Build static documentation site"
+	@echo "  make docs-deploy       - Deploy docs to GitHub Pages"
+	@echo "  make docs-clean        - Remove built documentation"
 	@echo ""
 
 # Installation targets
@@ -233,3 +240,28 @@ docker-clean:
 	@echo "$(BLUE)Removing VNtyper Docker images...$(RESET)"
 	@docker images | grep '$(DOCKER_IMAGE_NAME)' | awk '{print $$3}' | xargs -r docker rmi -f || true
 	@echo "$(GREEN)✓ Docker images removed$(RESET)"
+
+# Documentation targets
+docs-install:
+	@echo "$(BLUE)Installing documentation dependencies...$(RESET)"
+	pip install -e .[docs]
+	@echo "$(GREEN)✓ Documentation dependencies installed$(RESET)"
+
+docs-serve:
+	@echo "$(BLUE)Serving documentation locally...$(RESET)"
+	mkdocs serve
+
+docs-build:
+	@echo "$(BLUE)Building documentation site...$(RESET)"
+	mkdocs build --strict
+	@echo "$(GREEN)✓ Documentation built in site/$(RESET)"
+
+docs-deploy:
+	@echo "$(BLUE)Deploying documentation to GitHub Pages...$(RESET)"
+	mkdocs gh-deploy --force
+	@echo "$(GREEN)✓ Documentation deployed$(RESET)"
+
+docs-clean:
+	@echo "$(BLUE)Cleaning documentation build...$(RESET)"
+	rm -rf site/
+	@echo "$(GREEN)✓ Documentation build cleaned$(RESET)"
