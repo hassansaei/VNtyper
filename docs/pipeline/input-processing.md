@@ -6,12 +6,14 @@ VNtyper accepts three input formats: aligned BAM files, aligned CRAM files, or p
 
 For aligned input, the pipeline extracts reads overlapping the MUC1 VNTR locus using `samtools view` with region coordinates appropriate for the detected reference assembly.
 
-| Assembly | Style | MUC1 VNTR Region |
-|----------|-------|-------------------|
-| hg19     | UCSC  | `chr1:155160239-155162706` |
-| hg38     | UCSC  | `chr1:155188168-155190635` |
-| GRCh37   | NCBI  | `1:155160239-155162706` |
-| GRCh38   | NCBI  | `1:155188168-155190635` |
+| Assembly | Style | BAM Extraction Region | VNTR Core Region |
+|----------|-------|-----------------------|------------------|
+| hg19     | UCSC  | `chr1:155158000-155163000` | `chr1:155160500-155162000` |
+| hg38     | UCSC  | `chr1:155184000-155194000` | `chr1:155188000-155192500` |
+| GRCh37   | NCBI  | `NC_000001.10:155158000-155163000` | `NC_000001.10:155160500-155162000` |
+| GRCh38   | NCBI  | `NC_000001.11:155184000-155194000` | `NC_000001.11:155188000-155192500` |
+
+The BAM extraction region is a wider window (~5-10 kb) to capture flanking reads. The VNTR core region is the narrower interval used for coverage calculation and variant analysis.
 
 The extraction process:
 

@@ -78,7 +78,9 @@ This is the typical scenario:
 ### Limitations
 
 - **FASTQ input only** -- SHARK cannot process BAM/CRAM files. For aligned input, the pipeline uses samtools region extraction instead.
+- **hg19 reference only** -- SHARK currently uses a hardcoded hg19 MUC1 region reference regardless of the `--reference-assembly` setting.
 - SHARK filtering runs **before** fastp QC, so filtered reads still undergo quality control downstream.
+- After SHARK filtering, the pipeline still performs BWA alignment and full postprocessing on the filtered reads.
 
 ### Execution
 

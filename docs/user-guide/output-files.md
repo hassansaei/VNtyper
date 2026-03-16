@@ -58,9 +58,9 @@ Confidence is assigned based on empirically validated depth score thresholds fro
 
 | Level | Meaning |
 |-------|---------|
-| **High_Precision\*** | Depth score >= 0.00515 and alternate depth > 100 |
-| **High_Precision** | Depth score >= 0.00515 and alternate depth between 21--100 |
-| **Low_Precision** | Depth score >= 0.00469 and alternate depth >= 20 |
+| **High_Precision\*** | Depth score >= 0.00515 and alternate depth >= 100 |
+| **High_Precision** | Depth score >= 0.00515, alternate depth 21 to <100, and region depth > 200 |
+| **Low_Precision** | Variant detected with marginal depth or depth score support |
 | **Negative** | No variant passed filtering thresholds |
 
 !!! tip
