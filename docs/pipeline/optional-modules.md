@@ -60,12 +60,12 @@ adVNTR genotyping typically requires approximately 9 minutes per sample, signifi
 
 ### When to Use SHARK
 
-SHARK is designed for scenarios where MUC1 coverage is sparse relative to total sequencing volume:
+SHARK is for when you only have FASTQ files (no BAM/CRAM) and want to avoid processing entire exome or genome FASTQs through the pipeline. Instead of aligning all reads and then extracting the MUC1 region, SHARK extracts MUC1-relevant reads directly from the raw FASTQs before any alignment occurs.
 
-- **Whole-exome sequencing (WES)** -- where MUC1 VNTR reads are a small fraction of total reads
-- **Whole-genome sequencing (WGS)** -- where extracting MUC1 reads from a large FASTQ is computationally expensive via alignment
+This is the typical scenario:
 
-By pre-filtering reads with SHARK, the downstream alignment and genotyping steps operate on a much smaller read set, reducing both runtime and memory usage.
+- You have **whole-exome or whole-genome FASTQ files** and no aligned BAM
+- You want to **skip aligning the full dataset** just to extract MUC1 reads
 
 ### Requirements
 
