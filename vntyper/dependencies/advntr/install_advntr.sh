@@ -120,8 +120,11 @@ git clone "$GIT_REPO" --branch "$GIT_BRANCH" "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
 # Install adVNTR
+# Note: CFLAGS workaround for GCC 14+ which treats -Wincompatible-pointer-types
+# as a hard error. pomegranate's Cython-generated C code passes long int* where
+# scipy's BLAS wrapper expects int*. These flags are safely ignored on older GCC.
 echo "Installing adVNTR..."
-python setup.py install
+CFLAGS="${CFLAGS:-} -Wno-error=incompatible-pointer-types -Wno-error=int-conversion" python setup.py install
 
 echo "adVNTR installation completed successfully in $INSTALL_DIR."
 echo ""
