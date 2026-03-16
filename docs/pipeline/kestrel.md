@@ -42,12 +42,13 @@ After Kestrel produces its raw VCF, VNtyper applies an eight-step postprocessing
 ```mermaid
 flowchart TD
     S1[Step 1: VCF Parsing & INDEL Filtering] --> S2[Step 2: Split Insertions / Deletions]
-    S2 --> S3[Step 3: Motif Annotation]
-    S3 --> S4[Step 4: Depth Splitting & Frame Score]
-    S4 --> S5[Step 5: Confidence Assignment]
-    S5 --> S6[Step 6: Flagging]
-    S6 --> S7[Step 7: Final Filtering & Variant Selection]
-    S7 --> S8[Step 8: Output Generation]
+    S2 --> S3[Step 3: Depth Splitting & Frame Score]
+    S3 --> S4[Step 4: Confidence Assignment]
+    S4 --> S5[Step 5: ALT-Based Filtering]
+    S5 --> S6[Step 6: Motif Correction & Annotation]
+    S6 --> S7[Step 7: Flagging]
+    S7 --> S8[Step 8: Final Filtering & Variant Selection]
+    S8 --> S9[Step 9: Output Generation]
 ```
 
 ### Step 1: VCF Parsing and INDEL Filtering
@@ -58,18 +59,9 @@ If bcftools is available, the INDEL VCF is compressed and sorted (`output_indel.
 
 ### Step 2: Split Insertions and Deletions
 
-The INDEL VCF is split into two separate files: `output_insertion.vcf` and `output_deletion.vcf`. Each file is read into a pandas DataFrame for independent processing.
+The INDEL VCF is split into two separate files: `output_insertion.vcf` and `output_deletion.vcf`. Each file is read into a pandas DataFrame for independent processing. Insertion and deletion DataFrames are merged with the MUC1 reference motif table to link each variant to its motif sequence, tagged as "Insertion" or "Deletion", and then combined into a single DataFrame.
 
-### Step 3: Motif Annotation
-
-Each variant is annotated with its MUC1 repeat unit motif identity. The MUC1 VNTR consists of ~30-90 tandemly repeated units of approximately 60 bp each. Individual repeat units are designated by motif identifiers (e.g., X, Y, Z, 1, 2, 3, Q, etc.).
-
-!!! info "MUC1 VNTR motif structure"
-    The VNTR reference used by Kestrel encodes each repeat unit as a separate "chromosome" in the FASTA, named as `MotifLeft-MotifRight` (e.g., `X-Y`). A variant at position < 60 maps to the left motif; at position >= 60, it maps to the right motif. This convention allows VNtyper to determine which specific repeat unit harbors the variant.
-
-Insertion and deletion DataFrames are merged with the MUC1 reference motif table to link each variant to its motif sequence. Variants are tagged as "Insertion" or "Deletion" and then combined into a single DataFrame.
-
-### Step 4: Depth Splitting and Frame Score Calculation
+### Step 3: Depth Splitting and Frame Score Calculation
 
 The Kestrel `Sample` column (format: `DEL:AltDepth:ActiveRegionDepth`) is split into separate depth fields. The frame score is then calculated:
 
@@ -77,15 +69,30 @@ The Kestrel `Sample` column (format: `DEL:AltDepth:ActiveRegionDepth`) is split 
 
 A boolean `is_frameshift` column is added: `True` when `(len(ALT) - len(REF)) % 3 != 0`. Only frameshift variants are relevant for ADTKD-MUC1. See [Scoring and Confidence](scoring-and-confidence.md) for details.
 
-### Step 5: Confidence Assignment
+### Step 4: Confidence Assignment
 
 Each variant receives a confidence label based on its depth score and alternate allele depth. The depth score is computed as `Alt_Depth / Active_Region_Depth`. Thresholds are derived from Saei et al. (2023). See [Scoring and Confidence](scoring-and-confidence.md) for threshold tables.
 
-### Step 6: Flagging
+A **haplo_count** is also computed: the number of times the exact same variant (POS, REF, ALT) appears across different haplotype calls. Higher counts indicate more supporting evidence.
+
+### Step 5: ALT-Based Filtering
+
+Variants are filtered based on specific ALT allele patterns. Known artifact sequences (e.g., `CCGCC`, `CGGCG`, `CGGCC`) and certain motif combinations are excluded.
+
+### Step 6: Motif Correction and Annotation
+
+Each variant is annotated with its MUC1 repeat unit motif identity. The MUC1 VNTR consists of ~30-90 tandemly repeated units of approximately 60 bp each, designated by motif identifiers (e.g., X, Y, Z, 1, 2, 3, Q).
+
+!!! info "MUC1 VNTR motif structure"
+    The VNTR reference used by Kestrel encodes each repeat unit as a separate "chromosome" in the FASTA, named as `MotifLeft-MotifRight` (e.g., `X-Y`). A variant at position < 60 maps to the left motif; at position >= 60, it maps to the right motif. This convention allows VNtyper to determine which specific repeat unit harbors the variant.
+
+Position-based filtering removes conserved motifs (Q, 8, 9, 7, 6p, 6, V, J, I, G, E, A) that rarely vary and are likely artifacts when called.
+
+### Step 7: Flagging
 
 Configurable empirical rules flag potential false positives. Flags are applied **before** variant selection (Issue #145 fix), ensuring that unflagged variants are preferred during the selection step. See [Flagging](flagging.md) for rule details.
 
-### Step 7: Final Filtering and Variant Selection
+### Step 8: Final Filtering and Variant Selection
 
 Multiple boolean filter columns are evaluated:
 
@@ -103,7 +110,7 @@ Only variants where **all** applicable filters are `True` are retained. From the
 4. Highest haplo_count (number of identical variant calls across haplotypes)
 5. Lowest genomic position (deterministic tie-breaker)
 
-### Step 8: Output Generation
+### Step 9: Output Generation
 
 The final result is written to `kestrel_result.tsv` with metadata headers (VNtyper version, analysis date, reference file). A BED file (`output.bed`) is generated from the variant position for IGV visualization. An unfiltered pre-result file (`kestrel_pre_result.tsv`) is also saved for debugging.
 

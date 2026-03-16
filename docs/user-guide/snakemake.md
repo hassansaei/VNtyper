@@ -59,7 +59,7 @@ These are set in the `run_vntyper_pipeline` rule and can be adjusted by editing 
 The workflow runs one rule per BAM file:
 
 ```bash
-vntyper pipeline --bam {input.bam} --thread 8 --reference-assembly hg38 \
+vntyper pipeline --bam {input.bam} --threads 8 --reference-assembly hg38 \
     --fast-mode --keep-intermediates -o results/{sample}/ \
     --config-path vntyper/config.json
 ```

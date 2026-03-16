@@ -60,8 +60,8 @@ The thresholds are defined in `kestrel_config.json`:
 
 | Level | Criteria | Clinical Interpretation |
 |-------|----------|------------------------|
-| **High_Precision*** | Alt depth >= 100, Depth Score >= 0.00515, Region depth > 200 | Very high confidence call; strong supporting evidence |
-| **High_Precision** | Alt depth 21--100, Depth Score >= 0.00515, Region depth > 200 | High confidence call suitable for clinical consideration |
+| **High_Precision*** | Alt depth >= 100 and Depth Score >= 0.00515 | Very high confidence call; strong supporting evidence |
+| **High_Precision** | Alt depth >= 21 and < 100, Depth Score >= 0.00515, Region depth > 200 | High confidence call suitable for clinical consideration |
 | **Low_Precision** | Alt depth <= 20, or Depth Score between 0.00469--0.00515, or Region depth <= 200 | Variant detected but with marginal evidence; requires independent validation |
 | **Negative** | Depth Score < 0.00469 | Signal below noise threshold; variant is likely an artifact |
 
@@ -70,7 +70,7 @@ The thresholds are defined in `kestrel_config.json`:
 
 ### Assignment Logic
 
-The confidence assignment follows a layered rule system. All variants start as "Negative" and are upgraded based on conditions evaluated in sequence:
+The confidence assignment follows a layered rule system where conditions are applied in sequence and later conditions can overwrite earlier assignments. All variants start as "Negative":
 
 1. Variants with Depth Score **below** the low threshold (0.00469) remain Negative regardless of other metrics
 2. Variants at exactly the low threshold or with region depth <= 200 are assigned Low_Precision

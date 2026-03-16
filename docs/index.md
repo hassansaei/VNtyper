@@ -4,7 +4,7 @@ hide:
   - toc
 ---
 
-# VNtyper 2.0
+# VNtyper 2
 
 **Genotype MUC1 coding VNTRs for ADTKD-MUC1 diagnosis using short-read sequencing.**
 

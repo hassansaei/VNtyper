@@ -9,9 +9,9 @@ The reference installation includes:
 | Component | Description |
 |-----------|-------------|
 | **Chromosome 1 sequences** | UCSC hg19/hg38 (default), NCBI GRCh37/GRCh38, or Ensembl references |
-| **BWA indices** | Pre-built alignment indices for the downloaded references |
+| **BWA indices** | Alignment indices built locally during installation |
 | **MUC1 motif databases** | Pairwise and self-merged MUC1 motif FASTA files with samtools indices |
-| **adVNTR VNTR database** | Database files for the optional adVNTR genotyping module |
+| **adVNTR VNTR database** | Database files for the optional adVNTR module (requires adding to `--references`) |
 
 ## Basic Installation
 
@@ -66,15 +66,15 @@ After installation, the reference directory looks like this:
 ```
 references/
   alignment/
-    chr1.hg19.fa.gz          # hg19 chromosome 1 sequence
-    chr1.hg19.fa.gz.amb      # BWA index files
-    chr1.hg19.fa.gz.ann
-    chr1.hg19.fa.gz.bwt
-    chr1.hg19.fa.gz.pac
-    chr1.hg19.fa.gz.sa
-    chr1.hg38.fa.gz          # hg38 chromosome 1 sequence
-    chr1.hg38.fa.gz.*        # BWA index files
-  vntr_db_advntr/            # adVNTR database files
+    chr1.hg19.fa             # hg19 chromosome 1 sequence (extracted)
+    chr1.hg19.fa.amb         # BWA index files
+    chr1.hg19.fa.ann
+    chr1.hg19.fa.bwt
+    chr1.hg19.fa.pac
+    chr1.hg19.fa.sa
+    chr1.hg38.fa             # hg38 chromosome 1 sequence (extracted)
+    chr1.hg38.fa.*           # BWA index files
+  vntr_db_advntr/            # adVNTR database (only if included in --references)
   All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
   All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa.fai
   MUC1_motifs_Rev_com.fa
@@ -88,4 +88,4 @@ references/
 Expect approximately 2 GB of disk space for the default installation (hg19 + hg38 references with BWA indices). Adding NCBI or Ensembl references increases this proportionally.
 
 !!! note "MD5 verification"
-    VNtyper automatically generates MD5 checksums for all downloaded files and logs them during installation. Check `pipeline.log` for checksum details if you need to verify file integrity.
+    VNtyper automatically generates MD5 checksums for all downloaded files, writing them to `md5_checksums.txt` in the output directory. Check `install_references.log` for detailed installation progress.

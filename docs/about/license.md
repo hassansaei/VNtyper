@@ -4,8 +4,8 @@ VNtyper is released under the **BSD 3-Clause License**.
 
 ```text
 BSD 3-Clause License
-The Regents of the Universite Paris Cite (Imagine Institute)
-Berlin Institute of Health at Charite, Universitatsmedizin Berlin
+The Regents of the Université Paris Cité (Imagine Institute)
+Berlin Institute of Health at Charité, Universitätsmedizin Berlin
 
 Copyright (c) 2024, Hassan Saei
 Copyright (c) 2024, Bernt Popp

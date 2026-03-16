@@ -76,6 +76,8 @@ This produces:
 | `cohort_kestrel.tsv` | Kestrel results in TSV |
 | `cohort_kestrel.json` | Kestrel results in JSON |
 | `cohort_advntr.csv` | adVNTR results in CSV (if adVNTR was run) |
+| `cohort_advntr.tsv` | adVNTR results in TSV (if adVNTR was run) |
+| `cohort_advntr.json` | adVNTR results in JSON (if adVNTR was run) |
 
 ## HTML Report Contents
 

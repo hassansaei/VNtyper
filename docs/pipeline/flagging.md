@@ -7,7 +7,7 @@ Flagging applies configurable, post-hoc empirical filters to variant calls. Unli
 Each flagging rule is defined as a named condition in `kestrel_config.json`. Rules are Python logical expressions evaluated against each row of the variant DataFrame. If a rule's condition evaluates to `True`, the corresponding flag name is appended to the variant's `Flag` column. Multiple flags are comma-separated. Variants matching no rules receive `Flag = "Not flagged"`.
 
 !!! info "Flagging occurs before variant selection"
-    As of VNtyper 2.0 (Issue #145 fix), flagging is applied **before** the final variant selection step. This ensures that when multiple candidate variants pass all filters, unflagged variants are preferred over flagged ones. Previously, a flagged variant could be selected as the best call because flags were added after selection.
+    As of VNtyper 2 (Issue #145 fix), flagging is applied **before** the final variant selection step. This ensures that when multiple candidate variants pass all filters, unflagged variants are preferred over flagged ones. Previously, a flagged variant could be selected as the best call because flags were added after selection.
 
 ## Current Flagging Rules
 

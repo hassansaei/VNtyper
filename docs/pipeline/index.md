@@ -1,6 +1,6 @@
 # Pipeline Overview
 
-VNtyper 2.0 implements a multi-stage pipeline for genotyping MUC1 coding Variable Number Tandem Repeat (VNTR) variants associated with Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1). The pipeline accepts BAM, CRAM, or paired-end FASTQ input and produces a genotyping result with confidence-annotated variant calls.
+VNtyper 2 implements a multi-stage pipeline for genotyping MUC1 coding Variable Number Tandem Repeat (VNTR) variants associated with Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1). The pipeline accepts BAM, CRAM, or paired-end FASTQ input and produces a genotyping result with confidence-annotated variant calls.
 
 ## Pipeline Architecture
 

@@ -24,7 +24,7 @@ If you use VNtyper in your research, please cite the following publications.
 
 VNtyper relies on the Kestrel variant caller for its mapping-free k-mer-based genotyping. If you use VNtyper, please also cite the Kestrel publication:
 
-> Audano PA, Ravishankar S, Engelbrecht F, et al. Mapping-free variant calling using haplotype reconstruction from k-mer frequencies. *Bioinformatics*. 2018;34(10):1659--1665. doi:[10.1093/bioinformatics/btx753](https://doi.org/10.1093/bioinformatics/btx753)
+> Audano PA, Ravishankar S, Vannberg FO. Mapping-free variant calling using haplotype reconstruction from k-mer frequencies. *Bioinformatics*. 2018;34(10):1659--1665. doi:[10.1093/bioinformatics/btx753](https://doi.org/10.1093/bioinformatics/btx753)
 
 ### BibTeX
 

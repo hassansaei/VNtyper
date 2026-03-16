@@ -14,7 +14,7 @@ VNtyper needs reference sequences and motif databases before it can run. Downloa
 vntyper install-references -d ./references
 ```
 
-This downloads chromosome 1 references (hg19/hg38), MUC1 motif databases, and adVNTR VNTR databases, then builds BWA indices. See [Reference Setup](reference-setup.md) for details.
+This downloads chromosome 1 references (hg19/hg38) and MUC1 motif databases, then builds BWA indices. See [Reference Setup](reference-setup.md) for details.
 
 ## 3. Run the Pipeline
 
@@ -47,7 +47,7 @@ vntyper pipeline \
     --threads 4
 ```
 
-Add `--fast-mode` to skip optional steps and speed up the analysis.
+Add `--fast-mode` to skip filtering for unmapped and partially mapped reads, speeding up the analysis.
 
 ## 4. View Results
 
@@ -55,14 +55,18 @@ Once the pipeline completes, the output directory contains:
 
 ```
 results/
-  pipeline.log              # Full pipeline log
-  kestrel_result.tsv        # Genotyping results (main output)
-  alignment/                # Aligned BAM files
-  fastq/                    # Extracted FASTQ reads
-  kestrel/                  # Kestrel intermediate files
+  pipeline.log                  # Full pipeline log
+  pipeline_summary.json         # Machine-readable summary
+  kestrel/
+    kestrel_result.tsv          # Genotyping results (main output)
+    output_indel.vcf            # Filtered INDEL VCF
+    output.bam                  # Kestrel alignments
+  fastq_bam_processing/         # Extracted FASTQ reads
+  alignment_processing/         # BWA-aligned BAM (FASTQ input)
+  coverage/                     # Coverage statistics
 ```
 
-The primary output is `kestrel_result.tsv`, which contains detected MUC1 VNTR variants with confidence scores, frame shift analysis, and depth metrics.
+The primary output is `kestrel/kestrel_result.tsv`, which contains detected MUC1 VNTR variants with confidence scores, frameshift analysis, and depth metrics.
 
 ## 5. Generate an HTML Report
 

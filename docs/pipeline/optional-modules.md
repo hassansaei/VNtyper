@@ -18,9 +18,9 @@ adVNTR targets MUC1 VNTR using **VNTR ID 25561**, which corresponds to the MUC1 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `vid` | 25561 | VNTR database ID for MUC1 |
-| `threads` | 8 | Parallel threads |
+| `threads` | 1 | Parallel threads |
 | `additional_commands` | `-aln` | Extra flags (alignment mode) |
-| `output_format` | `tsv` | Output format (tsv or vcf) |
+| `output_format` | `vcf` | Output format (tsv or vcf) |
 | `max_frameshift` | 100 | Maximum frameshift multiplier for filtering |
 | `frameshift_multiplier` | 3 | Base multiplier for valid frame patterns |
 

@@ -12,7 +12,7 @@ Global options can be placed before or after the subcommand.
 |--------|------|---------|-------------|
 | `-v, --version` | flag | — | Show version and exit |
 | `-l, --log-level` | choice | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
-| `-f, --log-file` | path | `pipeline.log` in output dir | Log output file path. For `pipeline` and `cohort` commands, defaults to `<output-dir>/pipeline.log` or `<output-dir>/cohort.log` respectively |
+| `-f, --log-file` | path | (stdout) | Log output file path. For `pipeline` and `cohort` commands, automatically set to `<output-dir>/pipeline.log` or `<output-dir>/cohort.log` when `--output-dir` is provided |
 | `--config-path` | path | (bundled config) | Path to a custom `config.json`. If not provided, the default bundled configuration is used |
 
 ## Commands
