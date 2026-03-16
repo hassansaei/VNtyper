@@ -67,6 +67,9 @@ This is the typical scenario:
 - You have **whole-exome or whole-genome FASTQ files** and no aligned BAM
 - You want to **skip aligning the full dataset** just to extract MUC1 reads
 
+!!! tip "BAM input is always faster"
+    If you have an aligned BAM file, use `--bam` instead. BAM mode extracts MUC1 reads via samtools region slicing, which is much faster than SHARK. SHARK is only useful when BAM files are not available.
+
 ### Requirements
 
 - Conda environment `shark_env` with SHARK installed
