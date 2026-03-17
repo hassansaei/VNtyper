@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "VNtyper: A tool for genotyping MUC1-VNTR"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = {text = "BSD-3-Clause"}
 authors = [
     {name = "Hassan Saei", email = "hassan.saei@inserm.fr"},
     {name = "Bernt Popp", email = "bernt.popp.md@gmail.com"},
@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -52,12 +52,19 @@ dev = [
     "mypy>=1.0.0",
     "types-requests>=2.0.0",
 ]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5,<10",
+    "pymdown-extensions>=10.0",
+    "mkdocs-minify-plugin>=0.8",
+    "mkdocs-macros-plugin>=1.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/hassansaei/vntyper"
 Repository = "https://github.com/hassansaei/vntyper"
 Issues = "https://github.com/hassansaei/vntyper/issues"
-Documentation = "https://github.com/hassansaei/vntyper#readme"
+Documentation = "https://hassansaei.github.io/VNtyper/"
 
 [project.scripts]
 vntyper = "vntyper.cli:main"
