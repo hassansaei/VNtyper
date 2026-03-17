@@ -124,11 +124,13 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     # Condition 2: High Precision STAR if alt depth >= alt_mid_high AND Depth_Score >= high_threshold
     cond2 = (df["Estimated_Depth_AlternateVariant"] >= alt_mid_high) & (df["Depth_Score"] >= high_threshold)
 
-    # Condition 3: Low Precision if alt_depth is between mid_low and mid_high,
+    # Condition 3: Low Precision if alt_depth is between mid_low (inclusive) and mid_high (exclusive),
     # and Depth_Score between low_threshold and high_threshold
-    cond3 = df["Estimated_Depth_AlternateVariant"].between(alt_mid_low, alt_mid_high) & df["Depth_Score"].between(
-        low_threshold, high_threshold
-    )
+    cond3 = df["Estimated_Depth_AlternateVariant"].between(
+        alt_mid_low,
+        alt_mid_high,
+        inclusive="left",
+    ) & df["Depth_Score"].between(low_threshold, high_threshold)
 
     # Condition 4: Low Precision if alt depth <= alt_low
     cond4 = df["Estimated_Depth_AlternateVariant"] <= alt_low
