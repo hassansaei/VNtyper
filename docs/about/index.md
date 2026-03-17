@@ -17,7 +17,7 @@ Web Server
 :   [vntyper.org](https://vntyper.org)
 
 Current Version
-:   **2.0.1** -- see the [Changelog](changelog.md) for release history.
+:   **{{ version }}** -- see the [Changelog](changelog.md) for release history.
 
 License
 :   [BSD 3-Clause](license.md)

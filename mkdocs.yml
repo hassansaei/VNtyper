@@ -44,6 +44,8 @@ theme:
 
 plugins:
   - search
+  - macros:
+      module_name: docs/hooks
   - minify:
       minify_html: true
 

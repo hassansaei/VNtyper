@@ -74,7 +74,7 @@ Key fields:
 
 ```json
 {
-  "version": "2.0.1",
+  "version": "{{ version }}",
   "pipeline_start": "2024-01-15T10:30:00",
   "pipeline_end": "2024-01-15T10:35:00",
   "input_files": { "bam": "sample.bam" },
