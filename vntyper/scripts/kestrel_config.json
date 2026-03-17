@@ -35,7 +35,7 @@
   "motif_filtering": {
     "use_uniform_filtering": false,
     "position_threshold": 60,
-    "exclude_motifs_right": ["Q", "8", "9", "7", "6p", "6", "V", "J", "I", "G", "E", "A"],
+    "exclude_motifs_right": ["8", "9", "7", "6p", "6"],
     "alt_for_motif_right_gg": "GG",
     "motifs_for_alt_gg": [],
     "exclude_alts_combined": ["CCGCC", "CGGCG", "CGGCC"],
