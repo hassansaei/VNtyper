@@ -1,0 +1,6 @@
+/* Minimal overrides — Material theme defaults are excellent */
+
+/* Slightly wider content area for code blocks */
+.md-grid {
+  max-width: 1440px;
+}

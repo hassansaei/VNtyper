@@ -137,6 +137,7 @@ def run_vntyper_pipeline(
     reference: str,
     output_dir: Path,
     extra_modules: Optional[list[str]] = None,
+    extra_cli_options: Optional[list[str]] = None,
 ) -> int:
     """
     Execute VNtyper pipeline inside Docker container.
@@ -147,6 +148,8 @@ def run_vntyper_pipeline(
         reference: Reference assembly (hg19, hg38)
         output_dir: Output directory path (host path where files will appear)
         extra_modules: Optional list of extra modules (e.g., ["advntr"])
+        extra_cli_options: Optional list of additional CLI flags
+                           (e.g., ["--fast-mode", "--advntr-max-coverage", "300"])
 
     Returns:
         int: Exit code from pipeline execution
@@ -221,6 +224,10 @@ def run_vntyper_pipeline(
 
     if extra_modules:
         vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
+
+    # Add remaining CLI options (e.g. --fast-mode, --advntr-max-coverage)
+    if extra_cli_options:
+        vntyper_args.extend(extra_cli_options)
 
     # Copy BAM file and its index to writable location first (input is read-only)
     # VNtyper needs to write log files next to the BAM and samtools needs the index

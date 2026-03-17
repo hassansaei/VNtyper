@@ -111,7 +111,13 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, en
     subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
 
     # Define Docker-specific runner
-    def docker_runner(bam_file: Path, reference: str, output_dir: Path, extra_modules: list[str]) -> int:
+    def docker_runner(
+        bam_file: Path,
+        reference: str,
+        output_dir: Path,
+        extra_modules: list[str],
+        extra_cli_options: list[str],
+    ) -> int:
         """Execute pipeline with adVNTR in Docker container."""
         return run_vntyper_pipeline(
             container,
@@ -119,6 +125,7 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, en
             reference,
             output_dir,
             extra_modules=extra_modules,
+            extra_cli_options=extra_cli_options,
         )
 
     # Run test using SHARED orchestration logic

@@ -42,7 +42,7 @@ rule run_vntyper_pipeline:
         "vntyper"
     shell:
         """
-        vntyper pipeline --bam {input.bam} --thread {threads} --reference-assembly hg38 \
-                         --fast-mode --keep-intermediates -o {params.output_dir} \
-                         --ignore-advntr --config-path {params.config_path} &> {output.log}
+        vntyper --config-path {params.config_path} pipeline \
+                         --bam {input.bam} --threads {threads} --reference-assembly hg38 \
+                         --fast-mode --keep-intermediates -o {params.output_dir} &> {output.log}
         """

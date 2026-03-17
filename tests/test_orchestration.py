@@ -87,7 +87,7 @@ def run_bam_test_case(
 
 def run_advntr_test_case(
     test_case: dict,
-    runner: Callable[[Path, str, Path, list[str]], int],
+    runner: Callable[[Path, str, Path, list[str], list[str]], int],
     output_dir: Path,
 ) -> None:
     """
@@ -99,7 +99,7 @@ def run_advntr_test_case(
     Args:
         test_case: Test configuration dict
         runner: Function that executes the pipeline with extra modules
-                Signature: runner(bam_file, reference, output_dir, extra_modules) -> exit_code
+                Signature: runner(bam_file, reference, output_dir, extra_modules, extra_cli_options) -> exit_code
         output_dir: Output directory path
 
     Raises:
@@ -108,10 +108,29 @@ def run_advntr_test_case(
     # 1. Extract test configuration
     bam_file = Path(test_case["bam"])
     reference = test_case["reference_assembly"]
+
+    # Parse cli_options: separate --extra-modules from other CLI options
+    cli_options = list(test_case.get("cli_options", []))
     extra_modules = ["advntr"]
+    extra_cli_options: list[str] = []
+
+    i = 0
+    while i < len(cli_options):
+        if cli_options[i] == "--extra-modules":
+            # Extract module names, merging with default "advntr"
+            if i + 1 < len(cli_options):
+                for mod in cli_options[i + 1].split(","):
+                    if mod not in extra_modules:
+                        extra_modules.append(mod)
+                i += 2
+            else:
+                i += 1
+        else:
+            extra_cli_options.append(cli_options[i])
+            i += 1
 
     # 2. Run pipeline via runner
-    exit_code = runner(bam_file, reference, output_dir, extra_modules)
+    exit_code = runner(bam_file, reference, output_dir, extra_modules, extra_cli_options)
 
     # 3. Assert success
     assert exit_code == 0, f"adVNTR pipeline failed with exit code {exit_code}"
