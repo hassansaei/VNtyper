@@ -42,6 +42,23 @@ def regex_match(pattern, value):
         return False
 
 
+def _sanitize_na(value):
+    """
+    Convert ``pd.NA`` to ``None`` so that expressions evaluated by
+    :func:`evaluate_condition` behave predictably.
+
+    Why only ``pd.NA``?
+    * ``pd.NA in [...]`` returns ``pd.NA``; ``bool(pd.NA)`` raises
+      ``TypeError: boolean value of NA is ambiguous``.
+    * ``None in [...]`` cleanly returns ``False``.
+    * ``np.nan`` is left untouched because numeric comparisons like
+      ``np.nan < 0.4`` already return ``False`` without raising.
+    """
+    if value is pd.NA:
+        return None
+    return value
+
+
 def evaluate_condition(row, condition):
     """
     Evaluates a condition in the context of a DataFrame row.
@@ -57,7 +74,7 @@ def evaluate_condition(row, condition):
     Returns:
         bool: The boolean result of evaluating the condition for this row.
     """
-    local_vars = dict(row)
+    local_vars = {k: _sanitize_na(v) for k, v in row.items()}
     local_vars["regex_match"] = regex_match
     try:
         result = eval(condition, {"__builtins__": {}}, local_vars)

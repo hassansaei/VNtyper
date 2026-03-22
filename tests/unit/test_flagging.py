@@ -91,6 +91,23 @@ class TestEvaluateCondition:
         condition = "regex_match('^C', REF) and ALT == 'CGGCA'"
         assert evaluate_condition(row, condition) is True
 
+    def test_pd_na_in_list_returns_false(self):
+        """pd.NA in an 'in' check should return False, not raise TypeError (#154)."""
+        row = pd.Series({"Depth_Score": 0.015, "Motif": pd.NA})
+        condition = "(Depth_Score < 0.4) and (Motif in ['1', '2', '3'])"
+        assert evaluate_condition(row, condition) is False
+
+    def test_pd_na_equality_returns_false(self):
+        """pd.NA in an '==' check should return False, not raise TypeError."""
+        row = pd.Series({"REF": pd.NA, "ALT": "CG"})
+        assert evaluate_condition(row, "REF == 'C'") is False
+
+    def test_none_in_list_returns_false(self):
+        """Explicit None in an 'in' check should also return False."""
+        row = pd.Series({"Motif": None, "Depth_Score": 0.1})
+        condition = "(Depth_Score < 0.4) and (Motif in ['1', '2'])"
+        assert evaluate_condition(row, condition) is False
+
 
 # --- Low_Depth_Conserved_Motifs flagging rule tests ---
 
