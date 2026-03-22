@@ -2,8 +2,8 @@
   "kestrel_settings": {
     "java_memory": "12g",
     "kmer_sizes": [20],
-    "max_align_states": 60,
-    "max_hap_states": 60,
+    "max_align_states": 40,
+    "max_hap_states": 40,
     "additional_settings": ""
   },
   "frame_score_filtering": {
