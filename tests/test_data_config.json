@@ -671,6 +671,18 @@
       "filename": "example_dfc3_hg38_ensembl_bwa.bam.bai",
       "url_suffix": "",
       "md5sum": "10d1fcd3169c810cad2b941d34471d32"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_40cf_hg38_subset.bam",
+      "url_suffix": "",
+      "md5sum": "ca4a47b964530ea65c1a72daa36bfaa4"
+    },
+    {
+      "local_path": "tests/data",
+      "filename": "example_40cf_hg38_subset.bam.bai",
+      "url_suffix": "",
+      "md5sum": "bb1596845be1daeb4d79c989ea7ba4fc"
     }
   ],
   "archive_file": {
@@ -889,6 +901,28 @@
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_40cf_hg38_subset_fast_gdp_guard",
+        "description": "Guard against GDP inflation (Issue #156): this sample was falsely positive with maxhapstates/maxalignstates > 50 due to motif-specific ALT support inflation. With maxhapstates/maxalignstates=40 it must be Negative.",
+        "bam": "tests/data/example_40cf_hg38_subset.bam",
+        "reference_assembly": "hg38",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_archive": true,
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": "None",
+          "Estimated_Depth_Variant_ActiveRegion": "None",
+          "Depth_Score": {
+            "value": "None",
+            "tolerance_percentage": 5
+          },
+          "Confidence": "Negative"
         },
         "check_igv_report": false
       }
