@@ -111,6 +111,17 @@ def ensure_test_data(test_config):
             download_file(archive_url, tmp_path)
             logger.info("Archive downloaded to %s", tmp_path)
 
+            # Verify archive MD5 if configured
+            expected_archive_md5 = archive_config.get("md5sum")
+            if expected_archive_md5:
+                actual_archive_md5 = compute_md5(tmp_path)
+                if actual_archive_md5.lower() != expected_archive_md5.lower():
+                    pytest.exit(
+                        f"Archive MD5 mismatch.\nExpected={expected_archive_md5}, Got={actual_archive_md5}",
+                        returncode=1,
+                    )
+                logger.info("Archive MD5 verified: %s", actual_archive_md5)
+
             # Extract archive
             logger.info("Extracting archive to %s", extract_to)
             extract_to.mkdir(parents=True, exist_ok=True)
