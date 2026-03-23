@@ -687,9 +687,9 @@
   ],
   "archive_file": {
     "filename": "data.zip",
-    "url": "https://zenodo.org/records/17479292/files/data.zip?download=1",
+    "url": "https://zenodo.org/records/19181821/files/data.zip?download=1",
     "extract_to": "tests/data",
-    "md5sum": null
+    "md5sum": "fdd5958d58c733cdca452f3287898964"
   },
   "unit_tests": {},
   "integration_tests": {
