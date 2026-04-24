@@ -14,6 +14,11 @@ repository-code: "https://github.com/hassansaei/VNtyper"
 license: BSD-3-Clause
 version: "2.0.3"
 date-released: "2026-03-22"
+doi: "10.5281/zenodo.19744166"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.19744166"
+    description: "Concept DOI (all versions)"
 keywords:
   - MUC1
   - VNTR
