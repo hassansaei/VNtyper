@@ -520,10 +520,8 @@ def main():
             logging.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
             coord_system = "GRCh37"
 
-        # Map coordinate system to UCSC-style name for BWA reference lookup
-        ucsc_map = {"GRCh37": "hg19", "GRCh38": "hg38"}
-        ucsc_style_ref = ucsc_map.get(coord_system, "hg19")
-        bwa_key = f"bwa_reference_{ucsc_style_ref}"
+        # Map coordinate system for BWA reference lookup
+        bwa_key = f"bwa_reference_{args.reference_assembly}"
         bwa_reference = config.get("reference_data", {}).get(bwa_key)
         logging.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")
 
