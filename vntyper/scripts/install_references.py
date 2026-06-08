@@ -782,21 +782,30 @@ def main(
             ucsc_target = ref_info.get("target_path")
             if ucsc_target:
                 ref_path = output_dir / ucsc_target
-                updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
+                if ref_path.suffix == ".gz":
+                    ref_path = ref_path.with_suffix("")
+                config_key = ref_info.get("config_key", f"ucsc_{ref_key}")
+                updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from NCBI
         for ref_key, ref_info in ncbi_refs.items():
             ncbi_target = ref_info.get("target_path")
             if ncbi_target:
                 ref_path = output_dir / ncbi_target
-                updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
+                if ref_path.suffix == ".gz":
+                    ref_path = ref_path.with_suffix("")
+                config_key = ref_info.get("config_key", f"ncbi_{ref_key}")
+                updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from ENSEMBL
         for ref_key, ref_info in ensembl_refs.items():
             ensembl_target = ref_info.get("target_path")
             if ensembl_target:
                 ref_path = output_dir / ensembl_target
-                updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
+                if ref_path.suffix == ".gz":
+                    ref_path = ref_path.with_suffix("")
+                config_key = ref_info.get("config_key", f"ensembl_{ref_key}")
+                updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from VNtyper
         for ref_key, ref_info in vntyper_refs.items():
