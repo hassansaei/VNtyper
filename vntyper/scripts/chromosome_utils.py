@@ -27,6 +27,53 @@ CHR1_LENGTHS = {
 }
 
 
+UCSC_PRIMARY_CONTIGS = {
+    *(f"chr{i}" for i in range(1, 23)),
+    "chrX",
+    "chrY",
+    "chrM",
+}
+
+ENSEMBL_PRIMARY_CONTIGS = {
+    *(str(i) for i in range(1, 23)),
+    "X",
+    "Y",
+    "MT",
+}
+
+NCBI_PRIMARY_CONTIGS = {
+    # chr1-22, X, Y: GRCh37 and/or GRCh38 accessions.
+    "NC_000001.10", "NC_000001.11",
+    "NC_000002.11", "NC_000002.12",
+    "NC_000003.11", "NC_000003.12",
+    "NC_000004.11", "NC_000004.12",
+    "NC_000005.9",  "NC_000005.10",
+    "NC_000006.11", "NC_000006.12",
+    "NC_000007.13", "NC_000007.14",
+    "NC_000008.10", "NC_000008.11",
+    "NC_000009.11", "NC_000009.12",
+    "NC_000010.10", "NC_000010.11",
+    "NC_000011.9",  "NC_000011.10",
+    "NC_000012.11", "NC_000012.12",
+    "NC_000013.10", "NC_000013.11",
+    "NC_000014.8",  "NC_000014.9",
+    "NC_000015.9",  "NC_000015.10",
+    "NC_000016.9",  "NC_000016.10",
+    "NC_000017.10", "NC_000017.11",
+    "NC_000018.9",  "NC_000018.10",
+    "NC_000019.9",  "NC_000019.10",
+    "NC_000020.10", "NC_000020.11",
+    "NC_000021.8",  "NC_000021.9",
+    "NC_000022.10", "NC_000022.11",
+    "NC_000023.10", "NC_000023.11",  # X
+    "NC_000024.9",  "NC_000024.10",  # Y
+
+    # Human mitochondrial reference sequence, commonly used with NCBI-style naming.
+    "NC_012920.1",
+}
+
+
+
 def detect_assembly_from_chr1_length(contigs: list[dict]) -> Optional[str]:
     """
     Detect reference assembly from chr1 length - most reliable method.
@@ -123,38 +170,24 @@ def detect_naming_convention(contig_names: list[str]) -> str:
         logging.warning("Empty contig list provided to detect_naming_convention")
         return "unknown"
 
-    # Count naming patterns
-    ucsc_count = 0
-    ensembl_count = 0
-    ncbi_count = 0
+    # only primary contigs should be considered to detect the naming convention (no _alt, _decoy, _random, ...)
+    contigs = set(contig_names)
 
-    for name in contig_names:
-        # UCSC: starts with "chr" followed by number/letter
-        if re.match(r"^chr[0-9XYM]+$", name, re.IGNORECASE):
-            ucsc_count += 1
-        # NCBI: NC_XXXXXX.YY format
-        elif re.match(r"^NC_\d{6}\.\d+$", name):
-            ncbi_count += 1
-        # ENSEMBL simple numeric: just digits or X, Y, MT
-        elif re.match(r"^([0-9]+|X|Y|MT?)$", name, re.IGNORECASE):
-            ensembl_count += 1
+    # Count hits for primary contigs for each naming convention
+    hits = {
+        "ucsc": len(contigs & UCSC_PRIMARY_CONTIGS),
+        "ensembl": len(contigs & ENSEMBL_PRIMARY_CONTIGS),
+        "ncbi": len(contigs & NCBI_PRIMARY_CONTIGS),
+    }
 
-    # Determine convention based on majority
-    total = len(contig_names)
-    threshold = 0.5  # At least 50% of contigs should match the pattern
-
-    if ucsc_count / total >= threshold:
-        logging.debug(f"Detected UCSC naming convention ({ucsc_count}/{total} contigs)")
-        return "ucsc"
-    elif ncbi_count / total >= threshold:
-        logging.debug(f"Detected NCBI naming convention ({ncbi_count}/{total} contigs)")
-        return "ncbi"
-    elif ensembl_count / total >= threshold:
-        logging.debug(f"Detected ENSEMBL naming convention ({ensembl_count}/{total} contigs)")
-        return "ensembl"
+    convention, score = max(hits.items(), key=lambda item: item[1])
+    min_hits = 20
+    if score > min_hits:
+        logging.debug(f"Detected {convention} naming convention ({hits[convention]}) contigs)")
+        return convention
     else:
         logging.warning(
-            f"Could not determine naming convention. UCSC: {ucsc_count}, ENSEMBL: {ensembl_count}, NCBI: {ncbi_count}"
+            f"Could not determine naming convention. UCSC: {hits['ucsc']}, ENSEMBL: {hits['ensembl']}, NCBI: {hits['ncbi']}"
         )
         return "unknown"
 
