@@ -92,7 +92,11 @@
     "vntr_db_advntr": {
       "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_db_advntr.zip",
       "target_path": "vntr_db_advntr.zip",
-      "extract_to": "."
+      "extract_to": ".",
+      "config_paths": {
+        "advntr_reference_vntr_hg19": "vntr_db_advntr/hg19_muc1.db",
+        "advntr_reference_vntr_hg38": "vntr_db_advntr/hg38_muc1.db"
+      }
     }
   },
 

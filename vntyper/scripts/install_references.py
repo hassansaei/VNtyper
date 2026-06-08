@@ -809,10 +809,10 @@ def main(
 
         # Collect all references from VNtyper
         for ref_key, ref_info in vntyper_refs.items():
-            vntyper_target = ref_info.get("target_path")
-            if vntyper_target:
-                ref_path = output_dir / vntyper_target
-                updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
+            config_paths = ref_info.get("config_paths")
+            if config_paths:
+                for config_key, config_target in config_paths.items():
+                    updated_references[config_key] = (output_dir / config_target).resolve()
 
         # Collect references from own repository
         raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
