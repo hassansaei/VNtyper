@@ -619,9 +619,6 @@ def main():
             bam_file=args.bam_file,
             fasta_file=args.reference_fasta,
             flanking=args.flanking,
-            input_files={},  # Optionally populate if you want to reference them in the final report
-            pipeline_version=VERSION,
-            mean_vntr_coverage=None,  # If applicable, otherwise remove
             vcf_file=None,  # If applicable, otherwise remove
             config=config,
         )
