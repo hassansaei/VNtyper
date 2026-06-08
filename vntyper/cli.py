@@ -205,6 +205,7 @@ def main():
     parser_report.add_argument("--report-file", type=str, default=None, help="Name of the output report file.")
     parser_report.add_argument("--bed-file", type=Path, help="Path to the BED file for IGV reports.")
     parser_report.add_argument("--bam-file", type=Path, help="Path to the BAM file for IGV reports.")
+    parser_report.add_argument("--vcf-file", type=Path, help="Path to the VCF file for IGV reports.")
     parser_report.add_argument(
         "--reference-fasta",
         type=Path,
@@ -610,6 +611,13 @@ def main():
                 args.bed_file = candidate_bed
                 logging.debug(f"bed_file set to {args.bed_file}")
 
+        # Same approach for vcf-file (standard name is "output_indel.vcf" in "kestrel")
+        if args.vcf_file is None and args.input_dir:
+            candidate_vcf = args.input_dir / "kestrel" / "output_indel.vcf"
+            if candidate_vcf.exists():
+                args.vcf_file = candidate_vcf
+                logging.debug(f"vcf_file set to {args.vcf_file}")
+
         # Now call generate_summary_report
         generate_summary_report(
             output_dir=Path(args.output_dir),
@@ -619,10 +627,7 @@ def main():
             bam_file=args.bam_file,
             fasta_file=args.reference_fasta,
             flanking=args.flanking,
-            input_files={},  # Optionally populate if you want to reference them in the final report
-            pipeline_version=VERSION,
-            mean_vntr_coverage=None,  # If applicable, otherwise remove
-            vcf_file=None,  # If applicable, otherwise remove
+            vcf_file=args.vcf_file,
             config=config,
         )
 

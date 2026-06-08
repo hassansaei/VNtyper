@@ -418,7 +418,6 @@ def generate_summary_report(
     output_dir,
     template_dir,
     report_file,
-    log_file,
     bed_file=None,
     bam_file=None,
     fasta_file=None,
@@ -438,7 +437,6 @@ def generate_summary_report(
         output_dir (str): Output directory for the report.
         template_dir (str): Directory containing the report template.
         report_file (str): Name of the report file.
-        log_file (str): Path to the pipeline log file.
         bed_file (str, optional): Path to the BED file for IGV reports.
         bam_file (str, optional): Path to the BAM file for IGV reports.
         fasta_file (str, optional): Path to the reference FASTA file for IGV reports.
@@ -456,6 +454,7 @@ def generate_summary_report(
         template_dir,
         report_file,
     )
+    log_file = Path(output_dir) / "pipeline.log"
     logging.debug(
         "bed_file=%s, bam_file=%s, fasta_file=%s, flanking=%s, log_file=%s, vcf_file=%s",
         bed_file,
