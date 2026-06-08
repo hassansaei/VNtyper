@@ -808,7 +808,7 @@ def main(
                 updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from VNtyper
-        for ref_key, ref_info in vntyper_refs.items():
+        for _ref_key, ref_info in vntyper_refs.items():
             config_paths = ref_info.get("config_paths")
             if config_paths:
                 for config_key, config_target in config_paths.items():

@@ -511,15 +511,6 @@ def main():
             logging.debug("Shark module detected with BAM/CRAM input; exiting.")
             sys.exit(1)
 
-        # Determine which BWA reference to use from config using registry
-        from vntyper.scripts.reference_registry import get_coordinate_system
-
-        try:
-            coord_system = get_coordinate_system(args.reference_assembly)
-        except ValueError:
-            logging.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
-            coord_system = "GRCh37"
-
         # Map coordinate system for BWA reference lookup
         bwa_key = f"bwa_reference_{args.reference_assembly}"
         bwa_reference = config.get("reference_data", {}).get(bwa_key)
