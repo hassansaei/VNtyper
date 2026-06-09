@@ -1,12 +1,17 @@
 {
   "md5_chunk_size": 4096,
-
   "aligners": {
     "bwa": {
       "enabled": true,
       "executable": "bwa",
       "index_command": "bwa index {ref_path}",
-      "index_files": [".amb", ".ann", ".bwt", ".pac", ".sa"],
+      "index_files": [
+        ".amb",
+        ".ann",
+        ".bwt",
+        ".pac",
+        ".sa"
+      ],
       "alignment_command": "bwa mem -t {threads} {ref_path} {r1} {r2}",
       "threads_default": 4,
       "supports_threading": false,
@@ -17,7 +22,13 @@
       "enabled": false,
       "executable": "bwa-mem2",
       "index_command": "bwa-mem2 index {ref_path}",
-      "index_files": [".0123", ".amb", ".ann", ".bwt.2bit.64", ".pac"],
+      "index_files": [
+        ".0123",
+        ".amb",
+        ".ann",
+        ".bwt.2bit.64",
+        ".pac"
+      ],
       "alignment_command": "bwa-mem2 mem -t {threads} {ref_path} {r1} {r2}",
       "threads_default": 4,
       "supports_threading": false,
@@ -28,7 +39,9 @@
       "enabled": false,
       "executable": "minimap2",
       "index_command": "minimap2 -d {ref_path}.mmi {ref_path}",
-      "index_files": [".mmi"],
+      "index_files": [
+        ".mmi"
+      ],
       "alignment_command": "minimap2 -ax sr -t {threads} {ref_path}.mmi {r1} {r2}",
       "threads_default": 4,
       "supports_threading": true,
@@ -36,9 +49,7 @@
       "description": "Minimap2: versatile aligner, fast for both short and long reads (using sr preset)"
     }
   },
-
   "bwa_path": "bwa",
-
   "ucsc_references": {
     "hg19": {
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz",
@@ -53,7 +64,6 @@
       "index_command": "bwa index {path}"
     }
   },
-
   "ncbi_references": {
     "GRCh37": {
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
@@ -70,7 +80,6 @@
       "description": "NCBI GRCh38.p14 chromosome 1 (uses NC_000001.11 accession in FASTA header)"
     }
   },
-
   "ensembl_references": {
     "hg19_ensembl": {
       "url": "https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz",
@@ -87,7 +96,6 @@
       "description": "ENSEMBL GRCh38 chromosome 1 (uses '1' in FASTA header, no chr prefix)"
     }
   },
-
   "vntyper_references": {
     "vntr_db_advntr": {
       "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/refs/heads/main/reference/vntr_db_advntr.zip",
@@ -97,9 +105,16 @@
         "advntr_reference_vntr_hg19": "vntr_db_advntr/hg19_muc1.db",
         "advntr_reference_vntr_hg38": "vntr_db_advntr/hg38_muc1.db"
       }
+    },
+    "shark_muc1_region_hg19": {
+      "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/muc1_region_hg19.fa",
+      "target_path": "muc1_region_hg19.fa",
+      "index_command": "samtools faidx {path}",
+      "config_paths": {
+        "shark_reference_hg19": "muc1_region_hg19.fa"
+      }
     }
   },
-
   "own_repository_references": {
     "raw_files": [
       {

@@ -644,9 +644,7 @@ def main(
         references_to_process = ["hg19", "hg38"]
         logging.info("No references specified, using default: hg19, hg38")
 
-    all_available_refs = (
-        set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
-    )
+    all_available_refs = set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
     requested_refs = set(references_to_process)
     found_refs = requested_refs & all_available_refs
     missing_refs = requested_refs - all_available_refs
