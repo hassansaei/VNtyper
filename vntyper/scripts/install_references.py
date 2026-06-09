@@ -644,9 +644,7 @@ def main(
         references_to_process = ["hg19", "hg38"]
         logging.info("No references specified, using default: hg19, hg38")
 
-    all_available_refs = (
-        set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
-    )
+    all_available_refs = set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
     requested_refs = set(references_to_process)
     found_refs = requested_refs & all_available_refs
     missing_refs = requested_refs - all_available_refs
@@ -782,28 +780,37 @@ def main(
             ucsc_target = ref_info.get("target_path")
             if ucsc_target:
                 ref_path = output_dir / ucsc_target
-                updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
+                if ref_path.suffix == ".gz":
+                    ref_path = ref_path.with_suffix("")
+                config_key = ref_info.get("config_key", f"ucsc_{ref_key}")
+                updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from NCBI
         for ref_key, ref_info in ncbi_refs.items():
             ncbi_target = ref_info.get("target_path")
             if ncbi_target:
                 ref_path = output_dir / ncbi_target
-                updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
+                if ref_path.suffix == ".gz":
+                    ref_path = ref_path.with_suffix("")
+                config_key = ref_info.get("config_key", f"ncbi_{ref_key}")
+                updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from ENSEMBL
         for ref_key, ref_info in ensembl_refs.items():
             ensembl_target = ref_info.get("target_path")
             if ensembl_target:
                 ref_path = output_dir / ensembl_target
-                updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
+                if ref_path.suffix == ".gz":
+                    ref_path = ref_path.with_suffix("")
+                config_key = ref_info.get("config_key", f"ensembl_{ref_key}")
+                updated_references[config_key] = ref_path.resolve()
 
         # Collect all references from VNtyper
-        for ref_key, ref_info in vntyper_refs.items():
-            vntyper_target = ref_info.get("target_path")
-            if vntyper_target:
-                ref_path = output_dir / vntyper_target
-                updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
+        for _ref_key, ref_info in vntyper_refs.items():
+            config_paths = ref_info.get("config_paths")
+            if config_paths:
+                for config_key, config_target in config_paths.items():
+                    updated_references[config_key] = (output_dir / config_target).resolve()
 
         # Collect references from own repository
         raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
