@@ -36,8 +36,16 @@ jobs:
           python-version: '3.12'
           enable-cache: true
 
+      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
+      # (`error: The interpreter at /usr is externally managed`). Create an explicit
+      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
+      - name: Create virtualenv
+        run: |
+          uv venv
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Install dependencies
-        run: uv pip install --system ".[docs]"
+        run: uv pip install ".[docs]"
 
       - name: Build documentation
         run: mkdocs build --strict

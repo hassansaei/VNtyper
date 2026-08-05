@@ -63,6 +63,14 @@ jobs:
           python-version: '3.12'
           enable-cache: true
 
+      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
+      # (`error: The interpreter at /usr is externally managed`). Create an explicit
+      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
+      - name: Create virtualenv
+        run: |
+          uv venv
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       # Ruff is a standalone binary. This job used to `pip install -e .[dev]`, pulling
       # the full scientific stack (pandas, numpy, matplotlib, plotly, pysam, ...) - 28s
       # of installing to run a 0s lint.
@@ -72,7 +80,7 @@ jobs:
       # ruff. Going through `make` keeps CI and local scope identical - formatting was
       # previously checked only locally and not gated at all in CI.
       - name: Install ruff
-        run: uv pip install --system ruff
+        run: uv pip install ruff
 
       - run: make lint
       - run: make format-check
@@ -93,8 +101,16 @@ jobs:
           python-version: '3.10'
           enable-cache: true
 
+      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
+      # (`error: The interpreter at /usr is externally managed`). Create an explicit
+      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
+      - name: Create virtualenv
+        run: |
+          uv venv
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       # mypy genuinely needs the runtime deps installed to resolve imports.
-      - run: uv pip install --system -e .[dev]
+      - run: uv pip install -e .[dev]
 
       - run: make type-check
 
@@ -120,7 +136,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - run: uv pip install --system -e .[dev]
+      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
+      # (`error: The interpreter at /usr is externally managed`). Create an explicit
+      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
+      - name: Create virtualenv
+        run: |
+          uv venv
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
 
       # Enforces the coverage floor as well as the tests. tests/unit/test_marker_hygiene.py
       # additionally fails the build if any unit test file is missing its `unit` marker.
@@ -143,7 +167,15 @@ jobs:
           python-version: '3.12'
           enable-cache: true
 
-      - run: uv pip install --system -e .[docs]
+      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
+      # (`error: The interpreter at /usr is externally managed`). Create an explicit
+      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
+      - name: Create virtualenv
+        run: |
+          uv venv
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[docs]
 
       # docs.yml only builds on push to main, so a PR that breaks `mkdocs --strict`
       # was previously only discovered after merge, when the deploy failed.

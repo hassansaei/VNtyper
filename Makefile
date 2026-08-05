@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full check-ci ci-local ci-local-docker ci-local-docs lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -43,6 +43,7 @@ help:
 	@echo "$(GREEN)Gates (run before opening a PR):$(RESET)"
 	@echo "  make check-all         - format + lint + mypy + unit tests (~4s)"
 	@echo "  make ci-local          - everything ci-tests.yml runs, locally"
+	@echo "  make ci-local-uv       - replicate CI's uv install path in a temp venv"
 	@echo "  make ci-local-docker   - everything docker-build.yml runs, locally"
 	@echo "  make check-full        - check-all + integration tests (needs test data)"
 	@echo "  make lint-actions      - Lint GitHub Actions workflows (actionlint)"
@@ -289,8 +290,35 @@ ci-local-docs:
 		exit 1; \
 	fi
 
-# Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs.
-ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-docs
+# Replicates the INSTALL path CI uses (astral-sh/setup-uv -> uv venv -> uv pip install)
+# in a throwaway venv, then runs the same test command.
+#
+# This exists because `ci-local` runs in whatever environment you already have, so it
+# cannot catch breakage in how CI *builds* its environment. It missed exactly that once:
+# `uv pip install --system` fails on Ubuntu's PEP 668 interpreter
+# ("error: The interpreter at /usr is externally managed") and every CI job died at the
+# install step while every local check was green.
+CI_LOCAL_VENV := .ci-local-venv
+
+ci-local-uv:
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "$(RED)uv not installed - cannot verify the CI install path.$(RESET)"; \
+		echo "  Fix: curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+		exit 1; \
+	}
+	@echo "$(BLUE)Replicating the CI install path with uv...$(RESET)"
+	@rm -rf $(CI_LOCAL_VENV)
+	uv venv $(CI_LOCAL_VENV)
+	VIRTUAL_ENV=$(PWD)/$(CI_LOCAL_VENV) uv pip install -e ".[dev]"
+	@echo "$(BLUE)Running the CI test command in that environment...$(RESET)"
+	VIRTUAL_ENV=$(PWD)/$(CI_LOCAL_VENV) PATH="$(PWD)/$(CI_LOCAL_VENV)/bin:$$PATH" \
+		$(MAKE) --no-print-directory test-unit-cov
+	@rm -rf $(CI_LOCAL_VENV)
+	@echo "$(GREEN)✓ CI install path verified$(RESET)"
+
+# Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs, plus a
+# from-scratch install exactly as CI builds it.
+ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-docs ci-local-uv
 	@echo ""
 	@echo "$(GREEN)========================================$(RESET)"
 	@echo "$(GREEN)✓ Local CI parity checks all passed$(RESET)"

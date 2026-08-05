@@ -33,6 +33,8 @@ Neither exists — use the commands above.
 | Task | Command |
 | --- | --- |
 | Full pre-PR gate | `make check-all` |
+| Everything CI runs, locally | `make ci-local` |
+| Everything the image CI runs | `make ci-local-docker` |
 | Format + autofix | `make format` |
 | Lint | `make lint` |
 | Type check | `make type-check` |
@@ -46,7 +48,19 @@ Neither exists — use the commands above.
 
 Always run `make check-all` before opening a PR. It gates on the **unit** tier only
 (~0.5 s) so it is runnable on a fresh clone; use `make check-full` when you also want the
-tiers that need the 1.1 GB Zenodo archive. Run pytest **from the repo root** —
+tiers that need the 1.1 GB Zenodo archive.
+
+**If you changed anything under `.github/workflows/`, `make check-all` is not enough —
+run `make ci-local`.** It mirrors `ci-tests.yml` job for job (actionlint, format, lint,
+mypy, unit tests + coverage, strict docs build) *and* rebuilds the environment from
+scratch through CI's own installer via `make ci-local-uv`. That last part matters:
+`ci-local`'s other steps run in whatever environment you already have, so they cannot
+catch breakage in how CI *builds* its environment — which is exactly how
+`uv pip install --system` shipped green locally and then failed every CI job (see trap
+14). `make ci-local-docker` covers the image workflow. Neither target skips silently:
+if a required tool is missing they fail and say so.
+
+Run pytest **from the repo root** —
 `tests/parametrization.py` opens `tests/test_data_config.json` by relative path at
 collection time, so any other CWD breaks collection, including `-m unit`.
 
@@ -238,7 +252,15 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
     `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
     if the pushed tag disagrees with `vntyper/version.py`.
-13. **`pyproject.toml` and the conda env disagree on numpy.** `pyproject.toml` pins
+13. **CI installs with `uv` into an explicit venv, never `--system`.** GitHub's
+    `ubuntu-24.04` image ships a PEP 668 "externally managed" interpreter, so
+    `uv pip install --system` fails outright with
+    `error: The interpreter at /usr is externally managed`. Every job therefore runs
+    `uv venv`, exports `VIRTUAL_ENV`, and appends `.venv/bin` to `$GITHUB_PATH` before
+    installing. Keep that three-line block if you add a job; `make ci-local-uv`
+    reproduces it locally, and it is the only local check that exercises the install
+    layer at all.
+14. **`pyproject.toml` and the conda env disagree on numpy.** `pyproject.toml` pins
     `numpy>=1.26.0,<2.0.0`; `conda/environment_vntyper.yml` installs `numpy=2.0.2`. The
     Dockerfile therefore installs the package with `pip install --no-deps`, or pip
     downgrades conda's numpy from PyPI and mixes provenance. Reconcile the two before

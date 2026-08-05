@@ -208,7 +208,15 @@ jobs:
           python-version: '3.12'
           enable-cache: true
 
-      - run: uv pip install --system -e .[dev]
+      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
+      # (`error: The interpreter at /usr is externally managed`). Create an explicit
+      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
+      - name: Create virtualenv
+        run: |
+          uv venv
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
 
       # Structural checks against the built image: ~1s, one container start, no network
       # inside it and no Zenodo data. Deliberately BEFORE the test-data restore, so a
