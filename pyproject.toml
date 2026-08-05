@@ -51,34 +51,49 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "types-requests>=2.0.0",
-    # docker/app (FastAPI + Celery web service) test-only deps. None of these
-    # ship with the vntyper package; docker/app itself is installed from
-    # docker/requirements-web.txt, not from this project. fastapi[standard]
-    # pulls in httpx (TestClient's ASGI transport), python-multipart (Form/File
-    # parsing) and email-validator as transitive deps, so they are not listed
-    # separately here.
-    "fastapi[standard]>=0.115.3",
-    "redis>=5.2.0",
-    "celery>=5.3",
-    # Pinned below 0.2: 0.2.0 removed the `FastAPILimiter` class docker/app
-    # imports (`from fastapi_limiter import FastAPILimiter`), which is also
-    # what docker/requirements-web.txt pins in production (==0.1.6).
-    "fastapi-limiter>=0.1.6,<0.2",
-    "passlib[bcrypt]>=1.7.4",
-    "pydantic>=2.10.0",
+    # docker/app (FastAPI + Celery web service) deps. None of these ship with the
+    # vntyper package; docker/app itself is installed from
+    # docker/requirements-web.txt, not from this project.
+    #
+    # Pinned, not lower-bounded, and pinned to exactly what
+    # docker/requirements-web.txt installs: the tests under tests/unit/web/ run
+    # against these, so a lower bound would let the tier resolve a newer framework
+    # than the image ever runs and pass against a stack nobody deploys.
+    # tests/unit/test_version_consistency.py fails the build when this list and
+    # requirements-web.txt disagree. requirements-web.txt is an input to the base
+    # image's content hash (AGENTS.md trap 10), so it is the fixed side: change
+    # versions there first, then mirror them here.
+    "fastapi[standard]==0.115.3",
+    "uvicorn[standard]==0.32.0",
+    "redis==5.2.0",
+    "celery==5.4.0",
+    "python-multipart==0.0.31",
+    # 0.2.0 removed the `FastAPILimiter` class docker/app imports
+    # (`from fastapi_limiter import FastAPILimiter`).
+    "fastapi-limiter==0.1.6",
+    "email_validator==2.2.0",
+    "passlib[bcrypt]==1.7.4",
+    "pydantic==2.10.0",
+    # The one deliberate exception to the mirror above: test-only, so the image
+    # has no reason to carry it and requirements-web.txt does not list it.
     "fakeredis>=2.21",  # pure-Python Redis stand-in, unit-tier only
 ]
 web = [
-    # Mirrors docker/requirements-web.txt, the source of truth for what the
-    # Docker image installs. This group exists so `pip install .[web]` can
-    # run docker/app outside the container; the image itself still installs
-    # from requirements-web.txt directly.
-    "fastapi[standard]>=0.115.3",
-    "redis>=5.2.0",
-    "celery>=5.3",
-    "fastapi-limiter>=0.1.6,<0.2",
-    "passlib[bcrypt]>=1.7.4",
-    "pydantic>=2.10.0",
+    # Mirrors docker/requirements-web.txt exactly, pin for pin. That file is the
+    # source of truth for what the Docker image installs; this group exists so
+    # `pip install .[web]` can run docker/app outside the container against the
+    # same versions. The image itself still installs from requirements-web.txt
+    # directly, and tests/unit/test_version_consistency.py fails the build if the
+    # two ever drift apart.
+    "fastapi[standard]==0.115.3",
+    "uvicorn[standard]==0.32.0",
+    "redis==5.2.0",
+    "celery==5.4.0",
+    "python-multipart==0.0.31",
+    "fastapi-limiter==0.1.6",
+    "email_validator==2.2.0",
+    "passlib[bcrypt]==1.7.4",
+    "pydantic==2.10.0",
 ]
 docs = [
     "mkdocs>=1.6,<2",
