@@ -4,23 +4,32 @@ channels:
   - bioconda
   - nodefaults
 dependencies:
-  - python=3.9.19
+  # Python 3.12: 3.9 reached end of life on 2025-10-31 and no longer receives security
+  # fixes. The versions below are exactly what conda-forge/bioconda resolve to for
+  # 3.12, pinned so the environment stays reproducible.
+  #
+  # Everything on the NUMERICAL path is unchanged from the 3.9 environment - bwa,
+  # samtools, fastp, bcftools, openjdk (which runs Kestrel), pysam, numpy, pandas and
+  # biopython are all identical versions - so genotyping output is unaffected by the
+  # interpreter bump. Only the reporting stack moved: matplotlib 3.9.2 -> 3.10.9,
+  # plotly 5.24.0 -> 6.9.0, igv-reports 1.13.0 -> 1.16.0, jinja2 3.1.4 -> 3.1.6.
+  - python=3.12.13
   - bioconda::bwa=0.7.18
   - samtools=1.20
   - bioconda::fastp=0.23.4
   - pandas=2.2.2
   - numpy=2.0.2
-  - regex=2024.7.24
+  - regex=2026.7.19
   - biopython=1.84
-  - setuptools=72.2.0
-  - jinja2=3.1.4
-  - ca-certificates=2024.7.4
-  - openssl=3.3.2
-  - matplotlib=3.9.2
+  - setuptools=83.0.0
+  - jinja2=3.1.6
+  - ca-certificates=2026.7.22
+  - openssl=3.6.3
+  - matplotlib=3.10.9
   - seaborn=0.13.2
-  - certifi=2024.8.30
-  - igv-reports=1.13.0
-  - plotly=5.24.0
+  - certifi=2026.7.22
+  - igv-reports=1.16.0
+  - plotly=6.9.0
   - openjdk=11.0.23
   - bcftools=1.21
   - pysam=0.22.1

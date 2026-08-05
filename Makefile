@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -29,22 +29,35 @@ help:
 	@echo "$(GREEN)Testing:$(RESET)"
 	@echo "  make download-test-data      - Download test data from Zenodo (1.1GB, ~10-30 min)"
 	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
-	@echo "  make test                    - Run all tests (with live logging)"
-	@echo "  make test-unit               - Run unit tests only (fast)"
+	@echo "  make test                    - Run all tests (needs test data + Docker)"
+	@echo "  make test-unit               - Run unit tests only (fast, ~0.5s)"
+	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
+	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
-	@echo "  make test-integration-parallel - Run integration tests in parallel (67-81% faster)"
+	@echo "  make test-integration-parallel - Run integration tests in parallel"
 	@echo "  make test-advntr             - Run adVNTR test only"
 	@echo "  make test-cov                - Run tests with coverage report"
 	@echo "  make test-quiet              - Run tests with minimal output"
 	@echo "  make test-verbose            - Run tests with detailed output"
+	@echo ""
+	@echo "$(GREEN)Gates (run before opening a PR):$(RESET)"
+	@echo "  make check-all         - format + lint + mypy + unit tests (~4s)"
+	@echo "  make ci-local          - everything ci-tests.yml runs, locally"
+	@echo "  make ci-local-uv       - replicate CI's uv install path in a temp venv"
+	@echo "  make ci-local-docker   - everything docker-build.yml runs, locally"
+	@echo "  make check-full        - check-all + integration tests (needs test data)"
+	@echo "  make lint-actions      - Lint GitHub Actions workflows (actionlint)"
+	@echo "  make lint-docker       - Lint Dockerfiles (BuildKit check)"
 	@echo ""
 	@echo "$(GREEN)Build & Maintenance:$(RESET)"
 	@echo "  make clean            - Remove build artifacts and cache"
 	@echo "  make build            - Build distribution packages"
 	@echo ""
 	@echo "$(GREEN)Docker:$(RESET)"
-	@echo "  make docker-build      - Build multi-stage Docker image (production-ready)"
+	@echo "  make docker-build      - Build application image on the published base (~3 min)"
+	@echo "  make docker-build-base - Rebuild the base image (conda+refs, ~20-30 min)"
 	@echo "  make test-docker       - Run Docker integration tests with testcontainers"
+	@echo "  make test-docker-smoke - Fast image structure checks (~1s, no test data)"
 	@echo "  make test-docker-quick - Run Docker tests (excluding slow tests)"
 	@echo "  make docker-clean      - Remove all VNtyper Docker images"
 	@echo ""
@@ -134,8 +147,33 @@ test:
 
 test-unit:
 	@echo "$(BLUE)Running unit tests (fast)...$(RESET)"
-	pytest -m unit
+	pytest -m unit tests/unit -o log_cli=false
 	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
+
+# Inner dev loop: last-failed first, stop at the first failure.
+test-fast:
+	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
+	pytest -m unit tests/unit -o log_cli=false -q --ff -x
+
+# Coverage for the fast tier.
+#
+# Two thresholds:
+#   HARD FLOOR - `fail_under` in pyproject.toml [tool.coverage.report]. CI fails below
+#                it. A ratchet: it only ever goes up.
+#   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
+#                never fails.
+# scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
+# whenever coverage climbs past it.
+COVERAGE_TARGET ?= 80
+
+test-unit-cov:
+	@echo "$(BLUE)Running unit tests with coverage...$(RESET)"
+	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing
+	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
+	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
+
+coverage-report:
+	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 
 test-integration:
 	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
@@ -143,14 +181,16 @@ test-integration:
 	pytest -m integration
 	@echo "$(GREEN)✓ Integration tests complete$(RESET)"
 
+# --dist load, NOT loadfile: all 11 integration tests live in a single file, so
+# loadfile assigned every test to one worker and idled the rest.
 test-integration-parallel:
 	@echo "$(BLUE)Running integration tests in parallel (auto-detect CPU cores)...$(RESET)"
-	@echo "$(BLUE)Using pytest-xdist for parallel execution (67-81% faster)$(RESET)"
+	@echo "$(BLUE)Using pytest-xdist for parallel execution$(RESET)"
 	@if ! python -c "import xdist" 2>/dev/null; then \
 		echo "$(RED)Error: pytest-xdist not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	pytest -n auto --dist loadfile -m integration -v
+	pytest -n auto --dist load -m integration -v
 	@echo "$(GREEN)✓ Integration tests complete (parallel mode)$(RESET)"
 
 test-advntr:
@@ -195,11 +235,138 @@ build:
 all: format lint type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check: format-check type-check test
+# check / check-all gate on the UNIT tier only, so they are runnable on a fresh clone.
+# They used to depend on `test` (bare pytest), which pulls in the integration tier
+# (needs a 1.1 GB Zenodo download) and the docker tier (needs a daemon + image build)
+# - i.e. the documented pre-PR command could not actually be run.
+check: format-check type-check test-unit
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check-all: format-check lint type-check-all test
+check-all: format-check lint type-check-all test-unit
 	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
+
+# Opt-in gate that additionally runs the tiers needing test data / Docker.
+check-full: check-all test-integration
+	@echo "$(GREEN)✓ All checks passed (including integration)$(RESET)"
+
+# ---------------------------------------------------------------------------
+# Local CI parity
+# ---------------------------------------------------------------------------
+# `make ci-local` runs every check the GitHub Actions workflows run, so a red CI run
+# should never be the first time you learn something is broken. It deliberately mirrors
+# ci-tests.yml job for job.
+#
+# ACTIONLINT resolves to a local binary if present, otherwise the official container.
+ACTIONLINT ?= $(shell command -v actionlint 2>/dev/null)
+
+lint-actions:
+	@echo "$(BLUE)Linting GitHub Actions workflows...$(RESET)"
+	@if [ -n "$(ACTIONLINT)" ]; then \
+		$(ACTIONLINT); \
+	elif command -v docker >/dev/null 2>&1; then \
+		docker run --rm -v "$(PWD):/repo" --workdir /repo rhysd/actionlint:latest -color; \
+	else \
+		echo "$(RED)actionlint not found and Docker unavailable.$(RESET)"; \
+		echo "Install: go install github.com/rhysd/actionlint/cmd/actionlint@latest"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ Workflows valid$(RESET)"
+
+# `docker build --check` needs BuildKit and Docker Engine >= 25. Detect it and fail
+# with the actual remedy, rather than surfacing an opaque "unknown flag" error.
+lint-docker:
+	@echo "$(BLUE)Linting Dockerfiles (BuildKit check)...$(RESET)"
+	@if ! docker build --help 2>/dev/null | grep -q -- '--check'; then \
+		echo "$(RED)This Docker Engine does not support 'docker build --check'.$(RESET)"; \
+		echo "  It needs BuildKit and Docker Engine 25 or newer; CI runs 28.x."; \
+		echo "  Upgrade Docker, or run 'make docker-build' alone to skip this lint."; \
+		exit 1; \
+	fi
+	@DOCKER_BUILDKIT=1 docker build --check -f docker/Dockerfile.base . >/dev/null
+	@DOCKER_BUILDKIT=1 docker build --check -f docker/Dockerfile \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) . >/dev/null
+	@echo "$(GREEN)✓ Dockerfiles valid$(RESET)"
+
+# The docs job in ci-tests.yml. Fails loudly rather than skipping when the docs extra
+# is missing - a silent skip would defeat the point of local CI parity.
+ci-local-docs:
+	@if python -c "import mkdocs" 2>/dev/null; then \
+		$(MAKE) --no-print-directory docs-check; \
+	else \
+		echo "$(RED)mkdocs is not installed, so the CI docs job was NOT verified.$(RESET)"; \
+		echo "  Fix: pip install -e '.[docs]'"; \
+		exit 1; \
+	fi
+
+# Replicates the INSTALL path CI uses (astral-sh/setup-uv -> uv venv -> uv pip install)
+# in a throwaway venv, then runs the same test command.
+#
+# This exists because `ci-local` runs in whatever environment you already have, so it
+# cannot catch breakage in how CI *builds* its environment. It missed exactly that once:
+# `uv pip install --system` fails on Ubuntu's PEP 668 interpreter
+# ("error: The interpreter at /usr is externally managed") and every CI job died at the
+# install step while every local check was green.
+CI_LOCAL_VENV := .ci-local-venv
+
+ci-local-uv:
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "$(RED)uv not installed - cannot verify the CI install path.$(RESET)"; \
+		echo "  Fix: curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+		exit 1; \
+	}
+	@echo "$(BLUE)Replicating the CI install path with uv...$(RESET)"
+	@rm -rf $(CI_LOCAL_VENV)
+	uv venv $(CI_LOCAL_VENV)
+	VIRTUAL_ENV=$(PWD)/$(CI_LOCAL_VENV) uv pip install -e ".[dev]"
+	@echo "$(BLUE)Running the CI test command in that environment...$(RESET)"
+	VIRTUAL_ENV=$(PWD)/$(CI_LOCAL_VENV) PATH="$(PWD)/$(CI_LOCAL_VENV)/bin:$$PATH" \
+		$(MAKE) --no-print-directory test-unit-cov
+	@rm -rf $(CI_LOCAL_VENV)
+	@echo "$(GREEN)✓ CI install path verified$(RESET)"
+
+# Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs, plus a
+# from-scratch install exactly as CI builds it.
+ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-docs ci-local-uv
+	@echo ""
+	@echo "$(GREEN)========================================$(RESET)"
+	@echo "$(GREEN)✓ Local CI parity checks all passed$(RESET)"
+	@echo "$(GREEN)========================================$(RESET)"
+	@echo "Verified here: workflow syntax, format, lint, mypy, unit tests + coverage, docs."
+	@echo "NOT verified here (CI only):"
+	@echo "  - the Python 3.9-3.12 matrix; this ran your interpreter only"
+	@echo "  - the Docker image jobs -> run 'make ci-local-docker'"
+
+# Files whose contents define the base image. CI hashes exactly this set; keep in sync
+# with the hashFiles() list in docker-base.yml (tests/unit/test_version_consistency.py
+# and test_workflow_consistency.py guard the pieces that can drift).
+BASE_INPUTS := conda docker/Dockerfile.base docker/requirements-web.txt \
+	vntyper/scripts/install_references.py vntyper/scripts/install_references_config.json \
+	vntyper/dependencies/advntr reference .dockerignore
+
+# Mirrors docker-build.yml. Needs a Docker daemon.
+#
+# VNTYPER_TEST_IMAGE is forced to the image just built - otherwise the smoke tier would
+# fall back to its default tag and silently test a different, older image.
+#
+# If you have edited a base input, building on the published :latest base tests
+# something CI will not build, so refuse rather than give false assurance.
+ci-local-docker: lint-docker
+	@if git rev-parse --verify -q origin/main >/dev/null 2>&1 && \
+	    ! git diff --quiet origin/main -- $(BASE_INPUTS) 2>/dev/null; then \
+		if [ "$(DOCKER_BASE_IMAGE)" = "ghcr.io/hassansaei/vntyper-base:latest" ]; then \
+			echo "$(RED)You changed a base image input, but DOCKER_BASE_IMAGE still points at the published :latest.$(RESET)"; \
+			echo "  CI will build a new base from your changes; this would not. Run:"; \
+			echo "    make docker-build-base"; \
+			echo "    make ci-local-docker DOCKER_BASE_IMAGE=vntyper-base:local"; \
+			exit 1; \
+		fi; \
+		echo "$(BLUE)Base inputs changed; using $(DOCKER_BASE_IMAGE)$(RESET)"; \
+	fi
+	@$(MAKE) --no-print-directory docker-build
+	@$(MAKE) --no-print-directory test-docker-smoke VNTYPER_TEST_IMAGE=$(DOCKER_IMAGE)
+	@echo "$(BLUE)Running the Docker tier CI runs on PRs...$(RESET)"
+	@$(MAKE) --no-print-directory test-docker-quick VNTYPER_TEST_IMAGE=$(DOCKER_IMAGE)
+	@echo "$(GREEN)✓ Local Docker CI parity checks passed$(RESET)"
 
 # Docker targets
 #Docker configuration
@@ -207,11 +374,37 @@ DOCKER_IMAGE_NAME := vntyper
 DOCKER_IMAGE_TAG := latest
 DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
+# The image is split in two. docker/Dockerfile.base carries the conda environments,
+# adVNTR and the reference genomes (expensive, changes a few times a year);
+# docker/Dockerfile carries only the application (~3 min).
+#
+# BASE_IMAGE defaults to the published ghcr base, so `make docker-build` alone works
+# and just pulls it. Build the base locally only when you are changing conda/**,
+# the reference config, or Dockerfile.base itself.
+DOCKER_BASE_IMAGE ?= ghcr.io/hassansaei/vntyper-base:latest
+
+docker-build-base:
+	@echo "$(BLUE)Building base image (conda envs + adVNTR + references)...$(RESET)"
+	@echo "$(BLUE)Note: this downloads and BWA-indexes reference genomes; expect 20-30 min$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.base -t vntyper-base:local .
+	@echo "$(GREEN)✓ Base image built: vntyper-base:local$(RESET)"
+	@echo "$(GREEN)  Now run: make docker-build DOCKER_BASE_IMAGE=vntyper-base:local$(RESET)"
+
 docker-build:
-	@echo "$(BLUE)Building Docker image (multi-stage production build)...$(RESET)"
-	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t $(DOCKER_IMAGE) .
+	@echo "$(BLUE)Building application image on $(DOCKER_BASE_IMAGE)...$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		-t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
-	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
+
+# Fast structural checks against an already-built image. No Zenodo test data, no
+# network inside the container, ~2s. Set VNTYPER_TEST_IMAGE to point at a tag other
+# than vntyper:local.
+test-docker-smoke:
+	@echo "$(BLUE)Running image structure smoke tests on $(or $(VNTYPER_TEST_IMAGE),vntyper:local)...$(RESET)"
+	VNTYPER_TEST_IMAGE=$(or $(VNTYPER_TEST_IMAGE),vntyper:local) \
+		pytest -m smoke tests/docker -o log_cli=false
+	@echo "$(GREEN)✓ Image smoke tests complete$(RESET)"
 
 test-docker:
 	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"
@@ -220,7 +413,7 @@ test-docker:
 		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	pytest -m docker -v
+	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) pytest -m docker -v
 	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
 test-docker-quick:
@@ -230,6 +423,7 @@ test-docker-quick:
 		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
+	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
 	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_fast]" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_container_health" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_volume_mounts" \

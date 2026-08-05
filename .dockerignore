@@ -88,8 +88,16 @@ tests/benchmark/
 
 # Bioinformatics Data Files (CRITICAL - Saves 143GB+)
 # =============================================================================
-# Large reference genome files
-reference/
+# Large reference genome files.
+# Exclude the GENERATED bulk only, not the whole directory. The small tracked files at
+# reference/ top level (~192 KB total) are real image inputs: muc1_region_hg19.fa is
+# required by the SHARK module via shark_config.json, and vntr_db_advntr.zip carries the
+# adVNTR databases that config.json points at. The old Dockerfile obtained them by
+# `git clone`ing the repo; now they come from the build context, so they must not be
+# ignored. Everything multi-GB lives in the two subdirectories below.
+reference/alignment/
+reference/vntr_db_advntr/
+reference/*.log
 reference_old/
 
 # User output and downloads
@@ -173,3 +181,21 @@ dmypy.json
 *.db
 *.sqlite
 *.sqlite3
+
+# Local clone of the upstream adVNTR source tree. It is in .gitignore, but Docker does
+# NOT read .gitignore - without this line it was 46 MB of a 49 MB build context, and
+# install_advntr.sh would collide with a context-copied tree.
+adVNTR/
+
+# Dev tooling caches and agent config - never needed in an image
+.ruff_cache/
+.benchmarks/
+.claude/
+AGENTS.md
+CLAUDE.md
+
+# Docs and workflow sources are not part of the runtime image
+docs/
+snakemake/
+mkdocs.yml
+.github/

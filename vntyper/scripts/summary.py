@@ -16,7 +16,10 @@ so that all available data is expanded into individual columns.
 import csv
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def start_summary(version=None, input_files=None):
@@ -85,8 +88,8 @@ def parse_tsv(file_path):
 
     try:
         with open(file_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
+            for line_number, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
                 if not line:
                     continue
                 if line.startswith("#"):
@@ -96,8 +99,19 @@ def parse_tsv(file_path):
                     header = line.split("\t")
                     continue
                 row_values = line.split("\t")
-                row_dict = dict(zip(header, row_values))
-                data.append(row_dict)
+                # Validate the field count per row rather than letting zip() silently
+                # truncate to the shorter sequence: a ragged row means a malformed or
+                # truncated file, and dropping columns without a word turns corruption
+                # into a plausible-looking result. Skipping just the bad row keeps one
+                # bad line from discarding the whole file, which is what strict=True
+                # would do here (the exception would escape to the handler below).
+                if len(row_values) != len(header):
+                    logger.warning(
+                        f"{file_path}:{line_number}: skipping malformed row - expected "
+                        f"{len(header)} fields, found {len(row_values)}"
+                    )
+                    continue
+                data.append(dict(zip(header, row_values, strict=True)))
     except Exception as e:
         comments.append(f"Error parsing TSV file: {e}")
 
@@ -132,8 +146,15 @@ def parse_csv(file_path):
                 if header is None:
                     header = row
                     continue
-                row_dict = dict(zip(header, row))
-                data.append(row_dict)
+                # See the note in parse_tsv: warn and skip the individual malformed row
+                # rather than silently truncating it or discarding the whole file.
+                if len(row) != len(header):
+                    logger.warning(
+                        f"{file_path}:{reader.line_num}: skipping malformed row - expected "
+                        f"{len(header)} fields, found {len(row)}"
+                    )
+                    continue
+                data.append(dict(zip(header, row, strict=True)))
     except Exception as e:
         comments.append(f"Error parsing CSV file: {e}")
 

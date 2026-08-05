@@ -7,7 +7,7 @@ name = "vntyper"
 dynamic = ["version"]
 description = "VNtyper: A tool for genotyping MUC1-VNTR"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "BSD-3-Clause"}
 authors = [
     {name = "Hassan Saei", email = "hassan.saei@inserm.fr"},
@@ -19,16 +19,16 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
     "pandas>=2.2.0,<2.3.0",
-    "numpy>=1.26.0,<2.0.0",
+    "numpy>=1.26.0",
     "regex>=2024.7.24",
     "biopython>=1.84",
     "setuptools>=72.2.0",
@@ -100,8 +100,8 @@ version = {attr = "vntyper.version.__version__"}
 line-length = 120
 indent-width = 4
 
-# Target Python 3.9 (minimum supported version)
-target-version = "py39"
+# Target Python 3.10 (minimum supported version; 3.9 is EOL since 2025-10-31)
+target-version = "py310"
 
 # Exclude common directories
 exclude = [
@@ -181,11 +181,41 @@ unfixable = []
 # they hardcoded `--python-version 3.9`, and mypy 2.x dropped support for targeting
 # 3.9 ("must be 3.10 or higher"), breaking CI. Configure it once here instead.
 [tool.mypy]
-# The runtime floor stays 3.9 (see `requires-python` and the CI matrix); this is only
-# the version mypy type-checks against, and 3.10 is the oldest it still supports.
-# Ruff's `target-version = "py39"` remains the guard against 3.10+ syntax.
+# Matches `requires-python` and ruff's `target-version`; 3.10 is also the oldest
+# version mypy still supports targeting.
 python_version = "3.10"
 ignore_missing_imports = true
+
+# ===========================
+# Coverage Configuration
+# ===========================
+[tool.coverage.run]
+# `source` must live here rather than on the CLI for relative_files to work.
+source = ["vntyper"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+# HARD FLOOR - CI fails below this. It is a RATCHET: raise it whenever measured
+# coverage climbs, never lower it to make a build pass. `make test-unit-cov` prints
+# the exact line to change when the floor is out of date.
+#
+# NOTE: BOTH `coverage report --format=total` AND pytest-cov's terminal TOTAL column
+# ROUND to an integer - a true 25.68% displays as 26%. Setting this floor from either
+# of those numbers makes CI fail on the very run that produced it. Take the value
+# `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
+# figure and states the exact line to paste here.
+#
+# The TARGET is 80% (COVERAGE_TARGET in the Makefile). Falling short of the target is
+# a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
+# six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
+# realistically be tested (see "Changing existing code" in AGENTS.md).
+fail_under = 25
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
 
 [tool.ruff.format]
 # Use double quotes (Python default)

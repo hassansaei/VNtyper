@@ -1,22 +1,50 @@
 # VNtyper Docker Container
 
-A production-ready Docker container for **VNtyper** with multi-stage build optimization (60-70% smaller image size).
+A production-ready Docker container for **VNtyper**, built as two images:
+
+| Image | Contents | Rebuilt |
+| --- | --- | --- |
+| `docker/Dockerfile.base` | conda environments, adVNTR, reference genomes + BWA indexes | only when `conda/**`, `docker/requirements-web.txt`, `install_references*` or `vntyper/dependencies/advntr/**` change |
+| `docker/Dockerfile` | the VNtyper application and the FastAPI app | every commit (~3 min) |
+
+Splitting them keeps the per-commit build small: the expensive layers are published
+once to `ghcr.io/hassansaei/vntyper-base` and reused.
 
 ## **Building the Docker Image**
 
 ### **Quick Start**
 
 ```bash
-# Clone repository
 git clone https://github.com/hassansaei/VNtyper.git
 cd VNtyper
 
-# Build with BuildKit (recommended)
-DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t vntyper:latest .
-
-# Or use Make
+# Builds the application on the published base image (pulls the base, ~3 min)
 make docker-build
 ```
+
+Equivalently, by hand:
+
+```bash
+DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile \
+  --build-arg BASE_IMAGE=ghcr.io/hassansaei/vntyper-base:latest \
+  -t vntyper:latest .
+```
+
+### **Rebuilding the base image**
+
+Only needed when you change conda environments, the reference configuration, the web
+requirements, or `Dockerfile.base` itself. It downloads and BWA-indexes reference
+genomes, so expect 20-30 minutes.
+
+```bash
+make docker-build-base                                   # -> vntyper-base:local
+make docker-build DOCKER_BASE_IMAGE=vntyper-base:local   # build the app on it
+```
+
+In CI this happens automatically: `.github/workflows/docker-base.yml` publishes a base
+tagged with a content hash of those inputs, and `docker-build.yml` resolves the same
+hash. If you change a base input without publishing a new base, the app build fails
+with an explicit "base image does not exist" error rather than silently using a stale one.
 
 ### **Pull Pre-built Image**
 

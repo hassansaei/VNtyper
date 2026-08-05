@@ -1,13 +1,24 @@
 # Publish to PyPI when a version tag (v*.*.*) is pushed.
-# Requires PyPI API token stored as GitHub secret: PYPI_API_TOKEN
-#
-# Setup: GitHub repo → Settings → Secrets and variables → Actions → New repository secret
-#        Name: PYPI_API_TOKEN   Value: your PyPI API token (pypi.org → Account → API tokens)
 #
 # Usage:
-#   git tag v2.0.1
-#   git push origin v2.0.1
+#   git tag -a v2.0.5 -m "Release 2.0.5"
+#   git push origin v2.0.5
 #
+# Currently authenticates with the PYPI_API_TOKEN repository secret.
+#
+# RECOMMENDED FOLLOW-UP - migrate to Trusted Publishing (OIDC):
+#   PyPI now recommends Trusted Publishing over long-lived API tokens: the credential is
+#   short-lived, scoped to this project, and cannot leak from the secret store. It also
+#   turns on PEP 740 attestations by default.
+#
+#   This is a two-part change and MUST be done in this order, or the next release fails:
+#     1. On pypi.org: Manage project -> Publishing -> add a GitHub publisher with
+#        owner=hassansaei, repo=VNtyper, workflow=publish-pypi.yml, environment=pypi
+#     2. In this file: add `id-token: write` to the publish job's permissions, replace
+#        the twine step with `uses: pypa/gh-action-pypi-publish@release/v1` (no
+#        `password:`), and delete the PYPI_API_TOKEN secret.
+#   Deliberately not done unilaterally here, because step 2 without step 1 breaks
+#   publishing.
 name: Publish to PyPI
 
 on:
@@ -15,22 +26,50 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions: {}
+
 jobs:
   build-and-publish:
     name: Build and publish to PyPI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # NOTE: no `environment:` here yet. It is required for Trusted Publishing and is
+    # added as part of that migration (see the header), together with the matching
+    # environment name in the PyPI publisher config. Adding it now would only introduce
+    # a new failure mode on the release path without any benefit.
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       - name: Install build tools
         run: python -m pip install --upgrade pip build twine
+
+      # Publishing is irreversible: a version can never be re-uploaded to PyPI. Catch a
+      # tag/version mismatch here rather than after burning the version number.
+      - name: Verify tag matches vntyper.version.__version__
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          # Execute version.py and read __version__, rather than regexing the first
+          # quoted string: that would silently pick the wrong value if the literal ever
+          # changes quoting, becomes an expression, or gains a neighbouring string.
+          # runpy avoids importing the whole vntyper package (and its dependencies).
+          PKG=$(python -c "import runpy; print(runpy.run_path('vntyper/version.py')['__version__'])")
+          echo "tag=$TAG  package=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match vntyper/version.py ($PKG). Fix the version and re-tag."
+            exit 1
+          fi
 
       - name: Build package
         run: python -m build
@@ -42,4 +81,5 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+        # --skip-existing so a re-run after a partial failure is not a hard error.
+        run: twine upload --skip-existing dist/*
