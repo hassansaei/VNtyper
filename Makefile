@@ -83,26 +83,26 @@ install-dev:
 # Linting targets
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
-	ruff check vntyper/
+	ruff check vntyper/ docker/app/
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 lint-stats:
 	@echo "$(BLUE)Running Ruff linter with statistics...$(RESET)"
-	ruff check vntyper/ --statistics
+	ruff check vntyper/ docker/app/ --statistics
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 # Formatting targets
 format:
 	@echo "$(BLUE)Formatting code with Ruff...$(RESET)"
-	ruff format vntyper/
+	ruff format vntyper/ docker/app/
 	@echo "$(BLUE)Applying auto-fixes...$(RESET)"
-	ruff check vntyper/ --fix
+	ruff check vntyper/ docker/app/ --fix
 	@echo "$(GREEN)✓ Formatting complete$(RESET)"
 
 format-check:
 	@echo "$(BLUE)Checking code formatting...$(RESET)"
-	ruff format vntyper/ --check
-	ruff check vntyper/
+	ruff format vntyper/ docker/app/ --check
+	ruff check vntyper/ docker/app/
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
 # Type checking targets

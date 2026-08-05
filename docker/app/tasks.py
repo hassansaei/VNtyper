@@ -1,17 +1,15 @@
 # docker/app/tasks.py
 
-from .celery_app import celery_app
-import subprocess
+import hashlib
 import os
 import shutil
-import logging
-from datetime import datetime, timedelta
-import redis
-import hashlib
-from typing import Optional, List  # Added List for typing in new task
+import subprocess
+from datetime import datetime, timedelta, timezone
 
+import redis
 from celery.utils.log import get_task_logger
 
+from .celery_app import celery_app
 from .config import get_redis_password, settings
 from .utils import send_email
 
@@ -66,7 +64,7 @@ def send_email_task(self, to_email: str, subject: str, content: str):
         logger.info(f"Email sent to {to_email} with subject '{subject}'")
     except Exception as e:
         logger.error(f"Failed to send email to {to_email}: {e}")
-        raise self.retry(exc=e)
+        raise self.retry(exc=e) from e
 
 
 @celery_app.task(bind=True)
@@ -79,17 +77,16 @@ def run_vntyper_job(
     fast_mode: bool,
     keep_intermediates: bool,
     archive_results: bool,
-    email: Optional[str] = None,
-    cohort_key: Optional[str] = None,
-    client_ip: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    email: str | None = None,
+    cohort_key: str | None = None,
+    client_ip: str | None = None,
+    user_agent: str | None = None,
     advntr_mode: bool = False,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
     Sends an email upon job completion or failure if email is provided.
     """
-    task_id = self.request.id
     job_id = os.path.basename(output_dir)
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
@@ -101,7 +98,7 @@ def run_vntyper_job(
         # Store initial usage data
         usage_data = {
             "user_hash": user_hash,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "job_id": job_id,
             "status": "started",
         }
@@ -263,7 +260,11 @@ def delete_old_results():
     """
     max_age_days = settings.MAX_RESULT_AGE_DAYS
     output_dir = settings.DEFAULT_OUTPUT_DIR
-    cutoff_time = datetime.now() - timedelta(days=max_age_days)
+    # Both sides of the age comparison below are UTC-aware. They must stay that way
+    # together: mixing an aware datetime with a naive one raises TypeError, and the
+    # instants themselves are unchanged by the timezone, so the comparison result is
+    # the same as it was with the two naive local-time values.
+    cutoff_time = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
     logger.info(f"Running delete_old_results task. Deleting files older than {max_age_days} days.")
 
@@ -271,7 +272,7 @@ def delete_old_results():
         if filename.endswith(".zip"):
             file_path = os.path.join(output_dir, filename)
             if os.path.isfile(file_path):
-                file_creation_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                file_creation_time = datetime.fromtimestamp(os.path.getctime(file_path), tz=timezone.utc)
                 if file_creation_time < cutoff_time:
                     try:
                         os.remove(file_path)
@@ -311,10 +312,10 @@ def delete_old_results():
 def run_cohort_analysis_job(
     self,
     cohort_id: str,
-    zip_paths: List[str],
+    zip_paths: list[str],
     output_dir: str,
-    user_ip: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    user_ip: str | None = None,
+    user_agent: str | None = None,
 ):
     """
     Celery task to run a joint cohort analysis using 'vntyper cohort'.
@@ -341,7 +342,7 @@ def run_cohort_analysis_job(
     # Store initial usage data
     usage_data = {
         "user_hash": user_hash,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "job_id": job_id,
         "status": "started",
         "analysis_type": "cohort_analysis",
@@ -355,8 +356,7 @@ def run_cohort_analysis_job(
         os.makedirs(output_dir, exist_ok=True)
         input_file = os.path.join(output_dir, "cohort_input.txt")
         with open(input_file, "w") as f:
-            for zpath in zip_paths:
-                f.write(f"{zpath}\n")
+            f.writelines(f"{zpath}\n" for zpath in zip_paths)
 
         # 2) Run the "vntyper cohort" command
         command = [

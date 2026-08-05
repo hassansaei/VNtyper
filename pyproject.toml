@@ -212,6 +212,25 @@ ignore = [
 fixable = ["ALL"]
 unfixable = []
 
+[tool.ruff.lint.flake8-bugbear]
+# B008 exists to catch a *mutable* default that is built once at def time and then
+# shared by every call. FastAPI's parameter markers are not that: `File(...)` and
+# `Form(...)` return immutable `FieldInfo` descriptors that FastAPI reads out of the
+# signature and replaces with the parsed request value, so the function body never
+# sees the marker object at all. Ruff already hardcodes `fastapi.Depends` and
+# `fastapi.Query` as immutable for this reason; `File`, `Form`, `Body`, `Header`,
+# `Cookie` and `Path` are the same kind of object and the omission is a gap in that
+# list, not a defect in `docker/app`. B008 stays on for every genuinely mutable
+# default in both `vntyper/` and `docker/app/`.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+]
+
 # Per-file ignores
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "E402"]  # Allow unused imports

@@ -1,11 +1,12 @@
 # docker/app/celery_app.py
 
+import logging
+import os
+
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import beat_init, celeryd_init
 from kombu import Queue
-import os
-import logging
 
 from .config import build_redis_url, get_redis_password, require_redis_password
 
