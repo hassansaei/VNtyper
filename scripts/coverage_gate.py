@@ -26,9 +26,9 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -53,24 +53,27 @@ def read_floor() -> float:
 def read_total() -> float | None:
     """Read total coverage percentage from the existing coverage data file.
 
+    Uses coverage.py's Python API rather than shelling out to `coverage report`. That
+    is faster, does not depend on the CLI being on PATH, and avoids spawning a
+    subprocess altogether.
+
     Returns:
         Optional[float]: The total percentage, or None if coverage could not be read.
     """
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "coverage", "report", "--format=total"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except OSError:
+        import coverage
+    except ImportError:
         return None
-    if result.returncode not in (0, 2):  # 2 = below fail_under, still prints a total
-        return None
+
     try:
-        return float(result.stdout.strip())
-    except ValueError:
+        cov = coverage.Coverage(config_file=str(PYPROJECT))
+        cov.load()
+        # report() returns the total percentage; the text report itself is discarded.
+        # fail_under is enforced by this script, so ignore coverage's own exception.
+        return float(cov.report(file=io.StringIO()))
+    except Exception:
+        # A missing/corrupt .coverage file, or no measured data. Callers treat None as
+        # "could not read" and exit non-zero with an actionable message.
         return None
 
 

@@ -60,7 +60,11 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"
-          PKG=$(python -c "import re,pathlib; print(re.search(r'\"([^\"]+)\"', pathlib.Path('vntyper/version.py').read_text()).group(1))")
+          # Execute version.py and read __version__, rather than regexing the first
+          # quoted string: that would silently pick the wrong value if the literal ever
+          # changes quoting, becomes an expression, or gains a neighbouring string.
+          # runpy avoids importing the whole vntyper package (and its dependencies).
+          PKG=$(python -c "import runpy; print(runpy.run_path('vntyper/version.py')['__version__'])")
           echo "tag=$TAG  package=$PKG"
           if [ "$TAG" != "$PKG" ]; then
             echo "::error::Tag v$TAG does not match vntyper/version.py ($PKG). Fix the version and re-tag."

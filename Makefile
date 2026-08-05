@@ -272,10 +272,18 @@ lint-actions:
 	fi
 	@echo "$(GREEN)✓ Workflows valid$(RESET)"
 
+# `docker build --check` needs BuildKit and Docker Engine >= 25. Detect it and fail
+# with the actual remedy, rather than surfacing an opaque "unknown flag" error.
 lint-docker:
 	@echo "$(BLUE)Linting Dockerfiles (BuildKit check)...$(RESET)"
-	@docker build --check -f docker/Dockerfile.base . >/dev/null
-	@docker build --check -f docker/Dockerfile \
+	@if ! docker build --help 2>/dev/null | grep -q -- '--check'; then \
+		echo "$(RED)This Docker Engine does not support 'docker build --check'.$(RESET)"; \
+		echo "  It needs BuildKit and Docker Engine 25 or newer; CI runs 28.x."; \
+		echo "  Upgrade Docker, or run 'make docker-build' alone to skip this lint."; \
+		exit 1; \
+	fi
+	@DOCKER_BUILDKIT=1 docker build --check -f docker/Dockerfile.base . >/dev/null
+	@DOCKER_BUILDKIT=1 docker build --check -f docker/Dockerfile \
 		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) . >/dev/null
 	@echo "$(GREEN)✓ Dockerfiles valid$(RESET)"
 

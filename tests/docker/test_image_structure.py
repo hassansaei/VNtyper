@@ -60,12 +60,25 @@ MIN_REFERENCE_BYTES = {
 def _docker_available() -> bool:
     """Report whether a usable Docker daemon is present.
 
+    This runs at collection time via the module-level skipif below, so it must never
+    block: a daemon that is present but wedged (starting up, or stuck on its socket)
+    would otherwise stall the whole test session. Treat non-responsive as unavailable.
+
     Returns:
-        bool: True if the `docker` CLI exists and the daemon answers.
+        bool: True if the `docker` CLI exists and the daemon answers within 10s.
     """
     if shutil.which("docker") is None:
         return False
-    return subprocess.run(["docker", "info"], capture_output=True, check=False).returncode == 0
+    try:
+        completed = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return completed.returncode == 0
 
 
 pytestmark = [
