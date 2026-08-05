@@ -1,6 +1,5 @@
 import logging
 import os
-import shutil
 import subprocess
 from collections import Counter
 from enum import Enum
@@ -32,6 +31,7 @@ from starlette.background import BackgroundTask
 
 from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_cohort_analysis_job, run_vntyper_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
@@ -363,17 +363,15 @@ async def run_vntyper(
         logger.error(msg)
         raise HTTPException(status_code=413, detail=msg)
 
-    # Ensure input and output directories exist
-    os.makedirs(DEFAULT_INPUT_DIR, exist_ok=True)
-    os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
-
-    # Generate a unique job ID
+    # Generate a unique job ID. The two directories named after it are not
+    # created yet: everything that can refuse this submission is decided first,
+    # below, so a refusal costs the shared volume nothing at all.
     job_id = str(uuid4())
     job_input_dir = os.path.join(DEFAULT_INPUT_DIR, job_id)
     job_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, job_id)
 
-    # Constrain the client-supplied filenames before anything is created on
-    # disk, so a rejected submission leaves nothing behind.
+    # 1. The client-supplied filenames must be acceptable. This resolves paths
+    #    only; it creates nothing.
     try:
         bam_path = safe_upload_path(job_input_dir, bam_file.filename)
         bai_path = None
@@ -382,30 +380,7 @@ async def run_vntyper(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    os.makedirs(job_input_dir, exist_ok=True)
-    os.makedirs(job_output_dir, exist_ok=True)
-
-    # Save the uploaded files, counting the bytes as they are written. One
-    # budget covers the whole submission, so the two parts together stay within
-    # the same ceiling the declared length was checked against. A refused copy
-    # takes the directories this request created with it, so nothing of a
-    # rejected submission stays on the shared volume.
-    try:
-        remaining = MAX_UPLOAD_BYTES - save_upload_bounded(bam_file.file, bam_path, MAX_UPLOAD_BYTES)
-        logger.info(f"Saved uploaded BAM file to {bam_path}")
-
-        # `bai_path` is only ever set from `bai_file` above, so the second test cannot
-        # change the outcome; it is what lets the checker see the same thing.
-        if bai_path is not None and bai_file is not None:
-            save_upload_bounded(bai_file.file, bai_path, remaining)
-            logger.info(f"Saved uploaded BAI file to {bai_path}")
-    except ValueError as exc:
-        shutil.rmtree(job_input_dir, ignore_errors=True)
-        shutil.rmtree(job_output_dir, ignore_errors=True)
-        msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
-        raise HTTPException(status_code=413, detail=msg) from exc
-
-    # Validate the email if provided
+    # 2. Any email address supplied must be one results can actually be sent to.
     if email:
         try:
             valid = validate_email(email)
@@ -415,67 +390,91 @@ async def run_vntyper(
             logger.error(f"Invalid email address provided: {email} - {str(e)}")
             raise HTTPException(status_code=400, detail="Invalid email address provided.") from e
 
-    # Cohort handling logic. Joining a cohort writes into it, so it is
-    # authorized on exactly the same terms as reading one.
+    # 3. Joining a cohort writes into it, so it is authorized on exactly the
+    #    same terms as reading one. Membership itself is recorded further down,
+    #    once the submission is known to have been stored.
     if cohort_id or alias:
         cohort = authorized_cohort(cohort_id, alias, passphrase)
         cohort_id = cohort["cohort_id"]
-        cohort_key = cohort["cohort_key"]
-        # Assign the job to the cohort immediately
-        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
-        logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
+        cohort_key: str | None = cohort["cohort_key"]
     else:
         cohort_key = None  # Job is not associated with any cohort
         logger.info(f"Job {job_id} submitted as a single job without cohort assignment.")
 
     # Extract client IP and User-Agent
     client_ip = client_host(request)
-    user_agent = request.headers.get(
-        "User-Agent", "unknown"
-    )  # ---------------------------------------------------------------------
-    # If advntr_mode is True, use vntyper_long_queue; else the default queue.
-    # ---------------------------------------------------------------------
-    if advntr_mode:
-        task = run_vntyper_job.apply_async(
-            kwargs={
-                "bam_path": bam_path,
-                "output_dir": job_output_dir,
-                "thread": thread,
-                "reference_assembly": reference_assembly.value,
-                "fast_mode": fast_mode,
-                "keep_intermediates": keep_intermediates,
-                "archive_results": archive_results,
-                "email": email,
-                "cohort_key": cohort_key,
-                "client_ip": client_ip,
-                "user_agent": user_agent,
-                "advntr_mode": True,
-            },
-            queue="vntyper_long_queue",
-        )
-        logger.info(f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}")
-    else:
-        task = run_vntyper_job.delay(
-            bam_path=bam_path,
-            output_dir=job_output_dir,
-            thread=thread,
-            reference_assembly=reference_assembly.value,
-            fast_mode=fast_mode,
-            keep_intermediates=keep_intermediates,
-            archive_results=archive_results,
-            email=email,
-            cohort_key=cohort_key,
-            client_ip=client_ip,
-            user_agent=user_agent,
-            advntr_mode=False,
-        )
-        logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+    user_agent = request.headers.get("User-Agent", "unknown")
 
-    # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
-    redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
+    # Only now is anything written. `job_workspace` owns the two directories
+    # this submission needs and removes them again if the block below does not
+    # complete, so a submission that fails after its upload has landed leaves
+    # nothing on the volume either -- the caller never receives an identifier,
+    # so nothing afterwards could address the leftovers.
+    with job_workspace(DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, job_id):
+        # Save the uploaded files, counting the bytes as they are written. One
+        # budget covers the whole submission, so the two parts together stay
+        # within the same ceiling.
+        try:
+            remaining = MAX_UPLOAD_BYTES - save_upload_bounded(bam_file.file, bam_path, MAX_UPLOAD_BYTES)
+            logger.info(f"Saved uploaded BAM file to {bam_path}")
 
-    # Add the task ID to a Redis list to track the queue
-    redis_client.rpush("vntyper_job_queue", task.id)
+            # `bai_path` is only ever set from `bai_file` above, so the second test cannot
+            # change the outcome; it is what lets the checker see the same thing.
+            if bai_path is not None and bai_file is not None:
+                save_upload_bounded(bai_file.file, bai_path, remaining)
+                logger.info(f"Saved uploaded BAI file to {bai_path}")
+        except ValueError as exc:
+            msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
+            raise HTTPException(status_code=413, detail=msg) from exc
+
+        if cohort_key is not None:
+            redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+            logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
+
+        # ---------------------------------------------------------------------
+        # If advntr_mode is True, use vntyper_long_queue; else the default queue.
+        # ---------------------------------------------------------------------
+        if advntr_mode:
+            task = run_vntyper_job.apply_async(
+                kwargs={
+                    "bam_path": bam_path,
+                    "output_dir": job_output_dir,
+                    "thread": thread,
+                    "reference_assembly": reference_assembly.value,
+                    "fast_mode": fast_mode,
+                    "keep_intermediates": keep_intermediates,
+                    "archive_results": archive_results,
+                    "email": email,
+                    "cohort_key": cohort_key,
+                    "client_ip": client_ip,
+                    "user_agent": user_agent,
+                    "advntr_mode": True,
+                },
+                queue="vntyper_long_queue",
+            )
+            logger.info(f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}")
+        else:
+            task = run_vntyper_job.delay(
+                bam_path=bam_path,
+                output_dir=job_output_dir,
+                thread=thread,
+                reference_assembly=reference_assembly.value,
+                fast_mode=fast_mode,
+                keep_intermediates=keep_intermediates,
+                archive_results=archive_results,
+                email=email,
+                cohort_key=cohort_key,
+                client_ip=client_ip,
+                user_agent=user_agent,
+                advntr_mode=False,
+            )
+            logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+
+        # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
+        redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
+
+        # Add the task ID to a Redis list to track the queue
+        redis_client.rpush("vntyper_job_queue", task.id)
 
     return RunJobResponse(message="Job submitted", job_id=job_id, cohort_id=cohort_id)
 
