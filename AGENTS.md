@@ -37,12 +37,16 @@ Neither exists — use the commands above.
 | Lint | `make lint` |
 | Type check | `make type-check` |
 | Fast tests (what CI runs) | `make test-unit` |
-| Integration tests | `make test-integration` |
-| Coverage | `make test-cov` |
+| Inner loop (fail-fast) | `make test-fast` |
+| Unit coverage + floor | `make test-unit-cov` |
+| Integration tests (needs 1.1 GB data) | `make test-integration` |
+| Full gate incl. integration | `make check-full` |
 | Docs preview | `make docs-serve` |
 | Docs build (CI-equivalent) | `make docs-build` |
 
-Always run `make check-all` before opening a PR. Run pytest **from the repo root** —
+Always run `make check-all` before opening a PR. It gates on the **unit** tier only
+(~0.5 s) so it is runnable on a fresh clone; use `make check-full` when you also want the
+tiers that need the 1.1 GB Zenodo archive. Run pytest **from the repo root** —
 `tests/parametrization.py` opens `tests/test_data_config.json` by relative path at
 collection time, so any other CWD breaks collection, including `-m unit`.
 
@@ -87,15 +91,76 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 - Type hints are partial. Newer modules (`reference_registry`, `region_utils`,
   `scoring`, `flagging`) are fully annotated — match that when editing them.
 
+## Changing existing code
+
+These three rules apply whenever you touch a file, not just when you add a feature.
+
+**1. Touch a file, add tests for it.** This is not conditional on the module already
+having tests, and not something to defer to a follow-up PR.
+
+- Every function you **add** gets unit tests, including its failure paths.
+- Every function you **modify** gets a test that would have caught the bug you fixed, or
+  that pins the behaviour you changed. Write it *before* the fix where you can — a test
+  that fails first and passes after is worth more than one written to match the code.
+- Every function you **touch incidentally** (rename, refactor, re-indent) should leave
+  with at least the coverage it had.
+
+Tests go in the **unit** tier, so they must be pure: `tmp_path` + `unittest.mock`, no
+network, no Docker, no reference data, and `pytestmark = pytest.mark.unit` after the
+imports. If a change is only reachable through the integration tier, that is a signal the
+logic needs extracting — see rule 3.
+
+Two thresholds enforce this, and they are deliberately different:
+
+| | Where | Behaviour |
+| --- | --- | --- |
+| **Hard floor** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+
+`make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
+coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
+The gap between the two is real work, and rule 2 explains why it exists.
+
+**2. Keep files under ~650 LOC.** This is a real constraint here, not style preference.
+Measured on this repo, the correlation is total:
+
+| File | LOC | Unit coverage |
+| --- | --- | --- |
+| `cohort_summary.py` | 856 | 0% |
+| `cli.py` | 700 | 0% |
+| `generate_report.py` | 861 | 4% |
+| `pipeline.py` | 735 | 10% |
+| `install_references.py` | 901 | 24% |
+| `kestrel_genotyping.py` | 835 | 28% |
+| `region_utils.py` | 246 | 98% |
+| `scoring.py` | 176 | 100% |
+| `confidence_assignment.py` | 190 | 100% |
+
+Every module over 650 lines is under 30% covered; every well-covered module is under 650.
+Oversized files here are oversized because they fuse I/O, orchestration and pure logic
+into functions that cannot be called without a filesystem — which is exactly what makes
+them untestable. Splitting them is how the coverage gets written.
+
+**3. Refactor the part you touch.** When you edit inside a file over the limit, extract
+the region you are working on into a focused module rather than growing the file further.
+Pull the *pure* logic out first (parsing, scoring, filtering, formatting) and leave the
+I/O behind — the pure part is the part that gets a test. `scoring.py`,
+`confidence_assignment.py` and `region_utils.py` are the shape to copy. Do not attempt a
+whole-file rewrite as a side quest: split out the region under change, test it, move on.
+
+Known offenders, worst first: `docker/app/main.py` (1081), `install_references.py` (901),
+`generate_report.py` (861), `cohort_summary.py` (856), `kestrel_genotyping.py` (835),
+`pipeline.py` (735), `cli.py` (700), `tests/integration/test_pipeline_integration.py` (667).
+
 ## Testing
 
 - `pytest.ini` at the repo root is the live config. The `[tool.pytest.ini_options]`
   block in `pyproject.toml` is **dead** — pytest.ini takes precedence. Edit `pytest.ini`.
 - Markers: `unit`, `integration`, `docker`, `slow`.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
-  `pytest -m unit`, so an unmarked file silently never runs.
-  (`tests/unit/test_haplo_count_and_selection.py` is currently unmarked — 30 tests
-  invisible to CI.)
+  `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
+  `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
+  `--strict-markers` additionally turns a *misspelled* marker into an error.
 - Unit tests must stay pure: `tmp_path` + `unittest.mock`, no network, no reference data.
 - Integration and docker tests pull a ~1.1 GB Zenodo archive and MD5 all 114 files; one
   missing file triggers a full re-download. There are **no** `pytest.skip` guards
@@ -149,12 +214,28 @@ collection time, so any other CWD breaks collection, including `-m unit`.
    differs. Do not upgrade the JAR.
 9. **`run_command` uses `shell=True`** deliberately, for process substitution in the CRAM
    unmapped-read path. Converting it to `shell=False` breaks that branch.
-10. **The Docker build clones from GitHub**, it does not build your local checkout. Only
-    `docker/entrypoint.sh` and `docker/app/` come from the local context.
+10. **The image is split in two, and the halves are bound by a content hash.**
+    `docker/Dockerfile.base` holds the conda envs, adVNTR and the reference genomes and
+    is rebuilt only by `docker-base.yml` when `conda/**`, `requirements-web.txt`,
+    `install_references*` or `dependencies/advntr/**` change. `docker/Dockerfile` holds
+    only the application and builds on top in ~3 min. Both workflows compute the same
+    `hashFiles()` tag, so changing a base input without publishing a new base makes the
+    app build **fail loudly** with a missing tag rather than silently using a stale base.
+    To change a base input: merge to `main` (or run `docker-base.yml` via
+    `workflow_dispatch`) so the base publishes first. Locally:
+    `make docker-build-base && make docker-build DOCKER_BASE_IMAGE=vntyper-base:local`.
+    (This replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
+    tested PR code and a cached layer could serve an arbitrarily stale checkout.)
 11. **`vntyper report` is currently broken** — `cli.py` passes arguments
     `generate_summary_report()` does not accept. Do not copy that call site as an example.
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
-    `CITATION.cff`, and `docs/about/changelog.md` (currently stale at 2.0.1).
+    `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
+    if the pushed tag disagrees with `vntyper/version.py`.
+13. **`pyproject.toml` and the conda env disagree on numpy.** `pyproject.toml` pins
+    `numpy>=1.26.0,<2.0.0`; `conda/environment_vntyper.yml` installs `numpy=2.0.2`. The
+    Dockerfile therefore installs the package with `pip install --no-deps`, or pip
+    downgrades conda's numpy from PyPI and mixes provenance. Reconcile the two before
+    removing `--no-deps`.
 
 ## Never
 

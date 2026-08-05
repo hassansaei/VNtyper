@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""
+Report unit-test coverage against a hard floor and a soft target.
+
+Two thresholds, deliberately different:
+
+* **Hard floor** (`fail_under` in ``pyproject.toml``) - CI fails below it. It exists to
+  stop regressions, and it is a ratchet: it only ever moves up.
+* **Soft target** (``--target``, 80% by default) - what the project is aiming for.
+  Falling short is a warning, never a failure.
+
+The floor is what makes the target reachable. Every time coverage climbs meaningfully
+above the floor, this script prints the exact edit to raise it, so the floor follows
+coverage upward instead of sitting at whatever it was set to years ago.
+
+Usage:
+    python scripts/coverage_gate.py [--target 80] [--ratchet-margin 1.0]
+
+Run it after a coverage run, i.e. once a .coverage data file exists.
+
+Exit codes:
+    0: at or above the hard floor (a warning is printed if below target)
+    1: below the hard floor, or coverage data could not be read
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+
+
+def read_floor() -> float:
+    """Read the hard floor from ``[tool.coverage.report] fail_under``.
+
+    Returns:
+        float: The configured floor, or 0.0 if it cannot be found.
+    """
+    try:
+        text = PYPROJECT.read_text(encoding="utf-8")
+    except OSError:
+        return 0.0
+    match = re.search(r"^fail_under\s*=\s*([0-9.]+)", text, re.MULTILINE)
+    return float(match.group(1)) if match else 0.0
+
+
+def read_total() -> float | None:
+    """Read total coverage percentage from the existing coverage data file.
+
+    Returns:
+        Optional[float]: The total percentage, or None if coverage could not be read.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "coverage", "report", "--format=total"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode not in (0, 2):  # 2 = below fail_under, still prints a total
+        return None
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def emit(line: str, *, gh_command: str = "") -> None:
+    """Print a line, additionally annotating it for GitHub Actions when running in CI.
+
+    Args:
+        line: The human-readable message.
+        gh_command: One of "warning", "notice", "error", or "" for a plain line.
+    """
+    if gh_command and os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::{gh_command}::{line}")
+    else:
+        print(line)
+
+
+def write_summary(total: float, floor: float, target: float) -> None:
+    """Append a progress table to the GitHub Actions step summary, if available.
+
+    Args:
+        total: Measured coverage percentage.
+        floor: Hard floor percentage.
+        target: Soft target percentage.
+    """
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary:
+        return
+    filled = int(total / 100 * 40)
+    bar = "█" * filled + "░" * (40 - filled)
+    status = "✅ at target" if total >= target else "🎯 below target"
+    with open(summary, "a", encoding="utf-8") as handle:
+        handle.write(
+            f"### Unit test coverage\n\n"
+            f"`{bar}` **{total:.2f}%**\n\n"
+            f"| | % |\n| --- | --- |\n"
+            f"| Measured | **{total:.2f}** |\n"
+            f"| Hard floor (CI fails below) | {floor:.0f} |\n"
+            f"| Target | {target:.0f} — {status} |\n\n"
+        )
+
+
+def main() -> int:
+    """Compare measured coverage against the floor and the target.
+
+    Returns:
+        int: Process exit code.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--target",
+        type=float,
+        default=80.0,
+        help="Soft target percentage to strive for (default: 80).",
+    )
+    parser.add_argument(
+        "--ratchet-margin",
+        type=float,
+        default=1.0,
+        help="Suggest raising the floor once coverage exceeds it by this many points.",
+    )
+    args = parser.parse_args()
+
+    floor = read_floor()
+    total = read_total()
+
+    if total is None:
+        emit(
+            "Could not read coverage data. Run a coverage command first, e.g. "
+            "`make test-unit-cov`.",
+            gh_command="error",
+        )
+        return 1
+
+    print(f"coverage {total:.2f}%  (floor {floor:.0f}%, target {args.target:.0f}%)")
+    write_summary(total, floor, args.target)
+
+    if total + 1e-9 < floor:
+        emit(
+            f"Coverage {total:.2f}% is below the hard floor of {floor:.0f}%. "
+            "Add tests for the code you changed; do not lower the floor.",
+            gh_command="error",
+        )
+        return 1
+
+    # The ratchet: lock in gains so the floor tracks reality and the target stays live.
+    if total >= floor + args.ratchet_margin:
+        emit(
+            f"Coverage {total:.2f}% now exceeds the floor of {floor:.0f}%. "
+            f"Raise it: set `fail_under = {int(total)}` in pyproject.toml "
+            "[tool.coverage.report].",
+            gh_command="notice",
+        )
+
+    if total < args.target:
+        emit(
+            f"Coverage {total:.2f}% is below the {args.target:.0f}% target "
+            f"({args.target - total:.2f} points to go). Not a failure - but any file you "
+            "touch should leave this higher than you found it.",
+            gh_command="warning",
+        )
+    else:
+        emit(f"Coverage {total:.2f}% meets the {args.target:.0f}% target.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

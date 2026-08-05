@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full check-ci ci-local ci-local-docker ci-local-docs lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -39,6 +39,14 @@ help:
 	@echo "  make test-cov                - Run tests with coverage report"
 	@echo "  make test-quiet              - Run tests with minimal output"
 	@echo "  make test-verbose            - Run tests with detailed output"
+	@echo ""
+	@echo "$(GREEN)Gates (run before opening a PR):$(RESET)"
+	@echo "  make check-all         - format + lint + mypy + unit tests (~4s)"
+	@echo "  make ci-local          - everything ci-tests.yml runs, locally"
+	@echo "  make ci-local-docker   - everything docker-build.yml runs, locally"
+	@echo "  make check-full        - check-all + integration tests (needs test data)"
+	@echo "  make lint-actions      - Lint GitHub Actions workflows (actionlint)"
+	@echo "  make lint-docker       - Lint Dockerfiles (BuildKit check)"
 	@echo ""
 	@echo "$(GREEN)Build & Maintenance:$(RESET)"
 	@echo "  make clean            - Remove build artifacts and cache"
@@ -145,13 +153,25 @@ test-fast:
 	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
 	pytest -m unit tests/unit -o log_cli=false -q --ff -x
 
-# Coverage for the fast tier only. The floor is the measured baseline; ratchet it up
-# as coverage improves, never down.
+# Coverage for the fast tier.
+#
+# Two thresholds:
+#   HARD FLOOR - `fail_under` in pyproject.toml [tool.coverage.report]. CI fails below
+#                it. A ratchet: it only ever goes up.
+#   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
+#                never fails.
+# scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
+# whenever coverage climbs past it.
+COVERAGE_TARGET ?= 80
+
 test-unit-cov:
 	@echo "$(BLUE)Running unit tests with coverage...$(RESET)"
-	pytest -m unit tests/unit -o log_cli=false \
-		--cov=vntyper --cov-report=term-missing --cov-fail-under=24
+	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing
+	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
+
+coverage-report:
+	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 
 test-integration:
 	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
@@ -226,6 +246,62 @@ check-all: format-check lint type-check-all test-unit
 # Opt-in gate that additionally runs the tiers needing test data / Docker.
 check-full: check-all test-integration
 	@echo "$(GREEN)✓ All checks passed (including integration)$(RESET)"
+
+# ---------------------------------------------------------------------------
+# Local CI parity
+# ---------------------------------------------------------------------------
+# `make ci-local` runs every check the GitHub Actions workflows run, so a red CI run
+# should never be the first time you learn something is broken. It deliberately mirrors
+# ci-tests.yml job for job.
+#
+# ACTIONLINT resolves to a local binary if present, otherwise the official container.
+ACTIONLINT ?= $(shell command -v actionlint 2>/dev/null)
+
+lint-actions:
+	@echo "$(BLUE)Linting GitHub Actions workflows...$(RESET)"
+	@if [ -n "$(ACTIONLINT)" ]; then \
+		$(ACTIONLINT); \
+	elif command -v docker >/dev/null 2>&1; then \
+		docker run --rm -v "$(PWD):/repo" --workdir /repo rhysd/actionlint:latest -color; \
+	else \
+		echo "$(RED)actionlint not found and Docker unavailable.$(RESET)"; \
+		echo "Install: go install github.com/rhysd/actionlint/cmd/actionlint@latest"; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)✓ Workflows valid$(RESET)"
+
+lint-docker:
+	@echo "$(BLUE)Linting Dockerfiles (BuildKit check)...$(RESET)"
+	@docker build --check -f docker/Dockerfile.base . >/dev/null
+	@docker build --check -f docker/Dockerfile \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) . >/dev/null
+	@echo "$(GREEN)✓ Dockerfiles valid$(RESET)"
+
+# The docs job in ci-tests.yml. Fails loudly rather than skipping when the docs extra
+# is missing - a silent skip would defeat the point of local CI parity.
+ci-local-docs:
+	@if python -c "import mkdocs" 2>/dev/null; then \
+		$(MAKE) --no-print-directory docs-check; \
+	else \
+		echo "$(RED)mkdocs is not installed, so the CI docs job was NOT verified.$(RESET)"; \
+		echo "  Fix: pip install -e '.[docs]'"; \
+		exit 1; \
+	fi
+
+# Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs.
+ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-docs
+	@echo ""
+	@echo "$(GREEN)========================================$(RESET)"
+	@echo "$(GREEN)✓ Local CI parity checks all passed$(RESET)"
+	@echo "$(GREEN)========================================$(RESET)"
+	@echo "Verified here: workflow syntax, format, lint, mypy, unit tests + coverage, docs."
+	@echo "NOT verified here (CI only):"
+	@echo "  - the Python 3.9-3.12 matrix; this ran your interpreter only"
+	@echo "  - the Docker image jobs -> run 'make ci-local-docker'"
+
+# Mirrors docker-build.yml. Needs a Docker daemon; builds and smoke-tests the image.
+ci-local-docker: lint-docker docker-build test-docker-smoke
+	@echo "$(GREEN)✓ Local Docker CI parity checks passed$(RESET)"
 
 # Docker targets
 #Docker configuration

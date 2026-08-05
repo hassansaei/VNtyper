@@ -187,6 +187,31 @@ unfixable = []
 python_version = "3.10"
 ignore_missing_imports = true
 
+# ===========================
+# Coverage Configuration
+# ===========================
+[tool.coverage.run]
+# `source` must live here rather than on the CLI for relative_files to work.
+source = ["vntyper"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+# HARD FLOOR - CI fails below this. It is a RATCHET: raise it whenever measured
+# coverage climbs, never lower it to make a build pass. `make test-unit-cov` prints
+# the exact line to change when the floor is out of date.
+#
+# The TARGET is 80% (COVERAGE_TARGET in the Makefile). Falling short of the target is
+# a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
+# six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
+# realistically be tested (see "Changing existing code" in AGENTS.md).
+fail_under = 25
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
 [tool.ruff.format]
 # Use double quotes (Python default)
 quote-style = "double"
