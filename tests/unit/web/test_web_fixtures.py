@@ -65,17 +65,23 @@ def test_cohort_create_and_status_round_trip_through_fake_redis(client, fake_red
     `fake_redis` fixture is the same store both the app and the test see, not
     a separate no-op stand-in.
 
+    The passphrase is not incidental: a cohort cannot be created without one,
+    and cannot be read back without it either. Authorization itself is covered
+    in `test_cohort_authz.py`; here the credential is only what makes the
+    round trip reachable.
+
     Args:
         client: TestClient fixture from conftest.
         fake_redis: The fakeredis instance backing the app's Redis clients.
     """
-    create_response = client.post("/create-cohort/", data={"alias": "g0-smoke-cohort"})
+    passphrase = "g0-smoke-passphrase"
+    create_response = client.post("/create-cohort/", data={"alias": "g0-smoke-cohort", "passphrase": passphrase})
     assert create_response.status_code == 200
     cohort_id = create_response.json()["cohort_id"]
 
     assert fake_redis.hget(f"cohort:{cohort_id}", "alias") == "g0-smoke-cohort"
 
-    status_response = client.get("/cohort-status/", params={"cohort_id": cohort_id})
+    status_response = client.get("/cohort-status/", params={"cohort_id": cohort_id, "passphrase": passphrase})
     assert status_response.status_code == 200
     body = status_response.json()
     assert body["cohort_id"] == cohort_id

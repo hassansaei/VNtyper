@@ -5,7 +5,6 @@ import subprocess
 from collections import Counter
 from typing import Optional, Union, List
 from uuid import uuid4
-from datetime import datetime
 from enum import Enum
 
 import redis
@@ -27,9 +26,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from email_validator import validate_email, EmailNotValidError
-from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
+from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
 from .config import settings
 from .tasks import run_vntyper_job, run_cohort_analysis_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path
@@ -95,20 +94,6 @@ RATE_LIMIT_REDIS_URL = (
 
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
-
-# Initialize password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def hash_passphrase(passphrase: str) -> str:
-    """Hash a passphrase using bcrypt."""
-    return pwd_context.hash(passphrase)
-
-
-def verify_passphrase(passphrase: str, hashed_passphrase: str) -> bool:
-    """Verify a passphrase against its hash."""
-    return pwd_context.verify(passphrase, hashed_passphrase)
-
 
 app = FastAPI(
     title="VNtyper Online API",
@@ -242,53 +227,42 @@ def get_versions():
     dependencies=[Depends(simple_rate_limiter)],
     summary="Create a new cohort",
     description=(
-        "Create a new cohort with an optional alias and passphrase.\n\n"
+        "Create a new cohort. A passphrase is required, and it is the only "
+        "credential that will open the cohort afterwards. An alias may be given "
+        "as a label; aliases are unique, and an alias never identifies a cohort "
+        "on its own.\n\n"
         f"**Rate Limit:** {settings.RATE_LIMIT_SIMPLE_TIMES} requests per {settings.RATE_LIMIT_SIMPLE_SECONDS} seconds."
     ),
 )
 def create_cohort(
+    passphrase: str = Form(..., description="Passphrase protecting the cohort"),
     alias: Optional[str] = Form(None, description="Optional cohort alias"),
-    passphrase: Optional[str] = Form(
-        None, description="Optional passphrase to protect the cohort"
-    ),
 ):
     """
     **Description:**
 
-    This endpoint allows users to create a new cohort for grouping jobs. An optional alias and passphrase can be provided to identify and secure the cohort.
+    This endpoint allows users to create a new cohort for grouping jobs. The passphrase is required: it is the only credential that will open the cohort for reading, downloading or analysis. An optional alias labels the cohort; aliases are unique across cohorts.
 
     **Parameters:**
 
-    - **alias**: A user-defined name for the cohort.
-    - **passphrase**: A passphrase to protect the cohort access.
+    - **passphrase**: The passphrase that will protect cohort access. Required.
+    - **alias**: An optional user-defined label for the cohort.
 
     **Returns:**
 
-    - **cohort_id**: A unique identifier for the created cohort.
+    - **cohort_id**: A unique identifier for the created cohort. Keep it: it is
+      required, together with the passphrase, for every later request.
     - **alias**: The alias provided for the cohort.
     """
-    # Generate a unique cohort identifier
-    cohort_id = str(uuid4())
-
-    # Hash the passphrase if provided
-    hashed_passphrase = hash_passphrase(passphrase) if passphrase else None
-
-    # Store cohort metadata in Redis hash
-    cohort_key = f"cohort:{cohort_id}"
-    redis_cohort_client.hset(
-        cohort_key,
-        mapping={
-            "alias": alias or "",
-            "hashed_passphrase": hashed_passphrase or "",
-            "created_at": datetime.utcnow().isoformat(),
-        },
-    )
-
-    # Set a TTL for the cohort based on retention policy
-    ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-    redis_cohort_client.expire(cohort_key, ttl_seconds)
-
-    return {"cohort_id": cohort_id, "alias": alias}
+    try:
+        return create_cohort_record(
+            redis_cohort_client,
+            alias=alias,
+            passphrase=passphrase,
+            retention_seconds=settings.COHORT_RETENTION_DAYS * 86400,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class RunJobResponse(BaseModel):
@@ -405,46 +379,12 @@ async def run_vntyper(
                 status_code=400, detail="Invalid email address provided."
             )
 
-    # Cohort handling logic
+    # Cohort handling logic. Joining a cohort writes into it, so it is
+    # authorized on exactly the same terms as reading one.
     if cohort_id or alias:
-        if cohort_id:
-            cohort_key = f"cohort:{cohort_id}"
-            cohort_data = redis_cohort_client.hgetall(cohort_key)
-            if not cohort_data:
-                raise HTTPException(status_code=404, detail="Cohort ID not found")
-        else:
-            # Search for cohort by alias
-            cohort_key = None
-            cohort_data = None
-            for key in redis_cohort_client.scan_iter("cohort:*"):
-                data = redis_cohort_client.hgetall(key)
-                if data.get("alias") == alias:
-                    cohort_key = key
-                    cohort_data = data
-                    cohort_id = key.split(":", 1)[1]
-                    break
-            if not cohort_key:
-                raise HTTPException(status_code=404, detail="Cohort alias not found")
-        # If alias is provided, verify it matches the cohort's alias
-        if alias and cohort_data.get("alias") != alias:
-            logger.error(
-                f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Provided alias does not match the cohort's alias.",
-            )
-        logger.info(
-            f"Cohort identified: {cohort_id} with alias: {cohort_data.get('alias')}"
-        )
-        # Verify passphrase if required
-        if cohort_data.get("hashed_passphrase"):
-            if not passphrase:
-                raise HTTPException(
-                    status_code=401, detail="Passphrase required for this cohort"
-                )
-            if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
-                raise HTTPException(status_code=401, detail="Incorrect passphrase")
+        cohort = authorized_cohort(cohort_id, alias, passphrase)
+        cohort_id = cohort["cohort_id"]
+        cohort_key = cohort["cohort_key"]
         # Assign the job to the cohort immediately
         redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
         logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
@@ -741,10 +681,10 @@ def get_job_queue(
     ),
 )
 def get_cohort_status(
-    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
-    alias: Optional[str] = Query(None, description="Cohort alias"),
+    cohort_id: Optional[str] = Query(None, description="Cohort identifier (required)"),
+    alias: Optional[str] = Query(None, description="Cohort alias, checked against the cohort"),
     passphrase: Optional[str] = Query(
-        None, description="Passphrase if required by the cohort"
+        None, description="Passphrase protecting the cohort (required)"
     ),
 ):
     """
@@ -754,9 +694,9 @@ def get_cohort_status(
 
     **Parameters:**
 
-    - **cohort_id**: (Optional) The unique identifier of the cohort.
-    - **alias**: (Optional) The alias of the cohort.
-    - **passphrase**: (Optional) The passphrase for the cohort if required.
+    - **cohort_id**: The unique identifier of the cohort. Required.
+    - **alias**: (Optional) The alias of the cohort, checked against it.
+    - **passphrase**: The passphrase protecting the cohort. Required.
 
     **Returns:**
 
@@ -858,10 +798,10 @@ def get_usage_statistics():
     ),
 )
 def cohort_download(
-    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
-    alias: Optional[str] = Query(None, description="Cohort alias"),
+    cohort_id: Optional[str] = Query(None, description="Cohort identifier (required)"),
+    alias: Optional[str] = Query(None, description="Cohort alias, checked against the cohort"),
     passphrase: Optional[str] = Query(
-        None, description="Passphrase if required by the cohort"
+        None, description="Passphrase protecting the cohort (required)"
     ),
 ):
     """
@@ -872,9 +812,9 @@ def cohort_download(
 
     **Parameters:**
 
-    - **cohort_id**: (Optional) The unique identifier of the cohort.
-    - **alias**: (Optional) The alias of the cohort.
-    - **passphrase**: (Optional) The passphrase for the cohort if required.
+    - **cohort_id**: The unique identifier of the cohort. Required.
+    - **alias**: (Optional) The alias of the cohort, checked against it.
+    - **passphrase**: The passphrase protecting the cohort. Required.
 
     **Returns:**
 
@@ -927,10 +867,10 @@ def cohort_download(
 )
 def run_cohort_analysis(
     request: Request,
-    cohort_id: Optional[str] = Form(None, description="Cohort identifier"),
-    alias: Optional[str] = Form(None, description="Cohort alias"),
+    cohort_id: Optional[str] = Form(None, description="Cohort identifier (required)"),
+    alias: Optional[str] = Form(None, description="Cohort alias, checked against the cohort"),
     passphrase: Optional[str] = Form(
-        None, description="Passphrase if required by the cohort"
+        None, description="Passphrase protecting the cohort (required)"
     ),
 ):
     """
@@ -941,9 +881,9 @@ def run_cohort_analysis(
 
     **Parameters:**
 
-    - **cohort_id**: (Optional) The unique identifier of the cohort.
-    - **alias**: (Optional) The alias of the cohort.
-    - **passphrase**: (Optional) The passphrase if required by the cohort.
+    - **cohort_id**: The unique identifier of the cohort. Required.
+    - **alias**: (Optional) The alias of the cohort, checked against it.
+    - **passphrase**: The passphrase protecting the cohort. Required.
 
     **Returns:**
     - **message**: Confirmation message.
@@ -1028,61 +968,61 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
+def authorized_cohort(
+    cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]
+):
+    """
+    Resolve a cohort and authorize the caller, as HTTP.
+
+    The rules live in `cohorts.resolve_cohort`, which signals with builtin
+    exceptions so it stays free of FastAPI. This is the only place that
+    vocabulary is translated into status codes, so every cohort route answers a
+    given failure the same way.
+
+    Args:
+        cohort_id: The cohort's identifier. Required.
+        alias: Optional label, cross-checked against the resolved cohort.
+        passphrase: The cohort's passphrase. Required.
+
+    Returns:
+        dict: The resolved `cohort_id`, `cohort_key` and `alias`.
+
+    Raises:
+        HTTPException: 400 for a malformed request, 401 for a refused one, 404
+            for a cohort that does not exist.
+    """
+    try:
+        return resolve_cohort(
+            redis_cohort_client,
+            cohort_id=cohort_id,
+            alias=alias,
+            passphrase=passphrase,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def get_cohort_jobs(
     cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]
 ):
     """
     Helper function to retrieve job IDs associated with a cohort.
+
+    Args:
+        cohort_id: The cohort's identifier. Required.
+        alias: Optional label, cross-checked against the resolved cohort.
+        passphrase: The cohort's passphrase. Required.
+
+    Returns:
+        dict: The cohort's `cohort_id`, `alias` and member `job_ids`.
     """
-    # Retrieve the cohort using cohort_id or alias
-    cohort_key = None
-    cohort_data = None
-    if cohort_id:
-        cohort_key = f"cohort:{cohort_id}"
-        cohort_data = redis_cohort_client.hgetall(cohort_key)
-        if not cohort_data:
-            raise HTTPException(status_code=404, detail="Cohort ID not found")
-    elif alias:
-        # Search for cohort by alias
-        for key in redis_cohort_client.scan_iter("cohort:*"):
-            data = redis_cohort_client.hgetall(key)
-            if data.get("alias") == alias:
-                cohort_key = key
-                cohort_data = data
-                cohort_id = key.split(":", 1)[1]  # Extract cohort_id from key
-                break
-        if not cohort_key:
-            raise HTTPException(status_code=404, detail="Cohort alias not found")
-    else:
-        raise HTTPException(
-            status_code=400, detail="Cohort identifier or alias required"
-        )
-
-    # If cohort_id is provided and alias is also provided, verify alias matches
-    if cohort_id and alias:
-        if cohort_data.get("alias") != alias:
-            logger.error(
-                f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Provided alias does not match the cohort's alias.",
-            )
-        logger.info(f"Alias '{alias}' verified for cohort '{cohort_id}'.")
-    # Verify passphrase if required
-    if cohort_data.get("hashed_passphrase"):
-        if not passphrase:
-            raise HTTPException(
-                status_code=401, detail="Passphrase required for this cohort"
-            )
-        if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
-            raise HTTPException(status_code=401, detail="Incorrect passphrase")
-
-    # Retrieve job IDs from the cohort's job set
-    job_ids = redis_cohort_client.smembers(f"{cohort_key}:jobs") or []
+    cohort = authorized_cohort(cohort_id, alias, passphrase)
     return {
-        "cohort_id": cohort_id,
-        "alias": cohort_data.get("alias", ""),
-        "job_ids": list(job_ids),
+        "cohort_id": cohort["cohort_id"],
+        "alias": cohort["alias"],
+        "job_ids": cohort_job_ids(redis_cohort_client, cohort["cohort_key"]),
     }
-# Test auto-reload at Thu Oct  2 08:10:18 CEST 2025
