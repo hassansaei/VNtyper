@@ -301,7 +301,10 @@ ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-d
 	@echo "  - the Docker image jobs -> run 'make ci-local-docker'"
 
 # Mirrors docker-build.yml. Needs a Docker daemon; builds and smoke-tests the image.
-ci-local-docker: lint-docker docker-build test-docker-smoke
+# VNTYPER_TEST_IMAGE is forced to the image just built - otherwise the smoke tier
+# would fall back to its default tag and silently test a different, older image.
+ci-local-docker: lint-docker docker-build
+	@$(MAKE) --no-print-directory test-docker-smoke VNTYPER_TEST_IMAGE=$(DOCKER_IMAGE)
 	@echo "$(GREEN)✓ Local Docker CI parity checks passed$(RESET)"
 
 # Docker targets
@@ -337,8 +340,9 @@ docker-build:
 # network inside the container, ~2s. Set VNTYPER_TEST_IMAGE to point at a tag other
 # than vntyper:local.
 test-docker-smoke:
-	@echo "$(BLUE)Running image structure smoke tests (no test data needed)...$(RESET)"
-	pytest -m smoke tests/docker -o log_cli=false
+	@echo "$(BLUE)Running image structure smoke tests on $(or $(VNTYPER_TEST_IMAGE),vntyper:local)...$(RESET)"
+	VNTYPER_TEST_IMAGE=$(or $(VNTYPER_TEST_IMAGE),vntyper:local) \
+		pytest -m smoke tests/docker -o log_cli=false
 	@echo "$(GREEN)✓ Image smoke tests complete$(RESET)"
 
 test-docker:
