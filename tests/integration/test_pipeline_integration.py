@@ -516,6 +516,9 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
 # 3) adVNTR Tests
 #
 @pytest.mark.integration
+# See the note on test_docker_advntr_pipeline: adVNTR is the slowest test in the
+# repo (~9 min) and exceeds pytest.ini's global 600s timeout on slower hardware.
+@pytest.mark.timeout(2700)
 def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
     """
     Integration test for the adVNTR module.

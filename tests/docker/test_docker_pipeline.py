@@ -81,6 +81,12 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
 
 @pytest.mark.docker
 @pytest.mark.slow
+# Overrides pytest.ini's global 600s timeout. adVNTR's HMM genotyping is the slowest
+# thing in the suite: ~5-6 min on a 32-core workstation, but GitHub's runners give 2
+# cores, so it needs several times that. 600s passed locally and timed out on CI.
+# The global timeout stays tight for everything else; this is the one genuine outlier,
+# and 45 min still bounds a hang far below the 6h job limit.
+@pytest.mark.timeout(2700)
 @pytest.mark.parametrize("test_case", get_advntr_test_cases(), ids=get_advntr_test_ids())
 def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, ensure_test_data) -> None:
     """
