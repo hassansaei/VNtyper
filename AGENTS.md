@@ -201,9 +201,11 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
   schedule plus `workflow_dispatch` with `full: true` runs `test-docker` including
   adVNTR. adVNTR is off the merge path on purpose: one test costing 15-25 min on a
   2-core runner - more than the rest of the pipeline combined - for an optional
-  module. Both adVNTR tests carry `@pytest.mark.timeout(2700)`, overriding the
-  global 600 s; that global timeout is right for everything else and CI hardware is
-  several times slower than a workstation.
+  module. Both adVNTR tests carry `@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)`,
+  overriding the global 600 s; that global timeout is right for everything else and CI
+  hardware is several times slower than a workstation. The value and the reasoning
+  behind it live in `tests/test_orchestration.py` — the module both adVNTR tests already
+  share — so recalibrating for new runner hardware is a one-line change there.
 
 ## Git and PRs
 
