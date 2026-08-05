@@ -9,6 +9,7 @@ Fixtures:
 - vntyper_container: Module-scoped container with volume mounts
 """
 
+import os
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
@@ -21,19 +22,27 @@ from testcontainers.core.container import DockerContainer
 @pytest.fixture(scope="session")
 def vntyper_image() -> Generator[str, None, None]:
     """
-    Build VNtyper Docker image once per test session.
+    Provide a VNtyper Docker image for the session, building one only if needed.
 
     Yields:
         str: Image tag
 
-    Notes:
-        - Built from project root Dockerfile
-        - Cached for entire test session
-        - Automatically cleaned up after session
-    """
-    import subprocess
+    Raises:
+        RuntimeError: If no image was supplied and the local build fails.
 
-    # Build image
+    Notes:
+        - Set VNTYPER_TEST_IMAGE to an existing tag to skip building entirely. CI does
+          this with the image the build job already produced and pushed; without it the
+          fixture rebuilt the whole image from scratch (measured: 1042s of fixture setup
+          to run 17s of assertions), which is why the Docker test jobs took ~20 minutes.
+        - The local build path is retained so `make test-docker` still works on a
+          developer machine with no image present.
+    """
+    preexisting = os.environ.get("VNTYPER_TEST_IMAGE")
+    if preexisting:
+        yield preexisting
+        return
+
     image_tag = "vntyper:test"
     project_root = Path(__file__).parent.parent.parent
 

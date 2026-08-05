@@ -92,10 +92,16 @@ tests/
 
 ### How It Works
 
-1. **Session-Scoped Image Build** (`tests/docker/conftest.py:vntyper_image`)
-   - Builds Docker image once per pytest session
-   - Command: `docker build -f docker/Dockerfile -t vntyper:test .`
-   - Image is reused across all tests (efficient)
+1. **Session-Scoped Image** (`tests/docker/conftest.py:vntyper_image`)
+   - **Set `VNTYPER_TEST_IMAGE=<tag>` to use an existing image and skip building entirely.**
+     CI always does this, passing the image the build job just produced. Without it the
+     fixture rebuilds the whole image from scratch with no cache — measured at 1042s of
+     fixture setup to run 17s of assertions, which is why the Docker test jobs used to
+     take ~20 minutes.
+   - Falls back to `docker build -f docker/Dockerfile -t vntyper:test .` when the
+     variable is unset, so a developer with no image present still gets a working run.
+     Note this needs a base image; see `docker/README.md`.
+   - Image is reused across all tests in the session
 
 2. **Module-Scoped Container** (`tests/docker/conftest.py:vntyper_container`)
    - Creates running container with volume mounts

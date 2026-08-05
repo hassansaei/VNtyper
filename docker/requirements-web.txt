@@ -1,0 +1,17 @@
+# Web-service dependencies for the FastAPI + Celery layer in docker/app/.
+#
+# Extracted verbatim from the inline `pip install` that used to live in
+# docker/Dockerfile. Kept as a separate file so the base image can install it as a
+# stable, fully pinned layer that does not depend on any application source - editing
+# vntyper/ no longer reinstalls fastapi.
+#
+# These are NOT part of the `vntyper` PyPI package; the CLI does not need them.
+fastapi[standard]==0.115.3
+uvicorn[standard]==0.32.0
+redis==5.2.0
+celery==5.4.0
+python-multipart==0.0.12
+fastapi-limiter==0.1.6
+email_validator==2.2.0
+passlib[bcrypt]==1.7.4
+pydantic==2.10.0

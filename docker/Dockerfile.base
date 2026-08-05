@@ -1,0 +1,150 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# VNtyper base image - the expensive, rarely-changing foundation
+# =============================================================================
+# Published as ghcr.io/<owner>/vntyper-base:<inputs-hash> by
+# .github/workflows/docker-base.yml, which only fires when the inputs below change:
+#
+#   conda/**                                    (the three conda environments)
+#   docker/requirements-web.txt                 (FastAPI/Celery stack)
+#   docker/Dockerfile.base                      (this file)
+#   vntyper/scripts/install_references*.{py,json}  (reference genomes + BWA indexes)
+#   vntyper/dependencies/advntr/**              (adVNTR build)
+#
+# Everything here is independent of application source, so editing vntyper/ or
+# docker/app/ never triggers a rebuild. The per-commit image (docker/Dockerfile)
+# layers onto this and builds in ~3 min instead of 40-70.
+#
+# NOTE ON CACHE MOUNTS: this file deliberately uses none. BuildKit does not export
+# `RUN --mount=type=cache` into any remote cache backend (gha or registry) - they are
+# builder-local state, and CI gets a fresh builder every job. The previous Dockerfile
+# had five of them; all were dead weight in CI. Worse, mounting a cache at
+# /opt/conda/pkgs put it on a different filesystem from /opt/conda/envs, which stops
+# conda hardlinking and silently added ~330 MB to the image.
+# =============================================================================
+
+ARG MINIFORGE=condaforge/miniforge3:24.11.3-0@sha256:bcfc04b3562faa8dfd48f3767e2bd7b73a8529f9611b508d42e5bd227db1342d
+
+# =============================================================================
+# Stage: envs - conda environments, web stack, compiled adVNTR
+# =============================================================================
+FROM ${MINIFORGE} AS envs
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# NOTE: condaforge/miniforge3:24.11.3-0 ALREADY ships mamba 1.5.12 and defaults to
+# solver=libmamba (verified: `mamba --version` in that exact digest). The old
+# Dockerfile ran `conda install -y mamba -n base -c conda-forge` here, which installed
+# nothing new but resolved against live conda-forge and silently floated the toolchain
+# (conda 24.11.3 -> 26.7.0, mamba 1.5.12 -> 2.8.1, a major version). That defeated the
+# @sha256 digest pin above and made builds non-reproducible. Do not re-add it.
+
+COPY conda/ /tmp/conda/
+RUN mamba env create -f /tmp/conda/environment_vntyper.yml && \
+    mamba env create -f /tmp/conda/environment_envadvntr.yml && \
+    mamba env create -f /tmp/conda/environment_shark.yml && \
+    conda clean -afy && \
+    find /opt/conda/envs -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/conda/envs -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '*.a' \) -delete 2>/dev/null || true && \
+    rm -rf /tmp/conda
+
+# Fully pinned and independent of application source, so this stays cached across
+# every application change.
+COPY docker/requirements-web.txt /tmp/requirements-web.txt
+RUN conda run -n vntyper pip install --no-cache-dir -r /tmp/requirements-web.txt && \
+    rm -f /tmp/requirements-web.txt
+
+# adVNTR compiles into the envadvntr (Python 2.7) environment's site-packages, so the
+# cloned build tree is disposable once `setup.py install` has run.
+COPY vntyper/dependencies/advntr/ /tmp/advntr/
+RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
+        conda activate envadvntr && \
+        bash /tmp/advntr/install_advntr.sh -o -d /tmp/advntr-build" && \
+    rm -rf /tmp/advntr-build /tmp/advntr
+
+# =============================================================================
+# Stage: refs - reference genomes and BWA indexes
+# =============================================================================
+# Gated on only the two reference files, so a conda env change does not force a
+# 6-15 minute genome re-download and re-index.
+FROM envs AS refs
+
+# The tracked reference files that ship in the repo. These are NOT downloadable by
+# install_references.py and the pipeline needs them: muc1_region_hg19.fa for the SHARK
+# module (vntyper/modules/shark/shark_config.json) and vntr_db_advntr.zip for the adVNTR
+# databases named in config.json. The previous Dockerfile got them for free by cloning
+# the repo into the image; they now come from the build context.
+COPY reference/ /opt/refs/
+
+COPY vntyper/scripts/install_references.py \
+     vntyper/scripts/install_references_config.json \
+     /opt/ir/
+
+# No --config-path: the shipped config.json already carries correct RELATIVE reference
+# paths for this image's layout, and the ucsc_*/ncbi_* absolute keys it would add are
+# read by nothing in vntyper/. See the note in docker/Dockerfile.
+#
+# Files copied above are detected as already present and skipped. The two chr1 genomes
+# are downloaded and BWA-indexed here - the single most expensive step in the build,
+# and the main reason this image is separated from the per-commit one.
+RUN conda run -n vntyper python /opt/ir/install_references.py \
+        --output-dir /opt/refs \
+        --threads 4 && \
+    if [ -f /opt/refs/vntr_db_advntr.zip ] && [ ! -d /opt/refs/vntr_db_advntr ]; then \
+        conda run -n vntyper python -c "import zipfile; zipfile.ZipFile('/opt/refs/vntr_db_advntr.zip').extractall('/opt/refs')"; \
+    fi && \
+    test -d /opt/refs/vntr_db_advntr || { echo "adVNTR database missing after extraction"; exit 1; } && \
+    test -f /opt/refs/muc1_region_hg19.fa || { echo "SHARK muc1_region_hg19.fa missing"; exit 1; } && \
+    rm -f /opt/refs/alignment/*.fa.gz && \
+    rm -rf /opt/ir
+
+# =============================================================================
+# Stage: base - the published runtime foundation
+# =============================================================================
+FROM ${MINIFORGE} AS base
+
+LABEL org.opencontainers.image.title="VNtyper base" \
+      org.opencontainers.image.description="Conda environments, adVNTR and reference genomes for VNtyper" \
+      org.opencontainers.image.vendor="VNtyper Project" \
+      org.opencontainers.image.licenses="BSD-3-Clause" \
+      org.opencontainers.image.source="https://github.com/hassansaei/VNtyper" \
+      com.vntyper.type="bioinformatics" \
+      com.vntyper.build="base"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CONDA_AUTO_UPDATE_CONDA=FALSE \
+    PATH=/opt/conda/envs/vntyper/bin:$PATH \
+    DEFAULT_INPUT_DIR=/opt/vntyper/input \
+    DEFAULT_OUTPUT_DIR=/opt/vntyper/output \
+    REFERENCE_DIR=/opt/vntyper/reference
+
+# curl for the healthcheck, ca-certificates for TLS. No build tools in the runtime.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG USERNAME=appuser
+ARG USER_UID=1001
+ARG USER_GID=1001
+
+# `install -d -o` creates the two writable directories already owned by appuser.
+# The old Dockerfile ran `chown -R appuser /opt/vntyper` over 1.66 GB of references and
+# source; under overlayfs that copies up every touched file into a new layer, adding
+# ~1.66 GB to the image for nothing. References and code are read-only at runtime.
+RUN groupadd --gid $USER_GID $USERNAME && \
+    useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash --create-home $USERNAME && \
+    install -d -o $USERNAME -g $USERNAME $DEFAULT_INPUT_DIR $DEFAULT_OUTPUT_DIR
+
+COPY --from=envs /opt/conda/envs /opt/conda/envs
+COPY --from=refs /opt/refs       /opt/vntyper/reference
+
+WORKDIR /opt/vntyper
