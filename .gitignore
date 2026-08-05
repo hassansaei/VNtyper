@@ -205,6 +205,7 @@ fastp.json
 .claude/settings.local.json
 .claude/state/
 .claude/*.local.json
+.claude/worktrees/
 .mcp.local.json
 
 # local clone of the upstream adVNTR source tree (installed, not vendored)
