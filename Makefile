@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick clean build docker-build docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -29,10 +29,12 @@ help:
 	@echo "$(GREEN)Testing:$(RESET)"
 	@echo "  make download-test-data      - Download test data from Zenodo (1.1GB, ~10-30 min)"
 	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
-	@echo "  make test                    - Run all tests (with live logging)"
-	@echo "  make test-unit               - Run unit tests only (fast)"
+	@echo "  make test                    - Run all tests (needs test data + Docker)"
+	@echo "  make test-unit               - Run unit tests only (fast, ~0.5s)"
+	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
+	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
-	@echo "  make test-integration-parallel - Run integration tests in parallel (67-81% faster)"
+	@echo "  make test-integration-parallel - Run integration tests in parallel"
 	@echo "  make test-advntr             - Run adVNTR test only"
 	@echo "  make test-cov                - Run tests with coverage report"
 	@echo "  make test-quiet              - Run tests with minimal output"
@@ -43,7 +45,8 @@ help:
 	@echo "  make build            - Build distribution packages"
 	@echo ""
 	@echo "$(GREEN)Docker:$(RESET)"
-	@echo "  make docker-build      - Build multi-stage Docker image (production-ready)"
+	@echo "  make docker-build      - Build application image on the published base (~3 min)"
+	@echo "  make docker-build-base - Rebuild the base image (conda+refs, ~20-30 min)"
 	@echo "  make test-docker       - Run Docker integration tests with testcontainers"
 	@echo "  make test-docker-quick - Run Docker tests (excluding slow tests)"
 	@echo "  make docker-clean      - Remove all VNtyper Docker images"
@@ -134,8 +137,21 @@ test:
 
 test-unit:
 	@echo "$(BLUE)Running unit tests (fast)...$(RESET)"
-	pytest -m unit
+	pytest -m unit tests/unit -o log_cli=false
 	@echo "$(GREEN)✓ Unit tests complete$(RESET)"
+
+# Inner dev loop: last-failed first, stop at the first failure.
+test-fast:
+	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
+	pytest -m unit tests/unit -o log_cli=false -q --ff -x
+
+# Coverage for the fast tier only. The floor is the measured baseline; ratchet it up
+# as coverage improves, never down.
+test-unit-cov:
+	@echo "$(BLUE)Running unit tests with coverage...$(RESET)"
+	pytest -m unit tests/unit -o log_cli=false \
+		--cov=vntyper --cov-report=term-missing --cov-fail-under=24
+	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
 
 test-integration:
 	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
@@ -143,14 +159,16 @@ test-integration:
 	pytest -m integration
 	@echo "$(GREEN)✓ Integration tests complete$(RESET)"
 
+# --dist load, NOT loadfile: all 11 integration tests live in a single file, so
+# loadfile assigned every test to one worker and idled the rest.
 test-integration-parallel:
 	@echo "$(BLUE)Running integration tests in parallel (auto-detect CPU cores)...$(RESET)"
-	@echo "$(BLUE)Using pytest-xdist for parallel execution (67-81% faster)$(RESET)"
+	@echo "$(BLUE)Using pytest-xdist for parallel execution$(RESET)"
 	@if ! python -c "import xdist" 2>/dev/null; then \
 		echo "$(RED)Error: pytest-xdist not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	pytest -n auto --dist loadfile -m integration -v
+	pytest -n auto --dist load -m integration -v
 	@echo "$(GREEN)✓ Integration tests complete (parallel mode)$(RESET)"
 
 test-advntr:
@@ -195,11 +213,19 @@ build:
 all: format lint type-check test
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check: format-check type-check test
+# check / check-all gate on the UNIT tier only, so they are runnable on a fresh clone.
+# They used to depend on `test` (bare pytest), which pulls in the integration tier
+# (needs a 1.1 GB Zenodo download) and the docker tier (needs a daemon + image build)
+# - i.e. the documented pre-PR command could not actually be run.
+check: format-check type-check test-unit
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check-all: format-check lint type-check-all test
+check-all: format-check lint type-check-all test-unit
 	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
+
+# Opt-in gate that additionally runs the tiers needing test data / Docker.
+check-full: check-all test-integration
+	@echo "$(GREEN)✓ All checks passed (including integration)$(RESET)"
 
 # Docker targets
 #Docker configuration
@@ -207,11 +233,28 @@ DOCKER_IMAGE_NAME := vntyper
 DOCKER_IMAGE_TAG := latest
 DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
 
+# The image is split in two. docker/Dockerfile.base carries the conda environments,
+# adVNTR and the reference genomes (expensive, changes a few times a year);
+# docker/Dockerfile carries only the application (~3 min).
+#
+# BASE_IMAGE defaults to the published ghcr base, so `make docker-build` alone works
+# and just pulls it. Build the base locally only when you are changing conda/**,
+# the reference config, or Dockerfile.base itself.
+DOCKER_BASE_IMAGE ?= ghcr.io/hassansaei/vntyper-base:latest
+
+docker-build-base:
+	@echo "$(BLUE)Building base image (conda envs + adVNTR + references)...$(RESET)"
+	@echo "$(BLUE)Note: this downloads and BWA-indexes reference genomes; expect 20-30 min$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.base -t vntyper-base:local .
+	@echo "$(GREEN)✓ Base image built: vntyper-base:local$(RESET)"
+	@echo "$(GREEN)  Now run: make docker-build DOCKER_BASE_IMAGE=vntyper-base:local$(RESET)"
+
 docker-build:
-	@echo "$(BLUE)Building Docker image (multi-stage production build)...$(RESET)"
-	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile -t $(DOCKER_IMAGE) .
+	@echo "$(BLUE)Building application image on $(DOCKER_BASE_IMAGE)...$(RESET)"
+	DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		-t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
-	@echo "$(GREEN)✓ Image uses multi-stage build (35% smaller, more secure)$(RESET)"
 
 test-docker:
 	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"
