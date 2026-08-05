@@ -195,6 +195,15 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
   included. Set `VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1` to fail fast instead of downloading.
 - Correct marker composition is `-m "docker and not slow"`; repeated `-m` flags override
   rather than combine.
+- The Docker tier runs at three depths, chosen by how much signal each buys for its
+  runtime: PRs get `test-docker-quick` (4 tests, ~10 s), pushes to `main` get
+  `test-docker-fast` (everything except `slow`, ~1.5 min locally), and a nightly
+  schedule plus `workflow_dispatch` with `full: true` runs `test-docker` including
+  adVNTR. adVNTR is off the merge path on purpose: one test costing 15-25 min on a
+  2-core runner - more than the rest of the pipeline combined - for an optional
+  module. Both adVNTR tests carry `@pytest.mark.timeout(2700)`, overriding the
+  global 600 s; that global timeout is right for everything else and CI hardware is
+  several times slower than a workstation.
 
 ## Git and PRs
 
