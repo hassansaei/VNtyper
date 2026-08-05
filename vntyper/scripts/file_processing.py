@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # vntyper/scripts/file_processing.py
 
 import importlib.resources as pkg_resources
@@ -22,7 +21,7 @@ def filter_vcf(input_path, output_path):
 
     with open(input_path) as vcf_file, open(output_path, "w") as indel_file:
         for line in vcf_file:
-            if line.startswith("##") or line.startswith("#CHROM"):
+            if line.startswith(("##", "#CHROM")):
                 indel_file.write(line)
             else:
                 _, _, _, ref, alt, *_ = line.split("\t")
@@ -52,7 +51,7 @@ def filter_indel_vcf(indel_vcf, output_ins, output_del):
 
     with open(indel_vcf) as vcf_file, open(output_ins, "w") as insertion_file, open(output_del, "w") as deletion_file:
         for line in vcf_file:
-            if line.startswith("##") or line.startswith("#CHROM"):
+            if line.startswith(("##", "#CHROM")):
                 insertion_file.write(line)
                 deletion_file.write(line)
             else:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 scoring.py
 
@@ -30,6 +29,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+logger = logging.getLogger(__name__)
+
 
 def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -51,11 +52,11 @@ def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
             Adds 'Frame_Score' and a boolean column 'is_frameshift'.
             Does NOT filter out rows.
     """
-    logging.debug("Entering split_depth_and_calculate_frame_score")
-    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Entering split_depth_and_calculate_frame_score")
+    logger.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting split_depth_and_calculate_frame_score.")
+        logger.debug("DataFrame is empty. Exiting split_depth_and_calculate_frame_score.")
         return df
 
     # Step 1) Split 'Sample' into 3 parts
@@ -75,8 +76,8 @@ def split_depth_and_calculate_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     # Step 3) Mark frameshift in a new boolean column
     df["is_frameshift"] = (df["alt_len"] - df["ref_len"]) % 3 != 0
 
-    logging.debug("Exiting split_depth_and_calculate_frame_score")
-    logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Exiting split_depth_and_calculate_frame_score")
+    logger.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df
 
 
@@ -99,11 +100,11 @@ def split_frame_score(df: pd.DataFrame) -> pd.DataFrame:
             Adds 'direction' and 'frameshift_amount'.
             Retains all rows and intermediate columns for debugging.
     """
-    logging.debug("Entering split_frame_score")
-    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Entering split_frame_score")
+    logger.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting split_frame_score.")
+        logger.debug("DataFrame is empty. Exiting split_frame_score.")
         return df
 
     # Step 1) Determine direction
@@ -112,8 +113,8 @@ def split_frame_score(df: pd.DataFrame) -> pd.DataFrame:
     # Step 2) Calculate frameshift_amount
     df["frameshift_amount"] = (df["alt_len"] - df["ref_len"]).abs() % 3
 
-    logging.debug("Exiting split_frame_score")
-    logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Exiting split_frame_score")
+    logger.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df
 
 
@@ -138,11 +139,11 @@ def extract_frameshifts(df: pd.DataFrame) -> pd.DataFrame:
             Adds 'is_valid_frameshift' (bool).
             Keeps all rows.
     """
-    logging.debug("Entering extract_frameshifts")
-    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Entering extract_frameshifts")
+    logger.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting extract_frameshifts.")
+        logger.debug("DataFrame is empty. Exiting extract_frameshifts.")
         return df
 
     # Identify insertion vs deletion frameshifts
@@ -151,6 +152,6 @@ def extract_frameshifts(df: pd.DataFrame) -> pd.DataFrame:
 
     df["is_valid_frameshift"] = condition_insertion | condition_deletion
 
-    logging.debug("Exiting extract_frameshifts")
-    logging.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Exiting extract_frameshifts")
+    logger.debug(f"Final row count: {len(df)}, columns: {df.columns.tolist()}")
     return df

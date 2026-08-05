@@ -1,15 +1,16 @@
-#!/usr/bin/env python3
 # vntyper/scripts/generate_report.py
 
 import json
 import logging
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
+
+logger = logging.getLogger(__name__)
 
 
 def load_pipeline_summary(summary_file_path):
@@ -22,17 +23,17 @@ def load_pipeline_summary(summary_file_path):
     Returns:
         dict: The loaded summary dictionary or an empty dict if load fails.
     """
-    logging.info("Loading pipeline summary from %s", summary_file_path)
+    logger.info("Loading pipeline summary from %s", summary_file_path)
     if not os.path.exists(summary_file_path):
-        logging.error("Pipeline summary file not found: %s", summary_file_path)
+        logger.error("Pipeline summary file not found: %s", summary_file_path)
         return {}
     try:
         with open(summary_file_path) as f:
             summary = json.load(f)
-        logging.debug("Pipeline summary loaded successfully.")
+        logger.debug("Pipeline summary loaded successfully.")
         return summary
     except Exception as e:
-        logging.error("Failed to load pipeline summary: %s", e)
+        logger.error("Failed to load pipeline summary: %s", e)
         return {}
 
 
@@ -42,17 +43,17 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
     is not explicitly set, we fall back to config's default_values.flanking.
     Skips passing None for track arguments (vcf_file or bam_file).
     """
-    logging.debug("run_igv_report called with:")
-    logging.debug("  bed_file=%s", bed_file)
-    logging.debug("  bam_file=%s", bam_file)
-    logging.debug("  fasta_file=%s", fasta_file)
-    logging.debug("  output_html=%s", output_html)
-    logging.debug("  vcf_file=%s", vcf_file)
-    logging.debug("  flanking=%s", flanking)
+    logger.debug("run_igv_report called with:")
+    logger.debug("  bed_file=%s", bed_file)
+    logger.debug("  bam_file=%s", bam_file)
+    logger.debug("  fasta_file=%s", fasta_file)
+    logger.debug("  output_html=%s", output_html)
+    logger.debug("  vcf_file=%s", vcf_file)
+    logger.debug("  flanking=%s", flanking)
 
     if config is not None and flanking == 50:
         flanking = config.get("default_values", {}).get("flanking", 50)
-        logging.debug("Flanking region set to %s based on config.", flanking)
+        logger.debug("Flanking region set to %s based on config.", flanking)
 
     bed_file = str(bed_file) if bed_file else None
     bam_file = str(bam_file) if bam_file else None
@@ -77,35 +78,35 @@ def run_igv_report(bed_file, bam_file, fasta_file, output_html, flanking=50, vcf
         # Verify file exists before adding to tracks (defensive programming)
         if os.path.exists(vcf_file):
             tracks.append(str(vcf_file))
-            logging.debug(f"Adding VCF track: {vcf_file}")
+            logger.debug(f"Adding VCF track: {vcf_file}")
         else:
-            logging.warning(f"VCF file specified but not found: {vcf_file}. Skipping VCF track.")
+            logger.warning(f"VCF file specified but not found: {vcf_file}. Skipping VCF track.")
     else:
-        logging.info("No VCF file provided. IGV report will not include VCF track.")
+        logger.info("No VCF file provided. IGV report will not include VCF track.")
 
     if bam_file:
         if os.path.exists(bam_file):
             tracks.append(str(bam_file))
-            logging.debug(f"Adding BAM track: {bam_file}")
+            logger.debug(f"Adding BAM track: {bam_file}")
         else:
-            logging.warning(f"BAM file specified but not found: {bam_file}. Skipping BAM track.")
+            logger.warning(f"BAM file specified but not found: {bam_file}. Skipping BAM track.")
 
     if not tracks:
-        logging.error("No valid tracks (VCF or BAM) available for IGV report. Report may be empty or fail.")
+        logger.error("No valid tracks (VCF or BAM) available for IGV report. Report may be empty or fail.")
 
     igv_report_cmd.extend(tracks)
     igv_report_cmd.extend(["--output", output_html])
 
-    logging.debug("IGV report command: %s", " ".join([str(x) for x in igv_report_cmd if x]))
+    logger.debug("IGV report command: %s", " ".join([str(x) for x in igv_report_cmd if x]))
     try:
-        logging.info("Running IGV report: %s", " ".join([str(x) for x in igv_report_cmd if x]))
+        logger.info("Running IGV report: %s", " ".join([str(x) for x in igv_report_cmd if x]))
         subprocess.run(igv_report_cmd, check=True)
-        logging.info("IGV report successfully generated at %s", output_html)
+        logger.info("IGV report successfully generated at %s", output_html)
     except subprocess.CalledProcessError as e:
-        logging.error("Error generating IGV report: %s", e)
+        logger.error("Error generating IGV report: %s", e)
         raise
     except Exception as e:
-        logging.error("Unexpected error generating IGV report: %s", e)
+        logger.error("Unexpected error generating IGV report: %s", e)
         raise
 
 
@@ -115,7 +116,7 @@ def extract_igv_content(igv_report_html):
     the tableJson variable, and the sessionDictionary variable from the script.
     Returns empty strings if not found or on error.
     """
-    logging.debug("extract_igv_content called with igv_report_html=%s", igv_report_html)
+    logger.debug("extract_igv_content called with igv_report_html=%s", igv_report_html)
     try:
         with open(igv_report_html) as f:
             content = f.read()
@@ -124,7 +125,7 @@ def extract_igv_content(igv_report_html):
         igv_end = content.find("</body>")
 
         if igv_start == -1 or igv_end == -1:
-            logging.error("Failed to extract IGV content from report.")
+            logger.error("Failed to extract IGV content from report.")
             return "", "", ""
 
         igv_content = content[igv_start:igv_end].strip()
@@ -137,13 +138,13 @@ def extract_igv_content(igv_report_html):
         session_dict_end = content.find("\n", session_dict_start)
         session_dictionary = content[session_dict_start:session_dict_end].strip()
 
-        logging.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
+        logger.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
         return igv_content, table_json, session_dictionary
     except FileNotFoundError:
-        logging.error("IGV report file not found: %s", igv_report_html)
+        logger.error("IGV report file not found: %s", igv_report_html)
         return "", "", ""
     except Exception as e:
-        logging.error("Unexpected error extracting IGV content: %s", e)
+        logger.error("Unexpected error extracting IGV content: %s", e)
         return "", "", ""
 
 
@@ -152,17 +153,17 @@ def load_fastp_output(fastp_file):
     Loads fastp JSON output (e.g., output.json) for summary metrics if available.
     Returns an empty dict if file not found or if parsing fails.
     """
-    logging.debug("load_fastp_output called with fastp_file=%s", fastp_file)
+    logger.debug("load_fastp_output called with fastp_file=%s", fastp_file)
     if not os.path.exists(fastp_file):
-        logging.warning("fastp output file not found: %s", fastp_file)
+        logger.warning("fastp output file not found: %s", fastp_file)
         return {}
     try:
         with open(fastp_file) as f:
             data = json.load(f)
-        logging.debug("fastp output successfully loaded.")
+        logger.debug("fastp output successfully loaded.")
         return data
     except Exception as e:
-        logging.error("Failed to load or parse fastp output: %s", e)
+        logger.error("Failed to load or parse fastp output: %s", e)
         return {}
 
 
@@ -171,20 +172,20 @@ def load_pipeline_log(log_file):
     Loads the pipeline log content from the specified log_file.
     Returns a placeholder string if not found or on error.
     """
-    logging.info("Loading pipeline log from %s", log_file)
+    logger.info("Loading pipeline log from %s", log_file)
     if not log_file:
-        logging.warning("No pipeline log file provided; skipping log loading.")
+        logger.warning("No pipeline log file provided; skipping log loading.")
         return "No pipeline log file was provided."
     if not os.path.exists(log_file):
-        logging.warning("Pipeline log file not found: %s", log_file)
+        logger.warning("Pipeline log file not found: %s", log_file)
         return "Pipeline log file not found."
     try:
         with open(log_file) as f:
             content = f.read()
-        logging.debug("Pipeline log successfully loaded.")
+        logger.debug("Pipeline log successfully loaded.")
         return content
     except Exception as e:
-        logging.error("Failed to read pipeline log file: %s", e)
+        logger.error("Failed to read pipeline log file: %s", e)
         return "Failed to load pipeline log."
 
 
@@ -201,10 +202,10 @@ def load_report_config():
     try:
         with open(config_path) as f:
             report_config = json.load(f)
-        logging.info("Loaded report config from %s", config_path)
+        logger.info("Loaded report config from %s", config_path)
         return report_config
     except Exception as e:
-        logging.error("Failed to load report config: %s", e)
+        logger.error("Failed to load report config: %s", e)
         return {}
 
 
@@ -225,22 +226,22 @@ def compute_algorithm_result(df, logic_config):
         str: The computed algorithm result.
     """
     if df.empty:
-        logging.debug("DataFrame is empty; returning default result.")
+        logger.debug("DataFrame is empty; returning default result.")
         return logic_config.get("default", "none")
     row = df.iloc[0]
-    logging.debug("Data row for evaluation: %s", row.to_dict())
-    logging.debug("Logic configuration: %s", logic_config)
+    logger.debug("Data row for evaluation: %s", row.to_dict())
+    logger.debug("Logic configuration: %s", logic_config)
     for idx, rule in enumerate(logic_config.get("rules", [])):
-        logging.debug("Evaluating rule %s: %s", idx, rule)
+        logger.debug("Evaluating rule %s: %s", idx, rule)
         conditions = rule.get("conditions", {})
         rule_matches = True
         for col, expected in conditions.items():
             if col not in row:
-                logging.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
+                logger.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
                 rule_matches = False
                 break
             actual = str(row.get(col, "")).strip()
-            logging.debug(
+            logger.debug(
                 "Rule %s, column '%s': actual='%s', expected='%s'",
                 idx,
                 col,
@@ -252,7 +253,7 @@ def compute_algorithm_result(df, logic_config):
                 exp_val = expected.get("value")
                 if op == "==":
                     if actual != str(exp_val).strip():
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s == %s' not met (actual='%s').",
                             idx,
                             col,
@@ -263,7 +264,7 @@ def compute_algorithm_result(df, logic_config):
                         break
                 elif op == "!=":
                     if actual == str(exp_val).strip():
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s != %s' not met (actual='%s').",
                             idx,
                             col,
@@ -276,7 +277,7 @@ def compute_algorithm_result(df, logic_config):
                     if not isinstance(exp_val, list):
                         exp_val = [exp_val]
                     if actual not in exp_val:
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s in %s' not met (actual='%s').",
                             idx,
                             col,
@@ -289,7 +290,7 @@ def compute_algorithm_result(df, logic_config):
                     if not isinstance(exp_val, list):
                         exp_val = [exp_val]
                     if actual in exp_val:
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s not in %s' not met (actual='%s').",
                             idx,
                             col,
@@ -299,7 +300,7 @@ def compute_algorithm_result(df, logic_config):
                         rule_matches = False
                         break
                 else:
-                    logging.debug(
+                    logger.debug(
                         "Rule %s: Unsupported operator '%s' for column '%s'.",
                         idx,
                         op,
@@ -310,7 +311,7 @@ def compute_algorithm_result(df, logic_config):
             else:
                 if isinstance(expected, list):
                     if actual not in expected:
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s in %s' not met (actual='%s').",
                             idx,
                             col,
@@ -321,7 +322,7 @@ def compute_algorithm_result(df, logic_config):
                         break
                 else:
                     if actual != str(expected):
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s == %s' not met (actual='%s').",
                             idx,
                             col,
@@ -332,11 +333,11 @@ def compute_algorithm_result(df, logic_config):
                         break
         if rule_matches:
             result = rule.get("result")
-            logging.debug("Rule %s PASSED; returning result: %s", idx, result)
+            logger.debug("Rule %s PASSED; returning result: %s", idx, result)
             return result
         else:
-            logging.debug("Rule %s did not pass.", idx)
-    logging.debug("No rule matched; returning default result.")
+            logger.debug("Rule %s did not pass.", idx)
+    logger.debug("No rule matched; returning default result.")
     return logic_config.get("default", "none")
 
 
@@ -366,23 +367,23 @@ def build_screening_summary(
     try:
         kestrel_logic = report_config.get("algorithm_logic", {}).get("kestrel", {})
         computed_kestrel = compute_algorithm_result(kestrel_df, kestrel_logic)
-        logging.debug("Computed Kestrel result: %s", computed_kestrel)
+        logger.debug("Computed Kestrel result: %s", computed_kestrel)
 
         advntr_logic = report_config.get("algorithm_logic", {}).get("advntr", {})
         computed_advntr = compute_algorithm_result(advntr_df, advntr_logic) if advntr_available else "none"
-        logging.debug("Computed adVNTR result: %s", computed_advntr)
+        logger.debug("Computed adVNTR result: %s", computed_advntr)
 
         quality_metrics_pass = True
         if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
             quality_metrics_pass = False
-        logging.debug("Quality metrics pass: %s", quality_metrics_pass)
+        logger.debug("Quality metrics pass: %s", quality_metrics_pass)
 
         current_conditions = {
             "kestrel_result": computed_kestrel,
             "advntr_result": computed_advntr,
             "quality_metrics_pass": quality_metrics_pass,
         }
-        logging.debug("Unified screening conditions: %s", current_conditions)
+        logger.debug("Unified screening conditions: %s", current_conditions)
 
         unified_rules = report_config.get("screening_summary_rules", [])
         default_message = report_config.get(
@@ -399,18 +400,18 @@ def build_screening_summary(
             conditions = rule.get("conditions", {})
             if all(condition_matches(current_conditions.get(key), conditions.get(key)) for key in conditions):
                 summary_text = rule.get("message", "")
-                logging.debug("Unified rule matched: %s", conditions)
+                logger.debug("Unified rule matched: %s", conditions)
                 break
 
         if not summary_text:
             summary_text = default_message
-            logging.debug("No unified rule matched; using default screening message.")
+            logger.debug("No unified rule matched; using default screening message.")
 
     except Exception as ex:
-        logging.error("Exception in build_screening_summary: %s", ex)
+        logger.error("Exception in build_screening_summary: %s", ex)
         summary_text = "No summary available."
 
-    logging.debug("Final screening summary: %s", summary_text)
+    logger.debug("Final screening summary: %s", summary_text)
     return summary_text
 
 
@@ -449,14 +450,14 @@ def generate_summary_report(
     Raises:
         ValueError: If config is not provided.
     """
-    logging.debug("---- DEBUG: Entered generate_summary_report ----")
-    logging.debug(
+    logger.debug("---- DEBUG: Entered generate_summary_report ----")
+    logger.debug(
         "Called with output_dir=%s, template_dir=%s, report_file=%s",
         output_dir,
         template_dir,
         report_file,
     )
-    logging.debug(
+    logger.debug(
         "bed_file=%s, bam_file=%s, fasta_file=%s, flanking=%s, log_file=%s, vcf_file=%s",
         bed_file,
         bam_file,
@@ -475,7 +476,7 @@ def generate_summary_report(
     # Resolve flanking region from main config if needed.
     if flanking == 50 and config is not None:
         flanking = config.get("default_values", {}).get("flanking", 50)
-        logging.debug("Flanking region set to %s based on config.", flanking)
+        logger.debug("Flanking region set to %s based on config.", flanking)
 
     thresholds = config.get("thresholds", {})
     mean_vntr_cov_threshold = thresholds.get("mean_vntr_coverage", 100)
@@ -529,17 +530,17 @@ def generate_summary_report(
                     vntr_region_length = int(coverage_data.get("region_length", 0))
                     vntr_uncovered_bases = int(coverage_data.get("uncovered_bases", 0))
                     percent_vntr_uncovered = float(coverage_data.get("percent_uncovered", 0))
-                    logging.debug("All VNTR coverage statistics extracted successfully")
-                    logging.debug(f"Mean VNTR coverage: {mean_vntr_coverage}")
-                    logging.debug(f"Median VNTR coverage: {median_vntr_coverage}")
-                    logging.debug(f"StdDev VNTR coverage: {stdev_vntr_coverage}")
-                    logging.debug(f"Min VNTR coverage: {min_vntr_coverage}")
-                    logging.debug(f"Max VNTR coverage: {max_vntr_coverage}")
-                    logging.debug(f"VNTR region length: {vntr_region_length}")
-                    logging.debug(f"VNTR uncovered bases: {vntr_uncovered_bases}")
-                    logging.debug(f"Percent VNTR uncovered: {percent_vntr_uncovered}%")
+                    logger.debug("All VNTR coverage statistics extracted successfully")
+                    logger.debug(f"Mean VNTR coverage: {mean_vntr_coverage}")
+                    logger.debug(f"Median VNTR coverage: {median_vntr_coverage}")
+                    logger.debug(f"StdDev VNTR coverage: {stdev_vntr_coverage}")
+                    logger.debug(f"Min VNTR coverage: {min_vntr_coverage}")
+                    logger.debug(f"Max VNTR coverage: {max_vntr_coverage}")
+                    logger.debug(f"VNTR region length: {vntr_region_length}")
+                    logger.debug(f"VNTR uncovered bases: {vntr_uncovered_bases}")
+                    logger.debug(f"Percent VNTR uncovered: {percent_vntr_uncovered}%")
                 except Exception as e:
-                    logging.error("Error parsing VNTR coverage statistics: %s", e)
+                    logger.error("Error parsing VNTR coverage statistics: %s", e)
                     # Keep default None values for failed extractions
             break
 
@@ -577,7 +578,7 @@ def generate_summary_report(
             try:
                 kestrel_df["Depth Score"] = pd.to_numeric(kestrel_df["Depth Score"], errors="coerce")
             except Exception as e:
-                logging.warning("Could not convert 'Depth Score' to numeric: %s", e)
+                logger.warning("Could not convert 'Depth Score' to numeric: %s", e)
             kestrel_df = kestrel_df.sort_values(by="Depth Score", ascending=False)
         # Create a copy of the sorted dataframe (without HTML formatting) for matching.
         kestrel_df_raw = kestrel_df.copy()
@@ -594,11 +595,11 @@ def generate_summary_report(
                     )
                 )
             )
-        logging.debug("Kestrel data extracted from summary and formatted.")
+        logger.debug("Kestrel data extracted from summary and formatted.")
     else:
         kestrel_df = pd.DataFrame()
         kestrel_df_raw = pd.DataFrame()
-        logging.warning("No Kestrel data found in pipeline summary.")
+        logger.warning("No Kestrel data found in pipeline summary.")
 
     if advntr_data:
         advntr_df = pd.DataFrame(advntr_data)
@@ -615,7 +616,7 @@ def generate_summary_report(
             "Flag",
         ]
         advntr_df = advntr_df[[col for col in advntr_columns if col in advntr_df.columns]]
-        logging.debug("adVNTR data extracted from summary and formatted.")
+        logger.debug("adVNTR data extracted from summary and formatted.")
     else:
         advntr_df = pd.DataFrame()
 
@@ -623,7 +624,7 @@ def generate_summary_report(
 
     # IGV report generation (if applicable)
     if bed_file and os.path.exists(bed_file):
-        logging.info("Running IGV report for BED file: %s", bed_file)
+        logger.info("Running IGV report for BED file: %s", bed_file)
         igv_report_file = Path(output_dir) / "igv_report.html"
         run_igv_report(
             bed_file,
@@ -635,13 +636,13 @@ def generate_summary_report(
             config=config,
         )
     else:
-        logging.warning("BED file does not exist or not provided. Skipping IGV report generation.")
+        logger.warning("BED file does not exist or not provided. Skipping IGV report generation.")
         igv_report_file = None
 
     if igv_report_file and igv_report_file.exists():
         igv_content, table_json, session_dictionary = extract_igv_content(igv_report_file)
     else:
-        logging.warning("IGV report file not found. Skipping IGV content.")
+        logger.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
 
     fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
@@ -650,23 +651,23 @@ def generate_summary_report(
     if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
         coverage_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
         coverage_color = "red"
-        logging.debug("Mean VNTR coverage is below the threshold.")
+        logger.debug("Mean VNTR coverage is below the threshold.")
     else:
         coverage_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
         coverage_color = "green"
-        logging.debug("Mean VNTR coverage is above the threshold.")
+        logger.debug("Mean VNTR coverage is above the threshold.")
 
     # Check if percent_vntr_uncovered exceeds threshold
     if percent_vntr_uncovered is not None and percent_vntr_uncovered > percent_vntr_uncovered_threshold:
         uncovered_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
         uncovered_color = "red"
-        logging.debug(
+        logger.debug(
             f"Percent VNTR uncovered ({percent_vntr_uncovered}%) exceeds the threshold ({percent_vntr_uncovered_threshold}%)."
         )
     else:
         uncovered_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
         uncovered_color = "green"
-        logging.debug(
+        logger.debug(
             f"Percent VNTR uncovered ({percent_vntr_uncovered}%) is below the threshold ({percent_vntr_uncovered_threshold}%)."
         )
 
@@ -693,27 +694,27 @@ def generate_summary_report(
         passed_filter_reads = filtering_result.get("passed_filter_reads", 0)
         if total_reads_before > 0:
             passed_filter_rate = passed_filter_reads / total_reads_before
-            logging.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
+            logger.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
         else:
             passed_filter_rate = None
-            logging.debug("Total reads before filtering is zero; passed filter rate set to None.")
+            logger.debug("Total reads before filtering is zero; passed filter rate set to None.")
         sequencing_str = summary_fastp.get("sequencing", "")
-        logging.debug("Sequencing setup: %s", sequencing_str)
+        logger.debug("Sequencing setup: %s", sequencing_str)
 
     def warn_icon(value, cutoff, higher_better=True):
         if value is None:
-            logging.debug("warn_icon called with value=None; returning empty strings.")
+            logger.debug("warn_icon called with value=None; returning empty strings.")
             return "", ""
         if higher_better:
             if value < cutoff:
-                logging.debug(
+                logger.debug(
                     "Value %s is below the cutoff %s (higher_better=True).",
                     value,
                     cutoff,
                 )
                 return '<span style="color:red;font-weight:bold;">&#9888;</span>', "red"
             else:
-                logging.debug(
+                logger.debug(
                     "Value %s is above or equal to the cutoff %s (higher_better=True).",
                     value,
                     cutoff,
@@ -724,14 +725,14 @@ def generate_summary_report(
                 )
         else:
             if value > cutoff:
-                logging.debug(
+                logger.debug(
                     "Value %s is above the cutoff %s (higher_better=False).",
                     value,
                     cutoff,
                 )
                 return '<span style="color:red;font-weight:bold;">&#9888;</span>', "red"
             else:
-                logging.debug(
+                logger.debug(
                     "Value %s is below or equal to the cutoff %s (higher_better=False).",
                     value,
                     cutoff,
@@ -752,7 +753,7 @@ def generate_summary_report(
         index=False,
         escape=False,
     )
-    logging.debug("Kestrel results converted to HTML.")
+    logger.debug("Kestrel results converted to HTML.")
 
     if advntr_available:
         if not advntr_df.empty:
@@ -760,13 +761,13 @@ def generate_summary_report(
                 classes="table table-bordered table-striped hover compact table-sm",
                 index=False,
             )
-            logging.debug("adVNTR results converted to HTML.")
+            logger.debug("adVNTR results converted to HTML.")
         else:
             advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
-            logging.debug("adVNTR was performed but no variants identified; adding negative message.")
+            logger.debug("adVNTR was performed but no variants identified; adding negative message.")
     else:
         advntr_html = "<p>adVNTR genotyping was not performed.</p>"
-        logging.debug("adVNTR was not performed; adding message to report.")
+        logger.debug("adVNTR was not performed; adding message to report.")
 
     # Extract cross-match summary message from the pipeline summary if available.
     cross_match_message = ""
@@ -782,9 +783,9 @@ def generate_summary_report(
     env = Environment(loader=FileSystemLoader(template_dir))
     try:
         template = env.get_template("report_template.html")
-        logging.debug("Jinja2 template 'report_template.html' loaded successfully.")
+        logger.debug("Jinja2 template 'report_template.html' loaded successfully.")
     except Exception as e:
-        logging.error("Failed to load Jinja2 template: %s", e)
+        logger.error("Failed to load Jinja2 template: %s", e)
         raise
 
     # Use the sorted (and raw) kestrel dataframe for matching.
@@ -796,7 +797,7 @@ def generate_summary_report(
         mean_vntr_cov_threshold,
         report_config,
     )
-    logging.debug("Summary text generated: %s", summary_text)
+    logger.debug("Summary text generated: %s", summary_text)
 
     context = {
         "kestrel_highlight": kestrel_html,
@@ -806,7 +807,7 @@ def generate_summary_report(
         "igv_content": igv_content,
         "table_json": table_json,
         "session_dictionary": session_dictionary,
-        "report_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "input_files": input_files,
         "pipeline_version": pipeline_version,
         "header_warning": header_warning,
@@ -845,16 +846,16 @@ def generate_summary_report(
 
     try:
         rendered_html = template.render(context)
-        logging.debug("Report template rendered successfully.")
+        logger.debug("Report template rendered successfully.")
     except Exception as e:
-        logging.error("Failed to render the report template: %s", e)
+        logger.error("Failed to render the report template: %s", e)
         raise
 
     report_file_path = Path(output_dir) / report_file
     try:
         with open(report_file_path, "w") as f:
             f.write(rendered_html)
-        logging.info("Summary report generated and saved to %s", report_file_path)
+        logger.info("Summary report generated and saved to %s", report_file_path)
     except Exception as e:
-        logging.error("Failed to write the summary report: %s", e)
+        logger.error("Failed to write the summary report: %s", e)
         raise

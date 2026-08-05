@@ -10,6 +10,8 @@ import os
 
 import pysam
 
+logger = logging.getLogger(__name__)
+
 
 def read_uint32(f):
     """
@@ -44,8 +46,7 @@ def get_last_chunk_end(bai_filename):
                     # Each chunk: 8 bytes for chunk_beg, 8 bytes for chunk_end
                     _chunk_beg = read_uint64(bai)
                     chunk_end = read_uint64(bai)
-                    if chunk_end > max_vo:
-                        max_vo = chunk_end
+                    max_vo = max(max_vo, chunk_end)
             # Read number of linear index entries and skip them
             n_intv = read_uint32(bai)
             bai.seek(n_intv * 8, os.SEEK_CUR)
@@ -66,7 +67,7 @@ def extract_unmapped_reads_from_offset(bam_file, bai_file, output_bam):
         IOError: If reading/writing from disk fails, or if the BAI file is invalid.
     """
     last_vo = get_last_chunk_end(bai_file)
-    logging.info(f"Last mapped virtual offset (from BAI): {last_vo}")
+    logger.info(f"Last mapped virtual offset (from BAI): {last_vo}")
 
     with pysam.AlignmentFile(bam_file, "rb") as inbam:
         # Seek to the computed virtual offset.
@@ -77,4 +78,4 @@ def extract_unmapped_reads_from_offset(bam_file, bai_file, output_bam):
                 if read.is_unmapped:
                     outbam.write(read)
                     count += 1
-            logging.info(f"Extracted {count} unmapped reads to {output_bam}")
+            logger.info(f"Extracted {count} unmapped reads to {output_bam}")

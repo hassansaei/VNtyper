@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # vntyper/modules/shark/shark_filtering.py
 
 import logging
@@ -6,6 +5,8 @@ import os
 from pathlib import Path
 
 from vntyper.scripts.utils import load_config, run_command
+
+logger = logging.getLogger(__name__)
 
 
 def load_shark_config(config_path=None):
@@ -73,11 +74,11 @@ def run_shark_filter(
     )
 
     log_file = Path(output_dir) / f"{sample_name}_shark.log"
-    logging.info(f"Running SHARK filtering with command: {command}")
+    logger.info(f"Running SHARK filtering with command: {command}")
 
     success = run_command(command, str(log_file), critical=True)
     if not success:
-        logging.error("SHARK filtering failed.")
+        logger.error("SHARK filtering failed.")
         raise RuntimeError("SHARK filtering failed.")
 
     return filtered_fastq_1, filtered_fastq_2

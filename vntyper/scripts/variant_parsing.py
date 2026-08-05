@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 variant_parsing.py
 
@@ -25,11 +24,14 @@ References:
 - Saei et al., iScience 26, 107171 (2023)
 """
 
+from __future__ import annotations
+
 import gzip
 import logging
-from typing import Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
@@ -47,7 +49,7 @@ def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
     """
     open_func = gzip.open if vcf_file.endswith(".gz") else open
     data = []
-    header: Optional[list] = None
+    header: list | None = None
 
     try:
         with open_func(vcf_file, "rt") as f:
@@ -57,16 +59,16 @@ def read_vcf_without_comments(vcf_file: str) -> pd.DataFrame:
                 elif not line.startswith("##") and header:
                     data.append(line.strip().split("\t"))
     except FileNotFoundError:
-        logging.error(f"VCF file not found: {vcf_file}")
+        logger.error(f"VCF file not found: {vcf_file}")
         return pd.DataFrame()
     except Exception as e:
-        logging.error(f"Error reading VCF file {vcf_file}: {e}")
+        logger.error(f"Error reading VCF file {vcf_file}: {e}")
         return pd.DataFrame()
 
     if data and header:
-        logging.debug(f"VCF read successfully with {len(data)} records.")
+        logger.debug(f"VCF read successfully with {len(data)} records.")
         return pd.DataFrame(data, columns=header)
-    logging.debug("No variant records found in VCF.")
+    logger.debug("No variant records found in VCF.")
     return pd.DataFrame()
 
 
@@ -94,17 +96,17 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
             Intermediate columns like 'left', 'right' are no longer dropped;
             they remain for debugging.
     """
-    logging.debug("Entering filter_by_alt_values_and_finalize")
-    logging.debug(f"Initial DataFrame shape: {df.shape}")
+    logger.debug("Entering filter_by_alt_values_and_finalize")
+    logger.debug(f"Initial DataFrame shape: {df.shape}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting filter_by_alt_values_and_finalize.")
+        logger.debug("DataFrame is empty. Exiting filter_by_alt_values_and_finalize.")
         return df
 
     required_columns = {"ALT", "Depth_Score"}
     missing_columns = required_columns - set(df.columns)
     if missing_columns:
-        logging.error(f"Missing required columns: {missing_columns}")
+        logger.error(f"Missing required columns: {missing_columns}")
         raise KeyError(f"Missing required columns: {missing_columns}")
 
     alt_filter = kestrel_config.get("alt_filtering", {})
@@ -123,6 +125,6 @@ def filter_by_alt_values_and_finalize(df: pd.DataFrame, kestrel_config: dict) ->
     # Instead of filtering the DataFrame, we store a new boolean column
     df["alt_filter_pass"] = (~is_gg | meets_gg_threshold) & not_excluded_alt
 
-    logging.debug("Exiting filter_by_alt_values_and_finalize")
-    logging.debug(f"Final DataFrame shape: {df.shape}")
+    logger.debug("Exiting filter_by_alt_values_and_finalize")
+    logger.debug(f"Final DataFrame shape: {df.shape}")
     return df

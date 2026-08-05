@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # vntyper/cli.py
 # VNtyper CLI entry point
 
@@ -22,6 +21,8 @@ from vntyper.scripts.reference_registry import list_assemblies
 from vntyper.scripts.utils import setup_logging
 from vntyper.version import __version__ as VERSION
 
+logger = logging.getLogger(__name__)
+
 
 def load_config(config_path=None):
     """
@@ -36,16 +37,16 @@ def load_config(config_path=None):
     if config_path is not None and Path(config_path).exists():
         with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
-        logging.debug(f"Loaded configuration from {config_path}")
+        logger.debug(f"Loaded configuration from {config_path}")
     else:
         # No config path provided or file does not exist; use default config from package data
         try:
             with pkg_resources.open_text("vntyper", "config.json") as f:
                 config = json.load(f)
-            logging.debug("Loaded default configuration from package data.")
+            logger.debug("Loaded default configuration from package data.")
         except Exception as exc:
-            logging.error("Error: Default config file not found in package data.")
-            logging.error(exc)
+            logger.error("Error: Default config file not found in package data.")
+            logger.error(exc)
             sys.exit(1)
     return config
 
@@ -369,9 +370,9 @@ def main():
     try:
         # IMPORTANT: Use `initial_config` as fallback when `--config-path` is not provided
         config = load_config(args.config_path) if args.config_path else load_config(None)
-        logging.debug("Configuration loaded successfully.")
+        logger.debug("Configuration loaded successfully.")
     except Exception as exc:
-        logging.critical(f"Failed to load configuration: {exc}")
+        logger.critical(f"Failed to load configuration: {exc}")
         sys.exit(1)
 
     def get_conf(key, fallback):
@@ -409,14 +410,14 @@ def main():
 
     # Setup logging now (only once) with the determined log level and log file
     setup_logging(log_level=log_level_value, log_file=log_file_str)
-    logging.debug(f"Logging has been set up with level {log_level_value} and log_file {log_file_str}")
+    logger.debug(f"Logging has been set up with level {log_level_value} and log_file {log_file_str}")
 
     # Log current logging handlers and their levels
     for handler in logging.getLogger().handlers:
         handler_type = handler.__class__.__name__
         handler_level = logging.getLevelName(handler.level)
         handler_file = getattr(handler, "baseFilename", "N/A") if isinstance(handler, logging.FileHandler) else "N/A"
-        logging.debug(f"Handler: {handler_type}, Level: {handler_level}, File: {handler_file}")
+        logger.debug(f"Handler: {handler_type}, Level: {handler_level}, File: {handler_file}")
 
     # Subcommand: install-references
     if args.command == "install-references":
@@ -440,30 +441,30 @@ def main():
         if not args.log_file and args.output_dir:
             log_file = Path(args.output_dir) / "pipeline.log"
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            logging.debug(f"Setting log file to {log_file}")
+            logger.debug(f"Setting log file to {log_file}")
 
         if args.output_dir is None:
             args.output_dir = get_conf("output_dir", "out")
-            logging.debug(f"output_dir set to {args.output_dir}")
+            logger.debug(f"output_dir set to {args.output_dir}")
         if args.threads is None:
             args.threads = get_conf("threads", 4)
-            logging.debug(f"threads set to {args.threads}")
+            logger.debug(f"threads set to {args.threads}")
         if args.reference_assembly is None:
             args.reference_assembly = get_conf("reference_assembly", "hg19")
-            logging.debug(f"reference_assembly set to {args.reference_assembly}")
+            logger.debug(f"reference_assembly set to {args.reference_assembly}")
         if args.output_name is None:
             args.output_name = get_conf("output_name", "processed")
-            logging.debug(f"output_name set to {args.output_name}")
+            logger.debug(f"output_name set to {args.output_name}")
         if args.archive_format is None:
             args.archive_format = get_conf("archive_format", "zip")
-            logging.debug(f"archive_format set to {args.archive_format}")
+            logger.debug(f"archive_format set to {args.archive_format}")
 
         import itertools
 
         flattened_modules = list(
             itertools.chain.from_iterable(m if isinstance(m, list) else [m] for m in args.extra_modules)
         )
-        logging.debug(f"extra_modules flattened to {flattened_modules}")
+        logger.debug(f"extra_modules flattened to {flattened_modules}")
 
         # Validate single input type
         input_types = sum(
@@ -475,14 +476,14 @@ def main():
         )
         if input_types > 1:
             parser.error("Provide either BAM, CRAM, or FASTQ files (not multiples).")
-            logging.debug("Multiple input types detected.")
+            logger.debug("Multiple input types detected.")
             sys.exit(1)
 
         if not args.bam and not args.cram and (args.fastq1 is None or args.fastq2 is None):
             parser.error(
                 "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing."
             )
-            logging.debug("Missing FASTQ files for paired-end sequencing.")
+            logger.debug("Missing FASTQ files for paired-end sequencing.")
             sys.exit(1)
 
         # Construct module_args_dict for advntr, etc.
@@ -494,21 +495,21 @@ def main():
             if hasattr(args, "advntr_reference"):
                 module_args_dict["advntr"]["advntr_reference"] = args.advntr_reference
                 delattr(args, "advntr_reference")
-                logging.debug(f"advntr_reference set to {args.advntr_reference}")
+                logger.debug(f"advntr_reference set to {args.advntr_reference}")
 
             # The new coverage parameter:
             if args.advntr_max_coverage:
                 module_args_dict["advntr"]["max_coverage"] = args.advntr_max_coverage
-                logging.debug(f"advntr_max_coverage set to {args.advntr_max_coverage}")
+                logger.debug(f"advntr_max_coverage set to {args.advntr_max_coverage}")
 
         else:
             module_args_dict["advntr"] = {}
-            logging.debug("advntr module not included.")
+            logger.debug("advntr module not included.")
 
         # (#62) If user tries to use 'shark' in BAM/CRAM mode, exit with a warning
         if (args.bam or args.cram) and ("shark" in flattened_modules):
-            logging.warning("Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag.")
-            logging.debug("Shark module detected with BAM/CRAM input; exiting.")
+            logger.warning("Shark is not supported in BAM mode; please use FASTQ mode or remove the shark flag.")
+            logger.debug("Shark module detected with BAM/CRAM input; exiting.")
             sys.exit(1)
 
         # Determine which BWA reference to use from config using registry
@@ -517,7 +518,7 @@ def main():
         try:
             coord_system = get_coordinate_system(args.reference_assembly)
         except ValueError:
-            logging.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
+            logger.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
             coord_system = "GRCh37"
 
         # Map coordinate system to UCSC-style name for BWA reference lookup
@@ -525,19 +526,19 @@ def main():
         ucsc_style_ref = ucsc_map.get(coord_system, "hg19")
         bwa_key = f"bwa_reference_{ucsc_style_ref}"
         bwa_reference = config.get("reference_data", {}).get(bwa_key)
-        logging.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")
+        logger.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")
 
         sample_name_val = args.sample_name
         if sample_name_val is None:
             if args.bam:
                 sample_name_val = Path(args.bam).stem
-                logging.debug(f"sample_name set from BAM file: {sample_name_val}")
+                logger.debug(f"sample_name set from BAM file: {sample_name_val}")
             elif args.fastq1:
                 sample_name_val = Path(args.fastq1).stem
-                logging.debug(f"sample_name set from FASTQ1 file: {sample_name_val}")
+                logger.debug(f"sample_name set from FASTQ1 file: {sample_name_val}")
             else:
                 sample_name_val = "sample"
-                logging.debug(f"sample_name defaulted to: {sample_name_val}")
+                logger.debug(f"sample_name defaulted to: {sample_name_val}")
 
         # Process the new --summary-formats argument (comma-separated)
         summary_formats = []
@@ -581,10 +582,10 @@ def main():
         # (we do so only if relevant keys exist in config["default_values"])
         if args.report_file is None:
             args.report_file = get_conf("report_file", "summary_report.html")
-            logging.debug(f"report_file set to {args.report_file}")
+            logger.debug(f"report_file set to {args.report_file}")
         if args.flanking is None:
             args.flanking = get_conf("flanking", 50)
-            logging.debug(f"flanking set to {args.flanking}")
+            logger.debug(f"flanking set to {args.flanking}")
 
         # If user did not provide reference_fasta, fallback to config if present
         if args.reference_fasta is None:
@@ -592,7 +593,7 @@ def main():
             ref_fasta = config.get("reference_data", {}).get("muc1_reference_vntr")
             if ref_fasta:
                 args.reference_fasta = Path(ref_fasta)
-                logging.debug(f"reference_fasta set to {args.reference_fasta}")
+                logger.debug(f"reference_fasta set to {args.reference_fasta}")
 
         # If user didn't specify --bam-file, we attempt to find a standard location
         # e.g. <input-dir>/kestrel/output.bam
@@ -601,14 +602,14 @@ def main():
             candidate_bam = args.input_dir / "kestrel" / "output.bam"
             if candidate_bam.exists():
                 args.bam_file = candidate_bam
-                logging.debug(f"bam_file set to {args.bam_file}")
+                logger.debug(f"bam_file set to {args.bam_file}")
 
         # Same approach for bed-file (standard name is "output.bed" in "kestrel")
         if args.bed_file is None and args.input_dir:
             candidate_bed = args.input_dir / "kestrel" / "output.bed"
             if candidate_bed.exists():
                 args.bed_file = candidate_bed
-                logging.debug(f"bed_file set to {args.bed_file}")
+                logger.debug(f"bed_file set to {args.bed_file}")
 
         # Now call generate_summary_report
         generate_summary_report(
@@ -634,21 +635,21 @@ def main():
     elif args.command == "cohort":
         if args.summary_file is None:
             args.summary_file = get_conf("summary_file", "cohort_summary.html")
-            logging.debug(f"summary_file set to {args.summary_file}")
+            logger.debug(f"summary_file set to {args.summary_file}")
 
         # Prepare the list of input paths
         input_paths = []
         if args.input_dirs:
             input_paths.extend(args.input_dirs)
-            logging.debug(f"Added input_dirs: {args.input_dirs}")
+            logger.debug(f"Added input_dirs: {args.input_dirs}")
         if args.input_file:
             if not args.input_file.exists():
-                logging.error(f"The input file {args.input_file} does not exist.")
+                logger.error(f"The input file {args.input_file} does not exist.")
                 sys.exit(1)
             with open(args.input_file) as f:
                 file_lines = [line.strip() for line in f if line.strip()]
                 input_paths.extend(file_lines)
-            logging.debug(f"Added input_file entries: {file_lines}")
+            logger.debug(f"Added input_file entries: {file_lines}")
 
         aggregate_cohort(
             input_paths=input_paths,
@@ -669,13 +670,13 @@ def main():
 
         if args.output_dir is None:
             args.output_dir = get_conf("output_dir", "out")
-            logging.debug(f"output_dir set to {args.output_dir}")
+            logger.debug(f"output_dir set to {args.output_dir}")
         if args.reference_assembly is None:
             args.reference_assembly = get_conf("reference_assembly", "hg19")
-            logging.debug(f"reference_assembly set to {args.reference_assembly}")
+            logger.debug(f"reference_assembly set to {args.reference_assembly}")
         if args.threads is None:
             args.threads = get_conf("threads", 4)
-            logging.debug(f"threads set to {args.threads}")
+            logger.debug(f"threads set to {args.threads}")
 
         run_online_mode(
             config=config,
@@ -690,7 +691,7 @@ def main():
         )
 
     else:
-        logging.error(f"Unknown command: {args.command}")
+        logger.error(f"Unknown command: {args.command}")
         parser.print_help()
         sys.exit(1)
 

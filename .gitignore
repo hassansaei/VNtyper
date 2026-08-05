@@ -69,8 +69,8 @@ instance/
 .scrapy
 
 # Sphinx documentation
+# NOTE: do NOT ignore docs/ itself - it holds the tracked MkDocs site sources.
 docs/_build/
-docs/
 
 # PyBuilder
 .pybuilder/
@@ -192,15 +192,23 @@ fastp.json
 /docker/test_output/
 /testing/
 
-# Local Dockerfile (for local development/testing)
-Dockerfile
+# Local Dockerfile at the repo root (for local development/testing).
+# Anchored so that the tracked docker/Dockerfile is never ignored.
+/Dockerfile
 
 # apptainer files
 *.sif
 
-# claude files and folders
-.claude/
-CLAUDE.md
+# coding-agent configuration
+# AGENTS.md, CLAUDE.md and .claude/settings.json are tracked on purpose - they are
+# shared project instructions. Only per-developer overrides stay local.
+.claude/settings.local.json
+.claude/state/
+.claude/*.local.json
+.mcp.local.json
+
+# local clone of the upstream adVNTR source tree (installed, not vendored)
+/adVNTR/
 
 # local development documentation and sensitive configs
 plan/

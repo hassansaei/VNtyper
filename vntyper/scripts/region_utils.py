@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 region_utils.py
 
@@ -17,6 +16,8 @@ Functions:
 """
 
 import logging
+
+logger = logging.getLogger(__name__)
 
 # Module-level cache for BAM chromosome resolution
 # Key: (bam_file, reference_assembly, chromosome_number), Value: chromosome_name
@@ -59,7 +60,7 @@ def get_region_string(bam_file: str, reference_assembly: str, region_type: str, 
 
     # Resolve assembly alias to coordinate set
     coord_assembly = resolve_assembly_alias(reference_assembly)
-    logging.debug(f"Resolved assembly '{reference_assembly}' to coord set '{coord_assembly}'")
+    logger.debug(f"Resolved assembly '{reference_assembly}' to coord set '{coord_assembly}'")
 
     # Get coordinates from config
     assemblies = config.get("bam_processing", {}).get("assemblies", {})
@@ -86,7 +87,7 @@ def get_region_string(bam_file: str, reference_assembly: str, region_type: str, 
     cache_key = (bam_file, reference_assembly, chromosome_number)
     if cache_key in _chromosome_cache:
         chromosome_name = _chromosome_cache[cache_key]
-        logging.debug(f"Using cached chromosome name: {chromosome_name} for {bam_file}")
+        logger.debug(f"Using cached chromosome name: {chromosome_name} for {bam_file}")
     else:
         # Get actual chromosome name from BAM
         chromosome_name = get_chromosome_name_from_bam(
@@ -94,11 +95,11 @@ def get_region_string(bam_file: str, reference_assembly: str, region_type: str, 
         )
         # Cache the result
         _chromosome_cache[cache_key] = chromosome_name
-        logging.debug(f"Cached chromosome name: {chromosome_name} for {bam_file}")
+        logger.debug(f"Cached chromosome name: {chromosome_name} for {bam_file}")
 
     # Build final region string
     region = build_region_string(chromosome_name, coordinates)
-    logging.debug(f"Built region string: {region} for {region_type} in assembly {reference_assembly}")
+    logger.debug(f"Built region string: {region} for {region_type} in assembly {reference_assembly}")
 
     return region
 
@@ -170,7 +171,7 @@ def resolve_assembly_alias(reference_assembly: str) -> str:
     try:
         return get_coordinate_system(reference_assembly)
     except ValueError as e:
-        logging.warning(f"Unknown assembly '{reference_assembly}', defaulting to 'GRCh37': {e}")
+        logger.warning(f"Unknown assembly '{reference_assembly}', defaulting to 'GRCh37': {e}")
         return "GRCh37"
 
 
@@ -204,7 +205,7 @@ def get_region_string_with_fallback(bam_file: str, reference_assembly: str, regi
         )
 
     except (KeyError, ValueError) as e:
-        logging.warning(f"Dynamic region resolution failed: {e}. Falling back to legacy config lookup.")
+        logger.warning(f"Dynamic region resolution failed: {e}. Falling back to legacy config lookup.")
 
         # Fall back to old method: look up hardcoded region in config
         region_key = f"{region_type.replace('_coords', '')}_{reference_assembly}"
@@ -217,7 +218,7 @@ def get_region_string_with_fallback(bam_file: str, reference_assembly: str, regi
                 f"Neither new nor legacy format available."
             ) from e
 
-        logging.info(f"Using legacy region format: {region_key} = {region}")
+        logger.info(f"Using legacy region format: {region_key} = {region}")
         return region
 
 
@@ -231,10 +232,9 @@ def clear_chromosome_cache():
 
     Should be called between processing different BAM files.
     """
-    global _chromosome_cache
     cache_size = len(_chromosome_cache)
     _chromosome_cache.clear()
-    logging.debug(f"Cleared chromosome cache ({cache_size} entries)")
+    logger.debug(f"Cleared chromosome cache ({cache_size} entries)")
 
 
 def get_cache_info() -> dict:

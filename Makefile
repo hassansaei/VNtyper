@@ -95,17 +95,17 @@ format-check:
 # Type checking targets
 type-check:
 	@echo "$(BLUE)Running mypy type checker on vntyper package...$(RESET)"
-	mypy vntyper/ --python-version 3.9 --ignore-missing-imports
+	mypy vntyper/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 type-check-tests:
 	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
-	mypy tests/ --python-version 3.9 --ignore-missing-imports
+	mypy tests/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 type-check-all:
 	@echo "$(BLUE)Running mypy type checker on all code...$(RESET)"
-	mypy vntyper/ tests/ --python-version 3.9 --ignore-missing-imports
+	mypy vntyper/ tests/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 # Test data management targets
@@ -166,7 +166,7 @@ test-cov:
 
 test-quiet:
 	@echo "$(BLUE)Running tests with minimal output...$(RESET)"
-	pytest --log-cli=false -q
+	pytest -o log_cli=false -q
 	@echo "$(GREEN)✓ Tests complete$(RESET)"
 
 test-verbose:

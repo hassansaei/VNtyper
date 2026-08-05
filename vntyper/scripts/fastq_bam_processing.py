@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
 # vntyper/scripts/fastq_bam_processing.py
+
+from __future__ import annotations
 
 import json
 import logging
@@ -7,13 +8,14 @@ import os
 import statistics  # for median and stdev calculations
 import subprocess
 from pathlib import Path
-from typing import Optional, Union
 
 from vntyper.scripts.extract_unmapped_from_offset import (
     extract_unmapped_reads_from_offset,
 )
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.utils import run_command
+
+logger = logging.getLogger(__name__)
 
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
@@ -56,14 +58,14 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
         qc_command += " --dedup"
 
     log_file = Path(output) / f"{output_name}_fastp.log"
-    logging.info(f"Executing FASTQ quality control with command: {qc_command}")
+    logger.info(f"Executing FASTQ quality control with command: {qc_command}")
 
     success = run_command(str(qc_command), str(log_file), critical=True)
     if not success:
-        logging.error("FASTQ quality control failed.")
+        logger.error("FASTQ quality control failed.")
         raise RuntimeError("FASTQ quality control failed.")
 
-    logging.info("Quality control passed for FASTQ files.")
+    logger.info("Quality control passed for FASTQ files.")
 
 
 def process_bam_to_fastq(
@@ -110,23 +112,23 @@ def process_bam_to_fastq(
 
     if bed_file:
         if not bed_file.exists():
-            logging.error(f"Provided BED file does not exist: {bed_file}")
+            logger.error(f"Provided BED file does not exist: {bed_file}")
             raise FileNotFoundError(f"BED file not found: {bed_file}")
         bam_region = f"-L {bed_file}"
-        logging.debug(f"BAM regions set using BED file: {bam_region}")
+        logger.debug(f"BAM regions set using BED file: {bam_region}")
     else:
         # Use dynamic region resolution with fallback to legacy format
         bam_region = get_region_string_with_fallback(
             bam_file=str(in_bam), reference_assembly=reference_assembly, region_type="bam_region", config=config
         )
-        logging.debug(f"BAM region set to: {bam_region}")
+        logger.debug(f"BAM region set to: {bam_region}")
 
     cram_ref_option = ""
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
     # Slice/region extraction
     if keep_intermediates and final_bam.exists():
-        logging.info(f"Reusing existing BAM slice: {final_bam}")
+        logger.info(f"Reusing existing BAM slice: {final_bam}")
     else:
         if bed_file:
             command_slice = (
@@ -139,13 +141,13 @@ def process_bam_to_fastq(
                 f"{samtools_path} index {final_bam}"
             )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
-        logging.info(f"Executing region slicing with command: {command_slice}")
+        logger.info(f"Executing region slicing with command: {command_slice}")
 
         success = run_command(str(command_slice), str(log_file_slice), critical=True)
         if not success:
-            logging.error(f"{file_format.upper()} region slicing failed.")
+            logger.error(f"{file_format.upper()} region slicing failed.")
             raise RuntimeError(f"{file_format.upper()} region slicing failed.")
-        logging.info("BAM/CRAM region slicing completed.")
+        logger.info("BAM/CRAM region slicing completed.")
 
     # Extract & merge unmapped reads if not in fast_mode
     if not fast_mode:
@@ -158,12 +160,12 @@ def process_bam_to_fastq(
                 # Index if not present
                 index_cmd = f"{samtools_path} index {in_bam}"
                 log_file_index = Path(output) / f"{output_name}_unmapped_index.log"
-                logging.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
+                logger.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
                 success = run_command(str(index_cmd), str(log_file_index), critical=True)
                 if not success:
                     raise RuntimeError("Indexing BAM file failed.")
 
-            logging.info("Extracting unmapped reads using offset calculation...")
+            logger.info("Extracting unmapped reads using offset calculation...")
             extract_unmapped_reads_from_offset(
                 bam_file=str(in_bam),
                 bai_file=str(bam_bai),
@@ -177,38 +179,38 @@ def process_bam_to_fastq(
                 f"> /dev/null"
             )
             log_file_filter = Path(output) / f"{output_name}_filter.log"
-            logging.info(f"Executing filtering with command: {command_filter}")
+            logger.info(f"Executing filtering with command: {command_filter}")
 
             success = run_command(str(command_filter), str(log_file_filter), critical=True)
             if not success:
-                logging.error("BAM/CRAM filtering failed.")
+                logger.error("BAM/CRAM filtering failed.")
                 raise RuntimeError("BAM/CRAM filtering failed.")
 
         # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
         command_merge = f"{samtools_path} merge -f -@ {threads} {merged_bam} {final_bam} {unmapped_bam}"
         log_file_merge = Path(output) / f"{output_name}_merge.log"
-        logging.info(f"Executing BAM merging with command: {command_merge}")
+        logger.info(f"Executing BAM merging with command: {command_merge}")
 
         success = run_command(str(command_merge), str(log_file_merge), critical=True)
         if not success:
-            logging.error("BAM merging failed.")
+            logger.error("BAM merging failed.")
             raise RuntimeError("BAM merging failed.")
 
         final_bam = merged_bam
-        logging.info("BAM/CRAM filtering and merging completed.")
+        logger.info("BAM/CRAM filtering and merging completed.")
 
         # Rename merged BAM for adVNTR consistency and re-index
         final_bam_renamed = Path(output) / f"{output_name}_sliced.bam"
         os.replace(final_bam, final_bam_renamed)
         final_bam = final_bam_renamed
-        logging.info(f"Renamed merged BAM file to {final_bam}")
+        logger.info(f"Renamed merged BAM file to {final_bam}")
 
         command_index = f"{samtools_path} index {final_bam}"
         log_file_index = Path(output) / f"{output_name}_index.log"
-        logging.info(f"Re-indexing BAM file with command: {command_index}")
+        logger.info(f"Re-indexing BAM file with command: {command_index}")
         if not run_command(command_index, str(log_file_index), critical=True):
-            logging.error("Re-indexing BAM file failed.")
+            logger.error("Re-indexing BAM file failed.")
             raise RuntimeError("Re-indexing BAM file failed.")
 
     # Convert final BAM to FASTQ
@@ -226,7 +228,7 @@ def process_bam_to_fastq(
             final_fastq_single,
         ]
     ):
-        logging.info(
+        logger.info(
             f"Reusing existing FASTQ files: {final_fastq_1}, {final_fastq_2}, "
             f"{final_fastq_other}, and {final_fastq_single}"
         )
@@ -238,25 +240,25 @@ def process_bam_to_fastq(
             f"-s {final_fastq_single}"
         )
         log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
-        logging.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
+        logger.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
 
         success = run_command(str(command_sort_fastq), str(log_file_sort_fastq), critical=True)
         if not success:
-            logging.error("BAM to FASTQ conversion failed.")
+            logger.error("BAM to FASTQ conversion failed.")
             raise RuntimeError("BAM to FASTQ conversion failed.")
-        logging.info("BAM to FASTQ conversion completed.")
+        logger.info("BAM to FASTQ conversion completed.")
 
     # Clean up intermediates if requested
     if delete_intermediates and not keep_intermediates:
-        logging.info("Removing intermediate BAM files...")
+        logger.info("Removing intermediate BAM files...")
         intermediate_files = [
             Path(output) / f"{output_name}_unmapped.bam",
         ]
         for file in intermediate_files:
             if file.exists():
                 file.unlink()
-                logging.debug(f"Removed intermediate file: {file}")
-        logging.info("Intermediate BAM files removed.")
+                logger.debug(f"Removed intermediate file: {file}")
+        logger.info("Intermediate BAM files removed.")
 
     return (
         str(final_fastq_1),
@@ -290,14 +292,14 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
     samtools_path = config["tools"]["samtools"]
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
     depth_command = f"{samtools_path} depth -@ {threads} -r {region} {bam_file} > {coverage_output}"
-    logging.info(f"Calculating VNTR coverage with command: {depth_command}")
+    logger.info(f"Calculating VNTR coverage with command: {depth_command}")
     success = run_command(
         str(depth_command),
         str(coverage_output.with_suffix(".depth.log")),
         critical=True,
     )
     if not success:
-        logging.error("VNTR coverage calculation failed.")
+        logger.error("VNTR coverage calculation failed.")
         raise RuntimeError("VNTR coverage calculation failed.")
 
     try:
@@ -315,9 +317,9 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
             start_pos = int(pos_range[0])
             end_pos = int(pos_range[1])
             total_region_length = end_pos - start_pos + 1
-            logging.debug(f"VNTR region total length: {total_region_length} bp")
+            logger.debug(f"VNTR region total length: {total_region_length} bp")
         except (ValueError, IndexError) as e:
-            logging.warning(f"Could not parse region string: {e}. Setting region length to 0.")
+            logger.warning(f"Could not parse region string: {e}. Setting region length to 0.")
             total_region_length = 0
 
         with open(coverage_output) as f:
@@ -338,14 +340,14 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         min_coverage = min(coverage_values)
         max_coverage = max(coverage_values)
 
-        logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
-        logging.info(f"Median VNTR coverage: {median_coverage:.2f}")
-        logging.info(f"Standard deviation: {stdev_coverage:.2f}")
-        logging.info(f"Min coverage: {min_coverage}")
-        logging.info(f"Max coverage: {max_coverage}")
-        logging.info(f"VNTR region total length: {total_region_length} bp")
-        logging.info(f"VNTR region uncovered bases: {zero_coverage_bases} bp")
-        logging.info(f"Percentage of VNTR region with zero coverage: {percent_uncovered:.2f}%")
+        logger.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
+        logger.info(f"Median VNTR coverage: {median_coverage:.2f}")
+        logger.info(f"Standard deviation: {stdev_coverage:.2f}")
+        logger.info(f"Min coverage: {min_coverage}")
+        logger.info(f"Max coverage: {max_coverage}")
+        logger.info(f"VNTR region total length: {total_region_length} bp")
+        logger.info(f"VNTR region uncovered bases: {zero_coverage_bases} bp")
+        logger.info(f"Percentage of VNTR region with zero coverage: {percent_uncovered:.2f}%")
 
         if summary_filename is None:
             summary_filename = Path(output_dir) / f"{output_name}_summary.tsv"
@@ -359,7 +361,7 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
                 f"{min_coverage}\t{max_coverage}\t{total_region_length}\t"
                 f"{zero_coverage_bases}\t{percent_uncovered:.2f}\n"
             )
-        logging.info(f"Coverage summary written to: {summary_filename}")
+        logger.info(f"Coverage summary written to: {summary_filename}")
 
         return {
             "mean": mean_coverage,
@@ -372,7 +374,7 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
             "percent_uncovered": percent_uncovered,
         }
     except Exception as e:
-        logging.error(f"Error calculating coverage summary: {e}")
+        logger.error(f"Error calculating coverage summary: {e}")
         raise RuntimeError(f"Error calculating coverage summary: {e}") from e
 
 
@@ -421,13 +423,13 @@ def downsample_bam_if_needed(
     )["mean"]
 
     if current_coverage <= max_coverage:
-        logging.info(
+        logger.info(
             f"Current coverage ({current_coverage:.2f}) <= max_coverage ({max_coverage}). No downsampling needed."
         )
         return bam_path
 
     fraction = max_coverage / current_coverage
-    logging.info(
+    logger.info(
         f"Current coverage: {current_coverage:.2f}, max coverage: {max_coverage}, downsampling fraction: {fraction:.4f}"
     )
 
@@ -448,11 +450,11 @@ def downsample_bam_if_needed(
         str(downsampled_bam),
         str(bam_path),
     ]
-    logging.info(f"Downsampling BAM with command: {' '.join(cmd_view)}")
+    logger.info(f"Downsampling BAM with command: {' '.join(cmd_view)}")
     try:
         subprocess.run(cmd_view, check=True)
     except subprocess.CalledProcessError as err:
-        logging.error(f"Downsampling failed: {err}")
+        logger.error(f"Downsampling failed: {err}")
         return bam_path
 
     sorted_down_bam = downsampled_bam.with_suffix(".sorted.bam")
@@ -471,10 +473,10 @@ def downsample_bam_if_needed(
         cmd_index = [samtools_path, "index", str(sorted_down_bam)]
         subprocess.run(cmd_index, check=True)
     except subprocess.CalledProcessError as err:
-        logging.error(f"Sorting/indexing failed after downsampling: {err}")
+        logger.error(f"Sorting/indexing failed after downsampling: {err}")
         return bam_path
 
-    logging.info(f"Downsampling complete. Using BAM: {sorted_down_bam}")
+    logger.info(f"Downsampling complete. Using BAM: {sorted_down_bam}")
     return sorted_down_bam
 
 
@@ -487,7 +489,7 @@ def parse_contigs_from_header(header: str) -> list:
     for line in header.splitlines():
         if line.startswith("@SQ"):
             parts = line.split("\t")
-            contig_info: dict[str, Union[str, int, None]] = {}
+            contig_info: dict[str, str | int | None] = {}
             for part in parts:
                 if part.startswith("SN:"):
                     contig_info["name"] = part.replace("SN:", "")
@@ -501,7 +503,7 @@ def parse_contigs_from_header(header: str) -> list:
     return contigs
 
 
-def detect_assembly_from_contigs(header: str, config: dict, threshold: Optional[float] = None) -> str:
+def detect_assembly_from_contigs(header: str, config: dict, threshold: float | None = None) -> str:
     """
     Detects the reference genome assembly by comparing contig information from the BAM header
     against known assemblies from config. Returns the detected assembly name if the match percentage
@@ -524,11 +526,11 @@ def detect_assembly_from_contigs(header: str, config: dict, threshold: Optional[
         threshold = assembly_config.get("detection_threshold", 0.9)
 
     if not known_assemblies:
-        logging.warning("No known_assemblies found in config. Assembly detection disabled.")
+        logger.warning("No known_assemblies found in config. Assembly detection disabled.")
         return "Not detected"
 
     bam_contigs = parse_contigs_from_header(header)
-    for _assembly_key, assembly_data in known_assemblies.items():
+    for assembly_data in known_assemblies.values():
         expected_contigs = assembly_data["contigs"]
         match_count = 0
         for expected in expected_contigs:
@@ -585,19 +587,19 @@ def parse_header_pipeline_info(
             "WARNING: The Dragen pipeline has known issues aligning reads in the VNTR region. "
             "It is recommended to use normal mode."
         )
-        logging.warning(warning_message)
+        logger.warning(warning_message)
     elif pipeline.lower() == "clc":
         warning_message = (
             "WARNING: The CLC pipeline may have issues aligning reads in the VNTR region (Not tested). "
             "It is recommended to use normal mode and verify results carefully."
         )
-        logging.warning(warning_message)
+        logger.warning(warning_message)
     elif pipeline.lower() == "unknown":
         warning_message = (
             "WARNING: Alignment pipeline could not be detected from the header. "
             "It is recommended to use the BWA aligner."
         )
-        logging.warning(warning_message)
+        logger.warning(warning_message)
 
     result = {
         "assembly_text": assembly_text,
@@ -611,10 +613,10 @@ def parse_header_pipeline_info(
     try:
         with open(output_path, "w", encoding="utf-8") as out_f:
             json.dump(result, out_f, indent=4)
-        logging.info(f"Pipeline info written to {output_path}")
+        logger.info(f"Pipeline info written to {output_path}")
     except Exception as e:
-        logging.error(f"Failed to write pipeline info file: {e}")
-        raise e
+        logger.error(f"Failed to write pipeline info file: {e}")
+        raise
 
 
 def extract_bam_header(bam_file: str, config: dict) -> str:

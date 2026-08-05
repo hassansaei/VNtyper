@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 flagging.py
 
@@ -17,11 +16,14 @@ Example flagging rule:
 }
 """
 
+from __future__ import annotations
+
 import logging
 import re
-from typing import Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def regex_match(pattern, value):
@@ -38,7 +40,7 @@ def regex_match(pattern, value):
     try:
         return bool(re.search(pattern, str(value)))
     except Exception as e:
-        logging.error(f"Error in regex_match with pattern {pattern} and value {value}: {e}")
+        logger.error(f"Error in regex_match with pattern {pattern} and value {value}: {e}")
         return False
 
 
@@ -80,14 +82,14 @@ def evaluate_condition(row, condition):
         result = eval(condition, {"__builtins__": {}}, local_vars)
         return bool(result)
     except NameError as ne:
-        logging.warning(f"NameError while evaluating condition '{condition}' with row {row.to_dict()}: {ne}")
+        logger.warning(f"NameError while evaluating condition '{condition}' with row {row.to_dict()}: {ne}")
         return False
     except Exception as e:
-        logging.error(f"Error evaluating condition '{condition}' with row {row.to_dict()}: {e}")
+        logger.error(f"Error evaluating condition '{condition}' with row {row.to_dict()}: {e}")
         return False
 
 
-def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: Optional[dict] = None) -> pd.DataFrame:
+def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None = None) -> pd.DataFrame:
     """
     Applies flagging rules to the DataFrame and adds a 'Flag' column with the matched flags.
 
@@ -122,31 +124,31 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: Optional[di
     """
     # Create a copy to avoid modifying the original DataFrame
     df_copy = df.copy()
-    logging.debug("Created a copy of the DataFrame for flag processing.")
+    logger.debug("Created a copy of the DataFrame for flag processing.")
 
     # Initialize a list to store flags for each row
     flags: list[list[str]] = [[] for _ in range(len(df_copy))]
-    logging.debug("Initialized flags list for each row.")
+    logger.debug("Initialized flags list for each row.")
 
     # Evaluate each flag rule
     for flag, condition in flag_rules.items():
-        logging.debug(f"Evaluating flag rule '{flag}': {condition}")
+        logger.debug(f"Evaluating flag rule '{flag}': {condition}")
         mask = df_copy.apply(lambda row, cond=condition: evaluate_condition(row, cond), axis=1)
         matching_count = mask.sum()
-        logging.debug(f"Flag rule '{flag}' matched {matching_count} rows.")
+        logger.debug(f"Flag rule '{flag}' matched {matching_count} rows.")
         for i, condition_met in enumerate(mask):
             if condition_met:
                 flags[i].append(flag)
-                logging.debug(f"Row {i} meets condition for flag '{flag}'.")
+                logger.debug(f"Row {i} meets condition for flag '{flag}'.")
 
     # Create the 'Flag' column as a comma-separated string of flags for each row,
     # or 'Not flagged' if no flags were applied.
     df_copy["Flag"] = [", ".join(flag_list) if flag_list else "Not flagged" for flag_list in flags]
-    logging.debug("Added 'Flag' column to DataFrame with flag values.")
+    logger.debug("Added 'Flag' column to DataFrame with flag values.")
 
     # Mark potential duplicates if configured
     if duplicates_config and duplicates_config.get("enabled", False):
-        logging.debug(f"Duplicates config detected: {duplicates_config}")
+        logger.debug(f"Duplicates config detected: {duplicates_config}")
         group_cols = duplicates_config.get("group_by", ["REF", "ALT"])
         sort_info = duplicates_config.get("sort_by", [])
         if not sort_info:
@@ -157,7 +159,7 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: Optional[di
             sort_cols = [item["column"] for item in sort_info]
             sort_ascending = [item["ascending"] for item in sort_info]
 
-        logging.debug(
+        logger.debug(
             "Calling mark_potential_duplicates with "
             f"group_cols={group_cols}, sort_cols={sort_cols}, sort_ascending={sort_ascending}"
         )
@@ -169,7 +171,7 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: Optional[di
             duplicate_flag_name=duplicates_config.get("flag_name", "Potential_Duplicate"),
         )
     else:
-        logging.debug("No duplicates_config or 'enabled' is False; skipping duplicate flagging.")
+        logger.debug("No duplicates_config or 'enabled' is False; skipping duplicate flagging.")
 
     return df_copy
 
@@ -201,7 +203,7 @@ def mark_potential_duplicates(
         pd.DataFrame: A copy of the input DataFrame with duplicate rows flagged in the 'Flag' column.
     """
     df_copy = df.copy()
-    logging.debug(
+    logger.debug(
         f"Marking potential duplicates with group_cols={group_cols}, "
         f"sort_cols={sort_cols}, sort_ascending={sort_ascending}, "
         f"duplicate_flag_name={duplicate_flag_name}"
@@ -209,11 +211,11 @@ def mark_potential_duplicates(
 
     # Keep track of original index to restore ordering after grouping/sorting
     df_copy["__original_index"] = df_copy.index
-    logging.debug(f"DataFrame shape before sorting: {df_copy.shape}")
+    logger.debug(f"DataFrame shape before sorting: {df_copy.shape}")
 
     # Sort by the specified columns and order
     df_copy.sort_values(by=sort_cols, ascending=sort_ascending, inplace=True)
-    logging.debug(f"DataFrame shape after sorting: {df_copy.shape}")
+    logger.debug(f"DataFrame shape after sorting: {df_copy.shape}")
 
     # Mark duplicates within each group (the first row in each group has count=0)
     df_copy["__dup_indicator"] = df_copy.groupby(group_cols).cumcount()
@@ -221,7 +223,7 @@ def mark_potential_duplicates(
 
     # Log how many duplicates we have
     num_duplicates = df_copy["__is_duplicate"].sum()
-    logging.debug(f"Number of duplicates found: {num_duplicates}")
+    logger.debug(f"Number of duplicates found: {num_duplicates}")
 
     # Prepare a list for the new flags
     new_flags: list[list[str]] = []
@@ -231,12 +233,12 @@ def mark_potential_duplicates(
         else:
             new_flags.append([])
 
-    logging.debug("Combining existing flags with new duplicate flags.")
+    logger.debug("Combining existing flags with new duplicate flags.")
     combined_flags = []
     for i, row_tuple in enumerate(df_copy.itertuples(index=False)):
         # itertuples returns a named tuple - access Flag attribute safely
         # Use getattr to avoid mypy errors with dynamic pandas named tuple attributes
-        existing_flag = getattr(row_tuple, "Flag")  # noqa: B009
+        existing_flag = row_tuple.Flag
         dup_flag_list = new_flags[i]
 
         if existing_flag == "Not flagged":
@@ -252,9 +254,9 @@ def mark_potential_duplicates(
     df_copy["Flag"] = combined_flags
 
     # Restore original ordering
-    logging.debug("Restoring original row order.")
+    logger.debug("Restoring original row order.")
     df_copy.sort_values(by="__original_index", inplace=True)
     df_copy.drop(columns=["__original_index", "__dup_indicator", "__is_duplicate"], inplace=True)
 
-    logging.debug(f"Done marking potential duplicates. Final shape: {df_copy.shape}")
+    logger.debug(f"Done marking potential duplicates. Final shape: {df_copy.shape}")
     return df_copy

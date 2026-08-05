@@ -165,7 +165,7 @@ pytest --log-cli-level=DEBUG
 pytest --log-cli-level=WARNING
 
 # Disable live logging entirely
-pytest --log-cli=false
+pytest -o log_cli=false
 ```
 
 ## Troubleshooting Slow/Stuck Tests

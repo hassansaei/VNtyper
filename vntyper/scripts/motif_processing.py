@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # vntyper/scripts/motif_processing.py
 
 """
@@ -30,6 +29,8 @@ import logging
 
 import pandas as pd
 from Bio import SeqIO
+
+logger = logging.getLogger(__name__)
 
 
 def load_muc1_reference(reference_file):
@@ -294,11 +295,11 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
       - Default: false (legacy behavior for backward compatibility)
       - When true: applies depth-score-based filtering (fixes insG_pos54 detection)
     """
-    logging.debug("Entering motif_correction_and_annotation")
-    logging.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
+    logger.debug("Entering motif_correction_and_annotation")
+    logger.debug(f"Initial row count: {len(df)}, columns: {df.columns.tolist()}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting motif_correction_and_annotation.")
+        logger.debug("DataFrame is empty. Exiting motif_correction_and_annotation.")
         df["motif_filter_pass"] = False
         df["Motif_fasta"] = pd.NA
         df["POS_fasta"] = pd.NA
@@ -325,12 +326,11 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     if "Motifs" in working_df.columns:
         working_df["Motif_fasta"] = working_df["Motifs"]
     else:
-        logging.error("Missing 'Motifs' column. Old code returns empty.")
+        logger.error("Missing 'Motifs' column. Old code returns empty.")
         combined_df = pd.DataFrame(columns=working_df.columns)
-        pass
 
     if "Motifs" not in working_df.columns or working_df["Motifs"].str.count("-").max() != 1:
-        logging.error("Cannot split 'Motifs' into left-right. Old code returns empty.")
+        logger.error("Cannot split 'Motifs' into left-right. Old code returns empty.")
         combined_df = pd.DataFrame(columns=working_df.columns)
     else:
         working_df[["Motif_left", "Motif_right"]] = working_df["Motifs"].str.split("-", expand=True)
@@ -458,6 +458,6 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     # Drop the temporary original_index column
     original_df.drop(columns=["original_index"], inplace=True, errors="ignore")
 
-    logging.debug("Exiting motif_correction_and_annotation")
-    logging.debug(f"Final row count: {len(original_df)}, columns: {original_df.columns.tolist()}")
+    logger.debug("Exiting motif_correction_and_annotation")
+    logger.debug(f"Final row count: {len(original_df)}, columns: {original_df.columns.tolist()}")
     return original_df

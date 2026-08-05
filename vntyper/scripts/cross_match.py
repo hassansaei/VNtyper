@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 vntyper/scripts/cross_match.py
 
@@ -16,6 +15,8 @@ It accepts already‑parsed results (e.g. from a pipeline summary) without re‑
 
 import csv
 import logging
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MATCH_LOGIC = (
     "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"
@@ -130,7 +131,7 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
                 # Evaluate the matching condition in a restricted namespace.
                 match = bool(eval(match_logic, {"__builtins__": {}}, result))
             except Exception as e:
-                logging.error(f"Error evaluating match logic: {e}")
+                logger.error(f"Error evaluating match logic: {e}")
                 match = False
             result["Match"] = "Yes" if match else "No"
             if match:
@@ -150,7 +151,7 @@ def write_results_tsv(results, output_path):
         output_path (str or Path): File path to write the TSV.
     """
     if not results:
-        logging.info("No results to write.")
+        logger.info("No results to write.")
         return
     fieldnames = list(results[0].keys())
     with open(output_path, "w", newline="", encoding="utf-8") as out_f:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 reference_registry.py
 
@@ -19,8 +18,12 @@ This design separates coordinate systems from reference sources,
 eliminating duplication and improving maintainability.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Optional, TypedDict, cast
+from typing import TypedDict, cast
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Type Definitions
@@ -427,7 +430,7 @@ def get_all_reference_sources() -> list:
 
 
 def resolve_chromosome_name(
-    assembly_name: str, chromosome_number: int = 1, detected_convention: Optional[str] = None
+    assembly_name: str, chromosome_number: int = 1, detected_convention: str | None = None
 ) -> str:
     """
     Resolve chromosome name based on assembly and optional detected convention.
@@ -533,6 +536,6 @@ def validate_registry() -> tuple[bool, list]:
 if __name__ != "__main__":
     is_valid, errors = validate_registry()
     if not is_valid:
-        logging.warning(f"Reference registry validation failed with {len(errors)} errors:")
+        logger.warning(f"Reference registry validation failed with {len(errors)} errors:")
         for error in errors:
-            logging.warning(f"  - {error}")
+            logger.warning(f"  - {error}")

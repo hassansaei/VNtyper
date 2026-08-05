@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(make lint)",
+      "Bash(make lint-stats)",
+      "Bash(make format)",
+      "Bash(make format-check)",
+      "Bash(make type-check)",
+      "Bash(make type-check-tests)",
+      "Bash(make type-check-all)",
+      "Bash(make test-unit)",
+      "Bash(make test-quiet)",
+      "Bash(make check-all)",
+      "Bash(make docs-build)",
+      "Bash(make help)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)",
+      "Bash(pytest -m unit:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git check-ignore:*)"
+    ],
+    "deny": [
+      "Bash(git push --tags:*)",
+      "Bash(git tag:*)",
+      "Bash(twine upload:*)",
+      "Read(./tests/data/**)",
+      "Read(./reference/**)"
+    ]
+  }
+}
