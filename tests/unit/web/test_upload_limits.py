@@ -9,14 +9,19 @@ Two things are checked, and the second is the one that matters:
 
 1. The declared `Content-Length` is refused when it already exceeds the limit.
    That header is chosen by the client, so it is a cheap early answer and
-   nothing more.
+   nothing more. It is `app.request_limits`' answer to give, not this
+   boundary's: `Content-Length` measures the whole request, and a request always
+   carries more than the file inside it.
 2. The bytes actually read are counted while they are copied, and the copy stops
    the moment the running total passes the limit. A rejected upload must leave
    nothing behind, so the assertions below look at the filesystem rather than
    only at the status code.
 
 Each endpoint test states which of the two paths it exercises, because a test
-that cannot tell them apart would pass against a header-only check.
+that cannot tell them apart would pass against a header-only check. The
+consequence of the split is pinned too: a file of exactly the permitted size is
+accepted, framing and all, because no bound is ever applied to a measurement it
+does not describe.
 
 `docker` is put on `sys.path` by `tests/unit/web/conftest.py`, which pytest
 imports before this module, so `app.uploads` is importable here.
@@ -177,6 +182,11 @@ def test_configured_limit_is_a_documented_default() -> None:
 def capped_app(web_app, monkeypatch: pytest.MonkeyPatch):
     """Shrink the service's upload ceiling so test bodies can stay small.
 
+    Both the endpoint's ceiling and the setting the request-size middleware
+    derives its own bound from are shrunk, because the two are one configured
+    number in the shipped service and moving only one of them would put the
+    bodies below under a bound no deployment ever applies.
+
     Args:
         web_app: Patched `app.main` module from conftest.
         monkeypatch: Standard pytest fixture; restores the ceiling at teardown.
@@ -185,6 +195,7 @@ def capped_app(web_app, monkeypatch: pytest.MonkeyPatch):
         object: The same `app.main` module, with a `CAP`-byte upload ceiling.
     """
     monkeypatch.setattr(web_app, "MAX_UPLOAD_BYTES", CAP, raising=False)
+    monkeypatch.setattr(settings, "MAX_UPLOAD_BYTES", CAP)
     return web_app
 
 
@@ -231,7 +242,10 @@ def test_declared_length_over_the_cap_is_refused(capped_app, client, tmp_path: P
     """Exercises the header path only.
 
     The body carries a single byte, so the running byte count cannot possibly
-    trip; a rejection here can only have come from the declared length.
+    trip; a rejection here can only have come from the declared length. That
+    answer is `request_limits`' to give -- it is the one bound a declared length
+    can be measured against, since the header covers the whole request and not
+    the file inside it.
 
     Args:
         capped_app: `app.main` with the shrunk ceiling.
@@ -369,6 +383,54 @@ def test_upload_under_the_cap_still_succeeds_end_to_end(capped_app, client, tmp_
     assert (job_input_dir / "sample.bam").read_bytes() == bam_payload
     assert (job_input_dir / "sample.bam.bai").read_bytes() == bai_payload
     capped_app.run_vntyper_job.delay.assert_called_once()
+
+
+def test_upload_of_exactly_the_cap_is_accepted(capped_app, client, tmp_path: Path) -> None:
+    """The documented limit is a size a client can actually send.
+
+    The request carrying a file of exactly the permitted size is necessarily
+    larger than that file, because the multipart boundaries and part headers ride
+    along with it. A file-sized bound compared against a whole-request measurement
+    therefore refuses the very size the service documents as acceptable, so the
+    two are kept apart: `request_limits` owns the request bound and the streaming
+    counter owns the file bound.
+
+    Args:
+        capped_app: `app.main` with the shrunk ceiling.
+        client: TestClient fixture from conftest.
+        tmp_path: The directory the fixture configured as the input tree.
+    """
+    payload = b"e" * CAP
+
+    response = client.post(
+        "/run-job/",
+        files={"bam_file": ("sample.bam", payload, "application/octet-stream")},
+        data={"thread": "1", "reference_assembly": "hg19"},
+    )
+
+    assert response.status_code == 200, response.text
+    job_input_dir = tmp_path / "input" / response.json()["job_id"]
+    assert (job_input_dir / "sample.bam").read_bytes() == payload
+    capped_app.run_vntyper_job.delay.assert_called_once()
+
+
+def test_upload_one_byte_over_the_cap_is_still_refused(capped_app, client, tmp_path: Path) -> None:
+    """Accepting the limit itself must not accept anything past it.
+
+    Args:
+        capped_app: `app.main` with the shrunk ceiling.
+        client: TestClient fixture from conftest.
+        tmp_path: The directory the fixture configured as the input tree.
+    """
+    response = client.post(
+        "/run-job/",
+        files={"bam_file": ("sample.bam", b"f" * (CAP + 1), "application/octet-stream")},
+        data={"thread": "1", "reference_assembly": "hg19"},
+    )
+
+    assert response.status_code == 413
+    assert _job_files(tmp_path / "input") == []
+    capped_app.run_vntyper_job.delay.assert_not_called()
 
 
 def test_upload_just_under_the_cap_is_accepted(capped_app, client, tmp_path: Path) -> None:

@@ -351,17 +351,14 @@ async def run_vntyper(
     """
     logger.info("Received job submission")
 
-    # A request that already declares more than the ceiling is answered before
-    # anything is written. The header is chosen by the client, so this is only a
-    # cheap early answer -- the limit that counts is applied to the bytes
-    # actually read, further down. Content-Length covers the whole body, which
-    # is never smaller than the files inside it, so answering on it here cannot
-    # let an oversized submission through.
-    declared_length = request.headers.get("content-length")
-    if declared_length and declared_length.isdigit() and int(declared_length) > MAX_UPLOAD_BYTES:
-        msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
-        logger.error(msg)
-        raise HTTPException(status_code=413, detail=msg)
+    # Two bounds apply to a submission, and each has exactly one owner.
+    # `RequestSizeLimitMiddleware` bounds the whole request -- the declared
+    # length first, then the bytes as they arrive -- and answers before this
+    # function is ever called. `MAX_UPLOAD_BYTES` bounds what the submission
+    # writes to the volume, and is applied to the bytes actually copied, below.
+    # A request is always larger than the files inside it, by the multipart
+    # framing wrapped around them, so measuring the request against the
+    # file-sized bound here would refuse a file of exactly the permitted size.
 
     # Generate a unique job ID. The two directories named after it are not
     # created yet: everything that can refuse this submission is decided first,
