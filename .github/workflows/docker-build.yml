@@ -14,10 +14,23 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Previously absent entirely, so two pushes landing inside the ~30 min build window
-  # each ran a full cold build. Never cancel main; always cancel superseded PR runs.
+  # A group was previously absent entirely, so two pushes inside the ~30 min build
+  # window each ran a full cold build.
+  #
+  # cancel-in-progress is deliberately FALSE, including for pull requests. When the
+  # base image is missing, this run builds it - roughly 25 minutes - and a push landing
+  # meanwhile would throw that away, so a burst of pushes could starve the base build
+  # indefinitely. Cancelling cannot be made conditional on "is a base being built":
+  # `concurrency` is evaluated when the run starts, before any job, and its expressions
+  # may only use the github, inputs and vars contexts - not `needs` or job outputs.
+  #
+  # The cost of not cancelling is small now: the per-commit application build is ~3 min
+  # (it was ~30 before the base/app split), and a superseded run's base build is
+  # idempotent - docker-base.yml skips immediately when the content hash is already
+  # published. Cancellation was worth it when every build was half an hour; it is not
+  # worth discarding a 25-minute base build to save 3 minutes of runner time.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 permissions: {}
 
