@@ -29,7 +29,7 @@ from email_validator import validate_email, EmailNotValidError
 from pydantic import BaseModel, Field
 
 from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
-from .config import settings
+from .config import build_redis_url, get_redis_password, require_redis_password, settings
 from .tasks import run_vntyper_job, run_cohort_analysis_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
 from .version import API_VERSION
@@ -56,10 +56,10 @@ MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_BYTES
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
-# Redis Password Configuration
-# Set a default password if REDIS_PASSWORD is not provided
-DEFAULT_REDIS_PASSWORD = "defaultpassword"  # Change this to a secure default
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", DEFAULT_REDIS_PASSWORD)
+# Redis credential, from the single accessor in config.py so the API, the worker
+# and beat all resolve the same value. There is no fallback; startup_event()
+# calls require_redis_password() so a deployment that never set it stops there.
+REDIS_PASSWORD = get_redis_password()
 
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
@@ -90,13 +90,16 @@ redis_usage_client = redis.Redis(
     decode_responses=True,
 )
 
-# Rate limiting Redis URL
-RATE_LIMIT_REDIS_URL = (
-    f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
-)
-
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
+
+# Client-facing text for a job that failed. The task's own exception carries the
+# command line and the per-job container paths, which a job-status poller has no
+# use for; it is logged instead of returned.
+JOB_FAILURE_MESSAGE = (
+    "The job failed during processing. Quote the job ID when reporting it so the "
+    "failure can be looked up in the server logs."
+)
 
 app = FastAPI(
     title="VNtyper Online API",
@@ -153,11 +156,22 @@ if ENVIRONMENT in ["development", "local"]:
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize rate limiting and cache the VNtyper tool version."""
+    """Initialize rate limiting and cache the VNtyper tool version.
+
+    Raises:
+        RuntimeError: If REDIS_PASSWORD is unset. Checked first, before anything
+            opens a connection, so a misconfigured deployment fails here rather
+            than coming up half-authenticated.
+    """
+    redis_password = require_redis_password()
+
     # Initialize Redis client for rate limiting
     try:
+        rate_limit_redis_url = build_redis_url(
+            REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password
+        )
         redis_rate_limit = aioredis.from_url(
-            RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
+            rate_limit_redis_url, encoding="utf8", decode_responses=True
         )
         await FastAPILimiter.init(redis_rate_limit)
         logger.info("Rate limiting initialized successfully.")
@@ -526,8 +540,14 @@ def get_job_status(job_id: str):
     elif status == "SUCCESS":
         return JobStatusResponse(job_id=job_id, status="completed")
     elif status == "FAILURE":
+        # Log the task's own exception, return a generic message: the detail is
+        # operator-facing, and this endpoint is unauthenticated.
+        logger.error(
+            f"Job {job_id} (Task ID: {task_id}) failed: "
+            f"{type(task_result.info).__name__}: {task_result.info}"
+        )
         return JobStatusResponse(
-            job_id=job_id, status="failed", error=str(task_result.info)
+            job_id=job_id, status="failed", error=JOB_FAILURE_MESSAGE
         )
     else:
         return JobStatusResponse(job_id=job_id, status=status.lower())

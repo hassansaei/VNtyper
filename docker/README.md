@@ -104,6 +104,31 @@ docker run --rm vntyper:latest java -version
 docker run --rm vntyper:latest samtools --version
 ```
 
+## **Configuration**
+
+The CLI needs no configuration. The web service (API + Celery worker + beat) reads
+its settings from the environment; `docker/.env.example` lists them, with defaults,
+and is the file to copy:
+
+```bash
+cp docker/.env.example docker/.env
+```
+
+`REDIS_PASSWORD` is **required** and has no default. Redis, the API and the worker
+must all be given the same value, so the application refuses to start without it and
+`docker compose` refuses to bring the stack up without it. Generate a fresh secret:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+If you are updating an existing deployment that never set `REDIS_PASSWORD`, set it to a
+newly generated value rather than reusing what the service was previously running with.
+
+Do not set `CELERY_BROKER_URL` or `CELERY_RESULT_BACKEND`. Celery prefers those over the
+broker URL the application passes it, so setting them replaces the URL
+`docker/app/celery_app.py` builds from `REDIS_PASSWORD`.
+
 ## **Running the Docker Container**
 
 ### **CLI Usage**

@@ -1,5 +1,6 @@
 import os
 import logging
+from urllib.parse import quote
 
 
 class Settings:
@@ -62,3 +63,80 @@ settings = Settings()
 # Configure logging
 logging.basicConfig(level=settings.LOG_LEVEL, format=settings.LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Redis credential
+#
+# The API, the Celery worker and the beat scheduler all authenticate against the
+# same Redis instance, so they must resolve the same value from the same place.
+# Read here, once, with no fallback: a default in the source tree is a shared
+# secret, and a default that differs between modules lets the processes come up
+# authenticating differently against one instance.
+# ---------------------------------------------------------------------------
+
+REDIS_PASSWORD_ENV_VAR = "REDIS_PASSWORD"
+
+
+def get_redis_password() -> str | None:
+    """Return the configured Redis password, or None when it is unset.
+
+    Read from the environment on every call rather than captured at import time,
+    so importing an application module never depends on the deployment
+    environment. Callers that must not proceed without a credential should use
+    `require_redis_password` instead.
+
+    Returns:
+        str | None: The configured password, or None if REDIS_PASSWORD is unset
+            or empty.
+    """
+    return os.environ.get(REDIS_PASSWORD_ENV_VAR) or None
+
+
+def require_redis_password() -> str:
+    """Return the configured Redis password, failing fast when it is missing.
+
+    Call this from process startup - the FastAPI startup event, the Celery
+    worker and beat init signals - so a deployment that never set the variable
+    stops there with an explicit message.
+
+    Returns:
+        str: The configured password.
+
+    Raises:
+        RuntimeError: If REDIS_PASSWORD is unset or empty.
+    """
+    password = get_redis_password()
+    if not password:
+        msg = (
+            f"{REDIS_PASSWORD_ENV_VAR} is not set. Redis, the API and the Celery worker must all be "
+            f"given the same password and there is no default. Set {REDIS_PASSWORD_ENV_VAR} to a "
+            "freshly generated secret before starting the service."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+    return password
+
+
+def build_redis_url(host: str, port: int, db: int, password: str | None = None) -> str:
+    """Build a redis:// URL, percent-encoding the credential.
+
+    A Redis password is an arbitrary string and routinely contains characters
+    that are delimiters inside a URL authority (`@`, `:`, `/`, `#`).
+    Interpolating one straight into an f-string yields a URL the client parses
+    as a different host, port or path, so the encoding is done here rather than
+    repeated at each call site.
+
+    Args:
+        host: Redis hostname.
+        port: Redis port.
+        db: Redis logical database number.
+        password: Password to embed. When None or empty, the URL is built
+            without a credential section.
+
+    Returns:
+        str: A URL safe to hand to redis-py, Celery or fastapi-limiter.
+    """
+    if not password:
+        return f"redis://{host}:{port}/{db}"
+    return f"redis://:{quote(password, safe='')}@{host}:{port}/{db}"

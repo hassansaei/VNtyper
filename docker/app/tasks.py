@@ -12,7 +12,7 @@ from typing import Optional, List  # Added List for typing in new task
 
 from celery.utils.log import get_task_logger
 
-from .config import settings
+from .config import get_redis_password, settings
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -21,8 +21,10 @@ logger = get_task_logger(__name__)
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
-# Retrieve Redis password from environment variables
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "qE3!#zjraRG*`X2g4%<x&J")
+# Redis credential, from the single accessor in config.py so the worker resolves
+# the same value as the API. There is no fallback; app/celery_app.py refuses to
+# start a worker when the variable is unset.
+REDIS_PASSWORD = get_redis_password()
 
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
