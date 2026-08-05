@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 from collections import Counter
+from pathlib import Path
 from typing import Optional, Union, List
 from uuid import uuid4
 from enum import Enum
@@ -27,6 +28,7 @@ from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from email_validator import validate_email, EmailNotValidError
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
@@ -707,6 +709,12 @@ def get_job_queue(
                     total_jobs_in_queue=queue_length,
                     status="Job not in queue (might be processing or completed)",
                 )
+        except HTTPException:
+            # The "unknown job id" answer above is an HTTPException, and
+            # HTTPException is an Exception, so without this it would be caught
+            # below and reported as a server error. Let the handler's own
+            # deliberate status codes through untouched.
+            raise
         except Exception as e:
             logger.error(f"Error retrieving job position: {e}")
             raise HTTPException(status_code=500, detail="Error retrieving job position")
@@ -831,6 +839,18 @@ def get_usage_statistics():
     )
 
 
+def _remove_temp_file(path: str) -> None:
+    """Delete a temporary file the service built for a single response.
+
+    Tolerates the file already being gone so that a repeated cleanup cannot turn
+    into an error raised after the response has been sent.
+
+    Args:
+        path: Filesystem path of the temporary file to remove.
+    """
+    Path(path).unlink(missing_ok=True)
+
+
 @router.get(
     "/cohort-download/",
     tags=["Cohort Management"],
@@ -886,11 +906,15 @@ def cohort_download(
     # Suggest a download filename
     download_name = f"cohort_{response['cohort_id']}.zip"
 
-    # Return the zipped file as a download
+    # Return the zipped file as a download. The archive is scratch space owned by
+    # this one response, so it is removed in a background task, which Starlette
+    # runs after the body has been sent -- the caller still receives the complete
+    # archive, and nothing of it is left on disk afterwards.
     return FileResponse(
         path=final_zip_path,
         media_type="application/zip",
         filename=download_name,
+        background=BackgroundTask(_remove_temp_file, final_zip_path),
     )
 
 
