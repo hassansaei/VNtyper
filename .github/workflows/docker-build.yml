@@ -52,6 +52,59 @@ jobs:
               - 'reference/**'
               - '.github/workflows/docker-build.yml'
 
+  # Does the base image this commit needs already exist? Cheap check, no build.
+  base-status:
+    name: Check base image
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      missing: ${{ steps.check.outputs.missing }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for the content-addressed base tag
+        id: check
+        env:
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HASH" ]; then
+            echo "::error::hashFiles() matched no files - check the path patterns"
+            exit 1
+          fi
+          LOWER=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          REF="${{ env.GHCR_REGISTRY }}/${LOWER}-base:base-${HASH:0:16}"
+          if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Base $REF is published."
+          else
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Base $REF is not published; it will be built first."
+          fi
+
+  # Build the base only when this commit's inputs have no published base. Steady state
+  # this is skipped in seconds; it fires on the first run and whenever a PR changes
+  # conda/**, the reference config, or .dockerignore.
+  build-base:
+    name: Build base image
+    needs: [changes, base-status]
+    if: needs.base-status.outputs.missing == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-base.yml
+
   # Build and test in ONE job. The image never leaves the runner's daemon, so there is
   # no push-then-pull round trip and no multi-GB artifact upload, and the two stages are
   # no longer serialized behind a `needs:` edge that existed only to sequence them.
@@ -60,8 +113,15 @@ jobs:
   # pushed first and tested afterwards.
   build-and-test:
     name: Build and test image
-    needs: changes
-    if: needs.changes.outputs.image == 'true'
+    # `always()` so this still runs when build-base was skipped (base already
+    # published); a plain `needs` would skip this job too.
+    needs: [changes, base-status, build-base]
+    if: >-
+      always() &&
+      needs.changes.outputs.image == 'true' &&
+      needs.base-status.result == 'success' &&
+      needs.build-base.result != 'failure' &&
+      needs.build-base.result != 'cancelled'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -81,7 +141,7 @@ jobs:
       - name: Compute expected base image tag
         id: hash
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           if [ -z "$HASH" ]; then
@@ -98,15 +158,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Resolve the base tag to an immutable digest, and fail with an actionable message
-      # rather than a confusing pull error if it was never built.
+      # Pin to an immutable digest rather than the tag, so the image cannot change under
+      # us if the tag is ever re-pushed. By this point the `build-base` job has published
+      # the base if it was missing, so a failure here is a genuine fault, not bootstrap.
       - name: Resolve base image digest
         id: base
         run: |
           set -euo pipefail
           REF="${{ steps.img.outputs.base }}:${{ steps.hash.outputs.tag }}"
           if ! DIGEST=$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}' 2>/dev/null); then
-            echo "::error::Base image $REF does not exist. A dependency input changed - run the 'Docker Base Image' workflow (workflow_dispatch) or merge the change to main first."
+            echo "::error::Base image $REF is missing even though the build-base job did not fail. Check that job's logs, or re-run 'Docker Base Image' with force=true."
             exit 1
           fi
           echo "ref=${{ steps.img.outputs.base }}@${DIGEST}" >> "$GITHUB_OUTPUT"
@@ -264,7 +325,7 @@ jobs:
 
   docker-success:
     name: Docker Success
-    needs: [changes, build-and-test]
+    needs: [changes, base-status, build-base, build-and-test]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()

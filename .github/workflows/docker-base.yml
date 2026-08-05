@@ -29,6 +29,14 @@ on:
         description: 'Rebuild even if this content hash already exists'
         type: boolean
         default: false
+  # Callable from docker-build.yml so a PR that changes a base input (or the very
+  # first run, before any base exists) builds the base it needs instead of failing.
+  # Without this, every PR touching conda/** would be permanently red.
+  workflow_call:
+    outputs:
+      tag:
+        description: 'Content-addressed tag of the base image'
+        value: ${{ jobs.build-base.outputs.tag }}
 
 concurrency:
   group: docker-base-${{ github.ref }}
@@ -55,7 +63,7 @@ jobs:
       - name: Compute base image tag
         id: hash
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           # hashFiles() returns "" when nothing matched, which would silently produce the
