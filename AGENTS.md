@@ -64,14 +64,26 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 
 - Ruff is the only formatter and linter. **Line length 120**, double quotes,
   `target-version = "py39"`. Do not reformat to black's 88.
+- `[tool.ruff.lint]` uses an explicit `select`, deliberately **not** `extend-select`.
+  Ruff's defaults shift between releases (0.16 turned on ~440 rules at once and took
+  CI from green to 740 errors with no code change). Add rules to `select` explicitly;
+  never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
+  rationale comment in `pyproject.toml`.
+- mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
+  It targets 3.10 because mypy 2.x dropped 3.9; ruff's `target-version` still guards
+  the 3.9 runtime floor.
 - Code must run on Python 3.9 (CI matrix: 3.9–3.12). Your local interpreter is newer,
   so 3.10+ syntax can pass locally and break CI.
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on public functions.
-- Logging: modules call `logging.info(...)` on the root logger; configuration happens
-  once in `cli.py`. Do not add `basicConfig` or per-module handlers.
-- Errors: no custom exception classes. The convention is `logging.error(msg)` followed
+- Logging: every module declares `logger = logging.getLogger(__name__)` after its
+  imports and calls `logger.info(...)`. Never call `logging.info(...)` on the root
+  logger, and never add `basicConfig` or per-module handlers — `setup_logging()` in
+  `utils.py` configures the root logger once, and module loggers propagate to it.
+  f-strings in log calls are the established style here.
+- Errors: no custom exception classes. The convention is `logger.error(msg)` followed
   by `raise ValueError(msg)` / `RuntimeError(msg)` with the same message. Only exit
-  codes 0 and 1 are used.
+  codes 0 and 1 are used. `except Exception` at stage and process boundaries is
+  intentional, not an oversight.
 - Type hints are partial. Newer modules (`reference_registry`, `region_utils`,
   `scoring`, `flagging`) are fully annotated — match that when editing them.
 
@@ -111,8 +123,8 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 
 1. **Config is loaded at import time.** `kestrel_genotyping.py`, `advntr_genotyping.py`
    and `shark_filtering.py` read their JSON into module globals on import, and
-   `run_kestrel()` uses `global kestrel_config` rather than its `config` argument.
-   `--config-path` cannot override them; tests must patch the module global.
+   `run_kestrel()` reads the module-level `kestrel_config` rather than its `config`
+   argument. `--config-path` cannot override them; tests must patch the module global.
 2. **`--config-path` replaces the whole config, it does not merge.** Missing keys raise
    `KeyError` deep in the pipeline (`config["tools"]["java_path"]`, no `.get`).
 3. **Rule strings are `eval()`d against DataFrame column names.** `flagging.py` and
