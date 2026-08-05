@@ -14,6 +14,15 @@ class Settings:
     DEFAULT_INPUT_DIR: str = os.getenv("DEFAULT_INPUT_DIR", "/opt/vntyper/input")
     DEFAULT_OUTPUT_DIR: str = os.getenv("DEFAULT_OUTPUT_DIR", "/opt/vntyper/output")
 
+    # Upload size ceiling, in bytes. Caps the total an individual job submission
+    # may write into the input directory above; the rate limits below bound how
+    # many requests arrive, not how large each one is. The documented workflow
+    # uploads a MUC1-region subset measured in megabytes, so 1 GiB leaves ample
+    # headroom for an unsubsetted regional or exome-scale BAM while still
+    # bounding what a single request can consume. Deployments with a different
+    # volume budget override it with MAX_UPLOAD_BYTES.
+    MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", 1024 * 1024 * 1024))
+
     # Rate limiting configurations
     RATE_LIMIT_SIMPLE_TIMES: int = int(os.getenv("RATE_LIMIT_SIMPLE_TIMES", 100))
     RATE_LIMIT_SIMPLE_SECONDS: int = int(os.getenv("RATE_LIMIT_SIMPLE_SECONDS", 60))

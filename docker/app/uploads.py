@@ -1,4 +1,4 @@
-"""Safe construction of upload destination paths.
+"""Constraints applied to uploads at the boundary: where they land, and how big.
 
 The filename attached to an upload is chosen by the client and is not sanitised
 by the web framework. It decides where the file is written and travels onwards
@@ -18,13 +18,20 @@ that widening the allowlist later cannot silently widen where files land.
 Names are never repaired. A name that fails is refused, so the caller can answer
 the request with an error instead of storing the upload under a name the client
 did not ask for.
+
+Size is constrained on the same terms. `save_upload_bounded` counts the bytes it
+copies and stops the moment the running total passes the caller's ceiling, so
+the limit holds on what actually arrives rather than on what the client said was
+coming. A refused copy removes what it had already written.
 """
 
 import logging
 import os
 import re
 from collections.abc import Sequence
+from contextlib import suppress
 from functools import cache
+from typing import BinaryIO
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,11 @@ INDEX_EXTENSIONS: tuple[str, ...] = ("bai", "crai")
 # The allowlist below is ASCII-only, so for any name that gets that far the
 # character count and the byte count are the same number.
 MAX_FILENAME_LENGTH = 255
+
+# Uploads are copied a piece at a time so the memory one request costs does not
+# grow with the size of the file it carries, and so the running total can be
+# checked between pieces rather than only after everything has been written.
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 # A leading alphanumeric rules out dotfiles, `.`, `..` and leading-dash names.
 # The body excludes every path separator and every character with a meaning to a
@@ -115,3 +127,53 @@ def safe_upload_path(
         raise ValueError(msg)
 
     return destination
+
+
+def save_upload_bounded(
+    source: BinaryIO,
+    destination: str,
+    max_bytes: int,
+    chunk_size: int = UPLOAD_CHUNK_SIZE,
+) -> int:
+    """Copy an upload to disk, writing no more than `max_bytes` of it.
+
+    The size a client declares for its request is advisory, so the ceiling is
+    applied to the bytes that are actually read. The copy stops as soon as the
+    running total passes `max_bytes`, and the partly written file is removed
+    before the error propagates, so a refused upload costs the volume nothing.
+
+    Args:
+        source: The upload's byte stream, read `chunk_size` bytes at a time.
+        destination: Path to write to. Overwritten if it already exists.
+        max_bytes: The largest number of bytes accepted. A source of exactly
+            this size is written in full; one byte more is refused.
+        chunk_size: Bytes requested per read. Bounds the memory used.
+
+    Returns:
+        int: The number of bytes written.
+
+    Raises:
+        ValueError: If the source holds more than `max_bytes` bytes.
+        OSError: If the destination cannot be written.
+    """
+    written = 0
+    try:
+        with open(destination, "wb") as handle:
+            while True:
+                chunk = source.read(chunk_size)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    msg = f"Upload exceeds the maximum accepted size of {max_bytes} bytes"
+                    logger.error(msg)
+                    raise ValueError(msg)
+                handle.write(chunk)
+    except Exception:
+        # Includes the refusal above: whatever reached the volume is reclaimed
+        # before the caller ever sees the error.
+        with suppress(OSError):
+            os.remove(destination)
+        raise
+
+    return written

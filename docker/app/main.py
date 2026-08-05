@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
 from .config import settings
 from .tasks import run_vntyper_job, run_cohort_analysis_job
-from .uploads import INDEX_EXTENSIONS, safe_upload_path
+from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,9 @@ class ReferenceAssembly(str, Enum):
 # Environment variables for default directories
 DEFAULT_INPUT_DIR = settings.DEFAULT_INPUT_DIR
 DEFAULT_OUTPUT_DIR = settings.DEFAULT_OUTPUT_DIR
+
+# Total bytes a single job submission may write into the input directory above.
+MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_BYTES
 
 # Redis configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
@@ -334,6 +337,19 @@ async def run_vntyper(
     - **cohort_id**: Identifier of the associated cohort, if any.
     """
     logger.info("Received job submission")
+
+    # A request that already declares more than the ceiling is answered before
+    # anything is written. The header is chosen by the client, so this is only a
+    # cheap early answer -- the limit that counts is applied to the bytes
+    # actually read, further down. Content-Length covers the whole body, which
+    # is never smaller than the files inside it, so answering on it here cannot
+    # let an oversized submission through.
+    declared_length = request.headers.get("content-length")
+    if declared_length and declared_length.isdigit() and int(declared_length) > MAX_UPLOAD_BYTES:
+        msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
+        logger.error(msg)
+        raise HTTPException(status_code=413, detail=msg)
+
     # Ensure input and output directories exist
     os.makedirs(DEFAULT_INPUT_DIR, exist_ok=True)
     os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
@@ -356,16 +372,25 @@ async def run_vntyper(
     os.makedirs(job_input_dir, exist_ok=True)
     os.makedirs(job_output_dir, exist_ok=True)
 
-    # Save the uploaded BAM file
-    with open(bam_path, "wb") as f:
-        shutil.copyfileobj(bam_file.file, f)
-    logger.info(f"Saved uploaded BAM file to {bam_path}")
+    # Save the uploaded files, counting the bytes as they are written. One
+    # budget covers the whole submission, so the two parts together stay within
+    # the same ceiling the declared length was checked against. A refused copy
+    # takes the directories this request created with it, so nothing of a
+    # rejected submission stays on the shared volume.
+    try:
+        remaining = MAX_UPLOAD_BYTES - save_upload_bounded(
+            bam_file.file, bam_path, MAX_UPLOAD_BYTES
+        )
+        logger.info(f"Saved uploaded BAM file to {bam_path}")
 
-    # Save the uploaded BAI file if provided
-    if bai_path is not None:
-        with open(bai_path, "wb") as f:
-            shutil.copyfileobj(bai_file.file, f)
-        logger.info(f"Saved uploaded BAI file to {bai_path}")
+        if bai_path is not None:
+            save_upload_bounded(bai_file.file, bai_path, remaining)
+            logger.info(f"Saved uploaded BAI file to {bai_path}")
+    except ValueError as exc:
+        shutil.rmtree(job_input_dir, ignore_errors=True)
+        shutil.rmtree(job_output_dir, ignore_errors=True)
+        msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
+        raise HTTPException(status_code=413, detail=msg) from exc
 
     # Validate the email if provided
     if email:
