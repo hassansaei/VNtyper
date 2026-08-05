@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .tasks import run_vntyper_job, run_cohort_analysis_job
+from .uploads import INDEX_EXTENSIONS, safe_upload_path
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -368,23 +369,29 @@ async def run_vntyper(
     job_input_dir = os.path.join(DEFAULT_INPUT_DIR, job_id)
     job_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, job_id)
 
+    # Constrain the client-supplied filenames before anything is created on
+    # disk, so a rejected submission leaves nothing behind.
+    try:
+        bam_path = safe_upload_path(job_input_dir, bam_file.filename)
+        bai_path = None
+        if bai_file is not None and bai_file.filename:
+            bai_path = safe_upload_path(job_input_dir, bai_file.filename, INDEX_EXTENSIONS)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     os.makedirs(job_input_dir, exist_ok=True)
     os.makedirs(job_output_dir, exist_ok=True)
 
     # Save the uploaded BAM file
-    bam_path = os.path.join(job_input_dir, bam_file.filename)
     with open(bam_path, "wb") as f:
         shutil.copyfileobj(bam_file.file, f)
     logger.info(f"Saved uploaded BAM file to {bam_path}")
 
     # Save the uploaded BAI file if provided
-    if bai_file:
-        bai_path = os.path.join(job_input_dir, bai_file.filename)
+    if bai_path is not None:
         with open(bai_path, "wb") as f:
             shutil.copyfileobj(bai_file.file, f)
         logger.info(f"Saved uploaded BAI file to {bai_path}")
-    else:
-        bai_path = None
 
     # Validate the email if provided
     if email:
