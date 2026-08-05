@@ -336,6 +336,10 @@ def run_cohort_analysis_job(
     """
     task_id = self.request.id
     job_id = os.path.basename(output_dir)
+    # Bound before the try block: the cleanup below runs whether or not the task
+    # got as far as naming its scratch file, and must not mask the original
+    # failure with a NameError of its own.
+    input_file = None
     logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
     # Generate a unique hash for the user
@@ -407,22 +411,17 @@ def run_cohort_analysis_job(
             redis_cohort_client.expire(cohort_key, ttl_seconds)
             redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
 
-        # Delete input ZIP listing file
+        # Delete the listing file this task wrote for itself. That file is the
+        # only thing here the task owns; the .zip paths it names are the
+        # members' own results, which /download/{job_id}/ serves and which a
+        # later analysis reads again, so they are left alone. Result archives
+        # are aged out centrally by delete_old_results().
         try:
-            if os.path.exists(input_file):
+            if input_file and os.path.exists(input_file):
                 os.remove(input_file)
                 logger.info(f"Deleted cohort input file: {input_file}")
         except Exception as e:
             logger.error(f"Error deleting cohort input file {input_file}: {e}")
-
-        # Delete individual .zip files if archive_results was used
-        for zpath in zip_paths:
-            try:
-                if os.path.exists(zpath):
-                    os.remove(zpath)
-                    logger.info(f"Deleted individual result file: {zpath}")
-            except Exception as e:
-                logger.error(f"Error deleting file {zpath}: {e}")
 
         # Optionally, delete the output directory if it's empty
         try:
