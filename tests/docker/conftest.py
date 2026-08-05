@@ -13,10 +13,27 @@ import os
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import pytest
 from testcontainers.core.container import DockerContainer
+
+
+def _exit_code(result: Any) -> int:
+    """Return an exec result's exit code, treating an unknown code as failure.
+
+    testcontainers types `ExecResult.exit_code` as `int | None`; None means the daemon
+    did not report one (e.g. the exec was interrupted). Callers compare against 0, so
+    mapping None to a non-zero code keeps "unknown" from reading as success.
+
+    Args:
+        result: An exec result carrying an `exit_code` attribute.
+
+    Returns:
+        int: The exit code, or 1 when it is unknown.
+    """
+    code = getattr(result, "exit_code", None)
+    return 1 if code is None else int(code)
 
 
 @pytest.fixture(scope="session")
@@ -145,8 +162,8 @@ def run_vntyper_pipeline(
     bam_file: Path,
     reference: str,
     output_dir: Path,
-    extra_modules: Optional[list[str]] = None,
-    extra_cli_options: Optional[list[str]] = None,
+    extra_modules: list[str] | None = None,
+    extra_cli_options: list[str] | None = None,
 ) -> int:
     """
     Execute VNtyper pipeline inside Docker container.
@@ -194,7 +211,7 @@ def run_vntyper_pipeline(
     for i, part in enumerate(parts):
         if "docker_output" in part:
             # Everything after docker_output* is the subdirectory structure
-            subdir_parts = parts[i + 1:]
+            subdir_parts = parts[i + 1 :]
             if subdir_parts:
                 container_output_path = "/opt/vntyper/output/" + "/".join(subdir_parts)
             break
@@ -209,8 +226,10 @@ def run_vntyper_pipeline(
         ]
         mkdir_result = container.exec(mkdir_cmd)
         if mkdir_result.exit_code != 0:
-            print(f"Failed to create output directory: {mkdir_result.output.decode() if mkdir_result.output else 'No output'}")
-            return mkdir_result.exit_code
+            print(
+                f"Failed to create output directory: {mkdir_result.output.decode() if mkdir_result.output else 'No output'}"
+            )
+            return _exit_code(mkdir_result)
 
     # VNtyper writes log files next to input BAM, but input is read-only.
     # Copy BAM to output directory first (inside container).
@@ -250,7 +269,7 @@ def run_vntyper_pipeline(
     copy_result = container.exec(copy_cmd)
     if copy_result.exit_code != 0:
         print(f"Failed to copy BAM file: {copy_result.output.decode() if copy_result.output else 'No output'}")
-        return copy_result.exit_code
+        return _exit_code(copy_result)
 
     # Execute via conda run since we bypassed the entrypoint
     # Use --no-capture-output to stream stdout/stderr properly
@@ -270,16 +289,16 @@ def run_vntyper_pipeline(
         print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
         print("=" * 80)
 
-    return result.exit_code
+    return _exit_code(result)
 
 
 def run_vntyper_fastq_pipeline(
     container: DockerContainer,
     fastq1: Path,
-    fastq2: Optional[Path],
+    fastq2: Path | None,
     reference: str,
     output_dir: Path,
-    extra_modules: Optional[list[str]] = None,
+    extra_modules: list[str] | None = None,
 ) -> int:
     """
     Execute VNtyper FASTQ pipeline inside Docker container.
@@ -338,4 +357,4 @@ def run_vntyper_fastq_pipeline(
         print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
         print("=" * 80)
 
-    return result.exit_code
+    return _exit_code(result)
