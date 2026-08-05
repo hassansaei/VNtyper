@@ -1,0 +1,111 @@
+name: Docker Base Image
+
+# Builds the expensive foundation: three conda environments, compiled adVNTR, the
+# FastAPI/Celery stack, and the reference genomes with their BWA indexes.
+#
+# This only runs when one of those inputs actually changes - historically a handful of
+# times a year. The per-commit application image (docker-build.yml) layers onto it and
+# builds in ~3 minutes instead of 40-70.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'conda/**'
+      - 'docker/Dockerfile.base'
+      - 'docker/requirements-web.txt'
+      - 'vntyper/scripts/install_references.py'
+      - 'vntyper/scripts/install_references_config.json'
+      - 'vntyper/dependencies/advntr/**'
+      - '.github/workflows/docker-base.yml'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild even if this content hash already exists'
+        type: boolean
+        default: false
+
+concurrency:
+  group: docker-base-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build-base:
+    name: Build base image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.hash.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Content-addressed tag. The app workflow recomputes this from the same files at
+      # the same commit, so a change to conda/** that has not had its base built yet
+      # fails loudly with a missing tag instead of silently using a stale base.
+      - name: Compute base image tag
+        id: hash
+        env:
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**') }}
+        run: |
+          set -euo pipefail
+          # hashFiles() returns "" when nothing matched, which would silently produce the
+          # constant tag "base-" for every build. Fail instead.
+          if [ -z "$HASH" ]; then
+            echo "::error::hashFiles() matched no files - check the path patterns"
+            exit 1
+          fi
+          echo "tag=base-${HASH:0:16}" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize image name
+        id: img
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')-base" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A rebuild of identical content is ~25 minutes of nothing. Skip it unless forced.
+      - name: Check whether this content was already built
+        id: exists
+        run: |
+          set -euo pipefail
+          REF="${{ steps.img.outputs.name }}:${{ steps.hash.outputs.tag }}"
+          if [ "${{ inputs.force }}" != "true" ] && docker manifest inspect "$REF" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$REF already exists - skipping rebuild"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.skip != 'true'
+
+      - name: Build and push base image
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.base
+          push: true
+          tags: |
+            ${{ steps.img.outputs.name }}:${{ steps.hash.outputs.tag }}
+            ${{ steps.img.outputs.name }}:latest
+          # type=registry on ghcr, not type=gha: the GitHub Actions cache is capped at
+          # 10 GB per repo with hourly LRU eviction and is still marked beta, while GHCR
+          # storage is free and uncapped for public repos. A mode=max cache for this
+          # image alone exceeded the entire Actions cache budget.
+          cache-from: type=registry,ref=${{ steps.img.outputs.name }}:buildcache
+          cache-to: type=registry,ref=${{ steps.img.outputs.name }}:buildcache,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Base image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag: \`${{ steps.img.outputs.name }}:${{ steps.hash.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Rebuilt: \`${{ steps.exists.outputs.skip != 'true' }}\`" >> "$GITHUB_STEP_SUMMARY"

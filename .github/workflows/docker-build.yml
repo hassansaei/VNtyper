@@ -1,107 +1,157 @@
-# This workflow is run as part of CI to test that they run through.
-#
-# The images are pushed to `ghcr.io` and 'docker hub' for each PR and branch.  The ones for
-# the releases are pushed in `release-please.yml`.
 name: Docker Build
 
+# Builds the per-commit application image on top of the base image produced by
+# docker-base.yml, then runs the Docker test tiers against THAT image.
+#
+# No workflow-level `paths:` filter - a skipped workflow leaves a required check
+# pending forever. Filtering is per job, gated on `changes`, with `docker-success` as
+# the single required check.
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
-  workflow_dispatch:  # Allow manual trigger
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Previously absent entirely, so two pushes landing inside the ~30 min build window
+  # each ran a full cold build. Never cancel main; always cancel superseded PR runs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
 
 env:
   GHCR_REGISTRY: ghcr.io
-  DOCKERHUB_REGISTRY: docker.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push-image:
-    runs-on: ubuntu-latest
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
-      packages: write  # Required for ghcr.io
-
+      pull-requests: read
+    outputs:
+      image: ${{ steps.filter.outputs.image }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            image:
+              - 'vntyper/**'
+              - 'docker/**'
+              - 'conda/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - '.github/workflows/docker-build.yml'
 
-      # Set up Docker Buildx (required for caching)
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+  # Build and test in ONE job. The image never leaves the runner's daemon, so there is
+  # no push-then-pull round trip and no multi-GB artifact upload, and the two stages are
+  # no longer serialized behind a `needs:` edge that existed only to sequence them.
+  #
+  # It also means images are published only after their tests pass; the old workflow
+  # pushed first and tested afterwards.
+  build-and-test:
+    name: Build and test image
+    needs: changes
+    if: needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
 
-      # Log in to GitHub Container Registry (ghcr.io)
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Normalize image names
+        id: img
+        run: |
+          LOWER=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          echo "app=${{ env.GHCR_REGISTRY }}/${LOWER}" >> "$GITHUB_OUTPUT"
+          echo "base=${{ env.GHCR_REGISTRY }}/${LOWER}-base" >> "$GITHUB_OUTPUT"
+
+      # Must match docker-base.yml exactly.
+      - name: Compute expected base image tag
+        id: hash
+        env:
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**') }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HASH" ]; then
+            echo "::error::hashFiles() matched no files - check the path patterns"
+            exit 1
+          fi
+          echo "tag=base-${HASH:0:16}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Log in to Docker Hub
-      #- name: Log in to Docker Hub
-        #uses: docker/login-action@v3
-        #with:
-          #registry: ${{ env.DOCKERHUB_REGISTRY }}
-          #username: ${{ secrets.DOCKER_USERNAME }}  # Added to GitHub secrets
-          #password: ${{ secrets.DOCKER_PASSWORD }}  # Added to GitHub secrets
+      # Resolve the base tag to an immutable digest, and fail with an actionable message
+      # rather than a confusing pull error if it was never built.
+      - name: Resolve base image digest
+        id: base
+        run: |
+          set -euo pipefail
+          REF="${{ steps.img.outputs.base }}:${{ steps.hash.outputs.tag }}"
+          if ! DIGEST=$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}' 2>/dev/null); then
+            echo "::error::Base image $REF does not exist. A dependency input changed - run the 'Docker Base Image' workflow (workflow_dispatch) or merge the change to main first."
+            exit 1
+          fi
+          echo "ref=${{ steps.img.outputs.base }}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
-      # Extract metadata (tags, labels) for Docker
-      - name: Extract metadata (tags, labels) for Docker
+      - uses: docker/metadata-action@v5
         id: meta
-        uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.img.outputs.app }}
           tags: |
-            type=schedule
             type=ref,event=branch
             type=ref,event=tag
             type=ref,event=pr
             type=sha
 
-      # Build and push Docker image to both registries
-      - name: Build and push Docker image
+      # load: true exports into the runner's Docker daemon so the tests can use it
+      # directly. Nothing is pushed here - publishing happens after the tests pass.
+      - name: Build application image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BASE_IMAGE=${{ steps.base.outputs.ref }}
+          tags: vntyper:test
           labels: ${{ steps.meta.outputs.labels }}
-          push: true
-          # Enable GitHub Actions caching for 60-80% faster builds
-          # Using scoped cache to prevent stale reference issues (fixes "failed to compute cache key" errors)
-          # See: https://github.com/docker/buildx/issues/681
-          cache-from: type=gha,scope=build-${{ github.ref_name }}
-          cache-to: type=gha,scope=build-${{ github.ref_name }},mode=max
+          load: true
+          cache-from: |
+            type=registry,ref=${{ steps.img.outputs.app }}:buildcache-${{ github.ref_name }}
+            type=registry,ref=${{ steps.img.outputs.app }}:buildcache-main
+          # Fork PRs get a read-only GITHUB_TOKEN and cannot write to ghcr, so only
+          # export the cache from branches in this repository.
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache-{1},mode=max', steps.img.outputs.app, github.ref_name) || '' }}
 
-  # Docker Quick Tests - Run on all PRs for fast feedback
-  test-docker-quick:
-    name: Docker Tests (Quick)
-    needs: build-and-push-image
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
+      - name: Smoke test the image
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
+          set -euo pipefail
+          docker run --rm --entrypoint /opt/conda/envs/vntyper/bin/vntyper vntyper:test --version
 
-      # Restore test data cache (uses cache/restore to allow saving even on failure)
+      - name: Set up Python for the test suite
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - run: uv pip install --system -e .[dev]
+
       - name: Restore test data cache
-        id: cache-test-data-restore
+        id: cache-test-data
         uses: actions/cache/restore@v4
         with:
           path: tests/data
@@ -109,143 +159,84 @@ jobs:
           restore-keys: |
             test-data-v3-
 
-      # Verify cache contents if cache was restored
+      # Verify a restored cache, and record whether it has to be refetched. The old
+      # version did `rm -rf tests/data; exit 0` here, but the download step was gated on
+      # `cache-hit != 'true'` - false on this path - so nothing was ever re-downloaded
+      # and the job failed at final verification. A corrupted cache was unrecoverable
+      # until someone hand-bumped the cache key.
       - name: Verify cached test data
-        if: steps.cache-test-data-restore.outputs.cache-hit == 'true'
+        id: verify
+        if: steps.cache-test-data.outputs.cache-hit == 'true'
         run: |
-          echo "Cache was restored. Verifying integrity..."
-          python scripts/download_test_data.py --verify-only || {
-            echo "⚠ Cache verification failed. Will re-download."
+          if ! python scripts/download_test_data.py --verify-only; then
+            echo "⚠ Cache verification failed; will re-download."
             rm -rf tests/data
-            exit 0
-          }
-          echo "✓ Cache is valid"
+            echo "needs_download=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      # Download test data if not cached or verification failed
-      # Uses the same Python script as local development for consistency
       - name: Download test data
-        if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
-        run: |
-          echo "Downloading test data (1.1GB archive from Zenodo)..."
-          echo "Using Python download script (same as local development)"
-          echo "This ensures consistent extraction logic between local and CI"
-          echo ""
+        if: steps.cache-test-data.outputs.cache-hit != 'true' || steps.verify.outputs.needs_download == 'true'
+        run: python scripts/download_test_data.py
+        timeout-minutes: 30
 
-          # Use the standalone download script
-          # This ensures 100% identical behavior between local and CI
-          python scripts/download_test_data.py
-        timeout-minutes: 240
-
-      # Save test data cache IMMEDIATELY after download (before tests run)
-      # This ensures cache persists even if tests fail/timeout later
+      # Only save from main. A cache written on a PR is scoped to refs/pull/N/merge and
+      # can never be read by main or by any other PR - it just consumes the shared 10 GB
+      # quota and evicts caches that ARE reusable.
       - name: Save test data cache
+        if: >-
+          github.event_name == 'push' &&
+          (steps.cache-test-data.outputs.cache-hit != 'true' || steps.verify.outputs.needs_download == 'true')
         uses: actions/cache/save@v4
-        if: steps.cache-test-data-restore.outputs.cache-hit != 'true'
         with:
           path: tests/data
           key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
 
-      # Final verification before running tests
       - name: Final test data verification
-        run: |
-          echo "Running final verification before tests..."
-          python scripts/download_test_data.py --verify-only
-          echo "✓ Test data is ready"
+        run: python scripts/download_test_data.py --verify-only
 
-      - name: Run Docker quick tests
+      # On PRs run the fast subset; on main run everything. The old workflow ran the
+      # quick tier and then the full tier serially on main, but every quick test carries
+      # @pytest.mark.docker, so the full suite re-ran all of them - ~13 min of the
+      # critical path for zero extra information.
+      - name: Run Docker tests
         env:
-          # Disable automatic downloads in pytest fixtures (fail fast if data missing)
+          VNTYPER_TEST_IMAGE: vntyper:test
           VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
-        run: make test-docker-quick
-        timeout-minutes: 20
-
-      - name: Display test summary
-        if: always()
         run: |
-          echo "✓ Docker quick tests completed"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            make test-docker-quick
+          else
+            make test-docker
+          fi
 
-  # Docker Full Test Suite - Run only on main branch
-  test-docker-full:
-    name: Docker Tests (Full Suite)
-    needs: [build-and-push-image, test-docker-quick]
-    runs-on: ubuntu-latest
-    # Only run full suite on main branch or manual trigger
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+      # Publish only now, once the image has actually passed its tests. The previous
+      # workflow pushed to ghcr before any test ran. PRs never publish: a fork PR's
+      # GITHUB_TOKEN is read-only, and a tag per PR accumulated multi-GB images forever.
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Pushing $tag"
+            docker tag vntyper:test "$tag"
+            docker push "$tag"
+          done
 
+  docker-success:
+    name: Docker Success
+    needs: [changes, build-and-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: always()
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-
-      # Restore test data cache (uses cache/restore to allow saving even on failure)
-      - name: Restore test data cache
-        id: cache-test-data-full-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: tests/data
-          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
-          restore-keys: |
-            test-data-v3-
-
-      # Verify cache contents if cache was restored
-      - name: Verify cached test data
-        if: steps.cache-test-data-full-restore.outputs.cache-hit == 'true'
-        run: |
-          echo "Cache was restored. Verifying integrity..."
-          python scripts/download_test_data.py --verify-only || {
-            echo "⚠ Cache verification failed. Will re-download."
-            rm -rf tests/data
-            exit 0
-          }
-          echo "✓ Cache is valid"
-
-      # Download test data if not cached or verification failed
-      - name: Download test data
-        if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
-        run: |
-          echo "Downloading test data (1.1GB archive from Zenodo)..."
-          echo "Using Python download script (same as local development)"
-          python scripts/download_test_data.py --quiet
-        timeout-minutes: 120
-
-      # Save test data cache IMMEDIATELY after download (before tests run)
-      - name: Save test data cache
-        uses: actions/cache/save@v4
-        if: steps.cache-test-data-full-restore.outputs.cache-hit != 'true'
-        with:
-          path: tests/data
-          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
-
-      # Final verification before running tests
-      - name: Final test data verification
-        run: |
-          echo "Running final verification before tests..."
-          python scripts/download_test_data.py --verify-only
-          echo "✓ Test data is ready"
-
-      - name: Run full Docker test suite
+      - name: Check all jobs succeeded or were legitimately skipped
         env:
-          # Disable automatic downloads in pytest fixtures (fail fast if data missing)
-          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
-        run: make test-docker
-        timeout-minutes: 240
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-test-results-${{ github.run_id }}
-          path: |
-            pytest-results/
-            htmlcov/
-          retention-days: 30
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -qE '"result": *"(failure|cancelled)"'; then
+            echo "❌ One or more Docker jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "✅ Docker pipeline passed"

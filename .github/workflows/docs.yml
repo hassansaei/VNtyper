@@ -1,5 +1,7 @@
 name: Deploy Documentation
 
+# Deploy only. PR-time validation of `mkdocs build --strict` lives in the `docs` job of
+# ci-tests.yml, so a broken docs change is caught before merge rather than here.
 on:
   push:
     branches: [main]
@@ -9,10 +11,8 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# Least privilege at workflow level; the write scopes are granted per job below.
+permissions: {}
 
 concurrency:
   group: pages
@@ -20,17 +20,24 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Building the site needs no write access at all. `pages: write` and
+    # `id-token: write` were previously granted here too, via the workflow-level block.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.12'
-          cache: pip
+          enable-cache: true
 
       - name: Install dependencies
-        run: pip install ".[docs]"
+        run: uv pip install --system ".[docs]"
 
       - name: Build documentation
         run: mkdocs build --strict
@@ -42,7 +49,11 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

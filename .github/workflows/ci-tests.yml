@@ -1,112 +1,172 @@
 name: CI Tests
 
-# Run on push to main/develop and on all pull requests
+# NOTE: no workflow-level `paths:` filter. A workflow skipped by a path filter leaves
+# its required status check permanently "Pending" and blocks the merge, whereas a job
+# skipped by an `if:` reports "Success". So filtering happens per job below, gated on
+# the `changes` job, and `ci-success` is the single required check.
 on:
   push:
-    branches: [main, develop, docker-modernization-2025]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 
-# Ensure only one workflow runs at a time for each PR
+# Cancel superseded PR runs, but never abandon a run on main.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
 
 jobs:
-  # Job 1: Code Quality (Linting)
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'vntyper/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'pytest.ini'
+              - 'Makefile'
+              - '.github/workflows/ci-tests.yml'
+            docs:
+              - 'docs/**'
+              - 'mkdocs.yml'
+              - '.github/workflows/ci-tests.yml'
+
   lint:
     name: Lint (Ruff)
-    runs-on: ubuntu-latest
-
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: '3.12'
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
+      # Ruff is a standalone binary. This job used to `pip install -e .[dev]`, pulling
+      # the full scientific stack (pandas, numpy, matplotlib, plotly, pysam, ...) - 28s
+      # of installing to run a 0s lint.
+      #
+      # Unpinned on purpose: [tool.ruff.lint] uses an explicit `select`, so results are
+      # reproducible across ruff versions and CI cannot drift from a developer's local
+      # ruff. Going through `make` keeps CI and local scope identical - formatting was
+      # previously checked only locally and not gated at all in CI.
+      - name: Install ruff
+        run: uv pip install --system ruff
 
-      - name: Run linting (make lint)
-        run: make lint
+      - run: make lint
+      - run: make format-check
 
-  # Job 2: Type Checking
   typecheck:
     name: Type Check (mypy)
-    runs-on: ubuntu-latest
-
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
+      # mypy genuinely needs the runtime deps installed to resolve imports.
+      - run: uv pip install --system -e .[dev]
 
-      - name: Run type checking (make type-check)
-        run: make type-check
+      - run: make type-check
 
-  # Job 3: Unit Tests (fast, multiple Python versions)
   test-unit:
     name: Unit Tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    # Pinned, not ubuntu-latest: Python 3.9 is EOL (2025-10-31) and has no build for
+    # ubuntu-26.04, so this job breaks silently when the `latest` label moves.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
+      - run: uv pip install --system -e .[dev]
 
-      - name: Run unit tests (make test-unit)
-        run: make test-unit
+      # Enforces the coverage floor as well as the tests. tests/unit/test_marker_hygiene.py
+      # additionally fails the build if any unit test file is missing its `unit` marker.
+      - name: Run unit tests with coverage floor
+        run: make test-unit-cov
 
-      - name: Display test summary
-        if: always()
-        run: |
-          echo "✓ Unit tests completed for Python ${{ matrix.python-version }}"
+  docs:
+    name: Docs build (strict)
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
 
-  # Job 4: Summary (all checks must pass)
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - run: uv pip install --system -e .[docs]
+
+      # docs.yml only builds on push to main, so a PR that breaks `mkdocs --strict`
+      # was previously only discovered after merge, when the deploy failed.
+      - run: mkdocs build --strict
+
   ci-success:
     name: CI Success
-    needs: [lint, typecheck, test-unit]
-    runs-on: ubuntu-latest
+    # THE required status check. Keep this the only one, so job-level `if:` filtering
+    # never leaves a required check pending.
+    needs: [changes, lint, typecheck, test-unit, docs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     if: always()
-
     steps:
-      - name: Check all jobs succeeded
+      - name: Check all jobs succeeded or were legitimately skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          if [[ "${{ needs.lint.result }}" != "success" ]] || \
-             [[ "${{ needs.typecheck.result }}" != "success" ]] || \
-             [[ "${{ needs.test-unit.result }}" != "success" ]]; then
-            echo "❌ One or more CI jobs failed"
+          echo "$RESULTS"
+          # A skipped job is acceptable (path filter said it was irrelevant).
+          # A failed or cancelled job is not.
+          if echo "$RESULTS" | grep -qE '"result": *"(failure|cancelled)"'; then
+            echo "❌ One or more CI jobs failed or were cancelled"
             exit 1
-          else
-            echo "✅ All CI checks passed!"
           fi
+          echo "✅ All CI checks passed"
