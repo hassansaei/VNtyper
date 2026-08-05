@@ -2,7 +2,36 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## 2.0.4 (Current)
+## 2.0.5 (Current)
+
+**Docker image now runs Python 3.12.** Python 3.9 reached end of life on 2025-10-31.
+Every package on the numerical path is unchanged - bwa, samtools, fastp, bcftools,
+openjdk (Kestrel), pysam, numpy, pandas and biopython all resolve to the same versions -
+and the pipeline reproduces the expected genotype exactly. Only the reporting stack
+moved (matplotlib, plotly, igv-reports, jinja2). The package now requires Python 3.10+
+and is tested on 3.10-3.13.
+
+**CI/CD pipeline rebuilt.** The Docker image is split into a rarely-rebuilt base
+(conda environments, adVNTR, reference genomes) and a per-commit application image, so a
+commit now rebuilds in about 3 minutes instead of 40-70. Images are published only after
+their tests pass, and the build uses the repository's own source rather than cloning
+GitHub, so a pull request now tests the code in that pull request.
+
+- Fixed `pyproject.toml` declaring `numpy<2.0.0` while the conda environment installed
+  numpy 2.0.2: `pip install .` inside the image downgraded conda's numpy, so the
+  published image ran a different numerical stack than its own recipe declared.
+- Fixed the TSV/CSV summary parsers silently truncating rows whose field count did not
+  match the header; a malformed row is now logged and skipped without discarding the
+  rest of the file.
+- Recovered 30 unit tests that carried no `unit` marker and had therefore never run in
+  CI, covering the Issue #136/#145 genotype tie-breaking logic.
+- Added a fast image smoke tier that verifies every reference path `config.json`
+  declares actually exists in the image.
+- Added coverage reporting with a ratcheting floor and an 80% target.
+- `make check-all` now runs in seconds and works on a fresh clone; it previously
+  required a 1.1 GB download and a Docker daemon.
+
+## 2.0.4
 
 - Migrated all logging to per-module loggers (`logging.getLogger(__name__)`); log
   records now carry the emitting module name instead of `root`.
