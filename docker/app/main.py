@@ -178,12 +178,8 @@ async def startup_event():
 
     # Initialize Redis client for rate limiting
     try:
-        rate_limit_redis_url = build_redis_url(
-            REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password
-        )
-        redis_rate_limit = aioredis.from_url(
-            rate_limit_redis_url, encoding="utf8", decode_responses=True
-        )
+        rate_limit_redis_url = build_redis_url(REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password)
+        redis_rate_limit = aioredis.from_url(rate_limit_redis_url, encoding="utf8", decode_responses=True)
         await FastAPILimiter.init(redis_rate_limit)
         logger.info("Rate limiting initialized successfully.")
     except Exception as e:
@@ -213,12 +209,8 @@ async def startup_event():
 
 
 # Define separate RateLimiter dependencies
-simple_rate_limiter = RateLimiter(
-    times=settings.RATE_LIMIT_SIMPLE_TIMES, seconds=settings.RATE_LIMIT_SIMPLE_SECONDS
-)
-high_rate_limiter = RateLimiter(
-    times=settings.RATE_LIMIT_HIGH_TIMES, seconds=settings.RATE_LIMIT_HIGH_SECONDS
-)
+simple_rate_limiter = RateLimiter(times=settings.RATE_LIMIT_SIMPLE_TIMES, seconds=settings.RATE_LIMIT_SIMPLE_SECONDS)
+high_rate_limiter = RateLimiter(times=settings.RATE_LIMIT_HIGH_TIMES, seconds=settings.RATE_LIMIT_HIGH_SECONDS)
 
 # Initialize APIRouter without prefix
 router = APIRouter()
@@ -294,13 +286,9 @@ def create_cohort(
 
 
 class RunJobResponse(BaseModel):
-    message: str = Field(
-        ..., description="Confirmation message indicating job submission."
-    )
+    message: str = Field(..., description="Confirmation message indicating job submission.")
     job_id: str = Field(..., description="Unique identifier for the submitted job.")
-    cohort_id: Optional[str] = Field(
-        None, description="Identifier of the associated cohort, if any."
-    )
+    cohort_id: Optional[str] = Field(None, description="Identifier of the associated cohort, if any.")
 
 
 @router.post(
@@ -326,13 +314,9 @@ async def run_vntyper(
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
     email: Optional[str] = Form(None, description="Optional email to receive results"),
-    cohort_id: Optional[str] = Form(
-        None, description="Optional cohort identifier to associate the job"
-    ),
+    cohort_id: Optional[str] = Form(None, description="Optional cohort identifier to associate the job"),
     alias: Optional[str] = Form(None, description="Optional cohort alias"),
-    passphrase: Optional[str] = Form(
-        None, description="Passphrase if required by the cohort"
-    ),
+    passphrase: Optional[str] = Form(None, description="Passphrase if required by the cohort"),
     # ----------------------------------------------------
     # ADDED: single option for advntr_mode (default False)
     # ----------------------------------------------------
@@ -403,9 +387,7 @@ async def run_vntyper(
     # takes the directories this request created with it, so nothing of a
     # rejected submission stays on the shared volume.
     try:
-        remaining = MAX_UPLOAD_BYTES - save_upload_bounded(
-            bam_file.file, bam_path, MAX_UPLOAD_BYTES
-        )
+        remaining = MAX_UPLOAD_BYTES - save_upload_bounded(bam_file.file, bam_path, MAX_UPLOAD_BYTES)
         logger.info(f"Saved uploaded BAM file to {bam_path}")
 
         if bai_path is not None:
@@ -425,9 +407,7 @@ async def run_vntyper(
             logger.info(f"Validated email: {email}")
         except EmailNotValidError as e:
             logger.error(f"Invalid email address provided: {email} - {str(e)}")
-            raise HTTPException(
-                status_code=400, detail="Invalid email address provided."
-            )
+            raise HTTPException(status_code=400, detail="Invalid email address provided.")
 
     # Cohort handling logic. Joining a cohort writes into it, so it is
     # authorized on exactly the same terms as reading one.
@@ -440,9 +420,7 @@ async def run_vntyper(
         logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
     else:
         cohort_key = None  # Job is not associated with any cohort
-        logger.info(
-            f"Job {job_id} submitted as a single job without cohort assignment."
-        )
+        logger.info(f"Job {job_id} submitted as a single job without cohort assignment.")
 
     # Extract client IP and User-Agent
     client_ip = request.client.host
@@ -469,9 +447,7 @@ async def run_vntyper(
             },
             queue="vntyper_long_queue",
         )
-        logger.info(
-            f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}"
-        )
+        logger.info(f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}")
     else:
         task = run_vntyper_job.delay(
             bam_path=bam_path,
@@ -553,13 +529,8 @@ def get_job_status(job_id: str):
     elif status == "FAILURE":
         # Log the task's own exception, return a generic message: the detail is
         # operator-facing, and this endpoint is unauthenticated.
-        logger.error(
-            f"Job {job_id} (Task ID: {task_id}) failed: "
-            f"{type(task_result.info).__name__}: {task_result.info}"
-        )
-        return JobStatusResponse(
-            job_id=job_id, status="failed", error=JOB_FAILURE_MESSAGE
-        )
+        logger.error(f"Job {job_id} (Task ID: {task_id}) failed: {type(task_result.info).__name__}: {task_result.info}")
+        return JobStatusResponse(job_id=job_id, status="failed", error=JOB_FAILURE_MESSAGE)
     else:
         return JobStatusResponse(job_id=job_id, status=status.lower())
 
@@ -633,22 +604,14 @@ def health_check():
 
 
 class JobQueueResponse(BaseModel):
-    total_jobs_in_queue: int = Field(
-        ..., description="Total number of jobs in the queue."
-    )
+    total_jobs_in_queue: int = Field(..., description="Total number of jobs in the queue.")
 
 
 class JobQueuePositionResponse(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job.")
-    position_in_queue: Optional[int] = Field(
-        None, description="Position of the job in the queue."
-    )
-    total_jobs_in_queue: int = Field(
-        ..., description="Total number of jobs in the queue."
-    )
-    status: Optional[str] = Field(
-        None, description="Status message if job is not in the queue."
-    )
+    position_in_queue: Optional[int] = Field(None, description="Position of the job in the queue.")
+    total_jobs_in_queue: int = Field(..., description="Total number of jobs in the queue.")
+    status: Optional[str] = Field(None, description="Status message if job is not in the queue.")
 
 
 @router.get(
@@ -745,9 +708,7 @@ def get_job_queue(
 def get_cohort_status(
     cohort_id: Optional[str] = Query(None, description="Cohort identifier (required)"),
     alias: Optional[str] = Query(None, description="Cohort alias, checked against the cohort"),
-    passphrase: Optional[str] = Query(
-        None, description="Passphrase protecting the cohort (required)"
-    ),
+    passphrase: Optional[str] = Query(None, description="Passphrase protecting the cohort (required)"),
 ):
     """
     **Description:**
@@ -788,9 +749,7 @@ def get_cohort_status(
         else:
             task_result = AsyncResult(task_id)
             # Map the Celery status to standardized status
-            status = celery_status_mapping.get(
-                task_result.status, task_result.status.lower()
-            )
+            status = celery_status_mapping.get(task_result.status, task_result.status.lower())
         job_statuses.append({"job_id": job_id, "status": status})
 
     return {
@@ -874,9 +833,7 @@ def _remove_temp_file(path: str) -> None:
 def cohort_download(
     cohort_id: Optional[str] = Query(None, description="Cohort identifier (required)"),
     alias: Optional[str] = Query(None, description="Cohort alias, checked against the cohort"),
-    passphrase: Optional[str] = Query(
-        None, description="Passphrase protecting the cohort (required)"
-    ),
+    passphrase: Optional[str] = Query(None, description="Passphrase protecting the cohort (required)"),
 ):
     """
     **Description:**
@@ -947,9 +904,7 @@ def run_cohort_analysis(
     request: Request,
     cohort_id: Optional[str] = Form(None, description="Cohort identifier (required)"),
     alias: Optional[str] = Form(None, description="Cohort alias, checked against the cohort"),
-    passphrase: Optional[str] = Form(
-        None, description="Passphrase protecting the cohort (required)"
-    ),
+    passphrase: Optional[str] = Form(None, description="Passphrase protecting the cohort (required)"),
 ):
     """
     **Description:**
@@ -974,9 +929,7 @@ def run_cohort_analysis(
     cid = response["cohort_id"]
     job_ids = response["job_ids"]
     if not job_ids:
-        raise HTTPException(
-            status_code=400, detail="No jobs found in the specified cohort."
-        )
+        raise HTTPException(status_code=400, detail="No jobs found in the specified cohort.")
 
     # 2) Build the list of existing .zip result paths for these jobs
     zip_paths: List[str] = []
@@ -985,9 +938,7 @@ def run_cohort_analysis(
         if os.path.exists(candidate_zip):
             zip_paths.append(candidate_zip)
         else:
-            logger.warning(
-                f"Job {jid} missing .zip file. Skipping from cohort analysis."
-            )
+            logger.warning(f"Job {jid} missing .zip file. Skipping from cohort analysis.")
 
     if not zip_paths:
         raise HTTPException(
@@ -1009,9 +960,7 @@ def run_cohort_analysis(
         user_ip=client_ip,
         user_agent=user_agent,
     )
-    logger.info(
-        f"Enqueued cohort analysis job: analysis_job_id={analysis_job_id}, task_id={task.id}"
-    )
+    logger.info(f"Enqueued cohort analysis job: analysis_job_id={analysis_job_id}, task_id={task.id}")
 
     # Store the mapping for job status checking
     redis_client.set(analysis_job_id, task.id, ex=604800)  # 7 days TTL
@@ -1046,9 +995,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-def authorized_cohort(
-    cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]
-):
+def authorized_cohort(cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]):
     """
     Resolve a cohort and authorize the caller, as HTTP.
 
@@ -1084,9 +1031,7 @@ def authorized_cohort(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-def get_cohort_jobs(
-    cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]
-):
+def get_cohort_jobs(cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]):
     """
     Helper function to retrieve job IDs associated with a cohort.
 

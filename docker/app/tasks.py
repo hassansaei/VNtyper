@@ -106,9 +106,7 @@ def run_vntyper_job(
             "status": "started",
         }
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
-        redis_usage_client.expire(
-            f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS
-        )
+        redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
         # Ensure the BAM index (.bai) exists
         bai_path = f"{bam_path}.bai"
@@ -148,9 +146,7 @@ def run_vntyper_job(
         if archive_results:
             command.append("--archive-results")
         if advntr_mode:
-            command.extend(
-                ["--extra-modules", "advntr", "--advntr-max-coverage", "300"]
-            )
+            command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
 
         # Run the VNtyper pipeline
         try:
@@ -185,9 +181,7 @@ def run_vntyper_job(
             try:
                 shutil.make_archive(output_dir, "zip", output_dir)
                 shutil.rmtree(output_dir)
-                logger.info(
-                    f"Archived results to {output_dir}.zip and removed original directory"
-                )
+                logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
                 logger.error(f"Error archiving results: {e}")
                 # Update usage data on failure
@@ -271,9 +265,7 @@ def delete_old_results():
     output_dir = settings.DEFAULT_OUTPUT_DIR
     cutoff_time = datetime.now() - timedelta(days=max_age_days)
 
-    logger.info(
-        f"Running delete_old_results task. Deleting files older than {max_age_days} days."
-    )
+    logger.info(f"Running delete_old_results task. Deleting files older than {max_age_days} days.")
 
     for filename in os.listdir(output_dir):
         if filename.endswith(".zip"):
@@ -304,9 +296,7 @@ def delete_old_results():
                         logger.error(f"Error deleting file {zip_path}: {e}")
                 # Remove job ID from Redis
                 redis_client.delete(job_id)
-                redis_client.delete(
-                    f"celery-task-meta-{job_id}"
-                )  # Remove Celery task meta
+                redis_client.delete(f"celery-task-meta-{job_id}")  # Remove Celery task meta
             # Remove cohort jobs set
             redis_cohort_client.delete(cohort_jobs_key)
             logger.info(f"Deleted expired cohort data: {key}")
