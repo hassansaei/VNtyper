@@ -56,6 +56,7 @@ help:
 	@echo "  make docker-build      - Build application image on the published base (~3 min)"
 	@echo "  make docker-build-base - Rebuild the base image (conda+refs, ~20-30 min)"
 	@echo "  make test-docker       - Run Docker integration tests with testcontainers"
+	@echo "  make test-docker-smoke - Fast image structure checks (~1s, no test data)"
 	@echo "  make test-docker-quick - Run Docker tests (excluding slow tests)"
 	@echo "  make docker-clean      - Remove all VNtyper Docker images"
 	@echo ""
@@ -331,6 +332,14 @@ docker-build:
 		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
+
+# Fast structural checks against an already-built image. No Zenodo test data, no
+# network inside the container, ~2s. Set VNTYPER_TEST_IMAGE to point at a tag other
+# than vntyper:local.
+test-docker-smoke:
+	@echo "$(BLUE)Running image structure smoke tests (no test data needed)...$(RESET)"
+	pytest -m smoke tests/docker -o log_cli=false
+	@echo "$(GREEN)✓ Image smoke tests complete$(RESET)"
 
 test-docker:
 	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"

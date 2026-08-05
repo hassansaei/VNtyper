@@ -46,6 +46,10 @@ jobs:
               - 'conda/**'
               - 'tests/**'
               - 'pyproject.toml'
+              # .dockerignore decides what reaches the build context, so a change to
+              # it can alter the image without touching any other path here.
+              - '.dockerignore'
+              - 'reference/**'
               - '.github/workflows/docker-build.yml'
 
   # Build and test in ONE job. The image never leaves the runner's daemon, so there is
@@ -137,11 +141,6 @@ jobs:
           # export the cache from branches in this repository.
           cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache-{1},mode=max', steps.img.outputs.app, github.ref_name) || '' }}
 
-      - name: Smoke test the image
-        run: |
-          set -euo pipefail
-          docker run --rm --entrypoint /opt/conda/envs/vntyper/bin/vntyper vntyper:test --version
-
       - name: Set up Python for the test suite
         uses: astral-sh/setup-uv@v5
         with:
@@ -149,6 +148,46 @@ jobs:
           enable-cache: true
 
       - run: uv pip install --system -e .[dev]
+
+      # Structural checks against the built image: ~1s, one container start, no network
+      # inside it and no Zenodo data. Deliberately BEFORE the test-data restore, so a
+      # structurally broken image fails in seconds instead of after a 1.1 GB download.
+      #
+      # The load-bearing assertion is that every reference path config.json declares
+      # actually exists in the image - derived from the config inside the container, not
+      # from a hardcoded list that would drift from it.
+      - name: Image structure smoke tests
+        env:
+          VNTYPER_TEST_IMAGE: vntyper:test
+        run: pytest -m smoke tests/docker -o log_cli=false -q --junitxml=smoke-results.xml
+
+      - name: Summarise smoke results
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          path = pathlib.Path("smoke-results.xml")
+          if not path.exists():
+              print("## Image smoke tests\n\nNo results produced.")
+              raise SystemExit
+          root = ET.parse(path).getroot()
+          suite = root.find("testsuite")
+          if suite is None:
+              suite = root
+          print("## Image smoke tests\n")
+          print(
+              f"**{suite.get('tests')} assertions** in {float(suite.get('time', 0)):.2f}s "
+              f"- {suite.get('failures')} failed, {suite.get('errors')} errored\n"
+          )
+          for case in suite.iter("testcase"):
+              node = case.find("failure")
+              if node is None:
+                  node = case.find("error")
+              if node is not None:
+                  print(f"- `{case.get('name')}`\n\n  ```\n  {(node.get('message') or '')[:500]}\n  ```")
+          PY
 
       - name: Restore test data cache
         id: cache-test-data

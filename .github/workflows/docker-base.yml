@@ -16,6 +16,12 @@ on:
       - 'vntyper/scripts/install_references.py'
       - 'vntyper/scripts/install_references_config.json'
       - 'vntyper/dependencies/advntr/**'
+      # The tracked reference files are COPYed into the base, and .dockerignore
+      # decides which of them reach the build context at all. Omitting these two was
+      # how a .dockerignore rule silently dropped three config-declared reference
+      # files from the image without triggering a base rebuild.
+      - 'reference/**'
+      - '.dockerignore'
       - '.github/workflows/docker-base.yml'
   workflow_dispatch:
     inputs:

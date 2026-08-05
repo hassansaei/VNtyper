@@ -156,7 +156,14 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
 
 - `pytest.ini` at the repo root is the live config. The `[tool.pytest.ini_options]`
   block in `pyproject.toml` is **dead** — pytest.ini takes precedence. Edit `pytest.ini`.
-- Markers: `unit`, `integration`, `docker`, `slow`.
+- Markers: `unit`, `integration`, `docker`, `smoke`, `slow`. `smoke` is the fast image
+  tier (`make test-docker-smoke`, ~1 s): it asserts the built image's *structure* — that
+  every reference path `config.json` declares actually exists in it, that the three conda
+  envs and their interpreters are present, that adVNTR imports under Python 2.7, and that
+  the image stays under its size budget. It needs a Docker daemon but **no test data**,
+  and it derives its assertions from the config inside the container rather than from a
+  hardcoded list, so it cannot drift. Smoke tests carry **only** the `smoke` marker —
+  adding `docker` too would make the slow tier re-run them.
 - **Every new unit test file must declare `pytestmark = pytest.mark.unit`.** CI runs
   `pytest -m unit`, so an unmarked file silently never runs. This is enforced by
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
