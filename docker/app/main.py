@@ -5,6 +5,7 @@ import subprocess
 from collections import Counter
 from enum import Enum
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import redis
@@ -34,6 +35,7 @@ from .config import build_redis_url, get_redis_password, require_redis_password,
 from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_cohort_analysis_job, run_vntyper_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
+from .utils import client_host
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -287,7 +289,7 @@ def create_cohort(
 class RunJobResponse(BaseModel):
     message: str = Field(..., description="Confirmation message indicating job submission.")
     job_id: str = Field(..., description="Unique identifier for the submitted job.")
-    cohort_id: str | None = Field(None, description="Identifier of the associated cohort, if any.")
+    cohort_id: str | None = Field(default=None, description="Identifier of the associated cohort, if any.")
 
 
 @router.post(
@@ -306,7 +308,10 @@ class RunJobResponse(BaseModel):
 async def run_vntyper(
     request: Request,
     bam_file: UploadFile = File(..., description="BAM file to process"),
-    bai_file: UploadFile = File(None, description="Optional BAI index file"),
+    # `UploadFile | None`, not `UploadFile`: the part is optional, so the framework
+    # hands this over as None whenever a submission omits it, which the body below
+    # has always had to handle.
+    bai_file: UploadFile | None = File(None, description="Optional BAI index file"),
     thread: int = Form(4),
     reference_assembly: ReferenceAssembly = Form(ReferenceAssembly.HG38),
     fast_mode: bool = Form(False),
@@ -389,7 +394,9 @@ async def run_vntyper(
         remaining = MAX_UPLOAD_BYTES - save_upload_bounded(bam_file.file, bam_path, MAX_UPLOAD_BYTES)
         logger.info(f"Saved uploaded BAM file to {bam_path}")
 
-        if bai_path is not None:
+        # `bai_path` is only ever set from `bai_file` above, so the second test cannot
+        # change the outcome; it is what lets the checker see the same thing.
+        if bai_path is not None and bai_file is not None:
             save_upload_bounded(bai_file.file, bai_path, remaining)
             logger.info(f"Saved uploaded BAI file to {bai_path}")
     except ValueError as exc:
@@ -422,7 +429,7 @@ async def run_vntyper(
         logger.info(f"Job {job_id} submitted as a single job without cohort assignment.")
 
     # Extract client IP and User-Agent
-    client_ip = request.client.host
+    client_ip = client_host(request)
     user_agent = request.headers.get(
         "User-Agent", "unknown"
     )  # ---------------------------------------------------------------------
@@ -476,7 +483,7 @@ async def run_vntyper(
 class JobStatusResponse(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job.")
     status: str = Field(..., description="Current status of the job.")
-    error: str | None = Field(None, description="Error message if the job failed.")
+    error: str | None = Field(default=None, description="Error message if the job failed.")
 
 
 @router.get(
@@ -608,9 +615,9 @@ class JobQueueResponse(BaseModel):
 
 class JobQueuePositionResponse(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job.")
-    position_in_queue: int | None = Field(None, description="Position of the job in the queue.")
+    position_in_queue: int | None = Field(default=None, description="Position of the job in the queue.")
     total_jobs_in_queue: int = Field(..., description="Total number of jobs in the queue.")
-    status: str | None = Field(None, description="Status message if job is not in the queue.")
+    status: str | None = Field(default=None, description="Status message if job is not in the queue.")
 
 
 @router.get(
@@ -650,8 +657,12 @@ def get_job_queue(
         - **status**: Status message if the job is not in the queue.
     """
     try:
-        # Get the list of task IDs from the Redis list
-        task_ids = redis_client.lrange("vntyper_job_queue", 0, -1)
+        # Get the list of task IDs from the Redis list.
+        # redis-py declares the command return type as `Awaitable[list] | list` because
+        # the sync and async clients share one command mixin. `redis_client` is the sync
+        # `redis.Redis`, so the awaitable arm cannot occur; the cast says so once here
+        # instead of leaving the union to be re-checked at each use below.
+        task_ids = cast(list[str], redis_client.lrange("vntyper_job_queue", 0, -1))
         queue_length = len(task_ids)
     except Exception as e:
         logger.error(f"Error accessing the job queue: {e}")
@@ -950,7 +961,7 @@ def run_cohort_analysis(
     analysis_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, analysis_job_id)
 
     # 4) Enqueue the new Celery task
-    client_ip = request.client.host
+    client_ip = client_host(request)
     user_agent = request.headers.get("User-Agent", "unknown")
     task = run_cohort_analysis_job.delay(
         cohort_id=cid,
@@ -982,7 +993,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """
     if exc.status_code == 429:
         # Customize the error message for rate limit exceeded
-        logger.warning(f"Rate limit exceeded for IP: {request.client.host}")
+        logger.warning(f"Rate limit exceeded for IP: {client_host(request)}")
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": "Rate limit exceeded. Please try again later."},

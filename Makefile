@@ -23,7 +23,7 @@ help:
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format code with Ruff"
 	@echo "  make format-check     - Check code formatting without changes"
-	@echo "  make type-check       - Run mypy type checker on vntyper package"
+	@echo "  make type-check       - Run mypy type checker on vntyper/ and docker/app/"
 	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
@@ -107,8 +107,8 @@ format-check:
 
 # Type checking targets
 type-check:
-	@echo "$(BLUE)Running mypy type checker on vntyper package...$(RESET)"
-	mypy vntyper/
+	@echo "$(BLUE)Running mypy type checker on vntyper package and web service...$(RESET)"
+	mypy vntyper/ docker/app/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 type-check-tests:
@@ -116,8 +116,15 @@ type-check-tests:
 	mypy tests/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
-type-check-all:
-	@echo "$(BLUE)Running mypy type checker on all code...$(RESET)"
+# Runs mypy twice rather than over one combined argument list. Passing docker/app/
+# and tests/ to the same invocation puts the `app` package on mypy's search path for
+# the tests too, so the `from app import ...` lines in tests/unit/web/ stop resolving
+# to Any and a batch of unrelated findings in those tests' hand-rolled ASGI doubles
+# lands on this target. Keeping the two runs separate leaves each suite checked
+# against the same scope CI checks it against; wiring the web tests up to the real
+# types is worthwhile but is its own change.
+type-check-all: type-check
+	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
 	mypy vntyper/ tests/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 

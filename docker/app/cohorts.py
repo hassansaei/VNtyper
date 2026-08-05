@@ -113,6 +113,12 @@ def create_cohort_record(
         ValueError: If no passphrase was supplied, or the alias is already taken.
     """
     alias = _clean(alias)
+    # Normalised to `str` here, exactly as `resolve_cohort` does, so that the value
+    # handed to `hash_passphrase` below is the one the caller sent. Only the
+    # *emptiness* test is made on the trimmed form: `resolve_cohort` verifies the
+    # raw passphrase, so trimming before hashing would lock out any passphrase with
+    # leading or trailing whitespace.
+    passphrase = passphrase or ""
     if not _clean(passphrase):
         msg = "A passphrase is required to create a cohort"
         logger.error(msg)

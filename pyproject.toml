@@ -248,6 +248,33 @@ extend-immutable-calls = [
 python_version = "3.10"
 ignore_missing_imports = true
 
+# No `mypy_path` is needed for `mypy vntyper/ docker/app/`. `docker/app/__init__.py`
+# exists and `docker/__init__.py` does not, so mypy walks up exactly one level, roots
+# the package at `docker/` and names the modules `app.*` on its own - which is both
+# how the intra-package imports resolve and why the `app.*` override below matches.
+# Adding `mypy_path = "docker"` would additionally make `mypy tests/` resolve the
+# `from app import ...` lines in `tests/unit/web/`, which today degrade to `Any` under
+# `ignore_missing_imports`. That is worth doing, but it is not free: it surfaces a
+# batch of protocol-shape errors in the hand-rolled ASGI doubles in
+# `tests/unit/web/test_request_size_limit.py` and `test_upload_limits.py`, plus a real
+# `str | None` finding in `test_credentials_and_disclosure.py`. Those belong to the
+# tests, so they are left for a commit that owns them.
+
+# Staged strictness for the web service.
+#
+# NOTE: the global section above deliberately enables neither `disallow_untyped_defs`
+# nor `disallow_incomplete_defs`, so both are already off everywhere and this section
+# changes nothing today. It is written out all the same: it is the anchor for the
+# decision, and it holds `docker/app` at today's level if the global settings are
+# tightened for `vntyper/` later. `docker/app` is a large, largely unannotated FastAPI
+# service - running mypy relaxed catches real type bugs now, while running it strict
+# produces a backlog that gets silenced with `# type: ignore` rather than fixed.
+# Tighten as annotations land.
+[[tool.mypy.overrides]]
+module = "app.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
 # ===========================
 # Coverage Configuration
 # ===========================

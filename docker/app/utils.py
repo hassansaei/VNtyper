@@ -5,6 +5,7 @@ import smtplib
 from email.message import EmailMessage
 
 import bcrypt
+from starlette.requests import Request
 
 from .config import settings
 
@@ -14,6 +15,27 @@ logger = logging.getLogger(__name__)
 # The limit is stated here so a longer passphrase can be refused outright
 # rather than silently reduced to a prefix of itself.
 MAX_PASSPHRASE_BYTES = 72
+
+
+def client_host(request: Request) -> str | None:
+    """Return the peer address of a request, or None when there is not one.
+
+    `request.client` is populated from the `client` key of the ASGI scope, and
+    that key is optional: a server that cannot name the peer, and any caller
+    that drives the application directly rather than over a socket, both leave
+    it out. Reading `.host` off it unguarded turns those requests into a 500
+    from an AttributeError.
+
+    Both callers use the result only to build a usage-statistics hash and a log
+    line, so an unknown peer is answered with None rather than an error.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        str | None: The peer's address, or None if the scope did not carry one.
+    """
+    return request.client.host if request.client else None
 
 
 def hash_passphrase(passphrase: str) -> str:
