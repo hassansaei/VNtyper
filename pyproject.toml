@@ -116,22 +116,54 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-# Ruff's default select = ["E4", "E7", "E9", "F"]
-# Extend with additional modern Python rules (more composable)
-extend-select = [
+# Use an explicit `select`, NOT `extend-select`. `extend-select` builds on ruff's
+# default rule set, which ruff is free to change between releases - ruff 0.16
+# expanded its defaults and turned ~440 unrequested rules on at once, taking CI from
+# green to 740 errors without a single line of code changing. Listing rules
+# explicitly makes lint results reproducible across ruff versions.
+select = [
+    # --- ruff's historical defaults, now pinned explicitly ---
+    "E4",   # pycodestyle: imports
+    "E7",   # pycodestyle: statements
+    "E9",   # pycodestyle: runtime errors
+    "F",    # pyflakes
+    # --- long-standing project opt-ins ---
     "W",    # pycodestyle warnings
     "B",    # flake8-bugbear (detect common bugs)
     "I",    # isort (import sorting)
     "UP",   # pyupgrade (modern Python syntax)
     "SIM",  # flake8-simplify (simplify code)
+    # --- adopted when ruff 0.16 surfaced them; the code now satisfies these ---
+    "LOG",  # flake8-logging: no calls on the root logger
+    "DTZ",  # flake8-datetimez: no naive/deprecated datetime calls
+    "EXE",  # flake8-executable: no shebangs on non-executable modules
+    "FA",   # flake8-future-annotations
+    "C4",   # flake8-comprehensions
+    "PIE",  # flake8-pie
+    "PERF", # perflint
+    "FURB", # refurb
+    "G201",    # .exception() over .error(..., exc_info=True)
+    "TRY201",  # bare `raise` when re-raising
+    "TRY401",  # redundant exception object in .exception()
+    "PLW0602", # `global` without assignment
+    "PLW1510", # subprocess.run without explicit check=
 ]
 
-# Ignore docstring rules for now (can enable gradually)
-# Note: E501 (line too long) is automatically ignored when formatter is enabled
+# Note: E501 (line too long) is automatically ignored when the formatter is enabled.
 ignore = [
     "D100", "D104",  # Missing docstrings (enable later if desired)
     "D200", "D202", "D205", "D400", "D401",  # Docstring formatting
+    # Deliberate, not accidental:
+    "PERF203",  # try/except inside a loop - the pipeline needs per-iteration
+                # error handling so one bad sample cannot abort a whole cohort.
 ]
+
+# Rules deliberately NOT selected, so the omission is a decision and not an oversight:
+#   BLE001 (blind-except) - `except Exception` at stage and process boundaries is the
+#     project's intended error-handling contract (log, then exit 1). Narrowing all 46
+#     handlers needs per-call knowledge of what each external tool raises.
+#   G004 (logging-f-string) - f-strings in log calls are the established style across
+#     all ~600 log statements.
 
 # Allow auto-fix for all rules by default
 fixable = ["ALL"]
@@ -141,6 +173,19 @@ unfixable = []
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "E402"]  # Allow unused imports
 "tests/**/*.py" = ["S101"]        # Allow assert statements in tests
+
+# ===========================
+# mypy Configuration
+# ===========================
+# Previously passed as CLI flags from three separate Makefile targets, which drifted:
+# they hardcoded `--python-version 3.9`, and mypy 2.x dropped support for targeting
+# 3.9 ("must be 3.10 or higher"), breaking CI. Configure it once here instead.
+[tool.mypy]
+# The runtime floor stays 3.9 (see `requires-python` and the CI matrix); this is only
+# the version mypy type-checks against, and 3.10 is the oldest it still supports.
+# Ruff's `target-version = "py39"` remains the guard against 3.10+ syntax.
+python_version = "3.10"
+ignore_missing_imports = true
 
 [tool.ruff.format]
 # Use double quotes (Python default)
