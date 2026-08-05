@@ -63,14 +63,20 @@ jobs:
           python-version: '3.12'
           enable-cache: true
 
-      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
-      # (`error: The interpreter at /usr is externally managed`). Create an explicit
-      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
-      - name: Create virtualenv
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
         run: |
-          uv venv
-          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
       # Ruff is a standalone binary. This job used to `pip install -e .[dev]`, pulling
       # the full scientific stack (pandas, numpy, matplotlib, plotly, pysam, ...) - 28s
       # of installing to run a 0s lint.
@@ -101,14 +107,20 @@ jobs:
           python-version: '3.10'
           enable-cache: true
 
-      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
-      # (`error: The interpreter at /usr is externally managed`). Create an explicit
-      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
-      - name: Create virtualenv
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
         run: |
-          uv venv
-          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
       # mypy genuinely needs the runtime deps installed to resolve imports.
       - run: uv pip install -e .[dev]
 
@@ -136,14 +148,20 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
-      # (`error: The interpreter at /usr is externally managed`). Create an explicit
-      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
-      - name: Create virtualenv
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
         run: |
-          uv venv
-          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
       - run: uv pip install -e .[dev]
 
       # Enforces the coverage floor as well as the tests. tests/unit/test_marker_hygiene.py
@@ -167,14 +185,20 @@ jobs:
           python-version: '3.12'
           enable-cache: true
 
-      # uv refuses `--system` on Ubuntu's PEP 668 "externally managed" interpreter
-      # (`error: The interpreter at /usr is externally managed`). Create an explicit
-      # venv and put it on PATH so later `make`/`pytest` steps resolve tools from it.
-      - name: Create virtualenv
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
         run: |
-          uv venv
-          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
       - run: uv pip install -e .[docs]
 
       # docs.yml only builds on push to main, so a PR that breaks `mkdocs --strict`
