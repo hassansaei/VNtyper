@@ -95,7 +95,25 @@ order, or the next release fails:
 raises. Recorded as trap 11 in `AGENTS.md` and untouched here. Needs its own fix plus the
 regression test that would have caught it.
 
-### B6. Unexplained: base rebuild reported as skipped — LOW, but verify
+### B6. Workflow linting is local-only — MEDIUM
+
+`actionlint` runs in `make ci-local` and in no GitHub Actions workflow, so nothing in CI
+checks workflow syntax or shellchecks the `run:` blocks. A finding can sit on `main`
+indefinitely, and one did: SC2129 in `docker-base.yml` predates this work.
+
+That gap was widened by a bug in the gate itself. `lint-actions` expanded an empty
+`$(ACTIONLINT)` straight into command position, leaving a bare `;` — a shell *syntax*
+error, raised while parsing the whole `if ... fi` compound, so it fired before the
+`[ -n ... ]` guard could select the container fallback. `make ci-local` therefore died at
+its first step on every machine without a local `actionlint`, which is precisely the
+population the fallback was written to serve. Fixed by quoting the expansion and pinned by
+`tests/unit/test_makefile_recipes.py`, which renders each recipe with the tool variable
+forced empty and syntax-checks it.
+
+Plan: add an `actionlint` step to `ci-tests.yml`, gated on `.github/workflows/**` changing,
+so the check is not contingent on a contributor happening to run the local target.
+
+### B7. Unexplained: base rebuild reported as skipped — LOW, but verify
 
 On the run that bumped `python-multipart`, `Check base image` resolved a new content hash
 (`base-c5dec6b6f780ab4f`) and `Build base image` displayed **skipped**, yet that tag
