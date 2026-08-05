@@ -32,6 +32,7 @@ from starlette.background import BackgroundTask
 
 from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_vntyper_job, run_cohort_analysis_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
 from .version import API_VERSION
@@ -136,6 +137,14 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json",
 )
+
+# Bound the size of every request before it is read, not only the part of it
+# that reaches the job volume. MAX_UPLOAD_BYTES above governs what a submission
+# may write; the ceiling applied here is derived from it in request_limits and
+# governs what a submission may deliver. Registered first so that CORS, added
+# below, ends up outside it and a refused cross-origin upload still reads its
+# own status.
+app.add_middleware(RequestSizeLimitMiddleware)
 
 # CORS configuration for development
 # Only allow localhost origins when ENVIRONMENT is 'development' or 'local'
