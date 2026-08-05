@@ -125,6 +125,8 @@ nav:
     - Variant Flagging: pipeline/flagging.md
     - Optional Modules: pipeline/optional-modules.md
     - Reports & Visualization: pipeline/reports.md
+  - Development:
+    - CI/CD Follow-ups: development/ci-followups.md
   - About:
     - about/index.md
     - Scientific Background: about/scientific-background.md
