@@ -135,6 +135,12 @@ Two thresholds enforce this, and they are deliberately different:
 coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
 The gap between the two is real work, and rule 2 explains why it exists.
 
+**When raising the floor, use the number `make test-unit-cov` prints — never the `TOTAL`
+column of the coverage table.** Both that column and `coverage report --format=total`
+round to an integer, so a true 25.68% displays as `26%`; setting the floor from it makes
+CI fail on the very run that produced the number. The gate prints the precise figure and
+the exact line to paste.
+
 **2. Keep files under ~650 LOC.** This is a real constraint here, not style preference.
 Measured on this repo, the correlation is total:
 

@@ -200,15 +200,17 @@ show_missing = true
 # coverage climbs, never lower it to make a build pass. `make test-unit-cov` prints
 # the exact line to change when the floor is out of date.
 #
-# NOTE: `coverage report --format=total` ROUNDS to an integer, so it showed 25 when
-# the true figure was 24.51. scripts/coverage_gate.py reports the precise value via
-# coverage's Python API; keep this floor below it so both agree.
+# NOTE: BOTH `coverage report --format=total` AND pytest-cov's terminal TOTAL column
+# ROUND to an integer - a true 25.68% displays as 26%. Setting this floor from either
+# of those numbers makes CI fail on the very run that produced it. Take the value
+# `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
+# figure and states the exact line to paste here.
 #
 # The TARGET is 80% (COVERAGE_TARGET in the Makefile). Falling short of the target is
 # a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
 # six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
 # realistically be tested (see "Changing existing code" in AGENTS.md).
-fail_under = 26
+fail_under = 25
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
