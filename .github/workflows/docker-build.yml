@@ -210,7 +210,7 @@ jobs:
           cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache-{1},mode=max', steps.img.outputs.app, github.ref_name) || '' }}
 
       - name: Set up Python for the test suite
-        uses: astral-sh/setup-uv@v9
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           python-version: '3.12'
           enable-cache: true
