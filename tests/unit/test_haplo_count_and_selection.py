@@ -19,6 +19,9 @@ import pytest
 
 from vntyper.scripts.kestrel_genotyping import add_haplo_count, select_single_best_variant
 
+# CI runs `pytest -m unit`; without this the whole file is silently skipped.
+pytestmark = pytest.mark.unit
+
 
 class TestAddHaploCount:
     """Test the add_haplo_count function."""
