@@ -37,6 +37,10 @@ jobs:
           filters: |
             python:
               - 'vntyper/**'
+              # The FastAPI + Celery web service. It is not part of the vntyper
+              # package, but ruff, mypy and the coverage floor all cover it, so a
+              # change here has to run the same gates.
+              - 'docker/app/**'
               - 'tests/**'
               - 'pyproject.toml'
               - 'pytest.ini'
@@ -48,7 +52,12 @@ jobs:
               # The image's interpreter and dependency pins are asserted against
               # pyproject by tests/unit/test_version_consistency.py.
               - 'conda/**'
-              - '.github/workflows/ci-tests.yml'
+              # Every workflow, not just this one: test_workflow_consistency.py globs
+              # the whole directory to check that docker-base.yml and docker-build.yml
+              # agree on the base image's hash inputs, so a PR touching only one of
+              # those must still run it. Filtering on ci-tests.yml alone meant the
+              # guard never ran on the PRs it exists to guard.
+              - '.github/workflows/**'
             docs:
               - 'docs/**'
               - 'mkdocs.yml'

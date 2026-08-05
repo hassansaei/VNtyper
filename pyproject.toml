@@ -280,7 +280,12 @@ disallow_incomplete_defs = false
 # ===========================
 [tool.coverage.run]
 # `source` must live here rather than on the CLI for relative_files to work.
-source = ["vntyper"]
+#
+# `docker/app` is the FastAPI + Celery web service. It is not an installed package, so
+# it is listed as a directory path rather than an importable name; coverage measures it
+# by file location either way, and `relative_files` keeps the reported paths anchored to
+# the repo root so the same data file reads identically in CI and locally.
+source = ["vntyper", "docker/app"]
 relative_files = true
 
 [tool.coverage.report]
@@ -290,7 +295,7 @@ show_missing = true
 # the exact line to change when the floor is out of date.
 #
 # NOTE: BOTH `coverage report --format=total` AND pytest-cov's terminal TOTAL column
-# ROUND to an integer - a true 25.68% displays as 26%. Setting this floor from either
+# ROUND to an integer - a true 34.98% displays as 35%. Setting this floor from either
 # of those numbers makes CI fail on the very run that produced it. Take the value
 # `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
 # figure and states the exact line to paste here.
@@ -299,7 +304,7 @@ show_missing = true
 # a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
 # six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
 # realistically be tested (see "Changing existing code" in AGENTS.md).
-fail_under = 25
+fail_under = 34
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
