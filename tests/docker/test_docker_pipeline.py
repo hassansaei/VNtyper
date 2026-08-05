@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.parametrization import get_advntr_test_cases, get_advntr_test_ids, get_bam_test_cases, get_bam_test_ids
-from tests.test_orchestration import run_advntr_test_case, run_bam_test_case
+from tests.test_orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case, run_bam_test_case
 
 from .conftest import run_vntyper_pipeline
 
@@ -81,6 +81,7 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
 
 @pytest.mark.docker
 @pytest.mark.slow
+@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)
 @pytest.mark.parametrize("test_case", get_advntr_test_cases(), ids=get_advntr_test_ids())
 def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, ensure_test_data) -> None:
     """

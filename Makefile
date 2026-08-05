@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -259,10 +259,16 @@ check-full: check-all test-integration
 # ACTIONLINT resolves to a local binary if present, otherwise the official container.
 ACTIONLINT ?= $(shell command -v actionlint 2>/dev/null)
 
+# The quotes around $(ACTIONLINT) below are load-bearing. When the lookup finds
+# nothing the variable expands to "", and an unquoted expansion would leave the
+# `then` branch as a bare `;` - a shell *syntax* error, raised while parsing the
+# whole `if ... fi` compound, so it fires before the `[ -n ... ]` guard can select
+# the container fallback. That made this target fail on precisely the machines the
+# fallback exists for. tests/unit/test_makefile_recipes.py pins it.
 lint-actions:
 	@echo "$(BLUE)Linting GitHub Actions workflows...$(RESET)"
 	@if [ -n "$(ACTIONLINT)" ]; then \
-		$(ACTIONLINT); \
+		"$(ACTIONLINT)"; \
 	elif command -v docker >/dev/null 2>&1; then \
 		docker run --rm -v "$(PWD):/repo" --workdir /repo rhysd/actionlint:latest -color; \
 	else \
@@ -405,6 +411,16 @@ test-docker-smoke:
 	VNTYPER_TEST_IMAGE=$(or $(VNTYPER_TEST_IMAGE),vntyper:local) \
 		pytest -m smoke tests/docker -o log_cli=false
 	@echo "$(GREEN)✓ Image smoke tests complete$(RESET)"
+
+# Everything except the `slow` tier. This is what runs on main: adVNTR's HMM
+# genotyping is 15-25 min on a 2-core runner and dominates the suite, so it is
+# exercised on a schedule instead of blocking every merge.
+# Note the marker composition: repeated -m flags OVERRIDE rather than combine.
+test-docker-fast:
+	@echo "$(BLUE)Running Docker tests excluding the slow tier...$(RESET)"
+	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
+		pytest -m "docker and not slow" -v
+	@echo "$(GREEN)✓ Docker tests (fast tier) complete$(RESET)"
 
 test-docker:
 	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"

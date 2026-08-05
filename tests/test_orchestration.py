@@ -20,6 +20,18 @@ from tests.helpers import (
     validate_kestrel_output,
 )
 
+# Seconds allowed for a single adVNTR test, overriding pytest.ini's global 600 s.
+#
+# adVNTR's HMM genotyping is the slowest thing in the suite: ~5-6 min on a 32-core
+# workstation and ~9 min locally, but GitHub's runners give 2 cores, so it needs several
+# times that. 600 s passed locally and timed out on CI. The global timeout stays tight
+# for everything else - this is the one genuine outlier - and 45 min still bounds a hang
+# far below the 6 h job limit.
+#
+# Both adVNTR tests (docker and integration) import this rather than repeating the
+# literal, so recalibrating for new CI hardware is a one-line change here.
+ADVNTR_TIMEOUT_SECONDS = 2700
+
 
 def run_bam_test_case(
     test_case: dict,
