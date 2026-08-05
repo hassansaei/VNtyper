@@ -336,11 +336,36 @@ ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-d
 	@echo "  - the Python 3.9-3.12 matrix; this ran your interpreter only"
 	@echo "  - the Docker image jobs -> run 'make ci-local-docker'"
 
-# Mirrors docker-build.yml. Needs a Docker daemon; builds and smoke-tests the image.
-# VNTYPER_TEST_IMAGE is forced to the image just built - otherwise the smoke tier
-# would fall back to its default tag and silently test a different, older image.
-ci-local-docker: lint-docker docker-build
+# Files whose contents define the base image. CI hashes exactly this set; keep in sync
+# with the hashFiles() list in docker-base.yml (tests/unit/test_version_consistency.py
+# and test_workflow_consistency.py guard the pieces that can drift).
+BASE_INPUTS := conda docker/Dockerfile.base docker/requirements-web.txt \
+	vntyper/scripts/install_references.py vntyper/scripts/install_references_config.json \
+	vntyper/dependencies/advntr reference .dockerignore
+
+# Mirrors docker-build.yml. Needs a Docker daemon.
+#
+# VNTYPER_TEST_IMAGE is forced to the image just built - otherwise the smoke tier would
+# fall back to its default tag and silently test a different, older image.
+#
+# If you have edited a base input, building on the published :latest base tests
+# something CI will not build, so refuse rather than give false assurance.
+ci-local-docker: lint-docker
+	@if git rev-parse --verify -q origin/main >/dev/null 2>&1 && \
+	    ! git diff --quiet origin/main -- $(BASE_INPUTS) 2>/dev/null; then \
+		if [ "$(DOCKER_BASE_IMAGE)" = "ghcr.io/hassansaei/vntyper-base:latest" ]; then \
+			echo "$(RED)You changed a base image input, but DOCKER_BASE_IMAGE still points at the published :latest.$(RESET)"; \
+			echo "  CI will build a new base from your changes; this would not. Run:"; \
+			echo "    make docker-build-base"; \
+			echo "    make ci-local-docker DOCKER_BASE_IMAGE=vntyper-base:local"; \
+			exit 1; \
+		fi; \
+		echo "$(BLUE)Base inputs changed; using $(DOCKER_BASE_IMAGE)$(RESET)"; \
+	fi
+	@$(MAKE) --no-print-directory docker-build
 	@$(MAKE) --no-print-directory test-docker-smoke VNTYPER_TEST_IMAGE=$(DOCKER_IMAGE)
+	@echo "$(BLUE)Running the Docker tier CI runs on PRs...$(RESET)"
+	@$(MAKE) --no-print-directory test-docker-quick VNTYPER_TEST_IMAGE=$(DOCKER_IMAGE)
 	@echo "$(GREEN)✓ Local Docker CI parity checks passed$(RESET)"
 
 # Docker targets
@@ -388,7 +413,7 @@ test-docker:
 		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
-	pytest -m docker -v
+	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) pytest -m docker -v
 	@echo "$(GREEN)✓ Docker tests complete$(RESET)"
 
 test-docker-quick:
@@ -398,6 +423,7 @@ test-docker-quick:
 		echo "$(RED)Error: testcontainers not installed. Run: pip install -e .[dev]$(RESET)"; \
 		exit 1; \
 	fi
+	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
 	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_fast]" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_container_health" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_volume_mounts" \

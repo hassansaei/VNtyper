@@ -96,7 +96,11 @@ def parse_tsv(file_path):
                     header = line.split("\t")
                     continue
                 row_values = line.split("\t")
-                row_dict = dict(zip(header, row_values))
+                # strict=False preserves the long-standing behaviour: a ragged row is
+                # truncated to the shorter of the two rather than raising. strict=True
+                # would escape to the except below and discard the whole file's data
+                # because of one malformed line.
+                row_dict = dict(zip(header, row_values, strict=False))
                 data.append(row_dict)
     except Exception as e:
         comments.append(f"Error parsing TSV file: {e}")
@@ -132,7 +136,9 @@ def parse_csv(file_path):
                 if header is None:
                     header = row
                     continue
-                row_dict = dict(zip(header, row))
+                # See the note in parse_tsv_file: strict=False keeps a single ragged
+                # row from discarding the entire parse.
+                row_dict = dict(zip(header, row, strict=False))
                 data.append(row_dict)
     except Exception as e:
         comments.append(f"Error parsing CSV file: {e}")

@@ -215,9 +215,9 @@ def test_conda_env_exists(probe: dict[str, Any], env: str) -> None:
     assert probe["conda_env_dirs"][env]
 
 
-@pytest.mark.parametrize(("env", "expected"), [("vntyper", "3.9"), ("envadvntr", "2.7")])
+@pytest.mark.parametrize(("env", "expected"), [("vntyper", "3.12"), ("envadvntr", "2.7")])
 def test_interpreter_version(probe: dict[str, Any], env: str, expected: str) -> None:
-    """adVNTR needs Python 2.7; the pipeline needs 3.9. Neither may drift.
+    """adVNTR needs Python 2.7; the pipeline needs 3.12. Neither may drift.
 
     Args:
         probe: Probe report.

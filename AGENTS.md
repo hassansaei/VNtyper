@@ -252,7 +252,18 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
     `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
     if the pushed tag disagrees with `vntyper/version.py`.
-13. **CI installs with `uv` into an explicit venv, never `--system`.** GitHub's
+13. **The package and the image must declare the same versions, and a test enforces it.**
+    `conda/environment_vntyper.yml` is what the Docker image *runs*; `pyproject.toml` is
+    what the PyPI package *declares*. When they disagree, `pip install .` inside the
+    image resolves something different from the recipe — that is not hypothetical:
+    pyproject pinned `numpy>=1.26.0,<2.0.0` while the env installed `numpy=2.0.2`, so the
+    published image silently ran 1.26.4 on a different numerical stack.
+    `tests/unit/test_version_consistency.py` fails the build if
+    a conda pin violates a pyproject specifier, if the image's Python is not in the CI
+    matrix, if the classifiers and matrix disagree, if ruff's `target-version` or mypy's
+    `python_version` drifts from `requires-python`, or if a binary the image smoke tier
+    requires is missing from the environment. Change versions in **both** files.
+14. **CI installs with `uv` into an explicit venv, never `--system`.** GitHub's
     `ubuntu-24.04` image ships a PEP 668 "externally managed" interpreter, so
     `uv pip install --system` fails outright with
     `error: The interpreter at /usr is externally managed`. Every job therefore runs

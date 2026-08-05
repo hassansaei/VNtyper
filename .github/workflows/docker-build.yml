@@ -88,10 +88,17 @@ jobs:
           if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
             echo "missing=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Base $REF is published."
-          else
-            echo "missing=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Base $REF is not published; it will be built first."
+            exit 0
           fi
+          # A fork PR's GITHUB_TOKEN is read-only, so it cannot publish a base. Say so
+          # plainly instead of letting the push fail with an authorization error.
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "" ] && \
+             [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "::error::This fork PR changes a base image input, but $REF is not published and a fork cannot push to ghcr.io. A maintainer needs to run the 'Docker Base Image' workflow (workflow_dispatch) against this commit's inputs, or merge the base change first."
+            exit 1
+          fi
+          echo "missing=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Base $REF is not published; it will be built first."
 
   # Build the base only when this commit's inputs have no published base. Steady state
   # this is skipped in seconds; it fires on the first run and whenever a PR changes

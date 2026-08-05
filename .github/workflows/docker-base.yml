@@ -107,9 +107,15 @@ jobs:
           context: .
           file: docker/Dockerfile.base
           push: true
+          # `:latest` ONLY from a push to main. This workflow is also called from
+          # docker-build.yml on pull requests, and tagging latest there would let an
+          # unmerged - possibly failing - PR overwrite the base that `make docker-build`
+          # and every other consumer pull by default, or clobber a verified main base if
+          # it finished later. The content-addressed tag is always safe to publish: it
+          # is immutable by construction.
           tags: |
             ${{ steps.img.outputs.name }}:${{ steps.hash.outputs.tag }}
-            ${{ steps.img.outputs.name }}:latest
+            ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && format('{0}:latest', steps.img.outputs.name) || '' }}
           # type=registry on ghcr, not type=gha: the GitHub Actions cache is capped at
           # 10 GB per repo with hourly LRU eviction and is still marked beta, while GHCR
           # storage is free and uncapped for public repos. A mode=max cache for this

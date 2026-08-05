@@ -41,6 +41,13 @@ jobs:
               - 'pyproject.toml'
               - 'pytest.ini'
               - 'Makefile'
+              # scripts/ holds the coverage gate and the test-data fetcher; a change
+              # to the gate itself must run the tests it gates, or a regression in it
+              # merges green with test-unit skipped.
+              - 'scripts/**'
+              # The image's interpreter and dependency pins are asserted against
+              # pyproject by tests/unit/test_version_consistency.py.
+              - 'conda/**'
               - '.github/workflows/ci-tests.yml'
             docs:
               - 'docs/**'
@@ -130,8 +137,8 @@ jobs:
     name: Unit Tests (Python ${{ matrix.python-version }})
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    # Pinned, not ubuntu-latest: Python 3.9 is EOL (2025-10-31) and has no build for
-    # ubuntu-26.04, so this job breaks silently when the `latest` label moves.
+    # Pinned rather than ubuntu-latest so a runner-image rollover cannot change the
+    # toolchain underneath a green build without a commit.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -139,7 +146,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
 
