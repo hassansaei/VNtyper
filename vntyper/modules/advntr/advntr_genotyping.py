@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # vntyper/modules/advntr/advntr_genotyping.py
 
 import logging
@@ -11,12 +10,10 @@ import pandas as pd
 
 from vntyper.scripts.utils import load_config, run_command
 
-# -------------------------------------------------------------------------
-# Configure logging
-# -------------------------------------------------------------------------
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
+# -------------------------------------------------------------------------
 def load_advntr_config(config_path=None):
     """
     Loads the adVNTR configuration file.
@@ -65,17 +62,17 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     # Validate input paths before proceeding
     # ---------------------------------------------------------------------
     if not os.path.isfile(db_file):
-        logging.critical(f"VNTR database file not found: {db_file}")
+        logger.critical(f"VNTR database file not found: {db_file}")
         return 1
     if not os.path.isfile(sorted_bam):
-        logging.critical(f"Sorted BAM file not found: {sorted_bam}")
+        logger.critical(f"Sorted BAM file not found: {sorted_bam}")
         return 1
     if not os.path.isdir(output):
-        logging.warning(f"Output directory does not exist, creating: {output}")
+        logger.warning(f"Output directory does not exist, creating: {output}")
         try:
             os.makedirs(output, exist_ok=True)
         except Exception as e:
-            logging.critical(f"Could not create output directory {output}: {e}")
+            logger.critical(f"Could not create output directory {output}: {e}")
             return 1
 
     advntr_command = (
@@ -87,22 +84,22 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     # Define log file for adVNTR output
     log_file = os.path.join(output, f"{output_name}_advntr.log")
 
-    logging.info("Launching adVNTR genotyping...")
-    logging.debug(f"Command: {advntr_command}")
+    logger.info("Launching adVNTR genotyping...")
+    logger.debug(f"Command: {advntr_command}")
 
     try:
         # Run the adVNTR command and log output to the specified log file
         if not run_command(advntr_command, log_file, critical=True, cwd=cwd):
-            logging.error("adVNTR genotyping failed. Check the log for details.")
+            logger.error("adVNTR genotyping failed. Check the log for details.")
             return 1
     except sp.CalledProcessError as cpe:
-        logging.error(f"adVNTR genotyping CalledProcessError: {cpe}")
+        logger.error(f"adVNTR genotyping CalledProcessError: {cpe}")
         return 1
     except Exception as e:
-        logging.error(f"adVNTR genotyping encountered an unexpected error: {e}")
+        logger.error(f"adVNTR genotyping encountered an unexpected error: {e}")
         return 1
 
-    logging.info("adVNTR genotyping of MUC1-VNTR completed successfully.")
+    logger.info("adVNTR genotyping of MUC1-VNTR completed successfully.")
     return 0
 
 
@@ -117,7 +114,6 @@ def advntr_processing_del(df):
     Returns:
         pd.DataFrame: Filtered DataFrame containing only those deletions that pass the frameshift filter.
     """
-    logger = logging.getLogger(__name__)
     logger.debug("Starting deletion processing.")
     df1 = df.copy()
     logger.debug("Copied input DataFrame for deletion processing.")
@@ -157,7 +153,6 @@ def advntr_processing_ins(df):
     Returns:
         pd.DataFrame: Filtered DataFrame containing only those insertions that pass the frameshift filter.
     """
-    logger = logging.getLogger(__name__)
     logger.debug("Starting insertion processing.")
     df1 = df.copy()
     logger.debug("Copied input DataFrame for insertion processing.")
@@ -206,7 +201,7 @@ def load_ru_sequences(ru_fasta_path):
                 if current_ru and seq_lines:
                     ru_dict[current_ru] = "".join(seq_lines)
                 header = line[1:]
-                current_ru = header[2:] if header.startswith("RU") else header
+                current_ru = header.removeprefix("RU")
                 seq_lines = []
             else:
                 seq_lines.append(line)
@@ -307,10 +302,10 @@ def process_advntr_output(output_path, output, output_name, config=None):
         config (dict, optional): Main configuration dictionary.
     """
     if not os.path.exists(output_path):
-        logging.error(f"adVNTR output file {output_path} not found!")
+        logger.error(f"adVNTR output file {output_path} not found!")
         return
 
-    logging.info("Processing adVNTR result...")
+    logger.info("Processing adVNTR result...")
 
     with open(output_path) as file:
         content = file.readlines()
@@ -321,12 +316,12 @@ def process_advntr_output(output_path, output, output_name, config=None):
         file.writelines(content)
 
     try:
-        logging.info("Loading data into DataFrame...")
+        logger.info("Loading data into DataFrame...")
         df = pd.read_csv(output_path, sep="\t", comment="#")
-        logging.info(f"Data loaded successfully with shape: {df.shape}")
-        logging.debug(f"First few rows of the DataFrame:\n{df.head()}")
+        logger.info(f"Data loaded successfully with shape: {df.shape}")
+        logger.debug(f"First few rows of the DataFrame:\n{df.head()}")
     except Exception as e:
-        logging.error(f"Error loading data into DataFrame: {e}")
+        logger.error(f"Error loading data into DataFrame: {e}")
         return
 
     # Immediately check if the loaded DataFrame is empty
@@ -343,7 +338,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
         "Flag",
     ]
     if df.empty:
-        logging.warning("VCF file is empty. Generating default negative result.")
+        logger.warning("VCF file is empty. Generating default negative result.")
         advntr_concat = pd.DataFrame(
             [
                 {
@@ -363,22 +358,22 @@ def process_advntr_output(output_path, output, output_name, config=None):
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat = advntr_concat[final_columns]
         advntr_concat.to_csv(output_result_path, sep="\t", index=False)
-        logging.info(f"Processed adVNTR results saved to {output_result_path}")
+        logger.info(f"Processed adVNTR results saved to {output_result_path}")
         cleanup_files(output, output_name)
         return
 
     try:
-        logging.info("Processing deletions...")
+        logger.info("Processing deletions...")
         df_del = advntr_processing_del(df)
 
-        logging.info("Processing insertions...")
+        logger.info("Processing insertions...")
         df_ins = advntr_processing_ins(df)
 
-        logging.info("Concatenating deletions and insertions...")
+        logger.info("Concatenating deletions and insertions...")
         advntr_concat = pd.concat([df_del, df_ins], axis=0)
 
         if advntr_concat.empty:
-            logging.warning("No pathogenic variant found after filtering. Generating default negative result.")
+            logger.warning("No pathogenic variant found after filtering. Generating default negative result.")
             advntr_concat = pd.DataFrame(
                 [
                     {
@@ -404,14 +399,14 @@ def process_advntr_output(output_path, output, output_name, config=None):
                 "Pvalue",
             ]
             advntr_concat = advntr_concat[base_columns]
-            logging.info("Removing duplicates...")
+            logger.info("Removing duplicates...")
             advntr_concat.drop_duplicates(subset=["VID", "Variant", "NumberOfSupportingReads"], inplace=True)
 
             # Perform RU-level annotation if possible
             if config:
                 ru_fasta_path = config.get("reference_data", {}).get("code_adVNTR_RUs")
                 if ru_fasta_path and os.path.exists(ru_fasta_path):
-                    logging.info("Annotating variants with RU-level information.")
+                    logger.info("Annotating variants with RU-level information.")
                     ru_ann, pos_ann, ref_ann, alt_ann = annotate_advntr_variants(
                         advntr_concat["Variant"], ru_fasta_path
                     )
@@ -423,7 +418,7 @@ def process_advntr_output(output_path, output, output_name, config=None):
             # Apply flagging rules if available
             flagging_rules = advntr_config.get("flagging_rules", {})
             if flagging_rules:
-                logging.info("Applying flagging rules to adVNTR output.")
+                logger.info("Applying flagging rules to adVNTR output.")
                 from vntyper.scripts.flagging import add_flags
 
                 advntr_concat = add_flags(advntr_concat, flagging_rules)
@@ -436,9 +431,9 @@ def process_advntr_output(output_path, output, output_name, config=None):
         advntr_concat = advntr_concat[final_columns]
         output_result_path = os.path.join(output, f"{output_name}_adVNTR_result.tsv")
         advntr_concat.to_csv(output_result_path, sep="\t", index=False)
-        logging.info(f"Processed adVNTR results saved to {output_result_path}")
+        logger.info(f"Processed adVNTR results saved to {output_result_path}")
     except Exception as e:
-        logging.error(f"Error during processing of deletions and insertions: {e}")
+        logger.error(f"Error during processing of deletions and insertions: {e}")
         return
 
     cleanup_files(output, output_name)
@@ -452,4 +447,4 @@ def cleanup_files(output, output_name):
         output (str): The output directory.
         output_name (str): The base name for the output files.
     """
-    logging.info("Intermediate files cleaned up.")
+    logger.info("Intermediate files cleaned up.")

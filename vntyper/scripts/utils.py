@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # vntyper/scripts/utils.py
 
 import gzip
@@ -9,6 +8,8 @@ import os
 import shlex
 import subprocess
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def run_command(command, log_file, critical=False, cwd=None):
@@ -27,9 +28,9 @@ def run_command(command, log_file, critical=False, cwd=None):
     Returns:
         bool: True if the command succeeded, False otherwise.
     """
-    logging.debug(f"Running command: {command}")
+    logger.debug(f"Running command: {command}")
     if cwd is not None:
-        logging.debug(f"Working directory: {cwd}")
+        logger.debug(f"Working directory: {cwd}")
 
     with open(log_file, "w") as lf:
         process = subprocess.Popen(
@@ -43,11 +44,11 @@ def run_command(command, log_file, critical=False, cwd=None):
         for line in process.stdout:
             decoded_line = line.decode()
             lf.write(decoded_line)
-            logging.debug(decoded_line.strip())
+            logger.debug(decoded_line.strip())
         process.wait()
 
         if process.returncode != 0:
-            logging.debug(f"Command failed: {command}")
+            logger.debug(f"Command failed: {command}")
             if critical:
                 raise RuntimeError(f"Critical command failed: {command}")
             return False
@@ -62,12 +63,12 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         log_level (int): Logging level (e.g., logging.INFO).
         log_file (str, optional): Path to a log file. If None, logs are printed to console.
     """
-    logger = logging.getLogger()  # Get the root logger
-    logger.setLevel(log_level)  # Set the overall logging level
+    root_logger = logging.getLogger()  # Get the root logger
+    root_logger.setLevel(log_level)  # Set the overall logging level
 
     # Clear existing handlers so we don't duplicate logs
-    if logger.hasHandlers():
-        logger.handlers.clear()
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
 
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -76,13 +77,13 @@ def setup_logging(log_level=logging.INFO, log_file=None):
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+        root_logger.addHandler(file_handler)
 
     # Always attach a console handler at the same requested log level
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    root_logger.addHandler(console_handler)
 
 
 def create_output_directories(base_output_dir):
@@ -108,11 +109,11 @@ def create_output_directories(base_output_dir):
         try:
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
-                logging.info(f"Created directory: {dir_path}")
+                logger.info(f"Created directory: {dir_path}")
             else:
-                logging.info(f"Directory already exists: {dir_path}")
+                logger.info(f"Directory already exists: {dir_path}")
         except Exception as e:
-            logging.error(f"Failed to create directory {dir_path}: {e}")
+            logger.error(f"Failed to create directory {dir_path}: {e}")
             raise
 
     return dirs
@@ -133,7 +134,7 @@ def get_tool_version(command, version_flag):
     try:
         # Split the command properly in case it's a compound command like "mamba run ..."
         full_command = shlex.split(command) + shlex.split(version_flag)
-        result = subprocess.run(full_command, capture_output=True, text=True)
+        result = subprocess.run(full_command, capture_output=True, text=True, check=False)
         output = result.stdout.strip() or result.stderr.strip()
 
         # Parse version from the output based on the command
@@ -166,16 +167,16 @@ def get_tool_version(command, version_flag):
         return "unknown"
 
     except FileNotFoundError:
-        logging.error(f"Command not found: {command}")
+        logger.error(f"Command not found: {command}")
         return "unknown"
     except PermissionError:
-        logging.error(f"Permission denied: {command}")
+        logger.error(f"Permission denied: {command}")
         return "unknown"
     except IndexError as e:
-        logging.error(f"Failed to parse version for {command}: {e}")
+        logger.error(f"Failed to parse version for {command}: {e}")
         return "unknown"
     except Exception as e:
-        logging.error(f"Failed to get version for {command}: {e}")
+        logger.error(f"Failed to get version for {command}: {e}")
         return "unknown"
 
 
@@ -227,16 +228,16 @@ def search(regex: str, df, case=False):
     Returns:
         DataFrame: A DataFrame containing the rows where the pattern was found.
     """
-    logging.debug("Starting regex search in DataFrame.")
+    logger.debug("Starting regex search in DataFrame.")
     try:
         textlikes = df.select_dtypes(include=[object, "object"])
         result_df = df[
             textlikes.apply(lambda column: column.str.contains(regex, regex=True, case=case, na=False)).any(axis=1)
         ]
-        logging.debug("Regex search completed.")
+        logger.debug("Regex search completed.")
         return result_df
     except Exception as e:
-        logging.error(f"Error during regex search: {e}")
+        logger.error(f"Error during regex search: {e}")
         raise
 
 
@@ -255,24 +256,24 @@ def load_config(config_path=None):
         try:
             with open(config_path) as config_file:
                 config = json.load(config_file)
-                logging.info(f"Configuration loaded from {config_path}")
+                logger.info(f"Configuration loaded from {config_path}")
                 return config
         except json.JSONDecodeError as e:
-            logging.error(f"Error decoding JSON from the config file: {e}")
+            logger.error(f"Error decoding JSON from the config file: {e}")
             raise
         except Exception as e:
-            logging.error(f"Unexpected error loading config file {config_path}: {e}")
+            logger.error(f"Unexpected error loading config file {config_path}: {e}")
             raise
     else:
         # No config path provided or file does not exist; use default config from package data
         try:
             with pkg_resources.open_text("vntyper", "config.json") as f:
                 config = json.load(f)
-                logging.info("Loaded default config from package data.")
+                logger.info("Loaded default config from package data.")
                 return config
         except Exception as e:
-            logging.error("Error: Default config file not found in package data.")
-            logging.error(e)
+            logger.error("Error: Default config file not found in package data.")
+            logger.error(e)
             sys.exit(1)
 
 
@@ -294,16 +295,16 @@ def validate_bam_file(file_path, cwd=None):
         ValueError: If any validation check fails.
     """
     if not file_path:
-        logging.error("No alignment file provided.")
+        logger.error("No alignment file provided.")
         raise ValueError("No alignment file provided.")
 
     if not os.path.isfile(file_path):
-        logging.error(f"Alignment file does not exist: {file_path}")
+        logger.error(f"Alignment file does not exist: {file_path}")
         raise ValueError(f"Alignment file does not exist: {file_path}")
 
     # Modified to allow both .bam and .cram extensions
-    if not (file_path.endswith(".bam") or file_path.endswith(".cram")):
-        logging.error(f"Invalid alignment file extension for file: {file_path}. Must be .bam or .cram")
+    if not (file_path.endswith((".bam", ".cram"))):
+        logger.error(f"Invalid alignment file extension for file: {file_path}. Must be .bam or .cram")
         raise ValueError(f"Invalid alignment file extension for file: {file_path}")
 
     # Perform samtools quickcheck
@@ -311,10 +312,10 @@ def validate_bam_file(file_path, cwd=None):
     log_file = f"{file_path}.quickcheck.log"
     success = run_command(command, log_file, critical=True, cwd=cwd)
     if not success:
-        logging.error(f"Alignment file failed quickcheck: {file_path}")
+        logger.error(f"Alignment file failed quickcheck: {file_path}")
         raise ValueError(f"Alignment file failed quickcheck: {file_path}")
 
-    logging.info(f"Alignment file validated successfully: {file_path}")
+    logger.info(f"Alignment file validated successfully: {file_path}")
 
 
 def validate_fastq_file(file_path):
@@ -328,16 +329,16 @@ def validate_fastq_file(file_path):
         ValueError: If any validation check fails.
     """
     if not file_path:
-        logging.error("No FASTQ file provided.")
+        logger.error("No FASTQ file provided.")
         raise ValueError("No FASTQ file provided.")
 
     if not os.path.isfile(file_path):
-        logging.error(f"FASTQ file does not exist: {file_path}")
+        logger.error(f"FASTQ file does not exist: {file_path}")
         raise ValueError(f"FASTQ file does not exist: {file_path}")
 
     valid_extensions = (".fastq", ".fastq.gz", ".fq", ".fq.gz")
     if not file_path.endswith(valid_extensions):
-        logging.error(f"Invalid FASTQ file extension for file: {file_path}")
+        logger.error(f"Invalid FASTQ file extension for file: {file_path}")
         raise ValueError(f"Invalid FASTQ file extension for file: {file_path}")
 
     # Check basic FASTQ formatting by reading the first few lines
@@ -347,9 +348,9 @@ def validate_fastq_file(file_path):
             for _ in range(4):  # Read first 4 lines of the first read
                 line = f.readline()
                 if not line:
-                    logging.error(f"FASTQ file is incomplete or empty: {file_path}")
+                    logger.error(f"FASTQ file is incomplete or empty: {file_path}")
                     raise ValueError(f"FASTQ file is incomplete or empty: {file_path}")
-        logging.info(f"FASTQ file validated successfully: {file_path}")
+        logger.info(f"FASTQ file validated successfully: {file_path}")
     except Exception as e:
-        logging.error(f"Error validating FASTQ file {file_path}: {e}")
+        logger.error(f"Error validating FASTQ file {file_path}: {e}")
         raise

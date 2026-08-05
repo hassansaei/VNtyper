@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 kestrel_genotyping.py
 
@@ -27,7 +26,7 @@ from Saei et al., iScience 26, 107171 (2023).
 import logging
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -55,6 +54,8 @@ from vntyper.scripts.variant_parsing import (
     read_vcf_without_comments,
 )
 from vntyper.version import __version__ as VERSION
+
+logger = logging.getLogger(__name__)
 
 
 def load_kestrel_config(config_path=None):
@@ -164,7 +165,7 @@ def generate_header(reference_vntr, version=VERSION):
     header = [
         "## VNtyper Kestrel result",
         f"## VNtyper Version: {version}",
-        f"## Analysis date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"## Analysis date: {datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
         f"## Reference file: {reference_vntr}",
     ]
     return header
@@ -186,14 +187,14 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     bam_index = bam_file + ".bai"
 
     # Convert SAM to BAM using samtools
-    logging.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
+    logger.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
     run_command(
         f"samtools view -Sb {sam_file} > {bam_file}",
         log_file=os.path.join(output_dir, "samtools_view.log"),
     )
 
     # Index the BAM file
-    logging.info(f"Indexing BAM file: {bam_file}")
+    logger.info(f"Indexing BAM file: {bam_file}")
     run_command(
         f"samtools index {bam_file}",
         log_file=os.path.join(output_dir, "samtools_index.log"),
@@ -202,7 +203,7 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     # Delete the SAM file if indexing succeeds
     if os.path.exists(bam_file) and os.path.exists(bam_index):
         os.remove(sam_file)
-        logging.info(f"Deleted SAM file: {sam_file}")
+        logger.info(f"Deleted SAM file: {sam_file}")
 
     return bam_file
 
@@ -250,8 +251,6 @@ def run_kestrel(
     Returns:
         None
     """
-    global kestrel_config  # Use globally loaded Kestrel config
-
     kestrel_settings = kestrel_config.get("kestrel_settings", {})
     java_path = config["tools"]["java_path"]
     java_memory = kestrel_settings.get("java_memory", "12g")
@@ -286,17 +285,17 @@ def run_kestrel(
 
         # If the final VCF already exists, skip new runs
         if vcf_path.is_file():
-            logging.info("VCF file already exists, skipping Kestrel run...")
+            logger.info("VCF file already exists, skipping Kestrel run...")
             return
         else:
-            logging.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+            logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
 
             # Actually run the Kestrel command
             if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
-                logging.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
+                logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
                 raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
 
-            logging.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
+            logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
             # Now that Kestrel completed, confirm the VCF is present
             if vcf_path.is_file():
@@ -332,7 +331,7 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
     """
     # Check if bcftools is available (defensive programming)
     if shutil.which("bcftools") is None:
-        logging.warning(
+        logger.warning(
             "bcftools not found in PATH. VCF compression skipped. "
             "IGV report will use uncompressed VCF. "
             "For optimal performance, install bcftools: 'conda install bcftools'"
@@ -347,12 +346,12 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
     )
 
     if not success:
-        logging.error(
+        logger.error(
             f"bcftools sort command failed. Check {log_file} for details. IGV report will use uncompressed VCF."
         )
         return False
 
-    logging.info(f"VCF successfully compressed: {output_vcf_gz}")
+    logger.info(f"VCF successfully compressed: {output_vcf_gz}")
     return True
 
 
@@ -381,7 +380,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
         pd.DataFrame or None:
           The final processed DataFrame of variants, or None if no variants found.
     """
-    logging.info("Processing Kestrel VCF results...")
+    logger.info("Processing Kestrel VCF results...")
 
     # Step 1) Filter the original VCF to extract INDELs
     indel_vcf = os.path.join(output_dir, "output_indel.vcf")
@@ -416,7 +415,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
 
     # If both are empty, produce an empty result file
     if vcf_insertion.empty and vcf_deletion.empty:
-        logging.warning("No insertion/deletion variants found. Skipping.")
+        logger.warning("No insertion/deletion variants found. Skipping.")
         output_empty_result(output_dir, header)
         return None
 
@@ -433,7 +432,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     combined_df = combined_df.sort_values(by=sort_columns).reset_index(drop=True)
 
     if combined_df.empty:
-        logging.warning("Empty combined DataFrame of insertions+deletions.")
+        logger.warning("Empty combined DataFrame of insertions+deletions.")
         output_empty_result(output_dir, header)
         return None
 
@@ -444,7 +443,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
     processed_df = process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
 
     if processed_df.empty:
-        logging.warning("Final processed DataFrame is empty. Writing empty result.")
+        logger.warning("Final processed DataFrame is empty. Writing empty result.")
         output_empty_result(output_dir, header)
         return None
 
@@ -467,7 +466,7 @@ def process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config,
         f.write("\n".join(header) + "\n")
         processed_df.to_csv(f, sep="\t", index=False)
 
-    logging.info("Kestrel VCF processing completed.")
+    logger.info("Kestrel VCF processing completed.")
     return processed_df
 
 
@@ -501,7 +500,7 @@ def output_empty_result(output_dir, header):
         f.write("\n".join(header) + "\n")
         empty_df.to_csv(f, sep="\t", index=False)
 
-    logging.info(f"Empty result file with placeholder saved at {final_output_path}")
+    logger.info(f"Empty result file with placeholder saved at {final_output_path}")
 
 
 def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config):
@@ -586,13 +585,13 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
     # (7) Final Filter
     df = filter_final_dataframe(df, output_dir)
     if df.empty:
-        logging.info("All rows failed one or more filter criteria. Returning empty.")
+        logger.info("All rows failed one or more filter criteria. Returning empty.")
         return df
 
     # (8) Now generate the BED file from the fully filtered result
     bed_file_path = generate_bed_file(df, output_dir)
     if bed_file_path:
-        logging.info(f"BED file created at: {bed_file_path}")
+        logger.info(f"BED file created at: {bed_file_path}")
 
     return df
 
@@ -612,11 +611,11 @@ def generate_bed_file(df, output_dir):
     """
     # We only generate a BED if columns 'Motif_fasta' & 'POS_fasta' exist
     if "Motif_fasta" not in df.columns or "POS_fasta" not in df.columns:
-        logging.warning("Missing 'Motif_fasta' or 'POS_fasta' in DataFrame. Skipping BED file generation.")
+        logger.warning("Missing 'Motif_fasta' or 'POS_fasta' in DataFrame. Skipping BED file generation.")
         return None
 
     if df.empty:
-        logging.warning("DataFrame is empty. No variants to generate a BED file.")
+        logger.warning("DataFrame is empty. No variants to generate a BED file.")
         return None
 
     bed_file_path = os.path.join(output_dir, "output.bed")
@@ -628,7 +627,7 @@ def generate_bed_file(df, output_dir):
             pos = row["POS_fasta"]
             bed_file.write(f"{motif_fasta}\t{pos}\t{pos + 1}\n")
 
-    logging.info(f"BED file generated at: {bed_file_path}")
+    logger.info(f"BED file generated at: {bed_file_path}")
     return bed_file_path
 
 
@@ -664,7 +663,7 @@ def add_haplo_count(df: pd.DataFrame) -> pd.DataFrame:
     if all(col in df.columns for col in ["POS", "REF", "ALT"]):
         df["haplo_count"] = df.groupby(["POS", "REF", "ALT"])["ALT"].transform("size")
     else:
-        logging.warning("Missing POS/REF/ALT columns for haplo_count calculation")
+        logger.warning("Missing POS/REF/ALT columns for haplo_count calculation")
         df["haplo_count"] = 0
 
     return df
@@ -756,7 +755,7 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
     # Keep only the best variant
     result = df.head(1).drop(columns=["_priority", "_is_unflagged"])
 
-    logging.info(
+    logger.info(
         "Selected best variant: Confidence=%s, haplo_count=%d, Depth_Score=%.5f, POS=%d",
         result.iloc[0]["Confidence"],
         int(result.iloc[0]["haplo_count"]),
@@ -789,12 +788,12 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         pd.DataFrame: A copy of `df` containing only rows that pass
             all available filter columns.
     """
-    logging.info("Starting final filter of DataFrame with %d rows...", len(df))
+    logger.info("Starting final filter of DataFrame with %d rows...", len(df))
 
     # Write the unfiltered DataFrame to 'kestrel_pre_result.tsv' in output_dir
     pre_result_path = os.path.join(output_dir, "kestrel_pre_result.tsv")
     df.to_csv(pre_result_path, sep="\t", index=False)
-    logging.info("Wrote pre-filter DataFrame to %s", pre_result_path)
+    logger.info("Wrote pre-filter DataFrame to %s", pre_result_path)
 
     # Columns we will require to be True if they exist
     filter_cols = [
@@ -812,25 +811,25 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
             before_count = final_mask.sum()
             final_mask &= df[col]
             after_count = final_mask.sum()
-            logging.info(
+            logger.info(
                 "Filter column '%s' exists; %d -> %d rows remain after requiring True.",
                 col,
                 before_count,
                 after_count,
             )
         else:
-            logging.info("Filter column '%s' not found; skipping.", col)
+            logger.info("Filter column '%s' not found; skipping.", col)
 
     filtered_df = df[final_mask].copy()
-    logging.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
+    logger.info("Final DataFrame has %d rows after all filters.", len(filtered_df))
 
     # Select single best variant using multi-key priority sorting
     if len(filtered_df) > 1:
         filtered_df = select_single_best_variant(filtered_df)
-        logging.info("Selected 1 best variant from %d candidates using priority sorting.", len(df[final_mask]))
+        logger.info("Selected 1 best variant from %d candidates using priority sorting.", len(df[final_mask]))
     elif len(filtered_df) == 1:
-        logging.info("Only 1 variant passed all filters (no selection needed).")
+        logger.info("Only 1 variant passed all filters (no selection needed).")
     else:
-        logging.info("No variants passed all filters.")
+        logger.info("No variants passed all filters.")
 
     return filtered_df

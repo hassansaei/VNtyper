@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 chromosome_utils.py
 
@@ -14,9 +13,12 @@ Functions:
     validate_chromosome_name: Validate that a chromosome name follows expected patterns
 """
 
+from __future__ import annotations
+
 import logging
 import re
-from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Chr1 length constants for assembly detection (Phase 1 - Issue #139 fix)
 CHR1_LENGTHS = {
@@ -27,7 +29,7 @@ CHR1_LENGTHS = {
 }
 
 
-def detect_assembly_from_chr1_length(contigs: list[dict]) -> Optional[str]:
+def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
     """
     Detect reference assembly from chr1 length - most reliable method.
 
@@ -65,30 +67,30 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> Optional[str]:
         - plan/02_active/2025-10-27_assembly-detection-fix/SENIOR_DEVELOPER_REVIEW.md
     """
     if not contigs:
-        logging.debug("Empty contigs list provided to detect_assembly_from_chr1_length")
+        logger.debug("Empty contigs list provided to detect_assembly_from_chr1_length")
         return None
 
     # Find chr1 (handles both UCSC "chr1" and ENSEMBL "1" naming, case-insensitive)
     chr1 = next((c for c in contigs if c.get("name", "").lower() in ["chr1", "1"]), None)
 
     if not chr1:
-        logging.debug("Chr1 not found in contigs (tried 'chr1' and '1')")
+        logger.debug("Chr1 not found in contigs (tried 'chr1' and '1')")
         return None
 
     chr1_length = chr1.get("length")
     if chr1_length is None:
-        logging.warning("Chr1 found but length is None")
+        logger.warning("Chr1 found but length is None")
         return None
 
-    logging.debug(f"Chr1 length: {chr1_length:,} bp")
+    logger.debug(f"Chr1 length: {chr1_length:,} bp")
 
     # Check against known assemblies (GRCh* prioritized over hg* aliases)
     for assembly in ["GRCh38", "hg38", "GRCh37", "hg19"]:
         if chr1_length == CHR1_LENGTHS[assembly]:
-            logging.info(f"Assembly detected from chr1 length: {assembly} ({chr1_length:,} bp)")
+            logger.info(f"Assembly detected from chr1 length: {assembly} ({chr1_length:,} bp)")
             return assembly
 
-    logging.warning(
+    logger.warning(
         f"Unknown chr1 length: {chr1_length:,} bp. "
         f"Expected GRCh38/hg38: {CHR1_LENGTHS['GRCh38']:,} bp or "
         f"GRCh37/hg19: {CHR1_LENGTHS['GRCh37']:,} bp"
@@ -120,7 +122,7 @@ def detect_naming_convention(contig_names: list[str]) -> str:
         'ncbi'
     """
     if not contig_names:
-        logging.warning("Empty contig list provided to detect_naming_convention")
+        logger.warning("Empty contig list provided to detect_naming_convention")
         return "unknown"
 
     # Count naming patterns
@@ -144,16 +146,16 @@ def detect_naming_convention(contig_names: list[str]) -> str:
     threshold = 0.5  # At least 50% of contigs should match the pattern
 
     if ucsc_count / total >= threshold:
-        logging.debug(f"Detected UCSC naming convention ({ucsc_count}/{total} contigs)")
+        logger.debug(f"Detected UCSC naming convention ({ucsc_count}/{total} contigs)")
         return "ucsc"
     elif ncbi_count / total >= threshold:
-        logging.debug(f"Detected NCBI naming convention ({ncbi_count}/{total} contigs)")
+        logger.debug(f"Detected NCBI naming convention ({ncbi_count}/{total} contigs)")
         return "ncbi"
     elif ensembl_count / total >= threshold:
-        logging.debug(f"Detected ENSEMBL naming convention ({ensembl_count}/{total} contigs)")
+        logger.debug(f"Detected ENSEMBL naming convention ({ensembl_count}/{total} contigs)")
         return "ensembl"
     else:
-        logging.warning(
+        logger.warning(
             f"Could not determine naming convention. UCSC: {ucsc_count}, ENSEMBL: {ensembl_count}, NCBI: {ncbi_count}"
         )
         return "unknown"
@@ -196,7 +198,7 @@ def get_chromosome_name_from_bam(
     try:
         header = extract_bam_header(bam_file, config)
     except Exception as e:
-        logging.error(f"Failed to extract BAM header from {bam_file}: {e}")
+        logger.error(f"Failed to extract BAM header from {bam_file}: {e}")
         raise ValueError(f"Cannot read BAM header: {e}") from e
 
     # Parse contigs
@@ -205,11 +207,11 @@ def get_chromosome_name_from_bam(
         raise ValueError(f"No contigs found in BAM header for {bam_file}")
 
     contig_names = [c["name"] for c in contigs]
-    logging.debug(f"Found {len(contig_names)} contigs in BAM header. First 5: {contig_names[:5]}")
+    logger.debug(f"Found {len(contig_names)} contigs in BAM header. First 5: {contig_names[:5]}")
 
     # Detect naming convention
     convention = detect_naming_convention(contig_names)
-    logging.debug(f"Detected naming convention: {convention}")
+    logger.debug(f"Detected naming convention: {convention}")
 
     # Build expected chromosome name based on convention
     chr_name = _build_chromosome_name(chromosome_number, convention, reference_assembly, config)
@@ -220,7 +222,7 @@ def get_chromosome_name_from_bam(
         chr_name_lower = chr_name.lower()
         for name in contig_names:
             if name.lower() == chr_name_lower:
-                logging.debug(f"Found case-insensitive match: {name} for {chr_name}")
+                logger.debug(f"Found case-insensitive match: {name} for {chr_name}")
                 return name
 
         # Chromosome not found - provide helpful error
@@ -230,7 +232,7 @@ def get_chromosome_name_from_bam(
             f"Available contigs: {', '.join(contig_names[:10])}..."
         )
 
-    logging.debug(f"Resolved chromosome {chromosome_number} to '{chr_name}'")
+    logger.debug(f"Resolved chromosome {chromosome_number} to '{chr_name}'")
     return chr_name
 
 
@@ -281,7 +283,7 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
         try:
             coord_assembly = get_coordinate_system(reference_assembly)
         except ValueError:
-            logging.warning(f"Unknown assembly '{reference_assembly}', defaulting to GRCh37")
+            logger.warning(f"Unknown assembly '{reference_assembly}', defaulting to GRCh37")
             coord_assembly = "GRCh37"
 
         # Get NCBI accession from config
@@ -297,7 +299,7 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
 
     else:
         # Unknown convention - return ENSEMBL simple numeric format as fallback
-        logging.warning(f"Unknown naming convention '{convention}', using ENSEMBL simple numeric format")
+        logger.warning(f"Unknown naming convention '{convention}', using ENSEMBL simple numeric format")
         return chr_suffix if chromosome_number >= 23 else str(chromosome_number)
 
 
@@ -429,5 +431,5 @@ def validate_chromosome_name(chromosome_name: str) -> bool:
         if re.match(pattern, chromosome_name, re.IGNORECASE):
             return True
 
-    logging.debug(f"Chromosome name '{chromosome_name}' did not match any pattern")
+    logger.debug(f"Chromosome name '{chromosome_name}' did not match any pattern")
     return False

@@ -7,6 +7,8 @@ import requests
 
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
+logger = logging.getLogger(__name__)
+
 
 def subset_bam(bam_path, region, output_bam):
     """
@@ -21,15 +23,15 @@ def subset_bam(bam_path, region, output_bam):
         RuntimeError: If subset or indexing fails.
     """
     cmd = ["samtools", "view", "-P", "-b", bam_path, region, "-o", output_bam]
-    logging.info(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    logger.info(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Failed to subset BAM: {result.stderr}")
 
     # Index the subset bam
     cmd_index = ["samtools", "index", output_bam]
-    logging.info(f"Running: {' '.join(cmd_index)}")
-    result_idx = subprocess.run(cmd_index, capture_output=True, text=True)
+    logger.info(f"Running: {' '.join(cmd_index)}")
+    result_idx = subprocess.run(cmd_index, capture_output=True, text=True, check=False)
     if result_idx.returncode != 0:
         raise RuntimeError(f"Failed to index subset BAM: {result_idx.stderr}")
 
@@ -78,7 +80,7 @@ def submit_job(
         data["passphrase"] = passphrase
 
     submit_url = f"{api_url}/run-job/"
-    logging.info(f"Submitting job to {submit_url}")
+    logger.info(f"Submitting job to {submit_url}")
 
     with open(subset_bam, "rb") as bam_file:
         files = {"bam_file": ("subset.bam", bam_file, "application/octet-stream")}
@@ -110,7 +112,7 @@ def poll_job_status(api_url, job_id):
     """
     status_url = f"{api_url}/job-status/{job_id}/"
     while True:
-        logging.info(f"Checking job status for {job_id}")
+        logger.info(f"Checking job status for {job_id}")
         resp = requests.get(status_url, timeout=30)
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to get job status. Status: {resp.status_code}, Detail: {resp.text}")
@@ -118,7 +120,7 @@ def poll_job_status(api_url, job_id):
         status = data.get("status", "")
         if status in ["completed", "failed"]:
             return status
-        logging.info(f"Job {job_id} status: {status}, waiting...")
+        logger.info(f"Job {job_id} status: {status}, waiting...")
         time.sleep(10)
 
 
@@ -135,14 +137,14 @@ def download_results(api_url, job_id, output_dir):
         RuntimeError: If download fails.
     """
     dl_url = f"{api_url}/download/{job_id}/"
-    logging.info(f"Downloading results from {dl_url}")
+    logger.info(f"Downloading results from {dl_url}")
     resp = requests.get(dl_url, timeout=60)
     if resp.status_code != 200:
         raise RuntimeError(f"Failed to download results. Status: {resp.status_code}, Detail: {resp.text}")
     zip_path = output_dir / f"{job_id}.zip"
     with open(zip_path, "wb") as f:
         f.write(resp.content)
-    logging.info(f"Results saved to {zip_path}")
+    logger.info(f"Results saved to {zip_path}")
 
 
 def run_online_mode(
@@ -194,9 +196,9 @@ def run_online_mode(
         status = poll_job_status(api_url, job_id)
         if status == "completed":
             download_results(api_url, job_id, output_path)
-            logging.info("Job completed successfully.")
+            logger.info("Job completed successfully.")
         else:
-            logging.error("Job failed or status unknown.")
+            logger.error("Job failed or status unknown.")
         return
 
     # Fresh submission
@@ -216,7 +218,7 @@ def run_online_mode(
     )
     job_id = resp.get("job_id")
     if not job_id:
-        logging.error("No job_id returned from API.")
+        logger.error("No job_id returned from API.")
         return
 
     with open(job_id_file, "w") as f:
@@ -226,6 +228,6 @@ def run_online_mode(
     status = poll_job_status(api_url, job_id)
     if status == "completed":
         download_results(api_url, job_id, output_path)
-        logging.info("Job completed successfully.")
+        logger.info("Job completed successfully.")
     else:
-        logging.error("Job failed or status unknown.")
+        logger.error("Job failed or status unknown.")

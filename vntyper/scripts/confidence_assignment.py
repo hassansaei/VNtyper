@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 confidence_assignment.py
 
@@ -27,6 +26,8 @@ import logging
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Confidence label for variants that fail depth-based filtering.
 # Used as the default and for Depth_Score below the configured low_threshold.
@@ -67,11 +68,11 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
               - 'Confidence' (str, e.g., 'Low_Precision', 'High_Precision', etc.)
               - 'depth_confidence_pass' (bool; True if Confidence != 'Negative')
     """
-    logging.debug("Entering calculate_depth_score_and_assign_confidence")
-    logging.debug(f"Initial DataFrame shape: {df.shape}")
+    logger.debug("Entering calculate_depth_score_and_assign_confidence")
+    logger.debug(f"Initial DataFrame shape: {df.shape}")
 
     if df.empty:
-        logging.debug("DataFrame is empty. Exiting function without changes.")
+        logger.debug("DataFrame is empty. Exiting function without changes.")
         return df
 
     # Extract relevant config subdict
@@ -155,6 +156,6 @@ def calculate_depth_score_and_assign_confidence(df: pd.DataFrame, kestrel_config
     # Step 4: Mark pass/fail: Passing means Confidence != NEGATIVE_LABEL
     df["depth_confidence_pass"] = df["Confidence"] != NEGATIVE_LABEL
 
-    logging.debug("Exiting calculate_depth_score_and_assign_confidence")
-    logging.debug(f"Final DataFrame shape: {df.shape}")
+    logger.debug("Exiting calculate_depth_score_and_assign_confidence")
+    logger.debug(f"Final DataFrame shape: {df.shape}")
     return df

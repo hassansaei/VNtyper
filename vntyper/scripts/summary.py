@@ -16,7 +16,7 @@ so that all available data is expanded into individual columns.
 import csv
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def start_summary(version=None, input_files=None):
@@ -31,7 +31,7 @@ def start_summary(version=None, input_files=None):
         dict: A summary dictionary with pipeline start timestamp, version, input files, and an empty steps list.
     """
     return {
-        "pipeline_start": datetime.utcnow().isoformat(),
+        "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
         "steps": [],
@@ -45,7 +45,7 @@ def end_summary(summary):
     Args:
         summary (dict): The summary dictionary to update.
     """
-    summary["pipeline_end"] = datetime.utcnow().isoformat()
+    summary["pipeline_end"] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def md5sum(file_path):
@@ -96,7 +96,7 @@ def parse_tsv(file_path):
                     header = line.split("\t")
                     continue
                 row_values = line.split("\t")
-                row_dict = {key: value for key, value in zip(header, row_values)}
+                row_dict = dict(zip(header, row_values))
                 data.append(row_dict)
     except Exception as e:
         comments.append(f"Error parsing TSV file: {e}")
@@ -132,7 +132,7 @@ def parse_csv(file_path):
                 if header is None:
                     header = row
                     continue
-                row_dict = {key: value for key, value in zip(header, row)}
+                row_dict = dict(zip(header, row))
                 data.append(row_dict)
     except Exception as e:
         comments.append(f"Error parsing CSV file: {e}")
@@ -283,7 +283,7 @@ def convert_summary_to_csv(summary, output_csv_path):
     for record in flattened_steps:
         all_keys.update(record.keys())
     # Use a sorted list of keys for consistent column order
-    all_keys = sorted(list(all_keys))
+    all_keys = sorted(all_keys)
 
     with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=all_keys)
@@ -308,7 +308,7 @@ def convert_summary_to_tsv(summary, output_tsv_path):
     all_keys = set()
     for record in flattened_steps:
         all_keys.update(record.keys())
-    all_keys = sorted(list(all_keys))
+    all_keys = sorted(all_keys)
 
     with open(output_tsv_path, "w", newline="", encoding="utf-8") as tsvfile:
         writer = csv.DictWriter(tsvfile, fieldnames=all_keys, delimiter="\t")
@@ -327,9 +327,9 @@ if __name__ == "__main__":
     result_file = "example_results.tsv"  # Path to your result file
     file_type = "tsv"  # Could be "tsv", "csv", or "json"
     command = "run_example --option value"
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc).replace(tzinfo=None)
     # Simulate some processing delay
-    end_time = datetime.utcnow()
+    end_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Record the step (this will calculate the MD5 and parse the file)
     record_step(

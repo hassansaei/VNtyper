@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 vntyper/scripts/cohort_summary.py
 
@@ -18,7 +17,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib
@@ -27,6 +26,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
+
+logger = logging.getLogger(__name__)
 
 matplotlib.use("Agg")
 
@@ -50,7 +51,7 @@ def encode_image_to_base64(image_path):
             encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
         return f"data:image/png;base64,{encoded_string}"
     except Exception as e:
-        logging.error(f"Failed to encode image {image_path}: {e}")
+        logger.error(f"Failed to encode image {image_path}: {e}")
         return ""
 
 
@@ -84,7 +85,7 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
         Base64-encoded image string for static charts or HTML string for interactive charts.
     """
     if sum(values) == 0:
-        logging.warning(f"No data to plot for donut chart '{title}'.")
+        logger.warning(f"No data to plot for donut chart '{title}'.")
         return ""
     if interactive:
         fig = go.Figure(
@@ -92,7 +93,7 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
                 labels=labels,
                 values=values,
                 hole=0.6,
-                marker=dict(colors=colors, line=dict(color="black", width=2)),
+                marker={"colors": colors, "line": {"color": "black", "width": 2}},
                 textinfo="none",
             )
         )
@@ -104,9 +105,9 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
                 "xanchor": "center",
                 "yanchor": "top",
             },
-            annotations=[dict(text=f"<b>{total}</b>", x=0.5, y=0.5, font_size=40, showarrow=False)],
+            annotations=[{"text": f"<b>{total}</b>", "x": 0.5, "y": 0.5, "font_size": 40, "showarrow": False}],
             showlegend=False,
-            margin=dict(t=50, b=50, l=50, r=50),
+            margin={"t": 50, "b": 50, "l": 50, "r": 50},
             height=500,
             width=500,
         )
@@ -127,9 +128,9 @@ def generate_donut_chart(values, labels, total, title, colors, plot_path=None, i
             if plot_path:
                 plt.savefig(plot_path)
             else:
-                logging.warning("No plot_path provided for static donut chart, chart not saved.")
+                logger.warning("No plot_path provided for static donut chart, chart not saved.")
         except Exception as e:
-            logging.error(f"Error generating donut chart: {e}")
+            logger.error(f"Error generating donut chart: {e}")
         plt.close()
         if plot_path and os.path.exists(plot_path):
             return encode_image_to_base64(plot_path)
@@ -150,10 +151,10 @@ def load_report_config():
     try:
         with open(config_path) as f:
             report_config = json.load(f)
-        logging.info("Loaded report config from %s", config_path)
+        logger.info("Loaded report config from %s", config_path)
         return report_config
     except Exception as e:
-        logging.error("Failed to load report config: %s", e)
+        logger.error("Failed to load report config: %s", e)
         return {}
 
 
@@ -174,22 +175,22 @@ def compute_algorithm_result(df, logic_config):
         str: The computed algorithm result (e.g., 'High_Precision', 'positive', etc.).
     """
     if df.empty:
-        logging.debug("DataFrame is empty; returning default result.")
+        logger.debug("DataFrame is empty; returning default result.")
         return logic_config.get("default", "none")
     row = df.iloc[0]
-    logging.debug("Data row for evaluation: %s", row.to_dict())
-    logging.debug("Logic configuration: %s", logic_config)
+    logger.debug("Data row for evaluation: %s", row.to_dict())
+    logger.debug("Logic configuration: %s", logic_config)
     for idx, rule in enumerate(logic_config.get("rules", [])):
-        logging.debug("Evaluating rule %s: %s", idx, rule)
+        logger.debug("Evaluating rule %s: %s", idx, rule)
         conditions = rule.get("conditions", {})
         rule_matches = True
         for col, expected in conditions.items():
             if col not in row:
-                logging.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
+                logger.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
                 rule_matches = False
                 break
             actual = str(row.get(col, "")).strip()
-            logging.debug(
+            logger.debug(
                 "Rule %s, column '%s': actual='%s', expected='%s'",
                 idx,
                 col,
@@ -201,7 +202,7 @@ def compute_algorithm_result(df, logic_config):
                 exp_val = expected.get("value")
                 if op == "==":
                     if actual != str(exp_val).strip():
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s == %s' not met (actual='%s').",
                             idx,
                             col,
@@ -212,7 +213,7 @@ def compute_algorithm_result(df, logic_config):
                         break
                 elif op == "!=":
                     if actual == str(exp_val).strip():
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s != %s' not met (actual='%s').",
                             idx,
                             col,
@@ -225,7 +226,7 @@ def compute_algorithm_result(df, logic_config):
                     if not isinstance(exp_val, list):
                         exp_val = [exp_val]
                     if actual not in exp_val:
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s in %s' not met (actual='%s').",
                             idx,
                             col,
@@ -238,7 +239,7 @@ def compute_algorithm_result(df, logic_config):
                     if not isinstance(exp_val, list):
                         exp_val = [exp_val]
                     if actual in exp_val:
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s not in %s' not met (actual='%s').",
                             idx,
                             col,
@@ -248,7 +249,7 @@ def compute_algorithm_result(df, logic_config):
                         rule_matches = False
                         break
                 else:
-                    logging.debug(
+                    logger.debug(
                         "Rule %s: Unsupported operator '%s' for column '%s'.",
                         idx,
                         op,
@@ -259,7 +260,7 @@ def compute_algorithm_result(df, logic_config):
             else:
                 if isinstance(expected, list):
                     if actual not in expected:
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s in %s' not met (actual='%s').",
                             idx,
                             col,
@@ -270,7 +271,7 @@ def compute_algorithm_result(df, logic_config):
                         break
                 else:
                     if actual != str(expected):
-                        logging.debug(
+                        logger.debug(
                             "Rule %s: Condition '%s == %s' not met (actual='%s').",
                             idx,
                             col,
@@ -281,11 +282,11 @@ def compute_algorithm_result(df, logic_config):
                         break
         if rule_matches:
             result = rule.get("result")
-            logging.debug("Rule %s PASSED; returning result: %s", idx, result)
+            logger.debug("Rule %s PASSED; returning result: %s", idx, result)
             return result
         else:
-            logging.debug("Rule %s did not pass.", idx)
-    logging.debug("No rule matched; returning default result.")
+            logger.debug("Rule %s did not pass.", idx)
+    logger.debug("No rule matched; returning default result.")
     return logic_config.get("default", "none")
 
 
@@ -363,7 +364,7 @@ def load_pipeline_summary_for_sample(sample_dir):
     sample_dir = Path(sample_dir)
     summary_path = sample_dir / "pipeline_summary.json"
     if not summary_path.exists():
-        logging.warning(f"Pipeline summary file not found in {sample_dir}")
+        logger.warning(f"Pipeline summary file not found in {sample_dir}")
         return [], [], {}
     try:
         with open(summary_path) as f:
@@ -407,7 +408,7 @@ def load_pipeline_summary_for_sample(sample_dir):
                     additional_stats["coverage"] = data_list[0]
         return kestrel_data, advntr_data, additional_stats
     except Exception as e:
-        logging.error(f"Error loading pipeline summary from {sample_dir}: {e}")
+        logger.error(f"Error loading pipeline summary from {sample_dir}: {e}")
         return [], [], {}
 
 
@@ -599,11 +600,11 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     try:
         template = env.get_template("cohort_summary_template.html")
     except Exception as e:
-        logging.error(f"Failed to load Jinja2 template: {e}")
+        logger.error(f"Failed to load Jinja2 template: {e}")
         raise
 
     context = {
-        "report_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "kestrel_positive": kestrel_html,
         "advntr_positive": advntr_html,
         "kestrel_plot_base64": kestrel_plot_base64,
@@ -617,16 +618,16 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     try:
         rendered_html = template.render(context)
     except Exception as e:
-        logging.error(f"Failed to render the cohort summary template: {e}")
+        logger.error(f"Failed to render the cohort summary template: {e}")
         raise
 
     report_file_path = Path(output_dir) / summary_file
     try:
         with open(report_file_path, "w") as f:
             f.write(rendered_html)
-        logging.info(f"Cohort summary report generated and saved to {report_file_path}")
+        logger.info(f"Cohort summary report generated and saved to {report_file_path}")
     except Exception as e:
-        logging.error(f"Failed to write the cohort summary report: {e}")
+        logger.error(f"Failed to write the cohort summary report: {e}")
         raise
 
 
@@ -684,52 +685,52 @@ def aggregate_cohort(
     for path_str in input_paths:
         path = Path(path_str)
         if not path.exists():
-            logging.warning(f"Input path does not exist and will be skipped: {path}")
+            logger.warning(f"Input path does not exist and will be skipped: {path}")
             continue
         if path.is_dir():
             if (path / "pipeline_summary.json").exists():
-                logging.info(f"Found pipeline_summary.json in {path}")
+                logger.info(f"Found pipeline_summary.json in {path}")
                 processed_dirs.add(path)
             else:
                 found = False
                 for summary_file_path in path.rglob("pipeline_summary.json"):
                     sample_dir = summary_file_path.parent
-                    logging.info(f"Found pipeline_summary.json in {sample_dir}")
+                    logger.info(f"Found pipeline_summary.json in {sample_dir}")
                     processed_dirs.add(sample_dir)
                     found = True
                 if not found:
-                    logging.warning(f"No pipeline_summary.json found in directory {path}")
+                    logger.warning(f"No pipeline_summary.json found in directory {path}")
         elif zipfile.is_zipfile(path):
-            logging.info(f"Extracting zip file: {path}")
+            logger.info(f"Extracting zip file: {path}")
             temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
             try:
                 with zipfile.ZipFile(path, "r") as zip_ref:
                     zip_ref.extractall(temp_dir)
                 temp_path = Path(temp_dir)
                 if (temp_path / "pipeline_summary.json").exists():
-                    logging.info(f"Found pipeline_summary.json in {temp_path}")
+                    logger.info(f"Found pipeline_summary.json in {temp_path}")
                     processed_dirs.add(temp_path)
                 else:
                     found = False
                     for summary_file_path in temp_path.rglob("pipeline_summary.json"):
                         sample_dir = summary_file_path.parent
-                        logging.info(f"Found pipeline_summary.json in {sample_dir}")
+                        logger.info(f"Found pipeline_summary.json in {sample_dir}")
                         processed_dirs.add(sample_dir)
                         found = True
                     if not found:
-                        logging.warning(f"No pipeline_summary.json found in extracted zip file: {path}")
+                        logger.warning(f"No pipeline_summary.json found in extracted zip file: {path}")
                 temp_dirs.append(temp_dir)
             except zipfile.BadZipFile as e:
-                logging.error(f"Bad zip file {path}: {e}")
+                logger.error(f"Bad zip file {path}: {e}")
                 shutil.rmtree(temp_dir)
             except Exception as e:
-                logging.error(f"Error extracting zip file {path}: {e}")
+                logger.error(f"Error extracting zip file {path}: {e}")
                 shutil.rmtree(temp_dir)
         else:
-            logging.warning(f"Unsupported file type (not a directory or zip): {path}")
+            logger.warning(f"Unsupported file type (not a directory or zip): {path}")
 
     if not processed_dirs:
-        logging.error("No valid input directories or zip files found for cohort aggregation.")
+        logger.error("No valid input directories or zip files found for cohort aggregation.")
         return
 
     # If pseudonymization is requested, build a mapping from original to pseudonym names.
@@ -747,20 +748,20 @@ def aggregate_cohort(
         else:
             pseudonym = original_sample
 
-        logging.info(f"Processing sample directory: {sample_dir} as {pseudonym}")
+        logger.info(f"Processing sample directory: {sample_dir} as {pseudonym}")
         k_data, a_data, add_stats = load_pipeline_summary_for_sample(sample_dir)
         if k_data:
             for entry in k_data:
                 entry["Sample"] = pseudonym
             kestrel_list.extend(k_data)
         else:
-            logging.warning(f"No Kestrel data found in pipeline summary for sample {original_sample}.")
+            logger.warning(f"No Kestrel data found in pipeline summary for sample {original_sample}.")
         if a_data:
             for entry in a_data:
                 entry["Sample"] = pseudonym
             advntr_list.extend(a_data)
         else:
-            logging.warning(f"No adVNTR data found in pipeline summary for sample {original_sample}.")
+            logger.warning(f"No adVNTR data found in pipeline summary for sample {original_sample}.")
         if add_stats:
             add_stats["Sample"] = pseudonym
             additional_stats_list.append(add_stats)
@@ -768,12 +769,12 @@ def aggregate_cohort(
     if kestrel_list:
         kestrel_df = pd.DataFrame(kestrel_list)
     else:
-        logging.warning("No Kestrel data found in any sample.")
+        logger.warning("No Kestrel data found in any sample.")
         kestrel_df = pd.DataFrame()
     if advntr_list:
         advntr_df = pd.DataFrame(advntr_list)
     else:
-        logging.warning("No adVNTR data found in any sample.")
+        logger.warning("No adVNTR data found in any sample.")
         advntr_df = pd.DataFrame()
 
     # Create additional statistics DataFrame and HTML table if any stats were gathered.
@@ -808,9 +809,9 @@ def aggregate_cohort(
     for temp_dir in temp_dirs:
         try:
             shutil.rmtree(temp_dir)
-            logging.debug(f"Cleaned up temporary directory: {temp_dir}")
+            logger.debug(f"Cleaned up temporary directory: {temp_dir}")
         except Exception as e:
-            logging.error(f"Failed to remove temporary directory {temp_dir}: {e}")
+            logger.error(f"Failed to remove temporary directory {temp_dir}: {e}")
 
     # Generate additional machine-readable cohort summaries if requested
     if additional_formats:
@@ -819,28 +820,28 @@ def aggregate_cohort(
             if "csv" in formats:
                 csv_path = Path(output_dir) / "cohort_kestrel.csv"
                 kestrel_df.to_csv(csv_path, index=False)
-                logging.info(f"Cohort Kestrel CSV written to: {csv_path}")
+                logger.info(f"Cohort Kestrel CSV written to: {csv_path}")
             if "tsv" in formats:
                 tsv_path = Path(output_dir) / "cohort_kestrel.tsv"
                 kestrel_df.to_csv(tsv_path, sep="\t", index=False)
-                logging.info(f"Cohort Kestrel TSV written to: {tsv_path}")
+                logger.info(f"Cohort Kestrel TSV written to: {tsv_path}")
             if "json" in formats:
                 json_path = Path(output_dir) / "cohort_kestrel.json"
                 kestrel_df.to_json(json_path, orient="records", indent=4)
-                logging.info(f"Cohort Kestrel JSON written to: {json_path}")
+                logger.info(f"Cohort Kestrel JSON written to: {json_path}")
         if not advntr_df.empty:
             if "csv" in formats:
                 csv_path = Path(output_dir) / "cohort_advntr.csv"
                 advntr_df.to_csv(csv_path, index=False)
-                logging.info(f"Cohort adVNTR CSV written to: {csv_path}")
+                logger.info(f"Cohort adVNTR CSV written to: {csv_path}")
             if "tsv" in formats:
                 tsv_path = Path(output_dir) / "cohort_advntr.tsv"
                 advntr_df.to_csv(tsv_path, sep="\t", index=False)
-                logging.info(f"Cohort adVNTR TSV written to: {tsv_path}")
+                logger.info(f"Cohort adVNTR TSV written to: {tsv_path}")
             if "json" in formats:
                 json_path = Path(output_dir) / "cohort_advntr.json"
                 advntr_df.to_json(json_path, orient="records", indent=4)
-                logging.info(f"Cohort adVNTR JSON written to: {json_path}")
+                logger.info(f"Cohort adVNTR JSON written to: {json_path}")
 
     # If pseudonymization was enabled, output the pseudonymization table.
     if pseudonymize_samples and sample_mapping:
@@ -850,6 +851,6 @@ def aggregate_cohort(
                 pt.write("Pseudonym\tOriginal\n")
                 for pseudonym, original in sample_mapping.items():
                     pt.write(f"{pseudonym}\t{original}\n")
-            logging.info(f"Pseudonymization table written to: {pseudonym_table_path}")
+            logger.info(f"Pseudonymization table written to: {pseudonym_table_path}")
         except Exception as e:
-            logging.error(f"Failed to write pseudonymization table: {e}")
+            logger.error(f"Failed to write pseudonymization table: {e}")

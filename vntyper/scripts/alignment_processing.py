@@ -1,13 +1,15 @@
-#!/usr/bin/env python3
 # vntyper/scripts/alignment_processing.py
+
+from __future__ import annotations
 
 import importlib.resources as pkg_resources
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 from vntyper.scripts.utils import run_command
+
+logger = logging.getLogger(__name__)
 
 
 def check_bwa_index(reference: Path) -> bool:
@@ -40,7 +42,7 @@ def check_bwa_index(reference: Path) -> bool:
 
     if missing_files:
         # Log a warning with the list of missing index files
-        logging.warning(f"Missing BWA index files for reference {reference}: {[str(f) for f in missing_files]}")
+        logger.warning(f"Missing BWA index files for reference {reference}: {[str(f) for f in missing_files]}")
         return False
     return True
 
@@ -53,7 +55,7 @@ def align_and_sort_fastq(
     output_name: str,
     threads: int,
     config: dict,
-) -> Optional[str]:
+) -> str | None:
     """
     Align FASTQ files to the reference genome using BWA, then sort and convert to BAM using Samtools.
 
@@ -79,7 +81,7 @@ def align_and_sort_fastq(
         samtools_path = Path(config["tools"]["samtools"])
         bwa_path = Path(config["tools"]["bwa"])
     except KeyError as e:
-        logging.error(f"Missing tool path in configuration: {e}")
+        logger.error(f"Missing tool path in configuration: {e}")
         return None
 
     output_dir = Path(output_dir)
@@ -88,7 +90,7 @@ def align_and_sort_fastq(
     sorted_bam_out = output_dir / f"{output_name}_sorted.bam"
 
     if not check_bwa_index(reference):
-        logging.error(
+        logger.error(
             f"BWA index files not found for reference: {reference}. "
             f"Please run 'bwa index {reference}' to generate them."
         )
@@ -103,32 +105,32 @@ def align_and_sort_fastq(
 
     full_command = f"{bwa_command} | {samtools_view_sort_command}"
     log_file_alignment = output_dir / f"{output_name}_alignment.log"
-    logging.info(f"Executing alignment and sorting with command: {full_command}")
+    logger.info(f"Executing alignment and sorting with command: {full_command}")
 
     if not run_command(str(full_command), str(log_file_alignment), critical=True):
-        logging.error("BWA alignment and Samtools sorting failed.")
+        logger.error("BWA alignment and Samtools sorting failed.")
         return None
 
     if not sorted_bam_out.exists():
-        logging.error(
+        logger.error(
             f"Sorted BAM file {sorted_bam_out} not created. BWA alignment or Samtools sorting might have failed."
         )
         return None
 
-    logging.info("BWA alignment and Samtools sorting completed successfully.")
+    logger.info("BWA alignment and Samtools sorting completed successfully.")
 
-    logging.info(f"Indexing sorted BAM file: {sorted_bam_out}")
+    logger.info(f"Indexing sorted BAM file: {sorted_bam_out}")
     samtools_index_command = f"{samtools_path} index {sorted_bam_out}"
     log_file_index = output_dir / f"{output_name}_index.log"
 
     if not run_command(str(samtools_index_command), str(log_file_index), critical=True):
-        logging.error("Samtools indexing failed.")
+        logger.error("Samtools indexing failed.")
         return None
 
     index_file = sorted_bam_out.with_suffix(".bam.bai")
     if not index_file.exists():
-        logging.error(f"BAM index file {index_file} not created. Samtools indexing might have failed.")
+        logger.error(f"BAM index file {index_file} not created. Samtools indexing might have failed.")
         return None
 
-    logging.info("Samtools indexing completed successfully.")
+    logger.info("Samtools indexing completed successfully.")
     return str(sorted_bam_out)
