@@ -32,7 +32,7 @@ stand-in.
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from .identifiers import canonical_id
@@ -82,6 +82,26 @@ PASSPHRASE_QUERY_DESCRIPTION = (
     "request header instead. Still accepted, and still required if the header is "
     "not sent."
 )
+
+
+class CohortRecord(TypedDict):
+    """What creating a cohort hands back to the caller.
+
+    A `TypedDict` rather than `dict[str, str | None]`, because the two keys do
+    not have the same type and collapsing them into a union loses the one that
+    matters. A cohort_id is always minted, so `record["cohort_id"]` is a `str`
+    and goes straight into `cohort_key`; an alias is optional and stays
+    `str | None`. Under the union spelling the identifier read back as
+    `str | None` too, so every use of it was either a type error or a guard
+    against a state this function cannot return.
+
+    Attributes:
+        cohort_id: The server-generated identifier for the new cohort.
+        alias: The label it holds, or None when it was created without one.
+    """
+
+    cohort_id: str
+    alias: str | None
 
 
 def cohort_key(cohort_id: str) -> str:
@@ -217,7 +237,7 @@ def create_cohort_record(
     alias: str | None,
     passphrase: str | None,
     retention_seconds: int,
-) -> dict[str, str | None]:
+) -> CohortRecord:
     """Create a cohort, claiming its alias and storing its passphrase hash.
 
     The alias claim is made with a single ``SET ... NX EX`` command, which is
@@ -241,7 +261,7 @@ def create_cohort_record(
         retention_seconds: Lifetime of the cohort record and its alias claim.
 
     Returns:
-        dict[str, str | None]: The new ``cohort_id`` and the ``alias`` it holds.
+        CohortRecord: The new ``cohort_id`` and the ``alias`` it holds.
 
     Raises:
         ValueError: If no passphrase was supplied, if it is longer than the

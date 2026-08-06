@@ -258,41 +258,42 @@ extend-immutable-calls = [
 python_version = "3.10"
 ignore_missing_imports = true
 
-# No `mypy_path` is needed for `mypy vntyper/ docker/app/`. `docker/app/__init__.py`
+# `mypy vntyper/ docker/app/` needs no search path of its own: `docker/app/__init__.py`
 # exists and `docker/__init__.py` does not, so mypy walks up exactly one level, roots
-# the package at `docker/` and names the modules `app.*` on its own - which is both
-# how the intra-package imports resolve and why the `app.*` override below matches.
-# Adding `mypy_path = "docker"` would additionally make `mypy tests/` resolve the
-# `from app import ...` lines in `tests/unit/web/`, which today degrade to `Any` under
-# `ignore_missing_imports`. That is worth doing, and it is still deliberately not done
-# here. Measured under `MYPYPATH=docker mypy vntyper/ tests/` (ruff/mypy as pinned in
-# `[project.optional-dependencies] dev`), it reports 23 errors in 4 files, and only one
-# of them was a defect in a test:
+# the package at `docker/` and names the modules `app.*` on its own - which is both how
+# the intra-package imports resolve and why the `app.*` override below matches.
 #
-#   * 1 real finding, now fixed: `test_credentials_and_disclosure.py` passed
-#     `urlsplit(...).password` - a `str | None` - straight into `unquote()`. The test
-#     asserts the credential is present before decoding it.
-#   * 19 in hand-rolled ASGI doubles (`test_request_size_limit.py`,
-#     `test_upload_limits.py`). The doubles are structurally right but nominally
-#     narrower than the callables `RequestSizeLimitMiddleware` and
-#     `save_upload_bounded` declare (`dict` vs `MutableMapping`, a `read`-only object
-#     vs `BinaryIO`). The fix is on the *production* side - accept a `Protocol` or the
-#     ASGI aliases rather than a concrete class - not `# type: ignore` in the tests.
-#   * 3 from `create_cohort_record` returning `dict[str, str | None]`, so
-#     `created["cohort_id"]` types as `str | None` even though that key is always a
-#     `str`. A `TypedDict` in `docker/app/cohorts.py` fixes all three at the source.
+# `mypy_path` is set for the *other* invocation. `make type-check-all` also runs
+# `mypy vntyper/ tests/`, where the `from app import ...` lines in `tests/unit/web/`
+# have no such anchor: without this they resolve to `Any` under
+# `ignore_missing_imports`, and a whole suite is type-checked against a web service
+# whose every symbol is untyped. With it, those tests are checked against the real
+# signatures (#194).
 #
-# Both remaining groups are `docker/app` annotation work, so turning the path on now
-# would gate `tests/` on a backlog that belongs to another module - the exact shape of
-# problem the `app.*` override below exists to avoid. Turn it on once
-# `RequestSizeLimitMiddleware`/`save_upload_bounded` take protocols and
-# `create_cohort_record` returns a `TypedDict`; at that point this is a one-line change
-# with no fallout to silence.
+# Turning it on cost 23 errors in 3 files, all of them fixed at the source rather than
+# silenced. None was a behavioural defect; each was a stand-in nominally narrower than
+# the callable it stands in for, which a contravariant parameter refuses:
 #
-# `tests/` is *not* unchecked in the meantime: `make type-check-all` runs
-# `mypy vntyper/ tests/` as a second, separate invocation (see the comment on that
-# target), and both `make check-all` and the `typecheck` job in `ci-tests.yml` go
-# through it.
+#   * 17 in `test_request_size_limit.py`, whose hand-rolled ASGI doubles were annotated
+#     `dict[str, Any]` where `request_limits` and Starlette both publish
+#     `MutableMapping[str, Any]`. Fixed by widening the doubles to the contract they
+#     stand in for. `request_limits` itself is unchanged: narrowing its aliases to the
+#     `dict` the ASGI specification names would make the middleware unusable through
+#     `Starlette.add_middleware`.
+#   * 1 in `test_upload_limits.py`, whose `RecordingSource` implements `read` and
+#     nothing else. Fixed on the production side, where the over-broad declaration was:
+#     `save_upload_bounded` now takes a `uploads.ByteSource` protocol naming the one
+#     method it calls, rather than the whole of `BinaryIO`.
+#   * 4 from `create_cohort_record` returning `dict[str, str | None]`, so
+#     `created["cohort_id"]` typed as `str | None` even though that key is always a
+#     `str`. `cohorts.CohortRecord`, a `TypedDict`, fixes all four at the source.
+#   * 1 real finding in a test, fixed earlier under the same investigation:
+#     `test_credentials_and_disclosure.py` passed `urlsplit(...).password` - a
+#     `str | None` - straight into `unquote()`.
+#
+# The two invocations stay separate even so, because each suite is then checked against
+# the same scope CI checks it against; see the comment on the `type-check-all` target.
+mypy_path = "docker"
 
 # Staged strictness for the web service.
 #

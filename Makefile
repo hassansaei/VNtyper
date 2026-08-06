@@ -130,14 +130,12 @@ type-check-tests:
 # This is the target CI's `typecheck` job runs, because `type-check` alone leaves
 # everything under tests/ outside the type gate.
 #
-# It runs mypy twice rather than over one combined argument list. Passing docker/app/
-# and tests/ to the same invocation puts the `app` package on mypy's search path for
-# the tests too, so the `from app import ...` lines in tests/unit/web/ stop resolving
-# to Any and a batch of findings in those tests' hand-rolled ASGI doubles lands on this
-# target. Keeping the two runs separate leaves each suite checked against the same
-# scope CI checks it against; wiring the web tests up to the real types is worthwhile
-# but is its own change, and `[tool.mypy]` in pyproject.toml records exactly what it
-# would cost and what has to happen first.
+# It runs mypy twice rather than over one combined argument list, so that each suite is
+# checked against the same argument scope CI checks it against and a failure names the
+# run it came from. The split no longer decides whether the web tests see real types:
+# `mypy_path = "docker"` in pyproject.toml puts the `app` package on the search path for
+# both runs, so the `from app import ...` lines in tests/unit/web/ resolve to the real
+# signatures either way (#194).
 type-check-all: type-check
 	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
 	mypy vntyper/ tests/

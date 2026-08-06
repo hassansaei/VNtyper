@@ -37,7 +37,7 @@ imports before this module, so `app.request_limits` is importable here.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -115,6 +115,12 @@ def _stream(chunks: list[bytes]) -> tuple[Callable[[], Awaitable[dict[str, Any]]
     return receive, pulled
 
 
+# The stand-in applications and `_Recorder` below are spelled with
+# `MutableMapping[str, Any]`, not `dict[str, Any]`, because that is the ASGI
+# contract Starlette publishes and `request_limits` declares. A parameter is
+# contravariant: a double that accepts only a `dict` is *narrower* than the
+# callable it stands in for, so it would not be a legal argument even though it
+# behaves correctly at runtime (#194).
 def _draining_app(received: list[int]) -> Callable[..., Awaitable[None]]:
     """Build an ASGI app that reads the whole body, then answers 200.
 
@@ -128,7 +134,7 @@ def _draining_app(received: list[int]) -> Callable[..., Awaitable[None]]:
             application produces.
     """
 
-    async def app(scope: dict[str, Any], receive: Callable, send: Callable) -> None:
+    async def app(scope: MutableMapping[str, Any], receive: Callable, send: Callable) -> None:
         """Drain the request body and reply.
 
         Args:
@@ -157,9 +163,9 @@ class _Recorder:
     """Collect the ASGI messages an application sends."""
 
     def __init__(self) -> None:
-        self.messages: list[dict[str, Any]] = []
+        self.messages: list[MutableMapping[str, Any]] = []
 
-    async def __call__(self, message: dict[str, Any]) -> None:
+    async def __call__(self, message: MutableMapping[str, Any]) -> None:
         """Record one outbound message.
 
         Args:
@@ -301,7 +307,7 @@ def test_only_one_response_is_sent_when_the_ceiling_is_passed() -> None:
     """
     recorder = _Recorder()
 
-    async def stubborn_app(scope: dict[str, Any], receive: Callable, send: Callable) -> None:
+    async def stubborn_app(scope: MutableMapping[str, Any], receive: Callable, send: Callable) -> None:
         """Read until cut off, then answer anyway.
 
         Args:
@@ -395,7 +401,7 @@ def test_a_request_with_no_body_is_handed_the_untouched_stream() -> None:
     seen: dict[str, Any] = {}
     recorder = _Recorder()
 
-    async def app(scope: dict[str, Any], receive: Callable, send: Callable) -> None:
+    async def app(scope: MutableMapping[str, Any], receive: Callable, send: Callable) -> None:
         """Record the callables it was handed.
 
         Args:
@@ -491,7 +497,7 @@ def test_a_non_http_scope_is_passed_straight_through() -> None:
     seen: list[str] = []
     recorder = _Recorder()
 
-    async def app(scope: dict[str, Any], receive: Callable, send: Callable) -> None:
+    async def app(scope: MutableMapping[str, Any], receive: Callable, send: Callable) -> None:
         """Record the scope type it was called with.
 
         Args:
@@ -527,7 +533,7 @@ def test_the_application_error_is_not_swallowed_when_the_ceiling_held() -> None:
     """Only a refusal suppresses the application; real failures still surface."""
     recorder = _Recorder()
 
-    async def failing_app(scope: dict[str, Any], receive: Callable, send: Callable) -> None:
+    async def failing_app(scope: MutableMapping[str, Any], receive: Callable, send: Callable) -> None:
         """Fail while reading a body that is comfortably under the ceiling.
 
         Args:
