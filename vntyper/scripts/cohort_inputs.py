@@ -8,16 +8,19 @@ Locate the samples of a cohort and read what the pipeline recorded for each of t
 ``vntyper cohort`` is pointed at whatever the caller has: a directory that is itself one
 sample's output, a directory holding many, a zip file of either, or something that turns
 out to be none of those. :func:`discover_sample_directories` reduces all of that to the
-set of directories holding a ``pipeline_summary.json``, extracting any zip files on the
-way; :func:`load_pipeline_summary_for_sample` then reads one such directory into the
-three pieces the report needs.
+sorted list of directories holding a ``pipeline_summary.json``, extracting any zip files
+on the way; :func:`load_pipeline_summary_for_sample` then reads one such directory into
+the three pieces the report needs.
 
-Two failure modes are deliberate and both are characterised rather than changed. A
-sample that cannot be read - a missing summary, malformed JSON, an unparseable timestamp
-- is logged and dropped so one bad sample cannot abort a 40-sample cohort. And the
-discovery returns a **set**, so the order samples appear in the report is not
-reproducible between processes; that one is a defect, recorded in
-``tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today``.
+One failure mode is deliberate and is characterised rather than changed: a sample that
+cannot be read - a missing summary, malformed JSON, an unparseable timestamp - is logged
+and dropped so one bad sample cannot abort a 40-sample cohort.
+
+The discovery order is a contract. Sample directories are de-duplicated through a set
+and then **sorted**, because a set of ``Path`` iterates in string-hash order and Python
+randomises string hashing per process - which made two ``vntyper cohort`` runs over the
+same inputs disagree about the row order of the report and of every export. See
+:func:`discover_sample_directories`.
 
 The four step names this module matches are compared by exact string against what
 ``pipeline.py`` writes. A typo does not fail - it silently drops a section of the report
@@ -50,7 +53,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_SUMMARY_FILENAME = "pipeline_summary.json"
 
 
-def discover_sample_directories(input_paths: list[str]) -> tuple[set[Path], list[str]]:
+def discover_sample_directories(input_paths: list[str]) -> tuple[list[Path], list[str]]:
     """Resolve the cohort's input paths to the sample directories they contain.
 
     A directory holding a ``pipeline_summary.json`` is taken as one sample and is not
@@ -63,10 +66,24 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[set[Path], list
         input_paths: Directories or zip files, as ``vntyper cohort`` received them.
 
     Returns:
-        tuple[set[Path], list[str]]: The sample directories, and the temporary
-        directories the caller must pass to :func:`cleanup_temp_dirs` once the report
-        has been written. The directories come back as a **set**, so their iteration
-        order is not stable between processes.
+        tuple[list[Path], list[str]]: The sample directories in **sorted** order, and
+        the temporary directories the caller must pass to :func:`cleanup_temp_dirs`
+        once the report has been written.
+
+        The sample directories are accumulated in a set, which de-duplicates a
+        directory reached by two different input paths, and then sorted on the way out.
+        The set is the reason the sort is needed: ``Path.__hash__`` is the hash of the
+        path string, Python randomises string hashing per process, and
+        ``aggregate_cohort`` used to iterate the set directly - so two ``vntyper
+        cohort`` runs over the same inputs produced the report's rows, and every
+        CSV/TSV/JSON row, in different orders. Sorting here rather than at that one
+        call site means every consumer gets the same order.
+
+        ``sorted()`` on ``Path`` compares ``PurePath._parts_normcase``, so the order is
+        lexicographic by path *part* - the separator itself never participates - which
+        is the order ``ls`` would show. Pinned by
+        ``tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted``
+        and by the cross-process test beside it.
     """
     temp_dirs: list[str] = []
     processed_dirs: set[Path] = set()  # use a set to avoid duplicate directories
@@ -119,7 +136,8 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[set[Path], list
         else:
             logger.warning(f"Unsupported file type (not a directory or zip): {path}")
 
-    return processed_dirs, temp_dirs
+    # Sorted, not set order: see the Returns section above.
+    return sorted(processed_dirs), temp_dirs
 
 
 def cleanup_temp_dirs(temp_dirs: list[str]) -> None:

@@ -11,11 +11,14 @@ so the file names, the separators and the log lines announcing them are a contra
 :func:`write_pseudonymization_table` writes the mapping that makes a pseudonymised
 cohort resolvable again.
 
-Note that nothing here strips columns: whatever the frame carries is exported. The
-report is rendered before these are written and rendering annotates the frames with two
-working columns, so the exports currently carry ``__row_result`` and ``__unified`` as
-well. That is a defect, characterised rather than fixed - see
-``tests/unit/test_cohort_exports.py::test_a_frame_carrying_the_reductions_working_columns_exports_them_today``.
+Note that nothing here strips columns: whatever the frame carries is exported, and that
+is deliberate. The exports used to carry the sample-level reduction's two working
+columns, ``__row_result`` and ``__unified``, because the render mutated the frames it
+was handed before these were written. That was fixed where it was caused, in
+``cohort_categories.sample_categories``, and not with a denylist here - a denylist would
+have left the mutation in place for the next consumer while making these files look
+clean, and would drop a column a future caller meant to publish. See
+``tests/unit/test_cohort_exports.py::test_the_export_writes_the_frame_s_columns_and_strips_nothing``.
 
 Extracted from ``cohort_summary.py`` in Task 22 of the #181-#197 follow-ups.
 """

@@ -4,8 +4,9 @@
 frames beside the HTML report. These are the files a downstream analysis actually reads,
 so what is in them and what they are called is a contract; none of it had a test.
 
-Characterisation throughout, including one `..._today` recording a defect the split was
-not authorised to fix.
+Characterisation throughout, with one exception:
+`test_the_export_writes_the_frame_s_columns_and_strips_nothing` is a specification, and
+says so in its own docstring. No other test in this file has been ratified.
 """
 
 from __future__ import annotations
@@ -122,21 +123,29 @@ def test_each_written_file_is_announced_under_its_algorithm_name(tmp_path, caplo
     assert f"Cohort adVNTR CSV written to: {tmp_path / 'cohort_advntr.csv'}" in caplog.text
 
 
-def test_a_frame_carrying_the_reductions_working_columns_exports_them_today(tmp_path) -> None:
-    """Characterisation of a live defect, at the boundary where it is visible.
+def test_the_export_writes_the_frame_s_columns_and_strips_nothing(tmp_path) -> None:
+    """**Specification**: this module writes what it is handed, unfiltered.
 
-    Nothing here strips columns: whatever the frame carries is exported. `aggregate_cohort`
-    renders the report first, and rendering annotates the frame with `__row_result` and
-    `__unified`, so those two internal columns are in every export. See
+    It used to be the boundary where a defect was visible: the render annotated the
+    frame with `__row_result` and `__unified` and every export carried them. That was
+    fixed at its source - `cohort_categories.sample_categories` now annotates a copy -
+    and deliberately **not** by filtering here. A denylist here would have left the
+    mutation in place for the next consumer of the frame while making the exports look
+    clean, and it would silently drop a column a future caller meant to publish.
+
+    So the contract is stated positively and pinned with the very columns that used to
+    leak: give this module a frame with internal-looking names in it and they are
+    written, because deciding what belongs in the frame is the caller's job. See
     `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cohort-internal-columns-leak-into-exports.md`.
     """
     frame = pd.DataFrame([{"Sample": "s1", "__row_result": "High_Precision", "__unified": "Positive"}])
 
     write_cohort_frame(frame, tmp_path, "cohort_kestrel", "Kestrel", ["csv"])
 
-    assert (tmp_path / "cohort_kestrel.csv").read_text(encoding="utf-8").splitlines()[0] == (
-        "Sample,__row_result,__unified"
-    )
+    assert (tmp_path / "cohort_kestrel.csv").read_text(encoding="utf-8").splitlines() == [
+        "Sample,__row_result,__unified",
+        "s1,High_Precision,Positive",
+    ]
 
 
 def test_the_output_directory_may_be_given_as_a_string(tmp_path) -> None:

@@ -70,10 +70,12 @@ the oracle's blind spots rather than the ceiling.
 
 * Zip-file inputs. `aggregate_cohort` extracts them to a temporary directory; the
   discovery half of that is pinned in `tests/unit/test_cohort_inputs.py` instead.
-* The order samples appear in. `aggregate_cohort` collects sample directories into a
-  `set`, so the row order of both the report and the CSV/TSV/JSON exports varies between
-  processes. That is pinned as a defect, not as intent - see
-  `test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today`.
+* The order samples appear in - as far as *this fingerprint* goes. It is taken from
+  `generate_cohort_summary_report`, which is handed frames directly, so the discovery
+  that decides the row order never runs. The order is now deterministic and is pinned at
+  its source in `test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted`
+  and, end to end through `aggregate_cohort`, by
+  `test_both_samples_reach_the_report_in_sorted_order` below.
 * Anything the pipeline writes *into* `pipeline_summary.json`. The oracle starts from a
   summary file, so a change in what `pipeline.py` records is invisible here.
 * Export column order. The fingerprint is taken from the HTML only; the CSV/TSV/JSON
@@ -122,6 +124,26 @@ pytestmark = pytest.mark.unit
 #: ran this oracle unmodified, 27 passed. That proof is banked and stands on its own -
 #: `d82eb374...` is what the original implementation produced, and the five extracted
 #: modules reproduced it byte for byte.
+#:
+#: **Re-derived, and it did not move, when the two cohort defects were fixed** (the
+#: in-place annotation and the non-deterministic sample order). It was re-derived twice
+#: under `PYTHONHASHSEED=0` and `PYTHONHASHSEED=12345` in separate interpreters and both
+#: produced `9889773a...`, which is the value already recorded above. Each fix was also
+#: applied on its own and neither moved it. That is the expected result rather than a
+#: surprise, and it says something worth keeping:
+#:
+#: * The internal columns never reached the *page*. `cohort_tables` builds its tables
+#:   from the fixed `KESTREL_DISPLAY_COLUMNS` / `ADVNTR_DISPLAY_COLUMNS` lists, so
+#:   `__row_result` and `__unified` were dropped there. The leak was into the
+#:   CSV/TSV/JSON exports only, and this fingerprint is taken from the HTML - so the fix
+#:   is pinned by `test_an_export_written_after_the_report_carries_no_internal_columns`
+#:   and by `test_the_renderer_leaves_the_frames_it_was_handed_untouched`, not here.
+#: * The sample order never reached this fingerprint either: it is measured from
+#:   `generate_cohort_summary_report`, which is handed frames the test built, so
+#:   `discover_sample_directories` does not run. See the exclusion list above.
+#:
+#: A fingerprint that is stable across two hash seeds is itself part of the evidence for
+#: the second fix: a report whose row order followed the hash seed could not have one.
 EXPECTED_FINGERPRINT = "9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -195,7 +217,9 @@ def _kestrel_frame() -> pd.DataFrame:
     two values match no rule either way.
 
     Returns:
-        pd.DataFrame: A fresh frame - the renderer mutates the one it is handed.
+        pd.DataFrame: A fresh frame each call, so the equality check in
+        `test_the_renderer_leaves_the_frames_it_was_handed_untouched` has something
+        independent to compare against.
     """
     return pd.DataFrame(
         [
@@ -256,7 +280,8 @@ def _advntr_frame() -> pd.DataFrame:
     ``25561&`` is still ``!= "Negative"``, so the rule outcome is unchanged.
 
     Returns:
-        pd.DataFrame: A fresh frame - the renderer mutates the one it is handed.
+        pd.DataFrame: A fresh frame each call, for the same reason as
+        :func:`_kestrel_frame`.
     """
     return pd.DataFrame(
         [
@@ -453,32 +478,34 @@ def test_the_report_is_written_under_the_output_directory(tmp_path) -> None:
     assert (tmp_path / "plots" / "advntr_summary_plot.png").is_file()
 
 
-def test_the_renderer_annotates_the_frame_it_was_handed_today(tmp_path) -> None:
-    """Characterisation of a live defect: the input frame is mutated in place.
+def test_the_renderer_leaves_the_frames_it_was_handed_untouched(tmp_path) -> None:
+    """**Specification**: rendering reads its inputs and writes only the report.
 
-    `generate_cohort_summary_report` writes `__row_result` and `__unified` onto the
-    caller's DataFrame rather than onto its own copy. `aggregate_cohort` renders the
-    report *before* it exports CSV/TSV/JSON, so both internal columns reach every
-    machine-readable output - which the code comment two lines above the copy says is
-    exactly what the copy exists to prevent.
+    `generate_cohort_summary_report` used to write `__row_result` and `__unified` onto
+    the caller's DataFrames rather than onto its own copies, and `aggregate_cohort`
+    renders *before* it exports CSV/TSV/JSON, so both internal columns reached every
+    machine-readable output - which the code comment above the one copy this module does
+    take says is exactly what a copy exists to prevent. Fixed in
+    `cohort_categories.sample_categories`, at the source rather than at the export.
 
-    Pinned rather than fixed: the split that this oracle guards is not authorised to
-    change what any output contains. See
+    Both frames are asserted, not just the Kestrel one: the reduction runs twice and a
+    fix applied to one call site only would leave adVNTR's exports still carrying them.
+    See
     `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cohort-internal-columns-leak-into-exports.md`.
     """
-    frame = _kestrel_frame()
+    kestrel = _kestrel_frame()
+    advntr = _advntr_frame()
 
     cohort_summary.generate_cohort_summary_report(
         output_dir=str(tmp_path),
-        kestrel_df=frame,
-        advntr_df=_advntr_frame(),
+        kestrel_df=kestrel,
+        advntr_df=advntr,
         summary_file="cohort_summary.html",
         config=load_config(None),
     )
 
-    assert "__row_result" in frame.columns
-    assert "__unified" in frame.columns
-    assert list(frame["__unified"]) == ["Positive", "Positive_Flagged", "Negative"]
+    pd.testing.assert_frame_equal(kestrel, _kestrel_frame())
+    pd.testing.assert_frame_equal(advntr, _advntr_frame())
 
 
 # ---------------------------------------------------------------------------
@@ -556,9 +583,15 @@ def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> 
     }
 
 
-def test_both_samples_reach_the_report(tmp_path) -> None:
-    """The frames are built from the discovered directories, in whatever order the
-    discovery yields them, so this asserts on membership rather than on order."""
+def test_both_samples_reach_the_report_in_sorted_order(tmp_path) -> None:
+    """**Specification**: the row order of a cohort report is the sorted sample order.
+
+    The frames are built by iterating the discovered directories, so this is the end of
+    the chain `test_cohort_inputs.py` starts: discovery sorts, and the report inherits
+    it. It used to assert membership only, because the directories arrived in a `set`
+    and the order was whatever the process's hash seed produced. Asserting the
+    *positions* is what makes two runs of `vntyper cohort` comparable byte for byte.
+    """
     output_dir = tmp_path / "out"
     output_dir.mkdir()
 
@@ -571,8 +604,7 @@ def test_both_samples_reach_the_report(tmp_path) -> None:
 
     html = (output_dir / "cohort_summary.html").read_text(encoding="utf-8")
 
-    assert ">sample_one</td>" in html
-    assert ">sample_two</td>" in html
+    assert html.index(">sample_one</td>") < html.index(">sample_two</td>")
     assert '"values":[1,1,0]' in html
 
 
@@ -648,12 +680,17 @@ def test_the_pseudonymization_table_is_not_written_when_nothing_was_pseudonymise
     assert not (output_dir / "pseudonymization_table.tsv").exists()
 
 
-def test_an_export_written_after_the_report_carries_the_internal_columns_today(tmp_path) -> None:
-    """The consequence of the in-place annotation above, at the boundary a user sees.
+def test_an_export_written_after_the_report_carries_no_internal_columns(tmp_path) -> None:
+    """**Specification**, at the boundary a user sees: the same fix, end to end.
 
-    A cohort run with `--output-format csv` produces a `cohort_kestrel.csv` whose
-    header carries `__row_result` and `__unified`. Characterisation of the same defect;
-    see the issue file named in the test above.
+    A cohort run with `--output-format csv` used to produce a `cohort_kestrel.csv`
+    whose header carried `__row_result` and `__unified`, because the render mutated the
+    frame the export was about to write. Both exports are checked, and the whole header
+    is asserted rather than the two names alone - the columns and their order are the
+    contract a downstream parser reads. `Sample` is last because the export order is the
+    insertion order of the dicts read out of `pipeline_summary.json` with `Sample`
+    appended, not `cohort_tables`' display order; that is unchanged and is not this
+    fix's business. See the issue file named in the test above.
     """
     output_dir = tmp_path / "out"
     output_dir.mkdir()
@@ -666,7 +703,8 @@ def test_an_export_written_after_the_report_carries_the_internal_columns_today(t
         additional_formats="csv",
     )
 
-    header = (output_dir / "cohort_kestrel.csv").read_text(encoding="utf-8").splitlines()[0]
+    kestrel_header = (output_dir / "cohort_kestrel.csv").read_text(encoding="utf-8").splitlines()[0]
+    advntr_header = (output_dir / "cohort_advntr.csv").read_text(encoding="utf-8").splitlines()[0]
 
-    assert "__row_result" in header
-    assert "__unified" in header
+    assert kestrel_header == "Motif,Confidence,Flag,Sample"
+    assert advntr_header == "VID,Flag,Sample"

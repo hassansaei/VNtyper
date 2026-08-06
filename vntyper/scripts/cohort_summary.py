@@ -222,8 +222,9 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     # -----------------------------
     # Compute sample-level results
     # -----------------------------
-    # Both frames are annotated in place with the reduction's working columns; see
-    # cohort_categories.sample_categories.
+    # Neither frame is modified: the reduction annotates its own copy, which is what
+    # keeps its two working columns out of the exports aggregate_cohort writes from
+    # these same frames afterwards. See cohort_categories.sample_categories.
     kestrel_sample_results = sample_categories(kestrel_df, kestrel_logic, unify_kestrel_result)
     advntr_sample_results = sample_categories(advntr_df, advntr_logic, unify_advntr_result)
 
@@ -442,9 +443,9 @@ def aggregate_cohort(
 
     cleanup_temp_dirs(temp_dirs)
 
-    # Generate additional machine-readable cohort summaries if requested. Both frames
-    # were annotated in place by the render above, so the exports carry the reduction's
-    # working columns too; see cohort_exports.
+    # Generate additional machine-readable cohort summaries if requested. The render
+    # above leaves both frames as they were, so what goes out here is what was read out
+    # of the samples' pipeline_summary.json files and nothing else; see cohort_exports.
     if additional_formats:
         formats = parse_output_formats(additional_formats)
         write_cohort_frame(kestrel_df, output_dir, "cohort_kestrel", "Kestrel", formats)

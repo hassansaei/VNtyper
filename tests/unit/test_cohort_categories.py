@@ -8,7 +8,10 @@ reached.
 
 It is the step where a diagnosis is made, so it is also the step where a refactor can
 change one without changing a line of report markup. Everything here is
-**characterisation**: it records the reduction as it stands.
+**characterisation** - it records the reduction as it stands - with the single exception
+of `test_the_reduction_leaves_the_caller_s_frame_untouched`, which is a specification:
+it states the contract that closed the internal-column leak, and it is named as such in
+its own docstring. No other test in this file has been ratified.
 """
 
 from __future__ import annotations
@@ -155,22 +158,28 @@ def test_the_result_is_indexed_by_sample_name() -> None:
     assert list(result.index) == ["s1"]
 
 
-def test_the_reduction_annotates_the_caller_s_frame_in_place_today(caplog) -> None:
-    """Characterisation of a live defect, moved unchanged out of `cohort_summary.py`.
+def test_the_reduction_leaves_the_caller_s_frame_untouched() -> None:
+    """**Specification**, and the contract this module's whole job statement implies.
 
-    Two working columns, `__row_result` and `__unified`, are written onto the frame the
-    caller passed rather than onto a copy. `aggregate_cohort` renders the report before
-    it exports CSV/TSV/JSON from the same frame, so both columns reach every
-    machine-readable output. See
+    A function documented as reducing a frame to categories has no business writing to
+    it. It used to: the two working columns `__row_result` and `__unified` went onto the
+    frame the caller passed rather than onto a copy, and because `aggregate_cohort`
+    renders the report *before* it exports CSV/TSV/JSON from the same frame, both
+    reached every machine-readable output. Fixed by annotating a copy, so the caller's
+    frame comes back exactly as it went in - columns, order and values. See
     `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cohort-internal-columns-leak-into-exports.md`.
+
+    The frame is asserted whole rather than by column name, because "no new columns" is
+    the visible half of the contract and "no changed cells" is the other half.
     """
     frame = pd.DataFrame([{"Sample": "s1", "Confidence": "High_Precision"}])
+    before = frame.copy(deep=True)
 
-    sample_categories(frame, _KESTREL_LOGIC, unify_kestrel_result)
+    result = sample_categories(frame, _KESTREL_LOGIC, unify_kestrel_result)
 
-    assert list(frame.columns) == ["Sample", "Confidence", "__row_result", "__unified"]
-    assert frame["__row_result"].tolist() == ["High_Precision"]
-    assert frame["__unified"].tolist() == ["Positive"]
+    assert list(frame.columns) == ["Sample", "Confidence"]
+    pd.testing.assert_frame_equal(frame, before)
+    assert result.to_dict() == {"s1": "Positive"}
 
 
 # ---------------------------------------------------------------------------

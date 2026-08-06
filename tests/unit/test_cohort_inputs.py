@@ -8,8 +8,9 @@ rows, and the per-sample statistics.
 
 This was 120 lines of `cohort_summary.py` reachable only by calling the whole cohort
 pipeline, and it was the largest single uncovered block in the file. Everything here is
-**characterisation**: it records what a cohort run does today, including the two
-behaviours named `..._today`.
+**characterisation** - it records what a cohort run does today, including the behaviour
+named `..._today` - except the three discovery-order tests, which are specifications and
+say so in their own docstrings. No other test in this file has been ratified.
 
 Step names are matched by exact string comparison against what `pipeline.py` writes
 (AGENTS.md trap 5), so this file asserts against `summary_steps.STEP_*` for the same
@@ -20,6 +21,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -67,17 +71,19 @@ def test_a_directory_that_is_itself_a_sample_is_taken_as_one(tmp_path) -> None:
 
     dirs, temp_dirs = discover_sample_directories([str(sample)])
 
-    assert dirs == {sample}
+    assert dirs == [sample]
     assert temp_dirs == []
 
 
 def test_a_parent_directory_is_searched_recursively(tmp_path) -> None:
+    """`nested/sample_two` sorts before `sample_one`, because the sort is by path part
+    and `"nested" < "sample_one"` - a deeper sample is not pushed to the end."""
     one = _write_summary(tmp_path / "cohort" / "sample_one")
     two = _write_summary(tmp_path / "cohort" / "nested" / "sample_two")
 
     dirs, _ = discover_sample_directories([str(tmp_path / "cohort")])
 
-    assert dirs == {one, two}
+    assert dirs == [two, one]
 
 
 def test_a_directory_that_is_itself_a_sample_is_not_also_searched(tmp_path) -> None:
@@ -88,7 +94,7 @@ def test_a_directory_that_is_itself_a_sample_is_not_also_searched(tmp_path) -> N
 
     dirs, _ = discover_sample_directories([str(parent)])
 
-    assert dirs == {parent}
+    assert dirs == [parent]
 
 
 def test_the_same_sample_reached_twice_is_only_processed_once(tmp_path) -> None:
@@ -96,7 +102,7 @@ def test_the_same_sample_reached_twice_is_only_processed_once(tmp_path) -> None:
 
     dirs, _ = discover_sample_directories([str(sample), str(tmp_path / "cohort")])
 
-    assert dirs == {sample}
+    assert dirs == [sample]
 
 
 def test_a_missing_input_path_is_skipped_with_a_warning(tmp_path, caplog) -> None:
@@ -104,7 +110,7 @@ def test_a_missing_input_path_is_skipped_with_a_warning(tmp_path, caplog) -> Non
 
     dirs, _ = discover_sample_directories([str(tmp_path / "absent")])
 
-    assert dirs == set()
+    assert dirs == []
     assert "does not exist" in caplog.text
 
 
@@ -114,7 +120,7 @@ def test_a_directory_holding_no_summary_at_all_is_reported(tmp_path, caplog) -> 
 
     dirs, _ = discover_sample_directories([str(tmp_path / "empty")])
 
-    assert dirs == set()
+    assert dirs == []
     assert "No pipeline_summary.json found in directory" in caplog.text
 
 
@@ -125,26 +131,102 @@ def test_a_file_that_is_neither_a_directory_nor_a_zip_is_reported(tmp_path, capl
 
     dirs, _ = discover_sample_directories([str(stray)])
 
-    assert dirs == set()
+    assert dirs == []
     assert "Unsupported file type" in caplog.text
 
 
-def test_discovery_returns_an_unordered_set_today() -> None:
-    """Characterisation of a live defect: the cohort's row order is not reproducible.
+def test_the_discovered_directories_come_back_sorted(tmp_path) -> None:
+    """**Specification**: discovery has an order, and it is the lexicographic one.
 
-    Sample directories are collected into a `set`, and `aggregate_cohort` iterates it
-    directly. Set iteration order for `Path` objects follows their string hashes, which
-    Python randomises per process, so two runs of `vntyper cohort` over the same inputs
-    put the rows of the report - and of `cohort_kestrel.csv` and its siblings - in
-    different orders. See
+    The directories used to come back in a `set`, which `aggregate_cohort` iterated
+    directly, so the row order of the report and of `cohort_kestrel.csv` and its
+    siblings varied between processes. Sorting happens here rather than at the one call
+    site so that every consumer of this function gets the same order, not just the one
+    that was noticed. See
     `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cohort-nondeterministic-sample-order.md`.
 
-    Pinned as the type rather than as an order, because an order this test could assert
-    is exactly what the code does not provide.
+    The inputs are named in reverse on purpose: a deliberately adverse ordering is what
+    distinguishes "sorted" from "happens to arrive in order".
     """
-    dirs, _ = discover_sample_directories([])
+    first = _write_summary(tmp_path / "cohort" / "sample_a")
+    second = _write_summary(tmp_path / "cohort" / "sample_b")
+    third = _write_summary(tmp_path / "cohort" / "sample_c")
 
-    assert isinstance(dirs, set)
+    dirs, _ = discover_sample_directories([str(third), str(second), str(first)])
+
+    assert dirs == [first, second, third]
+
+
+def test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string(tmp_path) -> None:
+    """**Specification**: `sorted()` on `Path` compares the path *parts*.
+
+    `PurePath.__lt__` compares `_parts_normcase`, so the separator never takes part in
+    the comparison. That is the difference this pins: `cohort/sample_one` sorts before
+    `cohort-extra/sample_one` because `"cohort" < "cohort-extra"`, where the raw strings
+    compare the other way round (`"-"` is 0x2d and `"/"` is 0x2f). It is also the order
+    a user reading `ls` would predict, which is the point of choosing it.
+    """
+    plain = _write_summary(tmp_path / "cohort" / "sample_one")
+    suffixed = _write_summary(tmp_path / "cohort-extra" / "sample_one")
+    assert str(suffixed) < str(plain)
+
+    dirs, _ = discover_sample_directories([str(suffixed), str(plain)])
+
+    assert dirs == [plain, suffixed]
+
+
+#: Run in a subprocess: report the discovery order of the directories under ``argv[1]``.
+_ORDER_PROBE = (
+    "import json, sys;"
+    "from vntyper.scripts.cohort_inputs import discover_sample_directories;"
+    "print(json.dumps([p.name for p in discover_sample_directories(sys.argv[1:])[0]]))"
+)
+
+
+def _discovery_order_under_hash_seed(root: Path, seed: str) -> list[str]:
+    """Discover ``root``'s samples in a fresh interpreter with a chosen hash seed.
+
+    ``PYTHONPATH`` is seeded from this process's ``sys.path`` so the child imports the
+    same working tree's ``vntyper`` regardless of its working directory.
+
+    Args:
+        root: The cohort directory to discover.
+        seed: The ``PYTHONHASHSEED`` value for the child interpreter.
+
+    Returns:
+        list[str]: The discovered sample directory names, in discovery order.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _ORDER_PROBE, str(root)],
+        env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": os.pathsep.join(sys.path)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_processes_with_different_hash_seeds_discover_the_same_order(tmp_path) -> None:
+    """**Specification**, and the defect this closes is *between* processes.
+
+    A single-process comparison cannot see the old behaviour at all: `PYTHONHASHSEED` is
+    fixed for the life of an interpreter, so two calls in one process agreed even while
+    two `vntyper cohort` runs did not. The directories came back in a `set`, set
+    iteration order for `Path` follows `Path.__hash__`, and that is the hash of the path
+    string, which Python randomises per process. Five interpreters with five seeds is
+    the only way to observe it, so this spawns five - ten samples each, because a
+    two-element set can agree by luck and a ten-element one cannot.
+
+    A stable fingerprint in `test_cohort_summary_oracle.py` depends on this: a report
+    whose row order moved with the hash seed could not have one.
+    """
+    for index in range(10):
+        _write_summary(tmp_path / "cohort" / f"sample_{index:02d}")
+
+    orders = [_discovery_order_under_hash_seed(tmp_path / "cohort", seed) for seed in ("0", "1", "2", "3", "4")]
+
+    assert len({tuple(order) for order in orders}) == 1
+    assert orders[0] == [f"sample_{index:02d}" for index in range(10)]
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +258,8 @@ def test_a_zip_whose_root_is_a_sample_is_extracted_and_used(tmp_path) -> None:
     dirs, temp_dirs = discover_sample_directories([str(archive)])
 
     try:
-        assert len(dirs) == 1
         assert len(temp_dirs) == 1
-        assert next(iter(dirs)) == Path(temp_dirs[0])
+        assert dirs == [Path(temp_dirs[0])]
     finally:
         cleanup_temp_dirs(temp_dirs)
 
@@ -196,7 +277,7 @@ def test_a_zip_of_several_samples_is_searched_recursively(tmp_path) -> None:
     dirs, temp_dirs = discover_sample_directories([str(archive)])
 
     try:
-        assert {d.name for d in dirs} == {"sample_one", "sample_two"}
+        assert [d.name for d in dirs] == ["sample_one", "sample_two"]
     finally:
         cleanup_temp_dirs(temp_dirs)
 
@@ -208,7 +289,7 @@ def test_a_zip_holding_no_summary_is_reported_and_its_temp_dir_still_tracked(tmp
     dirs, temp_dirs = discover_sample_directories([str(archive)])
 
     try:
-        assert dirs == set()
+        assert dirs == []
         assert "No pipeline_summary.json found in extracted zip file" in caplog.text
         assert len(temp_dirs) == 1
     finally:
@@ -232,7 +313,7 @@ def test_a_corrupt_zip_is_reported_and_leaves_no_temporary_directory(tmp_path, c
 
     dirs, temp_dirs = discover_sample_directories([str(archive)])
 
-    assert dirs == set()
+    assert dirs == []
     assert temp_dirs == []
     assert "Bad zip file" in caplog.text
 
@@ -251,7 +332,7 @@ def test_a_zip_that_fails_to_extract_for_any_other_reason_is_also_cleaned_up(tmp
 
     dirs, temp_dirs = discover_sample_directories([str(archive)])
 
-    assert dirs == set()
+    assert dirs == []
     assert temp_dirs == []
     assert "Error extracting zip file" in caplog.text
 

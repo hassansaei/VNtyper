@@ -87,16 +87,16 @@ def sample_categories(
     ``unify``, and the rows of each sample are aggregated with
     :func:`aggregate_sample_category`.
 
-    Note that ``frame`` is annotated **in place** with the two working columns
-    ``__row_result`` and ``__unified``. That is preserved from the code this was
-    extracted from, and it is a defect rather than a contract: ``aggregate_cohort``
-    renders the report before it exports the same frame, so both columns reach the
-    CSV/TSV/JSON outputs. Pinned by
-    ``test_cohort_categories.py::test_the_reduction_annotates_the_caller_s_frame_in_place_today``.
+    ``frame`` is **not modified**. The two working columns ``__row_result`` and
+    ``__unified`` are written onto a copy, because the caller goes on to publish the
+    frame: ``aggregate_cohort`` renders the report and then exports the very same frame
+    as CSV/TSV/JSON, so annotating it in place - which this did until the #181-#197
+    follow-ups - put both internal columns into every machine-readable output. Pinned by
+    ``test_cohort_categories.py::test_the_reduction_leaves_the_caller_s_frame_untouched``.
 
     Args:
-        frame: One row per result. A frame that is empty, or that carries no
-            ``Sample`` column, yields an empty series.
+        frame: One row per result. Not modified. A frame that is empty, or that carries
+            no ``Sample`` column, yields an empty series.
         logic_config: The ``algorithm_logic`` entry for this algorithm.
         unify: :func:`unify_kestrel_result` or :func:`unify_advntr_result`.
 
@@ -104,12 +104,13 @@ def sample_categories(
         pd.Series: One category per sample, indexed by sample name.
     """
     if not frame.empty and "Sample" in frame.columns:
-        frame["__row_result"] = frame.apply(
+        annotated = frame.copy()
+        annotated["__row_result"] = annotated.apply(
             lambda row: compute_algorithm_result(pd.DataFrame([row]), logic_config),
             axis=1,
         )
-        frame["__unified"] = frame["__row_result"].apply(unify)
-        return frame.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
+        annotated["__unified"] = annotated["__row_result"].apply(unify)
+        return annotated.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
     return pd.Series(dtype=str)
 
 
