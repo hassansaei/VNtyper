@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 
 from vntyper.scripts.assembly_guard import (
+    STATUS_CONFLICT,
     STATUS_MISMATCH,
     STATUS_UNDETERMINED,
     AssemblyVerdict,
@@ -68,7 +69,15 @@ def read_alignment_header(input_file: str, config: dict) -> str | None:
 
 
 def enforce_declared_assembly(reference_assembly: str, header: str | None) -> AssemblyVerdict:
-    """Stop the run when the declared assembly and the header disagree.
+    """Stop the run when the coordinates about to be sliced are not the header's.
+
+    Two verdicts are fatal. ``mismatch`` is a disagreement between the declaration
+    and the header; ``conflict`` is a disagreement inside the header itself, where
+    two aliases of chromosome 1 carry two different recognised build lengths. Only
+    ``undetermined`` proceeds, and it means the question could not be answered at
+    all -- an unrecognised chr1 length, an unreadable header, an assembly name the
+    registry does not know. Contradictory evidence is not an unanswered question
+    and must not take that path.
 
     Args:
         reference_assembly: The assembly the caller declared, verbatim, as
@@ -79,14 +88,20 @@ def enforce_declared_assembly(reference_assembly: str, header: str | None) -> As
         AssemblyVerdict: The verdict, so a caller can record it.
 
     Raises:
-        ValueError: If the declared assembly and the header name different builds.
-            The message names the declared string, both builds, the chr1 length that
-            decided it, and the ``--reference-assembly`` value that would be right.
+        ValueError: If the declared assembly and the header name different builds,
+            or if the header names two builds itself. The message names the declared
+            string, the builds involved and the chr1 lengths that decided it; for a
+            mismatch it also names the ``--reference-assembly`` value that would be
+            right.
     """
     contigs = parse_contigs_from_header(header) if header else []
     verdict = reconcile_assembly(reference_assembly, contigs)
 
-    if verdict.status == STATUS_MISMATCH:
+    # `conflict` is fatal for the same reason `mismatch` is: the coordinates about
+    # to be sliced are not the coordinates the contig carries. The difference is
+    # only where the contradiction lives -- between the declaration and the header,
+    # or inside the header itself -- and neither is something to proceed through.
+    if verdict.status in (STATUS_MISMATCH, STATUS_CONFLICT):
         logger.error(verdict.message)
         raise ValueError(verdict.message)
 

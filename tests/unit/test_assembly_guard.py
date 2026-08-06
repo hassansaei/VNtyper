@@ -23,6 +23,7 @@ from tests.builders import (  # noqa: E402
 )
 from vntyper.scripts.assembly_guard import (  # noqa: E402
     STATUS_AGREE,
+    STATUS_CONFLICT,
     STATUS_MISMATCH,
     STATUS_UNDETERMINED,
     UNKNOWN,
@@ -273,18 +274,51 @@ CONFLICTING_ORDERS = [
 
 @pytest.mark.parametrize("label,contigs", CONFLICTING_ORDERS, ids=[c[0] for c in CONFLICTING_ORDERS])
 @pytest.mark.parametrize("declared", ["hg19", "hg38", "GRCh37", "GRCh38"])
-def test_conflicting_chr1_entries_are_undetermined_whatever_the_order(label, contigs, declared):
+def test_conflicting_recognised_chr1_entries_conflict_whatever_the_order(label, contigs, declared):
     """
-    A hybrid header carrying both `1` and `chr1` at *different* lengths cannot identify a
-    build. Taking the first match made the answer depend on the order the aligner happened
-    to write the header, so the same file could pass declared as hg19 and be rejected
-    declared as hg19 with its contigs reordered. Refusing to decide is the verdict; a
-    `mismatch` here would fail a possibly-usable run on the strength of an abnormal header.
+    A hybrid header carrying both `1` and `chr1` at two *recognised* build lengths is a
+    `conflict`: the header asserts GRCh37 and GRCh38 at once, and no ordering of it makes
+    that true. Taking the first match made the answer depend on the order the aligner
+    happened to write the header, so that is still refused -- but the verdict is now fatal
+    rather than `undetermined`.
+
+    This reverses an earlier decision made in review, which had this case `undetermined`
+    and therefore proceeding. It was wrong: `undetermined` means "the guard could not
+    answer the question", and the caller responds by trusting the declared assembly
+    unchecked. Here the header has answered, contradictorily. Whichever alias naming
+    resolution then picks, the declared build's MUC1 coordinates get applied to a contig
+    of the other build's length -- the wrong slice, and a plausible false negative, which
+    is the exact failure class this guard exists to make visible. Contradictory evidence
+    must not fail open.
     """
     verdict = reconcile_assembly(declared, contigs)
 
-    assert verdict.status == STATUS_UNDETERMINED, label
+    assert verdict.status == STATUS_CONFLICT, label
     assert verdict.chr1_length is None, label
+    assert verdict.coordinate_system == UNKNOWN, label
+
+
+@pytest.mark.parametrize("declared", ["hg19", "hg38"])
+@pytest.mark.parametrize(
+    "aliases",
+    [
+        pytest.param((("chr1", GRCH37_CHR1), ("1", 12345)), id="recognised_then_unrecognised"),
+        pytest.param((("1", 12345), ("chr1", GRCH38_CHR1)), id="unrecognised_then_recognised"),
+        pytest.param((("chr1", 12345), ("1", 999)), id="two_unrecognised"),
+    ],
+)
+def test_an_unrecognised_chr1_length_stays_undetermined(declared, aliases):
+    """Only *mutually contradictory recognised* evidence is fatal.
+
+    An unrecognised chr1 length is not a contradiction, it is an unanswered question: a
+    patched, decoy-carrying or non-human reference can name chromosome 1 at a length this
+    guard has no entry for. That must keep warning and proceeding exactly as before, or
+    the fatal conflict above becomes a guard that rejects ordinary inputs.
+    """
+    verdict = reconcile_assembly(declared, hybrid_header_contigs(*aliases))
+
+    assert verdict.status == STATUS_UNDETERMINED
+    assert verdict.chr1_length is None
 
 
 def test_the_verdict_is_identical_for_both_orderings_of_the_same_conflict():
@@ -298,13 +332,15 @@ def test_the_verdict_is_identical_for_both_orderings_of_the_same_conflict():
     assert forward.message == reverse.message
 
 
-def test_a_conflicting_header_names_both_lengths_in_its_message():
-    """The reader has to be able to see *what* conflicted; the guard is non-fatal."""
+def test_a_conflicting_header_names_both_contigs_and_both_lengths_in_its_message():
+    """This message becomes an exception the user sees, so it must show what contradicts."""
     verdict = reconcile_assembly("hg19", hybrid_header_contigs(("1", GRCH38_CHR1), ("chr1", GRCH37_CHR1)))
 
     plain = verdict.message.replace(",", "")
     assert str(GRCH37_CHR1) in plain
     assert str(GRCH38_CHR1) in plain
+    assert "chr1" in verdict.message
+    assert "GRCh37" in verdict.message and "GRCh38" in verdict.message
     assert "conflicting" in verdict.message
 
 

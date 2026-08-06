@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # Verdict statuses. Callers should import these rather than spell the strings.
 STATUS_AGREE = "agree"
 STATUS_MISMATCH = "mismatch"
+STATUS_CONFLICT = "conflict"
 STATUS_UNDETERMINED = "undetermined"
 
 #: Value used for any build or convention that could not be determined.
@@ -50,8 +51,13 @@ class AssemblyVerdict:
 
     Attributes:
         status: One of :data:`STATUS_AGREE`, :data:`STATUS_MISMATCH`,
-            :data:`STATUS_UNDETERMINED`. `undetermined` means the question could
-            not be answered -- it is neither a pass nor a failure.
+            :data:`STATUS_CONFLICT`, :data:`STATUS_UNDETERMINED`. `undetermined`
+            means the question could not be answered -- it is neither a pass nor
+            a failure. `conflict` means the header answered it *twice, and
+            contradictorily*: two aliases of chromosome 1 carrying two different
+            recognised build lengths. That is a defect in the input rather than
+            an unanswered question, so callers treat it as they treat
+            `mismatch`.
         declared: The assembly name the caller declared, verbatim.
         declared_coordinate_system: The *build* `declared` resolves to --
             "GRCh37", "GRCh38", or :data:`UNKNOWN` if the name is not in the
@@ -157,11 +163,19 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
     build unambiguously.
 
     A header that names chromosome 1 more than once with *conflicting* lengths
-    -- a hybrid carrying both `1` and `chr1` from different builds -- is
-    `undetermined`, never `mismatch`. Deciding from whichever alias came first
-    would let contig order reject a usable input; refusing to decide keeps the
-    guard from failing a run on the strength of an abnormal header, and the
-    conflict is named in `message`.
+    -- a hybrid carrying both `1` and `chr1` at two lengths this module
+    recognises as different builds -- is `conflict`. Contig order is still never
+    consulted: no ordering of a self-contradictory header makes it consistent,
+    and whichever alias downstream naming resolution picks, the declared build's
+    MUC1 coordinates land on a contig of the other build's length. That is the
+    wrong slice and a plausible false negative, so the evidence is reported as
+    contradictory rather than as absent, and `message` names both contigs and
+    both lengths.
+
+    An **unrecognised** chr1 length is a different case and stays
+    `undetermined`: a patched or non-human reference can declare a chromosome 1
+    this module has no entry for, and that is an unanswered question, not a
+    contradiction. Only mutually contradictory *recognised* evidence conflicts.
 
     This function never raises and never logs above INFO. It returns a verdict;
     the caller decides whether a mismatch is fatal.
@@ -177,9 +191,9 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
 
     Returns:
         AssemblyVerdict: The verdict. `status` is `agree` when both builds are
-        known and equal, `mismatch` when both are known and differ, and
-        `undetermined` when either could not be determined -- including when
-        several chr1 entries disagree.
+        known and equal, `mismatch` when both are known and differ, `conflict`
+        when the header's own chr1 entries name two different recognised builds,
+        and `undetermined` when the build could not be determined at all.
 
     Examples:
         >>> v = reconcile_assembly("hg19", [{"name": "chr1", "length": 248956422}])
@@ -202,6 +216,24 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
         detected_build = UNKNOWN
     else:
         detected_build = detect_assembly_from_chr1_length([{"name": "chr1", "length": chr1_length}]) or UNKNOWN
+
+    recognised = _recognised_builds(chr1_lengths)
+    if len({build for _, build in recognised}) > 1:
+        # The header contradicts itself. Decided before the declared/detected
+        # comparison because no declaration can reconcile it: there is no build
+        # such a header agrees with, and `undetermined` would fail open onto
+        # whichever alias downstream naming resolution happens to pick.
+        conflict_message = _conflict_message(declared, usable, recognised)
+        logger.debug(conflict_message)
+        return AssemblyVerdict(
+            status=STATUS_CONFLICT,
+            declared=declared,
+            declared_coordinate_system=declared_build,
+            coordinate_system=UNKNOWN,
+            naming_convention=naming_convention,
+            chr1_length=None,
+            message=conflict_message,
+        )
 
     if declared_build != UNKNOWN and detected_build != UNKNOWN:
         if declared_build == detected_build:
@@ -258,20 +290,88 @@ def _undetermined_reason(declared_build: str, usable: list[dict[str, Any]], chr1
     if not chr1_lengths:
         return "the header has no chr1 with an integer length"
     if len(chr1_lengths) > 1:
-        # Sorted by contig name, not header order: the whole point of this branch
-        # is that ordering is not evidence, so it must not reach the message either.
-        from vntyper.scripts.chromosome_utils import is_chr1_name
-
-        named = sorted(
-            {
-                (contig["name"], contig["length"])
-                for contig in usable
-                if is_chr1_name(contig["name"]) and contig.get("length") in chr1_lengths
-            }
-        )
+        # Reaching here means at most one of these lengths is a recognised build:
+        # two recognised ones are a `conflict` and never arrive. Ordering is not
+        # evidence in either branch, so it must not reach the message either.
         return (
-            "the header names chromosome 1 more than once with conflicting lengths ("
-            + ", ".join(f"{name} is {length:,} bp" for name, length in named)
-            + "), so no single length identifies the build"
+            "the header names chromosome 1 more than once with differing lengths ("
+            + _describe_chr1_contigs(usable, chr1_lengths)
+            + "), and no single one of them identifies a build"
         )
     return f"chr1 is {chr1_lengths[0]:,} bp, which matches neither GRCh37 nor GRCh38"
+
+
+def _recognised_builds(chr1_lengths: list[int]) -> list[tuple[int, str]]:
+    """Pair each chr1 length with the build it identifies, dropping the unrecognised.
+
+    Each length is offered to detection on its own, synthesised into a single
+    contig, so that neither header order nor the presence of a second chromosome 1
+    can influence what any one length resolves to.
+
+    Args:
+        chr1_lengths (list[int]): Result of :func:`_chr1_lengths`.
+
+    Returns:
+        list[tuple[int, str]]: `(length, build)` for every length the length ->
+        build table knows, in the order given. Lengths it does not know are
+        omitted, which is what keeps an unrecognised chromosome 1 out of the
+        conflict decision and on the `undetermined` path.
+    """
+    recognised: list[tuple[int, str]] = []
+    for length in chr1_lengths:
+        build = detect_assembly_from_chr1_length([{"name": "chr1", "length": length}])
+        if build:
+            recognised.append((length, build))
+    return recognised
+
+
+def _describe_chr1_contigs(usable: list[dict[str, Any]], lengths: list[int]) -> str:
+    """Name the chromosome 1 contigs that carry the given lengths.
+
+    Args:
+        usable (list[dict[str, Any]]): Contigs that survived filtering.
+        lengths (list[int]): The chr1 lengths to describe.
+
+    Returns:
+        str: A comma-separated clause such as `"1 is 248,956,422 bp, chr1 is
+        249,250,621 bp"`, sorted by contig name so that header order cannot
+        reach the message.
+    """
+    from vntyper.scripts.chromosome_utils import is_chr1_name
+
+    named = sorted(
+        {
+            (contig["name"], contig["length"])
+            for contig in usable
+            if is_chr1_name(contig["name"]) and contig.get("length") in lengths
+        }
+    )
+    return ", ".join(f"{name} is {length:,} bp" for name, length in named)
+
+
+def _conflict_message(declared: str, usable: list[dict[str, Any]], recognised: list[tuple[int, str]]) -> str:
+    """Compose the message for a self-contradictory header.
+
+    This message becomes the exception the user reads, so it names both contigs,
+    both lengths and both builds -- enough to see which alias is wrong without
+    looking the length table up by hand.
+
+    Args:
+        declared (str): The assembly the caller declared, verbatim.
+        usable (list[dict[str, Any]]): Contigs that survived filtering.
+        recognised (list[tuple[int, str]]): Result of :func:`_recognised_builds`.
+
+    Returns:
+        str: A complete sentence suitable as both a log line and an exception
+        message.
+    """
+    builds = sorted({build for _, build in recognised})
+    described = _describe_chr1_contigs(usable, [length for length, _ in recognised])
+    return (
+        f"The alignment header contradicts itself: it names chromosome 1 more than once with conflicting "
+        f"lengths ({described}), identifying {' and '.join(builds)} at the same time. Declared reference "
+        f"assembly '{declared}' cannot be reconciled with a header that describes two builds: the MUC1 region "
+        f"would be extracted from whichever alias contig resolution selects, and for one of these two that is "
+        f"the wrong build's coordinates, which yields a false negative. Supply an alignment whose header names "
+        f"chromosome 1 once."
+    )

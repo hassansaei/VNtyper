@@ -30,7 +30,7 @@ import pytest
 
 from tests.support.pipeline_harness import run_pipeline_under_harness
 from vntyper.scripts import pipeline_guards
-from vntyper.scripts.assembly_guard import STATUS_AGREE, STATUS_MISMATCH, STATUS_UNDETERMINED
+from vntyper.scripts.assembly_guard import STATUS_AGREE, STATUS_CONFLICT, STATUS_MISMATCH, STATUS_UNDETERMINED
 
 pytestmark = pytest.mark.unit
 
@@ -142,6 +142,58 @@ def test_a_decided_disagreement_is_fatal(declared: str, chr1_length: int, caplog
     assert errors[0].message == message, "AGENTS.md: log and raise the same message"
 
 
+def _hybrid_header(first: tuple[str, int], second: tuple[str, int]) -> str:
+    """Build a SAM header naming chromosome 1 twice, under two aliases.
+
+    Args:
+        first: (contig name, length) of the first chromosome 1 entry.
+        second: (contig name, length) of the second.
+
+    Returns:
+        str: SAM header text.
+    """
+    lines = "".join(f"@SQ\tSN:{name}\tLN:{length}\n" for name, length in (first, second))
+    return f"@HD\tVN:1.6\tSO:coordinate\n{lines}"
+
+
+@pytest.mark.parametrize(
+    "declared",
+    ["hg19", "GRCh37", "hg38", "hg38_ensembl"],
+)
+def test_a_self_contradictory_header_is_fatal(declared: str, caplog) -> None:
+    """A header asserting two recognised builds at once must stop the run, not proceed.
+
+    Whichever alias naming resolution picks, one of the two lengths belongs to the other
+    build, so the declared build's MUC1 coordinates would be applied to a contig that does
+    not carry them there. That is the silent false negative this guard exists to prevent,
+    so contradictory evidence is fatal for every declared build -- there is no declaration
+    a header like this can be reconciled with.
+
+    Args:
+        declared: The declared assembly name.
+        caplog: Pytest log capture.
+    """
+    header = _hybrid_header(("chr1", GRCH37_CHR1), ("1", GRCH38_CHR1))
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError) as excinfo:
+        pipeline_guards.enforce_declared_assembly(declared, header)
+
+    message = str(excinfo.value)
+    assert "249,250,621" in message and "248,956,422" in message
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert errors, "a conflict must be logged at ERROR as well as raised"
+    assert errors[0].message == message, "AGENTS.md: log and raise the same message"
+
+
+def test_a_conflict_verdict_is_enforced_by_status_not_by_message() -> None:
+    """The policy must key off ``STATUS_CONFLICT``, so a reworded message cannot disarm it."""
+    verdict_status = STATUS_CONFLICT
+    with mock.patch.object(pipeline_guards, "reconcile_assembly") as reconcile:
+        reconcile.return_value = mock.Mock(status=verdict_status, message="anything at all")
+        with pytest.raises(ValueError, match="anything at all"):
+            pipeline_guards.enforce_declared_assembly("hg19", _header())
+
+
 @pytest.mark.parametrize(
     ("declared", "header"),
     [
@@ -149,6 +201,11 @@ def test_a_decided_disagreement_is_fatal(declared: str, chr1_length: int, caplog
         pytest.param("hg19", "@HD\tVN:1.6\n", id="no_contigs"),
         pytest.param("hg19", _header(name="chr2", length=GRCH37_CHR1), id="no_chr1"),
         pytest.param("hg19", _header(length=12345), id="chr1_matches_no_build"),
+        pytest.param(
+            "hg19",
+            _hybrid_header(("chr1", GRCH37_CHR1), ("1", 12345)),
+            id="one_recognised_chr1_beside_an_unrecognised_one",
+        ),
         pytest.param("not_an_assembly", _header(), id="declared_name_unknown"),
     ],
 )
@@ -411,7 +468,7 @@ def test_the_pure_verdict_function_still_has_no_policy(caplog) -> None:
             assert verdict.message, "every verdict must carry a message the caller can log"
             statuses.add(verdict.status)
 
-    assert statuses == {STATUS_AGREE, STATUS_MISMATCH, STATUS_UNDETERMINED}, (
+    assert statuses == {STATUS_AGREE, STATUS_CONFLICT, STATUS_MISMATCH, STATUS_UNDETERMINED}, (
         f"the probe set no longer reaches every branch: {sorted(statuses)}"
     )
 

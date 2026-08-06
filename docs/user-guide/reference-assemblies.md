@@ -52,6 +52,13 @@ resolved. The chr1 length in the alignment header decides which build the file a
 describes; if that disagrees with what you declared, the run **stops with an error**
 naming both builds and the value you should have used.
 
+A header can also disagree with *itself*: a hybrid header naming chromosome 1 twice,
+once as `1` and once as `chr1`, at two lengths belonging to two different builds. That
+also **stops the run**, because whichever alias the region string resolves to, one of
+the two contigs does not carry MUC1 where the declared build says it does. No value of
+`--reference-assembly` reconciles such a file; re-generate it against a single
+reference.
+
 This matters because the failure it prevents is invisible. The MUC1 VNTR sits about
 30 kb apart between the two builds, so declaring the wrong one extracts a region that
 does not contain the VNTR. Kestrel then finds no supporting reads, and the report says
@@ -64,7 +71,9 @@ Three things the check deliberately does **not** do:
   The contig *naming* convention is reported but never used to decide.
 - **It does not guess.** If the header cannot be read, carries no chr1, or carries a
   chr1 whose length matches neither build, the result is *undetermined*: VNtyper logs a
-  warning and continues. Undetermined is neither a pass nor a failure.
+  warning and continues. Undetermined is neither a pass nor a failure — it means the
+  question could not be answered, which is not the same as the header answering it
+  contradictorily.
 - **It does not apply to FASTQ input.** A FASTQ has no header of its own, and the header
   produced after alignment describes the BWA reference rather than the sample.
 
