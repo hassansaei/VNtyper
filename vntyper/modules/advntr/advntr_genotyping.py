@@ -8,6 +8,7 @@ import subprocess as sp
 import numpy as np
 import pandas as pd
 
+from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
@@ -103,10 +104,19 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
             logger.critical(f"Could not create output directory {output}: {e}")
             return 1
 
+    # `run_command` runs this as one string under bash (trap 9), so quoting can only
+    # happen here. Paths, the sample-derived output name and the thread count are
+    # quoted; `advntr_path` and `additional_commands` are not, because both hold
+    # *command fragments* from config.json - `advntr` is "mamba run -n envadvntr advntr"
+    # (trap 6) and `additional_commands` is a flag list such as "-aln". Quoting either
+    # would collapse it into a single token bash then looks for as one binary or one
+    # argument. They are operator-controlled configuration, not user input.
     advntr_command = (
-        f"{advntr_path} genotype -fs -vid {vid} "
-        f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR{output_ext} "
-        f"-m {db_file} --working_directory {output} -t {threads} {additional_commands}"
+        f"{advntr_path} genotype -fs -vid {quote_path(vid)} "
+        f"--alignment_file {quote_path(sorted_bam)} "
+        f"-o {quote_path(f'{output}/{output_name}_adVNTR{output_ext}')} "
+        f"-m {quote_path(db_file)} --working_directory {quote_path(output)} "
+        f"-t {quote_path(threads)} {additional_commands}"
     )
 
     # Define log file for adVNTR output

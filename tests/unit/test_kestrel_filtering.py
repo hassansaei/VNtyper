@@ -353,3 +353,47 @@ class TestConstructKestrelCommand:
         """
         with pytest.raises(ValueError, match="FASTQ input files are missing or invalid"):
             self._command(fastq_1=fastq_1, fastq_2=fastq_2)
+
+    # -- shell quoting -----------------------------------------------------------------
+    #
+    # ``run_command`` executes this string under ``shell=True`` (trap 9), which makes
+    # quoting the caller's job. The web service accepts filenames that reach this line,
+    # so a space alone splits one argument into two and a ``;`` is arbitrary command
+    # execution. ``java_path`` stays unquoted: config.json holds a command *prefix*
+    # there, which quoting would collapse into one token.
+
+    HOSTILE = ["/data/my samples/R1.fastq.gz", "/data/o'brien/R1.fastq.gz", "/data/x; id/R1.fastq.gz"]
+
+    @pytest.mark.parametrize("hostile", HOSTILE)
+    @pytest.mark.parametrize("argument,flag", [("fastq_1", None), ("reference_vntr", "-r"), ("vcf_out", "-o")])
+    def test_a_hostile_path_survives_as_one_shell_word(self, argument, flag, hostile):
+        """Each operand, rendered and then re-split the way bash would split it."""
+        import shlex
+
+        words = shlex.split(self._command(**{argument: hostile}))
+
+        if flag is None:
+            assert hostile in words, f"{hostile!r} did not survive as one word"
+        else:
+            assert words[words.index(flag) + 1] == hostile
+
+    def test_a_sample_name_with_a_space_stays_attached_to_the_s_flag(self):
+        """``-s`` takes its value with no space, so quoting must not introduce one."""
+        import shlex
+
+        words = shlex.split(self._command(sample_name="patient 7"))
+
+        assert "-spatient 7" in words
+        assert "-s" not in words, "the sample name must not become a separate argument"
+
+    def test_a_hostile_output_directory_survives_in_both_places(self):
+        import shlex
+
+        words = shlex.split(self._command(output_dir="/out/my run"))
+
+        assert words[words.index("-p") + 1] == "/out/my run/output.sam"
+        assert words[words.index("--temploc") + 1] == "/out/my run"
+
+    def test_the_java_invocation_stays_several_words(self):
+        """Quoting it would make bash look for one binary named `mamba run ... java`."""
+        assert self._command(java_path="mamba run -n vntyper java").startswith("mamba run -n vntyper java -Xmx12g ")

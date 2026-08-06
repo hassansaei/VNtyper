@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
@@ -137,13 +138,20 @@ def construct_kestrel_command(
     if not fastq_1 or not fastq_2:
         raise ValueError("FASTQ input files are missing or invalid.")
 
+    # `run_command` runs this as one string under bash (trap 9), so quoting can only
+    # happen here. Paths and the sample name are quoted -- the web service accepts
+    # filenames that reach this line, and a space alone splits one argument into two.
+    # `java_path` is left raw: config.json holds a command *prefix* there, which
+    # quoting would collapse into a single token bash looks for as one binary. The
+    # numeric and memory settings are operator-controlled config, not user input, and
+    # are interpolated as before.
     base_command = (
-        f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
+        f"{java_path} -Xmx{java_memory} -jar {quote_path(kestrel_path)} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
-        f"-r {reference_vntr} -o {vcf_out} "
-        f"-s{sample_name} {fastq_1} {fastq_2} "
-        f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout "
-        f"--loglevel {log_level.upper()} --temploc {output_dir}"
+        f"-r {quote_path(reference_vntr)} -o {quote_path(vcf_out)} "
+        f"-s{quote_path(sample_name)} {quote_path(fastq_1)} {quote_path(fastq_2)} "
+        f"--hapfmt sam -p {quote_path(f'{output_dir}/output.sam')} --logstderr --logstdout "
+        f"--loglevel {log_level.upper()} --temploc {quote_path(output_dir)}"
     )
     if additional_settings:
         base_command += " " + additional_settings

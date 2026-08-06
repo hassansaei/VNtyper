@@ -18,6 +18,7 @@ Two things are pinned here:
 """
 
 import logging
+import shlex
 from pathlib import Path
 
 import pytest
@@ -217,15 +218,44 @@ class TestReferenceAssemblyIsAccceptedAndIgnored:
         assert "hg38" not in str(settings)
 
 
-class TestShellInterpolationIsUnquoted:
+class TestShellInterpolationIsQuoted:
     """
-    Characterisation: ``run_command`` executes with ``shell=True`` and its docstring makes
-    quoting the caller's job, but this caller interpolates raw. A path containing a space
-    silently becomes two arguments. Pinned rather than fixed so that adding ``shlex.quote``
-    is a deliberate, visible change.
+    ``run_command`` executes with ``shell=True`` (trap 9), which makes quoting the
+    caller's job. This caller used to interpolate raw, so a path containing a space
+    silently became two arguments and a path containing a ``;`` was arbitrary command
+    execution -- and the web service accepts filenames that reach this line.
+
+    ``shark_path`` stays unquoted on purpose: ``config.json`` holds a command *prefix*
+    there ("mamba run -n shark_env shark"), which quoting would collapse into one token.
     """
 
-    def test_a_path_with_a_space_is_interpolated_unquoted(self, tmp_path, captured_command):
-        filter_with(tmp_path, fastq_1="/data/my samples/R1.fastq.gz")
+    @pytest.mark.parametrize(
+        ("flag", "argument", "hostile"),
+        [
+            ("-1", "fastq_1", "/data/my samples/R1.fastq.gz"),
+            ("-2", "fastq_2", "/data/my samples/R2.fastq.gz"),
+            ("-1", "fastq_1", "/data/o'brien/R1.fastq.gz"),
+            ("-1", "fastq_1", "/data/x; touch /tmp/pwned/R1.fastq.gz"),
+            ("-1", "fastq_1", "/data/$(whoami)/R1.fastq.gz"),
+            ("-1", "fastq_1", "/data/`id`/R1.fastq.gz"),
+        ],
+    )
+    def test_a_hostile_path_survives_as_one_shell_word(self, tmp_path, captured_command, flag, argument, hostile):
+        filter_with(tmp_path, **{argument: hostile})
 
-        assert "-1 /data/my samples/R1.fastq.gz " in captured_command[0]["command"]
+        command = captured_command[0]["command"]
+        words = shlex.split(command)
+        assert words[words.index(flag) + 1] == hostile, f"{hostile!r} did not survive as one word: {command}"
+
+    def test_a_sample_name_with_a_space_survives_in_both_output_paths(self, tmp_path, captured_command):
+        filter_with(tmp_path, sample_name="patient 7")
+
+        words = shlex.split(captured_command[0]["command"])
+        assert words[words.index("-o") + 1] == str(tmp_path / "patient 7_shark_R1.fastq")
+        assert words[words.index("-p") + 1] == str(tmp_path / "patient 7_shark_R2.fastq")
+
+    def test_the_tool_prefix_is_still_three_separate_words(self, tmp_path, captured_command):
+        """Quoting `shark_path` would make bash look for one binary called `mamba run ...`."""
+        filter_with(tmp_path)
+
+        assert captured_command[0]["command"].startswith("mamba run -n shark_env shark ")

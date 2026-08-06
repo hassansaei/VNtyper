@@ -13,6 +13,7 @@ not run" and a confusing failure several stages later.
 """
 
 import logging
+import shlex
 import subprocess as sp
 from pathlib import Path
 
@@ -85,6 +86,73 @@ class TestTheCommandLine:
 
         assert captured_command[0]["critical"] is True
         assert captured_command[0]["cwd"] == str(tmp_path)
+
+
+class TestShellInterpolationIsQuoted:
+    """
+    ``run_command`` executes with ``shell=True`` (trap 9), which makes quoting the caller's
+    job. Every operand here originates outside ``config["tools"]`` -- the BAM path, the
+    output directory, the sample-derived ``output_name`` -- and the web service accepts
+    filenames that reach this line, so a space alone splits one argument into two and a
+    ``;`` is arbitrary command execution.
+
+    ``advntr_path`` and ``additional_commands`` stay unquoted on purpose: both hold command
+    *fragments* from config (``"mamba run -n envadvntr advntr"``, ``"-aln"``), which
+    quoting would collapse into a single token.
+    """
+
+    #: Single path components, so each can be a real directory under ``tmp_path``.
+    HOSTILE = ["my samples", "o'brien", "x; touch pwned", "$(whoami)", "`id`", 'quote"inside']
+
+    @pytest.mark.parametrize("fragment", HOSTILE)
+    def test_a_hostile_bam_path_survives_as_one_shell_word(self, tmp_path, captured_command, fragment):
+        db_file = tmp_path / "vntr_db.db"
+        db_file.write_text("db")
+        directory = tmp_path / fragment
+        directory.mkdir()
+        sorted_bam = directory / "sample.sorted.bam"
+        sorted_bam.write_text("bam")
+        output = tmp_path / "advntr"
+        output.mkdir()
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        words = shlex.split(captured_command[0]["command"])
+        assert words[words.index("--alignment_file") + 1] == str(sorted_bam)
+
+    @pytest.mark.parametrize("fragment", HOSTILE)
+    def test_a_hostile_output_name_survives_as_one_shell_word(self, inputs, captured_command, fragment):
+        db_file, sorted_bam, output = inputs
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), fragment, MAIN_CONFIG)
+
+        words = shlex.split(captured_command[0]["command"])
+        assert words[words.index("-o") + 1] == f"{output}/{fragment}_adVNTR.vcf"
+
+    @pytest.mark.parametrize("fragment", HOSTILE)
+    def test_a_hostile_output_directory_survives_in_both_places(self, tmp_path, captured_command, fragment):
+        db_file = tmp_path / "vntr_db.db"
+        db_file.write_text("db")
+        sorted_bam = tmp_path / "sample.sorted.bam"
+        sorted_bam.write_text("bam")
+        output = tmp_path / fragment
+        output.mkdir()
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        words = shlex.split(captured_command[0]["command"])
+        assert words[words.index("--working_directory") + 1] == str(output)
+        assert words[words.index("-o") + 1] == f"{output}/output_adVNTR.vcf"
+
+    def test_the_tool_prefix_and_the_flag_list_stay_separate_words(self, inputs, captured_command):
+        """Quoting either would give bash one token where it needs several."""
+        db_file, sorted_bam, output = inputs
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        command = captured_command[0]["command"]
+        assert command.startswith("mamba run -n envadvntr advntr genotype ")
+        assert command.endswith(" -aln")
 
 
 class TestSettingsComeFromTheDerivedGlobal:
