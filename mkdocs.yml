@@ -127,6 +127,7 @@ nav:
     - Reports & Visualization: pipeline/reports.md
   - Development:
     - CI/CD Follow-ups: development/ci-followups.md
+    - Golden-Cohort Gate: development/golden-cohort-gate.md
   - About:
     - about/index.md
     - Scientific Background: about/scientific-background.md
