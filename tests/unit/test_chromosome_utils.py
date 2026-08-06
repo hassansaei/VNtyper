@@ -43,12 +43,20 @@ class TestDetectNamingConvention:
         """Test handling of empty contig list."""
         assert detect_naming_convention([]) == "unknown"
 
-    def test_mixed_naming(self):
-        """Test handling of mixed naming conventions."""
+    def test_a_bare_majority_of_ucsc_names_wins(self):
+        """3 of 5 clears the 50% threshold, so the convention is decided."""
+        contigs = ["chr1", "chr2", "chr3", "chrUn_KI270302v1", "HLA-A*01:01:01:01"]
+        assert detect_naming_convention(contigs) == "ucsc"
+
+    def test_a_minority_of_ucsc_names_decides_nothing(self):
+        """2 of 5 misses the threshold and no other convention reaches it either."""
+        contigs = ["chr1", "chr2", "chrUn_KI270302v1", "HLA-A*01:01:01:01", "phiX174"]
+        assert detect_naming_convention(contigs) == "unknown"
+
+    def test_mixed_naming_with_no_majority_is_unknown(self):
+        """Three conventions, one contig each: nothing reaches 50%."""
         contigs = ["chr1", "2", "NC_000003.11"]
-        # Should return unknown since no single convention dominates
-        result = detect_naming_convention(contigs)
-        assert result in ["unknown", "ucsc", "ensembl", "ncbi"]
+        assert detect_naming_convention(contigs) == "unknown"
 
 
 class TestValidateChromosomeName:
@@ -271,6 +279,31 @@ class TestGetChromosomeNameFromBam:
         config = {}
         with pytest.raises(ValueError, match="not found in BAM"):
             get_chromosome_name_from_bam("test.bam", config, chromosome_number=1, reference_assembly="hg19")
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
+    def test_uppercase_contig_resolves_to_the_headers_own_spelling(self, mock_parse, mock_extract):
+        """The region string is handed to samtools, which matches contig names exactly.
+
+        A header spelling `CHR1` must come back as `CHR1`. Returning the
+        canonical `chr1` builds a region samtools cannot find, and an empty
+        region yields no reads and a confident negative.
+        """
+        mock_extract.return_value = "@SQ\tSN:CHR1\tLN:249250621\n"
+        mock_parse.return_value = [{"name": "CHR1", "length": 249250621}]
+
+        result = get_chromosome_name_from_bam("test.bam", {}, chromosome_number=1, reference_assembly="hg19")
+        assert result == "CHR1"
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
+    def test_exact_spelling_is_preferred_over_a_case_insensitive_match(self, mock_parse, mock_extract):
+        """With both spellings present the exact one wins, whatever the list order."""
+        mock_extract.return_value = "@SQ\tSN:CHR1\tLN:249250621\n@SQ\tSN:chr1\tLN:249250621\n"
+        mock_parse.return_value = [{"name": "CHR1", "length": 249250621}, {"name": "chr1", "length": 249250621}]
+
+        result = get_chromosome_name_from_bam("test.bam", {}, chromosome_number=1, reference_assembly="hg19")
+        assert result == "chr1"
 
     @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
     def test_bam_read_error(self, mock_extract):
