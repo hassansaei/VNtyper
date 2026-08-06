@@ -23,7 +23,7 @@ import pytest
 import requests
 
 # Import shared test orchestration for DRY principle
-from tests.test_orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case
+from tests.support.orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case
 
 # Configure logging for the entire module.
 logging.basicConfig(level=logging.INFO)
@@ -523,7 +523,7 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
 
     This test uses SHARED orchestration (run_advntr_test_case) to guarantee
     100% 1to1 congruence with Docker tests. All validation logic is centralized
-    in tests/test_orchestration.py and tests/helpers.py.
+    in tests/support/orchestration.py and tests/helpers.py.
 
     The 'advntr_case' fixture yields a single test scenario with:
       - bam: path to input BAM file

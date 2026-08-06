@@ -110,7 +110,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
     """
     Extract zip archive with intelligent handling of nested directories.
 
-    This uses the SAME logic as tests/test_data_utils.py to ensure
+    This uses the SAME logic as tests/support/data_utils.py to ensure
     consistent extraction behavior.
 
     Args:

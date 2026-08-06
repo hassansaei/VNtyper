@@ -31,7 +31,7 @@ Ordered by expected value, not size.
 ### B1. Test-data fetching is all-or-nothing — HIGH
 
 `scripts/download_test_data.py` re-downloads the full **1120 MB** Zenodo archive when a
-single file is missing, and `tests/test_data_utils.py` calls `pytest.exit()` on failure,
+single file is missing, and `tests/support/data_utils.py` calls `pytest.exit()` on failure,
 killing the whole session including unit tests that need no data.
 
 Observed: two of 114 files were absent locally (the config had moved ahead of the local

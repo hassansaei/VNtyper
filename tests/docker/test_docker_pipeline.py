@@ -6,7 +6,7 @@ guaranteeing 100% test identity. The ONLY difference is the runner function.
 
 Architecture:
 - Shared test cases: tests.parametrization (get_bam_test_cases, etc.)
-- Shared test logic: tests.test_orchestration (run_bam_test_case, etc.)
+- Shared test logic: tests.support.orchestration (run_bam_test_case, etc.)
 - Shared validation: tests.helpers (validate_kestrel_output, etc.)
 - Docker-specific: Runner functions (this file) + fixtures (conftest.py)
 
@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.parametrization import get_advntr_test_cases, get_advntr_test_ids, get_bam_test_cases, get_bam_test_ids
-from tests.test_orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case, run_bam_test_case
+from tests.support.orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case, run_bam_test_case
 
 from .conftest import run_vntyper_pipeline
 

@@ -205,7 +205,7 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
   module. Both adVNTR tests carry `@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)`,
   overriding the global 600 s; that global timeout is right for everything else and CI
   hardware is several times slower than a workstation. The value and the reasoning
-  behind it live in `tests/test_orchestration.py` — the module both adVNTR tests already
+  behind it live in `tests/support/orchestration.py` — the module both adVNTR tests already
   share — so recalibrating for new runner hardware is a one-line change there.
 
 ## Git and PRs
