@@ -10,14 +10,9 @@ Note: This module no longer defines its own CLI parser as these are now defined 
 """
 
 import base64
-import hashlib
-import html
 import json
 import logging
 import os
-import shutil
-import tempfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,72 +23,38 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-# These names are matched by exact string comparison against what pipeline.py
-# records. A typo does not fail - it silently drops a section (AGENTS.md trap 5),
-# so they are named, never spelled out.
-from vntyper.scripts.output_paths import contained_output_path
-from vntyper.scripts.report_formatting import escaped_table_html
-from vntyper.scripts.summary_steps import (
-    STEP_ADVNTR,
-    STEP_BAM_HEADER,
-    STEP_COVERAGE,
-    STEP_KESTREL,
+# The pipeline-summary step names this cohort consumes moved to cohort_inputs with the
+# code that matches them. They are compared by exact string against what pipeline.py
+# records and a typo silently drops a report section (AGENTS.md trap 5), so they are
+# named from summary_steps there, never spelled out.
+from vntyper.scripts.cohort_categories import (
+    category_counts,
+    sample_categories,
+    unify_advntr_result,
+    unify_kestrel_result,
 )
+from vntyper.scripts.cohort_exports import (
+    parse_output_formats,
+    write_cohort_frame,
+    write_pseudonymization_table,
+)
+from vntyper.scripts.cohort_inputs import (
+    cleanup_temp_dirs,
+    discover_sample_directories,
+    load_pipeline_summary_for_sample,
+    pseudonymized_sample_name,
+)
+from vntyper.scripts.cohort_tables import (
+    additional_stats_frame,
+    advntr_table_html,
+    kestrel_table_html,
+    stats_table_html,
+)
+from vntyper.scripts.output_paths import contained_output_path
 
 logger = logging.getLogger(__name__)
 
 matplotlib.use("Agg")
-
-#: CSS classes every table in the cohort report carries. Named once so the three tables
-#: cannot drift apart, and so the renderer call sites read as what they are.
-TABLE_CLASSES = "table table-bordered table-striped hover compact order-column table-sm"
-
-
-#: Colour applied to each recognised confidence label in the cohort's Kestrel table.
-_CONFIDENCE_COLOURS = {
-    "Low_Precision": "orange",
-    "High_Precision": "red",
-    "High_Precision*": "red",
-}
-
-
-def confidence_span(value):
-    """
-    Wrap a confidence label in its colour, escaping the label itself.
-
-    Args:
-        value: The ``Confidence`` cell. Any type; only ``str`` is styled.
-
-    Returns:
-        The cell as markup - a coloured ``<span>`` for a recognised label, the escaped
-        text for anything else, and non-strings unchanged so pandas keeps formatting
-        numbers and NA itself.
-    """
-    if not isinstance(value, str):
-        return value
-    text = html.escape(value, quote=True)
-    colour = _CONFIDENCE_COLOURS.get(value)
-    if colour is None:
-        return text
-    return f'<span style="color:{colour};font-weight:bold;">{text}</span>'
-
-
-def stats_table_html(additional_stats_df):
-    """
-    Render the per-sample statistics table for the cohort report.
-
-    Every value in it is read out of a sample's ``pipeline_summary.json`` - the sample
-    name (or its pseudonym, through the web service), the assembly, the VNtyper version,
-    the pipeline description - so none of it is markup this codebase built and none of it
-    is exempt from escaping.
-
-    Args:
-        additional_stats_df (pandas.DataFrame): One row per sample, ``Sample`` first.
-
-    Returns:
-        str: The table markup, or "" when there are no statistics to show.
-    """
-    return escaped_table_html(additional_stats_df, TABLE_CLASSES)
 
 
 def encode_image_to_base64(image_path):
@@ -222,260 +183,6 @@ def load_report_config():
         return {}
 
 
-def compute_algorithm_result(df, logic_config):
-    """
-    Computes the algorithm result (for Kestrel or adVNTR) based on the provided logic configuration.
-    Iterates over each rule in logic_config["rules"]. For each condition, compares the plain text value
-    from the DataFrame (using the column name) with the expected value.
-
-    Supported operators are: "==", "!=", "in", and "not in". If expected is a list, membership is checked.
-    Returns the rule's "result" if matched; otherwise returns logic_config["default"].
-
-    Args:
-        df (pandas.DataFrame): DataFrame containing the results (generally a single row).
-        logic_config (dict): Configuration dictionary with rules.
-
-    Returns:
-        str: The computed algorithm result (e.g., 'High_Precision', 'positive', etc.).
-    """
-    if df.empty:
-        logger.debug("DataFrame is empty; returning default result.")
-        return logic_config.get("default", "none")
-    row = df.iloc[0]
-    logger.debug("Data row for evaluation: %s", row.to_dict())
-    logger.debug("Logic configuration: %s", logic_config)
-    for idx, rule in enumerate(logic_config.get("rules", [])):
-        logger.debug("Evaluating rule %s: %s", idx, rule)
-        conditions = rule.get("conditions", {})
-        rule_matches = True
-        for col, expected in conditions.items():
-            if col not in row:
-                logger.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
-                rule_matches = False
-                break
-            actual = str(row.get(col, "")).strip()
-            logger.debug(
-                "Rule %s, column '%s': actual='%s', expected='%s'",
-                idx,
-                col,
-                actual,
-                expected,
-            )
-            if isinstance(expected, dict):
-                op = expected.get("operator")
-                exp_val = expected.get("value")
-                if op == "==":
-                    if actual != str(exp_val).strip():
-                        logger.debug(
-                            "Rule %s: Condition '%s == %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                elif op == "!=":
-                    if actual == str(exp_val).strip():
-                        logger.debug(
-                            "Rule %s: Condition '%s != %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                elif op == "in":
-                    if not isinstance(exp_val, list):
-                        exp_val = [exp_val]
-                    if actual not in exp_val:
-                        logger.debug(
-                            "Rule %s: Condition '%s in %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                elif op == "not in":
-                    if not isinstance(exp_val, list):
-                        exp_val = [exp_val]
-                    if actual in exp_val:
-                        logger.debug(
-                            "Rule %s: Condition '%s not in %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                else:
-                    logger.debug(
-                        "Rule %s: Unsupported operator '%s' for column '%s'.",
-                        idx,
-                        op,
-                        col,
-                    )
-                    rule_matches = False
-                    break
-            else:
-                if isinstance(expected, list):
-                    if actual not in expected:
-                        logger.debug(
-                            "Rule %s: Condition '%s in %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            expected,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                else:
-                    if actual != str(expected):
-                        logger.debug(
-                            "Rule %s: Condition '%s == %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            expected,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-        if rule_matches:
-            result = rule.get("result")
-            logger.debug("Rule %s PASSED; returning result: %s", idx, result)
-            return result
-        else:
-            logger.debug("Rule %s did not pass.", idx)
-    logger.debug("No rule matched; returning default result.")
-    return logic_config.get("default", "none")
-
-
-# --------------------------------------------------------------------------
-# New helper functions to correctly aggregate row-level results into
-# sample-level categories (Positive, Positive_Flagged, Negative).
-# --------------------------------------------------------------------------
-def unify_kestrel_result(row_result):
-    """
-    Convert a row-level Kestrel result (e.g. 'High_Precision', 'Low_Precision_flagged')
-    into a broader category: 'Positive', 'Positive_Flagged', or 'Negative'.
-    """
-    if row_result in ["High_Precision", "Low_Precision"]:
-        return "Positive"
-    elif row_result in ["High_Precision_flagged", "Low_Precision_flagged"]:
-        return "Positive_Flagged"
-    else:
-        return "Negative"
-
-
-def unify_advntr_result(row_result):
-    """
-    Convert a row-level adVNTR result (e.g. 'positive', 'positive flagged')
-    into a broader category: 'Positive', 'Positive_Flagged', or 'Negative'.
-    """
-    if row_result == "positive":
-        return "Positive"
-    elif row_result == "positive flagged":
-        return "Positive_Flagged"
-    else:
-        return "Negative"
-
-
-def aggregate_sample_category(results):
-    """
-    Given a list of final row-level categories for a sample (each in
-    {'Positive', 'Positive_Flagged', 'Negative'}), pick the highest category
-    following the rule:
-      - If there's at least one 'Positive' => 'Positive'
-      - Else if there's at least one 'Positive_Flagged' => 'Positive_Flagged'
-      - Else => 'Negative'
-    """
-    if any(r == "Positive" for r in results):
-        return "Positive"
-    elif any(r == "Positive_Flagged" for r in results):
-        return "Positive_Flagged"
-    else:
-        return "Negative"
-
-
-def load_pipeline_summary_for_sample(sample_dir):
-    """
-    Load the pipeline_summary.json from a sample directory and extract Kestrel,
-    adVNTR data and additional statistics (runtime, coverage, version, assembly, pipeline).
-
-    For the adVNTR step, the algorithm result will later be computed based on the logic
-    defined in report_config.json.
-
-    Parameters
-    ----------
-    sample_dir : str or Path
-        Directory containing the pipeline_summary.json file.
-
-    Returns
-    -------
-    tuple
-        Three elements: (kestrel_data, advntr_data, additional_stats).
-        additional_stats is a dict with keys:
-          - runtime: pipeline run duration (in seconds)
-          - version: pipeline version
-          - assembly: assembly text from BAM Header Parsing
-          - pipeline: alignment pipeline from BAM Header Parsing
-          - coverage: coverage metrics dict (mean, median, stdev, min, max)
-    """
-    sample_dir = Path(sample_dir)
-    summary_path = sample_dir / "pipeline_summary.json"
-    if not summary_path.exists():
-        logger.warning(f"Pipeline summary file not found in {sample_dir}")
-        return [], [], {}
-    try:
-        with open(summary_path) as f:
-            summary = json.load(f)
-        kestrel_data = []
-        advntr_data = []
-        additional_stats = {}
-
-        # Compute runtime from top-level timestamps if available
-        pipeline_start = summary.get("pipeline_start")
-        pipeline_end = summary.get("pipeline_end")
-        if pipeline_start and pipeline_end:
-            start_dt = datetime.fromisoformat(pipeline_start)
-            end_dt = datetime.fromisoformat(pipeline_end)
-            runtime_sec = (end_dt - start_dt).total_seconds()
-            additional_stats["runtime"] = f"{runtime_sec:.2f} seconds"
-        else:
-            additional_stats["runtime"] = "N/A"
-
-        # Pipeline version from top-level field
-        additional_stats["version"] = summary.get("version", "N/A")
-
-        # Initialize defaults for assembly, pipeline and coverage
-        additional_stats["assembly"] = "N/A"
-        additional_stats["pipeline"] = "N/A"
-        additional_stats["coverage"] = {}
-
-        for step in summary.get("steps", []):
-            if step.get("step") == STEP_KESTREL:
-                kestrel_data = step.get("parsed_result", {}).get("data", [])
-            elif step.get("step") == STEP_ADVNTR:
-                advntr_data = step.get("parsed_result", {}).get("data", [])
-            elif step.get("step") == STEP_BAM_HEADER:
-                parsed = step.get("parsed_result", {})
-                additional_stats["assembly"] = parsed.get("assembly_text", "N/A")
-                additional_stats["pipeline"] = parsed.get("alignment_pipeline", "N/A")
-            elif step.get("step") == STEP_COVERAGE:
-                parsed = step.get("parsed_result", {})
-                data_list = parsed.get("data", [])
-                if data_list:
-                    additional_stats["coverage"] = data_list[0]
-        return kestrel_data, advntr_data, additional_stats
-    except Exception as e:
-        logger.error(f"Error loading pipeline summary from {sample_dir}: {e}")
-        return [], [], {}
-
-
 def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_file, config, additional_stats_html=""):
     """
     Generate the cohort summary report combining Kestrel and adVNTR results along with
@@ -515,44 +222,16 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     # -----------------------------
     # Compute sample-level results
     # -----------------------------
-    # For each row in Kestrel, compute row-level result, unify it, then group by sample.
-    if not kestrel_df.empty and "Sample" in kestrel_df.columns:
-        kestrel_df["__row_result"] = kestrel_df.apply(
-            lambda row: compute_algorithm_result(pd.DataFrame([row]), kestrel_logic),
-            axis=1,
-        )
-        kestrel_df["__unified"] = kestrel_df["__row_result"].apply(unify_kestrel_result)
-        kestrel_sample_results = kestrel_df.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
-    else:
-        kestrel_sample_results = pd.Series(dtype=str)
-
-    # For each row in adVNTR, compute row-level result, unify it, then group by sample.
-    if not advntr_df.empty and "Sample" in advntr_df.columns:
-        advntr_df["__row_result"] = advntr_df.apply(
-            lambda row: compute_algorithm_result(pd.DataFrame([row]), advntr_logic),
-            axis=1,
-        )
-        advntr_df["__unified"] = advntr_df["__row_result"].apply(unify_advntr_result)
-        advntr_sample_results = advntr_df.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
-    else:
-        advntr_sample_results = pd.Series(dtype=str)
+    # Both frames are annotated in place with the reduction's working columns; see
+    # cohort_categories.sample_categories.
+    kestrel_sample_results = sample_categories(kestrel_df, kestrel_logic, unify_kestrel_result)
+    advntr_sample_results = sample_categories(advntr_df, advntr_logic, unify_advntr_result)
 
     # -------------------------
     # Count final sample-level
     # -------------------------
-    # Kestrel
-    kestrel_counts = kestrel_sample_results.value_counts()
-    k_pos = kestrel_counts.get("Positive", 0)
-    k_pos_flag = kestrel_counts.get("Positive_Flagged", 0)
-    k_neg = kestrel_counts.get("Negative", 0)
-    total_kestrel = k_pos + k_pos_flag + k_neg
-
-    # adVNTR
-    advntr_counts = advntr_sample_results.value_counts()
-    a_pos = advntr_counts.get("Positive", 0)
-    a_pos_flag = advntr_counts.get("Positive_Flagged", 0)
-    a_neg = advntr_counts.get("Negative", 0)
-    total_advntr = a_pos + a_pos_flag + a_neg
+    k_pos, k_pos_flag, k_neg, total_kestrel = category_counts(kestrel_sample_results)
+    a_pos, a_pos_flag, a_neg, total_advntr = category_counts(advntr_sample_results)
 
     # --------------------------------------------------------------------
     # Updated color assignments: Positive=Blue, Flagged=Orange, Negative=Dark Grey
@@ -601,53 +280,12 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         interactive=True,
     )
 
-    # Create a separate copy for HTML formatting so that machine-readable outputs remain plain.
-    kestrel_df_html = kestrel_df.copy()
-    if "Confidence" in kestrel_df_html.columns:
-        # This column is exempted from escaping below because the two branches here build
-        # a span. The exemption is for the span, not for whatever lands in the column - an
-        # unrecognised value falls through unstyled and is still a sample's own string -
-        # so every branch escapes the text it renders.
-        kestrel_df_html["Confidence"] = kestrel_df_html["Confidence"].apply(confidence_span)
-
-    # Reorder Kestrel DataFrame columns: place Sample first then the remaining columns.
-    desired_kestrel_cols = [
-        "Sample",
-        "Motif",
-        "Variant",
-        "POS",
-        "REF",
-        "ALT",
-        "Motif_sequence",
-        "Estimated_Depth_AlternateVariant",
-        "Estimated_Depth_Variant_ActiveRegion",
-        "Depth_Score",
-        "Confidence",
-        "Flag",
-    ]
-    kestrel_columns = [col for col in desired_kestrel_cols if col in kestrel_df_html.columns]
     # `Confidence` is the only cell in either table that holds markup this module built
-    # (the colour span above). Every other column is a sample's own string - the sample
-    # name most obviously, but the motif, the flag and the alleles too - so it is escaped.
-    kestrel_html = escaped_table_html(kestrel_df_html[kestrel_columns], TABLE_CLASSES, html_columns=("Confidence",))
-
-    # Reorder advntr DataFrame columns: ensure Sample is first.
-    desired_advntr_cols = [
-        "Sample",
-        "VID",
-        "Variant",
-        "NumberOfSupportingReads",
-        "MeanCoverage",
-        "Pvalue",
-        "RU",
-        "POS",
-        "REF",
-        "ALT",
-        "Flag",
-    ]
-    advntr_columns = [col for col in desired_advntr_cols if col in advntr_df.columns]
-    # Nothing constructs markup for the adVNTR table, so it has no exemption at all.
-    advntr_html = escaped_table_html(advntr_df[advntr_columns], TABLE_CLASSES)
+    # (a colour span). Every other column is a sample's own string - the sample name most
+    # obviously, but the motif, the flag and the alleles too - so it is escaped. Both
+    # tables state that per column rather than per table; see cohort_tables.
+    kestrel_html = kestrel_table_html(kestrel_df)
+    advntr_html = advntr_table_html(advntr_df)
 
     template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
     # Autoescaping, to parity with the per-sample report (AGENTS.md trap 11): anything
@@ -736,57 +374,10 @@ def aggregate_cohort(
     None
         Writes the cohort summary report to the specified output directory.
     """
-    temp_dirs = []
-    processed_dirs = set()  # use a set to avoid duplicate directories
     additional_stats_list = []
 
     # Identify valid directories/zip files (no changes here)
-    for path_str in input_paths:
-        path = Path(path_str)
-        if not path.exists():
-            logger.warning(f"Input path does not exist and will be skipped: {path}")
-            continue
-        if path.is_dir():
-            if (path / "pipeline_summary.json").exists():
-                logger.info(f"Found pipeline_summary.json in {path}")
-                processed_dirs.add(path)
-            else:
-                found = False
-                for summary_file_path in path.rglob("pipeline_summary.json"):
-                    sample_dir = summary_file_path.parent
-                    logger.info(f"Found pipeline_summary.json in {sample_dir}")
-                    processed_dirs.add(sample_dir)
-                    found = True
-                if not found:
-                    logger.warning(f"No pipeline_summary.json found in directory {path}")
-        elif zipfile.is_zipfile(path):
-            logger.info(f"Extracting zip file: {path}")
-            temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
-            try:
-                with zipfile.ZipFile(path, "r") as zip_ref:
-                    zip_ref.extractall(temp_dir)
-                temp_path = Path(temp_dir)
-                if (temp_path / "pipeline_summary.json").exists():
-                    logger.info(f"Found pipeline_summary.json in {temp_path}")
-                    processed_dirs.add(temp_path)
-                else:
-                    found = False
-                    for summary_file_path in temp_path.rglob("pipeline_summary.json"):
-                        sample_dir = summary_file_path.parent
-                        logger.info(f"Found pipeline_summary.json in {sample_dir}")
-                        processed_dirs.add(sample_dir)
-                        found = True
-                    if not found:
-                        logger.warning(f"No pipeline_summary.json found in extracted zip file: {path}")
-                temp_dirs.append(temp_dir)
-            except zipfile.BadZipFile as e:
-                logger.error(f"Bad zip file {path}: {e}")
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                logger.error(f"Error extracting zip file {path}: {e}")
-                shutil.rmtree(temp_dir)
-        else:
-            logger.warning(f"Unsupported file type (not a directory or zip): {path}")
+    processed_dirs, temp_dirs = discover_sample_directories(input_paths)
 
     if not processed_dirs:
         logger.error("No valid input directories or zip files found for cohort aggregation.")
@@ -800,9 +391,7 @@ def aggregate_cohort(
     for sample_dir in processed_dirs:
         original_sample = Path(sample_dir).name
         if pseudonymize_samples:
-            # Compute MD5 hash of the original sample name and take first 5 characters.
-            hash_suffix = hashlib.md5(original_sample.encode()).hexdigest()[:5]
-            pseudonym = f"{pseudonymize_samples}{hash_suffix}"
+            pseudonym = pseudonymized_sample_name(pseudonymize_samples, original_sample)
             sample_mapping[pseudonym] = original_sample
         else:
             pseudonym = original_sample
@@ -838,17 +427,7 @@ def aggregate_cohort(
 
     # Create additional statistics DataFrame and HTML table if any stats were gathered.
     if additional_stats_list:
-        additional_stats_df = pd.DataFrame(additional_stats_list)
-        # For coverage, flatten the dict (if available)
-        if "coverage" in additional_stats_df.columns:
-            coverage_df = additional_stats_df["coverage"].apply(pd.Series)
-            coverage_df = coverage_df.add_prefix("cov_")
-            additional_stats_df = pd.concat([additional_stats_df.drop(columns=["coverage"]), coverage_df], axis=1)
-        # Reorder columns to place "Sample" first if it exists
-        if "Sample" in additional_stats_df.columns:
-            cols = ["Sample"] + [col for col in additional_stats_df.columns if col != "Sample"]
-            additional_stats_df = additional_stats_df[cols]
-        additional_stats_html = stats_table_html(additional_stats_df)
+        additional_stats_html = stats_table_html(additional_stats_frame(additional_stats_list))
     else:
         additional_stats_html = ""
 
@@ -861,51 +440,16 @@ def aggregate_cohort(
         additional_stats_html=additional_stats_html,
     )
 
-    for temp_dir in temp_dirs:
-        try:
-            shutil.rmtree(temp_dir)
-            logger.debug(f"Cleaned up temporary directory: {temp_dir}")
-        except Exception as e:
-            logger.error(f"Failed to remove temporary directory {temp_dir}: {e}")
+    cleanup_temp_dirs(temp_dirs)
 
-    # Generate additional machine-readable cohort summaries if requested
+    # Generate additional machine-readable cohort summaries if requested. Both frames
+    # were annotated in place by the render above, so the exports carry the reduction's
+    # working columns too; see cohort_exports.
     if additional_formats:
-        formats = [fmt.strip().lower() for fmt in additional_formats.split(",") if fmt.strip()]
-        if not kestrel_df.empty:
-            if "csv" in formats:
-                csv_path = Path(output_dir) / "cohort_kestrel.csv"
-                kestrel_df.to_csv(csv_path, index=False)
-                logger.info(f"Cohort Kestrel CSV written to: {csv_path}")
-            if "tsv" in formats:
-                tsv_path = Path(output_dir) / "cohort_kestrel.tsv"
-                kestrel_df.to_csv(tsv_path, sep="\t", index=False)
-                logger.info(f"Cohort Kestrel TSV written to: {tsv_path}")
-            if "json" in formats:
-                json_path = Path(output_dir) / "cohort_kestrel.json"
-                kestrel_df.to_json(json_path, orient="records", indent=4)
-                logger.info(f"Cohort Kestrel JSON written to: {json_path}")
-        if not advntr_df.empty:
-            if "csv" in formats:
-                csv_path = Path(output_dir) / "cohort_advntr.csv"
-                advntr_df.to_csv(csv_path, index=False)
-                logger.info(f"Cohort adVNTR CSV written to: {csv_path}")
-            if "tsv" in formats:
-                tsv_path = Path(output_dir) / "cohort_advntr.tsv"
-                advntr_df.to_csv(tsv_path, sep="\t", index=False)
-                logger.info(f"Cohort adVNTR TSV written to: {tsv_path}")
-            if "json" in formats:
-                json_path = Path(output_dir) / "cohort_advntr.json"
-                advntr_df.to_json(json_path, orient="records", indent=4)
-                logger.info(f"Cohort adVNTR JSON written to: {json_path}")
+        formats = parse_output_formats(additional_formats)
+        write_cohort_frame(kestrel_df, output_dir, "cohort_kestrel", "Kestrel", formats)
+        write_cohort_frame(advntr_df, output_dir, "cohort_advntr", "adVNTR", formats)
 
     # If pseudonymization was enabled, output the pseudonymization table.
     if pseudonymize_samples and sample_mapping:
-        pseudonym_table_path = Path(output_dir) / "pseudonymization_table.tsv"
-        try:
-            with open(pseudonym_table_path, "w") as pt:
-                pt.write("Pseudonym\tOriginal\n")
-                for pseudonym, original in sample_mapping.items():
-                    pt.write(f"{pseudonym}\t{original}\n")
-            logger.info(f"Pseudonymization table written to: {pseudonym_table_path}")
-        except Exception as e:
-            logger.error(f"Failed to write pseudonymization table: {e}")
+        write_pseudonymization_table(output_dir, sample_mapping)
