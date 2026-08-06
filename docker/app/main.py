@@ -1,6 +1,8 @@
 import logging
 import os
 import subprocess
+import tempfile
+import zipfile
 from collections import Counter
 from enum import Enum
 from pathlib import Path
@@ -898,23 +900,28 @@ def cohort_download(
 
     - **FileResponse**: A ZIP file containing all `.zip` results for the cohort.
     """
-    import tempfile
-    import zipfile
-
     # Retrieve job IDs for the given cohort
     response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
     job_ids = response["job_ids"]
 
-    # Create a temporary ZIP file
+    # Create a temporary ZIP file. From the moment it exists it is this
+    # request's to clean up: the cleanup below is attached to the response, and
+    # a build that fails never produces one, so the file is reclaimed here
+    # instead. A member's own archive can age out between being seen and being
+    # read, which is enough to take this path.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_zip:
-        with zipfile.ZipFile(temp_zip.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        final_zip_path = temp_zip.name
+
+    try:
+        with zipfile.ZipFile(final_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             # For each job, look for its existing .zip file in the output directory
             for job_id in job_ids:
                 job_zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
                 if os.path.exists(job_zip_path):
                     zf.write(job_zip_path, arcname=os.path.basename(job_zip_path))
-
-        final_zip_path = temp_zip.name  # We'll pass this to FileResponse
+    except BaseException:
+        _remove_temp_file(final_zip_path)
+        raise
 
     # Suggest a download filename
     download_name = f"cohort_{response['cohort_id']}.zip"

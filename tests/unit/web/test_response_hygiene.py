@@ -150,6 +150,48 @@ def test_cohort_download_still_delivers_the_complete_archive(
     assert sorted(p.name for p in spool.iterdir()) == []
 
 
+def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_built(
+    client, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failure part-way through the build does not strand the scratch file.
+
+    The archive is assembled member by member, and a member's result can age out
+    between being seen and being read. The cleanup is attached to the response,
+    so a build that never produces a response has to reclaim the file itself --
+    otherwise the one path that leaves a temporary file behind is the one nobody
+    is watching.
+
+    Args:
+        client: TestClient fixture from conftest.
+        fake_redis: The store backing the app's cohort client.
+        monkeypatch: Standard pytest fixture, used to redirect `tempfile`.
+        tmp_path: The directory the `web_app` fixture configured as the job tree.
+    """
+    spool = _spool_dir(monkeypatch, tmp_path)
+    cohort_id = _cohort_with_one_result(client, fake_redis, tmp_path)
+
+    def _member_vanished(self, filename, *args, **kwargs):
+        """Stand in for a member archive that expires mid-build.
+
+        Args:
+            self: The `ZipFile` being written.
+            filename: The member path being added.
+            *args: Ignored.
+            **kwargs: Ignored.
+
+        Raises:
+            FileNotFoundError: Always.
+        """
+        raise FileNotFoundError(filename)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", _member_vanished)
+
+    with pytest.raises(FileNotFoundError):
+        client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
+
+    assert sorted(p.name for p in spool.iterdir()) == []
+
+
 # ---------------------------------------------------------------------------
 # /job-queue/ reports what actually happened
 # ---------------------------------------------------------------------------
