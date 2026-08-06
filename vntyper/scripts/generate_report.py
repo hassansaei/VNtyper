@@ -525,6 +525,7 @@ def generate_summary_report(
         "passed_filter_color": pf_color,
         "sequencing_str": fastp.sequencing,
         "summary_text": screening.text,
+        "summary_is_positive": screening.is_positive,
         "cross_match_message": cross_match_message,
     }
 

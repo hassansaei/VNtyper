@@ -242,6 +242,70 @@ def test_a_negative_run_renders_its_placeholder_row(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The screening summary box - defect W3
+# ---------------------------------------------------------------------------
+
+
+def summary_box_classes(html: str) -> str:
+    """Return the class attribute of the screening summary box."""
+    import re
+
+    match = re.search(r'<p class="(summary-box[^"]*)"', html)
+    assert match, "the screening summary box is missing from the report"
+    return match.group(1)
+
+
+def test_a_negative_screening_is_not_styled_as_a_finding(tmp_path) -> None:
+    """Defect W3. The template decided emphasis with
+    `{% if 'negative' not in summary_text %}summary-positive{% endif %}`, and
+    not one of the configured messages contains that word -- only the fallback
+    default does. So "No variant detected by either genotyping method" was
+    rendered in the same bold style as a confirmed pathogenic frameshift."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, []),
+        tabular_step(summary_steps.STEP_ADVNTR, []),
+    )
+    html = render(tmp_path)
+    assert "No variant detected by either genotyping method" in html
+    assert "summary-positive" not in summary_box_classes(html)
+
+
+def test_a_positive_screening_is_styled_as_a_finding(positive_summary) -> None:
+    html = render(positive_summary)
+    assert "summary-positive" in summary_box_classes(html)
+
+
+def test_an_advntr_only_finding_is_styled_as_a_finding(tmp_path) -> None:
+    """Kestrel negative, adVNTR positive: still a finding, and the configured
+    message for it contains no giveaway word either way."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, []),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
+    )
+    assert "summary-positive" in summary_box_classes(render(tmp_path))
+
+
+def test_a_run_with_no_results_at_all_is_not_styled_as_a_finding(tmp_path) -> None:
+    """No pipeline summary: Kestrel negative, adVNTR never run. Its configured
+    message is "No variant detected." -- which also lacks the giveaway word, so
+    an empty run rendered as a finding too."""
+    assert "summary-positive" not in summary_box_classes(render(tmp_path))
+
+
+def test_the_template_no_longer_decides_emphasis_from_the_message_text() -> None:
+    """Pinned at the template, because the substring test is the kind of thing
+    that gets reintroduced by someone reading the rendered output."""
+    template = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
+    assert "summary-positive" in template, "the class vanished; this assertion would be vacuous"
+    assert "'negative' not in summary_text" not in template
+    assert "summary_is_positive" in template
+
+
+# ---------------------------------------------------------------------------
 # adVNTR
 # ---------------------------------------------------------------------------
 

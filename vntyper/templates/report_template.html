@@ -289,7 +289,14 @@
         {% endif %}
 
         <h2>Screening Summary</h2>
-        <p class="summary-box {% if 'negative' not in summary_text %}summary-positive{% endif %}">
+        {#
+          Emphasis comes from the computed screening state, never from the text.
+          This condition used to search the rendered message for a giveaway word,
+          and no configured message contains it -- only the fallback default
+          does -- so every configured message, "No variant detected by either
+          genotyping method" included, rendered as a positive finding.
+        #}
+        <p class="summary-box {% if summary_is_positive %}summary-positive{% endif %}">
             {{ summary_text|safe }}
         </p>
 
