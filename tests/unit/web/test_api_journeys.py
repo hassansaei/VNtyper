@@ -433,12 +433,20 @@ def test_an_upload_the_service_does_not_accept_is_refused_before_anything_is_sto
     web_app.run_vntyper_job.delay.assert_not_called()
 
 
+# Well-formed, and belonging to no job. Well-formed matters: the routes refuse an
+# identifier they could not have issued before they look anything up, so an
+# obviously malformed value would answer 404 without reaching the store at all.
+# That path is `test_job_identifiers.py`'s subject; this one is about a real
+# identifier for a job that is not there.
+UNKNOWN_JOB_ID = "6f1e0c74-9a3b-4d52-8e17-2b95a4c60d38"
+
+
 @pytest.mark.parametrize(
     ("path", "params", "detail"),
     [
-        ("/job-status/no-such-job/", None, "Job ID not found"),
-        ("/download/no-such-job/", None, "File not found"),
-        ("/job-queue/", {"job_id": "no-such-job"}, "Job ID not found"),
+        (f"/job-status/{UNKNOWN_JOB_ID}/", None, "Job ID not found"),
+        (f"/download/{UNKNOWN_JOB_ID}/", None, "File not found"),
+        ("/job-queue/", {"job_id": UNKNOWN_JOB_ID}, "Job ID not found"),
     ],
 )
 def test_an_unknown_job_id_is_reported_as_missing_not_as_a_server_error(

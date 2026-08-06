@@ -40,6 +40,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -706,9 +707,10 @@ def test_the_download_endpoint_still_streams_a_file_larger_than_the_ceiling(
         tmp_path: The directory the fixture configured as the output tree.
     """
     archive = b"r" * (configured_max_request_bytes() * 3)
-    (tmp_path / "output" / "job-with-a-result.zip").write_bytes(archive)
+    job_id = str(uuid4())
+    (tmp_path / "output" / f"{job_id}.zip").write_bytes(archive)
 
-    response = client.get("/download/job-with-a-result/")
+    response = client.get(f"/download/{job_id}/")
 
     assert response.status_code == 200
     assert response.content == archive

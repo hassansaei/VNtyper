@@ -31,6 +31,7 @@ from starlette.background import BackgroundTask
 
 from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .identifiers import is_job_id
 from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_cohort_analysis_job, run_vntyper_job
@@ -207,6 +208,34 @@ async def startup_event():
     except subprocess.TimeoutExpired:
         logger.error("Timeout expired while retrieving tool version.")
         TOOL_VERSION = "timeout retrieving tool version"
+
+
+def require_job_id(job_id: str, detail: str = "Job ID not found") -> str:
+    """Refuse a job identifier the service could not have issued.
+
+    The three routes that take an identifier from a caller use it directly, as a
+    Redis key and as part of a path, so the shape is checked once here before it
+    is used for anything. The answer for an unusable identifier is deliberately
+    the same as for one that names no job: telling the two apart would say which
+    identifiers exist, and reporting either as a server error would say the
+    service is broken when it is not.
+
+    Args:
+        job_id: The caller-supplied identifier. Untrusted.
+        detail: The message this route uses for "no such job", so the answer a
+            caller gets does not depend on why the lookup failed.
+
+    Returns:
+        str: The identifier, unchanged, once it is known to be usable.
+
+    Raises:
+        HTTPException: 404, if the value is not one of this service's
+            identifiers.
+    """
+    if not is_job_id(job_id):
+        logger.warning("Refused a job identifier that is not in the form this service issues")
+        raise HTTPException(status_code=404, detail=detail)
+    return job_id
 
 
 # Define separate RateLimiter dependencies
@@ -515,7 +544,8 @@ def get_job_status(job_id: str):
     - **status**: The current status of the job.
     - **error**: Error message if the job has failed.
     """
-    # Retrieve task ID from Redis using job_id
+    # Retrieve task ID from Redis using job_id, once it is one of ours.
+    require_job_id(job_id)
     task_id = redis_client.get(job_id)
     if not task_id:
         logger.warning(f"Job ID {job_id} not found in Redis")
@@ -574,7 +604,10 @@ def download_result(job_id: str):
 
     - **FileResponse**: A ZIP file containing the results of the job.
     """
-    logger.info(f"Received download request for job {job_id}")
+    logger.info("Received download request")
+    # The identifier becomes a filename below, so it is checked before it is
+    # joined onto anything.
+    require_job_id(job_id, detail="File not found")
     zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
     if os.path.exists(zip_path):
         logger.info(f"Serving zip file {zip_path}")
@@ -657,6 +690,9 @@ def get_job_queue(
         - **total_jobs_in_queue**: Total number of jobs currently in the queue.
         - **status**: Status message if the job is not in the queue.
     """
+    if job_id:
+        require_job_id(job_id)
+
     try:
         # Get the list of task IDs from the Redis list.
         # redis-py declares the command return type as `Awaitable[list] | list` because

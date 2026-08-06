@@ -39,6 +39,10 @@ from app.cohorts import COHORT_KEY_PREFIX  # noqa: E402
 
 GOOD_PASSPHRASE = "correct-horse-battery-staple"
 
+# A job identifier in the form the service issues, which is the only form the
+# job routes accept -- see `test_job_identifiers.py`.
+QUEUED_JOB_ID = "b7c41d90-2e58-4a63-9f07-15c8de3b6a24"
+
 # Recognisable bytes so the delivered archive can be compared to its source.
 RESULT_PAYLOAD = b"vntyper-result-bytes-for-job-a"
 
@@ -154,10 +158,15 @@ def test_cohort_download_still_delivers_the_complete_archive(
 def test_job_queue_reports_an_unknown_job_id_as_not_found(client) -> None:
     """An identifier with no job behind it is a 404, not a server error.
 
+    The identifier is well-formed and simply unknown, so the 404 has to come from
+    the store lookup rather than from the format check that precedes it -- this
+    is the handler re-raising its own `HTTPException` instead of catching it in
+    its broad handler, which is what the test is for.
+
     Args:
         client: TestClient fixture from conftest.
     """
-    response = client.get("/job-queue/", params={"job_id": "no-such-job"})
+    response = client.get("/job-queue/", params={"job_id": QUEUED_JOB_ID})
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Job ID not found"
@@ -175,7 +184,7 @@ def test_job_queue_still_reports_a_real_failure_as_a_server_error(client, web_ap
     broken.get.side_effect = RuntimeError("redis went away mid-request")
     web_app.redis_client = broken
 
-    response = client.get("/job-queue/", params={"job_id": "job-a"})
+    response = client.get("/job-queue/", params={"job_id": QUEUED_JOB_ID})
 
     assert response.status_code == 500
     assert response.json()["detail"] == "Error retrieving job position"
@@ -188,14 +197,14 @@ def test_job_queue_reports_the_position_of_a_queued_job(client, fake_redis) -> N
         client: TestClient fixture from conftest.
         fake_redis: The store backing the app's job client.
     """
-    fake_redis.set("job-a", "task-a")
+    fake_redis.set(QUEUED_JOB_ID, "task-a")
     fake_redis.rpush("vntyper_job_queue", "task-z", "task-a")
 
-    response = client.get("/job-queue/", params={"job_id": "job-a"})
+    response = client.get("/job-queue/", params={"job_id": QUEUED_JOB_ID})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["job_id"] == "job-a"
+    assert body["job_id"] == QUEUED_JOB_ID
     assert body["position_in_queue"] == 2
     assert body["total_jobs_in_queue"] == 2
 
@@ -207,9 +216,9 @@ def test_job_queue_reports_a_known_job_that_has_left_the_queue(client, fake_redi
         client: TestClient fixture from conftest.
         fake_redis: The store backing the app's job client.
     """
-    fake_redis.set("job-a", "task-a")
+    fake_redis.set(QUEUED_JOB_ID, "task-a")
 
-    response = client.get("/job-queue/", params={"job_id": "job-a"})
+    response = client.get("/job-queue/", params={"job_id": QUEUED_JOB_ID})
 
     assert response.status_code == 200
     body = response.json()

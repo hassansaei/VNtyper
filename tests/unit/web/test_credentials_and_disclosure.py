@@ -64,6 +64,10 @@ ALLOWED_PLACEHOLDER_DEFAULTS = frozenset({"your_smtp_password"})
 # Calls whose second positional argument is an environment-variable fallback.
 ENV_LOOKUPS = frozenset({"os.getenv", "os.environ.get", "os.environ.setdefault", "getenv"})
 
+# A job identifier in the form the service issues, which is the only form the
+# job routes accept -- see `test_job_identifiers.py`.
+FAILED_JOB_ID = "3f2a7c18-5b6d-4e9a-8c31-0d4f7a2b9e65"
+
 # What the pipeline's own failure looks like when it reaches /job-status/: the
 # Celery task shells out through conda, so the exception carries the argv and the
 # per-job paths inside the container.
@@ -77,9 +81,9 @@ FAILED_TASK_INFO = subprocess.CalledProcessError(
         "vntyper",
         "pipeline",
         "--bam",
-        "/opt/vntyper/input/job-1/sample.bam",
+        f"/opt/vntyper/input/{FAILED_JOB_ID}/sample.bam",
         "-o",
-        "/opt/vntyper/output/job-1/",
+        f"/opt/vntyper/output/{FAILED_JOB_ID}/",
     ],
 )
 
@@ -407,14 +411,14 @@ def test_worker_startup_fails_fast_without_a_configured_credential(
 
 
 def _register_failed_job(fake_redis, web_app, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point job-1 at a task that Celery reports as FAILURE.
+    """Point a job identifier at a task that Celery reports as FAILURE.
 
     Args:
         fake_redis: The in-process Redis stand-in the app is patched onto.
         web_app: The imported `app.main` module.
         monkeypatch: Used to replace `AsyncResult` in `app.main`.
     """
-    fake_redis.set("job-1", "task-1")
+    fake_redis.set(FAILED_JOB_ID, "task-1")
     monkeypatch.setattr(
         web_app,
         "AsyncResult",
@@ -428,11 +432,11 @@ def test_job_status_of_a_failed_job_does_not_disclose_internal_detail(
     """A failed job reports that it failed, without the argv or container paths."""
     _register_failed_job(fake_redis, web_app, monkeypatch)
 
-    response = client.get("/job-status/job-1/")
+    response = client.get(f"/job-status/{FAILED_JOB_ID}/")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["job_id"] == "job-1"
+    assert payload["job_id"] == FAILED_JOB_ID
     assert payload["status"] == "failed"
 
     error = payload["error"]
@@ -453,7 +457,7 @@ def test_job_status_of_a_failed_job_still_says_something_useful(
     """
     _register_failed_job(fake_redis, web_app, monkeypatch)
 
-    error = client.get("/job-status/job-1/").json()["error"]
+    error = client.get(f"/job-status/{FAILED_JOB_ID}/").json()["error"]
 
     assert error, "a failed job must still explain that it failed"
     assert "fail" in error.lower()
@@ -467,9 +471,9 @@ def test_job_status_failure_detail_is_still_logged_server_side(
     _register_failed_job(fake_redis, web_app, monkeypatch)
 
     with caplog.at_level(logging.ERROR, logger="app.main"):
-        client.get("/job-status/job-1/")
+        client.get(f"/job-status/{FAILED_JOB_ID}/")
 
     logged = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
     assert logged, "the failure detail was neither returned nor logged"
-    assert any("job-1" in message for message in logged)
-    assert any("/opt/vntyper/input/job-1/sample.bam" in message for message in logged)
+    assert any(FAILED_JOB_ID in message for message in logged)
+    assert any(f"/opt/vntyper/input/{FAILED_JOB_ID}/sample.bam" in message for message in logged)
