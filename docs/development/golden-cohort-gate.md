@@ -9,11 +9,34 @@ it**, so read the run whose candidate matches the tree you are judging.
 | Run | Candidate ("after") | Verdict | Attests |
 | --- | --- | --- | --- |
 | 1 | `7344c62` | PASS | the branch as it stood at `7344c62` |
-| 2 | `1792345` | PASS | **the branch tip**, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096` |
+| 2 | `1792345` | PASS | the branch at `1792345`, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096` |
 
 Run 2 is the attestation of record: run 1 predates 24 commits, five of which change
 production code. Run 1 is kept because it is the measurement several of the adjudications
 below were written against, not because it stands in for the tip.
+
+### What has landed since run 2
+
+Run 2's candidate is `1792345`, not the branch tip — an earlier version of this page said
+"the branch tip", which was true when it was written and is not now. The verdict still
+stands for `1792345`, and the commits after it are these:
+
+| Commit | Changes | Reachable by the gate? |
+| --- | --- | --- |
+| `7dae56f` | this document | no — documentation only |
+| `2ae28c5` | `shlex.quote` on four interpolated paths | no — the cohort's paths contain no shell metacharacter, so every quoted command is byte-identical to the unquoted one |
+| `42c976a` | the mutation harness's working-tree guard | no — `scripts/`, not the pipeline |
+| `2aa095a` | cross-match emphasis: CSS class from the computed state | **report presentation only**, and only the `class` attribute of the cross-match paragraph. No genotype field |
+| `4ce5639` | web-service identifier normalisation | no — `docker/app/`, not the pipeline |
+| `97033d3` | `--report-file` / `--summary-file` containment | no — refuses a path where it used to write one; the cohort passes a bare name |
+| `22e3d17` | two unit-test guards | no — tests only |
+| `50d7968` | cohort report escaping and autoescaping | **report presentation only**. Verified byte-identical on a realistic three-sample cohort once Plotly's random div ids and the timestamp are normalised |
+
+Two of the eight change how a report is *rendered* and none of them touches a genotype
+field, a `Confidence` label or a `Flag`. That is the same class of difference run 2 already
+adjudicated, so the verdict is not invalidated — but it has not been re-measured either,
+and this table is the honest statement of that rather than a claim that the tree is
+unchanged.
 
 **Verdict: PASS, both runs.** Every genotype field, every `Confidence` label and every
 `Flag` is byte-identical between baseline and candidate, on every sample and every
@@ -94,10 +117,10 @@ The call each sample yields, identical on all six assemblies and identical on bo
 | `example_dfc3` | `5-E` | Deletion | `High_Precision*` | Not flagged |
 | `example_40cf` (hg38 only) | — | — | `Negative` | — |
 
-## Result — run 2, candidate `1792345` (the branch tip)
+## Result — run 2, candidate `1792345`
 
 Same baseline, same 58-case matrix, same comparison. Re-run because run 1's candidate is
-24 commits behind the tip and five of those commits change production code: `d144505`
+24 commits behind `1792345` and five of those commits change production code: `d144505`
 (adVNTR compound-variant repair restored to crash-only), `c51052c` and `b4059ce`
 (assembly guard), `7e58eb8` (shell quoting at three call sites) and `2c92096`
 (`--output-name` rejection).
