@@ -170,6 +170,48 @@ def test_the_kestrel_table_carries_the_display_headings(positive_summary) -> Non
         assert f"<th>{heading}</th>" in html
 
 
+def test_the_motif_column_reaches_the_report(positive_summary) -> None:
+    """Defect W2. The pipeline emits an annotated `Motif` **and** a raw `Motifs`
+    pair; the report keyed on `Motifs` and renamed it to the heading "Motif", so
+    a positive run showed the raw pair under a heading claiming to be the
+    annotated motif, and a negative run -- whose placeholder row has no `Motifs`
+    column at all -- lost the column entirely. `cohort_summary.py` keys on
+    `Motif`, so the two reports disagreed about the same sample."""
+    html = render(positive_summary)
+    assert "<th>Motif</th>" in html, "the Motif column is missing from the Kestrel table"
+
+
+def test_the_motif_column_shows_the_annotated_motif_not_the_raw_pair(positive_summary) -> None:
+    """`Motifs` is the raw left-right pair Kestrel emits ("X-5"); `Motif` is the
+    motif the variant was assigned to ("5"). Both exist because both are
+    load-bearing upstream (AGENTS.md trap 3) -- the report shows the annotated
+    one, which is what `cohort_summary.py` shows."""
+    html = render(positive_summary)
+    assert ">5</td>" in html
+    assert ">X-5</td>" not in html
+
+
+def test_a_negative_run_still_has_a_motif_column(tmp_path) -> None:
+    """The negative placeholder row carries `Motif` and no `Motifs` at all, so
+    before the fix the column was absent from every negative report too."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [{"Motif": "None", "Confidence": "Negative"}]),
+    )
+    assert "<th>Motif</th>" in render(tmp_path)
+
+
+def test_the_kestrel_display_columns_key_on_the_annotated_motif() -> None:
+    """Contract C3, pinned at the declaration: the fix is on the report side.
+    `motif_processing.py` keeps both names and neither may be renamed -- the
+    Kestrel flagging rules `eval` against `Motif` and the duplicate ordering
+    against `Motifs`, and a missing name evaluates to False rather than raising."""
+    from vntyper.scripts.report_formatting import KESTREL_DISPLAY_COLUMNS
+
+    assert KESTREL_DISPLAY_COLUMNS["Motif"] == "Motif"
+    assert "Motifs" not in KESTREL_DISPLAY_COLUMNS
+
+
 def test_the_confidence_column_is_colour_coded(positive_summary) -> None:
     html = render(positive_summary)
     assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html

@@ -66,8 +66,17 @@ MISSING_AS_BLANK: tuple[str, str] = ("", "")
 #: the results frame are dropped, so this is a superset of any one run's output:
 #: a negative run's ``kestrel_result.tsv`` carries neither ``Flag`` nor the depth
 #: columns.
+#:
+#: The motif key is ``Motif``, not ``Motifs`` (contract C3). Both columns exist and
+#: both are load-bearing upstream -- the shipped Kestrel flagging expressions
+#: ``eval`` against singular ``Motif`` while duplicate ordering uses plural
+#: ``Motifs``, and a missing name there evaluates to False rather than raising
+#: (AGENTS.md trap 3), so neither may be renamed. ``Motifs`` is the raw
+#: ``left-right`` pair Kestrel emits; ``Motif`` is the motif the variant was
+#: annotated onto, which is what ``cohort_summary.py`` shows and what the heading
+#: has always claimed to be.
 KESTREL_DISPLAY_COLUMNS: dict[str, str] = {
-    "Motifs": "Motif",
+    "Motif": "Motif",
     "Variant": "Variant",
     "POS": "Position",
     "REF": "REF",
