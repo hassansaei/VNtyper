@@ -10,11 +10,22 @@ iScience 26, 107171 (2023).
 
 Typical Flow:
 -------------
-1. Convert depth columns to integers.
-2. Compute Depth_Score = alt / active_region depth.
+1. Coerce the two depth columns to numeric with ``pd.to_numeric(errors="coerce")``
+   and fill the unparseable ones with 0. This is a float coercion, not an integer
+   cast: a fractional depth is accepted and stays fractional. Production depths are
+   whole numbers because they are read counts split out of Kestrel's ``Sample``
+   field, but nothing in this module enforces that.
+2. Compute Depth_Score = alt / active_region depth (float division; a zero region
+   depth yields inf, which is then replaced with NaN).
 3. Compare Depth_Score and alt-depth coverage to threshold intervals.
 4. Assign textual confidence labels (e.g., 'Low_Precision', 'High_Precision').
 5. Return updated DataFrame with 'Depth_Score' and 'Confidence' columns.
+
+Rule ordering (see ``docs/pipeline/scoring-and-confidence.md`` for the full table):
+the six conditions below are applied in sequence and later ones overwrite earlier
+ones, so ``cond_midband`` -- the CLOSED interval [low, high], applied last -- has the
+final word. A Depth_Score of exactly ``high`` is therefore Low_Precision even though
+``cond2`` and ``cond5`` are written with ``>=``.
 
 References:
 -----------
