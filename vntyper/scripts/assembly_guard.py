@@ -156,6 +156,13 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
     because a header can name its contigs inconsistently and still identify its
     build unambiguously.
 
+    A header that names chromosome 1 more than once with *conflicting* lengths
+    -- a hybrid carrying both `1` and `chr1` from different builds -- is
+    `undetermined`, never `mismatch`. Deciding from whichever alias came first
+    would let contig order reject a usable input; refusing to decide keeps the
+    guard from failing a run on the strength of an abnormal header, and the
+    conflict is named in `message`.
+
     This function never raises and never logs above INFO. It returns a verdict;
     the caller decides whether a mismatch is fatal.
 
@@ -167,13 +174,6 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
             `fastq_bam_processing.parse_contigs_from_header` returns them:
             `[{"name": "chr1", "length": 248956422}, ...]`. Entries that are not
             usable are skipped.
-
-    A header that names chromosome 1 more than once with *conflicting* lengths
-    -- a hybrid carrying both `1` and `chr1` from different builds -- is
-    `undetermined`, never `mismatch`. Deciding from whichever alias came first
-    would let contig order reject a usable input; refusing to decide keeps the
-    guard from failing a run on the strength of an abnormal header, and the
-    conflict is named in `message`.
 
     Returns:
         AssemblyVerdict: The verdict. `status` is `agree` when both builds are
