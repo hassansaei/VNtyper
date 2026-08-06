@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from vntyper.scripts.report_formatting import (
     ADVNTR_DISPLAY_COLUMNS,
@@ -42,6 +42,7 @@ from vntyper.scripts.report_formatting import (
     KESTREL_DISPLAY_COLUMNS,
     MISSING_AS_OK,
     confidence_html,
+    escape_frame_cells,
     extract_igv_fragments,
     js_object_literal,
     parse_coverage_stats,
@@ -267,6 +268,11 @@ def build_kestrel_frames(kestrel_data):
     if "Confidence" in frame.columns:
         frame["Confidence"] = frame["Confidence"].apply(confidence_html)
 
+    # The table is rendered with escape=False so the colour-coded Confidence span
+    # survives, which means every other cell has to be escaped here. `Confidence`
+    # is excluded because `confidence_html` has already escaped its own value.
+    frame = escape_frame_cells(frame, html_columns=("Confidence",))
+
     logger.debug("Kestrel data extracted from summary and formatted.")
     return frame, matching_frame
 
@@ -462,7 +468,12 @@ def generate_summary_report(
 
     cross_match_message = build_cross_match_message(pipeline_summary)
 
-    env = Environment(loader=FileSystemLoader(template_dir))
+    # Autoescaping is on: everything reaching the report from a sample - file
+    # names, BAM header fields, motif sequences, log lines - is attacker-influenced
+    # and the report is a file people forward. The fragments we build ourselves are
+    # marked `|safe` at their interpolation points in the template, and the two
+    # results tables and the Confidence spans are escaped before they get there.
+    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html"]))
     try:
         template = env.get_template("report_template.html")
         logger.debug("Jinja2 template 'report_template.html' loaded successfully.")

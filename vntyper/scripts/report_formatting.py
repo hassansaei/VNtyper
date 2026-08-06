@@ -36,6 +36,7 @@ Functions:
 
 from __future__ import annotations
 
+import html
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -194,17 +195,61 @@ def select_display_columns(df: pd.DataFrame, columns: dict[str, str]) -> pd.Data
 def confidence_html(value: Any) -> str:
     """Colour-code one ``Confidence`` value for display.
 
+    The label is escaped either way. This is the one cell of the Kestrel table
+    that legitimately carries markup, which is why the table is rendered with
+    ``escape=False``; a value with no configured style therefore used to reach
+    the HTML untouched.
+
     Args:
         value: The confidence label.
 
     Returns:
-        str: The label wrapped in a coloured span, or the label unchanged when
-        it has no configured style.
+        str: The escaped label, wrapped in a coloured span when it has a
+        configured style.
     """
-    style = CONFIDENCE_STYLES.get(value if isinstance(value, str) else str(value))
+    key = value if isinstance(value, str) else str(value)
+    text = escape_html(key)
+    style = CONFIDENCE_STYLES.get(key)
     if style is None:
-        return value
-    return f'<span style="{style}">{value}</span>'
+        return text
+    return f'<span style="{style}">{text}</span>'
+
+
+def escape_html(value: Any) -> str:
+    """HTML-escape one value, including quotes.
+
+    Args:
+        value: Any value; non-strings are stringified first.
+
+    Returns:
+        str: The escaped text.
+    """
+    return html.escape(value if isinstance(value, str) else str(value), quote=True)
+
+
+def escape_frame_cells(df: pd.DataFrame, html_columns: tuple[str, ...] = ()) -> pd.DataFrame:
+    """Escape every string cell of a frame that is about to be rendered raw.
+
+    Only ``str`` cells are touched. Numbers and NaN cannot carry markup, and
+    stringifying them here would take pandas' own float and NA formatting out of
+    the rendered table.
+
+    Args:
+        df: The frame to escape.
+        html_columns: Columns already holding markup we constructed ourselves,
+            left alone.
+
+    Returns:
+        pd.DataFrame: A new frame; the input is not modified.
+    """
+    escaped = df.copy()
+    for column in escaped.columns:
+        if column in html_columns:
+            continue
+        escaped[column] = escaped[column].map(
+            lambda cell: html.escape(cell, quote=True) if isinstance(cell, str) else cell
+        )
+    return escaped
 
 
 def parse_coverage_stats(data: list[dict[str, Any]]) -> dict[str, Any]:

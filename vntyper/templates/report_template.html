@@ -196,7 +196,7 @@
         
         <!-- Basic coverage view (default) -->
         <div id="basicCoverageView">
-            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</p>
+            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon|safe }}</p>
         </div>
         
         <!-- Detailed coverage view (hidden by default) -->
@@ -211,7 +211,7 @@
                 <tbody>
                     <tr>
                         <td>Mean Coverage</td>
-                        <td>{{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</td>
+                        <td>{{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Median Coverage</td>
@@ -239,7 +239,7 @@
                     </tr>
                     <tr>
                         <td>Percentage Uncovered</td>
-                        <td>{{ percent_vntr_uncovered }}% {{ percent_vntr_uncovered_icon }}</td>
+                        <td>{{ percent_vntr_uncovered }}% {{ percent_vntr_uncovered_icon|safe }}</td>
                     </tr>
                 </tbody>
             </table>
@@ -267,22 +267,22 @@
                                 N/A
                             {% endif %}
                         </td>                    
-                        <td>{{ duplication_rate_icon }}</td>
+                        <td>{{ duplication_rate_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Q20 Rate (Cutoff: 80%)</td>
                         <td>{{ (q20_rate * 100)|round(2) if q20_rate is not none else 'N/A' }}%</td>
-                        <td>{{ q20_icon }}</td>
+                        <td>{{ q20_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Q30 Rate (Cutoff: 70%)</td>
                         <td>{{ (q30_rate * 100)|round(2) if q30_rate is not none else 'N/A' }}%</td>
-                        <td>{{ q30_icon }}</td>
+                        <td>{{ q30_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Passed Filter Rate (Cutoff: 80%)</td>
                         <td>{{ (passed_filter_rate * 100)|round(2) if passed_filter_rate is not none else 'N/A' }}%</td>
-                        <td>{{ passed_filter_icon }}</td>
+                        <td>{{ passed_filter_icon|safe }}</td>
                     </tr>
                 </tbody>
             </table>

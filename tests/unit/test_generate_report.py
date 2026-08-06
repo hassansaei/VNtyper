@@ -446,6 +446,135 @@ def test_no_log_file_says_so_rather_than_failing(positive_summary) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Escaping - defect C5
+# ---------------------------------------------------------------------------
+
+PAYLOAD = "<script>alert(1)</script>"
+ESCAPED = "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def test_an_input_file_name_is_escaped(tmp_path) -> None:
+    """The report is a file people forward. Nothing that reaches it from a
+    sample -- a file name, a BAM header, a motif sequence, a log line -- was
+    escaped, and the Kestrel table was rendered with `escape=False`."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        input_files={"bam": f"{PAYLOAD}.bam"},
+    )
+    html = render(tmp_path)
+    assert PAYLOAD not in html
+    assert ESCAPED in html
+
+
+def test_a_bam_header_field_is_escaped(tmp_path) -> None:
+    """The header block is parsed straight out of the BAM's @PG and @SQ lines."""
+    write_summary(
+        tmp_path,
+        {"step": summary_steps.STEP_BAM_HEADER, "parsed_result": {"alignment_pipeline": PAYLOAD, "warning": PAYLOAD}},
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    html = render(tmp_path)
+    assert PAYLOAD not in html
+
+
+def test_a_kestrel_cell_is_escaped(tmp_path) -> None:
+    """The Kestrel table is rendered with `escape=False` so the colour-coded
+    Confidence span survives; every other cell must be escaped by hand."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Motif_sequence": PAYLOAD}]),
+    )
+    html = render(tmp_path)
+    assert PAYLOAD not in html
+    assert ESCAPED in html
+
+
+def test_an_unstyled_confidence_value_is_escaped(tmp_path) -> None:
+    """The Confidence column is the one cell that legitimately carries markup.
+    A value with no configured style used to pass through untouched."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Confidence": PAYLOAD}]),
+    )
+    assert PAYLOAD not in render(tmp_path)
+
+
+def test_the_pipeline_log_is_escaped(positive_summary) -> None:
+    """`<pre>` does not stop a `</pre><script>` in a log line."""
+    log_file = positive_summary / "pipeline.log"
+    log_file.write_text(f"</pre>{PAYLOAD}\n", encoding="utf-8")
+    html = render(positive_summary, log_file=str(log_file))
+    assert PAYLOAD not in html
+    assert "&lt;/pre&gt;" in html
+
+
+def test_escaping_does_not_neuter_the_status_icons(positive_summary) -> None:
+    """The icons are pre-built HTML fragments we construct ourselves. Turning
+    autoescaping on without marking them would print the span markup as text."""
+    html = render(positive_summary)
+    assert '<span style="color:green;font-weight:bold;">&#10004;</span>' in html
+    assert "&lt;span style=" not in html
+
+
+def test_escaping_does_not_neuter_the_screening_message(positive_summary) -> None:
+    """Configured messages carry `<br>` line breaks."""
+    html = render(positive_summary)
+    assert "<br>" in html
+
+
+def test_escaping_does_not_neuter_the_results_tables(positive_summary) -> None:
+    html = render(positive_summary)
+    assert 'id="kestrel_table"' in html
+    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+
+
+def test_escaping_does_not_neuter_the_igv_script_block(positive_summary) -> None:
+    html = render(positive_summary)
+    assert 'const tableJson = {"headers": [], "rows": []};' in html
+
+
+#: Every context value the template is allowed to interpolate unescaped, and why.
+SAFE_BY_DESIGN = {
+    "kestrel_highlight": "pandas table; its cells are escaped by escape_frame_cells",
+    "advntr_highlight": "pandas table rendered with escape=True, or a fixed <p>",
+    "summary_text": "a configured clinical message carrying <br> line breaks",
+    "cross_match_message": "one of two fixed sentences built in generate_report",
+    "table_json": "a JavaScript literal spliced out of the IGV report",
+    "session_dictionary": "a JavaScript literal spliced out of the IGV report",
+    "mean_vntr_coverage_icon": "an HTML fragment built by report_formatting",
+    "percent_vntr_uncovered_icon": "an HTML fragment built by report_formatting",
+    "duplication_rate_icon": "an HTML fragment built by report_formatting",
+    "q20_icon": "an HTML fragment built by report_formatting",
+    "q30_icon": "an HTML fragment built by report_formatting",
+    "passed_filter_icon": "an HTML fragment built by report_formatting",
+}
+
+
+def test_nothing_new_is_marked_safe_in_the_template() -> None:
+    """Autoescaping only protects what is not marked `|safe`, and marking a value
+    safe is a one-word edit. This is the list, and adding to it is deliberate."""
+    import re
+
+    template = (TEMPLATE_DIR / "report_template.html").read_text(encoding="utf-8")
+    marked = set(re.findall(r"\{\{\s*([A-Za-z_][\w.]*)\s*\|\s*safe\s*\}\}", template))
+    assert marked, "found no |safe expressions; this assertion would be vacuous"
+    assert marked <= set(SAFE_BY_DESIGN), f"newly unescaped values: {sorted(marked - set(SAFE_BY_DESIGN))}"
+
+
+def test_the_template_environment_autoescapes() -> None:
+    """Pinned at the source, because turning it back off is also a one-word edit
+    and every escaping test above would keep passing for the fragments."""
+    import inspect
+
+    from vntyper.scripts import generate_report
+
+    source = inspect.getsource(generate_report.generate_summary_report)
+    assert "Environment(" in source, "the environment vanished; this assertion would be vacuous"
+    assert "autoescape=" in source
+
+
+# ---------------------------------------------------------------------------
 # The version and input files come from the summary, not from the caller
 # ---------------------------------------------------------------------------
 

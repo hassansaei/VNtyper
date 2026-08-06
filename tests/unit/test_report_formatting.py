@@ -268,3 +268,51 @@ def test_a_page_with_a_container_but_no_table_json_yields_empty_fragments() -> N
     assert container
     assert table_json == ""
     assert session == ""
+
+
+# ---------------------------------------------------------------------------
+# Escaping
+# ---------------------------------------------------------------------------
+
+
+def test_escape_frame_cells_escapes_strings() -> None:
+    frame = pd.DataFrame([{"Motif Sequence": "<script>alert(1)</script>"}])
+    out = rf.escape_frame_cells(frame)
+    assert out.iloc[0]["Motif Sequence"] == "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def test_escape_frame_cells_leaves_numbers_alone() -> None:
+    """Stringifying numbers here would take pandas' float and NA formatting out
+    of the rendered table, and a number cannot carry markup anyway."""
+    frame = pd.DataFrame([{"Depth Score": 0.0125, "Position": 67}])
+    out = rf.escape_frame_cells(frame)
+    assert out.iloc[0]["Depth Score"] == pytest.approx(0.0125)
+    assert out.iloc[0]["Position"] == 67
+
+
+def test_escape_frame_cells_skips_the_columns_holding_our_own_markup() -> None:
+    frame = pd.DataFrame([{"Confidence": '<span style="x">High_Precision</span>', "REF": "<b>"}])
+    out = rf.escape_frame_cells(frame, html_columns=("Confidence",))
+    assert out.iloc[0]["Confidence"] == '<span style="x">High_Precision</span>'
+    assert out.iloc[0]["REF"] == "&lt;b&gt;"
+
+
+def test_escape_frame_cells_does_not_mutate_its_input() -> None:
+    frame = pd.DataFrame([{"REF": "<b>"}])
+    rf.escape_frame_cells(frame)
+    assert frame.iloc[0]["REF"] == "<b>"
+
+
+def test_confidence_html_escapes_an_unstyled_value() -> None:
+    """The Kestrel table is rendered with escape=False, so this is the last
+    chance to escape a Confidence value with no configured style."""
+    assert rf.confidence_html("<img src=x onerror=alert(1)>") == "&lt;img src=x onerror=alert(1)&gt;"
+
+
+def test_confidence_html_escapes_inside_the_span_too() -> None:
+    assert rf.confidence_html("Low_Precision").startswith('<span style="color:orange')
+
+
+def test_escape_html_escapes_quotes() -> None:
+    """Quotes matter: these values land inside attributes in the IGV tooltips."""
+    assert rf.escape_html('a"b') == "a&quot;b"
