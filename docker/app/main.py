@@ -30,7 +30,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
-from starlette.background import BackgroundTask
 
 from .cohorts import (
     COHORT_PASSPHRASE_HEADER,
@@ -45,6 +44,7 @@ from .config import build_redis_url, get_redis_password, require_redis_password,
 from .identifiers import is_job_id
 from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
+from .scratch_response import ScratchFileResponse
 from .tasks import run_cohort_analysis_job, run_vntyper_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
 from .utils import MAX_PASSPHRASE_BYTES, client_host
@@ -944,10 +944,10 @@ def cohort_download(
     job_ids = response["job_ids"]
 
     # Create a temporary ZIP file. From the moment it exists it is this
-    # request's to clean up: the cleanup below is attached to the response, and
-    # a build that fails never produces one, so the file is reclaimed here
-    # instead. A member's own archive can age out between being seen and being
-    # read, which is enough to take this path.
+    # request's to clean up: the response below removes it once it ends, and a
+    # build that fails never produces a response, so that path reclaims the file
+    # itself. A member's own archive can age out between being seen and being
+    # read, which is enough to reach it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_zip:
         final_zip_path = temp_zip.name
 
@@ -966,14 +966,14 @@ def cohort_download(
     download_name = f"cohort_{response['cohort_id']}.zip"
 
     # Return the zipped file as a download. The archive is scratch space owned by
-    # this one response, so it is removed in a background task, which Starlette
-    # runs after the body has been sent -- the caller still receives the complete
-    # archive, and nothing of it is left on disk afterwards.
-    return FileResponse(
+    # this one response, and `ScratchFileResponse` removes it in a `finally`
+    # around the send: the caller receives the complete archive, and the file is
+    # gone afterwards whether the body was delivered or the connection dropped
+    # part-way through it.
+    return ScratchFileResponse(
         path=final_zip_path,
         media_type="application/zip",
         filename=download_name,
-        background=BackgroundTask(_remove_temp_file, final_zip_path),
     )
 
 

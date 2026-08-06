@@ -8,7 +8,10 @@ has answered.
    the response itself must still carry the complete archive, so the cleanup has
    to happen *after* the body is sent rather than before it. Both halves are
    asserted together: an implementation that deletes too early fails the
-   integrity check, and one that never deletes fails the filesystem check.
+   integrity check, and one that never deletes fails the filesystem check. The
+   ways a response ends are covered one by one — delivered, failed while being
+   built, and abandoned mid-body — because the archive holds a whole cohort's
+   results and "usually removed" is not the guarantee being claimed.
 
 2. ``/job-queue/`` must answer an unknown ``job_id`` with 404. A handler that
    catches its own ``HTTPException`` in a broad ``except Exception`` turns that
@@ -190,6 +193,73 @@ def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_bui
         client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
 
     assert sorted(p.name for p in spool.iterdir()) == []
+
+
+def test_cohort_download_removes_the_archive_when_the_send_fails(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A connection dropped mid-body still takes the archive with it.
+
+    Starlette awaits every body send *before* it runs a response's background
+    task, and it does so without a `finally`. A client that disconnects part-way
+    through the download therefore skipped the cleanup entirely, and what was
+    left on disk was a ZIP of the whole cohort's results.
+
+    Driven as raw ASGI rather than through TestClient, because a failing `send`
+    is the condition under test and TestClient will not produce one.
+
+    Args:
+        client: TestClient fixture from conftest, used to create the cohort.
+        web_app: The patched `app.main` module, holding the ASGI app.
+        fake_redis: The store backing the app's cohort client.
+        monkeypatch: Standard pytest fixture, used to redirect `tempfile`.
+        tmp_path: The directory the `web_app` fixture configured as the job tree.
+    """
+    import asyncio
+
+    spool = _spool_dir(monkeypatch, tmp_path)
+    cohort_id = _cohort_with_one_result(client, fake_redis, tmp_path)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/cohort-download/",
+        "raw_path": b"/cohort-download/",
+        "query_string": f"cohort_id={cohort_id}&passphrase={GOOD_PASSPHRASE}".encode(),
+        "root_path": "",
+        "headers": [(b"host", b"testserver")],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+
+    async def receive():
+        """Return the (empty) request body.
+
+        Returns:
+            dict: A single complete `http.request` message.
+        """
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        """Accept the response start, then drop the connection.
+
+        Args:
+            message: The ASGI message being sent.
+
+        Raises:
+            ConnectionResetError: On the first body chunk.
+        """
+        if message["type"] == "http.response.body":
+            msg = "the client went away mid-download"
+            raise ConnectionResetError(msg)
+
+    with pytest.raises(ConnectionResetError, match="went away"):
+        asyncio.run(web_app.app(scope, receive, send))
+
+    assert sorted(p.name for p in spool.iterdir()) == [], "a ZIP of the cohort's results was left on disk"
 
 
 # ---------------------------------------------------------------------------
