@@ -84,6 +84,22 @@ make test-cov
 !!! tip "Downloading test data"
     Integration tests require approximately 1.1 GB of test data from Zenodo. Run `make download-test-data` to fetch it and `make verify-test-data` to confirm checksums.
 
+### Where each tier runs in CI
+
+| Tier | Trigger |
+|------|---------|
+| Unit (`make test-unit-cov`) | Every pull request and push to `main` (`ci-tests.yml`) |
+| Docker, quick / fast | Pull requests and pushes to `main` (`docker-build.yml`) |
+| Docker, full (incl. adVNTR) | Nightly cron in `docker-build.yml`; weekly against the published `:main` image in `scheduled-tests.yml` |
+| Integration (`make test-integration`) | Weekly cron in `scheduled-tests.yml` |
+
+The integration tier is not on the merge path: it needs the Zenodo archive and an
+installed reference genome, so it runs on a timer instead. That schedule exists to catch
+rot in things this repository does not control — the Zenodo record, the UCSC/NCBI/ENSEMBL
+reference URLs, the conda channels — before it shows up as a red build on an unrelated
+pull request. Run `make check-full` locally when you change anything the pipeline
+executes end to end.
+
 ## Commit Conventions
 
 VNtyper 2 follows the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification. Each commit message should have the form:
