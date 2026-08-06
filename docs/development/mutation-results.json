@@ -1,48 +1,18 @@
 {
-  "elapsed": 553.9350351969988,
+  "elapsed": 299.9935840070102,
   "modules": [
     {
       "path": "vntyper/scripts/confidence_assignment.py",
-      "killed": 11,
-      "survived": 8,
+      "killed": 9,
+      "survived": 2,
       "survivors": [
         {
-          "line": 82,
+          "line": 133,
           "original": "0",
           "replacement": "1"
         },
         {
-          "line": 91,
-          "original": "0.2",
-          "replacement": "1.2"
-        },
-        {
-          "line": 92,
-          "original": "0.4",
-          "replacement": "1.4"
-        },
-        {
-          "line": 95,
-          "original": "5",
-          "replacement": "6"
-        },
-        {
-          "line": 96,
-          "original": "10",
-          "replacement": "11"
-        },
-        {
-          "line": 97,
-          "original": "20",
-          "replacement": "21"
-        },
-        {
-          "line": 105,
-          "original": "0",
-          "replacement": "1"
-        },
-        {
-          "line": 110,
+          "line": 138,
           "original": "-",
           "replacement": "+"
         }
@@ -56,241 +26,118 @@
     },
     {
       "path": "vntyper/scripts/motif_processing.py",
-      "killed": 21,
-      "survived": 47,
+      "killed": 38,
+      "survived": 20,
       "survivors": [
         {
-          "line": 77,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 79,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 79,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 80,
-          "original": "-",
-          "replacement": "+"
-        },
-        {
-          "line": 80,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 81,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 104,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 106,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 106,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 107,
-          "original": "-",
-          "replacement": "+"
-        },
-        {
-          "line": 107,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 108,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 189,
+          "line": 216,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 204,
+          "line": 231,
           "original": "==",
           "replacement": "!="
         },
         {
-          "line": 212,
+          "line": 239,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 263,
+          "line": 290,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 265,
+          "line": 292,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 268,
+          "line": 295,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 303,
+          "line": 330,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 310,
+          "line": 337,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 314,
+          "line": 341,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 315,
+          "line": 342,
           "original": "60",
           "replacement": "61"
         },
         {
-          "line": 323,
+          "line": 367,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 332,
-          "original": "or",
-          "replacement": "and"
-        },
-        {
-          "line": 336,
+          "line": 487,
           "original": "True",
           "replacement": "False"
         },
         {
-          "line": 337,
+          "line": 491,
           "original": "-",
           "replacement": "+"
         },
         {
-          "line": 337,
+          "line": 491,
           "original": "1",
           "replacement": "2"
         },
         {
-          "line": 340,
-          "original": "<",
-          "replacement": ">="
-        },
-        {
-          "line": 344,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 346,
-          "original": "in",
-          "replacement": "not in"
-        },
-        {
-          "line": 347,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 374,
-          "original": "in",
-          "replacement": "not in"
-        },
-        {
-          "line": 375,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 415,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 420,
-          "original": "-",
-          "replacement": "+"
-        },
-        {
-          "line": 420,
-          "original": "1",
-          "replacement": "2"
-        },
-        {
-          "line": 424,
+          "line": 495,
           "original": ">=",
           "replacement": "<"
         },
         {
-          "line": 425,
+          "line": 496,
           "original": "-",
           "replacement": "+"
         },
         {
-          "line": 434,
+          "line": 510,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 512,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 514,
+          "original": "not",
+          "replacement": ""
+        },
+        {
+          "line": 518,
           "original": "False",
           "replacement": "True"
-        },
+        }
+      ]
+    },
+    {
+      "path": "vntyper/scripts/motif_decisions.py",
+      "killed": 7,
+      "survived": 1,
+      "survivors": [
         {
-          "line": 439,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 441,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 443,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 447,
-          "original": "False",
-          "replacement": "True"
-        },
-        {
-          "line": 449,
-          "original": "in",
-          "replacement": "not in"
-        },
-        {
-          "line": 452,
-          "original": "in",
-          "replacement": "not in"
-        },
-        {
-          "line": 455,
-          "original": "in",
-          "replacement": "not in"
-        },
-        {
-          "line": 459,
+          "line": 79,
           "original": "True",
           "replacement": "False"
         }
@@ -298,24 +145,9 @@
     },
     {
       "path": "vntyper/scripts/variant_parsing.py",
-      "killed": 3,
-      "survived": 4,
+      "killed": 6,
+      "survived": 1,
       "survivors": [
-        {
-          "line": 59,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 59,
-          "original": "and",
-          "replacement": "or"
-        },
-        {
-          "line": 68,
-          "original": "and",
-          "replacement": "or"
-        },
         {
           "line": 114,
           "original": "0.0",
@@ -334,7 +166,7 @@
           "replacement": "True"
         },
         {
-          "line": 238,
+          "line": 243,
           "original": "False",
           "replacement": "True"
         }

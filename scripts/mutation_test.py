@@ -266,7 +266,9 @@ EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
         "`.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469"
     ),
     # --- motif_processing.py ------------------------------------------------------
-    ("vntyper/scripts/motif_processing.py", 315, "60", "61"): (
+    # Line moved 315 -> 342 when 11e2300 extracted the decision layer. The sweep's stale-
+    # entry check caught the drift; the mutant is the same one and is still equivalent.
+    ("vntyper/scripts/motif_processing.py", 342, "60", "61"): (
         "`.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60"
     ),
     # --- flagging.py --------------------------------------------------------------
@@ -284,7 +286,8 @@ EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
     # `Index`, duplicate `Flag` columns, a string index and a MultiIndex all resolve
     # `.Flag` to the same column either way, because namedtuple's `rename=True` renames
     # the colliding field and not `Flag`.
-    ("vntyper/scripts/flagging.py", 238, "False", "True"): (
+    # Line moved 238 -> 243 with the duplicate-flagging changes in 6e7cda2.
+    ("vntyper/scripts/flagging.py", 243, "False", "True"): (
         "`itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name"
     ),
 }
