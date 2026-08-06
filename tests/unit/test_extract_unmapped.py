@@ -14,8 +14,10 @@ import pysam
 import pytest
 
 from vntyper.scripts.extract_unmapped_from_offset import (
+    BAI_MAGIC,
     extract_unmapped_reads_from_offset,
     get_last_chunk_end,
+    read_exact,
     read_uint32,
     read_uint64,
 )
@@ -23,15 +25,16 @@ from vntyper.scripts.extract_unmapped_from_offset import (
 pytestmark = pytest.mark.unit
 
 
-def _bai(references):
+def _bai(references, magic=b"BAI\x01"):
     """Build a minimal BAI. `references` is a list of lists of (beg, end) chunks.
 
     Matches, byte for byte, the order `get_last_chunk_end` walks: a 4-byte
-    magic (unparsed, just skipped), then n_ref (uint32), then per reference:
-    n_bins (uint32); for each bin, a bin number (uint32, read but unused), a
-    chunk count (uint32) and that many (chunk_beg, chunk_end) uint64 pairs;
-    then n_intv (uint32) and n_intv * 8 bytes of linear index that the real
-    parser skips with `bai.seek` rather than reading.
+    magic, which the parser reads and compares against `BAI\\x01`, then n_ref
+    (uint32), then per reference: n_bins (uint32); for each bin, a bin number
+    (uint32, read but unused), a chunk count (uint32) and that many
+    (chunk_beg, chunk_end) uint64 pairs; then n_intv (uint32) and n_intv * 8
+    bytes of linear index, which the parser steps over with `bai.seek` after
+    checking those bytes are actually present in the file.
 
     All chunks for one reference are written into a single synthetic bin
     here (n_bins is 0 or 1). That is a simplification versus a real BAI,
@@ -39,8 +42,16 @@ def _bai(references):
     `get_last_chunk_end`: it maxes `chunk_end` over every chunk in every
     bin, so how those chunks are grouped into bins does not affect the
     result.
+
+    Args:
+        references: One list of `(chunk_beg, chunk_end)` pairs per reference.
+        magic: The four signature bytes to write. Overridden only by the
+            tests that check the signature is validated rather than skipped.
+
+    Returns:
+        bytes: The encoded index.
     """
-    out = [b"BAI\x01", struct.pack("<I", len(references))]
+    out = [magic, struct.pack("<I", len(references))]
     for chunks in references:
         out.append(struct.pack("<I", 1 if chunks else 0))  # n_bins
         if chunks:
@@ -51,6 +62,44 @@ def _bai(references):
         out.append(struct.pack("<I", 2))  # n_intv: a 2-entry linear index
         out.append(struct.pack("<QQ", 0, 0))  # the linear index itself, skipped over
     return b"".join(out)
+
+
+# ---------------------------------------------------------------------------
+# read_exact
+# ---------------------------------------------------------------------------
+
+
+def test_the_magic_constant_is_the_bai_signature():
+    """Pinned as a literal so a typo in the constant cannot pass unnoticed.
+
+    Confirmed against a real `samtools index` output, whose first four bytes
+    are these.
+    """
+    assert BAI_MAGIC == b"BAI\x01"
+
+
+@pytest.mark.parametrize("size", [1, 4, 8, 16])
+def test_read_exact_returns_exactly_the_bytes_asked_for(size):
+    """The bytes come back unchanged, and only `size` of them are consumed."""
+    stream = io.BytesIO(bytes(range(32)))
+    assert read_exact(stream, size, "field") == bytes(range(size))
+    assert stream.tell() == size
+
+
+def test_read_exact_raises_naming_the_field_and_both_byte_counts():
+    """The one behaviour every caller depends on: a short read is not silently short.
+
+    `f.read(n)` returns what it has rather than raising, so without this check
+    a truncated field reaches the caller as a shorter `bytes` -- which
+    `int.from_bytes` then zero-fills into a plausible number.
+    """
+    with pytest.raises(ValueError, match=r"expected 8 bytes for magic, found 3"):
+        read_exact(io.BytesIO(b"BAI"), 8, "magic")
+
+
+def test_read_exact_raises_on_an_empty_stream():
+    with pytest.raises(ValueError, match=r"expected 4 bytes for magic, found 0"):
+        read_exact(io.BytesIO(b""), 4, "magic")
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +232,118 @@ def test_a_truncation_mid_field_reports_the_partial_byte_count(tmp_path):
     path = tmp_path / "x.bai"
     path.write_bytes(_bai([[(0, 900)]])[:5])
     with pytest.raises(ValueError, match=r"[Tt]runcated BAI.*n_ref.*found 1"):
+        get_last_chunk_end(str(path))
+
+
+# ---------------------------------------------------------------------------
+# get_last_chunk_end: the two structural checks the docstring promised but the
+# parser did not perform -- the signature, and the length of the linear index.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "magic", [b"CSI\x01", b"BAI\x02", b"\x00\x00\x00\x00", b"CRAI"], ids=["csi", "v2", "zeros", "crai"]
+)
+def test_an_index_whose_signature_is_not_the_bai_magic_is_rejected(tmp_path, magic):
+    """The four magic bytes must be read and compared, not skipped.
+
+    `get_last_chunk_end` consumed the signature with a bare `bai.read(4)` whose
+    result was thrown away, so the only thing that decided whether a file was
+    accepted was whether the bytes *after* the signature happened to parse. The
+    concrete case this makes safe: a file with a wrong signature and a
+    parseable `n_ref = 0` returned a plausible offset of `0` -- indistinguishable
+    from the value a legitimately empty index returns -- instead of raising.
+
+    The `.csi` case is the realistic one. A CSI index is a different format
+    carrying the same information, it lives beside a BAM under a different
+    extension, and its first four bytes are `CSI\\x01`; handed one, the parser
+    would previously have walked its bgzf-compressed body as if it were a BAI.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        magic: Four signature bytes that are not `BAI\\x01`.
+    """
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([], magic=magic))
+    with pytest.raises(ValueError, match=r"[Ii]nvalid BAI index.*magic"):
+        get_last_chunk_end(str(path))
+
+
+def test_the_valid_signature_is_still_accepted(tmp_path):
+    """The guard above must reject the wrong magic without rejecting the right one."""
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([[(0, 900)]]))
+    assert get_last_chunk_end(str(path)) == 900
+
+
+def test_a_file_too_short_to_hold_a_signature_names_the_magic_not_n_ref(tmp_path):
+    """A file shorter than four bytes runs out inside the signature itself.
+
+    Reported against the field that actually came up short. Skipping the magic
+    with an unchecked `read(4)` pushed the first detected shortfall onto
+    `n_ref`, which sends whoever reads the log looking at the wrong offset.
+    """
+    path = tmp_path / "x.bai"
+    path.write_bytes(b"BA")
+    with pytest.raises(ValueError, match=r"[Tt]runcated BAI index.*magic.*found 2"):
+        get_last_chunk_end(str(path))
+
+
+def test_a_missing_linear_index_tail_raises_instead_of_seeking_past_the_end(tmp_path):
+    """The declared linear-index length must be checked against the real file length.
+
+    The `n_intv * 8` linear-index body is stepped over with `bai.seek(...,
+    SEEK_CUR)`, and seeking past the end of a file succeeds on every platform --
+    so the seek returning normally proves nothing about whether those bytes
+    exist. For every reference but the last, the next `read_uint32` lands at EOF
+    and the truncation is caught anyway; for the *final* reference nothing
+    follows, so the walk simply ended and `max_vo` was returned from an index
+    that stops mid-structure.
+
+    Truncating `_bai([[(0, 900)]])` to 40 bytes leaves every fixed-width field
+    intact -- including `n_intv = 2` -- and removes all 16 bytes of the linear
+    index it declares.
+    """
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([[(0, 900)]])[:40])
+    with pytest.raises(ValueError, match=r"[Tt]runcated BAI index.*linear index.*found 0"):
+        get_last_chunk_end(str(path))
+
+
+def test_a_partially_present_linear_index_reports_how_many_bytes_were_there(tmp_path):
+    """Half a linear index is as invalid as none, and the message says how much was found."""
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([[(0, 900)]])[:48])
+    with pytest.raises(ValueError, match=r"[Tt]runcated BAI index.*linear index.*found 8"):
+        get_last_chunk_end(str(path))
+
+
+def test_the_optional_trailing_unplaced_read_count_is_tolerated(tmp_path):
+    """The length check is a lower bound, not an equality: real BAIs carry a tail.
+
+    `samtools index` writes an optional trailing `n_no_coor` (uint64, the count
+    of reads with no coordinate) after the last reference. `get_last_chunk_end`
+    never reads it, and the linear-index length check must not turn its presence
+    into a validation failure -- an exact-length check would reject every index
+    samtools produces.
+    """
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([[(0, 900)]]) + struct.pack("<Q", 17))
+    assert get_last_chunk_end(str(path)) == 900
+
+
+def test_a_large_declared_linear_index_is_rejected_without_allocating_it(tmp_path):
+    """A corrupt `n_intv` must fail fast rather than trying to buy the memory.
+
+    Consuming the linear index with `f.read(n_intv * 8)` would honour a
+    corrupt count literally: `n_intv = 2**32 - 1` asks for 34 GB. The check
+    compares offsets against the file's real length instead, so it costs
+    nothing and still raises.
+    """
+    path = tmp_path / "x.bai"
+    body = _bai([[(0, 900)]])
+    path.write_bytes(body[:36] + struct.pack("<I", 0xFFFFFFFF))
+    with pytest.raises(ValueError, match=r"[Tt]runcated BAI index.*linear index"):
         get_last_chunk_end(str(path))
 
 

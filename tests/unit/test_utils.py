@@ -576,6 +576,71 @@ def test_validate_bam_file_accepts_the_cram_extension(tmp_path):
         validate_bam_file(str(cram_file))  # must not raise
 
 
+@pytest.mark.parametrize(
+    "filename",
+    ["SAMPLE.CRAM", "SAMPLE.BAM", "sample.Cram", "sample.Bam", "NA12878.CRAM"],
+    ids=["upper-cram", "upper-bam", "mixed-cram", "mixed-bam", "upper-cram-realistic"],
+)
+def test_validate_bam_file_accepts_an_uppercase_alignment_extension(tmp_path, filename):
+    """An upper-case extension is an accepted upload name, so it must survive validation.
+
+    Three layers see the same file and they have to agree on what a CRAM is:
+
+    * ``docker/app/uploads.py`` compiles its allowlist with ``re.IGNORECASE``
+      (and says so, deliberately: "sequencers and LIMS exports routinely
+      upper-case it"), so ``SAMPLE.CRAM`` is a name the endpoint stores;
+    * ``docker/app/tasks.py`` lower-cases the suffix before choosing ``--cram``
+      or ``--bam``, so the worker routes it correctly, and
+      ``tests/unit/web/test_cram_alignment_handoff.py::test_the_flag_is_chosen_case_insensitively``
+      pins that;
+    * this function then decided the extension with a case-*sensitive*
+      ``endswith((".bam", ".cram"))`` and raised ``ValueError``.
+
+    So an upload the endpoint accepted and the worker routed died in the
+    validator, and the web test could not see it: it inspects the argument
+    vector the worker builds and never runs that command through
+    ``validate_bam_file``. This test closes exactly that gap.
+
+    Nothing downstream needs the lower-case name. ``samtools`` identifies BAM
+    and CRAM from the file's own signature, not from its extension --
+    ``samtools quickcheck -v`` on files named ``SAMPLE.BAM`` and
+    ``SAMPLE.CRAM`` was measured returning 0 -- and ``pipeline.py`` branches on
+    which CLI flag carried the path, never on the path's suffix.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        filename: An alignment filename whose extension is not all lower-case.
+    """
+    alignment_file = tmp_path / filename
+    alignment_file.touch()
+
+    with patch("vntyper.scripts.utils.run_command", return_value=True):
+        validate_bam_file(str(alignment_file))  # must not raise
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["notes.TXT", "reads.SAM", "sample.CRAM.gz", "sample.BAMBOO"],
+    ids=["txt", "sam", "gzipped-cram", "longer-suffix"],
+)
+def test_validate_bam_file_still_rejects_a_wrong_extension_whatever_its_case(tmp_path, filename):
+    """Case-folding the suffix must widen the check to casing, and to nothing else.
+
+    ``.sam`` is the one that matters: an uncompressed SAM is not something
+    ``pipeline.py``'s BAM path can slice, and lower-casing before comparing
+    must not be mistaken for "accept anything alignment-shaped".
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        filename: A filename whose extension is neither ``.bam`` nor ``.cram``.
+    """
+    bad_file = tmp_path / filename
+    bad_file.touch()
+
+    with pytest.raises(ValueError, match="Invalid alignment file extension"):
+        validate_bam_file(str(bad_file))
+
+
 def test_validate_bam_file_passes_cwd_through_to_run_command(tmp_path):
     """
     utils.py:334 -- ``cwd`` is threaded into the quickcheck ``run_command`` call
@@ -716,6 +781,46 @@ def test_validate_fastq_file_rejects_a_truncated_read(tmp_path):
     fastq_file.write_text("@SEQ_ID\nGATTACA\n")
 
     with pytest.raises(ValueError, match="incomplete or empty"):
+        validate_fastq_file(str(fastq_file))
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["reads.FASTQ.GZ", "reads.FASTQ", "reads.Fq.Gz", "reads.FQ"],
+    ids=["upper-gz", "upper-plain", "mixed-gz", "upper-fq"],
+)
+def test_validate_fastq_file_extension_check_stays_case_sensitive(tmp_path, filename):
+    """The FASTQ validator does NOT case-fold, and that asymmetry is on purpose.
+
+    ``validate_bam_file`` was made case-insensitive because the upload
+    allowlist above it already accepts ``SAMPLE.CRAM``; the obvious follow-on
+    is to do the same here. It would be wrong, and this test is what stops it.
+
+    ``fastp`` decides whether to decompress from a case-sensitive ``.gz``
+    suffix. Measured with the pinned fastp v0.23.4, on the same 5-read gzipped
+    FASTQ written under two names::
+
+        reads.fastq.gz -> exit=0  reads_written=5
+        reads.FASTQ.GZ -> exit=0  reads_written=0
+
+    So accepting ``reads.FASTQ.GZ`` here would trade a clear ``ValueError`` at
+    the boundary for a silent zero-read run that reaches Kestrel and produces a
+    genotype from nothing. There is also no layer above this one that disagrees:
+    the web service has no FASTQ endpoint, so unlike the alignment case there is
+    no accepted-then-rejected contradiction to resolve.
+
+    This is a decision taken in this fix lane with the measurement attached, not
+    a behaviour signed off by the repository owner; it is a candidate for review
+    if FASTQ upload is ever added or fastp's detection changes.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        filename: A FASTQ filename whose extension is not all lower-case.
+    """
+    fastq_file = tmp_path / filename
+    fastq_file.touch()
+
+    with pytest.raises(ValueError, match="Invalid FASTQ file extension"):
         validate_fastq_file(str(fastq_file))
 
 

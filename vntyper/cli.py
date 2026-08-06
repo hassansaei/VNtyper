@@ -102,8 +102,11 @@ def main(argv: list[str] | None = None) -> None:
     # disk. The log file for a `pipeline` run is `<output_dir>/pipeline.log`, so
     # validating this in the handler meant the output directory was created and
     # written to before the run died -- and it died with an unhandled ValueError,
-    # which is a traceback for what is really a usage error. Exit 1: AGENTS.md
-    # keeps this CLI to exit codes 0 and 1, so `parser.error`'s 2 is not used.
+    # which is a traceback for what is really a usage error. Exit 1 rather than
+    # `parser.error`'s 2: the parser is already built and dispatched by this point,
+    # so this reads as a completed run that failed, not as a usage error caught at
+    # parse time. `cli_handlers` does use `parser.error` -- and therefore exit 2 --
+    # for the input combinations it rejects while parsing.
     if args.command == "pipeline" and getattr(args, "output_name", None) is not None:
         try:
             validate_output_name(args.output_name)

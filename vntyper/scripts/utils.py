@@ -313,6 +313,20 @@ def validate_bam_file(file_path, cwd=None):
     to handle CRAM as well. The logic remains the same; we just allow .cram
     extension in addition to .bam and run samtools quickcheck regardless.
 
+    The extension is compared without regard to case, matching the two layers
+    that see the same file first: the upload allowlist in
+    ``docker/app/uploads.py`` compiles its pattern with ``re.IGNORECASE``
+    because sequencers and LIMS exports routinely upper-case the extension,
+    and ``docker/app/tasks.py`` lower-cases the suffix before choosing
+    ``--cram`` or ``--bam``. A case-sensitive comparison here rejected the
+    ``SAMPLE.CRAM`` those two had just accepted and routed, failing the job in
+    the validator. Nothing downstream needs the lower-case spelling: samtools
+    identifies BAM and CRAM from the file's own signature rather than its name,
+    and ``pipeline.py`` branches on which CLI flag carried the path.
+
+    ``validate_fastq_file`` is deliberately *not* case-folded to match; see the
+    note in its docstring.
+
     Args:
         file_path (str): Path to the BAM or CRAM file.
         cwd (str, optional): Working directory to use when running samtools.
@@ -329,8 +343,8 @@ def validate_bam_file(file_path, cwd=None):
         logger.error(f"Alignment file does not exist: {file_path}")
         raise ValueError(f"Alignment file does not exist: {file_path}")
 
-    # Modified to allow both .bam and .cram extensions
-    if not (file_path.endswith((".bam", ".cram"))):
+    # Modified to allow both .bam and .cram extensions, in any case
+    if not file_path.lower().endswith((".bam", ".cram")):
         logger.error(f"Invalid alignment file extension for file: {file_path}. Must be .bam or .cram")
         raise ValueError(f"Invalid alignment file extension for file: {file_path}")
 
@@ -357,6 +371,25 @@ def validate_bam_file(file_path, cwd=None):
 def validate_fastq_file(file_path):
     """
     Validates the FASTQ file for existence, correct extension, and basic formatting.
+
+    Unlike ``validate_bam_file``, the extension check here is **case-sensitive**,
+    and that asymmetry is deliberate rather than an oversight.
+
+    ``fastp`` decides whether to decompress its input from a case-sensitive
+    ``.gz`` suffix. Measured with fastp v0.23.4, the version
+    ``conda/environment_vntyper.yml`` pins: a correctly gzipped 5-read FASTQ
+    named ``reads.fastq.gz`` yields 5 reads, and the byte-identical file named
+    ``reads.FASTQ.GZ`` yields **0 reads and exit status 0** -- fastp reads the
+    compressed bytes as text, finds no records, and reports success. Accepting
+    ``reads.FASTQ.GZ`` here would therefore replace a clear ``ValueError`` at
+    the boundary with a silent zero-read run that reaches Kestrel, which is the
+    failure mode this repository is least able to notice.
+
+    The BAM/CRAM side has no equivalent hazard -- samtools identifies those
+    formats from the file's own signature, not from its name -- and it has a
+    layer above it that accepts upper-case names, so it is case-folded and this
+    is not. There is no upload endpoint for FASTQ, so no other layer disagrees
+    with this one.
 
     Args:
         file_path (str): Path to the FASTQ file.

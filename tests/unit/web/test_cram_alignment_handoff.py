@@ -49,10 +49,12 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from app.tasks import build_vntyper_command, resolve_index_path  # noqa: E402
+from app.uploads import safe_upload_path  # noqa: E402
 
 from vntyper.scripts import cli_handlers  # noqa: E402
 from vntyper.scripts.artifact_names import PIPELINE_BASENAME  # noqa: E402
 from vntyper.scripts.cli_parser import build_parser  # noqa: E402
+from vntyper.scripts.utils import validate_bam_file  # noqa: E402
 
 MINIMAL_CONFIG: dict[str, dict[str, object]] = {
     "default_values": {
@@ -201,6 +203,52 @@ def test_no_optional_flag_is_appended_when_none_was_asked_for() -> None:
         "--reference-assembly",
         "hg19",
     ]
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_flag"),
+    [
+        ("SAMPLE.CRAM", "--cram"),
+        ("SAMPLE.BAM", "--bam"),
+        ("sample.Cram", "--cram"),
+        ("sample.cram", "--cram"),
+        ("sample.bam", "--bam"),
+    ],
+    ids=["upper-cram", "upper-bam", "mixed-cram", "lower-cram", "lower-bam"],
+)
+def test_a_name_the_endpoint_accepts_survives_all_three_layers(
+    tmp_path: Path, filename: str, expected_flag: str
+) -> None:
+    """The three layers that see the same filename must agree about it.
+
+    The flag assertions above stop at the argument vector the worker builds:
+    they never run that vector's alignment path through the validator the CLI
+    reaches for first. That left a real gap open. ``uploads.py`` accepted
+    ``SAMPLE.CRAM``, ``tasks.py`` routed it to ``--cram``, and
+    ``vntyper.scripts.utils.validate_bam_file`` then rejected it with
+    ``ValueError: Invalid alignment file extension`` because it compared the
+    suffix case-sensitively -- so the job was accepted, enqueued, and died in
+    validation. Every existing test passed throughout.
+
+    This walks one name through all three in order, which is the only shape of
+    test that can catch a disagreement between them.
+
+    Args:
+        tmp_path: Pytest temporary directory, standing in for the job input dir.
+        filename: A client-supplied upload name.
+        expected_flag: The CLI flag that name must be routed to.
+    """
+    stored_path = safe_upload_path(str(tmp_path), filename)
+    Path(stored_path).touch()
+
+    command = build_vntyper_command(
+        alignment_path=stored_path, output_dir=str(tmp_path), thread=1, reference_assembly="hg38"
+    )
+    assert expected_flag in command
+    handed_to_the_cli = command[command.index(expected_flag) + 1]
+
+    with mock.patch("vntyper.scripts.utils.run_command", return_value=True):
+        validate_bam_file(handed_to_the_cli)  # must not raise
 
 
 # ---------------------------------------------------------------------------
