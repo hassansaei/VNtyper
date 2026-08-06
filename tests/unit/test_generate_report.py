@@ -369,6 +369,43 @@ def test_no_cross_match_step_means_no_cross_match_section(positive_summary) -> N
 
 
 # ---------------------------------------------------------------------------
+# The IGV script block - defect C6
+# ---------------------------------------------------------------------------
+
+
+def test_a_report_without_igv_still_declares_valid_javascript(positive_summary) -> None:
+    """Defect C6. `content.find(marker) + len(marker)` is 17 for an absent
+    marker, so the extraction returned arbitrary page text and the report
+    contained `const tableJson = <garbage>;` -- a syntax error that takes the
+    whole <script> block down, and with it the variant table, the flag toggle
+    and the coverage switch. That happened on every sample with no IGV report."""
+    html = render(positive_summary)
+    assert 'const tableJson = {"headers": [], "rows": []};' in html
+    assert "const sessionDictionary = {};" in html
+    assert "const tableJson = ;" not in html
+
+
+def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monkeypatch) -> None:
+    """The other side of the same fix: a real IGV page still reaches the HTML."""
+    from vntyper.scripts import generate_report
+
+    monkeypatch.setattr(
+        generate_report,
+        "extract_igv_content",
+        lambda path: ('<div id="container">panel</div>', '{"headers": ["a"], "rows": []}', '{"0": "blob:x"}'),
+    )
+    monkeypatch.setattr(generate_report, "run_igv_report", lambda *a, **k: None)
+
+    bed = positive_summary / "output.bed"
+    bed.write_text("chr1\t1\t2\n", encoding="utf-8")
+    (positive_summary / "igv_report.html").write_text("ignored", encoding="utf-8")
+
+    html = render(positive_summary, bed_file=str(bed))
+    assert 'const tableJson = {"headers": ["a"], "rows": []};' in html
+    assert 'const sessionDictionary = {"0": "blob:x"};' in html
+
+
+# ---------------------------------------------------------------------------
 # The BAM header block
 # ---------------------------------------------------------------------------
 

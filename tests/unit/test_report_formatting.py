@@ -242,3 +242,29 @@ def test_extract_igv_fragments_returns_empty_without_a_container() -> None:
 
 def test_extract_igv_fragments_returns_empty_for_empty_input() -> None:
     assert rf.extract_igv_fragments("") == ("", "", "")
+
+
+def test_extract_line_after_returns_empty_when_the_marker_is_absent() -> None:
+    """`content.find(marker) + len(marker)` is 17 when the marker is absent, so
+    the old code sliced from character 17 and produced arbitrary text where a
+    JavaScript object literal belonged -- `const tableJson = <garbage>;` is a
+    syntax error that kills the whole <script> block."""
+    content = "x" * 200
+    assert rf.extract_line_after(content, rf.IGV_TABLE_JSON_MARKER) == ""
+
+
+def test_extract_line_after_keeps_the_last_line_without_a_trailing_newline() -> None:
+    """`find("\\n", start)` is -1 at the end of a file, and slicing to -1 drops
+    the final character -- turning a valid literal into an unbalanced one."""
+    content = 'const tableJson = {"rows": []}'
+    assert rf.extract_line_after(content, rf.IGV_TABLE_JSON_MARKER) == '{"rows": []}'
+
+
+def test_a_page_with_a_container_but_no_table_json_yields_empty_fragments() -> None:
+    """The real shape of the failure: `create_report` produced a page, but not
+    the variable the report splices out of it."""
+    page = '<html><body><div id="container">m</div></body></html>'
+    container, table_json, session = rf.extract_igv_fragments(page)
+    assert container
+    assert table_json == ""
+    assert session == ""

@@ -37,10 +37,13 @@ from jinja2 import Environment, FileSystemLoader
 
 from vntyper.scripts.report_formatting import (
     ADVNTR_DISPLAY_COLUMNS,
+    EMPTY_SESSION_DICTIONARY,
+    EMPTY_TABLE_JSON,
     KESTREL_DISPLAY_COLUMNS,
     MISSING_AS_OK,
     confidence_html,
     extract_igv_fragments,
+    js_object_literal,
     parse_coverage_stats,
     select_display_columns,
     summarise_fastp,
@@ -489,8 +492,10 @@ def generate_summary_report(
         "advntr_available": advntr_available,
         "log_content": pipeline_log_content,
         "igv_content": igv_content,
-        "table_json": table_json,
-        "session_dictionary": session_dictionary,
+        # Interpolated straight into a <script> block, so they must parse even
+        # when there is no IGV report at all.
+        "table_json": js_object_literal(table_json, EMPTY_TABLE_JSON),
+        "session_dictionary": js_object_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
         "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "input_files": input_files,
         "pipeline_version": pipeline_version,

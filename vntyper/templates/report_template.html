@@ -461,7 +461,16 @@
         let igvBrowser;
 
         document.addEventListener("DOMContentLoaded", function () {
-            initIGV();
+            // No IGV report was generated for this sample: tableJson and
+            // sessionDictionary fall back to empty literals, and igv.createBrowser
+            // would throw on an undefined sessionURL and abort the rest of the
+            // script.
+            if (sessionDictionary && Object.keys(sessionDictionary).length > 0) {
+                initIGV();
+            } else {
+                document.getElementById("igvContainer").innerHTML =
+                    "<p><em>No IGV alignment visualization is available for this sample.</em></p>";
+            }
         });
 
         function initIGV() {

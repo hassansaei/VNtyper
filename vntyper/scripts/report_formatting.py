@@ -130,6 +130,12 @@ IGV_BODY_END_MARKER = "</body>"
 IGV_TABLE_JSON_MARKER = "const tableJson = "
 IGV_SESSION_DICTIONARY_MARKER = "const sessionDictionary = "
 
+#: Valid JavaScript literals for a report with no IGV panel. The template
+#: interpolates the extracted fragments directly into a ``<script>`` block, so an
+#: empty one is a syntax error rather than an empty table.
+EMPTY_TABLE_JSON = '{"headers": [], "rows": []}'
+EMPTY_SESSION_DICTIONARY = "{}"
+
 
 def threshold_icon(
     value: float | None,
@@ -291,16 +297,50 @@ def summarise_fastp(fastp_data: dict[str, Any]) -> FastpMetrics:
 def extract_line_after(content: str, marker: str) -> str:
     """Return the text between ``marker`` and the end of its line.
 
+    Both edge cases are load-bearing and both used to be wrong:
+
+    * an absent marker made ``find`` return -1, and ``-1 + len(marker)`` is a
+      valid index, so the old code sliced from character 17 and returned
+      arbitrary page text where a JavaScript object literal belonged;
+    * a marker on the last line with no trailing newline made ``find("\\n", ...)``
+      return -1, and slicing to -1 dropped the final character.
+
     Args:
         content: The document to search.
         marker: The literal that precedes the wanted text.
 
     Returns:
-        str: The stripped remainder of the marker's line.
+        str: The stripped remainder of the marker's line, or "" when the marker
+        is absent.
     """
-    start = content.find(marker) + len(marker)
+    start = content.find(marker)
+    if start == -1:
+        logger.debug("Marker %r not found.", marker)
+        return ""
+    start += len(marker)
     end = content.find("\n", start)
+    if end == -1:
+        end = len(content)
     return content[start:end].strip()
+
+
+def js_object_literal(fragment: str, fallback: str) -> str:
+    """Return ``fragment`` if it can stand as a JavaScript literal, else ``fallback``.
+
+    The template interpolates these straight into a ``<script>`` block as
+    ``const tableJson = {{ table_json|safe }};``. An empty fragment produces
+    ``const tableJson = ;`` -- a syntax error that takes the whole script block
+    down, and with it the variant table, the flag toggles and the coverage
+    switch, on every sample with no IGV report.
+
+    Args:
+        fragment: The extracted literal, possibly empty.
+        fallback: A valid literal to use instead.
+
+    Returns:
+        str: Something that parses.
+    """
+    return fragment if fragment.strip() else fallback
 
 
 def extract_igv_fragments(content: str) -> tuple[str, str, str]:
