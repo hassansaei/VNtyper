@@ -65,7 +65,9 @@ class AssemblyVerdict:
             affects `status`, because a header can name its contigs
             inconsistently and still identify its build unambiguously.
         chr1_length: The chr1 length the verdict was reasoned from, or None if
-            no usable chr1 was present. This is the evidence behind `status`.
+            no usable chr1 was present *or* several contigs named chromosome 1
+            with conflicting lengths. This is the evidence behind `status`; when
+            it is None the reason is spelled out in `message`.
         message: A complete, human-readable sentence suitable both as a log
             line and as an exception message.
     """
@@ -111,24 +113,38 @@ def _usable_contigs(contigs: list[dict]) -> list[dict[str, Any]]:
     return [c for c in contigs if isinstance(c, dict) and isinstance(c.get("name"), str)]
 
 
-def _chr1_length(contigs: list[dict[str, Any]]) -> int | None:
-    """Return the integer chr1 length present in the contigs, if any.
+def _chr1_lengths(contigs: list[dict[str, Any]]) -> list[int]:
+    """Return every *distinct* integer chr1 length the contigs declare.
+
+    A header should name chromosome 1 once, but nothing enforces that: a hybrid
+    header can carry both `1` and `chr1`, and the two aliases can carry
+    *different* lengths. Taking the first match would then let the order the
+    contigs happen to appear in decide the build -- so
+    `[{"1": 248956422}, {"chr1": 249250621}]` would read as GRCh38 and the same
+    header written the other way round as GRCh37. Collect them all and let the
+    caller decide deliberately.
+
+    Non-integer and missing lengths are skipped rather than ending the search,
+    so one malformed alias cannot mask a well-formed one.
 
     Args:
         contigs (list[dict[str, Any]]): Contigs already filtered by
             :func:`_usable_contigs`.
 
     Returns:
-        int | None: The length, or None if chr1 is absent or its length is not
-        an integer.
+        list[int]: Distinct lengths, in the order the header declared them.
+        Empty when no contig names chromosome 1 with an integer length.
     """
     from vntyper.scripts.chromosome_utils import is_chr1_name
 
+    lengths: list[int] = []
     for contig in contigs:
-        if is_chr1_name(contig["name"]):
-            length = contig.get("length")
-            return length if isinstance(length, int) and not isinstance(length, bool) else None
-    return None
+        if not is_chr1_name(contig["name"]):
+            continue
+        length = contig.get("length")
+        if isinstance(length, int) and not isinstance(length, bool) and length not in lengths:
+            lengths.append(length)
+    return lengths
 
 
 def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
@@ -152,10 +168,18 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
             `[{"name": "chr1", "length": 248956422}, ...]`. Entries that are not
             usable are skipped.
 
+    A header that names chromosome 1 more than once with *conflicting* lengths
+    -- a hybrid carrying both `1` and `chr1` from different builds -- is
+    `undetermined`, never `mismatch`. Deciding from whichever alias came first
+    would let contig order reject a usable input; refusing to decide keeps the
+    guard from failing a run on the strength of an abnormal header, and the
+    conflict is named in `message`.
+
     Returns:
         AssemblyVerdict: The verdict. `status` is `agree` when both builds are
         known and equal, `mismatch` when both are known and differ, and
-        `undetermined` when either could not be determined.
+        `undetermined` when either could not be determined -- including when
+        several chr1 entries disagree.
 
     Examples:
         >>> v = reconcile_assembly("hg19", [{"name": "chr1", "length": 248956422}])
@@ -167,9 +191,17 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
     usable = _usable_contigs(contigs)
     declared_build = _declared_coordinate_system(declared)
     naming_convention = detect_naming_convention([c["name"] for c in usable]) if usable else UNKNOWN
-    chr1_length = _chr1_length(usable)
+    chr1_lengths = _chr1_lengths(usable)
 
-    detected_build = detect_assembly_from_chr1_length(usable) or UNKNOWN
+    # Exactly one chr1 length is the normal case and the only one worth deciding
+    # from. Detection is fed a single synthesised contig rather than the raw list
+    # so that contig order can never influence the verdict; the length -> build
+    # table stays in chromosome_utils, which remains the one place that knows it.
+    chr1_length = chr1_lengths[0] if len(chr1_lengths) == 1 else None
+    if chr1_length is None:
+        detected_build = UNKNOWN
+    else:
+        detected_build = detect_assembly_from_chr1_length([{"name": "chr1", "length": chr1_length}]) or UNKNOWN
 
     if declared_build != UNKNOWN and detected_build != UNKNOWN:
         if declared_build == detected_build:
@@ -188,7 +220,7 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
             )
     else:
         status = STATUS_UNDETERMINED
-        reason = _undetermined_reason(declared_build, usable, chr1_length)
+        reason = _undetermined_reason(declared_build, usable, chr1_lengths)
         message = (
             f"Could not verify the declared reference assembly '{declared}': {reason}. "
             f"The declared assembly is being used unchecked."
@@ -208,13 +240,13 @@ def reconcile_assembly(declared: str, contigs: list[dict]) -> AssemblyVerdict:
     )
 
 
-def _undetermined_reason(declared_build: str, usable: list[dict[str, Any]], chr1_length: int | None) -> str:
+def _undetermined_reason(declared_build: str, usable: list[dict[str, Any]], chr1_lengths: list[int]) -> str:
     """Explain why no comparison was possible.
 
     Args:
         declared_build (str): Result of :func:`_declared_coordinate_system`.
         usable (list[dict[str, Any]]): Contigs that survived filtering.
-        chr1_length (int | None): Result of :func:`_chr1_length`.
+        chr1_lengths (list[int]): Result of :func:`_chr1_lengths`.
 
     Returns:
         str: A clause naming the single reason, for embedding in a message.
@@ -223,6 +255,23 @@ def _undetermined_reason(declared_build: str, usable: list[dict[str, Any]], chr1
         return "it is not a name the reference registry knows"
     if not usable:
         return "the header contained no usable contigs"
-    if chr1_length is None:
+    if not chr1_lengths:
         return "the header has no chr1 with an integer length"
-    return f"chr1 is {chr1_length:,} bp, which matches neither GRCh37 nor GRCh38"
+    if len(chr1_lengths) > 1:
+        # Sorted by contig name, not header order: the whole point of this branch
+        # is that ordering is not evidence, so it must not reach the message either.
+        from vntyper.scripts.chromosome_utils import is_chr1_name
+
+        named = sorted(
+            {
+                (contig["name"], contig["length"])
+                for contig in usable
+                if is_chr1_name(contig["name"]) and contig.get("length") in chr1_lengths
+            }
+        )
+        return (
+            "the header names chromosome 1 more than once with conflicting lengths ("
+            + ", ".join(f"{name} is {length:,} bp" for name, length in named)
+            + "), so no single length identifies the build"
+        )
+    return f"chr1 is {chr1_lengths[0]:,} bp, which matches neither GRCh37 nor GRCh38"

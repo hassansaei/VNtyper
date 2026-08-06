@@ -250,6 +250,92 @@ def test_a_usable_contig_still_decides_despite_junk_beside_it():
     assert verdict.chr1_length == GRCH37_CHR1
 
 
+# ---------------------------------------------------------------------------
+# A header naming chromosome 1 twice must not let contig order decide
+# ---------------------------------------------------------------------------
+
+
+def hybrid_header_contigs(first: tuple[str, int], second: tuple[str, int]) -> list[dict]:
+    """Two aliases of chromosome 1 plus one ordinary contig, in the given order."""
+    return [
+        {"name": first[0], "length": first[1]},
+        {"name": second[0], "length": second[1]},
+        {"name": "chr2", "length": 242193529},
+    ]
+
+
+CONFLICTING_ORDERS = [
+    ("ensembl first", hybrid_header_contigs(("1", GRCH38_CHR1), ("chr1", GRCH37_CHR1))),
+    ("ucsc first", hybrid_header_contigs(("chr1", GRCH37_CHR1), ("1", GRCH38_CHR1))),
+    ("ncbi first", hybrid_header_contigs(("NC_000001.11", GRCH38_CHR1), ("chr1", GRCH37_CHR1))),
+]
+
+
+@pytest.mark.parametrize("label,contigs", CONFLICTING_ORDERS, ids=[c[0] for c in CONFLICTING_ORDERS])
+@pytest.mark.parametrize("declared", ["hg19", "hg38", "GRCh37", "GRCh38"])
+def test_conflicting_chr1_entries_are_undetermined_whatever_the_order(label, contigs, declared):
+    """
+    A hybrid header carrying both `1` and `chr1` at *different* lengths cannot identify a
+    build. Taking the first match made the answer depend on the order the aligner happened
+    to write the header, so the same file could pass declared as hg19 and be rejected
+    declared as hg19 with its contigs reordered. Refusing to decide is the verdict; a
+    `mismatch` here would fail a possibly-usable run on the strength of an abnormal header.
+    """
+    verdict = reconcile_assembly(declared, contigs)
+
+    assert verdict.status == STATUS_UNDETERMINED, label
+    assert verdict.chr1_length is None, label
+
+
+def test_the_verdict_is_identical_for_both_orderings_of_the_same_conflict():
+    """The whole point: ordering is not evidence, so it must not move the verdict."""
+    forward = reconcile_assembly("hg19", hybrid_header_contigs(("1", GRCH38_CHR1), ("chr1", GRCH37_CHR1)))
+    reverse = reconcile_assembly("hg19", hybrid_header_contigs(("chr1", GRCH37_CHR1), ("1", GRCH38_CHR1)))
+
+    assert forward.status == reverse.status
+    assert forward.chr1_length is None and reverse.chr1_length is None
+    assert forward.coordinate_system == reverse.coordinate_system == UNKNOWN
+    assert forward.message == reverse.message
+
+
+def test_a_conflicting_header_names_both_lengths_in_its_message():
+    """The reader has to be able to see *what* conflicted; the guard is non-fatal."""
+    verdict = reconcile_assembly("hg19", hybrid_header_contigs(("1", GRCH38_CHR1), ("chr1", GRCH37_CHR1)))
+
+    plain = verdict.message.replace(",", "")
+    assert str(GRCH37_CHR1) in plain
+    assert str(GRCH38_CHR1) in plain
+    assert "conflicting" in verdict.message
+
+
+@pytest.mark.parametrize(
+    "declared,length,expected",
+    [("hg19", GRCH37_CHR1, STATUS_AGREE), ("hg38", GRCH37_CHR1, STATUS_MISMATCH)],
+)
+def test_chromosome_one_repeated_at_the_same_length_still_decides(declared, length, expected):
+    """Duplicated aliases are only a problem when they *disagree*."""
+    verdict = reconcile_assembly(declared, hybrid_header_contigs(("1", length), ("chr1", length)))
+
+    assert verdict.status == expected
+    assert verdict.chr1_length == length
+
+
+@pytest.mark.parametrize("bad_length", [None, "249250621", 249250621.0, True])
+def test_a_malformed_chr1_alias_no_longer_masks_a_well_formed_one(bad_length):
+    """
+    Previously the first chr1-named contig ended the search whatever its length was, so a
+    header whose leading alias carried a junk length read as "no chr1" even though a usable
+    one followed. Skipping the junk is a decision, not an accident of order.
+    """
+    verdict = reconcile_assembly(
+        "hg19",
+        [{"name": "1", "length": bad_length}, {"name": "chr1", "length": GRCH37_CHR1}],
+    )
+
+    assert verdict.status == STATUS_AGREE
+    assert verdict.chr1_length == GRCH37_CHR1
+
+
 def test_the_verdict_is_immutable():
     """F stores this in the pipeline summary; it must not be edited in place."""
     import dataclasses
