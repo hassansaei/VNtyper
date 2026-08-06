@@ -1,6 +1,9 @@
 # Follow-ups to #179: close #181–#188, #192, #194–#197
 
-Branch `fix/issue-181-197-followups`, 34 commits on top of `4fd638a` (v2.0.6).
+Branch `fix/issue-181-197-followups`, 45 commits on top of `4fd638a` (v2.0.6), tip
+`434f792`. The last nine commits answer an adversarial review of this PR — see
+**[Adversarial review](#adversarial-review)** at the end, which includes a **merge
+blocker that review found and this branch had introduced**.
 
 This finishes the work PR #198 opened. #198 raised unit coverage from 25.68% to 70.57%
 and, in doing so, filed seventeen issues describing everything it had found but not
@@ -87,7 +90,7 @@ extraction and never edited. Its limits are stated in §5.
 | `2a267aa` | #192 — every `LEN` token in a compound adVNTR state is summed |
 | `5f5222e` | #188 — `--cram` passed for CRAM uploads, plus the two regressions that alone would cause |
 | `6f03ddf` | #184 — mid-band `Depth_Score` stays `Low_Precision`; D11 — the calibration constants are required, not defaulted |
-| `90f61fa` | D8 + D9 — working columns no longer leak into exports; sample order is deterministic |
+| `90f61fa` | D8 + D9 — working columns no longer leak into exports; sample order is deterministic **for fixed directory inputs** (ZIP inputs are not: #205) |
 | `11e2300` | #195 — motif decision layer extracted, twin preprocessors merged, D5 column-wide dash gate fixed per row |
 | `ec67fff` | Floor 79 → 80 |
 
@@ -135,7 +138,7 @@ documented as such and overridable with `--non-fast-cases`.
 | --- | --- | --- | --- |
 | `102c46f` | `filter_vcf` keeps indels with multi-base alleles on both sides; `filter_indel_vcf` routes by length difference; a new `_assert_kestrel_allele_contract` guard | `javap` on the vendored `kestrel.jar`: `VariantInsertion.getVcfRef()` ends in `Character.toString(char)` on all three return paths, so REF is always exactly one base and Kestrel 1.0.1 emits only 1-vs-1, 1-vs-N, N-vs-1. Both defects are therefore **latent**. The post-fix classification table is measured and every 1-vs-N and N-vs-1 row is identical to the pre-fix table: production blast radius zero. | Nothing attests behaviour under a different jar — the guarantee is a property of *this* jar and is enforced nowhere else in VNtyper (AGENTS.md trap 8). Equal-length multi-base rows (MNPs) move from **silently dropped to hard failure**; deliberate, but it is a silent-drop-to-raise transition. `filter_indel_vcf` no longer reads `config.json`. |
 | `c489d49` (#185) | A missing gate column raises instead of being skipped | End-to-end test driving the real `run_pipeline` with a stage made to stop emitting `motif_filter_pass`, asserting `SystemExit`, code 1, and the message at ERROR — not merely reading the call graph. Before the fix the same test failed with "the run did not exit; it returned None". All five gates are parametrised. All five stages were read: every gate assignment is unconditional on each non-empty return path. | A cohort PASS proves only that no shipped stage omits a gate **on the cohort's inputs**. A cohort *difference* here would have been a finding, not a reason to weaken the raise. Web-visible: a job that previously produced a wrong result can now surface as failed. |
-| `2a267aa` (#192) | `Insertion_len` is the sum of every `LEN` token, not the remainder after a greedy split | A **differential sweep**: 52,511 probes; 13,563 / 13,563 previously-parsing inputs byte-identical; 38,943 differing, every one predicted by an oracle stated *before* the sweep ran; 0 violations in the three unchanged classes; reported-call delta +16,659 / −1,649. Induced-failure proof: tightening `LEN(\d+)` to `^LEN(\d+)` produced 21 failures and a non-zero exit. | **The golden cohort provably cannot attest this.** The cohort's only compound state, dfc3's `D17_2&D18_2&D19_2&D20_2&D21_2`, carries no `LEN` token, so `Insertion_len` is 0 under both semantics — measured, and confirmed byte-identical on both sides. The sweep covers a swept grammar, not observed adVNTR output. And `Deletion_length` is still `Variant.str.count("D")`, a count of *events* used arithmetically as a length in bp (unresolved, posted to #192, drafted as a new issue). |
+| `2a267aa` (#192) | `Insertion_len` is the sum of every `LEN` token, not the remainder after a greedy split | A **differential sweep**: 52,511 probes; 13,563 / 13,563 previously-parsing inputs byte-identical; 38,943 differing, every one predicted by an oracle stated *before* the sweep ran; 0 violations in the three unchanged classes; reported-call delta **+11,467 / −3,145** (restated at `ad515c6`: both sides of the comparison are now evaluated through the corrected, narrower filter). Induced-failure proof: tightening `LEN(\d+)` to `^LEN(\d+)` produced 21 failures and a non-zero exit. | **The golden cohort provably cannot attest this.** The cohort's only compound state, dfc3's `D17_2&D18_2&D19_2&D20_2&D21_2`, carries no `LEN` token, so `Insertion_len` is 0 under both semantics — measured, and confirmed byte-identical on both sides. The sweep covers a swept grammar, not observed adVNTR output. And `Deletion_length` is still `Variant.str.count("D")`, a count of *events* used arithmetically as a length in bp (unresolved, posted to #192, drafted as a new issue). |
 | `5f5222e` (#188) | `--cram` for CRAM uploads; CRAM sample-name derivation; `.crai` cleanup | An end-to-end run through the real Celery worker with only Redis faked, on a CRAM built at test time into scratch: the command carries `--cram`, `pipeline_summary.json` records `input_files={"cram": …}`, the VCF sample column is the file stem, the `.crai` is produced and cleaned up, and `kestrel_result.tsv` is byte-identical to the BAM run of the same sample apart from the timestamp (93 / 9883 / 0.009410098148335525 / High_Precision). Two induced reverts: pre-#188 leaves the `.crai` on the volume; fix 1 alone yields a VCF sample column of `sample`. | **The golden cohort contains no CRAM input at all** — that is #191's trigger. The genotype-equality assertion is **hand-run, not in CI**: it needs samtools, reference data and a real pipeline subprocess, all barred from the unit tier. #188 does not park on #191, but it stays unattested in CI until an integration case exists. |
 | `6f03ddf` (#184) | `cond6` becomes `cond_midband`, inclusive at both ends, applied last | A 54-cell boundary matrix; 116 enumerated integer depth pairs reaching 0.00515 for alt ≤ 12000, every one with alt a multiple of 103 and therefore > `alt_mid_high`, so only `High_Precision*` moves on integer depths; a selection test measured in both directions (before POS 67 / `High_Precision*`, after POS 68 / `High_Precision`). | **A golden-cohort PASS is weak evidence here and should not be read as strong.** Exact float equality with 0.00515 requires alt depth to be an exact multiple of 103, essentially unreachable on real data, so the cohort very likely contains no boundary row at all. The boundary table and the selection test are the load-bearing evidence. `cond3` is now dead in effect and is retained deliberately, as the expression that names the intent; its operands will surface as equivalent-mutant survivors in a future sweep. |
 | `11e2300` (#195) | `motif_processing.py:332` dash gate applied per row; decision layer extracted to `motif_decisions.py`; twin preprocessors merged | An end-to-end oracle hashed against the pre-extraction code and passed unmodified. The oracle was strengthened before any code moved: a `<` → `<=` mutation survived the first draft, so a POS-60 boundary test was added and the hash re-derived. `motif_decisions.py` is registered in `scripts/mutation_test.py` TARGETS — a module absent from TARGETS is not mutated at all. | The expected cohort delta is none **because real motif IDs carry exactly one dash** — an expectation, not evidence, and the attestation must say so. The oracle is an equivalence proof for the *extraction*, not for the dash-gate fix. The fix also uncovered an opposite face nothing had recorded: a **dashless** row rides through on a sibling's dash and is reported as a passing call on a motif not in the reference. That direction is more dangerous than the one #179's audit recorded, and had no instrument before this branch. |
@@ -152,7 +155,8 @@ documented as such and overridable with `--non-fast-cases`.
 | Branch point (`4fd638a`) | 70.57% statement | 70 |
 | After phase 3 (`debee23`) | 74.22% **branch-inclusive** | 74 |
 | After the cohort split (`c6d967a`) | 79.02% branch-inclusive | 79 |
-| Branch tip (`ec67fff`) | **80.24% branch-inclusive** | **80** |
+| `ec67fff` | 80.24% branch-inclusive | 80 |
+| Branch tip (`434f792`) | **80.37% branch-inclusive** | **80** |
 
 Statement-only coverage of the same suite is 80.77%, so the two are not interchangeable
 and deleting `branch = true` would *raise* the reported total while covering strictly
@@ -379,3 +383,90 @@ Makefile change was reverted and the gap is documented as AGENTS.md trap 16 and 
 - `docs/pipeline/optional-modules.md` — SHARK `reference_assembly` (#187).
 - `docs/development/mutation-testing.md` — regenerated through its generator, with the
   superseded conclusion quoted and refuted rather than deleted.
+
+---
+
+## Adversarial review
+
+After the work above was complete and green, this PR was put through an adversarial
+review — Codex `gpt-5.6-sol` at `xhigh`, read-only, five scoped lanes rather than one
+whole-branch pass, because 18k added lines against a 272k window is a shallow read.
+It returned **47 findings, 6 Critical**. Every finding spot-checked against source was
+real; no false positives were found.
+
+The recurring class is the one this branch exists to eliminate: **a document or a test
+asserting something the source contradicts.** The branch removed old instances and
+produced new ones. That is the honest headline.
+
+### The merge blocker, which this branch introduced
+
+`advntr_processing_del/ins` computed `frame = abs(Insertion_len - Deletion_length)` and
+tested it against unsigned series. `abs()` discards the direction of the net change, and a
+mixed state satisfies both presence guards, so either series could admit it. The
+pathogenic ADTKD-MUC1 frame is signed: Δ = +1 mod 3.
+
+Both arms are therefore correct for **pure** states — which is all the Kestrel parity test
+ever covered — and wrong for mixed ones, where the sign is the whole question.
+
+The sign error predates this branch. **`2a267aa` (#192) made it reachable**:
+`I9_2_A_LEN3&D50_2` had `Insertion_len` coerced to 0 by the old parser and was dropped;
+summing every `LEN` token gives 3, Δ becomes **+2** — the opposite, non-pathogenic frame —
+`abs()` makes it 2, and the deletion arm reported it. A false-positive clinical call.
+
+Two tests asserted the defect was correct, one of them named
+`test_a_deletion_with_a_compensating_insertion_is_judged_on_the_net_change` while
+asserting the behaviour that ignores the net change.
+
+Fixed at **`ad515c6`**. A verdict changes iff the state is mixed and Δ % 3 == 2; nothing
+is ever newly reported (new ⊆ old, `newly reported: 0` over 52,511 probes); no pure state
+moves (0 of 23,064). Both are now hard failure conditions of the sweep.
+
+**The golden cohort cannot attest this fix.** The cohort contains no mixed adVNTR state,
+so a PASS is silence, not evidence. The sweep is the evidence, plus three states in
+`advntr_config.json`'s `Polymorphic_Call` list that change verdict.
+
+### What else the review found, and where it went
+
+| Area | Finding | Outcome |
+|---|---|---|
+| CRAM | `tee` into `>(…)` — bash does not wait, so the merge raced the writer | `175011e` |
+| Gate | `expect_exit` declared in 7 places, read in 0; two failed runs compared `IDENTICAL` | `c8baa36` |
+| Gate | Nothing enforced that two *different* trees were compared | `c8baa36` |
+| Gate | Attestation claimed a commit the harness never recorded | `c8baa36` |
+| Cohort | The escaping test could not fail — widening the exemption passed all 2290 tests | `e369dc5` |
+| Confidence | Docs said `>= 0.00515` → High; code demotes exactly 0.00515 to Low | `4b2c7d4` |
+| Web | Unguarded Redis call in `finally` could skip patient-file deletion | `b91bee0` |
+| I/O | `SAMPLE.CRAM` accepted by upload, rejected by the validator | `29d88bd` |
+| Docs | 12 repository claims contradicted by the repository | `235b392` |
+
+Filed rather than fixed, each needing a decision or predating the branch:
+**#205** cohort ZIP identity, **#206** 20-bit pseudonym collisions, **#207** Flag-tooltip
+DOM XSS, **#208** in-place mutation surviving SIGHUP, **#209** the CRAM reference
+contract, **#210** the pipeline's second index, **#211** `scripts/` outside coverage.
+
+### CRAM is now exercised for the first time (#188)
+
+`make cram-fixtures` derives a verified CRAM beside every cohort BAM — 50/50, zero lossy,
+each proved by digesting the decoded record stream from both sides. `no_ref=1`, because
+the cohort's headers carry no `M5` tags and `cram_ref_option` is unconditionally empty, so
+a reference-compressed CRAM would be undecodable by this pipeline. `embed_ref=2` was
+measured and rejected as not lossless.
+
+That made the CRAM race measurable rather than arguable. On `7a61_hg38_ensembl`
+(622,690 unmapped pairs) the old form returned a file **28 bytes short — the BGZF EOF
+block — in 3 of 3 trials**, and `samtools merge` accepted it with **exit 0**. Read loss
+was intermittent: 105 reads in one trial of three; a synthetic CRAM lost 199,797 of
+200,000. The truncation is deterministic, the loss is load-dependent and unbounded, and
+nothing reports it. After the fix, BAM and CRAM produce identical genotypes and recover
+all 622,690 reads.
+
+These fixtures exercise the container, decoder, `.crai` indexing and unmapped scan. They
+deliberately do **not** exercise reference resolution — they need no reference. That
+separate failure mode is measured in #209.
+
+### Corrections to this document
+
+Three figures here were wrong and are now fixed: the commit count and tip, the #192
+reported-call delta, and the unqualified cohort-determinism claim. They were true when
+written and falsified by later commits on this same branch — which is precisely the defect
+class above, occurring in the PR body describing the fix for it.
