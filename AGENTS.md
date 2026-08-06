@@ -265,8 +265,17 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
     `make docker-build-base && make docker-build DOCKER_BASE_IMAGE=vntyper-base:local`.
     (This replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
-11. **`vntyper report` is currently broken** — `cli.py` passes arguments
-    `generate_summary_report()` does not accept. Do not copy that call site as an example.
+11. **The report's presentation logic lives outside `generate_report.py`.**
+    `screening_summary.py` owns the screening state and the `report_config.json` rule
+    table; `report_formatting.py` owns the icons, the column projections and the IGV
+    fragment splicing. Put new pure logic there, not back in `generate_report.py`.
+    Two rules that are easy to break: emphasis in the report comes from the computed
+    state (`summary_is_positive`), never from searching the message text, and the
+    Jinja2 environment autoescapes — anything you mark `|safe` must be a fragment
+    VNtyper built, not a value read from a sample. `tests/unit/test_generate_report.py`
+    enforces both. (`vntyper report` itself was broken until #179 — the handler passed
+    arguments `generate_summary_report()` does not accept — and now lives in
+    `cli_report.py` with its call contract pinned by a signature-binding spy.)
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
     `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
     if the pushed tag disagrees with `vntyper/version.py`.

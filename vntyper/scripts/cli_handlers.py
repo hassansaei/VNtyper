@@ -12,7 +12,7 @@ them apart lets each subcommand be edited, tested and reverted on its own.
 
 The ``report`` handler deliberately lives in its own module
 (:mod:`vntyper.scripts.cli_report`) rather than here: it is the one subcommand
-known to be broken (AGENTS.md trap 11) and is owned separately from the rest.
+known to be broken (AGENTS.md trap 11, fixed in #179) and is owned separately.
 
 Logging is **not** configured here. ``cli.py`` remains the sole place that calls
 ``setup_logging()``; handlers receive the already-resolved log level and log file

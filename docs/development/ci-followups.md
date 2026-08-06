@@ -89,11 +89,16 @@ order, or the next release fails:
 2. In the workflow: add `id-token: write` and the `environment:` block, replace the twine
    step with `pypa/gh-action-pypi-publish@release/v1`, delete the secret.
 
-### B5. `vntyper report` is broken — MEDIUM
+### B5. `vntyper report` is broken — RESOLVED (#179)
 
-`cli.py` passes arguments `generate_summary_report()` does not accept, so the subcommand
-raises. Recorded as trap 11 in `AGENTS.md` and untouched here. Needs its own fix plus the
-regression test that would have caught it.
+`cli.py` passed arguments `generate_summary_report()` does not accept, so the subcommand
+raised `TypeError` before doing any work. Fixed in #179: the handler moved to
+`vntyper/scripts/cli_report.py`, the three unaccepted keywords were dropped (the report
+generator reads all three out of `pipeline_summary.json` itself) and the required
+`log_file` is now passed. The regression test drives the real
+`cli.main(["report", ...])` into a spy that binds
+`inspect.signature(generate_summary_report)`, so a call the real function would reject
+fails in the same place.
 
 ### B6. Workflow linting is local-only — MEDIUM
 

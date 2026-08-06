@@ -15,9 +15,9 @@ These tests pin the dispatch seam that split creates:
 * logging is configured exactly once, in ``cli.py``, *before* any handler runs.
 
 They deliberately stop at the handler boundary: what each handler goes on to do is
-covered where that handler lives. ``vntyper report`` in particular is known broken
-(AGENTS.md trap 11) and is owned elsewhere -- the point here is that it is now
-reachable, and separately editable, from a test.
+covered where that handler lives. ``vntyper report`` in particular was known broken
+(AGENTS.md trap 11, fixed in #179) and is owned elsewhere -- the point here is
+that it is reachable, and separately editable, from a test.
 """
 
 import argparse

@@ -99,7 +99,7 @@ def test_parse_coverage_stats_yields_none_for_no_rows() -> None:
 def test_parse_coverage_stats_survives_an_unreadable_value(caplog) -> None:
     import logging
 
-    row = dict.fromkeys(COVERAGE_COLUMNS, 1)
+    row: dict[str, object] = dict.fromkeys(COVERAGE_COLUMNS, 1)
     row["stdev"] = "not-a-number"
     with caplog.at_level(logging.ERROR, logger="vntyper.scripts.report_formatting"):
         stats = rf.parse_coverage_stats([row])

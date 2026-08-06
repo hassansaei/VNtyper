@@ -60,7 +60,11 @@ def bound_calls(monkeypatch):
 def test_the_spy_rejects_the_arguments_the_real_function_rejects(bound_calls) -> None:
     """Guard the guard: a spy that accepts anything proves nothing."""
     with pytest.raises(TypeError):
-        cli_report.generate_summary_report(output_dir=".", template_dir=".", report_file="r.html", nonexistent=1)
+        # Deliberately wrong, which is the whole point: mypy flags it here for the
+        # same reason it flagged the production call site before #179 fixed it.
+        cli_report.generate_summary_report(  # type: ignore[call-arg]
+            output_dir=".", template_dir=".", report_file="r.html", nonexistent=1
+        )
     assert bound_calls == []
 
 
@@ -175,7 +179,13 @@ def test_handle_report_is_callable_directly(tmp_path, bound_calls) -> None:
         reference_fasta=None,
         flanking=None,
     )
-    cli_report.handle_report(args, config={"default_values": {}}, parser=None, log_level_value=20, log_file_str=None)
+    cli_report.handle_report(
+        args,
+        config={"default_values": {}},
+        parser=argparse.ArgumentParser(),
+        log_level_value=20,
+        log_file_str=None,
+    )
 
     assert len(bound_calls) == 1
     assert bound_calls[0].arguments["log_file"] is None

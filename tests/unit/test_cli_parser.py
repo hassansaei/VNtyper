@@ -13,9 +13,9 @@ handling, including that ``argv=None`` still reads ``sys.argv`` so the console e
 point is unaffected.
 
 This file deliberately stops at the parser. It does not exercise what the subcommands
-go on to do - ``vntyper report`` in particular is known to be broken (AGENTS.md trap 11)
-and is owned elsewhere. The point here is only that those paths are now *reachable*
-from a test.
+go on to do - ``vntyper report`` in particular was known to be broken (AGENTS.md
+trap 11, fixed in #179) and is owned elsewhere. The point here is only that those
+paths are *reachable* from a test.
 """
 
 import argparse
@@ -97,8 +97,8 @@ def test_the_report_subcommand_parses_an_output_directory():
     """
     The seam for the ``report`` tests: ``report -o DIR`` must reach ``args``.
 
-    What ``report`` then does with those arguments is broken today (AGENTS.md trap 11)
-    and is fixed elsewhere; this only pins that the arguments parse.
+    What ``report`` then does with those arguments is covered in
+    ``tests/unit/test_cli_report.py``; this only pins that the arguments parse.
     """
     args = build_parser().parse_args(["report", "-o", "results"])
     assert args.command == "report"
