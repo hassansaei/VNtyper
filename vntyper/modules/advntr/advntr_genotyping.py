@@ -171,6 +171,11 @@ def advntr_processing_del(df):
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
     df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
     logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
+    # Pathogenic-frame filter (#182, decided 2026-08-06). Deletions must be
+    # 3n+2 and insertions 3n+1: both are Delta = +1 mod 3, the ADTKD-MUC1
+    # frame that yields the toxic MUC1-fs product. This is the SAME rule
+    # Kestrel applies in scoring.extract_frameshifts (#181); the two are
+    # asserted to agree by tests/unit/test_frameshift_convention_parity.py.
     max_frameshift = advntr_settings.get("max_frameshift", 100)
     frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
     del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
@@ -210,6 +215,11 @@ def advntr_processing_ins(df):
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
     df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
     logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
+    # Pathogenic-frame filter (#182, decided 2026-08-06). Deletions must be
+    # 3n+2 and insertions 3n+1: both are Delta = +1 mod 3, the ADTKD-MUC1
+    # frame that yields the toxic MUC1-fs product. This is the SAME rule
+    # Kestrel applies in scoring.extract_frameshifts (#181); the two are
+    # asserted to agree by tests/unit/test_frameshift_convention_parity.py.
     max_frameshift = advntr_settings.get("max_frameshift", 100)
     frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
     ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)

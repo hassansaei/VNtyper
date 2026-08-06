@@ -133,6 +133,17 @@ class TestPureDeletionsAreFilteredByLength:
         ],
     )
     def test_a_pure_deletion_survives_only_when_its_length_is_two_mod_three(self, length, shifts_the_frame, kept_today):
+        """
+        Specification (#182, decided 2026-08-06). @hassansaei: "keep the same 3n+1 / 3n+2
+        rule for adVNTR as for Kestrel (#181). This is intentional shared convention, not
+        something to relax independently." For a pure deletion, ``Deletion_length`` is
+        always >= 1, so ``advntr_processing_del``'s guard never decides the outcome here --
+        only ``del_frame`` membership (``length % 3 == 2``) does, which this table pins as
+        decided behaviour. It does not rule on the separate guard-interaction gap visible
+        in the 1/4/7 rows -- see
+        ``test_a_frameshifting_deletion_of_one_mod_three_bases_is_lost``, which stays a
+        characterisation.
+        """
         assert (length % 3 != 0) is shifts_the_frame, "test table disagrees with arithmetic"
 
         assert surviving_rows(pure_deletion(length)) == (1 if kept_today else 0)
@@ -171,6 +182,17 @@ class TestPureInsertionsAreFilteredByLength:
     def test_a_pure_insertion_survives_only_when_its_length_is_one_mod_three(
         self, length, shifts_the_frame, kept_today
     ):
+        """
+        Specification (#182, decided 2026-08-06). @hassansaei: "keep the same 3n+1 / 3n+2
+        rule for adVNTR as for Kestrel (#181). This is intentional shared convention, not
+        something to relax independently." For a pure insertion, ``Insertion_len`` is
+        always >= 1, so ``advntr_processing_ins``'s guard never decides the outcome here --
+        only ``ins_frame`` membership (``length % 3 == 1``) does, which this table pins as
+        decided behaviour. It does not rule on the separate guard-interaction gap visible
+        in the 2/5/8 rows -- see
+        ``test_a_frameshifting_insertion_of_two_mod_three_bases_is_lost``, which stays a
+        characterisation.
+        """
         assert (length % 3 != 0) is shifts_the_frame, "test table disagrees with arithmetic"
 
         assert surviving_rows(pure_insertion(length)) == (1 if kept_today else 0)
