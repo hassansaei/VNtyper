@@ -1,555 +1,168 @@
 """
-An example of Pytest-based integration tests for VNtyper that load test
-scenarios from a JSON config file, making tests more adaptable and extensible.
+End-to-end integration tests for the VNtyper pipeline.
 
-This version includes:
- - A fixture to auto-download files if missing or MD5 mismatch,
- - Top-level "server_base_url" plus per-file "local_path", "filename", "url_suffix" in the config,
- - Handling "None"/negative values in the Kestrel checks,
- - Acceptance of multi-argument "--extra-modules",
- - A new 'adVNTR' test for advanced VNTR detection.
+Every scenario is read from ``tests/test_data_config.json`` and validated through the
+shared orchestration in ``tests/support/orchestration.py``, so this tier and the Docker
+tier assert exactly the same things about exactly the same samples. The only difference
+between the two is the runner: here the CLI is a subprocess on this machine, there it is
+``container.exec``.
+
+What this module deliberately does **not** define:
+
+* ``test_config`` and ``ensure_test_data`` - both live in ``tests/conftest.py``. The
+  copies that used to sit here ignored ``VNTYPER_TEST_DATA_SKIP_DOWNLOAD``, so the CI
+  fast-fail path was silently bypassed for this tier.
+* ``compute_md5`` and ``download_file`` - both live in ``tests/support/data_utils.py``.
+* the test-case lists - ``tests/parametrization.py`` is the single source, shared with
+  ``tests/docker/test_docker_pipeline.py``.
+
+These tests perform real I/O (subprocesses, ~1.2 GB of sample data, reference genomes)
+and are therefore **not** part of the unit tier. They carry ``integration`` only.
 """
 
-import csv
-import hashlib
-import json
+from __future__ import annotations
+
 import logging
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-import requests
 
-# Import shared test orchestration for DRY principle
-from tests.support.orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case
+from tests.parametrization import (
+    get_advntr_test_cases,
+    get_advntr_test_ids,
+    get_bam_test_cases,
+    get_bam_test_ids,
+    get_fastq_test_cases,
+    get_fastq_test_ids,
+)
+from tests.support.orchestration import (
+    ADVNTR_TIMEOUT_SECONDS,
+    run_advntr_test_case,
+    run_bam_test_case,
+    run_fastq_test_case,
+)
 
-# Configure logging for the entire module.
-logging.basicConfig(level=logging.INFO)
-
-
-@pytest.fixture(scope="session")
-def test_config():
-    """
-    Fixture to load the test scenarios from JSON config.
-    This file (test_data_config.json) must exist in the `tests/` folder or
-    another location if so configured.
-
-    Returns:
-        dict: The parsed JSON configuration dictionary. This config contains
-              references to files, test scenarios, and more.
-    """
-    config_path = Path("tests/test_data_config.json")
-    if not config_path.exists():
-        pytest.exit(f"Config file {config_path} not found!", returncode=1)
-
-    with config_path.open("r") as f:
-        return json.load(f)
+logger = logging.getLogger(__name__)
 
 
-@pytest.fixture(scope="session")
-def ensure_test_data(test_config):
-    """
-    Session-scoped fixture that ensures all test data is present and valid (by MD5).
-
-    This version supports both:
-    1. Archive-based downloads (data.zip from Zenodo)
-    2. Individual file downloads (legacy support)
-
-    If 'archive_file' is specified in config, it will download and extract the archive
-    when any file is missing or has MD5 mismatch. Otherwise, it falls back to individual
-    file downloads.
+def _fresh_output_dir(tmp_path: Path, test_name: str) -> Path:
+    """Return an empty, per-case output directory under ``tmp_path``.
 
     Args:
-        test_config (dict): The loaded JSON config with:
-            - archive_file (optional): dict with url, extract_to
-            - file_resources: list of file dicts with local_path, filename, md5sum
+        tmp_path: The test's temporary directory.
+        test_name: The case's ``test_name``, used as the directory name.
+
+    Returns:
+        Path: The created directory.
     """
-    logger = logging.getLogger(__name__)
-    import tempfile
-    import zipfile
+    output_dir = tmp_path / test_name
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
-    file_resources = test_config.get("file_resources", [])
-    archive_config = test_config.get("archive_file")
 
-    # Check if we need to download anything
-    need_download = False
-    for resource in file_resources:
-        local_dir = Path(resource["local_path"])
-        filename = resource["filename"]
-        local_path = local_dir / filename
-        expected_md5 = resource["md5sum"]
+def _run_cli(command: list[str]) -> int:
+    """Run the ``vntyper`` CLI and return its exit code.
 
-        if not local_path.exists():
-            logger.info("File %s is missing.", local_path)
-            need_download = True
-            break
+    stdout and stderr are logged rather than swallowed: the pipeline writes its whole
+    stage log to stderr, and it is the only diagnosis available when a case fails.
 
-        current_md5 = compute_md5(local_path)
-        if current_md5.lower() != expected_md5.lower():
-            logger.warning("File %s has MD5 mismatch. Expected=%s, Got=%s", local_path, expected_md5, current_md5)
-            need_download = True
-            break
+    Args:
+        command: The full argv to execute.
 
-    if not need_download:
-        logger.info("All test data files verified. No download needed.")
-        return
+    Returns:
+        int: The process exit code.
+    """
+    logger.info("Command to execute: %s", " ".join(command))
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
 
-    # Need to download - use archive if configured
-    if archive_config:
-        archive_url = archive_config["url"]
-        extract_to = Path(archive_config["extract_to"])
-
-        logger.info("Downloading test data archive from %s", archive_url)
-
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-
-        try:
-            # Download archive
-            download_file(archive_url, tmp_path)
-            logger.info("Archive downloaded to %s", tmp_path)
-
-            # Verify archive MD5 if configured
-            expected_archive_md5 = archive_config.get("md5sum")
-            if expected_archive_md5:
-                actual_archive_md5 = compute_md5(tmp_path)
-                if actual_archive_md5.lower() != expected_archive_md5.lower():
-                    pytest.exit(
-                        f"Archive MD5 mismatch.\nExpected={expected_archive_md5}, Got={actual_archive_md5}",
-                        returncode=1,
-                    )
-                logger.info("Archive MD5 verified: %s", actual_archive_md5)
-
-            # Extract archive
-            logger.info("Extracting archive to %s", extract_to)
-            extract_to.mkdir(parents=True, exist_ok=True)
-
-            with zipfile.ZipFile(tmp_path, "r") as zip_ref:
-                zip_ref.extractall(extract_to)
-
-            logger.info("Archive extracted successfully")
-
-            # Verify all files after extraction
-            for resource in file_resources:
-                local_dir = Path(resource["local_path"])
-                filename = resource["filename"]
-                local_path = local_dir / filename
-                expected_md5 = resource["md5sum"]
-
-                if not local_path.exists():
-                    pytest.exit(f"File {local_path} not found after archive extraction!", returncode=1)
-
-                current_md5 = compute_md5(local_path)
-                if current_md5.lower() != expected_md5.lower():
-                    pytest.exit(
-                        f"File {local_path} MD5 mismatch after extraction.\nExpected={expected_md5}, Got={current_md5}",
-                        returncode=1,
-                    )
-                logger.info("Verified %s", local_path)
-        finally:
-            # Clean up temp file
-            if tmp_path.exists():
-                tmp_path.unlink()
+    logger.info("Return code: %d", result.returncode)
+    logger.info("STDOUT:\n%s", result.stdout)
+    if result.returncode != 0:
+        logger.error("STDERR:\n%s", result.stderr)
     else:
-        # Legacy: download individual files
-        logger.info("Using legacy individual file download mode")
-        server_base_url = test_config.get("server_base_url", "")
+        logger.debug("STDERR:\n%s", result.stderr)
 
-        for resource in file_resources:
-            local_dir = Path(resource["local_path"])
-            filename = resource["filename"]
-            local_path = local_dir / filename
-            url_suffix = resource.get("url_suffix", "")
-            expected_md5 = resource["md5sum"]
-
-            if local_path.exists():
-                current_md5 = compute_md5(local_path)
-                if current_md5.lower() == expected_md5.lower():
-                    logger.info("File %s exists and MD5 verified.", local_path)
-                    continue
-                else:
-                    logger.warning("File %s MD5 mismatch, re-downloading.", local_path)
-                    local_path.unlink()
-
-            if server_base_url and url_suffix:
-                full_url = server_base_url.rstrip("/") + "/" + url_suffix.lstrip("/")
-                logger.info("Downloading %s from %s", filename, full_url)
-                download_file(full_url, local_path)
-
-                final_md5 = compute_md5(local_path)
-                if final_md5.lower() != expected_md5.lower():
-                    pytest.exit(
-                        f"Downloaded file {local_path} MD5 mismatch.\nExpected={expected_md5}, Got={final_md5}",
-                        returncode=1,
-                    )
-            else:
-                pytest.exit(f"File {local_path} not found and no download URL configured!", returncode=1)
-
-    return
-
-
-def compute_md5(file_path: Path) -> str:
-    """
-    Compute the MD5 hash of a file, returning the hex digest string.
-
-    Args:
-        file_path (Path): Path to the file whose MD5 should be computed.
-
-    Returns:
-        str: Hex digest string of the file's MD5 sum.
-    """
-    hasher = hashlib.md5()
-    with file_path.open("rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def download_file(url: str, dest_path: Path):
-    """
-    Download a file from 'url' and save it to 'dest_path'.
-    Raises an exception if the download fails (non-200 code).
-
-    Args:
-        url (str): The remote URL to download from.
-        dest_path (Path): The local path where the downloaded file is saved.
-    """
-    resp = requests.get(url, stream=True, timeout=60)
-    resp.raise_for_status()
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(dest_path, "wb") as f:
-        f.writelines(resp.iter_content(chunk_size=65536))
+    return result.returncode
 
 
 #
 # 1) FASTQ Tests
 #
 @pytest.mark.integration
-def test_fastq_input(tmp_path, test_config, ensure_test_data, fastq_case):
+@pytest.mark.parametrize("fastq_case", get_fastq_test_cases(), ids=get_fastq_test_ids())
+def test_fastq_input(tmp_path: Path, ensure_test_data: None, fastq_case: dict) -> None:
+    """Run the pipeline from paired FASTQ input and validate the declared outputs.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        ensure_test_data: Session fixture that verifies (and, outside CI, fetches) the data.
+        fastq_case: One entry of ``integration_tests.fastq_tests``.
     """
-    Parametrized test for "fastq_tests" items from the JSON config, which
-    reside under "unit_tests" -> "fastq_tests".
+    output_dir = _fresh_output_dir(tmp_path, fastq_case["test_name"])
 
-    This test depends on:
-      - ensure_test_data => ensures all needed files are downloaded/verified
-
-    The 'fastq_case' fixture yields a single test scenario with:
-      - fastq1 / fastq2
-      - cli_options
-      - expected_files
-      - test_name
-    """
-    logger = logging.getLogger(__name__)
-    logger.info("Starting test_fastq_input for case: %s", fastq_case["test_name"])
-
-    # 1) Prepare input (FASTQ files) and output directory
-    fastq1 = fastq_case["fastq1"]
-    fastq2 = fastq_case["fastq2"]
-    cli_options = fastq_case["cli_options"]
-    expected_files = fastq_case["expected_files"]
-    output_dir = tmp_path / fastq_case["test_name"]
-
-    # Clean up old output to ensure a fresh start
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # 2) Build the CLI command for VNtyper
-    command = [
-        "vntyper",
-        "--config-path",
-        "vntyper/config.json",
-        "pipeline",
-        "--fastq1",
-        fastq1,
-        "--fastq2",
-        fastq2,
-        "--threads",
-        "4",
-        "--output-dir",
-        str(output_dir),
-    ] + cli_options
-
-    logger.info("Command to execute: %s", " ".join(command))
-    # 3) Execute the CLI command
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-
-    # Log output for debugging
-    logger.info("Return code: %d", result.returncode)
-    logger.info("STDOUT:\n%s", result.stdout)
-    logger.info("STDERR:\n%s", result.stderr)
-
-    # Check the return code (0 => success)
-    assert result.returncode == 0, (
-        f"Pipeline returned non-zero exit code.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    )
-
-    # 4) Check for the expected output files in the output directory
-    for rel_path in expected_files:
-        check_path = output_dir / rel_path
-        logger.info("Checking file: %s", check_path)
-        assert check_path.exists(), (
-            f"Expected file {rel_path} not found in output directory.\nContents: {list(output_dir.rglob('*'))}"
+    def local_runner(
+        fastq1: Path,
+        fastq2: Path | None,
+        reference: str,
+        out_dir: Path,
+        extra_modules: list[str],
+    ) -> int:
+        """Execute the vntyper CLI locally via subprocess."""
+        command = [
+            "vntyper",
+            "--config-path",
+            "vntyper/config.json",
+            "pipeline",
+            "--fastq1",
+            str(fastq1),
+        ]
+        if fastq2 is not None:
+            command.extend(["--fastq2", str(fastq2)])
+        command.extend(
+            [
+                "--threads",
+                "4",
+                "--reference-assembly",
+                reference,
+                "--output-dir",
+                str(out_dir),
+            ]
         )
+        if extra_modules:
+            command.extend(["--extra-modules", ",".join(extra_modules)])
+        return _run_cli(command)
+
+    run_fastq_test_case(fastq_case, local_runner, output_dir)
 
 
 #
 # 2) BAM Tests
 #
 @pytest.mark.integration
-def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, bam_case):
+@pytest.mark.parametrize("bam_case", get_bam_test_cases(), ids=get_bam_test_ids())
+def test_bam_input_with_kestrel_checks(tmp_path: Path, ensure_test_data: None, bam_case: dict) -> None:
+    """Run the pipeline from BAM input and validate Kestrel, coverage and artefacts.
+
+    Validation is delegated wholesale to ``run_bam_test_case``. That matters for the
+    expected-negative cases: this test used to skip the confidence assertion whenever the
+    expectation was a negative call, which is precisely the class most likely to move
+    under a filtering change. The shared validator asserts every expectation, positive or
+    negative, with no exemption.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        ensure_test_data: Session fixture that verifies (and, outside CI, fetches) the data.
+        bam_case: One entry of ``integration_tests.bam_tests``.
     """
-    Parametrized test for all "bam_tests" items from the JSON config,
-    which is now under "integration_tests" -> "bam_tests".
+    output_dir = _fresh_output_dir(tmp_path, bam_case["test_name"])
+    cli_options = list(bam_case.get("cli_options", []))
 
-    This test ensures:
-      - The pipeline runs successfully with the specified BAM,
-      - The (optional) archive is created if requested,
-      - Kestrel checks (like depth, confidence, etc.) match expected values,
-      - IGV report is present if required.
-
-    The 'bam_case' fixture yields a single test scenario with:
-      - bam
-      - cli_options
-      - expected_archive (optional)
-      - kestrel_assertions (optional)
-      - check_igv_report (optional)
-      - test_name
-    """
-    logger = logging.getLogger(__name__)
-    logger.info(
-        "Starting test_bam_input_with_kestrel_checks for case: %s",
-        bam_case["test_name"],
-    )
-
-    bam_path = bam_case["bam"]
-    cli_options = bam_case["cli_options"]
-    reference_assembly = bam_case.get("reference_assembly", "hg19")
-    output_dir = tmp_path / bam_case["test_name"]
-
-    # Clean up old output
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build the command, including any extra CLI options from the config
-    command = [
-        "vntyper",
-        "-l",
-        "DEBUG",
-        "pipeline",
-        "--bam",
-        bam_path,
-        "--threads",
-        "4",
-        "--reference-assembly",
-        reference_assembly,
-        "-o",
-        str(output_dir),
-    ] + cli_options
-
-    logger.info("Command to execute: %s", " ".join(command))
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-
-    # Log outputs
-    logger.info("Return code: %d", result.returncode)
-    logger.info("STDOUT:\n%s", result.stdout)
-    logger.info("STDERR:\n%s", result.stderr)
-
-    # 1) Confirm success
-    assert result.returncode == 0, (
-        f"Pipeline returned non-zero exit code.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-    )
-
-    # 2) Check the archive if needed
-    if bam_case.get("expected_archive"):
-        archive_zip = f"{output_dir}.zip"
-        logger.info("Looking for %s", archive_zip)
-        assert os.path.exists(archive_zip), (
-            f"No archive created despite --archive-results.\nFiles in tmp_path: {list(tmp_path.iterdir())}"
-        )
-
-    # 3) If we have Kestrel checks, parse kestrel_result.tsv and compare
-    if "kestrel_assertions" in bam_case:
-        kestrel_tsv = output_dir / "kestrel" / "kestrel_result.tsv"
-        logger.info("Looking for %s", kestrel_tsv)
-        assert kestrel_tsv.exists(), (
-            "kestrel_result.tsv not found in the kestrel subfolder.\n"
-            f"Folder contents: {list((output_dir / 'kestrel').iterdir())}"
-        )
-
-        with open(kestrel_tsv) as f:
-            # Skip comment lines (those starting with '#')
-            reader = csv.DictReader((row for row in f if not row.startswith("#")), delimiter="\t")
-            rows = list(reader)
-
-        assert len(rows) > 0, "kestrel_result.tsv is empty after skipping comments."
-        row = rows[0]  # examine the first row by default
-
-        def parse_int_allow_none(val):
-            """
-            Returns None if val == "None", otherwise returns int(val).
-            This handles negative or standard integer strings.
-            """
-            if val is None or val == "None":
-                return None
-            return int(val)
-
-        def parse_float_allow_none(val):
-            """
-            Returns None if val == "None", otherwise returns float(val).
-            This handles negative or standard float strings.
-            """
-            if val is None or val == "None":
-                return None
-            return float(val)
-
-        # Check Estimated_Depth_AlternateVariant
-        if "Estimated_Depth_AlternateVariant" in bam_case["kestrel_assertions"]:
-            expected_alt = bam_case["kestrel_assertions"]["Estimated_Depth_AlternateVariant"]
-            alt_str = row["Estimated_Depth_AlternateVariant"]
-            alt_val = parse_int_allow_none(alt_str)
-
-            # If expected_alt == "None", we expect alt_val to be None
-            if isinstance(expected_alt, str) and expected_alt == "None":
-                assert alt_val is None, f"Expected None, got {alt_val}"
-            elif isinstance(expected_alt, dict):
-                # Dict format with tolerance support: {"value": 416, "tolerance_percentage": 5}
-                expected_alt_int = int(expected_alt["value"])
-                tolerance_pct = expected_alt.get("tolerance_percentage", 5)
-
-                if expected_alt_int is None:
-                    assert alt_val is None, f"Expected None, got {alt_val}"
-                else:
-                    assert alt_val is not None, "Row Estimated_Depth_AlternateVariant is None, but config says numeric"
-                    allowed_variation = abs(expected_alt_int) * (tolerance_pct / 100.0)
-                    diff = abs(alt_val - expected_alt_int)
-                    assert diff <= allowed_variation, (
-                        f"Estimated_Depth_AlternateVariant mismatch. Got={alt_val}, "
-                        f"Expected ~{expected_alt_int} ±{allowed_variation:.2f}"
-                    )
-            else:
-                # Simple integer format - exact match (backward compatible)
-                expected_alt_int = int(expected_alt)
-                assert alt_val == expected_alt_int, f"Expected alt depth={expected_alt_int}, got {alt_val}"
-
-        # Check Estimated_Depth_Variant_ActiveRegion
-        if "Estimated_Depth_Variant_ActiveRegion" in bam_case["kestrel_assertions"]:
-            expected_var = bam_case["kestrel_assertions"]["Estimated_Depth_Variant_ActiveRegion"]
-            var_str = row["Estimated_Depth_Variant_ActiveRegion"]
-            var_val = parse_int_allow_none(var_str)
-
-            if isinstance(expected_var, str) and expected_var == "None":
-                assert var_val is None, f"Expected None, got {var_val}"
-            elif isinstance(expected_var, dict):
-                # Dict format with tolerance support: {"value": 416, "tolerance_percentage": 5}
-                expected_var_int = int(expected_var["value"])
-                tolerance_pct = expected_var.get("tolerance_percentage", 5)
-
-                if expected_var_int is None:
-                    assert var_val is None, f"Expected None, got {var_val}"
-                else:
-                    assert var_val is not None, (
-                        "Row Estimated_Depth_Variant_ActiveRegion is None, but config says numeric"
-                    )
-                    allowed_variation = abs(expected_var_int) * (tolerance_pct / 100.0)
-                    diff = abs(var_val - expected_var_int)
-                    assert diff <= allowed_variation, (
-                        f"Estimated_Depth_Variant_ActiveRegion mismatch. Got={var_val}, "
-                        f"Expected ~{expected_var_int} ±{allowed_variation:.2f}"
-                    )
-            else:
-                # Simple integer format - exact match (backward compatible)
-                expected_var_int = int(expected_var)
-                assert var_val == expected_var_int, f"Expected region depth={expected_var_int}, got {var_val}"
-
-        # Check Depth_Score
-        if "Depth_Score" in bam_case["kestrel_assertions"]:
-            ds_info = bam_case["kestrel_assertions"]["Depth_Score"]
-            ds_val_str = ds_info["value"]
-            tolerance_pct = ds_info.get("tolerance_percentage", 5)
-
-            row_ds_str = row["Depth_Score"]
-            row_ds = parse_float_allow_none(row_ds_str)
-            config_ds = parse_float_allow_none(ds_val_str)
-
-            if config_ds is None:
-                # Expect "None"
-                assert row_ds is None, f"Expected Depth_Score=None, got {row_ds}"
-            else:
-                # numeric check with tolerance
-                assert row_ds is not None, "Row Depth_Score is None, but config says numeric"
-                allowed_variation = abs(config_ds) * (tolerance_pct / 100.0)
-                diff = abs(row_ds - config_ds)
-                assert diff <= allowed_variation, (
-                    f"Depth_Score mismatch. Got={row_ds}, Expected ~{config_ds} ±{allowed_variation}"
-                )
-
-        # Check Confidence
-        if "Confidence" in bam_case["kestrel_assertions"]:
-            expected_conf = bam_case["kestrel_assertions"]["Confidence"]
-            actual_conf = row["Confidence"]
-            if expected_conf == "Negative":
-                logger.info("Test expects a 'Negative' confidence => skipping strict check.")
-            else:
-                # Some are "High_Precision*" => partial match check
-                if expected_conf.endswith("*"):
-                    prefix = expected_conf[:-1]  # remove trailing '*'
-                    assert actual_conf.startswith(prefix), (
-                        f"Expected Confidence to start with '{prefix}', got '{actual_conf}'"
-                    )
-                else:
-                    # Exact match check
-                    assert actual_conf == expected_conf, f"Expected Confidence='{expected_conf}', got '{actual_conf}'"
-
-    # 4) Check for IGV report if requested
-    if bam_case.get("check_igv_report"):
-        igv_report = output_dir / "igv_report.html"
-        logger.info("Looking for %s", igv_report)
-        assert igv_report.exists(), f"Expected igv_report.html not found.\nFiles are: {list(output_dir.iterdir())}"
-
-
-#
-# 3) adVNTR Tests
-#
-@pytest.mark.integration
-@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)
-def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
-    """
-    Integration test for the adVNTR module.
-
-    This test uses SHARED orchestration (run_advntr_test_case) to guarantee
-    100% 1to1 congruence with Docker tests. All validation logic is centralized
-    in tests/support/orchestration.py and tests/helpers.py.
-
-    The 'advntr_case' fixture yields a single test scenario with:
-      - bam: path to input BAM file
-      - cli_options: CLI flags including extra modules for adVNTR
-      - expected_vcf: output filename (e.g., output_adVNTR_result.tsv)
-      - advntr_assertions: expected values for VID, State, reads, coverage, p-value
-      - test_name: unique identifier for this test case
-    """
-    logger = logging.getLogger(__name__)
-    logger.info("Starting test_advntr_input for case: %s", advntr_case["test_name"])
-
-    output_dir = tmp_path / advntr_case["test_name"]
-
-    # Clean up old output
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Define local CLI runner (matches Docker runner signature)
-    def local_runner(
-        bam_file: Path,
-        reference: str,
-        output_dir: Path,
-        extra_modules: list[str],
-        extra_cli_options: list[str],
-    ) -> int:
-        """Execute vntyper CLI locally via subprocess."""
+    def local_runner(bam_file: Path, reference: str, out_dir: Path) -> int:
+        """Execute the vntyper CLI locally via subprocess."""
         command = [
             "vntyper",
             "-l",
@@ -562,108 +175,69 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
             "--reference-assembly",
             reference,
             "-o",
-            str(output_dir),
+            str(out_dir),
+            *cli_options,
+        ]
+        return _run_cli(command)
+
+    run_bam_test_case(bam_case, local_runner, output_dir)
+
+    # --archive-results is a local-only flag (the Docker runner does not pass CLI
+    # options), so the archive assertion stays here rather than in the shared
+    # orchestration, where it would assert something the Docker tier never asks for.
+    if bam_case.get("expected_archive"):
+        archive_zip = Path(f"{output_dir}.zip")
+        logger.info("Looking for %s", archive_zip)
+        assert archive_zip.exists(), (
+            f"No archive created despite --archive-results.\nFiles in {tmp_path}: {list(tmp_path.iterdir())}"
+        )
+
+
+#
+# 3) adVNTR Tests
+#
+@pytest.mark.integration
+@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)
+@pytest.mark.parametrize("advntr_case", get_advntr_test_cases(), ids=get_advntr_test_ids())
+def test_advntr_input(tmp_path: Path, ensure_test_data: None, advntr_case: dict) -> None:
+    """Run the pipeline with ``--extra-modules advntr`` and validate the adVNTR call.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        ensure_test_data: Session fixture that verifies (and, outside CI, fetches) the data.
+        advntr_case: One entry of ``integration_tests.advntr_tests``.
+    """
+    output_dir = _fresh_output_dir(tmp_path, advntr_case["test_name"])
+
+    def local_runner(
+        bam_file: Path,
+        reference: str,
+        out_dir: Path,
+        extra_modules: list[str],
+        extra_cli_options: list[str],
+    ) -> int:
+        """Execute the vntyper CLI locally via subprocess."""
+        command = [
+            "vntyper",
+            "-l",
+            "DEBUG",
+            "pipeline",
+            "--bam",
+            str(bam_file),
+            "--threads",
+            "4",
+            "--reference-assembly",
+            reference,
+            "-o",
+            str(out_dir),
         ]
 
-        # Add extra modules
         if extra_modules:
             # The comma form relies on cli_handlers.normalise_extra_modules: before
             # #179 "advntr,shark" matched neither module and ran Kestrel only.
             command.extend(["--extra-modules", ",".join(extra_modules)])
 
-        # Add remaining CLI options (e.g. --fast-mode, --advntr-max-coverage)
         command.extend(extra_cli_options)
+        return _run_cli(command)
 
-        logger.info("Command to execute: %s", " ".join(command))
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-
-        logger.info("Return code: %d", result.returncode)
-        logger.info("STDOUT:\n%s", result.stdout)
-        if result.returncode != 0:
-            logger.error("STDERR:\n%s", result.stderr)
-
-        return result.returncode
-
-    # Run test using SHARED orchestration logic (DRY principle)
-    # This guarantees 100% identical validation between local and Docker tests
     run_advntr_test_case(advntr_case, local_runner, output_dir)
-
-
-#
-# Parametrization
-#
-
-
-@pytest.fixture(scope="function")
-def fastq_case(request, test_config):
-    """
-    Yields exactly one item from test_config["integration_tests"]["fastq_tests"].
-    Each item is a dict describing a particular FASTQ-based scenario.
-
-    Returns:
-        dict: Keys include "test_name", "fastq1", "fastq2", "cli_options",
-              "expected_files", etc.
-    """
-    return request.param
-
-
-@pytest.fixture(scope="function")
-def bam_case(request, test_config):
-    """
-    Yields exactly one item from test_config["integration_tests"]["bam_tests"].
-    Each item is a dict describing a particular BAM-based scenario.
-
-    Returns:
-        dict: Keys include "test_name", "bam", "cli_options",
-              "expected_archive" (bool), "kestrel_assertions" (dict),
-              and "check_igv_report" (bool).
-    """
-    return request.param
-
-
-@pytest.fixture(scope="function")
-def advntr_case(request, test_config):
-    """
-    Yields exactly one item from test_config["integration_tests"]["advntr_tests"].
-    Each item is a dict describing a particular adVNTR-based scenario.
-
-    Returns:
-        dict: Keys include "test_name", "bam", "cli_options",
-              "expected_vcf", "advntr_assertions" (dict).
-    """
-    return request.param
-
-
-def pytest_generate_tests(metafunc):
-    """
-    A custom hook that generates dynamic parameters from 'test_data_config.json'.
-    This allows each test function (e.g., test_fastq_input, test_bam_input_with_kestrel_checks,
-    test_advntr_input) to be parametrized with an array of cases from the JSON file.
-
-    We handle three categories (all under integration_tests):
-      - "integration_tests" -> "fastq_tests"
-      - "integration_tests" -> "bam_tests"
-      - "integration_tests" -> "advntr_tests"
-    """
-    config_data = metafunc.config._store.get("test_config_data", None)
-    if not config_data:
-        # Load the JSON config once and store it
-        config_path = Path("tests/test_data_config.json")
-        with config_path.open("r") as f:
-            config_data = json.load(f)
-        metafunc.config._store["test_config_data"] = config_data
-
-    # For FASTQ tests
-    if "fastq_case" in metafunc.fixturenames:
-        fastq_cases = config_data.get("integration_tests", {}).get("fastq_tests", [])
-        metafunc.parametrize("fastq_case", fastq_cases, ids=[c["test_name"] for c in fastq_cases])
-
-    # For BAM tests
-    if "bam_case" in metafunc.fixturenames:
-        bam_cases = config_data.get("integration_tests", {}).get("bam_tests", [])
-        metafunc.parametrize("bam_case", bam_cases, ids=[c["test_name"] for c in bam_cases])
-
-    # For adVNTR tests
-    if "advntr_case" in metafunc.fixturenames:
-        advntr_cases = config_data.get("integration_tests", {}).get("advntr_tests", [])
-        metafunc.parametrize("advntr_case", advntr_cases, ids=[c["test_name"] for c in advntr_cases])
