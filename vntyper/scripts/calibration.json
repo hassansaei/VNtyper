@@ -1,0 +1,81 @@
+{
+  "_comment": "Provenance for calibrated constants in kestrel_config.json. Production code never reads this file; tests/unit/test_calibration_consistency.py asserts the two agree. Bounds encode a reviewed safe range, not a derivation. `changed_by` names the commit that last set the value, not one that changed the logic reading it. Several values were introduced in b97d4a6 as vntyper/scripts/kestrel_filter_config.json and carried unchanged into kestrel_config.json by the split in e9c22a2.",
+  "constants": {
+    "kestrel_settings.max_align_states": {
+      "value": 40,
+      "source": "issue #156",
+      "rationale": "Above ~50, motif-specific ALT support inflates without new variant calls, pushing single-motif calls into High/Low_Precision. Reverted from 60 to 40.",
+      "bounds": [30, 50],
+      "changed_by": "40397da"
+    },
+    "kestrel_settings.max_hap_states": {
+      "value": 40,
+      "source": "issue #156",
+      "rationale": "Always set equal to max_align_states.",
+      "bounds": [30, 50],
+      "changed_by": "40397da"
+    },
+    "confidence_assignment.depth_score_thresholds.low": {
+      "value": 0.00469,
+      "source": "Saei et al., iScience 26, 107171 (2023)",
+      "rationale": "Empirical noise floor. Below this a variant is reported Negative. The value has never changed; 7ca8950 later moved that filtering to the root of confidence_assignment.py rather than applying it as an override, but left the number alone.",
+      "bounds": [0.001, 0.01],
+      "changed_by": "b97d4a6"
+    },
+    "confidence_assignment.depth_score_thresholds.high": {
+      "value": 0.00515,
+      "source": "Saei et al., iScience 26, 107171 (2023)",
+      "rationale": "Empirical boundary above which a call may reach a High_Precision tier.",
+      "bounds": [0.001, 0.01],
+      "changed_by": "b97d4a6"
+    },
+    "confidence_assignment.alt_depth_thresholds.low": {
+      "value": 20,
+      "source": "Saei et al., iScience 26, 107171 (2023)",
+      "rationale": "At or below this alternate-allele depth a call is Low_Precision regardless of depth score.",
+      "bounds": [5, 50],
+      "changed_by": "b97d4a6"
+    },
+    "confidence_assignment.alt_depth_thresholds.mid_low": {
+      "value": 21,
+      "source": "Saei et al., iScience 26, 107171 (2023)",
+      "rationale": "Lower edge of the High_Precision alternate-depth band; alt_low + 1 by construction.",
+      "bounds": [6, 51],
+      "changed_by": "b97d4a6"
+    },
+    "confidence_assignment.alt_depth_thresholds.mid_high": {
+      "value": 100,
+      "source": "issue #154",
+      "rationale": "Upper edge of the High_Precision band, exclusive. At exactly 100 the call is High_Precision*; the inclusive='left' fix in fade198 stopped cond3 overwriting that. The threshold itself has never moved -- only the comparison around it.",
+      "bounds": [50, 500],
+      "changed_by": "b97d4a6"
+    },
+    "confidence_assignment.var_active_region_threshold": {
+      "value": 200,
+      "source": "Saei et al., iScience 26, 107171 (2023)",
+      "rationale": "Active-region depth at or below this contributes a Low_Precision signal. NOTE: precedence is unspecified - a later High_Precision condition can override it. See spec R1; do not change without domain sign-off.",
+      "bounds": [50, 1000],
+      "changed_by": "b97d4a6"
+    },
+    "alt_filtering.gg_depth_score_threshold": {
+      "value": 0.00469,
+      "source": "Saei et al., iScience 26, 107171 (2023)",
+      "rationale": "Same calibrated number as depth_score_thresholds.low, stored separately for the GG alt filter. Linked - must not drift.",
+      "bounds": [0.001, 0.01],
+      "changed_by": "b97d4a6"
+    },
+    "motif_filtering.position_threshold": {
+      "value": 60,
+      "source": "VNtyper 1.3 (44b3ac6)",
+      "rationale": "Splits the VNTR into left (<60) and right (>=60) motif partitions. Carried forward unchanged from the v1 monolith, where VNtyper.py hardcoded the same POS < 60 / POS >= 60 split.",
+      "bounds": [1, 200],
+      "changed_by": "b97d4a6"
+    }
+  },
+  "linked": [
+    [
+      "confidence_assignment.depth_score_thresholds.low",
+      "alt_filtering.gg_depth_score_threshold"
+    ]
+  ]
+}
