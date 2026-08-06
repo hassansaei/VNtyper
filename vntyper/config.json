@@ -14,7 +14,9 @@
     "log_file": "pipeline.log"
   },
   "api": {
-    "base_url": "https://vntyper.org/api"
+    "base_url": "https://vntyper.org/api",
+    "poll_interval_seconds": 10,
+    "poll_timeout_seconds": 14400
   },
   "reference_data": {
     "muc1_reference_vntr": "reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",

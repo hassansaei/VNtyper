@@ -39,6 +39,28 @@ The `online` command follows a submit-poll-download workflow:
 
 Use `--resume` to skip submission and resume polling a previously submitted job.
 
+## Exit codes and polling limits
+
+`vntyper online` exits **1** whenever the remote job does not complete — a failed job, a
+job in an unexpected terminal state, a submission that returns no job id, or a job that
+never reaches a terminal status within the polling window. Before VNtyper 2.0.6 all of
+those logged a message and exited **0**, so a wrapping `subprocess.run(..., check=True)`
+treated a failed genotyping run as a success.
+
+Polling is bounded. Two `api` keys in `config.json` control it:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `poll_interval_seconds` | `10` | Seconds between status checks |
+| `poll_timeout_seconds` | `14400` (4 h) | Total time to keep polling before giving up |
+
+Timing out is not the same as failing: the job may still be running on the server. Re-run
+the same command with `--resume` to pick the polling back up.
+
+The server returns a deliberately generic message for a failed job, because
+`/job-status/` is unauthenticated. Ask the instance operator for the job log if you need
+the detail.
+
 ## Examples
 
 Submit a BAM for online analysis:

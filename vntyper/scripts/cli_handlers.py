@@ -371,6 +371,9 @@ def handle_online(
         parser: Unused; present for the uniform handler signature.
         log_level_value: Unused; present for the uniform handler signature.
         log_file_str: Unused; present for the uniform handler signature.
+
+    Raises:
+        SystemExit: With code 1 when the remote job did not complete.
     """
     # No need to set up logging here; it's already set up in cli.py
 
@@ -384,14 +387,20 @@ def handle_online(
         args.threads = get_conf(config, "threads", 4)
         logger.debug(f"threads set to {args.threads}")
 
-    run_online_mode(
-        config=config,
-        bam=args.bam,
-        output_dir=args.output_dir,
-        reference_assembly=args.reference_assembly,
-        threads=args.threads,
-        email=args.email,
-        cohort_id=args.cohort_id,
-        passphrase=args.passphrase,
-        resume=args.resume,
-    )
+    try:
+        run_online_mode(
+            config=config,
+            bam=args.bam,
+            output_dir=args.output_dir,
+            reference_assembly=args.reference_assembly,
+            threads=args.threads,
+            email=args.email,
+            cohort_id=args.cohort_id,
+            passphrase=args.passphrase,
+            resume=args.resume,
+        )
+    except RuntimeError:
+        # run_online_mode has already logged the reason at ERROR. Exit non-zero so a
+        # wrapping `subprocess.run(..., check=True)` sees the failure: this used to
+        # return normally and exit 0 on a failed remote job.
+        sys.exit(1)
