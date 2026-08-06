@@ -32,8 +32,6 @@ from tests.helpers import (  # noqa: E402
     validate_kestrel_output,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 # The four literal confidence labels this codebase can emit. Three come from
 # kestrel_config.json's `confidence_levels`; "Negative" is the placeholder row
 # kestrel_genotyping.py writes when nothing was called. Not one is a pattern.
@@ -55,13 +53,21 @@ def _write_tsv(path: Path, header: list[str], row: list[str]) -> None:
 def _production_coverage_header() -> list[str]:
     """Read the coverage header straight out of the production writer.
 
+    Rendered by calling the production formatter rather than by regexing its
+    source. The header used to be an inline literal inside
+    ``fastq_bam_processing.calculate_vntr_coverage``, and this function used to
+    scrape it out with a regex -- which broke the moment the pure half moved to
+    ``coverage_stats``. Calling the formatter tracks it through any refactor, and
+    ``calculate_vntr_coverage`` now writes exactly what it returns.
+
     Returns:
         list[str]: The column names ``calculate_vntr_coverage`` writes.
     """
-    source = (REPO_ROOT / "vntyper" / "scripts" / "fastq_bam_processing.py").read_text(encoding="utf-8")
-    matches = re.findall(r'out_f\.write\("([a-z_\\t]+)\\n"\)', source)
-    assert len(matches) == 1, f"expected exactly one coverage header write, found {len(matches)}: {matches}"
-    return matches[0].split("\\t")
+    from vntyper.scripts.coverage_stats import COVERAGE_COLUMNS as PRODUCTION_COLUMNS
+    from vntyper.scripts.coverage_stats import format_coverage_summary
+
+    rendered = format_coverage_summary(dict.fromkeys(PRODUCTION_COLUMNS, 0))
+    return rendered.splitlines()[0].split("\t")
 
 
 # ---------------------------------------------------------------------------

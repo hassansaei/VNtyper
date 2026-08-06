@@ -7,6 +7,10 @@ import json
 import logging
 from pathlib import Path
 
+from vntyper.scripts.command_builders import (
+    build_bwa_align_sort_command,
+    build_samtools_index_command,
+)
 from vntyper.scripts.utils import run_command
 
 logger = logging.getLogger(__name__)
@@ -96,14 +100,15 @@ def align_and_sort_fastq(
         )
         return None
 
-    bwa_command = f"{bwa_path} mem -t {threads} {reference} {fastq1} {fastq2}"
-
-    samtools_view_sort_command = (
-        f"{config['tools']['samtools']} view -@ {threads} -b | "
-        f"{config['tools']['samtools']} sort -@ {threads} -o {sorted_bam_out}"
+    full_command = build_bwa_align_sort_command(
+        bwa_path=str(bwa_path),
+        samtools_path=str(samtools_path),
+        threads=threads,
+        reference=reference,
+        fastq1=fastq1,
+        fastq2=fastq2,
+        sorted_bam=sorted_bam_out,
     )
-
-    full_command = f"{bwa_command} | {samtools_view_sort_command}"
     log_file_alignment = output_dir / f"{output_name}_alignment.log"
     logger.info(f"Executing alignment and sorting with command: {full_command}")
 
@@ -120,7 +125,7 @@ def align_and_sort_fastq(
     logger.info("BWA alignment and Samtools sorting completed successfully.")
 
     logger.info(f"Indexing sorted BAM file: {sorted_bam_out}")
-    samtools_index_command = f"{samtools_path} index {sorted_bam_out}"
+    samtools_index_command = build_samtools_index_command(samtools_path=str(samtools_path), bam_file=sorted_bam_out)
     log_file_index = output_dir / f"{output_name}_index.log"
 
     if not run_command(str(samtools_index_command), str(log_file_index), critical=True):

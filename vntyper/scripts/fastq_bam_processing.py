@@ -5,10 +5,24 @@ from __future__ import annotations
 import json
 import logging
 import os
-import statistics  # for median and stdev calculations
 import subprocess
 from pathlib import Path
 
+from vntyper.scripts.command_builders import (
+    build_bam_to_fastq_command,
+    build_cram_unmapped_filter_command,
+    build_fastp_command,
+    build_samtools_depth_command,
+    build_samtools_index_command,
+    build_samtools_merge_command,
+    build_samtools_slice_command,
+)
+from vntyper.scripts.coverage_stats import (
+    format_coverage_summary,
+    parse_region_length,
+    read_depth_values,
+    summarise_coverage,
+)
 from vntyper.scripts.extract_unmapped_from_offset import (
     extract_unmapped_reads_from_offset,
 )
@@ -33,29 +47,20 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     Raises:
         RuntimeError: If FASTQ quality control fails.
     """
-    fastp_path = config["tools"]["fastp"]
-    compression_level = config["bam_processing"]["compression_level"]
-    disable_adapter_trimming = config["bam_processing"]["disable_adapter_trimming"]
-    deduplication = config["bam_processing"]["deduplication"]
-    dup_calc_accuracy = config["bam_processing"]["dup_calc_accuracy"]
-    length_required = config["bam_processing"]["length_required"]
-    qualified_quality_phred = config["bam_processing"]["qualified_quality_phred"]
-
-    qc_command = (
-        f"{fastp_path} --thread {threads} --in1 {fastq_1} --in2 {fastq_2} "
-        f"--out1 {output}/{output_name}_R1.fastq.gz --out2 {output}/{output_name}_R2.fastq.gz "
-        f"--compression {compression_level} "
-        f"--qualified_quality_phred {qualified_quality_phred} "
-        f"--dup_calc_accuracy {dup_calc_accuracy} "
-        f"--length_required {length_required} "
-        f"--html {output}/{output_name}.html "
-        f"--json {output}/{output_name}.json "
+    qc_command = build_fastp_command(
+        fastp_path=config["tools"]["fastp"],
+        threads=threads,
+        fastq_1=fastq_1,
+        fastq_2=fastq_2,
+        output=output,
+        output_name=output_name,
+        compression_level=config["bam_processing"]["compression_level"],
+        qualified_quality_phred=config["bam_processing"]["qualified_quality_phred"],
+        dup_calc_accuracy=config["bam_processing"]["dup_calc_accuracy"],
+        length_required=config["bam_processing"]["length_required"],
+        disable_adapter_trimming=config["bam_processing"]["disable_adapter_trimming"],
+        deduplication=config["bam_processing"]["deduplication"],
     )
-
-    if disable_adapter_trimming:
-        qc_command += " --disable_adapter_trimming"
-    if deduplication:
-        qc_command += " --dedup"
 
     log_file = Path(output) / f"{output_name}_fastp.log"
     logger.info(f"Executing FASTQ quality control with command: {qc_command}")
@@ -130,16 +135,14 @@ def process_bam_to_fastq(
     if keep_intermediates and final_bam.exists():
         logger.info(f"Reusing existing BAM slice: {final_bam}")
     else:
-        if bed_file:
-            command_slice = (
-                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} -L {bed_file} -o {final_bam} && "
-                f"{samtools_path} index {final_bam}"
-            )
-        else:
-            command_slice = (
-                f"{samtools_path} view -P -b {cram_ref_option} {in_bam} {bam_region} -o {final_bam} && "
-                f"{samtools_path} index {final_bam}"
-            )
+        command_slice = build_samtools_slice_command(
+            samtools_path=samtools_path,
+            in_bam=in_bam,
+            output_bam=final_bam,
+            region=None if bed_file else bam_region,
+            bed_file=bed_file,
+            cram_ref_option=cram_ref_option,
+        )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
         logger.info(f"Executing region slicing with command: {command_slice}")
 
@@ -158,7 +161,7 @@ def process_bam_to_fastq(
             bam_bai = f"{in_bam}.bai"
             if not Path(bam_bai).exists():
                 # Index if not present
-                index_cmd = f"{samtools_path} index {in_bam}"
+                index_cmd = build_samtools_index_command(samtools_path=samtools_path, bam_file=in_bam)
                 log_file_index = Path(output) / f"{output_name}_unmapped_index.log"
                 logger.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
                 success = run_command(str(index_cmd), str(log_file_index), critical=True)
@@ -173,10 +176,12 @@ def process_bam_to_fastq(
             )
         else:
             # Fallback: CRAM uses samtools for unmapped extraction
-            command_filter = (
-                f"{samtools_path} view {cram_ref_option} -@ {threads} -h {in_bam} | tee "
-                f" >(samtools view -b -f 12 -@ {threads} - -o {unmapped_bam}) "
-                f"> /dev/null"
+            command_filter = build_cram_unmapped_filter_command(
+                samtools_path=samtools_path,
+                in_bam=in_bam,
+                unmapped_bam=unmapped_bam,
+                threads=threads,
+                cram_ref_option=cram_ref_option,
             )
             log_file_filter = Path(output) / f"{output_name}_filter.log"
             logger.info(f"Executing filtering with command: {command_filter}")
@@ -188,7 +193,13 @@ def process_bam_to_fastq(
 
         # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"
-        command_merge = f"{samtools_path} merge -f -@ {threads} {merged_bam} {final_bam} {unmapped_bam}"
+        command_merge = build_samtools_merge_command(
+            samtools_path=samtools_path,
+            merged_bam=merged_bam,
+            sliced_bam=final_bam,
+            unmapped_bam=unmapped_bam,
+            threads=threads,
+        )
         log_file_merge = Path(output) / f"{output_name}_merge.log"
         logger.info(f"Executing BAM merging with command: {command_merge}")
 
@@ -206,7 +217,7 @@ def process_bam_to_fastq(
         final_bam = final_bam_renamed
         logger.info(f"Renamed merged BAM file to {final_bam}")
 
-        command_index = f"{samtools_path} index {final_bam}"
+        command_index = build_samtools_index_command(samtools_path=samtools_path, bam_file=final_bam)
         log_file_index = Path(output) / f"{output_name}_index.log"
         logger.info(f"Re-indexing BAM file with command: {command_index}")
         if not run_command(command_index, str(log_file_index), critical=True):
@@ -233,11 +244,14 @@ def process_bam_to_fastq(
             f"{final_fastq_other}, and {final_fastq_single}"
         )
     else:
-        command_sort_fastq = (
-            f"{samtools_path} sort -n -@ {threads} {final_bam} | "
-            f"{samtools_path} fastq -@ {threads} - -1 {final_fastq_1} "
-            f"-2 {final_fastq_2} -0 {final_fastq_other} "
-            f"-s {final_fastq_single}"
+        command_sort_fastq = build_bam_to_fastq_command(
+            samtools_path=samtools_path,
+            in_bam=final_bam,
+            threads=threads,
+            fastq_r1=final_fastq_1,
+            fastq_r2=final_fastq_2,
+            fastq_other=final_fastq_other,
+            fastq_single=final_fastq_single,
         )
         log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
         logger.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
@@ -291,7 +305,13 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
     """
     samtools_path = config["tools"]["samtools"]
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
-    depth_command = f"{samtools_path} depth -@ {threads} -r {region} {bam_file} > {coverage_output}"
+    depth_command = build_samtools_depth_command(
+        samtools_path=samtools_path,
+        threads=threads,
+        region=region,
+        bam_file=bam_file,
+        coverage_output=coverage_output,
+    )
     logger.info(f"Calculating VNTR coverage with command: {depth_command}")
     success = run_command(
         str(depth_command),
@@ -303,51 +323,18 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         raise RuntimeError("VNTR coverage calculation failed.")
 
     try:
-        # Parse region string to get total region length
-        try:
-            # Region format is typically 'chr:start-end'
-            region_parts = region.split(":")
-            if len(region_parts) != 2:
-                raise ValueError(f"Invalid region format: {region}")
+        total_region_length = parse_region_length(region)
+        coverage_values = read_depth_values(coverage_output)
+        stats = summarise_coverage(coverage_values, total_region_length)
 
-            pos_range = region_parts[1].split("-")
-            if len(pos_range) != 2:
-                raise ValueError(f"Invalid position range: {region_parts[1]}")
-
-            start_pos = int(pos_range[0])
-            end_pos = int(pos_range[1])
-            total_region_length = end_pos - start_pos + 1
-            logger.debug(f"VNTR region total length: {total_region_length} bp")
-        except (ValueError, IndexError) as e:
-            logger.warning(f"Could not parse region string: {e}. Setting region length to 0.")
-            total_region_length = 0
-
-        with open(coverage_output) as f:
-            coverage_values = [int(line.strip().split("\t")[2]) for line in f if line.strip()]
-        if not coverage_values:
-            raise RuntimeError("No coverage data found.")
-
-        # Calculate number of bases with coverage and percentage of uncovered bases
-        covered_bases_count = len(coverage_values)
-        zero_coverage_bases = total_region_length - covered_bases_count
-
-        # Handle edge case of zero region length
-        percent_uncovered = 0 if total_region_length <= 0 else zero_coverage_bases / total_region_length * 100
-
-        mean_coverage = sum(coverage_values) / len(coverage_values)
-        median_coverage = statistics.median(coverage_values)
-        stdev_coverage = statistics.stdev(coverage_values) if len(coverage_values) > 1 else 0
-        min_coverage = min(coverage_values)
-        max_coverage = max(coverage_values)
-
-        logger.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
-        logger.info(f"Median VNTR coverage: {median_coverage:.2f}")
-        logger.info(f"Standard deviation: {stdev_coverage:.2f}")
-        logger.info(f"Min coverage: {min_coverage}")
-        logger.info(f"Max coverage: {max_coverage}")
-        logger.info(f"VNTR region total length: {total_region_length} bp")
-        logger.info(f"VNTR region uncovered bases: {zero_coverage_bases} bp")
-        logger.info(f"Percentage of VNTR region with zero coverage: {percent_uncovered:.2f}%")
+        logger.info(f"Mean VNTR coverage: {stats['mean']:.2f}")
+        logger.info(f"Median VNTR coverage: {stats['median']:.2f}")
+        logger.info(f"Standard deviation: {stats['stdev']:.2f}")
+        logger.info(f"Min coverage: {stats['min']}")
+        logger.info(f"Max coverage: {stats['max']}")
+        logger.info(f"VNTR region total length: {stats['region_length']} bp")
+        logger.info(f"VNTR region uncovered bases: {stats['uncovered_bases']} bp")
+        logger.info(f"Percentage of VNTR region with zero coverage: {stats['percent_uncovered']:.2f}%")
 
         if summary_filename is None:
             summary_filename = Path(output_dir) / f"{output_name}_summary.tsv"
@@ -355,24 +342,10 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
             summary_filename = Path(summary_filename)
 
         with open(summary_filename, "w") as out_f:
-            out_f.write("mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n")
-            out_f.write(
-                f"{mean_coverage:.2f}\t{median_coverage:.2f}\t{stdev_coverage:.2f}\t"
-                f"{min_coverage}\t{max_coverage}\t{total_region_length}\t"
-                f"{zero_coverage_bases}\t{percent_uncovered:.2f}\n"
-            )
+            out_f.write(format_coverage_summary(stats))
         logger.info(f"Coverage summary written to: {summary_filename}")
 
-        return {
-            "mean": mean_coverage,
-            "median": median_coverage,
-            "stdev": stdev_coverage,
-            "min": min_coverage,
-            "max": max_coverage,
-            "region_length": total_region_length,
-            "uncovered_bases": zero_coverage_bases,
-            "percent_uncovered": percent_uncovered,
-        }
+        return stats
     except Exception as e:
         logger.error(f"Error calculating coverage summary: {e}")
         raise RuntimeError(f"Error calculating coverage summary: {e}") from e
