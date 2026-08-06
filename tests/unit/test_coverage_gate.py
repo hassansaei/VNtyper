@@ -17,12 +17,13 @@ import coverage_gate  # noqa: E402
 # to prevent. When you legitimately raise the floor (use the number `make test-unit-cov`
 # prints, never the rounded TOTAL column), raise this literal in the same commit.
 #
-# 79 is a BRANCH-INCLUSIVE figure: `branch = true` was enabled in #196, taking the floor
+# 80 is a BRANCH-INCLUSIVE figure: `branch = true` was enabled in #196, taking the floor
 # from 70 to the 74.22% that run measured; splitting cohort_summary.py into five focused
-# modules then took the same suite to 79.02% and the floor moved with it. Statement-only
-# coverage of the same suite is 80.77%, so the two measurements are not interchangeable -
-# see `test_branch_coverage_is_enabled` below for why that gap has to be guarded.
-CURRENT_COVERAGE_FLOOR = 79.0
+# modules took the same suite to 79.02%; and the fixes and tests of the gated phase took
+# it to 80.24%. Statement-only coverage is higher still, so the two measurements are not
+# interchangeable - see `test_branch_coverage_is_enabled` below for why that gap has to
+# be guarded.
+CURRENT_COVERAGE_FLOOR = 80.0
 
 
 def test_read_floor_returns_the_configured_value() -> None:
