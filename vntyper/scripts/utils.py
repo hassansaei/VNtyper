@@ -9,6 +9,8 @@ import shlex
 import subprocess
 import sys
 
+from vntyper.scripts.command_builders import quote_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -325,7 +327,9 @@ def validate_bam_file(file_path, cwd=None):
         raise ValueError(f"Invalid alignment file extension for file: {file_path}")
 
     # Perform samtools quickcheck
-    command = f"samtools quickcheck -v {file_path}"
+    # Quoted because `run_command` runs with shell=True: an unquoted path containing a
+    # space becomes two operands, and one containing a metacharacter is executed.
+    command = f"samtools quickcheck -v {quote_path(file_path)}"
     log_file = f"{file_path}.quickcheck.log"
     success = run_command(command, log_file, critical=True, cwd=cwd)
     if not success:

@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlretrieve
 
+from vntyper.scripts.command_builders import quote_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -254,9 +256,12 @@ def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[
         logger.error(f"No index_command specified for {aligner_name}")
         return False
 
-    # Prepare command parameters
+    # Prepare command parameters. The template itself is a command prefix and stays as
+    # written, but every *path* substituted into it is quoted: the formatted string is
+    # handed to `subprocess.run(..., shell=True)` below, so a reference directory with a
+    # space in it would otherwise be split into two operands.
     params = {
-        "ref_path": str(ref_path),
+        "ref_path": quote_path(ref_path),
         "threads": threads if aligner_info.get("supports_threading", False) else aligner_info.get("threads_default", 4),
     }
 
@@ -265,12 +270,12 @@ def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[
         # DRAGMAP: needs separate index directory
         index_dir = ref_path.parent / f"{ref_path.stem}_{aligner_name}_index"
         index_dir.mkdir(parents=True, exist_ok=True)
-        params["index_dir"] = str(index_dir)
+        params["index_dir"] = quote_path(index_dir)
 
     if aligner_info.get("requires_index_base", False):
         # Bowtie2: needs separate index base name
         index_base = ref_path.parent / f"{ref_path.stem}_{aligner_name}"
-        params["index_base"] = str(index_base)
+        params["index_base"] = quote_path(index_base)
 
     # Format command
     try:

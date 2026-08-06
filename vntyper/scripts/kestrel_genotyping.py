@@ -197,14 +197,14 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     # Convert SAM to BAM using samtools
     logger.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
     run_command(
-        f"samtools view -Sb {sam_file} > {bam_file}",
+        f"samtools view -Sb {quote_path(sam_file)} > {quote_path(bam_file)}",
         log_file=os.path.join(output_dir, "samtools_view.log"),
     )
 
     # Index the BAM file
     logger.info(f"Indexing BAM file: {bam_file}")
     run_command(
-        f"samtools index {bam_file}",
+        f"samtools index {quote_path(bam_file)}",
         log_file=os.path.join(output_dir, "samtools_index.log"),
     )
 
@@ -349,7 +349,7 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
     # Attempt compression using existing run_command infrastructure (DRY principle)
     log_file = os.path.join(output_dir, "bcftools_sort.log")
     success = run_command(
-        f"bcftools sort {input_vcf} -o {output_vcf_gz} -W -O z",
+        f"bcftools sort {quote_path(input_vcf)} -o {quote_path(output_vcf_gz)} -W -O z",
         log_file=log_file,
     )
 
