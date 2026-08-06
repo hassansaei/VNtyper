@@ -68,6 +68,30 @@ def test_read_uint64_is_little_endian_and_unsigned():
     assert read_uint64(io.BytesIO(b"\xff" * 8)) == 18446744073709551615
 
 
+def test_read_uint32_raises_on_a_short_read():
+    """SPECIFICATION (issue-truncated-bai-fail-open.md, decision 1): `f.read(4)`
+    returning fewer than 4 bytes at EOF must raise, not silently zero-fill via
+    `int.from_bytes(b"", ...) == 0`. The message names both the expected and the
+    actually-found byte count so a truncated index is diagnosable from the log."""
+    with pytest.raises(ValueError, match=r"expected 4 bytes.*found 2"):
+        read_uint32(io.BytesIO(b"\x01\x00"))
+
+
+def test_read_uint32_raises_on_a_completely_empty_read():
+    with pytest.raises(ValueError, match=r"expected 4 bytes.*found 0"):
+        read_uint32(io.BytesIO(b""))
+
+
+def test_read_uint64_raises_on_a_short_read():
+    with pytest.raises(ValueError, match=r"expected 8 bytes.*found 3"):
+        read_uint64(io.BytesIO(b"\x01\x00\x00"))
+
+
+def test_read_uint64_raises_on_a_completely_empty_read():
+    with pytest.raises(ValueError, match=r"expected 8 bytes.*found 0"):
+        read_uint64(io.BytesIO(b""))
+
+
 # ---------------------------------------------------------------------------
 # get_last_chunk_end
 # ---------------------------------------------------------------------------
@@ -100,31 +124,66 @@ def test_an_index_with_no_chunks_at_all_returns_zero(tmp_path):
     assert get_last_chunk_end(str(path)) == 0
 
 
-def test_a_truncated_index_does_not_silently_return_a_low_offset_today(tmp_path):
-    """CHARACTERISATION of a live fail-open. Do not "fix" this here.
+def test_a_truncated_index_raises_instead_of_silently_returning_a_low_offset(tmp_path):
+    """SPECIFICATION (issue-truncated-bai-fail-open.md, decision 1). Upgraded
+    from the characterisation test `..._today` that pinned the fail-open.
 
-    `read_uint32`/`read_uint64` do `int.from_bytes(f.read(n), ...)`. At EOF,
-    `f.read(n)` returns `b""` and `int.from_bytes(b"", ...)` is 0 rather than
-    raising. Truncate a BAI to just its 4-byte magic and `n_ref =
-    read_uint32(bai)` silently reads 0 instead of the real reference count,
-    so `get_last_chunk_end` believes the index describes zero references and
-    returns 0 -- even though the untruncated index (built from the same
-    `_bai([[(0, 900)]])` call) records a chunk ending at offset 900.
+    `read_uint32`/`read_uint64` used to do `int.from_bytes(f.read(n), ...)`
+    with no length check. At EOF, `f.read(n)` returns `b""` and
+    `int.from_bytes(b"", ...)` is 0 rather than raising. Truncating a BAI to
+    just its 4-byte magic made `n_ref = read_uint32(bai)` silently read 0
+    instead of the real reference count, so `get_last_chunk_end` believed the
+    index described zero references and returned 0 -- even though the
+    untruncated index (built from the same `_bai([[(0, 900)]])` call) records
+    a chunk ending at offset 900.
 
-    The caller (`extract_unmapped_reads_from_offset`) then seeks the input
-    BAM to offset 0 and scans the entire file rather than raising for a
-    corrupt/truncated index -- reads are not silently dropped in *this*
-    direction, but a real-world truncation partway through a large index
-    (not just after the magic) would return some offset lower than the true
-    one, silently dropping whatever mapped-chunk data existed past the
-    truncation point, with no error anywhere. This test pins today's
-    behaviour so it cannot drift further by accident; whether a truncated
-    BAI *should* raise is a separate product decision, not made here (see
-    issue-truncated-bai-fail-open.md).
+    The module's own docstring for `extract_unmapped_reads_from_offset`
+    already promised `IOError`/`ValueError` for "if the BAI file is
+    invalid" -- a truncated index is invalid, so it must raise, matching that
+    contract instead of contradicting it.
     """
     path = tmp_path / "x.bai"
     path.write_bytes(_bai([[(0, 900)]])[:4])
-    assert get_last_chunk_end(str(path)) == 0
+    with pytest.raises(ValueError, match=r"[Tt]runcated BAI.*n_ref"):
+        get_last_chunk_end(str(path))
+
+
+# Byte offset at which each field starts in `_bai([[(0, 900)]])` (a single
+# reference, single bin, single chunk, 2-entry linear index): magic(4) +
+# n_ref(4) + n_bins(4) + bin_number(4) + n_chunks(4) + chunk_beg(8) +
+# chunk_end(8) + n_intv(4) + linear_index(16) = 56 bytes total. Truncating to
+# exactly the start offset of a field means that field's read finds 0 bytes;
+# truncating one byte further in means it finds 1.
+_FIELD_START_OFFSETS = [
+    (4, "n_ref"),
+    (8, "n_bins"),
+    (12, "bin number"),
+    (16, "n_chunks"),
+    (20, "chunk_beg"),
+    (28, "chunk_end"),
+    (36, "n_intv"),
+]
+
+
+@pytest.mark.parametrize("truncate_at,field_name", _FIELD_START_OFFSETS)
+def test_a_truncation_at_any_fixed_width_field_raises_and_names_that_field(tmp_path, truncate_at, field_name):
+    """Every fixed-width read `get_last_chunk_end` performs -- not only the
+    `n_ref` one the first truncation test happens to exercise -- must raise
+    on a short read, and the message must name the field that came up short
+    so a truncated BAI is diagnosable from the log alone."""
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([[(0, 900)]])[:truncate_at])
+    with pytest.raises(ValueError, match=rf"[Tt]runcated BAI.*{field_name}.*found 0"):
+        get_last_chunk_end(str(path))
+
+
+def test_a_truncation_mid_field_reports_the_partial_byte_count(tmp_path):
+    """Not every short read lands on a field boundary: a truncation one byte
+    into `n_ref` must still raise, and report 1 byte found, not 0."""
+    path = tmp_path / "x.bai"
+    path.write_bytes(_bai([[(0, 900)]])[:5])
+    with pytest.raises(ValueError, match=r"[Tt]runcated BAI.*n_ref.*found 1"):
+        get_last_chunk_end(str(path))
 
 
 # ---------------------------------------------------------------------------
