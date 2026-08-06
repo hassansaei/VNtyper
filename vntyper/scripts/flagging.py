@@ -213,8 +213,13 @@ def mark_potential_duplicates(
     df_copy["__original_index"] = df_copy.index
     logger.debug(f"DataFrame shape before sorting: {df_copy.shape}")
 
-    # Sort by the specified columns and order
-    df_copy.sort_values(by=sort_cols, ascending=sort_ascending, inplace=True)
+    # Sort by the specified columns and order.
+    # kind="stable" because sort_by is now a single key by default (#197): pandas'
+    # default quicksort does not guarantee tied rows keep their input order, so which
+    # tied row keeps the first position -- and therefore which row is left unflagged
+    # -- would be arbitrary between runs. This is an implementation detail beyond the
+    # #197 decision, which only concerns the sort *key*, not sort stability.
+    df_copy.sort_values(by=sort_cols, ascending=sort_ascending, inplace=True, kind="stable")
     logger.debug(f"DataFrame shape after sorting: {df_copy.shape}")
 
     # Mark duplicates within each group (the first row in each group has count=0)

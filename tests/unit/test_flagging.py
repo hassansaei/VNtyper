@@ -366,21 +366,84 @@ class TestDuplicateSortSelection:
         assert result.loc[0, "Flag"] == "Potential_Duplicate"
 
 
-class TestDuplicateSortColumnMustExist:
-    """Characterisation of a real trap in the shipped config - not an endorsement.
+# --- #197: duplicate sort key falls back to Depth_Score alone ---
 
-    `kestrel_config.json` sets `duplicate_flagging.enabled = false`, and its `sort_by`
-    names the columns `Motifs` and `POS`. By the time flagging runs - step 6.5 of
+
+def test_duplicate_ordering_uses_depth_score_only_and_no_motif_column(kestrel_config):
+    """#197: Motif is not a duplicate sort key; Depth_Score descending is.
+
+    Specification. @hassansaei: "Fall back to the 1.3 Depth_Score-only rule
+    [...] Do not use Motifs or Motif as a sort key." The previous config named
+    the plural `Motifs`, which does not exist at step 6.5 and raised KeyError.
+    """
+    sort_by = kestrel_config["duplicate_flagging"]["sort_by"]
+
+    assert sort_by == [{"column": "Depth_Score", "ascending": False}]
+    assert all(entry["column"] not in ("Motif", "Motifs") for entry in sort_by)
+
+
+def test_duplicate_flagging_stays_disabled_in_the_shipped_config(kestrel_config):
+    """@hassansaei on #197: "Leave duplicate_flagging.enabled as false (as now)."."""
+    assert kestrel_config["duplicate_flagging"]["enabled"] is False
+
+
+def test_the_flagged_row_is_deterministic_when_depth_scores_tie():
+    """A single-key sort_values is not stable; ties must not reorder.
+
+    Implementation detail, not part of the #197 decision: with Depth_Score as the only
+    sort key, pandas' default quicksort does not guarantee tied rows keep their input
+    order, so which tied row is left unflagged (and therefore preferred by
+    select_single_best_variant, which prefers unflagged rows) would be arbitrary.
+
+    A handful of tied rows is not enough to observe this on the numpy build used here -
+    argsort(kind="quicksort") happens to leave short equal-value runs untouched, and
+    only starts reordering ties once the array is large enough (~260+ rows on this
+    build) for numpy's introspective quicksort to switch strategy mid-sort. 300 rows
+    is used to sit safely past that threshold and actually exercise the guarantee
+    `kind="stable"` gives.
+
+    Goes through add_flags with duplicate_flagging enabled, the path this would
+    actually break in production if the toggle were ever turned on (it stays off in
+    the shipped config; see test_duplicate_flagging_stays_disabled_in_the_shipped_config).
+    """
+    n = 300
+    df = pd.DataFrame(
+        {
+            "REF": ["C"] * n,
+            "ALT": ["CC"] * n,
+            "Depth_Score": [0.5] * n,
+            "POS": list(range(n)),
+        }
+    )
+    duplicates_config = _dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}])
+
+    first = add_flags(df.copy(), {}, duplicates_config=duplicates_config)
+    second = add_flags(df.copy(), {}, duplicates_config=duplicates_config)
+
+    assert first["Flag"].tolist() == second["Flag"].tolist()
+    assert first.loc[first["POS"] == 0, "Flag"].iloc[0] == "Not flagged"
+
+
+class TestDuplicateSortColumnMustExist:
+    """Characterisation of a real trap: a sort column absent from the frame raises.
+
+    Before #197, `kestrel_config.json` shipped `duplicate_flagging.sort_by` naming the
+    columns `Motifs` and `POS`. By the time flagging runs - step 6.5 of
     `process_kmer_results`, immediately after `motif_correction_and_annotation` - the
     `Motifs` column has been dropped: step 6 projects onto an explicit `keep_cols` list
     that carries `Motif` and `POS` but not `Motifs`.
 
-    So flipping that toggle on would not silently mis-sort, it would raise `KeyError`
-    from `sort_values` on the first frame it saw. That is the *good* failure mode and
-    the opposite of AGENTS.md trap 3, where a config string naming a column that does
-    not exist merely logs a warning and turns the rule off. These tests pin both halves
-    so neither can drift unnoticed. Fixing the config name is a human's call - it
-    changes which rows get flagged - so nothing here changes it.
+    So flipping that toggle on with that stale `sort_by` would not silently mis-sort,
+    it would raise `KeyError` from `sort_values` on the first frame it saw. That is the
+    *good* failure mode and the opposite of AGENTS.md trap 3, where a config string
+    naming a column that does not exist merely logs a warning and turns the rule off.
+
+    #197 (@hassansaei) replaced that three-key `sort_by` with a single `Depth_Score`
+    descending key - see `test_duplicate_ordering_uses_depth_score_only_and_no_motif_column`
+    below - so the shipped config no longer has this shape. These tests reconstruct the
+    retired three-key form explicitly via `_dup_config` instead of reading it off
+    `kestrel_config.json`, so the trap stays documented for any future `sort_by` that
+    reintroduces a since-dropped column name.
     """
 
     def test_unknown_sort_column_raises_rather_than_mis_sorting(self):
@@ -397,16 +460,31 @@ class TestDuplicateSortColumnMustExist:
         with pytest.raises(KeyError):
             add_flags(df, {}, duplicates_config=config)
 
-    def test_shipped_config_sort_columns_are_recorded(self, kestrel_config):
-        """Pin the shipped duplicate_flagging block, including the disabled toggle.
+    def test_retired_three_key_sort_by_would_still_raise(self):
+        """The pre-#197 sort_by shape (Depth_Score, Motifs, POS) still raises KeyError.
 
-        If someone enables duplicate flagging without renaming 'Motifs', the test above
-        says what happens; this one is what makes the pair fail together rather than
-        leaving a stale comment behind.
+        #197 removed this exact three-key shape from the shipped config (it is no
+        longer readable from `kestrel_config.json`), so it is reconstructed here
+        explicitly to show the trap it documents is a property of the code, not of
+        whatever the config currently happens to ship.
         """
-        duplicates = kestrel_config["duplicate_flagging"]
-        assert duplicates["enabled"] is False
-        assert [item["column"] for item in duplicates["sort_by"]] == ["Depth_Score", "Motifs", "POS"]
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.5],
+                "POS": [100, 200],
+                "Motif": ["5", "5"],
+            }
+        )
+        stale_sort_by = [
+            {"column": "Depth_Score", "ascending": False},
+            {"column": "Motifs", "ascending": True},
+            {"column": "POS", "ascending": True},
+        ]
+        config = _dup_config(sort_by=stale_sort_by)
+        with pytest.raises(KeyError):
+            add_flags(df, {}, duplicates_config=config)
 
 
 class TestDuplicateFlagCombination:

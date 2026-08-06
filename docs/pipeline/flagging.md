@@ -41,15 +41,20 @@ The duplicate flagging configuration:
   "flag_name": "Potential_Duplicate",
   "group_by": ["REF", "ALT"],
   "sort_by": [
-    {"column": "Depth_Score", "ascending": false},
-    {"column": "Motifs", "ascending": true},
-    {"column": "POS", "ascending": true}
+    {"column": "Depth_Score", "ascending": false}
   ]
 }
 ```
 
+`sort_by` is `Depth_Score` descending only, per [@hassansaei on #197](https://github.com/hassansaei/VNtyper/issues/197):
+"Fall back to the 1.3 Depth_Score-only rule [...] Do not use `Motifs` or `Motif` as a sort key." An earlier
+revision of this config sorted on three keys, including the plural `Motifs`, which does not exist as a column
+by the time flagging runs and raised `KeyError` if the toggle were ever enabled.
+
 !!! note
-    Duplicate flagging is **disabled** by default in the current configuration. Enable it by setting `"enabled": true` in `kestrel_config.json`.
+    Duplicate flagging is **disabled** by default in the current configuration. Per the same decision on #197,
+    it stays disabled in the shipped config ("We have already tested with this setup. I do not know what will
+    happen if we turn it on!"). Enable it by setting `"enabled": true` in `kestrel_config.json`.
 
 ## The `regex_match` Helper
 
