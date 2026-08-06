@@ -450,7 +450,11 @@ async def run_vntyper(
     # complete, so a submission that fails after its upload has landed leaves
     # nothing on the volume either -- the caller never receives an identifier,
     # so nothing afterwards could address the leftovers.
-    with job_workspace(DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, job_id):
+    #
+    # That holds up to `workspace.commit()` below and not past it: once the
+    # broker has accepted the task the worker owns these directories, and a
+    # later failure here must not delete what it is reading.
+    with job_workspace(DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, job_id) as workspace:
         # Save the uploaded files, counting the bytes as they are written. One
         # budget covers the whole submission, so the two parts together stay
         # within the same ceiling.
@@ -467,6 +471,11 @@ async def run_vntyper(
             msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
             raise HTTPException(status_code=413, detail=msg) from exc
 
+        # Membership is recorded before the enqueue because the task is handed
+        # the cohort key, but it is only *true* once the task exists: an enqueue
+        # that fails has to take the member with it, or the cohort keeps an
+        # identifier naming a job that was never created and whose directories
+        # are about to be reclaimed.
         if cohort_key is not None:
             redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
             logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
@@ -474,43 +483,54 @@ async def run_vntyper(
         # ---------------------------------------------------------------------
         # If advntr_mode is True, use vntyper_long_queue; else the default queue.
         # ---------------------------------------------------------------------
-        if advntr_mode:
-            task = run_vntyper_job.apply_async(
-                kwargs={
-                    "bam_path": bam_path,
-                    "index_path": bai_path,
-                    "output_dir": job_output_dir,
-                    "thread": thread,
-                    "reference_assembly": reference_assembly.value,
-                    "fast_mode": fast_mode,
-                    "keep_intermediates": keep_intermediates,
-                    "archive_results": archive_results,
-                    "email": email,
-                    "cohort_key": cohort_key,
-                    "client_ip": client_ip,
-                    "user_agent": user_agent,
-                    "advntr_mode": True,
-                },
-                queue="vntyper_long_queue",
-            )
-            logger.info(f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}")
-        else:
-            task = run_vntyper_job.delay(
-                bam_path=bam_path,
-                index_path=bai_path,
-                output_dir=job_output_dir,
-                thread=thread,
-                reference_assembly=reference_assembly.value,
-                fast_mode=fast_mode,
-                keep_intermediates=keep_intermediates,
-                archive_results=archive_results,
-                email=email,
-                cohort_key=cohort_key,
-                client_ip=client_ip,
-                user_agent=user_agent,
-                advntr_mode=False,
-            )
-            logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+        try:
+            if advntr_mode:
+                task = run_vntyper_job.apply_async(
+                    kwargs={
+                        "bam_path": bam_path,
+                        "index_path": bai_path,
+                        "output_dir": job_output_dir,
+                        "thread": thread,
+                        "reference_assembly": reference_assembly.value,
+                        "fast_mode": fast_mode,
+                        "keep_intermediates": keep_intermediates,
+                        "archive_results": archive_results,
+                        "email": email,
+                        "cohort_key": cohort_key,
+                        "client_ip": client_ip,
+                        "user_agent": user_agent,
+                        "advntr_mode": True,
+                    },
+                    queue="vntyper_long_queue",
+                )
+                logger.info(f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}")
+            else:
+                task = run_vntyper_job.delay(
+                    bam_path=bam_path,
+                    index_path=bai_path,
+                    output_dir=job_output_dir,
+                    thread=thread,
+                    reference_assembly=reference_assembly.value,
+                    fast_mode=fast_mode,
+                    keep_intermediates=keep_intermediates,
+                    archive_results=archive_results,
+                    email=email,
+                    cohort_key=cohort_key,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                    advntr_mode=False,
+                )
+                logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+        except BaseException:
+            if cohort_key is not None:
+                redis_cohort_client.srem(f"{cohort_key}:jobs", job_id)
+                logger.info(f"Job {job_id} was not enqueued; removed it from cohort {cohort_id} again")
+            raise
+
+        # The commit point: the task exists, so a worker owns the job's input
+        # directory from here on and the reclaim above no longer applies. The
+        # two writes below are bookkeeping about a job that is already running.
+        workspace.commit()
 
         # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
         redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds

@@ -114,6 +114,35 @@ def test_workspace_removes_everything_it_created_when_the_body_raises(tmp_path: 
     assert _tree(tmp_path / "output") == []
 
 
+def test_workspace_keeps_its_directories_when_the_body_raises_after_the_commit(tmp_path: Path) -> None:
+    """Once the task is accepted the directories belong to the worker, not to the request.
+
+    The reclaim above is scoped to submissions that were *not* accepted. After the
+    commit point, a failure in the request is no longer evidence that nothing is
+    running: the worker holds the input path and is reading it.
+
+    Args:
+        tmp_path: Scratch directory standing in for the volume.
+    """
+    with pytest.raises(RuntimeError, match="after acceptance"):  # noqa: SIM117
+        with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1") as workspace:
+            (Path(workspace.input_dir) / BAM_NAME).write_bytes(BAM_BYTES)
+            workspace.commit()
+            msg = "a bookkeeping write failed after acceptance"
+            raise RuntimeError(msg)
+
+    assert (tmp_path / "input" / "job-1" / BAM_NAME).read_bytes() == BAM_BYTES
+    assert (tmp_path / "output" / "job-1").is_dir()
+
+
+def test_workspace_still_unpacks_as_the_pair_of_directories(tmp_path: Path) -> None:
+    """The commit point is additive: the two directories are still what it yields."""
+    with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1") as workspace:
+        job_input, job_output = workspace
+        assert job_input == workspace.input_dir == str(tmp_path / "input" / "job-1")
+        assert job_output == workspace.output_dir == str(tmp_path / "output" / "job-1")
+
+
 # ---------------------------------------------------------------------------
 # Endpoint level: every refusal path has to reclaim what it wrote.
 # ---------------------------------------------------------------------------
@@ -207,6 +236,88 @@ def _raise_enqueue_failure(**_kwargs) -> None:
     """
     msg = "the broker is unreachable"
     raise RuntimeError(msg)
+
+
+@pytest.mark.parametrize("write", ["set", "rpush"])
+def test_a_failure_after_acceptance_does_not_delete_the_running_jobs_input(
+    write: str, client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every bookkeeping write after the enqueue is injected with a failure in turn.
+
+    Celery has accepted the task by then, so a worker is already reading the BAM at
+    the path it was handed. Reclaiming the directory here deletes a running job's
+    input underneath it -- a worse outcome than the leftover the reclaim exists to
+    prevent, and one that produces a wrong result rather than a wasted inode.
+
+    Args:
+        write: Name of the Redis method to fail.
+        client: TestClient fixture from conftest.
+        web_app: The patched `app.main` module, holding the mocked Celery task.
+        fake_redis: The in-process Redis every client in `web_app` shares.
+        monkeypatch: Standard pytest fixture; restores the method at teardown.
+        tmp_path: The directory the fixture configured as the job tree.
+    """
+
+    def _fail(*_args, **_kwargs):
+        msg = "the connection to Redis dropped"
+        raise ConnectionError(msg)
+
+    monkeypatch.setattr(fake_redis, write, _fail)
+
+    with pytest.raises(ConnectionError, match="dropped"):
+        _submit(client)
+
+    web_app.run_vntyper_job.delay.assert_called_once()
+    accepted_input = Path(web_app.run_vntyper_job.delay.call_args.kwargs["bam_path"])
+    assert accepted_input.read_bytes() == BAM_BYTES, "the worker's input was deleted underneath it"
+    assert Path(web_app.run_vntyper_job.delay.call_args.kwargs["output_dir"]).is_dir()
+
+
+def test_an_enqueue_failure_leaves_no_ghost_member_in_the_cohort(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cohort membership is recorded before the enqueue, so it has to be undone with it.
+
+    The member is added first because the task needs the cohort key. If the broker
+    then refuses the task, the identifier stays in the cohort's Set naming a job
+    that does not exist and whose directories have just been reclaimed: every
+    cohort report afterwards looks for results that will never arrive.
+
+    Args:
+        client: TestClient fixture from conftest.
+        web_app: The patched `app.main` module, holding the mocked Celery task.
+        fake_redis: The in-process Redis every client in `web_app` shares.
+        monkeypatch: Standard pytest fixture; restores the task at teardown.
+        tmp_path: The directory the fixture configured as the job tree.
+    """
+    created = client.post("/create-cohort/", data={"alias": "family-c", "passphrase": PASSPHRASE})
+    assert created.status_code == 200, created.text
+    cohort_id = created.json()["cohort_id"]
+    members_key = f"cohort:{cohort_id}:jobs"
+
+    monkeypatch.setattr(web_app.run_vntyper_job, "delay", _raise_enqueue_failure)
+
+    with pytest.raises(RuntimeError, match="the broker is unreachable"):
+        _submit(client, cohort_id=cohort_id, passphrase=PASSPHRASE)
+
+    assert fake_redis.smembers(members_key) == set()
+    assert _tree(tmp_path / "input") == []
+
+
+def test_an_accepted_cohort_submission_is_recorded_as_a_member(client, fake_redis) -> None:
+    """The compensation above must not fire on the happy path.
+
+    Args:
+        client: TestClient fixture from conftest.
+        fake_redis: The in-process Redis every client in `web_app` shares.
+    """
+    created = client.post("/create-cohort/", data={"alias": "family-d", "passphrase": PASSPHRASE})
+    cohort_id = created.json()["cohort_id"]
+
+    response = _submit(client, cohort_id=cohort_id, passphrase=PASSPHRASE)
+
+    assert response.status_code == 200, response.text
+    assert fake_redis.smembers(f"cohort:{cohort_id}:jobs") == {response.json()["job_id"]}
 
 
 def test_an_accepted_submission_still_keeps_its_directories(client, web_app, tmp_path: Path) -> None:
