@@ -195,41 +195,68 @@ biased by the scoping.
     reports a difference you did not make, a sweep is running and the
     artefact is void.
 
-## Related: branch coverage is measured but not enabled
+## Related: branch coverage, now enabled
 
 Mutation testing and branch coverage were investigated together, because both
 ask a sharper question than line coverage and they agreed on which modules are
 weakest. The branch-coverage half of that work is recorded here so it is not
-re-derived from scratch:
+re-derived from scratch.
 
-`[tool.coverage.run]` does **not** set `branch = true`, so an `if` that is
-entered but never taken counts as fully covered. Enabling it was measured:
+`[tool.coverage.run]` now sets `branch = true`, so an `if` that is entered but
+never taken no longer counts as fully covered. It was enabled in **#196**,
+measured on `fix/issue-181-197-followups` at `5bb2463`:
 
 | Measure | Value |
 | --- | ---: |
-| Line (statement) coverage | 66.82% |
-| **Branch-inclusive total** | **63.80%** |
-| Branch-only coverage | 53.40% |
-| Branch exits never taken | 685 of 1470 |
+| Line (statement) coverage | 76.60% |
+| **Branch-inclusive total** | **74.22%** |
+| Branch-only coverage | 66.00% |
+| Branch exits never taken | 512 of 1506 |
 
-Turning it on would take the reported total to 63.80% against a `fail_under`
-of **66**, so CI would fail on the enabling commit. **It was therefore not
-enabled, and the floor was not lowered** - the floor is a ratchet and lowering
-it to admit a new measurement would defeat its purpose.
+`fail_under` was raised **70 &rarr; 74** in the same commit, to the figure
+`scripts/coverage_gate.py` printed for that run. **The floor was raised to meet
+the measurement; the measurement was not weakened to fit the floor.** That
+distinction is the whole point of the ratchet.
 
-To enable it, the blended figure needs **144 more covered units** out of 6528
-(5058 statements + 1470 branch exits) to clear 66%. Two modules hold 275 of
-the 685 untaken exits between them:
+!!! warning "74 is a branch-inclusive floor, and nothing else notices if that changes"
 
-| Module | Untaken branch exits | Missing lines | LOC |
-| --- | ---: | ---: | ---: |
-| `cohort_summary.py` | 150 | 358 | 856 |
-| `install_references.py` | 125 | 321 | 901 |
+    Deleting `branch = true` does not fail any gate on its own - it *raises*
+    the reported total, because statement-only coverage of the same suite is
+    76.60% against the branch-inclusive 74.22%. The build would go green while
+    measuring strictly less. `tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled`
+    exists solely to make that edit fail, and it is the only thing that does.
 
-Both are on the oversized-file list in `AGENTS.md`, which is the same
-conclusion reached from the other direction: the branches are untested because
-the files fuse I/O with logic and cannot be called without a filesystem.
-Splitting them is the prerequisite, not writing more tests against them.
+### Correction: the previously recorded prerequisite was wrong
+
+This section formerly recorded the opposite conclusion, and it is kept here
+rather than deleted, because a document that quietly rewrites its own history
+stops being worth trusting.
+
+The earlier measurement was **63.80%** branch-inclusive (76.60% is the current
+line figure; it was 66.82% then) against a `fail_under` of **66**. Enabling
+branch coverage at that point really would have failed CI on the enabling
+commit, and the decision not to enable it - and specifically not to lower the
+floor to admit it - was correct.
+
+What was wrong was the stated route out. The old text identified
+`cohort_summary.py` and `install_references.py` as holding 275 of the 685
+untaken exits, both on the oversized-file list in `AGENTS.md`, and concluded:
+*"Splitting them is the prerequisite, not writing more tests against them."*
+
+**It was not a prerequisite.** Branch coverage cleared the floor with both
+files still unsplit and still untested. The gap was closed instead by testing
+five small, already-testable modules to 100% and a sixth to 98%:
+`cross_match.py`, `utils.py`, `file_processing.py`,
+`extract_unmapped_from_offset.py`, `variant_parsing.py`, and `docker/app/tasks.py`.
+
+The generalisable mistake was reading "these two files hold the most untaken
+exits" as "these two files are the ones that must be fixed". Concentration of
+missing coverage is not the same as cheapness of covering it: the two oversized
+modules are expensive precisely because they fuse I/O with logic, while the
+same number of units was available across several modules that could be called
+directly. Splitting `cohort_summary.py` and `install_references.py` remains
+worth doing for the reasons `AGENTS.md` gives - it was simply never a blocker
+for this.
 
 ## Raw output
 

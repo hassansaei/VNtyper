@@ -397,20 +397,52 @@ def test_every_committed_equivalence_entry_targets_a_real_module() -> None:
         assert path in mutation_test.TARGETS, path
 
 
-def test_the_page_records_that_branch_coverage_is_measured_but_not_enabled() -> None:
+def test_the_page_records_that_branch_coverage_is_now_enabled() -> None:
     """
-    Branch coverage was measured at 63.80% against a floor of 66 and left disabled.
+    Branch coverage was enabled in #196 at 74.22% and the floor was raised 70 -> 74.
 
     That is a real finding with a real decision attached, and the next person to reach
-    for `branch = true` needs to find it rather than re-derive it.
+    for `branch = true` needs to find it rather than re-derive it. These are the CURRENT
+    figures; the superseded ones are asserted separately below.
     """
     result = mutation_test.ModuleResult(path="vntyper/scripts/scoring.py", killed=4, survived=0)
 
     page = mutation_test.format_markdown([result], elapsed=1.0)
 
-    assert "63.80%" in page
-    assert "not" in page and "lowered" in page
-    assert "144 more covered units" in page
+    # Pin the table ROWS, not the bare figures. Each number also appears in the prose
+    # below the table, so `assert "74.22%" in page` stays green when the headline table
+    # alone drifts - verified by inducing exactly that and watching it pass.
+    assert "| **Branch-inclusive total** | **74.22%** |" in page, "the total the floor was set from"
+    assert "| Line (statement) coverage | 76.60% |" in page, "statement-only, which is HIGHER than the total"
+    assert "| Branch exits never taken | 512 of 1506 |" in page
+    assert "was not weakened to fit the floor" in page, (
+        "the page must say the floor was raised to meet the measurement, not the reverse - "
+        "that direction is the whole point of the ratchet"
+    )
+
+
+def test_the_page_keeps_the_superseded_branch_coverage_claim_as_a_correction() -> None:
+    """
+    The old 63.80%/floor-66 finding stays on the page, labelled as superseded, not deleted.
+
+    The page once concluded that splitting `cohort_summary.py` and `install_references.py`
+    was "the prerequisite" for enabling branch coverage. That turned out to be wrong -
+    #196 enabled it with both files still unsplit, by testing five small modules instead.
+
+    Silently dropping a falsified claim is the failure mode this assertion guards: a
+    document that quietly rewrites its own history stops being worth trusting, so the
+    convention here is to record the correction. 63.80% and 66.82% are HISTORICAL figures
+    and must remain readable as such; the current ones are asserted above.
+    """
+    result = mutation_test.ModuleResult(path="vntyper/scripts/scoring.py", killed=4, survived=0)
+
+    page = mutation_test.format_markdown([result], elapsed=1.0)
+
+    assert "### Correction:" in page, "the superseded claim must be marked as corrected, not deleted"
+    assert "63.80%" in page, "the historical branch-inclusive total"
+    assert "66.82%" in page, "the historical line-coverage total"
+    assert "Splitting them is the prerequisite" in page, "the old conclusion must be quoted before it is refuted"
+    assert "It was not a prerequisite" in page, "and it must actually be refuted"
 
 
 def test_the_page_warns_against_building_from_the_tree_during_a_sweep() -> None:

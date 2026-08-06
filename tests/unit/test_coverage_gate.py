@@ -16,7 +16,12 @@ import coverage_gate  # noqa: E402
 # bound and still leave this test green, which is exactly the regression the gate exists
 # to prevent. When you legitimately raise the floor (use the number `make test-unit-cov`
 # prints, never the rounded TOTAL column), raise this literal in the same commit.
-CURRENT_COVERAGE_FLOOR = 70.0
+#
+# 74 is a BRANCH-INCLUSIVE figure: `branch = true` was enabled in #196 and the floor was
+# raised from 70 to the 74.22% that run measured. Statement-only coverage of the same
+# suite is ~76.6%, so the two measurements are not interchangeable - see
+# `test_branch_coverage_is_enabled` below for why that gap has to be guarded.
+CURRENT_COVERAGE_FLOOR = 74.0
 
 
 def test_read_floor_returns_the_configured_value() -> None:
@@ -35,6 +40,42 @@ def test_read_floor_returns_the_configured_value() -> None:
         "CURRENT_COVERAGE_FLOOR here in the same commit."
     )
     assert floor >= CURRENT_COVERAGE_FLOOR, "The coverage floor must never be lowered."
+
+
+def test_branch_coverage_is_enabled() -> None:
+    """`[tool.coverage.run] branch = true` must stay on, because nothing else notices.
+
+    A config assertion earns a test here for one specific reason: **the ratchet cannot
+    catch this regression, because deleting the setting moves the number the WRONG WAY.**
+    Both figures below are measured, on the same suite and the same commit:
+
+        branch-inclusive (branch = true)   74.22%   <- what fail_under = 74 was set from
+        statement-only   (setting removed) 76.60%   <- clears the floor by 2.60 points
+
+    So removing `branch = true` *raises* the reported total, the coverage gate goes
+    green, CI goes green, and the measurement has silently been weakened back to the one
+    #196 replaced - an `if` that is entered but never taken counted as fully covered.
+    A floor can only catch coverage falling; this makes it rise. That is why the
+    assertion has to exist, and it is the only thing standing between that edit and a
+    passing build.
+
+    The config is read through coverage.py's own parser rather than by grepping the
+    TOML, so a commented-out or overridden setting fails here exactly as it would in
+    a real run.
+
+    Raises:
+        AssertionError: If branch coverage is off in pyproject.toml.
+    """
+    import coverage
+
+    config = coverage.Coverage(config_file=str(coverage_gate.PYPROJECT)).config
+
+    assert config.branch is True, (
+        "pyproject.toml [tool.coverage.run] no longer sets `branch = true`. The floor "
+        f"of {CURRENT_COVERAGE_FLOOR:.0f} is a branch-inclusive figure; measuring "
+        "statements only would clear it while covering strictly less. Re-enable branch "
+        "coverage rather than relying on the floor to catch this - it cannot."
+    )
 
 
 def test_read_floor_raises_when_pyproject_is_unreadable(monkeypatch, tmp_path) -> None:
