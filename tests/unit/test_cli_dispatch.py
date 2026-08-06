@@ -242,6 +242,40 @@ def test_an_unroutable_command_exits_one(tmp_path, monkeypatch, caplog) -> None:
     assert any(record.levelno >= logging.ERROR and "Unknown command" in record.message for record in caplog.records)
 
 
+def test_an_unhonourable_output_name_exits_one_before_anything_is_created(tmp_path, monkeypatch, caplog) -> None:
+    """A flag the pipeline cannot honour is refused before the run leaves a trace.
+
+    ``--output-name`` was validated inside the handler, which runs after logging
+    has been configured -- and the log file for a ``pipeline`` run is
+    ``<output_dir>/pipeline.log``, so the output directory was created, written to,
+    and only then did the run die on input that was never acceptable. It died with
+    an unhandled ``ValueError`` as well: a traceback for a usage error.
+    """
+    monkeypatch.setattr(cli, "setup_logging", lambda log_level=logging.INFO, log_file=None: None)
+    called = []
+    monkeypatch.setitem(cli.HANDLERS, "pipeline", lambda *a, **k: called.append(True))
+
+    output_dir = tmp_path / "new-dir"
+    with caplog.at_level(logging.CRITICAL, logger="vntyper.cli"), pytest.raises(SystemExit) as excinfo:
+        cli.main(["pipeline", "--bam", str(tmp_path / "x.bam"), "-o", str(output_dir), "--output-name", "sample"])
+
+    assert excinfo.value.code == 1
+    assert not called, "the handler ran on input the CLI had already decided to refuse"
+    assert not output_dir.exists(), "the refused run created its output directory"
+    assert any("--output-name" in record.message for record in caplog.records)
+
+
+def test_the_default_output_name_still_dispatches(tmp_path, monkeypatch) -> None:
+    """The check is a guard on one flag, not a new way for ordinary runs to fail."""
+    monkeypatch.setattr(cli, "setup_logging", lambda log_level=logging.INFO, log_file=None: None)
+    called = []
+    monkeypatch.setitem(cli.HANDLERS, "pipeline", lambda *a, **k: called.append(True))
+
+    cli.main(["pipeline", "--bam", str(tmp_path / "x.bam"), "-o", str(tmp_path / "out"), "--output-name", "output"])
+
+    assert called == [True]
+
+
 def test_no_command_prints_help_and_exits_zero(capsys) -> None:
     """Unchanged behaviour, pinned here because dispatch now sits right after it."""
     with pytest.raises(SystemExit) as excinfo:

@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+from vntyper.scripts.artifact_names import validate_output_name
 from vntyper.scripts.cli_handlers import (
     CommandHandler,
     handle_cohort,
@@ -96,6 +97,19 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         logger.critical(f"Failed to load configuration: {exc}")
         sys.exit(1)
+
+    # Refuse a flag the pipeline cannot honour *before* anything is created on
+    # disk. The log file for a `pipeline` run is `<output_dir>/pipeline.log`, so
+    # validating this in the handler meant the output directory was created and
+    # written to before the run died -- and it died with an unhandled ValueError,
+    # which is a traceback for what is really a usage error. Exit 1: AGENTS.md
+    # keeps this CLI to exit codes 0 and 1, so `parser.error`'s 2 is not used.
+    if args.command == "pipeline" and getattr(args, "output_name", None) is not None:
+        try:
+            validate_output_name(args.output_name)
+        except ValueError as exc:
+            logger.critical(str(exc))
+            sys.exit(1)
 
     # Determine log level
     if args.log_level:

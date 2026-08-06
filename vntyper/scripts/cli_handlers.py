@@ -194,6 +194,10 @@ def handle_pipeline(
     if args.reference_assembly is None:
         args.reference_assembly = get_conf(config, "reference_assembly", "hg19")
         logger.debug(f"reference_assembly set to {args.reference_assembly}")
+    # A value supplied on the command line has already been refused in `cli.main`,
+    # before the output directory and the log file were created. This call still
+    # runs, because the value can also come from the configuration file, which the
+    # CLI check deliberately does not reach into.
     # --output-name is validated, not forwarded: run_pipeline takes no such parameter
     # and three of its consumers name their files from a literal it cannot reach.
     # Refusing a value we cannot honour is the point - silently dropping it produced a
