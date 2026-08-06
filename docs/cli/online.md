@@ -24,8 +24,8 @@ vntyper [global-options] online
 | `--reference-assembly` | choice | `hg19` | Reference assembly used for alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl` |
 | `--threads` | int | `4` | Number of threads to use |
 | `--email` | string | — | Email address to receive notifications (optional) |
-| `--cohort-id` | string | — | Cohort ID to associate the job with (optional) |
-| `--passphrase` | string | — | Passphrase for the cohort, if required |
+| `--cohort-id` | string | — | Cohort ID to associate the job with (optional). The identifier the service returned when the cohort was created, not its alias |
+| `--passphrase` | string | — | Passphrase for the cohort. Required whenever `--cohort-id` is given; at most 72 bytes once UTF-8 encoded |
 | `--resume` | flag | off | Resume polling a previously submitted job if a `job_id` is found in the output directory |
 
 ## Workflow
@@ -51,7 +51,8 @@ Submit with email notifications and cohort association:
 
 ```bash
 vntyper online --bam sample.bam -o results/ \
-    --email user@example.com --cohort-id my_cohort --passphrase secret123
+    --email user@example.com \
+    --cohort-id 4f9c1a72-5e30-4b8d-9a61-7c2e0d5b83fa --passphrase secret123
 ```
 
 Resume polling a previously submitted job:
