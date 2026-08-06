@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tests.builders import kestrel_config as shipped_kestrel_config
 from vntyper.scripts.confidence_assignment import (
     NEGATIVE_LABEL,
     calculate_depth_score_and_assign_confidence,
@@ -136,3 +137,88 @@ def test_low_region_depth_with_insufficient_depth_score(kestrel_config):
     out = calculate_depth_score_and_assign_confidence(_make_df(alt_depth, region_depth), kestrel_config)
     assert out.loc[0, "Confidence"] == NEGATIVE_LABEL
     assert not out.loc[0, "depth_confidence_pass"]
+
+
+# ---------------------------------------------------------------------------
+# The calibration constants are required, not defaulted.
+# ---------------------------------------------------------------------------
+
+#: The six calibration constants, as dotted paths inside ``confidence_assignment``,
+#: paired with the ``.get()`` default that used to stand in for a missing key.
+#:
+#: Those defaults were not neutral placeholders -- they encoded a SECOND, WRONG
+#: calibration. ``depth_score_thresholds.high`` defaulted to 0.4 where the shipped
+#: config supplies 0.00515, a factor of 78. Dropping a single key was enough to
+#: genotype a whole cohort against thresholds nobody chose, silently and with no
+#: log line. ``--config-path`` replaces the whole config rather than merging it
+#: (AGENTS.md trap 2) and a partial config already fails with ``KeyError``
+#: elsewhere in the pipeline, so a partial config is not supported input and the
+#: right behaviour is to fail loudly here too.
+CALIBRATION_CONSTANTS = {
+    "depth_score_thresholds.low": (0.00469, 0.2),
+    "depth_score_thresholds.high": (0.00515, 0.4),
+    "alt_depth_thresholds.low": (20, 5),
+    "alt_depth_thresholds.mid_low": (21, 10),
+    "alt_depth_thresholds.mid_high": (100, 20),
+    "var_active_region_threshold": (200, 0),
+}
+
+
+def test_the_shipped_config_supplies_every_calibration_constant():
+    """Requiring the keys only leaves behaviour unchanged because all six are shipped.
+
+    This is the whole safety argument for removing the defaults, so it is asserted
+    rather than assumed. It also pins the shipped values against the defaults they
+    replaced: a config edit moving one of them back towards its old fallback would
+    be a recalibration, and would surface here.
+    """
+    conf = shipped_kestrel_config()["confidence_assignment"]
+
+    for dotted, (shipped, old_default) in CALIBRATION_CONSTANTS.items():
+        node = conf
+        parts = dotted.split(".")
+        for part in parts[:-1]:
+            assert part in node, f"{dotted}: the shipped config is missing the {part!r} section"
+            node = node[part]
+        assert parts[-1] in node, f"{dotted}: the shipped config is missing this key"
+        assert node[parts[-1]] == shipped, f"{dotted}: shipped value moved"
+        assert node[parts[-1]] != old_default, f"{dotted}: the shipped value now equals the old fallback"
+
+
+@pytest.mark.parametrize("dotted", sorted(CALIBRATION_CONSTANTS))
+def test_dropping_a_calibration_constant_raises_instead_of_recalibrating(dotted):
+    """A missing calibration key must raise, not fall back to a different calibration.
+
+    Before this change every one of these was read as ``.get(key, <default>)``, so a
+    config missing ``depth_score_thresholds.high`` scored against 0.4 instead of
+    0.00515 and turned an ample-depth ``High_Precision*`` call into
+    ``Low_Precision`` -- a changed genotype, produced silently, from a config
+    nothing validates. Labels under ``confidence_levels`` deliberately keep their
+    fallbacks: those are cosmetic strings, not calibration.
+
+    Args:
+        dotted: Dotted path of the key to remove, from
+            :data:`CALIBRATION_CONSTANTS`.
+    """
+    config = shipped_kestrel_config()
+    node = config["confidence_assignment"]
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        node = node[part]
+    del node[parts[-1]]
+
+    with pytest.raises(KeyError, match=parts[-1]):
+        calculate_depth_score_and_assign_confidence(_make_df(120, 12000), config)
+
+
+def test_an_empty_frame_still_short_circuits_before_the_config_is_read():
+    """The empty-input fast path must not need a config at all.
+
+    ``calculate_depth_score_and_assign_confidence`` returns before touching
+    ``kestrel_config``, and callers rely on that: a run with no Kestrel variants
+    reaches this function with an empty frame. Requiring the calibration keys must
+    not turn that into a ``KeyError``.
+    """
+    out = calculate_depth_score_and_assign_confidence(pd.DataFrame(), {})
+
+    assert out.empty

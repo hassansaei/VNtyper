@@ -108,6 +108,23 @@ TARGETS: dict[str, tuple[str, ...]] = {
     ),
     "vntyper/scripts/motif_processing.py": (
         "tests/unit/test_motif_filtering_issue_136.py",
+        "tests/unit/test_motif_preprocessing.py",
+        "tests/unit/test_motif_decisions.py",
+        "tests/unit/test_motif_config_guard.py",
+        "tests/unit/test_kestrel_filtering.py",
+        "tests/unit/test_generate_report.py",
+    ),
+    # The pure decision layer extracted out of motif_correction_and_annotation.
+    # Registered in the same commit as the extraction, deliberately: a module absent
+    # from TARGETS is not mutated at all, so extracting the hard decisions without
+    # adding them here would have made motif_processing.py's score rise for the worst
+    # possible reason - the decisions leaving the measurement rather than becoming
+    # tested. The two scores are only comparable to the 30.9% baseline together.
+    "vntyper/scripts/motif_decisions.py": (
+        "tests/unit/test_motif_decisions.py",
+        "tests/unit/test_motif_filtering_issue_136.py",
+        "tests/unit/test_motif_config_guard.py",
+        "tests/unit/test_kestrel_filtering.py",
         "tests/unit/test_generate_report.py",
     ),
     "vntyper/scripts/variant_parsing.py": ("tests/unit/test_variant_parsing.py",),
@@ -196,28 +213,11 @@ def mutate_number(literal: str) -> str | None:
 #: than silently ignored.
 EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
     # --- confidence_assignment.py -------------------------------------------------
-    # Every threshold this module reads is read as `<subdict>.get(<key>, <default>)`,
-    # and kestrel_config.json supplies ALL of these keys. The default operand is
-    # therefore dead with the shipped config, and changing it cannot move a call.
-    # Verified against vntyper/scripts/kestrel_config.json ["confidence_assignment"].
-    ("vntyper/scripts/confidence_assignment.py", 82, "0", "1"): (
-        "`.get()` default for `var_active_region_threshold`; the shipped config supplies 200"
-    ),
-    ("vntyper/scripts/confidence_assignment.py", 91, "0.2", "1.2"): (
-        "`.get()` default for `depth_score_thresholds.low`; the shipped config supplies 0.00469"
-    ),
-    ("vntyper/scripts/confidence_assignment.py", 92, "0.4", "1.4"): (
-        "`.get()` default for `depth_score_thresholds.high`; the shipped config supplies 0.00515"
-    ),
-    ("vntyper/scripts/confidence_assignment.py", 95, "5", "6"): (
-        "`.get()` default for `alt_depth_thresholds.low`; the shipped config supplies 20"
-    ),
-    ("vntyper/scripts/confidence_assignment.py", 96, "10", "11"): (
-        "`.get()` default for `alt_depth_thresholds.mid_low`; the shipped config supplies 21"
-    ),
-    ("vntyper/scripts/confidence_assignment.py", 97, "20", "21"): (
-        "`.get()` default for `alt_depth_thresholds.mid_high`; the shipped config supplies 100"
-    ),
+    # Six entries used to live here, one per `<subdict>.get(<key>, <default>)` read of a
+    # calibration constant. They are gone because the code is: the six defaults were
+    # DELETED (#184 follow-up), not reclassified. The constants are now read as direct
+    # subscripts, so a missing key raises KeyError instead of silently substituting a
+    # second, wrong calibration - and there is no default operand left to mutate.
     # --- variant_parsing.py -------------------------------------------------------
     ("vntyper/scripts/variant_parsing.py", 114, "0.0", "1.0"): (
         "`.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469"
