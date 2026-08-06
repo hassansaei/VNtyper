@@ -21,7 +21,7 @@ import coverage_gate  # noqa: E402
 # raised from 70 to the 74.22% that run measured. Statement-only coverage of the same
 # suite is ~76.6%, so the two measurements are not interchangeable - see
 # `test_branch_coverage_is_enabled` below for why that gap has to be guarded.
-CURRENT_COVERAGE_FLOOR = 74.0
+CURRENT_COVERAGE_FLOOR = 79.0
 
 
 def test_read_floor_returns_the_configured_value() -> None:
