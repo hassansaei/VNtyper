@@ -41,6 +41,7 @@ Neither exists — use the commands above.
 | Fast tests (what CI runs) | `make test-unit` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
+| Coverage of changed lines | `make patch-coverage` |
 | Integration tests (needs 1.1 GB data) | `make test-integration` |
 | Full gate incl. integration | `make check-full` |
 | Docs preview | `make docs-serve` |
@@ -125,12 +126,26 @@ network, no Docker, no reference data, and `pytestmark = pytest.mark.unit` after
 imports. If a change is only reachable through the integration tier, that is a signal the
 logic needs extracting — see rule 3.
 
-Two thresholds enforce this, and they are deliberately different:
+Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
 | **Hard floor** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+
+**The patch gate is what makes this rule enforceable.** The hard floor is an average over
+~5000 statements, so a PR can add a hundred untested lines and move it by less than a
+point — measured: three untested lines moved it 0.03. It has never once failed a PR for
+shipping untested code, and it cannot. `make patch-coverage` runs `diff-cover` over the
+lines your branch changed and fails below 80%, so an untested new function fails its own
+PR regardless of what the repo total is doing. It is also how the 80% target is reached:
+every PR lands at ≥80%, so the average climbs on its own.
+
+It scores against the **merge base**, so commits landing on `main` while your PR is open
+are never charged to you. A PR that only deletes code, only touches docs, or changes no
+measured Python has nothing to score and passes. The CI job checks out with
+`fetch-depth: 0` because finding a merge base needs real history.
 
 `make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
 coverage exceeds it. Never lower the floor to make a build pass — add the test instead.

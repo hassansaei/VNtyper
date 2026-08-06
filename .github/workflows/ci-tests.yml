@@ -161,7 +161,13 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
+      # fetch-depth: 0, not the default 1. The patch-coverage step below scores the diff
+      # against the MERGE BASE with origin/main, and a shallow clone has no merge base to
+      # find - `git merge-base` fails and the gate errors out instead of scoring. Full
+      # history costs a few seconds on a repo this size.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -188,6 +194,32 @@ jobs:
       # additionally fails the build if any unit test file is missing its `unit` marker.
       - name: Run unit tests with coverage floor
         run: make test-unit-cov
+
+      # Patch coverage: at least 80% of the lines THIS PR CHANGED must be covered.
+      #
+      # This is the step that makes AGENTS.md rule 1 ("touch a file, add tests for it")
+      # enforceable. The floor in the previous step is a whole-repo average over ~5000
+      # statements: a PR can add a hundred untested lines and move it by less than a
+      # point, so it has never once failed a PR for shipping untested code. This one
+      # scores the diff and nothing else.
+      #
+      # It reuses the coverage.xml the step above already wrote, so it costs one
+      # `diff-cover` invocation and no second test run.
+      #
+      # Conditions, both load-bearing:
+      #   * pull_request only - a push to main is being compared against itself, so
+      #     there is no diff to score.
+      #   * one interpreter only - the score is identical on all four, and running it
+      #     across the matrix would turn one failure into four identical ones.
+      #
+      # A PR that only deletes code, only touches docs, or changes no measured Python
+      # has no scoreable lines; diff-cover reports "No lines with coverage information"
+      # and exits 0. Verified, not assumed.
+      - name: Coverage of changed lines (patch coverage)
+        if: github.event_name == 'pull_request' && matrix.python-version == '3.12'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: make patch-coverage PATCH_COVERAGE_BASE="origin/$BASE_REF"
 
   docs:
     name: Docs build (strict)

@@ -48,6 +48,10 @@ dev = [
     "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
     "testcontainers>=4.0.0",  # Docker container testing
     "requests>=2.31.0",  # HTTP library for downloading test data
+    # Scores coverage of CHANGED lines only (`make patch-coverage`, gated at 80% in CI).
+    # Lower-bounded rather than pinned: the gate reads our own coverage.xml and the
+    # number it computes does not depend on the tool version.
+    "diff-cover>=9.0",
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "types-requests>=2.0.0",

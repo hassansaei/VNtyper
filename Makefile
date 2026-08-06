@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -33,6 +33,7 @@ help:
 	@echo "  make test-unit               - Run unit tests only (fast, ~0.5s)"
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
+	@echo "  make patch-coverage          - Coverage of changed lines only (CI gate)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
 	@echo "  make test-integration-parallel - Run integration tests in parallel"
 	@echo "  make test-advntr             - Run adVNTR test only"
@@ -186,14 +187,56 @@ test-fast:
 # whenever coverage climbs past it.
 COVERAGE_TARGET ?= 80
 
+# `--cov-report=xml` costs ~0.1s and writes coverage.xml, which `patch-coverage` below
+# consumes. Emitting it here rather than from a second pytest run keeps the patch gate
+# free in CI: the same measurement feeds both the whole-repo floor and the patch gate.
 test-unit-cov:
 	@echo "$(BLUE)Running unit tests with coverage...$(RESET)"
-	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing
+	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing --cov-report=xml
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
 
 coverage-report:
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
+
+# Patch coverage: the share of the lines THIS BRANCH CHANGED that the unit tier executes.
+#
+# The floor above is a whole-repo ratchet. It moves slowly and it is an average, so a PR
+# can add a hundred untested lines and still not drop it a single point - which is why
+# AGENTS.md rule 1 ("touch a file, add tests for it") was unenforceable in CI. This gate
+# scores only the changed lines, so an untested new function fails its own PR no matter
+# what the repo total is doing. It is also the only realistic route to the 80% target:
+# every PR from here lands at >= 80%, so the average climbs on its own.
+#
+# Deliberately NOT a ratchet and deliberately NOT the same number as the floor: this is
+# a fixed bar on new work, set at the project's COVERAGE_TARGET.
+#
+# diff-cover's default `...` range notation scores against the MERGE BASE, not the tip of
+# the base branch, so commits landing on main while a PR is open are never charged to that
+# PR. Finding that merge base needs real history - a shallow clone has none, so the CI job
+# that runs this sets `fetch-depth: 0` (actions/checkout defaults to a depth of 1).
+#
+# Failure modes, all of which must pass rather than fail:
+#   * docs-only PR      - ci-tests.yml's `python` path filter skips the whole job.
+#   * deletion-only PR  - no ADDED lines, so there is nothing to score. Reports 100%.
+#   * tests-only PR     - tests/ is outside `[tool.coverage.run] source`, so it never
+#                         appears in coverage.xml and contributes no measurable lines.
+#   * no Python at all  - same: nothing measurable in the diff, reports 100%.
+# In every one of those cases diff-cover reports "No lines with coverage information"
+# and exits 0.
+PATCH_COVERAGE_TARGET ?= 80
+PATCH_COVERAGE_BASE ?= origin/main
+
+patch-coverage:
+	@test -f coverage.xml || { \
+		echo "$(RED)coverage.xml not found. Run 'make test-unit-cov' first.$(RESET)"; \
+		exit 1; \
+	}
+	@echo "$(BLUE)Checking coverage of changed lines against $(PATCH_COVERAGE_BASE)...$(RESET)"
+	diff-cover coverage.xml \
+		--compare-branch=$(PATCH_COVERAGE_BASE) \
+		--fail-under=$(PATCH_COVERAGE_TARGET)
+	@echo "$(GREEN)✓ Patch coverage >= $(PATCH_COVERAGE_TARGET)%$(RESET)"
 
 test-integration:
 	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
@@ -352,7 +395,7 @@ ci-local-uv:
 
 # Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs, plus a
 # from-scratch install exactly as CI builds it.
-ci-local: lint-actions format-check lint type-check-all test-unit-cov ci-local-docs ci-local-uv
+ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-coverage ci-local-docs ci-local-uv
 	@echo ""
 	@echo "$(GREEN)========================================$(RESET)"
 	@echo "$(GREEN)✓ Local CI parity checks all passed$(RESET)"
