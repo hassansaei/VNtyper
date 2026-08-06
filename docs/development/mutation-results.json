@@ -1,5 +1,5 @@
 {
-  "elapsed": 572.2532905889966,
+  "elapsed": 553.9350351969988,
   "modules": [
     {
       "path": "vntyper/scripts/confidence_assignment.py",
@@ -325,63 +325,18 @@
     },
     {
       "path": "vntyper/scripts/flagging.py",
-      "killed": 6,
-      "survived": 11,
+      "killed": 15,
+      "survived": 2,
       "survivors": [
-        {
-          "line": 89,
-          "original": "False",
-          "replacement": "True"
-        },
         {
           "line": 150,
           "original": "False",
           "replacement": "True"
         },
         {
-          "line": 154,
-          "original": "not",
-          "replacement": ""
-        },
-        {
-          "line": 157,
-          "original": "False",
-          "replacement": "True"
-        },
-        {
-          "line": 217,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
           "line": 238,
           "original": "False",
           "replacement": "True"
-        },
-        {
-          "line": 244,
-          "original": "==",
-          "replacement": "!="
-        },
-        {
-          "line": 250,
-          "original": "+",
-          "replacement": "-"
-        },
-        {
-          "line": 250,
-          "original": "+",
-          "replacement": "-"
-        },
-        {
-          "line": 258,
-          "original": "True",
-          "replacement": "False"
-        },
-        {
-          "line": 259,
-          "original": "True",
-          "replacement": "False"
         }
       ]
     }

@@ -16,12 +16,12 @@ deliberate defect, runs the tests, and records whether anything failed. A
 
 ## Result
 
-**61 of 131 mutants killed - a raw mutation score of 46.6%.**
+**70 of 131 mutants killed - a raw mutation score of 53.4%.**
 
-Of the 70 survivors, 9 are hand-classified as
+Of the 61 survivors, 10 are hand-classified as
 *equivalent* (the mutation cannot change observable behaviour, so no test could
-ever kill it) and 61 are genuine gaps. Excluding the equivalent
-mutants the score is **50.0%** (61/122).
+ever kill it) and 51 are genuine gaps. Excluding the equivalent
+mutants the score is **57.9%** (70/121).
 
 Both numbers are given because neither alone is honest: the raw score
 understates the suite by counting unkillable mutants against it, and the
@@ -31,9 +31,9 @@ Every classification is listed below with its reason so it can be checked.
 | Module | Killed | Total | Raw score |
 | --- | ---: | ---: | ---: |
 | `vntyper/scripts/motif_processing.py` | 21 | 68 | 30.9% |
-| `vntyper/scripts/flagging.py` | 6 | 17 | 35.3% |
 | `vntyper/scripts/variant_parsing.py` | 3 | 7 | 42.9% |
 | `vntyper/scripts/confidence_assignment.py` | 11 | 19 | 57.9% |
+| `vntyper/scripts/flagging.py` | 15 | 17 | 88.2% |
 | `vntyper/scripts/scoring.py` | 20 | 20 | 100.0% |
 
 ## Surviving mutants
@@ -48,16 +48,6 @@ kills one is a test that would have caught a real defect of that shape.
 | --- | ---: | --- |
 | `vntyper/scripts/confidence_assignment.py` | 105 | `0` &rarr; `1` |
 | `vntyper/scripts/confidence_assignment.py` | 110 | `-` &rarr; `+` |
-| `vntyper/scripts/flagging.py` | 89 | `False` &rarr; `True` |
-| `vntyper/scripts/flagging.py` | 154 | `not` &rarr; `(deleted)` |
-| `vntyper/scripts/flagging.py` | 157 | `False` &rarr; `True` |
-| `vntyper/scripts/flagging.py` | 217 | `True` &rarr; `False` |
-| `vntyper/scripts/flagging.py` | 238 | `False` &rarr; `True` |
-| `vntyper/scripts/flagging.py` | 244 | `==` &rarr; `!=` |
-| `vntyper/scripts/flagging.py` | 250 | `+` &rarr; `-` |
-| `vntyper/scripts/flagging.py` | 250 | `+` &rarr; `-` |
-| `vntyper/scripts/flagging.py` | 258 | `True` &rarr; `False` |
-| `vntyper/scripts/flagging.py` | 259 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 77 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 79 | `1` &rarr; `2` |
 | `vntyper/scripts/motif_processing.py` | 79 | `True` &rarr; `False` |
@@ -134,6 +124,7 @@ not a supported input.
 | `vntyper/scripts/confidence_assignment.py` | 96 | `10` &rarr; `11` | `.get()` default for `alt_depth_thresholds.mid_low`; the shipped config supplies 21 |
 | `vntyper/scripts/confidence_assignment.py` | 97 | `20` &rarr; `21` | `.get()` default for `alt_depth_thresholds.mid_high`; the shipped config supplies 100 |
 | `vntyper/scripts/flagging.py` | 150 | `False` &rarr; `True` | `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly |
+| `vntyper/scripts/flagging.py` | 238 | `False` &rarr; `True` | `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name |
 | `vntyper/scripts/motif_processing.py` | 315 | `60` &rarr; `61` | `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60 |
 | `vntyper/scripts/variant_parsing.py` | 114 | `0.0` &rarr; `1.0` | `.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469 |
 
@@ -228,16 +219,16 @@ VNtyper mutation testing - advisory score
 ============================================================
 
 Command:  make mutation
-Total:    131 mutants, 61 killed, 70 survived
-Score:    46.6%
-Duration: 9.5 min
+Total:    131 mutants, 70 killed, 61 survived
+Score:    53.4%
+Duration: 9.2 min
 
 Per module
 ------------------------------------------------------------
   30.9%   21/ 68  vntyper/scripts/motif_processing.py
-  35.3%    6/ 17  vntyper/scripts/flagging.py
   42.9%    3/  7  vntyper/scripts/variant_parsing.py
   57.9%   11/ 19  vntyper/scripts/confidence_assignment.py
+  88.2%   15/ 17  vntyper/scripts/flagging.py
  100.0%   20/ 20  vntyper/scripts/scoring.py
 
 Surviving mutants  [E] = hand-classified equivalent, [ ] = genuine gap
@@ -259,18 +250,10 @@ vntyper/scripts/confidence_assignment.py
   [ ] line  110  '-' -> '+'
 
 vntyper/scripts/flagging.py
-  [ ] line   89  'False' -> 'True'
   [E] line  150  'False' -> 'True'
           equivalent: `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly
-  [ ] line  154  'not' -> ''
-  [ ] line  157  'False' -> 'True'
-  [ ] line  217  'True' -> 'False'
-  [ ] line  238  'False' -> 'True'
-  [ ] line  244  '==' -> '!='
-  [ ] line  250  '+' -> '-'
-  [ ] line  250  '+' -> '-'
-  [ ] line  258  'True' -> 'False'
-  [ ] line  259  'True' -> 'False'
+  [E] line  238  'False' -> 'True'
+          equivalent: `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name
 
 vntyper/scripts/motif_processing.py
   [ ] line   77  'True' -> 'False'

@@ -229,6 +229,15 @@ EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
     ("vntyper/scripts/flagging.py", 150, "False", "True"): (
         "`.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly"
     ),
+    # `itertuples(index=True)` only prepends an `Index` field to the namedtuple; the loop
+    # body reads `row_tuple.Flag` by name and never touches position, so both forms yield
+    # the same value. Checked against the awkward cases too - a column literally named
+    # `Index`, duplicate `Flag` columns, a string index and a MultiIndex all resolve
+    # `.Flag` to the same column either way, because namedtuple's `rename=True` renames
+    # the colliding field and not `Flag`.
+    ("vntyper/scripts/flagging.py", 238, "False", "True"): (
+        "`itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name"
+    ),
 }
 
 
