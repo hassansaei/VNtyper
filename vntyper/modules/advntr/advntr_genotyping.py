@@ -12,21 +12,33 @@ from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
 
-#: Matches the *first* ``LEN<digits>`` token in an adVNTR ``State`` string.
+#: Matches greedily from the first ``LEN`` token to the end of an adVNTR ``State`` string.
 #:
-#: A compound call names several parts joined by ``&`` -- for example
-#: ``I9_2_A_LEN9&I50_2_A_LEN3``. The original expression here was the greedy
-#: ``"(LEN.*)"``, which matched ``LEN9&I50_2_A_LEN3``; splitting *that* on ``LEN``
-#: yields three fields for a two-column assignment and raises ``ValueError``. The broad
-#: handler in :func:`process_advntr_output` swallowed it and returned without writing a
-#: file, so one compound call silently discarded every other variant in the sample.
+#: This is the historic expression and it is deliberately kept. Everything after the first
+#: ``LEN`` becomes ``Insertion_len``, so a single-part state leaves a bare number
+#: (``I22_2_G_LEN1`` -> ``"1"``) while any state with a further ``&`` part leaves a
+#: non-numeric remainder (``I9_2_A_LEN2&D50_2`` -> ``"2&D50_2"``) that
+#: ``pd.to_numeric(errors="coerce")`` turns into ``NaN`` and then **zero**. That zero
+#: decides which rows pass the frameshift filter and therefore which adVNTR genotypes are
+#: reported, so it is a clinical-output decision, not a parsing detail: it is pinned by
+#: ``tests/unit/test_advntr_output_parsing.py::TestInsertionLenIsCharacterised`` and may
+#: only change deliberately. Whether it *should* become the first part's length or the sum
+#: over all parts is filed for the domain owner, not decided here.
+GREEDY_INSERTION_LEN_PATTERN = r"(LEN.*)"
+
+#: ``str.split`` bound for the ``LEN`` split, and the whole of the compound-variant repair.
 #:
-#: Anchoring on the digits keeps the historic single-part behaviour byte for byte
-#: (``I22_2_G_LEN1`` still yields ``1``) while making the multi-part case parse. Note
-#: that ``Insertion_len`` remains the *first* part's length rather than the sum over all
-#: parts; changing that would change which rows pass the frameshift filter, so it is
-#: pinned by a characterisation test and left for a deliberate decision.
-FIRST_INSERTION_LEN_PATTERN = r"(LEN\d+)"
+#: A ``State`` naming two insertions -- ``I9_2_A_LEN9&I50_2_A_LEN3`` -- extracts to
+#: ``LEN9&I50_2_A_LEN3``, which contains *two* ``LEN`` tokens; an unbounded split yields
+#: three fields for a two-column assignment and raises ``ValueError``. The broad handler in
+#: :func:`process_advntr_output` swallowed it and returned without writing a file, so one
+#: compound call silently discarded every other variant in the sample.
+#:
+#: Splitting at most once makes that shape impossible while leaving every state that
+#: already produced two fields byte for byte unchanged -- the bound only ever fires on the
+#: input that used to crash, and it gives that input the same treatment every other
+#: multi-part remainder already got: non-numeric, coerced to zero.
+INSERTION_LEN_SPLIT_LIMIT = 1
 
 
 # -------------------------------------------------------------------------
@@ -138,10 +150,10 @@ def advntr_processing_del(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract(FIRST_INSERTION_LEN_PATTERN)[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract(GREEDY_INSERTION_LEN_PATTERN)[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
-    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
+    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=INSERTION_LEN_SPLIT_LIMIT, expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
     df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
     df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
@@ -177,10 +189,10 @@ def advntr_processing_ins(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract(FIRST_INSERTION_LEN_PATTERN)[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract(GREEDY_INSERTION_LEN_PATTERN)[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
-    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
+    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=INSERTION_LEN_SPLIT_LIMIT, expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
     df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
     df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
