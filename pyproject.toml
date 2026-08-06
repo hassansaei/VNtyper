@@ -168,13 +168,20 @@ target-version = "py310"
 # resolved by reformatting: `reference/` is a base-image content-hash input (see `exclude`
 # below), and rewriting a committed `specs/` document to satisfy a formatter is churn.
 #
-# What this line gives up, stated rather than hidden: the 7 Markdown files under
-# `RUFF_PATHS` that 0.16 had started formatting are no longer formatted. That is the
-# intended scope - the Makefile calls `RUFF_PATHS` "the whole of the repository's
-# first-party Python", and prose here is gated by `mkdocs build --strict`, not by ruff.
-# The 157 first-party `.py` files are unaffected. Widening this to prose is a deliberate
-# change to this line and to `RUFF_PATHS` together, not something to inherit from a
-# release note.
+# What this line gives up, stated rather than hidden: the Markdown files under
+# `RUFF_PATHS` are no longer formatted, though 0.16 had started doing it. Measure the
+# scope by re-running the check with `*.md` appended to this list and subtracting the
+# `.py`-only total - it was 45 Markdown files against 184 `.py` files when `docs/` was
+# added to `RUFF_PATHS`, and both figures move with every merge. Prose here is gated by
+# `mkdocs build --strict`, not by ruff. No `.py` file is affected either way. Widening
+# this to prose is a deliberate change to this line and to `RUFF_PATHS` together, not
+# something to inherit from a release note.
+#
+# `RUFF_PATHS` is `vntyper/ docker/app/ tests/ scripts/ docs/`, chosen so that it and a
+# bare `.` discover the identical set of files. Keep them equal - a target that passes
+# while the bare command reports a finding is the trap this `include` line was added to
+# remove, and it had reopened via `docs/hooks.py`. The Makefile comment above
+# `RUFF_PATHS` gives the one-line command that checks it.
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
 
 # Exclude common directories

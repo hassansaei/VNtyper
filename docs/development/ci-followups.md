@@ -6,6 +6,18 @@ need different handling: **behaviour this work changed**, which users may notice
 
 Everything here is evidence-backed — measurements and file references, not guesses.
 
+!!! warning "Every measurement on this page is dated, and several are now historical"
+
+    This page records the state at PR #176/#180. Line counts and coverage figures move
+    with every merge, so **none of the numbers below are a live claim** — each is
+    labelled with when it was taken, and an entry that has since been resolved says so
+    and names what resolved it. Several of the original figures (`generate_report.py` at
+    861 lines / 4%, `cohort_summary.py` at 856, `cli.py` at 700) were hundreds of lines
+    out of date before this warning was added.
+
+    For the current picture, read **"Changing existing code" in `AGENTS.md`** — that is
+    the maintained table, and it tells you to re-measure before quoting it too.
+
 ## A. Behaviour this work changed
 
 These are intentional, verified, and listed so nothing arrives as a surprise.
@@ -19,10 +31,18 @@ These are intentional, verified, and listed so nothing arrives as a surprise.
 | A5 | adVNTR moved off the merge path | Nightly cron + `workflow_dispatch full: true` still run it | An adVNTR regression is caught within a day, not at merge |
 | A6 | Local conda env must be recreated | `conda/environment_vntyper.yml` changed interpreter | `mamba env create -f conda/environment_vntyper.yml` then `pip install -e ".[dev,docs]"` |
 
-**A1 residual risk is the one worth acting on.** `generate_report.py` is 4% covered and
-the reporting stack is exactly what moved. A single test that renders a report from a
-fixture `pipeline_summary.json` and asserts the HTML contains the expected variant row
-would close it cheaply.
+**A1 residual risk — RESOLVED (#179).** At the time this was written `generate_report.py`
+was 861 lines and 4% covered, and the reporting stack was exactly what the interpreter
+bump moved. The proposed fix — "a single test that renders a report from a fixture
+`pipeline_summary.json` and asserts the HTML contains the expected variant row" — is what
+`tests/unit/test_generate_report.py` now does, across 43 test functions
+(`grep -c '^def test' tests/unit/test_generate_report.py`): each writes a
+`pipeline_summary.json` into `tmp_path`, calls the real `generate_summary_report()`, and
+asserts against the rendered HTML (coverage rows, the Kestrel table headings, the
+annotated `Motif` column, the confidence colour coding, the negative placeholder row and
+the screening-summary styling). `generate_report.py` is 574 lines today
+(`wc -l vntyper/scripts/generate_report.py`); for its coverage see the table in
+`AGENTS.md`.
 
 ## B. Pre-existing debt
 
@@ -42,19 +62,21 @@ a per-file `md5sum` for all 114 entries.
 
 Plan:
 1. Replace `pytest.exit()` with `pytest.skip(allow_module_level=True)` so a fresh clone
-   yields `330 passed, N skipped` instead of a session abort. Keep the hard failure when
-   `GITHUB_ACTIONS=true`, where a missing file means a genuine cache fault.
+   yields `<all unit tests> passed, N skipped` instead of a session abort (the suite was
+   330 tests when this was written and is several times that now). Keep the hard failure
+   when `GITHUB_ACTIONS=true`, where a missing file means a genuine cache fault.
 2. Cache the archive rather than streaming it to a `NamedTemporaryFile` that is deleted
    in `finally`, so a single missing file costs one `zip_ref.open(member)`.
 3. Record the archive version alongside the data, so a config bump reports "your data is
    from v2.0, config wants v2.1" rather than "2 files missing".
 
-### B2. Six modules over 650 LOC, all under 30% covered — HIGH
+### B2. Six modules over 650 LOC, all under 30% covered — SUPERSEDED; the conclusion was wrong
 
-Every module above the size limit in `AGENTS.md` is barely tested, and none of the
-well-covered ones exceed it:
+**Historical snapshot, PR #176/#180.** These are the figures as recorded then. They are
+kept rather than deleted because the *conclusion* drawn from them turned out to be false,
+and a page that quietly rewrites its own history stops being worth trusting.
 
-| Module | LOC | Coverage |
+| Module | LOC (then) | Coverage (then) |
 | --- | --- | --- |
 | `cohort_summary.py` | 856 | 0% |
 | `cli.py` | 700 | 0% |
@@ -64,19 +86,41 @@ well-covered ones exceed it:
 | `kestrel_genotyping.py` | 835 | 28% |
 | `docker/app/main.py` | 1081 | not measured |
 
-They are untested *because* they fuse I/O, orchestration and pure logic into functions
-that cannot be called without a filesystem. The route from 25.68% to the 80% target runs
-through splitting them, one region at a time, under the rule already in `AGENTS.md`:
-extract the pure part, test that, leave the I/O behind.
+The heading's claim — *every module over 650 LOC is under 30% covered* — **is false, and
+so is its converse.** `docker/app/main.py` is the largest file in the repository and one
+of the best covered, because it is a stack of thin FastAPI handlers reachable through
+`TestClient`. `install_references.py` is the same size and sits low because it downloads,
+unpacks and checksums files. **Coupling to I/O predicts coverage; size does not.**
+`AGENTS.md`, "Changing existing code", carries the current table and the full argument.
 
-### B3. `tests/` is not linted or formatted — MEDIUM
+Three of the seven rows have since been closed, and the line counts are now very
+different. Measured at the tip of the `#181–#197` follow-up branch with
+`wc -l`:
 
-`ruff check tests/` reports **30 fixable issues**; `ruff format --check tests/` wants to
-reformat **12 of 35 files**. CI lints `vntyper/` only, so this is invisible.
+| Module | LOC (then) | LOC (now) | What changed |
+| --- | ---: | ---: | --- |
+| `cohort_summary.py` | 856 | 456 | split into `cohort_rules`, `cohort_categories`, `cohort_tables`, `cohort_inputs`, `cohort_exports` |
+| `cli.py` | 700 | 173 | parser → `cli_parser.py`, handlers → `cli_handlers.py`, `report` → `cli_report.py` (#179) |
+| `generate_report.py` | 861 | 574 | presentation logic → `screening_summary.py`, `report_formatting.py`; see A1 |
+| `pipeline.py` | 735 | 721 | still over the limit |
+| `install_references.py` | 901 | 901 | still over the limit, and still the one module the old rule describes |
+| `kestrel_genotyping.py` | 835 | 877 | still over the limit, and larger than it was |
+| `docker/app/main.py` | 1081 | 1151 | still over the limit, and well covered |
 
-Deliberately out of scope for the pipeline work — expanding lint scope inside a CI PR
-would have mixed a cleanup with an infrastructure change. It is a self-contained PR:
-run the formatter, fix or explicitly ignore the 30, then add `tests/` to `make lint`.
+So **four** production files remain over 650 LOC, not six: `docker/app/main.py`,
+`install_references.py`, `kestrel_genotyping.py` and `pipeline.py`. The still-open work
+is the splitting rule already in `AGENTS.md` — extract the pure part, test that, leave
+the I/O behind — applied to those four, worst first.
+
+### B3. `tests/` is not linted or formatted — RESOLVED
+
+`RUFF_PATHS` in the `Makefile` is now
+`vntyper/ docker/app/ tests/ scripts/ docs/`, and every ruff target (`lint`,
+`lint-stats`, `format`, `format-check`) reads from it, so `tests/` is linted **and**
+formatted by the same gates that cover `vntyper/`. The set is deliberately equal to what
+a bare `ruff format --check .` discovers, so the Makefile target and the obvious command
+cannot report different things; the comment above `RUFF_PATHS` gives the command that
+checks that.
 
 ### B4. PyPI Trusted Publishing — MEDIUM
 
@@ -195,8 +239,10 @@ Two smaller questions ride along with it, both currently invisible for the same 
 
 ## C. Deliberately not doing
 
-- **Sharding the unit suite.** It runs in 0.44 s. Measured: `-n auto` is **4.8× slower**
-  (2.08 s vs 0.43 s) because worker bootstrap re-imports pandas/numpy/pysam per worker.
+- **Sharding the unit suite.** Measured at PR #176/#180, when the tier ran in 0.44 s:
+  `-n auto` was **4.8× slower** (2.08 s vs 0.43 s) because worker bootstrap re-imports
+  pandas/numpy/pysam per worker. The tier is much larger now, so the *ratio* is the part
+  that carries; re-measure before acting on it either way.
 - **`pytest-testmon`.** Its value is skipping expensive tests; every test here is <10 ms,
   and its stale-database failure mode silently skips tests — the exact bug class that hid
   30 tests for months.

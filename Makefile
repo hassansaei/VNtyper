@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -19,7 +19,7 @@ help:
 	@echo "  make install-dev      - Install package with development dependencies"
 	@echo ""
 	@echo "$(GREEN)Code Quality:$(RESET)"
-	@echo "  make lint             - Run Ruff linter over vntyper/ docker/app/ tests/ scripts/"
+	@echo "  make lint             - Run Ruff linter over $(RUFF_PATHS)"
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format the same paths with Ruff"
 	@echo "  make format-check     - Check formatting and lint without changes"
@@ -84,14 +84,38 @@ install-dev:
 
 # Linting and formatting targets
 #
-# RUFF_PATHS is the whole of the repository's first-party Python. Keep the four ruff
-# targets below reading from this one variable: they used to scope to
+# INVARIANT: RUFF_PATHS covers exactly the files ruff discovers on its own from the
+# repository root, so `make format-check` and a bare `ruff format --check .` can never
+# disagree. Verify it - do not trust the counts below, which are a snapshot:
+#
+#   diff <(ruff check . --show-files | sort) \
+#        <(ruff check vntyper/ docker/app/ tests/ scripts/ docs/ --show-files | sort)
+#
+# It must report only `pyproject.toml` (see below). Snapshot when `docs/` was added:
+# `ruff format --check .` considered 184 files, the old
+# `vntyper/ docker/app/ tests/ scripts/` considered 183, and the difference was the one
+# file `docs/hooks.py` - the mkdocs macro module, first-party Python that runs at every
+# docs build. A target that passes while the obvious command reports a finding is the
+# same green-CI/red-local trap that the `include` pin in `[tool.ruff]` was added to
+# remove, so it is closed by widening the variable rather than by hiding the file from
+# ruff.
+#
+# Widening the variable also widens `ruff check`, which was verified first:
+# `ruff check docs/` reports "All checks passed!", so this added no new lint findings.
+#
+# One file is still discovered by the bare command and not by this variable:
+# `pyproject.toml` itself, via the `**/pyproject.toml` entry in `[tool.ruff] include`.
+# No `RUF` rule is selected, so it yields nothing on either side today - but if one is
+# ever selected, add `pyproject.toml` to the `lint`/`lint-stats` invocations only.
+# `ruff format` does not format TOML, so it must not go in this shared variable.
+#
+# Keep the four ruff targets below reading from this one variable: they used to scope to
 # `vntyper/ docker/app/`, which left tests/ and scripts/ - thousands of lines, and the
 # code that decides whether everything else is correct - with no linter and no
 # formatter on them at all. The three checks that gate a PR (`check`, `check-all`,
 # `ci-local`) all reach ruff through these targets, so widening the variable widens
 # every gate at once.
-RUFF_PATHS := vntyper/ docker/app/ tests/ scripts/
+RUFF_PATHS := vntyper/ docker/app/ tests/ scripts/ docs/
 
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
@@ -147,6 +171,12 @@ download-test-data:
 	@echo "$(BLUE)This may take 10-30 minutes depending on network speed$(RESET)"
 	python scripts/download_test_data.py
 	@echo "$(GREEN)✓ Test data download complete$(RESET)"
+
+cram-fixtures:
+	@echo "$(BLUE)Deriving verified CRAM fixtures from the BAM cohort...$(RESET)"
+	@echo "$(BLUE)Each conversion is proved lossless before it is recorded$(RESET)"
+	python scripts/make_cram_fixtures.py
+	@echo "$(GREEN)✓ CRAM fixtures derived into tests/data/cram/$(RESET)"
 
 download-test-data-force:
 	@echo "$(BLUE)Force downloading test data (even if already present)...$(RESET)"
@@ -246,17 +276,30 @@ patch-coverage:
 # silently wrong genotype rather than a crash. confidence_assignment.py once had 100%
 # line coverage and a 21% mutation score.
 #
-# PYTHONDONTWRITEBYTECODE=1 IS LOAD-BEARING. DO NOT REMOVE IT.
+# THE INVARIANT: no child process may load bytecode generated for a different revision
+# of a target module. Break it and every mutant "survives" against the UNMUTATED code,
+# and the printed score is fiction. Two sweeps on this branch were exactly that.
 #
-# Mutations here are mostly byte-length preserving (`<` -> `>`, `and` -> `or`) and
-# CPython validates a cached .pyc against the source's (mtime, size) pair, with mtime
-# at one-second granularity. A mutant written in the same second as the file it
-# replaces is therefore indistinguishable from it to the cache validator: the
-# interpreter loads the stale .pyc and runs the UNMUTATED code, every mutant "survives"
-# and the score is fiction. Two sweeps on this branch were exactly that before it was
-# found. scripts/mutation_test.py additionally deletes every __pycache__ before it
-# starts - the env var stops new caches, the deletion stops old ones, and both are
-# needed. The full explanation is in that file's module docstring.
+# Why it is easy to break: CPython validates a cached .pyc against the source's
+# (mtime, size) pair, and mtime has one-second granularity - so a mutant that is written
+# within the same second AND is the same byte length as the file it replaces is
+# indistinguishable from it to the cache validator. Measured over the six modules in
+# TARGETS at the time of writing: 46 of 121 generated mutants (38%) are byte-length
+# preserving, which is more than enough for that - the exact split moves with the source
+# but the hazard does not. (Note what is NOT length preserving, since the old text got
+# both examples wrong: the operator table maps `<` -> `>=`, never `<` -> `>`, and
+# `and` -> `or` is three characters to two.)
+#
+# PYTHONDONTWRITEBYTECODE=1 below is DEFENCE IN DEPTH, not the defence. It applies to
+# this parent process, which never imports a target module. The actual defences both
+# live in scripts/mutation_test.py and apply regardless of how it is invoked:
+#   * run_tests() passes `-B` AND sets PYTHONDONTWRITEBYTECODE=1 in the child's env -
+#     either alone already disables bytecode writing;
+#   * sweep_module() deletes every __pycache__ under vntyper/ after writing each mutant
+#     and before running its tests, so no cache from an earlier mutant or an earlier run
+#     can be picked up.
+# Keeping the variable here costs nothing and documents the intent at the call site.
+# The full explanation is in that file's module docstring.
 #
 # While this runs, vntyper/scripts/*.py is REWRITTEN IN PLACE, so do not build, package
 # or install from the tree: a docker build, pip install or python -m build started
@@ -448,7 +491,7 @@ ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-cove
 	@echo "$(GREEN)========================================$(RESET)"
 	@echo "Verified here: workflow syntax, format, lint, mypy, unit tests + coverage, docs."
 	@echo "NOT verified here (CI only):"
-	@echo "  - the Python 3.9-3.12 matrix; this ran your interpreter only"
+	@echo "  - the Python 3.10-3.13 matrix (ci-tests.yml); this ran your interpreter only"
 	@echo "  - the Docker image jobs -> run 'make ci-local-docker'"
 
 # Files whose contents define the base image. CI hashes exactly this set; keep in sync

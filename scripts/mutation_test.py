@@ -14,12 +14,35 @@ This harness makes that measurement reproducible. It:
 0. Refuses to start unless every target file is committed - it rewrites the live tree
    and restores the text it read at the start, which is only the committed text if the
    tree was clean. See ``mutation_guard``.
+0b. Refuses to start unless the tests it is about to judge mutants by **pass on the
+   unmutated tree**. See "The green-baseline preflight" below.
 1. Tokenizes each target module and generates one mutant per mutable token.
 2. Discards mutants that do not compile (e.g. ``*args`` -> ``/args``).
 3. Writes each mutant over the real file, runs the tests, and restores the original.
 4. Counts a mutant as **killed** if the tests fail, **survived** if they pass.
 
 A survivor is a defect the suite cannot see. The score is ``killed / total``.
+
+The green-baseline preflight
+----------------------------
+Step 4 is the whole measurement and it reads a single bit: pytest's return code. It
+cannot tell "this mutant broke a test" from "this repository was already broken" - an
+unrelated failing test, a collection error, a missing dependency, an import-time crash
+or a timeout all return non-zero, and every one of them would be recorded as a kill.
+A sufficiently broken environment therefore scores **100%**, prints a triumphant report
+and overwrites the committed evidence page with it.
+
+So :func:`baseline_refusal` runs, before a single byte is mutated, exactly the pytest
+invocations the sweep will use to judge mutants:
+
+* each selected target's scoped test files, serially, as the kill check does; and
+* the whole unit tier in parallel, as the survivor escalation does - a broken full-tier
+  run is the *more* dangerous of the two, because it converts every genuine survivor
+  into a phantom "killed (full tier)".
+
+If any of them fails the run aborts with the captured pytest output, and nothing is
+written. This is not hypothetical: the ``.pyc`` warning below records two sweeps on this
+branch whose results were entirely fictional.
 
 Scoping and accuracy
 --------------------
@@ -40,22 +63,42 @@ number printed here. Use it to find untested decisions, not as a pass/fail thres
    **The ``.pyc`` trap - read this before changing how mutants are written.**
 
    Two mutation sweeps on this branch produced fictional results before this was found.
-   Most mutations here are byte-length preserving (``<`` -> ``>``, ``and`` -> ``or``),
-   and CPython validates a cached ``.pyc`` against the source's **(mtime, size)** pair,
-   where mtime has one-second granularity. A mutant written within the same second as
-   the file it replaces therefore has an identical (mtime, size) - so the interpreter
-   considers the stale ``.pyc`` valid, loads the **unmutated** bytecode, and the tests
-   pass. Every mutant "survives" and the score is garbage.
+
+   **The invariant: no child process may load bytecode generated for a different
+   revision of a target module.** Everything below exists to hold that, and nothing
+   below is worth defending on its own terms.
+
+   Why it is easy to break: CPython validates a cached ``.pyc`` against the source's
+   **(mtime, size)** pair, and mtime has one-second granularity. A mutant that is
+   written within the same second as the file it replaces *and* is the same byte length
+   therefore has an identical (mtime, size), the interpreter considers the stale
+   ``.pyc`` valid, loads the **unmutated** bytecode, and the tests pass. Every such
+   mutant "survives" and the score is garbage.
+
+   How much of the mutant population that covers, measured rather than asserted: over
+   the six modules in :data:`TARGETS` at the time of writing, **46 of 121** generated
+   mutants (38%) were byte-length preserving. Not most - but far more than enough, and
+   they are the threshold flips (``==`` -> ``!=``, ``-`` -> ``+``, ``1`` -> ``2``) that
+   matter most. The exact split moves with the source; the hazard does not.
+
+   Two examples that were previously given here are wrong and are corrected so nobody
+   re-derives the rule from them: :data:`OPERATOR_MUTATIONS` maps ``<`` -> ``>=``, so
+   the harness never performs ``<`` -> ``>``; and ``and`` -> ``or`` is three characters
+   to two, which *changes* the size and so is caught by the cache validator anyway.
 
    Two defences, both required and both applied below:
-     * ``PYTHONDONTWRITEBYTECODE=1`` plus ``python -B`` in the child, so no ``.pyc`` is
-       written during the run at all; and
-     * every ``__pycache__`` under the target tree is deleted before the sweep starts,
-       so no ``.pyc`` written by an earlier run can be picked up either.
+     * ``python -B`` **and** ``PYTHONDONTWRITEBYTECODE=1`` in the child, so no ``.pyc``
+       is written during the run at all. Either flag alone already disables bytecode
+       writing; :func:`run_pytest` sets both, unconditionally, so the defence does not
+       depend on how the harness was invoked. The ``PYTHONDONTWRITEBYTECODE=1`` on the
+       ``make mutation`` recipe is defence in depth for the *parent*, which never
+       imports a target module - it is not what holds the invariant.
+     * every ``__pycache__`` under ``vntyper/`` is deleted before the sweep starts *and*
+       again after each mutant is written, immediately before its tests run - so no
+       ``.pyc`` from an earlier run or an earlier mutant can be picked up either.
 
-   Neither alone is sufficient: the env var stops new caches, the deletion stops old
-   ones. Do not remove either, and do not "optimise" the sweep by leaving caches in
-   place.
+   Neither alone is sufficient: the flags stop new caches, the deletion stops old ones.
+   Do not remove either, and do not "optimise" the sweep by leaving caches in place.
 
 Usage:
     python scripts/mutation_test.py                       # all targets
@@ -385,9 +428,24 @@ def clear_bytecode_caches(root: Path) -> int:
     return removed
 
 
-def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> bool:
+@dataclass(frozen=True)
+class TestRun:
     """
-    Run pytest over the given paths and report whether the suite passed.
+    The outcome of one pytest invocation, including what it printed.
+
+    The sweep only needs :attr:`passed`, but the preflight needs :attr:`output`: a
+    refusal that says "the baseline is red" without saying *how* is a refusal nobody can
+    act on, and discarding the output is what let a broken environment look like a
+    perfect score for as long as it did.
+    """
+
+    passed: bool
+    output: str
+
+
+def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> TestRun:
+    """
+    Run pytest over the given paths and return the outcome and the captured output.
 
     Args:
         test_paths (tuple[str, ...]): Test files or directories to run.
@@ -397,15 +455,18 @@ def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False)
             that xdist's worker startup would cost more than it saves.
 
     Returns:
-        bool: True if every test passed. A timeout counts as a failure - a mutant that
-            sends the suite into an infinite loop has been detected, not missed.
+        TestRun: ``passed`` is True only if pytest exited 0. A timeout counts as a
+            failure - a mutant that sends the suite into an infinite loop has been
+            detected, not missed - and reports that fact in ``output``.
 
     Note:
         ``-B`` and ``PYTHONDONTWRITEBYTECODE`` are the other half of the ``.pyc``
-        defence. ``-p no:cacheprovider`` keeps pytest from writing ``.pytest_cache``
+        defence, and either alone would disable bytecode writing; both are set so that
+        the invariant does not depend on how the harness was invoked.
+        ``-p no:cacheprovider`` keeps pytest from writing ``.pytest_cache``
         entries that would make ``--lf`` behave differently between mutants, and
         ``-o log_cli=false`` suppresses the live log pytest.ini turns on, which is pure
-        overhead when the output is captured and discarded.
+        overhead during the sweep itself.
     """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -441,8 +502,98 @@ def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False)
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return False
-    return completed.returncode == 0
+        return TestRun(passed=False, output=f"pytest exceeded the {timeout}s timeout and was abandoned.")
+    # `or ""` because a subprocess double may leave these unset; a missing stream is not
+    # a reason for the preflight to crash instead of reporting.
+    output = (completed.stdout or "") + (completed.stderr or "")
+    return TestRun(passed=completed.returncode == 0, output=output)
+
+
+def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> bool:
+    """
+    Run pytest and report only whether it passed.
+
+    The sweep's kill check is exactly this bit, so it gets its own name; everything that
+    needs the output calls :func:`run_pytest` directly.
+
+    Args:
+        test_paths (tuple[str, ...]): Test files or directories to run.
+        timeout (int): Seconds before the run is abandoned.
+        parallel (bool): Distribute across cores with xdist.
+
+    Returns:
+        bool: True if every test passed.
+    """
+    return run_pytest(test_paths, timeout, parallel).passed
+
+
+def format_baseline_refusal(label: str, test_paths: tuple[str, ...], output: str) -> str:
+    """
+    Render the refusal printed when the unmutated tree does not pass its own tests.
+
+    Args:
+        label (str): What was being checked - a target path, or the escalation tier.
+        test_paths (tuple[str, ...]): The pytest arguments that failed.
+        output (str): Everything pytest printed, verbatim.
+
+    Returns:
+        str: The message to print on stderr before exiting non-zero.
+    """
+    return "\n".join(
+        [
+            "REFUSING TO SWEEP: the tests failed on the UNMUTATED tree.",
+            "",
+            f"  checking: {label}",
+            f"  pytest:   {' '.join(test_paths)}",
+            "",
+            "A mutant is recorded as KILLED whenever pytest exits non-zero, and pytest",
+            "exits non-zero for an unrelated failure, a collection error, a missing",
+            "dependency or a timeout just as readily as for a detected mutant. Sweeping",
+            "now would score those as kills and publish the result - a broken checkout",
+            "scores 100%.",
+            "",
+            "Fix the failure below, then re-run. Nothing has been mutated or written.",
+            "",
+            "-" * 70,
+            output.rstrip() or "(pytest produced no output)",
+            "-" * 70,
+        ]
+    )
+
+
+def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str | None:
+    """
+    Run the sweep's own test invocations against the unmutated tree.
+
+    Both invocations the sweep uses are checked, because both feed the score and they
+    fail independently:
+
+    * the scoped run per target decides ``killed``;
+    * the parallel full-tier run decides whether a scoped survivor is *recorded* as a
+      survivor, so if it is broken every genuine gap silently becomes a kill.
+
+    Args:
+        targets (dict[str, tuple[str, ...]]): The targets this run will sweep, mapped to
+            their scoped test files. Narrowed by ``--module`` exactly as the sweep is.
+        timeout (int): Per-pytest-run timeout in seconds.
+
+    Returns:
+        str | None: The refusal to print, or ``None`` when every check passed. Returned
+            rather than raised so ``main()`` keeps its single exit point.
+    """
+    checks: list[tuple[str, tuple[str, ...], bool]] = [
+        (f"{path_str} (scoped kill check)", scoped, False) for path_str, scoped in targets.items()
+    ]
+    # Last, because it is the slow one and a scoped failure is the cheaper diagnosis.
+    checks.append(("full unit tier (survivor escalation)", ("tests/unit",), True))
+
+    for label, test_paths, parallel in checks:
+        print(f"  baseline: {label} ...", end="", flush=True)
+        run = run_pytest(test_paths, timeout, parallel=parallel)
+        print(" ok" if run.passed else " FAILED", flush=True)
+        if not run.passed:
+            return format_baseline_refusal(label, test_paths, run.output)
+    return None
 
 
 def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, verbose: bool) -> ModuleResult:
@@ -477,6 +628,12 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
     try:
         for index, mutant in enumerate(mutants, start=1):
             path.write_text(mutant.source, encoding="utf-8")
+            # Between writing the mutant and running its tests, every time - not once at
+            # the start. This is half the `.pyc` invariant in the module docstring: the
+            # child must not be able to load bytecode built from the previous mutant, or
+            # from the original, both of which can share this file's (mtime, size).
+            # tests/unit/test_mutation_test.py::test_no_bytecode_cache_survives_into_any_mutants_test_run
+            # is the only thing that notices if this line goes.
             clear_bytecode_caches(REPO_ROOT / "vntyper")
 
             if not run_tests(scoped_tests, timeout):
@@ -740,18 +897,33 @@ def format_markdown(results: list[ModuleResult], elapsed: float) -> str:
     out.append("the full unit tier before recording it as a survivor, so the score is not")
     out.append("biased by the scoping.")
     out.append("")
-    out.append('!!! danger "`PYTHONDONTWRITEBYTECODE=1` is load-bearing"')
+    out.append("Before it mutates anything it runs those same pytest invocations against the")
+    out.append("**unmutated** tree and aborts unless they pass, printing the failure. A mutant")
+    out.append("is counted as killed whenever pytest exits non-zero, and pytest exits non-zero")
+    out.append("for an unrelated failure, a collection error or a missing dependency just as")
+    out.append("readily - so without that preflight a broken checkout scores 100% and")
+    out.append("overwrites this page with the result.")
     out.append("")
-    out.append("    Most mutations here are byte-length preserving (`<` to `>`, `and` to")
-    out.append("    `or`), and CPython validates a cached `.pyc` against the source's")
-    out.append("    `(mtime, size)` pair with one-second mtime granularity. A mutant written")
-    out.append("    in the same second as the file it replaces is therefore")
-    out.append("    indistinguishable from it to the cache validator: the interpreter loads")
-    out.append("    the stale `.pyc`, runs the **unmutated** code, every mutant *survives*")
-    out.append("    and the score is fiction. Two sweeps produced exactly that before it was")
-    out.append("    found. The harness also deletes every `__pycache__` before it starts -")
-    out.append("    the environment variable stops new caches, the deletion stops old ones,")
-    out.append("    and both are required.")
+    out.append('!!! danger "No child may load bytecode built from a different revision"')
+    out.append("")
+    out.append("    That is the invariant. CPython validates a cached `.pyc` against the")
+    out.append("    source's `(mtime, size)` pair with one-second mtime granularity, so a")
+    out.append("    mutant written in the same second as the file it replaces **and of the")
+    out.append("    same byte length** (`==` to `!=`, `1` to `2`) is indistinguishable from")
+    out.append("    it to the cache validator: the interpreter loads the stale `.pyc`, runs")
+    out.append("    the **unmutated** code, every such mutant *survives* and the score is")
+    out.append("    fiction. Two sweeps produced exactly that before it was found.")
+    out.append("")
+    out.append("    Two defences hold it, and both are required. `run_pytest()` passes")
+    out.append("    `python -B` and sets `PYTHONDONTWRITEBYTECODE=1` in the child, so no")
+    out.append("    `.pyc` is written during the run; and every `__pycache__` under")
+    out.append("    `vntyper/` is deleted before the sweep starts and again after each")
+    out.append("    mutant is written, so none left by an earlier run or an earlier mutant")
+    out.append("    can be loaded. The flags stop new caches, the deletion stops old ones.")
+    out.append("")
+    out.append("    The `PYTHONDONTWRITEBYTECODE=1` on the `make mutation` recipe is defence")
+    out.append("    in depth for the parent process, which never imports a target module -")
+    out.append("    it is not what holds the invariant, and the harness is safe without it.")
     out.append("")
     out.append('!!! danger "Nothing may build or install from the tree while a sweep runs"')
     out.append("")
@@ -963,8 +1135,11 @@ def main() -> int:
     Run the mutation sweep and print the report.
 
     Returns:
-        int: Always 0. This measurement is advisory and must never fail a build - see
-            the module docstring for why gating on it would be wrong.
+        int: 0 when a sweep actually happened and the tree was restored afterwards.
+            **Non-zero means no usable measurement was produced**, never "the score is
+            too low": the refusals are a dirty working tree, a red baseline, a git that
+            cannot answer, and a target left unrestored. The score itself is advisory and
+            is not gated - see the module docstring for why gating on it would be wrong.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--module", help="Only mutate targets whose path contains this substring.")
@@ -1023,6 +1198,18 @@ def main() -> int:
     # cache from an earlier sweep is enough on its own to make every mutant "survive".
     removed = clear_bytecode_caches(REPO_ROOT / "vntyper")
     print(f"Cleared {removed} __pycache__ directories before starting.")
+
+    # A mutant is "killed" whenever pytest exits non-zero, so a suite that is already red
+    # scores every mutant as a kill and publishes a fictional 100%. Prove the tests pass
+    # on the unmutated tree first, using the same invocations the sweep will use. This
+    # runs AFTER the cache clear so the baseline is measured under the same conditions
+    # the mutants will be, and BEFORE `time.monotonic()` so its cost is not reported as
+    # sweep duration.
+    print("Checking the baseline: the tests must pass on the UNMUTATED tree.")
+    refusal = baseline_refusal(targets, args.timeout)
+    if refusal is not None:
+        print(f"\n{refusal}", file=sys.stderr)
+        return 1
 
     start = time.monotonic()
     results = [sweep_module(p, t, args.timeout, args.verbose) for p, t in targets.items()]

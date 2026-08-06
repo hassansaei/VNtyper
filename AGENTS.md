@@ -115,9 +115,20 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   `utils.py` configures the root logger once, and module loggers propagate to it.
   f-strings in log calls are the established style here.
 - Errors: no custom exception classes. The convention is `logger.error(msg)` followed
-  by `raise ValueError(msg)` / `RuntimeError(msg)` with the same message. Only exit
-  codes 0 and 1 are used. `except Exception` at stage and process boundaries is
-  intentional, not an oversight.
+  by `raise ValueError(msg)` / `RuntimeError(msg)` with the same message.
+  `except Exception` at stage and process boundaries is intentional, not an oversight.
+- Exit codes: **the code that ran to a conclusion uses 0 and 1** — every `sys.exit()` in
+  `cli.py` and `cli_handlers.py` is one of those two. **Argument and usage errors exit
+  with argparse's 2**, and there are two ways to get there: an unknown subcommand or a
+  bad option, rejected by `parse_args()` (`vntyper fastq` → `invalid choice`, exit 2);
+  and `parser.error(...)` in `handle_pipeline()` for conflicting or missing inputs
+  (`--bam` together with `--cram`, or FASTQ without both mates), which also exits 2.
+  Both were verified by running them. So: do not claim the CLI only ever exits 0 or 1 —
+  claim that *completed application outcomes* are 0/1 and that argparse owns 2.
+  (`parser.error()` never returns, so the `sys.exit(1)` lines immediately after the two
+  calls in `cli_handlers.py` are unreachable. Leave them or remove them deliberately;
+  do not "fix" the exit code by routing usage errors through them without deciding that
+  the contract should change.)
 - Type hints are partial. Newer modules (`reference_registry`, `region_utils`,
   `scoring`, `flagging`) are fully annotated — match that when editing them.
 
@@ -280,10 +291,19 @@ limit.
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
   `--strict-markers` additionally turns a *misspelled* marker into an error.
 - Unit tests must stay pure: `tmp_path` + `unittest.mock`, no network, no reference data.
-- Integration and docker tests pull a ~1.1 GB Zenodo archive and MD5 all 114 files; one
-  missing file triggers a full re-download. There are **no** `pytest.skip` guards
-  anywhere — missing data calls `pytest.exit()` and kills the whole session, unit tests
-  included. Set `VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1` to fail fast instead of downloading.
+- Integration and docker tests pull a ~1.1 GB Zenodo archive and MD5 all 114
+  `file_resources` entries; one missing file triggers a full re-download.
+  **The test-data bootstrap has no skip fallback**: `tests/conftest.py` and
+  `tests/support/data_utils.py` call `pytest.exit(..., returncode=1)` on missing config,
+  a missing Kestrel JAR or a failed download, which ends the whole session — unit tests
+  included — rather than skipping the tier that needs the data. Set
+  `VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1` to fail fast instead of downloading.
+  (Skips do exist elsewhere and are fine: `tests/docker/test_image_structure.py` carries
+  a module-level `pytest.mark.skipif` on the Docker daemon plus a `pytest.skip` when the
+  image is not present locally, and `test_version_consistency.py`,
+  `test_workflow_consistency.py` and `test_integration_tier_hygiene.py` skip on files
+  that are absent from a partial checkout. The old blanket claim that there are no
+  `pytest.skip` guards *anywhere* was simply false — do not restore it.)
 - Correct marker composition is `-m "docker and not slow"`; repeated `-m` flags override
   rather than combine.
 - The Docker tier runs at three depths, chosen by how much signal each buys for its
@@ -321,10 +341,19 @@ limit.
    argument. `--config-path` cannot override them; tests must patch the module global.
 2. **`--config-path` replaces the whole config, it does not merge.** Missing keys raise
    `KeyError` deep in the pipeline (`config["tools"]["java_path"]`, no `.get`).
-3. **Rule strings are `eval()`d against DataFrame column names.** `flagging.py` and
-   `cross_match.py` evaluate expressions from `kestrel_config.json`,
-   `advntr_config.json` and `config.json`. Renaming a column silently turns flags off —
-   a `NameError` only logs a warning. Grep the JSON configs before renaming any column.
+3. **Rule strings are `eval()`d against DataFrame column names, and the two modules that
+   do it now behave differently.** Grep the JSON configs before renaming any column.
+   - `flagging.py` (`evaluate_condition`) evaluates the flag conditions that
+     `kestrel_genotyping.py` and `advntr_genotyping.py` read out of
+     `kestrel_config.json` and `advntr_config.json`. It still **fails open**: a
+     `NameError` logs `logger.warning(...)` and returns `False`, and any other exception
+     logs `logger.error(...)` and returns `False`. So renaming a column silently turns a
+     flag off, and the run still exits 0. This is the trap.
+   - `cross_match.py` (`match_variants`) evaluates `config["cross_match"]["match_logic"]`
+     from `config.json`. It **no longer fails open** — commit `5ee1e4a` made it
+     `logger.error(msg)` then `raise ValueError(msg)`, on `NameError`/`SyntaxError` and on
+     every other exception alike, because "no match" and "could not be evaluated" are
+     indistinguishable in the report. A bad rule there now stops the run.
 4. **Stages mark, they do not filter.** Kestrel stages append boolean columns
    (`is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass`,
    `motif_filter_pass`); `filter_final_dataframe()` ANDs them at the end. Preserve that
@@ -348,12 +377,24 @@ limit.
     is rebuilt only by `docker-base.yml` when `conda/**`, `requirements-web.txt`,
     `install_references*` or `dependencies/advntr/**` change. `docker/Dockerfile` holds
     only the application and builds on top in ~3 min. Both workflows compute the same
-    `hashFiles()` tag, so changing a base input without publishing a new base makes the
-    app build **fail loudly** with a missing tag rather than silently using a stale base.
-    To change a base input: merge to `main` (or run `docker-base.yml` via
-    `workflow_dispatch`) so the base publishes first. Locally:
+    `hashFiles()` tag, so a base input can never be changed and then silently built
+    against a stale base. What happens when the tag is missing depends on **who is
+    running the workflow**, and the two paths are very different:
+    - **Same-repository run** (push, or a PR from a branch in this repo): the
+      `base-status` job records `missing=true`, the `build-base` job calls the reusable
+      `./.github/workflows/docker-base.yml` and publishes the base, and `build-and-test`
+      waits on it. No manual step, no failure — just a slow run.
+    - **Fork PR**: a fork's `GITHUB_TOKEN` is read-only and cannot push to GHCR, so
+      `base-status` fails the run with an explicit error. That is the only case where
+      "a maintainer must run `docker-base.yml` via `workflow_dispatch`, or merge the base
+      change first" applies.
+
+    Locally, neither path exists — build the base yourself:
     `make docker-build-base && make docker-build DOCKER_BASE_IMAGE=vntyper-base:local`.
-    (This replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
+    `make ci-local-docker` refuses to run against the published `:latest` base when you
+    have edited a base input, for the same reason.
+
+    (The split replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
@@ -396,12 +437,18 @@ limit.
     `numpy=2.0.2`, which satisfies it) — but they are still resolved by two different
     solvers, so `--no-deps` stays.
 16. **`scripts/` is linted and formatted but is not type-checked.** `RUFF_PATHS` covers
-    `vntyper/ docker/app/ tests/ scripts/`, but `make type-check-all` runs
+    `vntyper/ docker/app/ tests/ scripts/ docs/`, but `make type-check-all` runs
     `mypy vntyper/ docker/app/` and then `mypy vntyper/ tests/` — `scripts/` appears in
-    neither, so nothing under it is type-checked by any gate. That is now ~3200 lines
-    including the golden-cohort harness, the coverage gate and the mutation runner.
-    Adding `scripts/` to the first mypy invocation is a one-line change and currently
-    surfaces exactly one pre-existing error
+    neither, so nothing under it is type-checked by any gate. That is now **over 5,000
+    lines** — re-measure with `find scripts -name '*.py' | xargs wc -l`; it read 5,048
+    across 13 files when this was written, and it is still growing. Roughly 3,200 of
+    those arrived on this branch (`git diff --numstat origin/main...HEAD -- scripts/`:
+    3,212 added, 45 removed) — the golden-cohort harness, the adVNTR `LEN` differential
+    and the mutation runner's growth; the coverage gate, the test-data downloader and
+    `mutation_guard.py` predate it. The figure quoted here has been wrong before, which
+    is why the command is given rather than just the number.
+    Adding `scripts/` to the first mypy invocation is a one-line
+    change and still surfaces exactly one pre-existing error
     (`scripts/download_test_data.py:147: Need type annotation for "dir_counts"`);
     fix that first, then widen the target.
 

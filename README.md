@@ -43,15 +43,16 @@
   - No `setup.py` required - fully compatible with pip ≥21.3.
   - Provides Conda environment setup for easy dependency management.
 
-- **Subcommands:**
-  - `install-references`
-  - `pipeline`
-  - `fastq`
-  - `bam`
-  - `kestrel`
-  - `report`
-  - `cohort`
-  - `online`
+- **Subcommands** (the complete list `vntyper --help` prints):
+  - `pipeline` --- run the full pipeline on a BAM, CRAM or FASTQ pair
+  - `report` --- regenerate the summary report from an existing output directory
+  - `cohort` --- aggregate several run directories into one cohort summary
+  - `install-references` --- download and index the reference files
+  - `online` --- subset a BAM and submit it to a hosted VNtyper instance
+
+  There is no `fastq`, `bam` or `kestrel` subcommand. FASTQ and BAM/CRAM are *input
+  options* to `pipeline` (`--fastq1/--fastq2`, `--bam`, `--cram`), and Kestrel is a stage
+  inside `pipeline` rather than something you invoke directly.
 
 ---
 
@@ -217,7 +218,8 @@ VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following
 
 VNtyper 2.0 relies on several tools and Python libraries. Ensure that the following dependencies are available in your environment:
 
-- Python >= 3.9  
+- Python >= 3.10 (`requires-python` in `pyproject.toml`; CI covers 3.10-3.13, and the
+  Docker image runs the 3.12.13 pinned by `conda/environment_vntyper.yml`)  
 - BWA  
 - Samtools  
 - Fastp  

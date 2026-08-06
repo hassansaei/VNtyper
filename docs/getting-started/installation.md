@@ -6,7 +6,7 @@ VNtyper 2 requires the following to be installed on your system:
 
 | Dependency   | Minimum Version | Purpose                          |
 |-------------|-----------------|----------------------------------|
-| Python      | 3.9+            | Core runtime                     |
+| Python      | 3.10+           | Core runtime                     |
 | Java        | 11+             | Kestrel genotyping engine        |
 | BWA         | 0.7.18+         | Read alignment                   |
 | samtools    | 1.20+           | BAM/CRAM manipulation            |
@@ -51,7 +51,7 @@ VNtyper 2 requires the following to be installed on your system:
     pip install -e .
     ```
 
-    The `environment_vntyper.yml` includes Python 3.9, BWA, samtools, fastp, OpenJDK 11, and all Python dependencies.
+    The `environment_vntyper.yml` pins Python 3.12.13 and includes BWA, samtools, fastp, OpenJDK 11, and all Python dependencies. That pin is what the Docker image runs; the package itself declares `requires-python = ">=3.10"`, and CI tests 3.10 through 3.13.
 
     Additional environment files are available for optional modules:
 
