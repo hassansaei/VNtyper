@@ -143,20 +143,94 @@ def _relative_named_paths(harness) -> set[str]:
     return found
 
 
-def _string_constants(module) -> set[str]:
-    """Return every string literal in ``module``'s source.
+def _string_constants_in_source(source: str) -> set[str]:
+    """Return every string literal in ``source``, **excluding docstrings**.
 
-    Uses the AST so a docstring mentioning a filename is not confused with a
-    literal used to build one.
+    ``ast.Constant`` covers docstrings too -- they are expression statements holding
+    a string -- so an unfiltered walk cannot tell a filename the code *uses* from one
+    a docstring merely *mentions*. ``generate_report``'s ``load_fastp_output``
+    docstring says "e.g., output.json" while the production read is a single literal
+    at ``generate_report.py:435``; without this filter, deleting that read left the
+    test green on the strength of the prose.
+
+    Args:
+        source: Python source text.
+
+    Returns:
+        set[str]: The string constants the code evaluates.
+    """
+    tree = ast.parse(source)
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
+    }
+
+
+def _string_constants(module) -> set[str]:
+    """:func:`_string_constants_in_source` applied to an imported module.
 
     Args:
         module: The imported module to parse.
 
     Returns:
-        set[str]: The string constants.
+        set[str]: The string constants the module's code evaluates.
     """
-    tree = ast.parse(inspect.getsource(module))
-    return {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+    return _string_constants_in_source(inspect.getsource(module))
+
+
+PROSE_PROBE = '''"""Module doc naming only_in_module_doc.tsv."""
+
+
+class C:
+    """Class doc naming only_in_class_doc.tsv."""
+
+
+def f():
+    """Function doc naming only_in_func_doc.tsv."""
+    return "a_real_literal.tsv"
+'''
+
+
+def test_the_string_constant_scan_ignores_docstrings() -> None:
+    """Guard the guard: a scan that reads prose proves nothing about the code."""
+    constants = _string_constants_in_source(PROSE_PROBE)
+
+    assert constants == {"a_real_literal.tsv"}, f"a docstring leaked into the scan: {sorted(constants)}"
+
+
+def test_the_scan_still_sees_a_docstrings_worth_of_text_elsewhere() -> None:
+    """The filter must drop docstrings, not every long string."""
+    constants = _string_constants_in_source('x = """not a docstring, an assignment"""\n')
+
+    assert constants == {"not a docstring, an assignment"}
+
+
+def test_generate_report_mentions_the_fastp_basename_in_prose_as_well_as_in_code() -> None:
+    """The concrete case F4 named: without the filter this module passes on its docstring.
+
+    ``load_fastp_output``'s docstring says "e.g., output.json" and the only production
+    read spells the whole relative path. If the filter regressed, the bare basename
+    would reappear in the scan and deleting line 435 would no longer fail anything.
+    """
+    source = inspect.getsource(generate_report)
+
+    assert "output.json" in source, "the fastp basename left generate_report entirely"
+    assert "output.json" not in _string_constants(generate_report), (
+        "the bare basename is only in a docstring; if the scan sees it, the docstring filter is broken"
+    )
+    assert "fastq_bam_processing/output.json" in _string_constants(generate_report), (
+        "the production read at generate_report.py:435 is gone; the report has lost its fastp metrics"
+    )
 
 
 # --------------------------------------------------------------------------------------

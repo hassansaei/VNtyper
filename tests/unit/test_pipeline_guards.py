@@ -246,12 +246,20 @@ def test_a_mismatched_cram_stops_too(tmp_path: Path) -> None:
     assert not harness.stages["process_bam_to_fastq"].called
 
 
-def test_a_cram_whose_header_cannot_be_read_still_runs(tmp_path: Path) -> None:
-    """The case the try/except exists for: an unresolvable CRAM reference.
+def test_an_unreadable_cram_header_does_not_stop_the_pipeline_at_the_guard(tmp_path: Path) -> None:
+    """The guard must not turn an unreadable header into a refusal.
 
-    ``extract_bam_header`` runs samtools with ``check=True``, so a CRAM whose
-    reference cannot be found raises ``CalledProcessError`` - which is neither
-    ``KeyError`` nor ``ValueError``, so the existing region fallback does not catch it.
+    ``extract_bam_header`` runs samtools with ``check=True``, so a CRAM whose reference
+    cannot be found raises ``CalledProcessError`` - neither ``KeyError`` nor
+    ``ValueError``, so the existing region fallback does not catch it. The guard has to
+    swallow it and reach an `undetermined` verdict rather than a `mismatch`.
+
+    **What this proves, and what it does not.** Every stage is a recorder in this
+    harness: region resolution, BAM-to-FASTQ conversion and Kestrel itself are all
+    stubbed. Reaching ``run_kestrel`` therefore shows only that nothing between the
+    header read and Kestrel raised or exited - it is not evidence that a real CRAM with
+    an unresolvable reference produces a genotype. That question belongs to the
+    integration tier, which has no such fixture.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -353,16 +361,61 @@ def test_the_guard_runs_after_input_validation(tmp_path: Path) -> None:
     assert not harness.stages["read_alignment_header"].called
 
 
-def test_the_pure_verdict_function_still_has_no_policy() -> None:
-    """``assembly_guard`` stays pure; the policy lives here and is revertible alone."""
-    import ast
-    import inspect
+#: Inputs spanning every branch of the verdict, including the degenerate ones a real
+#: header can produce. Written out here rather than derived, so the sweep below cannot
+#: shrink silently.
+VERDICT_PROBE_INPUTS: list[tuple[str, list]] = [
+    ("hg19", [{"name": "chr1", "length": GRCH37_CHR1}]),
+    ("hg19", [{"name": "chr1", "length": GRCH38_CHR1}]),
+    ("hg38", [{"name": "1", "length": GRCH38_CHR1}]),
+    ("GRCh37", [{"name": "NC_000001.10", "length": GRCH37_CHR1}]),
+    ("not_a_registry_name", [{"name": "chr1", "length": GRCH37_CHR1}]),
+    ("hg19", []),
+    ("hg19", [{}]),
+    ("hg19", [None]),
+    ("hg19", [{"name": "chr1"}]),
+    ("hg19", [{"name": "chr1", "length": None}]),
+    ("hg19", [{"name": "chr1", "length": "249250621"}]),
+    ("hg19", [{"name": "chr1", "length": 123}]),
+    ("hg19", [{"name": "chr1", "length": GRCH37_CHR1}, {"name": "1", "length": GRCH38_CHR1}]),
+    ("hg19", [{"name": "chr2", "length": 242193529}]),
+    ("", [{"name": "chr1", "length": GRCH37_CHR1}]),
+]
+
+
+def test_the_pure_verdict_function_still_has_no_policy(caplog) -> None:
+    """``assembly_guard`` stays non-fatal; the policy lives here and is revertible alone.
+
+    Asserted behaviourally rather than by scanning for the word ``raise``: a scan proves
+    only that the module contains no literal ``raise`` statement, which a call to
+    ``sys.exit`` or any fatal helper walks straight past. Drive every branch of the
+    verdict and assert what actually matters -- nothing escapes, nothing exits, and the
+    module never logs above DEBUG, because deciding how loud a verdict is belongs to the
+    caller.
+    """
+    import logging
 
     from vntyper.scripts import assembly_guard
 
-    tree = ast.parse(inspect.getsource(assembly_guard))
-    raises = [node for node in ast.walk(tree) if isinstance(node, ast.Raise)]
-    assert not raises, "assembly_guard must stay non-fatal; enforcement belongs in pipeline_guards"
+    assert len(VERDICT_PROBE_INPUTS) >= 12, "vacuity guard: the probe set shrank"
 
-    statuses = {STATUS_AGREE, STATUS_MISMATCH, STATUS_UNDETERMINED}
-    assert len(statuses) == 3, "the three statuses collapsed; the tests above would be vacuous"
+    statuses = set()
+    with caplog.at_level(logging.DEBUG, logger=assembly_guard.logger.name):
+        for declared, contigs in VERDICT_PROBE_INPUTS:
+            try:
+                verdict = assembly_guard.reconcile_assembly(declared, contigs)
+            except SystemExit as exc:  # pragma: no cover - the defect this test exists for
+                pytest.fail(f"reconcile_assembly({declared!r}, {contigs!r}) exited: {exc}")
+            except BaseException as exc:  # noqa: BLE001  # pragma: no cover
+                pytest.fail(f"reconcile_assembly({declared!r}, {contigs!r}) raised {exc!r}")
+            assert verdict.message, "every verdict must carry a message the caller can log"
+            statuses.add(verdict.status)
+
+    assert statuses == {STATUS_AGREE, STATUS_MISMATCH, STATUS_UNDETERMINED}, (
+        f"the probe set no longer reaches every branch: {sorted(statuses)}"
+    )
+
+    own_records = [r for r in caplog.records if r.name == assembly_guard.logger.name]
+    assert own_records, "the guard logged nothing at all; the caplog filter is wrong"
+    loud = [r for r in own_records if r.levelno > logging.DEBUG]
+    assert not loud, f"assembly_guard must stay quiet; the caller sets the level: {[r.getMessage() for r in loud]}"

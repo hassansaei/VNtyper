@@ -562,16 +562,34 @@ def test_nothing_new_is_marked_safe_in_the_template() -> None:
     assert marked <= set(SAFE_BY_DESIGN), f"newly unescaped values: {sorted(marked - set(SAFE_BY_DESIGN))}"
 
 
-def test_the_template_environment_autoescapes() -> None:
-    """Pinned at the source, because turning it back off is also a one-word edit
-    and every escaping test above would keep passing for the fragments."""
-    import inspect
+def test_the_template_environment_autoescapes(positive_summary, monkeypatch) -> None:
+    """The environment production *builds*, not the source that builds it.
+
+    This used to assert that ``generate_summary_report``'s source contained the substring
+    ``autoescape=`` -- which ``autoescape=False`` satisfies, so the assertion could not
+    fail for the reason it existed. Capture the real ``Environment`` instead and ask it
+    what it does with an HTML template name.
+    """
+    from jinja2 import Environment
 
     from vntyper.scripts import generate_report
 
-    source = inspect.getsource(generate_report.generate_summary_report)
-    assert "Environment(" in source, "the environment vanished; this assertion would be vacuous"
-    assert "autoescape=" in source
+    captured: list[Environment] = []
+    real_environment = generate_report.Environment
+
+    def spy(*args, **kwargs):
+        env = real_environment(*args, **kwargs)
+        captured.append(env)
+        return env
+
+    monkeypatch.setattr(generate_report, "Environment", spy)
+    render(positive_summary)
+
+    assert captured, "generate_summary_report built no Jinja2 environment; this test would be vacuous"
+    env = captured[0]
+    assert env.autoescape, "autoescaping is off; every |safe fragment is now the only thing escaped"
+    assert env.autoescape("report_template.html") is True, "an .html template must be autoescaped"
+    assert env.from_string("{{ v }}").render(v=PAYLOAD) == ESCAPED
 
 
 # ---------------------------------------------------------------------------

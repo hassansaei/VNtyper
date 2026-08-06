@@ -163,11 +163,23 @@ def test_ncbi_accessions_are_chromosome_specific(assembly: str, expected: list[s
     assert names == expected
 
 
-def test_ncbi_accessions_come_from_the_production_version_tables() -> None:
-    """Derived from production, so the builder cannot drift away from it."""
+def test_ncbi_accessions_do_not_drift_from_the_production_version_tables() -> None:
+    """**Circular by construction, and kept anyway** -- as a drift detector, not an oracle.
+
+    The builder calls ``_construct_ncbi_accession`` itself, so this can only fail if the
+    builder stops delegating; it can never catch an error the two share. The five
+    independently written accessions in
+    :func:`test_ncbi_accessions_are_chromosome_specific` above are the real assertion, and
+    they are what would catch a wrong version table. What this adds is coverage of
+    chromosomes 6-25, where no hand-written expectation exists: if someone reimplements the
+    builder's naming instead of delegating, the two diverge here.
+    """
     from vntyper.scripts.chromosome_utils import _construct_ncbi_accession
 
-    for number, contig in enumerate(bam_contigs(convention="ncbi", assembly="GRCh37", n_contigs=25), start=1):
+    contigs = bam_contigs(convention="ncbi", assembly="GRCh37", n_contigs=25)
+    assert len(contigs) == 25, "vacuity guard: the loop below would assert nothing"
+
+    for number, contig in enumerate(contigs, start=1):
         assert contig["name"] == _construct_ncbi_accession(number, "hg19")
 
 
