@@ -31,6 +31,43 @@ What it deliberately excludes, and why
 
 What this oracle does **not** cover
 -----------------------------------
+**Read this list as the limit of what a green run here proves.** It is not exhaustive by
+construction - it is exhaustive as far as anyone has looked - so treat it as the floor of
+the oracle's blind spots rather than the ceiling.
+
+* **Decision-logic paths the fixture never exercises. This is the important one.**
+  The fixture below produces 3 of the 5 Kestrel verdicts (`High_Precision`,
+  `Low_Precision_flagged`, and the `negative` default) and 2 of the 3 adVNTR verdicts
+  (`positive`, `positive flagged`). It never produces a bare `Low_Precision`, a
+  `High_Precision_flagged`, or an adVNTR `negative`. A change to how an unexercised
+  verdict is categorised therefore **passes this oracle and passes the escaping suite** -
+  demonstrated: mutating `unify_kestrel_result` so `Low_Precision` maps to `Negative`
+  instead of `Positive`, which would move a sample out of the positive segment of every
+  cohort donut chart in the field, is caught only by
+  `tests/unit/test_cohort_categories.py`.
+
+  So state the guarantee precisely: **this oracle proves equivalence over the paths the
+  fixture covers, plus - for the whole-function moves it was built to attest - byte
+  identity of the moved bodies.** A branch the fixture never reaches cannot have been
+  mis-transcribed if its body is unchanged, which is why the split it guards is sound
+  despite the gap. It is *not* blanket behavioural equivalence, and it must not be leant
+  on for a change that is anything other than a pure move. For those, the per-module
+  suites are the instrument.
+
+  Do **not** close this gap by adding fixture rows. It would churn the fingerprint for no
+  gain in what the oracle is actually for, and the categorisation paths already have
+  exhaustive direct coverage in `test_cohort_categories.py` and `test_cohort_rules.py`.
+
+  **Worked example, from this file's own history.** Which verdicts the fixture happens to
+  reach is not a detail - it decides whether a rule change is visible here at all. When
+  `report_config.json`'s adVNTR rule 2 gained the `VID != "Negative"` guard that rule 1
+  always had, the change was genotype-neutral across all five `(VID, Flag)` pairs the
+  pipeline can produce, and it still broke this fingerprint - because the fixture's
+  `sample_two` row was `VID="Negative"` with `Flag="Coverage_flagged"`, a state the
+  pipeline cannot produce and the one input the guard did move. The reverse holds just as
+  well: had the fixture used a different adVNTR row, a rule change that *was* observable
+  could have gone unseen. The row is now a reachable one, and the comment on it says so.
+
 * Zip-file inputs. `aggregate_cohort` extracts them to a temporary directory; the
   discovery half of that is pinned in `tests/unit/test_cohort_inputs.py` instead.
 * The order samples appear in. `aggregate_cohort` collects sample directories into a
@@ -39,6 +76,9 @@ What this oracle does **not** cover
   `test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today`.
 * Anything the pipeline writes *into* `pipeline_summary.json`. The oracle starts from a
   summary file, so a change in what `pipeline.py` records is invisible here.
+* Export column order. The fingerprint is taken from the HTML only; the CSV/TSV/JSON
+  headers are a different order entirely (`Sample` is twelfth, not first) and are pinned
+  in `tests/unit/test_cohort_exports.py`.
 """
 
 from __future__ import annotations
@@ -60,7 +100,29 @@ pytestmark = pytest.mark.unit
 
 #: The recorded fingerprint of the two-sample cohort report below. A refactor that
 #: changes this changed the report; that is the whole point of the number.
-EXPECTED_FINGERPRINT = "d82eb3745e5a8f1f118659d8e5853492ad1b5b7b2b424be11a54e1c79c1c28ee"
+#:
+#: It has moved once, and the reason is recorded here because a changed fingerprint with
+#: no explanation should be read as the worst case:
+#:
+#: * **Old**: ``d82eb3745e5a8f1f118659d8e5853492ad1b5b7b2b424be11a54e1c79c1c28ee``
+#: * **New**: ``9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645``
+#:
+#: **Cause: a fixture correction, not a behaviour change.** `sample_two`'s adVNTR row was
+#: `VID="Negative"` with `Flag="Coverage_flagged"` - a state the pipeline cannot produce
+#: (the only producer of `VID == "Negative"` sets `Flag = "Not applicable"` and never
+#: reaches `add_flags`; `Coverage_flagged` is not a flag `add_flags` can emit at all). It
+#: is now a reachable row: a real `VID="25561"` call flagged `Low_Coverage`. The trigger
+#: was `report_config.json`'s adVNTR rule 2 gaining the `VID != "Negative"` guard that
+#: rule 1 always had - genotype-neutral on all five `(VID, Flag)` pairs the pipeline can
+#: produce, and it moved only that unreachable row. See the comment on the row itself.
+#:
+#: **The refactor attestation does not rest on this constant and is not weakened by the
+#: re-derivation.** The old hash was independently verified against the *pre-split*
+#: 911-line `cohort_summary.py`: the reviewer reverted the file to its original state and
+#: ran this oracle unmodified, 27 passed. That proof is banked and stands on its own -
+#: `d82eb374...` is what the original implementation produced, and the five extracted
+#: modules reproduced it byte for byte.
+EXPECTED_FINGERPRINT = "9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
@@ -212,18 +274,31 @@ def _advntr_frame() -> pd.DataFrame:
                 "Flag": "Not flagged",
                 "Unlisted": "dropped",
             },
+            # A real call that the shipped flagging rules flagged. Every value here is
+            # one the pipeline can actually produce: `VID` is the hardcoded MUC1 VNTR
+            # locus id, and `Low_Coverage` is a flag name read straight off
+            # `advntr_config.json`'s `flagging_rules`, earned by the four supporting
+            # reads (its rule is `NumberOfSupportingReads < 10`).
+            #
+            # This row used to be `VID="Negative"` with `Flag="Coverage_flagged"` - a
+            # state the pipeline cannot produce twice over: the only producer of a
+            # `VID == "Negative"` row sets `Flag = "Not applicable"` and never reaches
+            # `add_flags`, and `Coverage_flagged` is not a string `add_flags` can emit
+            # at all. Modelling an impossible state held this fingerprint hostage to a
+            # rule about impossible inputs, and it duly broke when that rule was
+            # corrected. Keep this row reachable.
             {
                 "Sample": "sample_two",
-                "VID": "Negative",
-                "Variant": "Negative",
-                "NumberOfSupportingReads": "0",
+                "VID": "25561",
+                "Variant": "I22_G_GG",
+                "NumberOfSupportingReads": "4",
                 "MeanCoverage": "12",
-                "Pvalue": "1.0",
-                "RU": "None",
-                "POS": "None",
-                "REF": "None",
-                "ALT": "None",
-                "Flag": "Coverage_flagged",
+                "Pvalue": "0.04",
+                "RU": "GG",
+                "POS": "155188205",
+                "REF": "G",
+                "ALT": "GG",
+                "Flag": "Low_Coverage",
                 "Unlisted": "dropped",
             },
         ]
@@ -360,7 +435,8 @@ def test_the_donut_charts_carry_the_sample_level_counts(tmp_path) -> None:
     has a flagged low-precision call plus an unrecognised one, so it aggregates to
     Positive_Flagged - one Positive, one Positive_Flagged, no Negative.
 
-    adVNTR: `sample_one` is positive and `sample_two` is flagged.
+    adVNTR: `sample_one` is a clean call (Positive) and `sample_two` is a real call
+    carrying the `Low_Coverage` flag (Positive_Flagged) - the same one/one/zero split.
     """
     html = _render(tmp_path)
 

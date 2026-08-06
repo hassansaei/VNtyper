@@ -263,20 +263,33 @@ def test_the_shipped_kestrel_rules_produce_the_recorded_verdicts(confidence: str
     [
         ("25561", "Not flagged", "positive"),
         ("Negative", "Not flagged", "negative"),
-        ("25561", "Coverage_flagged", "positive flagged"),
-        ("Negative", "Coverage_flagged", "positive flagged"),
+        ("25561", "Low_Coverage", "positive flagged"),
+        ("Negative", "Low_Coverage", "negative"),
         ("Negative", "Not applicable", "negative"),
         ("Negative", "None", "negative"),
     ],
 )
 def test_the_shipped_advntr_rules_produce_the_recorded_verdicts(vid: str, flag: str, expected: str) -> None:
-    """The fourth case is characterisation of a live defect, not of intent.
+    """The verdicts the shipped rules produce, read out of `report_config.json` itself.
 
-    An adVNTR row with `VID == "Negative"` - the module's own way of saying "nothing
-    found" - is reported `positive flagged` as soon as its `Flag` is anything outside
-    the three excused values, because the second rule tests the flag alone and never
-    looks at the VID. See
-    `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cohort-advntr-negative-row-flagged-positive.md`.
+    The fourth case is the one to watch. Rule 2 (`"positive flagged"`) once guarded on
+    the flag alone while rule 1 (`"positive"`) guarded on both `VID != "Negative"` and
+    the flag, so on paper a `VID == "Negative"` row carrying any flag outside the three
+    excused values came out `"positive flagged"`. Rule 2 now carries the same `VID`
+    guard, and that case is `"negative"`.
+
+    The asymmetry was never reachable: both sentinel-row constructions set
+    `Flag = "Not applicable"`, which rule 2 excludes; neither is routed through
+    `add_flags`; and the shipped flagging rules cannot fire on sentinel values anyway.
+    So closing it moved no verdict the pipeline can produce - `tests/unit/test_advntr_rule_symmetry.py`
+    owns that property and enumerates all five reachable `(VID, Flag)` pairs. What this
+    parametrisation owns is the interpreter's output over the shipped table, case by
+    case. See
+    `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/issue-cohort-advntr-vid-column-overloaded.md`.
+
+    The flag strings here are real ones: `Low_Coverage` is a rule name from
+    `advntr_config.json`'s `flagging_rules`, which is what `add_flags` writes into the
+    column.
     """
     from vntyper.scripts.cohort_summary import load_report_config
 

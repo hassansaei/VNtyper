@@ -74,6 +74,10 @@
         },
         {
           "conditions": {
+            "VID": {
+              "operator": "!=",
+              "value": "Negative"
+            },
             "Flag": {
               "operator": "not in",
               "value": ["Not flagged", "Not applicable", "None"]
