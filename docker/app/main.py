@@ -42,7 +42,7 @@ from .cohorts import (
     resolve_cohort,
 )
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
-from .identifiers import is_job_id
+from .identifiers import canonical_id
 from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
 from .scratch_response import ScratchFileResponse
@@ -238,16 +238,21 @@ def require_job_id(job_id: str, detail: str = "Job ID not found") -> str:
             caller gets does not depend on why the lookup failed.
 
     Returns:
-        str: The identifier, unchanged, once it is known to be usable.
+        str: The identifier in the canonical form the service issues, once it is
+            known to be usable. Callers must use this value rather than the one
+            they passed in - it is what the key and the path are built from.
 
     Raises:
         HTTPException: 404, if the value is not one of this service's
             identifiers.
     """
-    if not is_job_id(job_id):
+    canonical = canonical_id(job_id)
+    if canonical is None:
         logger.warning("Refused a job identifier that is not in the form this service issues")
         raise HTTPException(status_code=404, detail=detail)
-    return job_id
+    # The canonical form, not the form the caller typed: it becomes a Redis key and a
+    # path segment, and both are case-sensitive.
+    return canonical
 
 
 # Define separate RateLimiter dependencies
@@ -576,8 +581,9 @@ def get_job_status(job_id: str):
     - **status**: The current status of the job.
     - **error**: Error message if the job has failed.
     """
-    # Retrieve task ID from Redis using job_id, once it is one of ours.
-    require_job_id(job_id)
+    # Retrieve task ID from Redis using job_id, once it is one of ours. The returned
+    # value is the canonical form, which is what the key is built from.
+    job_id = require_job_id(job_id)
     task_id = redis_client.get(job_id)
     if not task_id:
         logger.warning(f"Job ID {job_id} not found in Redis")
@@ -639,7 +645,7 @@ def download_result(job_id: str):
     logger.info("Received download request")
     # The identifier becomes a filename below, so it is checked before it is
     # joined onto anything.
-    require_job_id(job_id, detail="File not found")
+    job_id = require_job_id(job_id, detail="File not found")
     zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
     if os.path.exists(zip_path):
         logger.info(f"Serving zip file {zip_path}")
@@ -723,7 +729,7 @@ def get_job_queue(
         - **status**: Status message if the job is not in the queue.
     """
     if job_id:
-        require_job_id(job_id)
+        job_id = require_job_id(job_id)
 
     try:
         # Get the list of task IDs from the Redis list.

@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from .identifiers import is_cohort_id
+from .identifiers import canonical_id
 from .utils import hash_passphrase, verify_passphrase
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def cohort_key(cohort_id: str) -> str:
 
     Args:
         cohort_id: The cohort's identifier. Check it with
-            :func:`identifiers.is_cohort_id` first: this only interpolates.
+            :func:`identifiers.canonical_id` first: this only interpolates.
 
     Returns:
         str: The key the cohort hash is stored under.
@@ -366,10 +366,14 @@ def resolve_cohort(
     # before it is interpolated. A value that is not one of ours names no cohort,
     # and gets the same answer as one that simply does not exist -- both because
     # that is true and because distinguishing them would say which ids are real.
-    if not is_cohort_id(cohort_id):
+    canonical = canonical_id(cohort_id)
+    if canonical is None:
         msg = "Cohort ID not found"
         logger.error(f"{msg}: {len(cohort_id)}-character value is not an identifier this service issues")
         raise LookupError(msg)
+    # Everything below keys off the canonical form. Accepting an upper-cased identifier
+    # and then interpolating it as typed validated the value and then failed to find it.
+    cohort_id = canonical
 
     key = cohort_key(cohort_id)
     record = store.hgetall(key)

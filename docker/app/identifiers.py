@@ -17,8 +17,17 @@ gets.
 The pattern is anchored at both ends with `\\Z` rather than `$`, because `$` also
 matches immediately before a trailing newline, and it accepts either hex case:
 the service issues lower case, but an identifier that has been round-tripped
-through a system that upper-cased it is still the same identifier and still
-selects the same key.
+through a system that upper-cased it is still the same identifier.
+
+Accepting either case is only half of that, and on its own it is worse than
+rejecting upper case outright. Redis keys are bytes and the output directory is
+a case-sensitive filesystem, so an upper-cased identifier used *unchanged*
+validates and then matches nothing -- the caller gets 404, the answer reserved
+for an identifier that names no job, for one that does. `canonical_id` closes
+that: it is the validator, and it returns the identifier in the form the service
+issued rather than the form the caller typed. Every caller uses its return
+value; the `is_*` predicates are thin wrappers over it, kept because the shape
+alone is worth stating and testing on its own.
 """
 
 import logging
@@ -28,6 +37,24 @@ logger = logging.getLogger(__name__)
 
 # The canonical form of a UUID: five hyphen-separated groups of hex digits.
 _JOB_ID_PATTERN = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z")
+
+
+def canonical_id(value: str | None) -> str | None:
+    """Validate an identifier and return it in the form this service issues.
+
+    Args:
+        value: The candidate identifier, as supplied by a caller. Untrusted.
+
+    Returns:
+        str | None: The identifier lower-cased, or None when the value is not one
+            of this service's identifiers at all. The lower-casing is the whole
+            point: the value goes on to be a Redis key and a path segment, both
+            case-sensitive, so returning it as typed would validate an identifier
+            and then fail to find it.
+    """
+    if not value or not _JOB_ID_PATTERN.match(value):
+        return None
+    return value.lower()
 
 
 def is_job_id(value: str | None) -> bool:
@@ -41,7 +68,7 @@ def is_job_id(value: str | None) -> bool:
             value is False, as is anything carrying a path separator, a glob, a
             control character or any other content the service never mints.
     """
-    return bool(value) and bool(_JOB_ID_PATTERN.match(value or ""))
+    return canonical_id(value) is not None
 
 
 def is_cohort_id(value: str | None) -> bool:

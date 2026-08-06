@@ -26,7 +26,7 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-from app.identifiers import is_job_id  # noqa: E402
+from app.identifiers import canonical_id, is_job_id  # noqa: E402
 
 
 def _report_celery_status(monkeypatch: pytest.MonkeyPatch, web_app, status: str) -> None:
@@ -88,6 +88,46 @@ def test_the_check_is_indifferent_to_hex_case() -> None:
     issued = str(uuid4())
 
     assert is_job_id(issued.upper()) is True
+
+
+def test_an_upper_case_identifier_is_folded_to_the_form_the_service_issued() -> None:
+    """
+    Accepting a case the lookup cannot use is worse than rejecting it.
+
+    The module documents an upper-cased identifier as "still the same identifier and still
+    selects the same key". Redis keys are bytes, so it does not: the value validated, was
+    interpolated unchanged, matched nothing, and came back 404 - the answer for an
+    identifier that does not exist, given to one that does. Normalising at the point of
+    validation is what makes the documented contract true.
+    """
+    issued = str(uuid4())
+
+    assert canonical_id(issued.upper()) == issued
+    assert canonical_id(issued) == issued
+
+
+@pytest.mark.parametrize("value", ["", None, "no-such-job", "*", "vntyper_job_queue"])
+def test_a_value_that_is_not_an_identifier_has_no_canonical_form(value) -> None:
+    """The normaliser is the predicate: anything it cannot fold, it rejects."""
+    assert canonical_id(value) is None
+
+
+def test_the_routes_resolve_an_upper_case_identifier(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    End to end: a route must find the job, not 404 on input it has just accepted.
+
+    Both consumers are covered - the Redis key and the output filename - because the
+    identifier is used case-sensitively in each.
+    """
+    _report_celery_status(monkeypatch, web_app, "PENDING")
+    issued = str(uuid4())
+    fake_redis.set(issued, "task-1")
+    (tmp_path / "output" / f"{issued}.zip").write_bytes(b"result-bytes")
+
+    assert client.get(f"/job-status/{issued.upper()}/").status_code == 200
+    assert client.get(f"/download/{issued.upper()}/").content == b"result-bytes"
 
 
 # ---------------------------------------------------------------------------
