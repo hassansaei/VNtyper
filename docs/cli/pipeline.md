@@ -34,7 +34,7 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `-o, --output-dir` | path | `out` | Output directory for the results |
-| `-n, --output-name` | string | `processed` | Base name for the output files |
+| `-n, --output-name` | string | `output` | Base name for the output files. **Fixed at `output`**: any other value is rejected. The report generator, the `report` subcommand and the Kestrel stage each name their files from that literal and take no basename argument, so moving only the stages that accept one would leave the report reading files nothing wrote — which VNtyper reports as a negative genotype rather than an error. Use `--output-dir` to separate runs. |
 | `-s, --sample-name` | string | (from input filename) | Sample name for labeling results. If not provided, defaults to the input BAM or FASTQ filename stem |
 
 ## Reference & Region Options

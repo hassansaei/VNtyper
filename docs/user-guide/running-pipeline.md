@@ -23,7 +23,7 @@ vntyper pipeline --bam sample.bam -o results/ \
 | `--fast-mode` | Skip filtering for unmapped and partially mapped reads (faster) |
 | `--reference-assembly` | Assembly used for alignment (default: hg19). See [Reference Assemblies](reference-assemblies.md) |
 | `--sample-name` | Label for results. Defaults to input filename stem |
-| `--output-name` | Base name for intermediate output files (default: `processed`) |
+| `--output-name` | Base name for intermediate output files. Fixed at `output`; any other value is rejected. Use `--output-dir` to separate runs |
 
 ## With adVNTR Module
 

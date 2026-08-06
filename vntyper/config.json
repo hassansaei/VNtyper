@@ -2,7 +2,7 @@
   "default_values": {
     "threads": 4,
     "output_dir": "out",
-    "output_name": "processed",
+    "output_name": "output",
     "archive_format": "zip",
     "report_file": "summary_report.html",
     "flanking": 50,

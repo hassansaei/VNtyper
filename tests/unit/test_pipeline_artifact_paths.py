@@ -1,0 +1,459 @@
+"""Every artefact path the pipeline derives from a basename, enumerated and frozen.
+
+Contract C5. ``--output-name`` is parsed, defaulted from ``config.json`` and then
+**dropped**: ``run_pipeline`` has no such parameter, and ``pipeline.py``,
+``generate_report.py`` and the adVNTR stage each hardcode their own basename instead.
+
+Threading it through looks like a one-line fix and is not, because a stale or
+inconsistent artefact path does not fail hard anywhere in this pipeline:
+
+* ``summary.record_step`` records a missing file with ``md5sum=None`` and
+  ``parsed_result={"error": ...}`` rather than raising;
+* ``generate_report.build_kestrel_frames`` turns that into an empty frame;
+* an empty Kestrel frame is the report's configured **negative** default.
+
+A basename that moves for some artefacts and not others is therefore a silent
+false-negative genotype - exactly the failure class this work exists to prevent.
+
+So this module enumerates the whole surface first and freezes it. Three sets, and the
+split between them is the finding:
+
+1. :data:`PARAMETERISED_ON_THE_BAM_PATH` / :data:`PARAMETERISED_ON_THE_FASTQ_PATH` -
+   basenames ``run_pipeline`` hands to a stage. These *could* move, because the stage
+   takes an ``output_name`` argument.
+2. :data:`RECONSTRUCTED` - paths ``pipeline.py`` rebuilds from a literal instead of
+   consuming what the stage returned. Contract C4 names the adVNTR pair specifically.
+3. :data:`HARDCODED_IN_CONSUMERS` - basenames baked into modules ``run_pipeline`` cannot
+   reach at all, so no parameter threaded through ``run_pipeline`` can move them.
+
+Set 3 is why ``--output-name`` is refused rather than threaded; see
+:mod:`vntyper.scripts.artifact_names`.
+"""
+
+import ast
+import inspect
+import json
+from pathlib import Path
+
+import pytest
+
+from tests.support.pipeline_harness import artifact_paths_from_summary, run_pipeline_under_harness
+from vntyper.scripts import cli_report, generate_report, pipeline
+from vntyper.scripts.artifact_names import (
+    COVERAGE_BASENAME,
+    PIPELINE_BASENAME,
+    pipeline_artifact_paths,
+)
+
+pytestmark = pytest.mark.unit
+
+
+# --------------------------------------------------------------------------------------
+# 1. Basenames handed to a stage. Every one of these stages accepts an ``output_name``.
+# --------------------------------------------------------------------------------------
+PARAMETERISED_ON_THE_BAM_PATH: dict[str, str] = {
+    "process_bam_to_fastq": PIPELINE_BASENAME,
+    "run_advntr": PIPELINE_BASENAME,
+    "process_advntr_output": PIPELINE_BASENAME,
+    # A *different* literal, and one nothing derives from --output-name even in
+    # principle: the coverage TSV name is part of frozen contract C1.
+    "calculate_vntr_coverage": COVERAGE_BASENAME,
+}
+
+PARAMETERISED_ON_THE_FASTQ_PATH: dict[str, str] = {
+    "process_fastq": PIPELINE_BASENAME,
+    "align_and_sort_fastq": PIPELINE_BASENAME,
+    "process_bam_to_fastq": PIPELINE_BASENAME,
+    "calculate_vntr_coverage": COVERAGE_BASENAME,
+}
+
+# --------------------------------------------------------------------------------------
+# 2. Paths pipeline.py rebuilds itself, relative to the output directory.
+# --------------------------------------------------------------------------------------
+RECONSTRUCTED: set[str] = {
+    "fastq_bam_processing/output_R1.fastq.gz",
+    "fastq_bam_processing/output_R2.fastq.gz",
+    "fastq_bam_processing/output.json",
+    "fastq_bam_processing/output_sliced.bam",
+    "alignment_processing/output_sorted.bam",
+    "kestrel/output.vcf",
+    "kestrel/output.bam",
+    "kestrel/output.bed",
+    "kestrel/output_indel.vcf",
+    "kestrel/output_indel.vcf.gz",
+    "advntr/output_adVNTR.tsv",
+    "advntr/output_adVNTR.vcf",
+    "advntr/output_adVNTR_result.tsv",
+}
+
+#: Artefacts whose names carry no basename at all. They never move, whatever
+#: ``--output-name`` were to do, so a partial threading desynchronises them from
+#: everything in :data:`RECONSTRUCTED`.
+BASENAME_INDEPENDENT: set[str] = {
+    "pipeline_summary.json",
+    "fastq_bam_processing/pipeline_info.json",
+    "coverage/coverage_summary.tsv",
+    "kestrel/kestrel_result.tsv",
+    "advntr/cross_match_results.tsv",
+}
+
+# --------------------------------------------------------------------------------------
+# 3. Basenames baked into modules run_pipeline cannot reach.
+# --------------------------------------------------------------------------------------
+HARDCODED_IN_CONSUMERS: dict[str, set[str]] = {
+    # generate_report reads fastp's JSON by literal name; a moved basename makes
+    # every fastp quality metric silently absent from the report.
+    "generate_report": {"fastq_bam_processing/output.json"},
+    # `vntyper report --input-dir` rediscovers the IGV inputs by literal name, and
+    # the report subcommand has no --output-name flag at all, so a custom-named run
+    # could never be re-reported.
+    "cli_report": {"kestrel/output.bam", "kestrel/output.bed"},
+}
+
+
+def _relative_named_paths(harness) -> set[str]:
+    """Collect every path under the output directory that a stage was handed.
+
+    Walks the recorded call arguments rather than the filesystem: the point is what
+    the pipeline *named*, not what the (stubbed) tools happened to create.
+
+    Args:
+        harness: The harness returned by ``run_pipeline_under_harness``.
+
+    Returns:
+        set[str]: POSIX-style paths relative to the output directory.
+    """
+    root = Path(harness.output_dir).resolve()
+    found: set[str] = set()
+    for stub in harness.stages.values():
+        if not stub.called:
+            continue
+        for call in stub.call_args_list:
+            for value in (*call.args, *call.kwargs.values()):
+                if not isinstance(value, str | Path):
+                    continue
+                candidate = Path(value)
+                if not candidate.is_absolute():
+                    continue
+                try:
+                    found.add(candidate.resolve().relative_to(root).as_posix())
+                except ValueError:
+                    continue
+    return found
+
+
+def _string_constants(module) -> set[str]:
+    """Return every string literal in ``module``'s source.
+
+    Uses the AST so a docstring mentioning a filename is not confused with a
+    literal used to build one.
+
+    Args:
+        module: The imported module to parse.
+
+    Returns:
+        set[str]: The string constants.
+    """
+    tree = ast.parse(inspect.getsource(module))
+    return {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+
+
+# --------------------------------------------------------------------------------------
+# The enumeration itself
+# --------------------------------------------------------------------------------------
+
+
+def _assert_basenames(harness, expected: dict[str, str]) -> None:
+    """Assert each stage was handed the basename the contract says it gets.
+
+    Args:
+        harness: The harness returned by ``run_pipeline_under_harness``.
+        expected: Stage name -> the basename it must receive.
+    """
+    for stage, basename in expected.items():
+        stub = harness.stages[stage]
+        assert stub.called, f"the pipeline never reached {stage}(); this assertion would be vacuous"
+        call = stub.call_args
+        actual = call.kwargs.get("output_name")
+        if actual is None:
+            # process_fastq, align_and_sort_fastq and the adVNTR pair take it positionally.
+            positional = [value for value in call.args if isinstance(value, str)]
+            assert basename in positional, f"{stage}() was not given the basename {basename!r}: {positional}"
+        else:
+            assert actual == basename, f"{stage}() was given basename {actual!r}, expected {basename!r}"
+
+
+def test_the_bam_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:
+    """``artifact_names`` must describe the real pipeline, not an aspiration.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    harness = run_pipeline_under_harness(tmp_path / "out", extra_modules=["advntr"])
+    _assert_basenames(harness, PARAMETERISED_ON_THE_BAM_PATH)
+
+
+def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) -> None:
+    """The FASTQ branch reaches two stages the BAM branch never does.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    harness = run_pipeline_under_harness(
+        tmp_path / "out",
+        bam=None,
+        fastq1="/in/r1.fastq.gz",
+        fastq2="/in/r2.fastq.gz",
+    )
+    _assert_basenames(harness, PARAMETERISED_ON_THE_FASTQ_PATH)
+
+
+#: Every path a full BAM + adVNTR run names, frozen. This is the byte-identical
+#: baseline contract C5 requires: a change here means an artefact moved, and if it
+#: moved for a producer but not its consumer the result is an empty report section
+#: rather than an error.
+BAM_RUN_ARTEFACTS: set[str] = {
+    ".",  # generate_summary_report's own output_dir argument
+    "in.bam",  # the harness's input, which lives under the output dir
+    "predefined_regions_hg19.bed",
+    "fastq_bam_processing",
+    "fastq_bam_processing/output_R1.fastq.gz",
+    "fastq_bam_processing/output_R2.fastq.gz",
+    "fastq_bam_processing/output_sliced.bam",
+    "fastq_bam_processing/pipeline_info.json",
+    "coverage",
+    "coverage/coverage_summary.tsv",
+    "kestrel",
+    "kestrel/output.vcf",
+    "kestrel/output.bam",
+    "kestrel/output.bed",
+    "kestrel/kestrel_result.tsv",
+    "advntr",
+    "advntr/output_adVNTR.tsv",
+    "advntr/output_adVNTR_result.tsv",
+    "advntr/cross_match_results.tsv",
+}
+
+#: The same, for a FASTQ run without adVNTR.
+FASTQ_RUN_ARTEFACTS: set[str] = {
+    ".",
+    "predefined_regions_hg19.bed",
+    "fastq_bam_processing",
+    "fastq_bam_processing/output.json",
+    "fastq_bam_processing/output_R1.fastq.gz",
+    "fastq_bam_processing/output_R2.fastq.gz",
+    "alignment_processing",
+    "alignment_processing/output_sorted.bam",
+    "coverage",
+    "coverage/coverage_summary.tsv",
+    "kestrel",
+    "kestrel/output.vcf",
+    "kestrel/output.bam",
+    "kestrel/output.bed",
+    "kestrel/kestrel_result.tsv",
+}
+
+
+def test_the_bam_run_artefact_set_is_unchanged(tmp_path: Path) -> None:
+    """The frozen enumeration for BAM input plus adVNTR, compared all at once.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    harness = run_pipeline_under_harness(tmp_path / "out", extra_modules=["advntr"])
+    named = _relative_named_paths(harness) | artifact_paths_from_summary(harness.output_dir)
+    assert named == BAM_RUN_ARTEFACTS, (
+        f"artefact paths drifted; new: {sorted(named - BAM_RUN_ARTEFACTS)}; gone: {sorted(BAM_RUN_ARTEFACTS - named)}"
+    )
+
+
+def test_the_fastq_run_artefact_set_is_unchanged(tmp_path: Path) -> None:
+    """The frozen enumeration for FASTQ input, which names two more artefacts.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    harness = run_pipeline_under_harness(
+        out,
+        bam=None,
+        fastq1="/in/r1.fastq.gz",
+        fastq2="/in/r2.fastq.gz",
+    )
+    named = _relative_named_paths(harness) | artifact_paths_from_summary(out)
+    assert named == FASTQ_RUN_ARTEFACTS, (
+        f"artefact paths drifted; new: {sorted(named - FASTQ_RUN_ARTEFACTS)}; "
+        f"gone: {sorted(FASTQ_RUN_ARTEFACTS - named)}"
+    )
+
+
+def test_the_declaration_is_exactly_the_enumerated_surface(tmp_path: Path) -> None:
+    """The declaration partitions into the two documented halves and nothing else.
+
+    :data:`RECONSTRUCTED` is what moves with the basename; :data:`BASENAME_INDEPENDENT`
+    is what never does. Anything outside both is an artefact this analysis missed.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    declared = {Path(path).relative_to(tmp_path).as_posix() for path in pipeline_artifact_paths(tmp_path).values()}
+    # Produced inside process_bam_to_fastq and fastp; the pipeline never names them,
+    # so they are absent from the run-based sets above but are still artefacts.
+    produced_but_never_named = {
+        "fastq_bam_processing/output_other.fastq.gz",
+        "fastq_bam_processing/output_single.fastq.gz",
+        "fastq_bam_processing/output.html",
+    }
+    assert declared == RECONSTRUCTED | BASENAME_INDEPENDENT | produced_but_never_named, (
+        f"unclassified: {sorted(declared - RECONSTRUCTED - BASENAME_INDEPENDENT - produced_but_never_named)}; "
+        f"classified but not declared: "
+        f"{sorted((RECONSTRUCTED | BASENAME_INDEPENDENT | produced_but_never_named) - declared)}"
+    )
+
+
+def test_every_path_a_run_names_is_declared(tmp_path: Path) -> None:
+    """``pipeline_artifact_paths`` must not miss anything a run actually produces.
+
+    This is what binds :mod:`vntyper.scripts.artifact_names` to ``pipeline.py``: an
+    artefact named by the pipeline but absent from the declaration is one that a
+    future basename change would silently leave behind.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    declared = set(pipeline_artifact_paths(tmp_path / "out").values())
+    declared_relative = {Path(path).relative_to(tmp_path / "out").as_posix() for path in declared}
+
+    named: set[str] = set()
+    for kwargs in (
+        {"extra_modules": ["advntr"]},
+        {"bam": None, "fastq1": "/in/r1.fastq.gz", "fastq2": "/in/r2.fastq.gz"},
+    ):
+        run_dir = tmp_path / f"out{len(named)}"
+        harness = run_pipeline_under_harness(run_dir, **kwargs)
+        named |= {
+            path
+            for path in _relative_named_paths(harness) | artifact_paths_from_summary(run_dir)
+            if PIPELINE_BASENAME in path or COVERAGE_BASENAME in path
+        }
+
+    assert named, "no basename-derived paths were named; this test would be vacuous"
+    # The stage directories are handed to stages as output directories, not as
+    # artefacts, and "coverage" is a directory whose name happens to be a basename.
+    stage_dirs = {"coverage", "kestrel", "advntr", "fastq_bam_processing", "alignment_processing"}
+    undeclared = named - declared_relative - stage_dirs - {"in.bam"}
+    assert not undeclared, f"named by a run but absent from pipeline_artifact_paths: {sorted(undeclared)}"
+
+
+def test_every_declared_path_moves_together_under_a_custom_basename(tmp_path: Path) -> None:
+    """The declaration's own consistency: change the basename, everything moves.
+
+    This is the property a threaded ``--output-name`` would need, and the reason it
+    cannot be threaded: the declaration can satisfy it, but three consumers named in
+    :data:`HARDCODED_IN_CONSUMERS` cannot.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    default = pipeline_artifact_paths(tmp_path, basename=PIPELINE_BASENAME)
+    moved = pipeline_artifact_paths(tmp_path, basename="mysample")
+
+    assert set(default) == set(moved), "the declaration lost or gained a key when the basename changed"
+    unmoved = {key for key, path in default.items() if moved[key] == path}
+    # Only the basename-independent artefacts may stay put.
+    assert unmoved == {
+        "coverage_summary",
+        "kestrel_result",
+        "cross_match",
+        "pipeline_info",
+        "pipeline_summary",
+    }, f"these did not move with the basename: {sorted(unmoved)}"
+
+
+def test_the_kestrel_igv_inputs_are_rebuilt_from_a_literal(tmp_path: Path) -> None:
+    """``pipeline.py`` names Kestrel's outputs itself rather than consuming them.
+
+    ``run_kestrel`` returns nothing; ``pipeline.py`` reconstructs ``output.bam``,
+    ``output.bed`` and ``output_indel.vcf`` from the same literal Kestrel hardcodes
+    internally. Moving one without the other silently drops the IGV panel.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    (out / "kestrel").mkdir(parents=True)
+    (out / "kestrel" / "output_indel.vcf").touch()
+
+    harness = run_pipeline_under_harness(out)
+    kwargs = harness.kwargs("generate_summary_report")
+
+    assert kwargs["bam_file"] == str(out / "kestrel" / f"{PIPELINE_BASENAME}.bam")
+    assert kwargs["bed_file"] == str(out / "kestrel" / f"{PIPELINE_BASENAME}.bed")
+    assert kwargs["vcf_file"] == str(out / "kestrel" / f"{PIPELINE_BASENAME}_indel.vcf")
+
+
+def test_the_compressed_vcf_wins_when_both_exist(tmp_path: Path) -> None:
+    """The other half of ``_select_best_vcf_file``'s literal pair.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    kestrel_dir = tmp_path / "kestrel"
+    kestrel_dir.mkdir()
+    (kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf").touch()
+    (kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz").touch()
+
+    assert pipeline._select_best_vcf_file(str(kestrel_dir)) == str(kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz")
+
+
+# --------------------------------------------------------------------------------------
+# Why the parameter is refused rather than threaded
+# --------------------------------------------------------------------------------------
+
+
+def test_the_configured_default_basename_is_the_one_the_pipeline_uses() -> None:
+    """``config.json`` must not advertise a basename the pipeline ignores.
+
+    ``default_values.output_name`` was ``"processed"`` while every artefact was named
+    ``output``. Because the CLI dropped the value before calling ``run_pipeline``, the
+    disagreement was invisible - and it is exactly what makes threading the parameter
+    unsafe: threading the configured default would have moved every path on an
+    ordinary run.
+    """
+    with open(Path(pipeline.__file__).parent.parent / "config.json", encoding="utf-8") as handle:
+        config = json.load(handle)
+    assert config["default_values"]["output_name"] == PIPELINE_BASENAME
+
+
+@pytest.mark.parametrize("module_name", sorted(HARDCODED_IN_CONSUMERS))
+def test_the_consumers_hardcode_the_basename_out_of_run_pipelines_reach(module_name: str) -> None:
+    """Pin the coupling that makes a threaded ``--output-name`` unverifiable.
+
+    These modules are not called with a basename and take no parameter for one. Any
+    ``--output-name`` threaded through ``run_pipeline`` would move the producer and
+    leave these readers behind, which is a silently empty report section.
+
+    Args:
+        module_name: ``generate_report`` or ``cli_report``.
+    """
+    module = {"generate_report": generate_report, "cli_report": cli_report}[module_name]
+    constants = _string_constants(module)
+    assert constants, f"parsed no string constants out of {module_name}; this test would be vacuous"
+
+    hits = {path for path in HARDCODED_IN_CONSUMERS[module_name] if any(part in constants for part in _parts(path))}
+    assert hits == HARDCODED_IN_CONSUMERS[module_name], (
+        f"{module_name} no longer hardcodes {sorted(HARDCODED_IN_CONSUMERS[module_name] - hits)}; "
+        "if it now takes the basename as a parameter, --output-name may finally be threadable"
+    )
+
+
+def _parts(path: str) -> set[str]:
+    """Return the spellings a module might use for ``path``.
+
+    Args:
+        path: A POSIX-style relative artefact path.
+
+    Returns:
+        set[str]: The whole path and its final component.
+    """
+    return {path, Path(path).name}

@@ -128,7 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-name",
         type=str,
         default=None,
-        help="Base name for the output files.",
+        help=(
+            "Base name for the output files. Currently fixed at 'output': the report "
+            "generator, the report subcommand and the Kestrel stage each name their "
+            "files from that literal and take no basename argument, so any other value "
+            "is rejected rather than silently ignored. Use --output-dir to separate runs."
+        ),
     )
     parser_pipeline.add_argument(
         "-s",

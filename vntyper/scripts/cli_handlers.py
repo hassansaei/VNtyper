@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any, Protocol
 
+from vntyper.scripts.artifact_names import validate_output_name
 from vntyper.scripts.cohort_summary import aggregate_cohort
 from vntyper.scripts.install_references import main as install_references_main
 
@@ -135,9 +136,13 @@ def handle_pipeline(
     if args.reference_assembly is None:
         args.reference_assembly = get_conf(config, "reference_assembly", "hg19")
         logger.debug(f"reference_assembly set to {args.reference_assembly}")
-    if args.output_name is None:
-        args.output_name = get_conf(config, "output_name", "processed")
-        logger.debug(f"output_name set to {args.output_name}")
+    # --output-name is validated, not forwarded: run_pipeline takes no such parameter
+    # and three of its consumers name their files from a literal it cannot reach.
+    # Refusing a value we cannot honour is the point - silently dropping it produced a
+    # run whose artefacts were not where the caller was told to look.
+    # See vntyper/scripts/artifact_names.py.
+    args.output_name = validate_output_name(args.output_name or get_conf(config, "output_name", None))
+    logger.debug(f"output_name is fixed at {args.output_name}")
     if args.archive_format is None:
         args.archive_format = get_conf(config, "archive_format", "zip")
         logger.debug(f"archive_format set to {args.archive_format}")
