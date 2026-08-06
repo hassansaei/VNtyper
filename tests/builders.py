@@ -21,7 +21,14 @@ _SCRIPTS = Path(__file__).resolve().parents[1] / "vntyper" / "scripts"
 
 # chr1 lengths, the decisive signal for distinguishing the two builds.
 _CHR1_LENGTH = {"GRCh37": 249250621, "GRCh38": 248956422}
-_CHR1_NAME = {"ucsc": "chr1", "ensembl": "1", "ncbi": {"GRCh37": "NC_000001.10", "GRCh38": "NC_000001.11"}}
+_CONVENTIONS = ("ucsc", "ensembl", "ncbi")
+
+# `_construct_ncbi_accession` documents its second argument as "hg19 or hg38".
+_UCSC_ALIAS = {"GRCh37": "hg19", "GRCh38": "hg38"}
+
+# A chr1 length that belongs to neither build. 249_250_621 is GRCh37 and
+# 248_956_422 is GRCh38; this sits between them and matches nothing.
+UNKNOWN_CHR1_LENGTH = 249_000_000
 
 STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
     "raw": ("Motifs", "Variant", "POS", "REF", "ALT", "Sample", "Motif_sequence"),
@@ -268,13 +275,122 @@ def kestrel_config(**dotted_overrides: Any) -> dict[str, Any]:
     return copy.deepcopy(config)
 
 
-def bam_header(convention: str = "ucsc", assembly: str = "GRCh37", n_contigs: int = 25) -> str:
+def _validate_naming(convention: str, assembly: str) -> None:
+    """Reject an unknown convention or assembly.
+
+    Args:
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        assembly: ``GRCh37`` or ``GRCh38``.
+
+    Raises:
+        ValueError: If either is unknown.
+    """
+    if assembly not in _CHR1_LENGTH:
+        raise ValueError(f"Unknown assembly {assembly!r}")
+    if convention not in _CONVENTIONS:
+        raise ValueError(f"Unknown convention {convention!r}")
+
+
+def _contig_name(number: int, convention: str, assembly: str) -> str:
+    """Build one contig name the way production builds it.
+
+    Chromosome numbering follows ``chromosome_utils._build_chromosome_name``:
+    1-22 are themselves, 23 is X, 24 is Y and 25 is the mitochondrion.
+
+    NCBI accessions are delegated to production's own version table rather than
+    reconstructed here. They are *chromosome-specific* -- GRCh37 chr1 is
+    ``NC_000001.10`` but GRCh37 chr5 is ``NC_000005.9`` -- and an earlier version
+    of this builder stamped one version on every chromosome, producing accessions
+    that do not exist. That kind of wrong builder makes every consumer green for
+    the wrong reason, so the table is imported, not copied.
+
+    Args:
+        number: Chromosome number, 1-25.
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        assembly: ``GRCh37`` or ``GRCh38``.
+
+    Returns:
+        str: The contig name.
+    """
+    if convention == "ncbi":
+        # `_construct_ncbi_accession` takes the UCSC-style alias, not the build
+        # name. See the note in tests/unit/test_builders.py.
+        from vntyper.scripts.chromosome_utils import _construct_ncbi_accession
+
+        return _construct_ncbi_accession(number, _UCSC_ALIAS[assembly])
+
+    if number == 23:
+        suffix = "X"
+    elif number == 24:
+        suffix = "Y"
+    elif number == 25:
+        suffix = "M" if convention == "ucsc" else "MT"
+    else:
+        suffix = str(number)
+
+    return f"chr{suffix}" if convention == "ucsc" else suffix
+
+
+def _contig_length(number: int, assembly: str) -> int:
+    """Return the length for a contig.
+
+    Only chr1 carries a real length: it is the single decisive signal for telling
+    the two builds apart (``chromosome_utils.detect_assembly_from_chr1_length``).
+    Every other contig gets a distinct filler length so that contigs stay
+    distinguishable without implying an accuracy this builder does not have.
+
+    Args:
+        number: Chromosome number, 1-25.
+        assembly: ``GRCh37`` or ``GRCh38``.
+
+    Returns:
+        int: The contig length in bases.
+    """
+    return _CHR1_LENGTH[assembly] if number == 1 else 100_000_000 + number
+
+
+def bam_contigs(convention: str = "ucsc", assembly: str = "GRCh37", n_contigs: int = 25) -> list[dict[str, Any]]:
+    """Build the parsed contig list a BAM header yields.
+
+    This is the shape ``fastq_bam_processing.parse_contigs_from_header`` returns
+    and the shape every assembly-reconciliation consumer takes: a list of
+    ``{"name": str, "length": int}``. :func:`bam_header` renders exactly this
+    list, so the two can never disagree.
+
+    Args:
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        assembly: ``GRCh37`` or ``GRCh38``; sets the chr1 length.
+        n_contigs: How many contigs to emit, starting at chr1.
+
+    Returns:
+        list[dict[str, Any]]: The contigs, in chromosome order.
+
+    Raises:
+        ValueError: If the convention or assembly is unknown.
+    """
+    _validate_naming(convention, assembly)
+    return [
+        {"name": _contig_name(number, convention, assembly), "length": _contig_length(number, assembly)}
+        for number in range(1, n_contigs + 1)
+    ]
+
+
+def bam_header(
+    convention: str = "ucsc",
+    assembly: str = "GRCh37",
+    n_contigs: int = 25,
+    contigs: list[dict[str, Any]] | None = None,
+) -> str:
     """Build a SAM ``@SQ`` header in the requested naming convention.
 
     Args:
         convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
         assembly: ``GRCh37`` or ``GRCh38``; sets the chr1 length.
         n_contigs: How many contigs to emit.
+        contigs: Render these contigs verbatim instead of building them. An entry
+            whose ``length`` is None emits an ``@SQ`` line with no ``LN:`` field;
+            a string ``length`` is written out as-is, which is how the malformed
+            fixtures below are produced.
 
     Returns:
         str: The header text.
@@ -282,19 +398,122 @@ def bam_header(convention: str = "ucsc", assembly: str = "GRCh37", n_contigs: in
     Raises:
         ValueError: If the convention or assembly is unknown.
     """
-    if assembly not in _CHR1_LENGTH:
-        raise ValueError(f"Unknown assembly {assembly!r}")
-    if convention not in _CHR1_NAME:
-        raise ValueError(f"Unknown convention {convention!r}")
+    if contigs is None:
+        contigs = bam_contigs(convention=convention, assembly=assembly, n_contigs=n_contigs)
 
     lines = ["@HD\tVN:1.6\tSO:coordinate"]
-    for number in range(1, n_contigs + 1):
-        if convention == "ucsc":
-            name = f"chr{number}"
-        elif convention == "ensembl":
-            name = str(number)
+    for contig in contigs:
+        length = contig.get("length")
+        if length is None:
+            lines.append(f"@SQ\tSN:{contig['name']}")
         else:
-            name = f"NC_{number:06d}.{'10' if assembly == 'GRCh37' else '11'}"
-        length = _CHR1_LENGTH[assembly] if number == 1 else 100_000_000 + number
-        lines.append(f"@SQ\tSN:{name}\tLN:{length}")
+            lines.append(f"@SQ\tSN:{contig['name']}\tLN:{length}")
     return "\n".join(lines) + "\n"
+
+
+def bam_contigs_unknown_chr1_length(convention: str = "ucsc", n_contigs: int = 25) -> list[dict[str, Any]]:
+    """Build contigs whose chr1 length matches neither build.
+
+    Args:
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        n_contigs: How many contigs to emit.
+
+    Returns:
+        list[dict[str, Any]]: The contigs; chr1's length is
+        :data:`UNKNOWN_CHR1_LENGTH`.
+    """
+    contigs = bam_contigs(convention=convention, assembly="GRCh37", n_contigs=n_contigs)
+    if contigs:
+        contigs[0]["length"] = UNKNOWN_CHR1_LENGTH
+    return contigs
+
+
+def bam_contigs_without_chr1(
+    convention: str = "ucsc", assembly: str = "GRCh37", n_contigs: int = 25
+) -> list[dict[str, Any]]:
+    """Build contigs with chr1 absent entirely.
+
+    Args:
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        assembly: ``GRCh37`` or ``GRCh38``.
+        n_contigs: How many contigs to build before chr1 is dropped.
+
+    Returns:
+        list[dict[str, Any]]: The contigs, chr1 removed.
+
+    Raises:
+        ValueError: If ``n_contigs`` leaves nothing behind.
+    """
+    if n_contigs < 2:
+        raise ValueError(f"n_contigs={n_contigs} leaves no contigs once chr1 is dropped")
+    return bam_contigs(convention=convention, assembly=assembly, n_contigs=n_contigs)[1:]
+
+
+def bam_contigs_mixed_conventions(assembly: str = "GRCh37") -> list[dict[str, Any]]:
+    """Build contigs whose names do not agree on a single naming convention.
+
+    chr1 stays UCSC-named and keeps its decisive length, so the *build* is still
+    recoverable from this fixture even though the *convention* is not: those two
+    questions are separate and must not be conflated.
+
+    Args:
+        assembly: ``GRCh37`` or ``GRCh38``.
+
+    Returns:
+        list[dict[str, Any]]: A UCSC chr1 followed by ENSEMBL- and NCBI-named
+        contigs, none of which reaches a majority.
+    """
+    _validate_naming("ucsc", assembly)
+    ucsc = bam_contigs(convention="ucsc", assembly=assembly, n_contigs=1)
+    ensembl = bam_contigs(convention="ensembl", assembly=assembly, n_contigs=3)[1:]
+    ncbi = bam_contigs(convention="ncbi", assembly=assembly, n_contigs=5)[3:]
+    return ucsc + ensembl + ncbi
+
+
+def bam_header_missing_chr1_length(convention: str = "ucsc", assembly: str = "GRCh37", n_contigs: int = 25) -> str:
+    """Build a header whose chr1 ``@SQ`` line carries no ``LN:`` field.
+
+    ``parse_contigs_from_header`` keeps only contigs with an integer length, so
+    this parses to a contig list with no chr1 at all rather than to a chr1 with a
+    missing length. A consumer that only ever sees the parsed list cannot tell
+    the two apart.
+
+    Args:
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        assembly: ``GRCh37`` or ``GRCh38``.
+        n_contigs: How many contigs to emit.
+
+    Returns:
+        str: The header text.
+    """
+    contigs = bam_contigs(convention=convention, assembly=assembly, n_contigs=n_contigs)
+    if contigs:
+        contigs[0]["length"] = None
+    return bam_header(contigs=contigs)
+
+
+def bam_header_malformed_chr1_length(
+    convention: str = "ucsc",
+    assembly: str = "GRCh37",
+    n_contigs: int = 25,
+    length: str = "not-a-number",
+) -> str:
+    """Build a header whose chr1 ``LN:`` field is not an integer.
+
+    ``parse_contigs_from_header`` catches the ``ValueError``, sets the length to
+    None and then drops the contig -- see
+    :func:`bam_header_missing_chr1_length` for why that matters.
+
+    Args:
+        convention: One of ``ucsc``, ``ensembl``, ``ncbi``.
+        assembly: ``GRCh37`` or ``GRCh38``.
+        n_contigs: How many contigs to emit.
+        length: The malformed value to write into chr1's ``LN:`` field.
+
+    Returns:
+        str: The header text.
+    """
+    contigs = bam_contigs(convention=convention, assembly=assembly, n_contigs=n_contigs)
+    if contigs:
+        contigs[0]["length"] = length
+    return bam_header(contigs=contigs)

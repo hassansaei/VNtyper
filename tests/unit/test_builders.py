@@ -12,7 +12,13 @@ pytestmark = pytest.mark.unit
 
 from tests.builders import (  # noqa: E402
     STAGE_COLUMNS,
+    bam_contigs,
+    bam_contigs_mixed_conventions,
+    bam_contigs_unknown_chr1_length,
+    bam_contigs_without_chr1,
     bam_header,
+    bam_header_malformed_chr1_length,
+    bam_header_missing_chr1_length,
     kestrel_config,
     kestrel_df,
     kestrel_row,
@@ -99,6 +105,163 @@ def test_bam_header_rejects_an_unknown_assembly_and_convention() -> None:
         bam_header(assembly="hg19")
     with pytest.raises(ValueError, match="Unknown convention"):
         bam_header(convention="nonsense")
+
+
+# ---------------------------------------------------------------------------
+# bam_contigs: the parsed shape production hands to assembly reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_bam_contigs_returns_the_shape_parse_contigs_from_header_returns() -> None:
+    """`reconcile_assembly` consumes this exact shape: name (str), length (int)."""
+    contigs = bam_contigs()
+    assert isinstance(contigs, list)
+    assert contigs, "builder produced no contigs; every assertion below would be vacuous"
+    for contig in contigs:
+        assert set(contig) == {"name", "length"}, f"unexpected keys: {sorted(contig)}"
+        assert isinstance(contig["name"], str)
+        assert isinstance(contig["length"], int)
+
+
+@pytest.mark.parametrize("convention", ["ucsc", "ensembl", "ncbi"])
+@pytest.mark.parametrize("assembly", ["GRCh37", "GRCh38"])
+@pytest.mark.parametrize("n_contigs", [1, 3, 25])
+def test_bam_header_and_bam_contigs_agree_through_the_production_parser(
+    convention: str, assembly: str, n_contigs: int
+) -> None:
+    """The two builders must never drift; production's own parser is the judge."""
+    from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
+
+    header = bam_header(convention=convention, assembly=assembly, n_contigs=n_contigs)
+    parsed = parse_contigs_from_header(header)
+
+    assert len(parsed) == n_contigs
+    assert parsed == bam_contigs(convention=convention, assembly=assembly, n_contigs=n_contigs)
+
+
+def test_bam_header_renders_a_caller_supplied_contig_list() -> None:
+    header = bam_header(contigs=[{"name": "chrZ", "length": 42}])
+    assert "@SQ\tSN:chrZ\tLN:42" in header
+    assert "chr1" not in header
+
+
+# --- the defect: NCBI accessions are chromosome-specific, not one version -----
+
+
+@pytest.mark.parametrize(
+    "assembly,expected",
+    [
+        # Real GRCh37/GRCh38 RefSeq accessions. The old builder emitted ".10" for
+        # every GRCh37 chromosome and ".11" for every GRCh38 one - accessions that
+        # do not exist, so every consumer went green for the wrong reason.
+        ("GRCh37", ["NC_000001.10", "NC_000002.11", "NC_000003.11", "NC_000004.11", "NC_000005.9"]),
+        ("GRCh38", ["NC_000001.11", "NC_000002.12", "NC_000003.12", "NC_000004.12", "NC_000005.10"]),
+    ],
+)
+def test_ncbi_accessions_are_chromosome_specific(assembly: str, expected: list[str]) -> None:
+    names = [contig["name"] for contig in bam_contigs(convention="ncbi", assembly=assembly, n_contigs=5)]
+    assert names == expected
+
+
+def test_ncbi_accessions_come_from_the_production_version_tables() -> None:
+    """Derived from production, so the builder cannot drift away from it."""
+    from vntyper.scripts.chromosome_utils import _construct_ncbi_accession
+
+    for number, contig in enumerate(bam_contigs(convention="ncbi", assembly="GRCh37", n_contigs=25), start=1):
+        assert contig["name"] == _construct_ncbi_accession(number, "hg19")
+
+
+def test_ncbi_chr1_matches_the_accession_shipped_in_config() -> None:
+    """config.json's `known_chromosome_naming` short-circuits chr1 in production."""
+    import json
+    from pathlib import Path
+
+    config = json.loads((Path(__file__).resolve().parents[2] / "vntyper" / "config.json").read_text(encoding="utf-8"))
+    naming = config["bam_processing"]["known_chromosome_naming"]
+    for assembly in ("GRCh37", "GRCh38"):
+        first = bam_contigs(convention="ncbi", assembly=assembly, n_contigs=1)[0]
+        assert first["name"] == naming[assembly]["ncbi"]
+
+
+@pytest.mark.parametrize(
+    "convention,expected_tail",
+    [("ucsc", ["chr22", "chrX", "chrY", "chrM"]), ("ensembl", ["22", "X", "Y", "MT"])],
+)
+def test_sex_and_mitochondrial_contigs_use_production_names(convention: str, expected_tail: list[str]) -> None:
+    """No real BAM contains `chr23`; production never builds that name either."""
+    names = [contig["name"] for contig in bam_contigs(convention=convention, n_contigs=25)]
+    assert names[-4:] == expected_tail
+
+
+def test_bam_contigs_rejects_an_unknown_assembly_and_convention() -> None:
+    with pytest.raises(ValueError, match="Unknown assembly"):
+        bam_contigs(assembly="hg19")
+    with pytest.raises(ValueError, match="Unknown convention"):
+        bam_contigs(convention="nonsense")
+
+
+# --- fixtures the assembly-reconciliation work needs -------------------------
+
+
+@pytest.mark.parametrize("convention", ["ucsc", "ensembl", "ncbi"])
+def test_the_canonical_contigs_are_detected_as_their_assembly(convention: str) -> None:
+    """The positive control the degenerate fixtures below are measured against."""
+    from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+    for assembly in ("GRCh37", "GRCh38"):
+        detected = detect_assembly_from_chr1_length(bam_contigs(convention=convention, assembly=assembly))
+        if convention == "ncbi":
+            # Known gap: production searches only "chr1"/"1", so an NCBI-named
+            # chr1 is invisible to it. Pinned here so closing that gap is a
+            # visible, deliberate change rather than a silent one.
+            assert detected is None
+        else:
+            assert detected == assembly
+
+
+def test_unknown_chr1_length_fixture_matches_no_assembly() -> None:
+    from vntyper.scripts.chromosome_utils import CHR1_LENGTHS, detect_assembly_from_chr1_length
+
+    contigs = bam_contigs_unknown_chr1_length()
+    chr1 = next(c for c in contigs if c["name"] == "chr1")
+    assert chr1["length"] not in CHR1_LENGTHS.values()
+    assert detect_assembly_from_chr1_length(contigs) is None
+
+
+def test_without_chr1_fixture_really_has_no_chr1() -> None:
+    from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+    for convention in ("ucsc", "ensembl", "ncbi"):
+        contigs = bam_contigs_without_chr1(convention=convention)
+        assert contigs, "fixture produced nothing to reason about"
+        assert not any(c["name"].lower() in ("chr1", "1") for c in contigs)
+        assert detect_assembly_from_chr1_length(contigs) is None
+
+
+def test_missing_and_malformed_chr1_lengths_are_dropped_by_the_production_parser() -> None:
+    """A header the parser silently discards is indistinguishable from no chr1."""
+    from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
+
+    for header in (bam_header_missing_chr1_length(), bam_header_malformed_chr1_length()):
+        parsed = parse_contigs_from_header(header)
+        assert parsed, "the whole header was discarded; the assertion below would be vacuous"
+        assert not any(c["name"] == "chr1" for c in parsed), (
+            "parse_contigs_from_header keeps only contigs with an integer length"
+        )
+
+
+def test_mixed_convention_fixture_defeats_convention_detection() -> None:
+    from vntyper.scripts.chromosome_utils import detect_naming_convention
+
+    contigs = bam_contigs_mixed_conventions()
+    names = [c["name"] for c in contigs]
+    assert len(names) >= 3, "too few contigs for a majority vote to mean anything"
+    assert detect_naming_convention(names) == "unknown"
+    # ...but chr1 is still UCSC-named and still carries a decisive length, so the
+    # build is recoverable even when the convention is not.
+    from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+    assert detect_assembly_from_chr1_length(contigs) == "GRCh37"
 
 
 def test_the_scored_stage_frame_feeds_the_real_confidence_assignment() -> None:
