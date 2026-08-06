@@ -75,10 +75,11 @@ import subprocess
 import sys
 import time
 import tokenize
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning
+from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning, writable_paths
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -906,6 +907,30 @@ def write_outputs(results: list[ModuleResult], elapsed: float, output: Path | No
         print(f"Raw results written to {results_json}")
 
 
+def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> str | None:
+    """
+    Decide whether this run may write anything at all.
+
+    Args:
+        targets (Iterable[str]): Repo-relative sources the run will mutate. Empty on the
+            ``--render-only`` path, which mutates nothing.
+        outputs (Sequence[Path | None]): Files the run will overwrite, ``None`` for the
+            ones it was not asked to write.
+
+    Returns:
+        str | None: The refusal to print, or ``None`` when the run may proceed. Both
+            refusals are returned rather than raised so the caller keeps its single exit
+            point, and both fail closed: a dirty file refuses, and so does an
+            indeterminate answer from git.
+    """
+    guarded = writable_paths(REPO_ROOT, targets, outputs)
+    try:
+        dirty = dirty_paths(REPO_ROOT, guarded)
+    except RuntimeError as exc:
+        return str(exc)
+    return format_dirty_tree_refusal(dirty) if dirty else None
+
+
 def main() -> int:
     """
     Run the mutation sweep and print the report.
@@ -929,8 +954,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Re-render path: no mutation, no tests, no source rewritten.
+    # Re-render path: no mutation, no tests, no source rewritten - but `write_outputs()`
+    # still overwrites the docs page wholesale, so the preflight applies here too. It is
+    # narrower: only the outputs are at risk, because no target is touched.
     if args.render_only:
+        refusal = _refuse_if_dirty([], [args.output])
+        if refusal is not None:
+            print(refusal, file=sys.stderr)
+            return 1
         results, elapsed = results_from_dict(json.loads(args.render_only.read_text(encoding="utf-8")))
         print(format_report(results, elapsed))
         write_outputs(results, elapsed, args.output, None)
@@ -945,10 +976,11 @@ def main() -> int:
 
     # Before a single byte is written; see `mutation_guard` for the three ways a sweep
     # over uncommitted work goes wrong. Only the targets this run will actually rewrite
-    # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep.
-    dirty = dirty_paths(REPO_ROOT, targets)
-    if dirty:
-        print(format_dirty_tree_refusal(dirty), file=sys.stderr)
+    # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep -
+    # plus the files it will overwrite on the way out.
+    refusal = _refuse_if_dirty(targets, [args.output, args.results_json])
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
         return 1
 
     # SIGINT already unwinds through the `finally` in sweep_module() as a
@@ -978,7 +1010,13 @@ def main() -> int:
     # someone committing a mutant. The preflight above is what makes this check
     # meaningful: the tree was clean when the sweep started, so anything dirty now came
     # from the sweep rather than from the maintainer.
-    unrestored = dirty_paths(REPO_ROOT, targets)
+    try:
+        unrestored = dirty_paths(REPO_ROOT, targets)
+    except RuntimeError as exc:
+        # git answered before the sweep and cannot now. The sources may hold a mutant and
+        # nothing here can prove otherwise, so say so rather than exit 0.
+        print(f"\n{exc}", file=sys.stderr)
+        return 1
     if unrestored:
         print(f"\n{format_unrestored_warning(unrestored)}", file=sys.stderr)
         return 1

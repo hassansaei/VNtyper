@@ -13,6 +13,7 @@ is ``PYTHONDONTWRITEBYTECODE=1`` in the child plus deleting every ``__pycache__`
 both halves are pinned here so a future edit cannot quietly drop one.
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -611,3 +612,119 @@ def test_the_preflight_checks_only_the_targets_the_run_will_rewrite(tmp_path, mo
     assert git_calls, "the preflight must consult git before mutating anything"
     assert "sample.py" in git_calls[0]
     assert "other.py" not in git_calls[0], "an unselected target must not gate the run"
+
+
+def test_the_preflight_also_guards_the_files_it_will_overwrite(tmp_path, monkeypatch) -> None:
+    """
+    `write_outputs()` rewrites the report and the raw results wholesale, every run.
+
+    Guarding only the mutated sources meant an uncommitted edit to
+    ``docs/development/mutation-testing.md`` was destroyed by the next `make mutation`
+    with no warning at all.
+    """
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    report = tmp_path / "docs/development/mutation-testing.md"
+    results = tmp_path / "docs/development/mutation-results.json"
+    calls = _prepare_main(
+        tmp_path,
+        monkeypatch,
+        ["", ""],
+        argv=["mutation_test.py", "--output", str(report), "--results-json", str(results)],
+    )
+
+    mutation_test.main()
+
+    preflight = [c for c in calls if c[0] == "git"][0]
+    assert "docs/development/mutation-testing.md" in preflight
+    assert "docs/development/mutation-results.json" in preflight
+
+
+def test_a_dirty_report_page_stops_the_run_before_it_is_overwritten(tmp_path, monkeypatch, capsys) -> None:
+    """The docs page is generated, but an edit in flight is still somebody's work."""
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    report = tmp_path / "docs/development/mutation-testing.md"
+    _prepare_main(
+        tmp_path,
+        monkeypatch,
+        [" M docs/development/mutation-testing.md\n"],
+        argv=["mutation_test.py", "--output", str(report)],
+    )
+    swept: list[str] = []
+    monkeypatch.setattr(mutation_test, "sweep_module", lambda path_str, *_a, **_k: swept.append(path_str))
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0
+    assert swept == []
+    assert "docs/development/mutation-testing.md" in capsys.readouterr().err
+
+
+def test_render_only_runs_the_preflight_over_the_page_it_rewrites(tmp_path, monkeypatch, capsys) -> None:
+    """
+    ``--render-only`` mutates nothing, which is exactly why it looked safe to exempt.
+
+    It still overwrites the docs page, so `make mutation-render` over an uncommitted edit
+    destroyed it just as surely as a full sweep would have.
+    """
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    saved = tmp_path / "results.json"
+    saved.write_text(json.dumps({"elapsed": 1.0, "modules": []}) + "\n", encoding="utf-8")
+    report = tmp_path / "docs/development/mutation-testing.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("# uncommitted edit\n", encoding="utf-8")
+    _prepare_main(
+        tmp_path,
+        monkeypatch,
+        [" M docs/development/mutation-testing.md\n"],
+        argv=["mutation_test.py", "--render-only", str(saved), "--output", str(report)],
+    )
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0
+    assert report.read_text(encoding="utf-8") == "# uncommitted edit\n"
+    assert "docs/development/mutation-testing.md" in capsys.readouterr().err
+
+
+def test_render_only_over_a_clean_page_still_renders(tmp_path, monkeypatch) -> None:
+    """The guard must gate on uncommitted work only - the ordinary re-render is unchanged."""
+    saved = tmp_path / "results.json"
+    saved.write_text(json.dumps({"elapsed": 1.0, "modules": []}) + "\n", encoding="utf-8")
+    report = tmp_path / "docs/development/mutation-testing.md"
+    _prepare_main(
+        tmp_path,
+        monkeypatch,
+        [""],
+        argv=["mutation_test.py", "--render-only", str(saved), "--output", str(report)],
+    )
+
+    assert mutation_test.main() == 0
+    assert report.exists()
+
+
+def test_an_indeterminate_git_answer_stops_the_run(tmp_path, monkeypatch, capsys) -> None:
+    """
+    Unknown is not clean. The guard's own failure must not become permission to proceed.
+
+    This is the fail-open pattern the branch exists to remove, and it had shipped inside
+    the fix for it: `dirty_paths` returned "nothing is dirty" whenever git could not be
+    run at all.
+    """
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(tmp_path, monkeypatch, [""])
+    monkeypatch.setattr(subprocess, "run", _raise_missing_git)
+    swept: list[str] = []
+    monkeypatch.setattr(mutation_test, "sweep_module", lambda path_str, *_a, **_k: swept.append(path_str))
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0, "a guard that cannot check must not wave the sweep through"
+    assert swept == []
+    assert "cannot determine" in capsys.readouterr().err
+
+
+def _raise_missing_git(command, *_args, **_kwargs):
+    """Stand in for a checkout with no ``git`` on PATH."""
+    if command[0] == "git":
+        raise FileNotFoundError("git")
+    return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
