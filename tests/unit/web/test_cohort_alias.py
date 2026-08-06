@@ -84,12 +84,97 @@ def test_a_failure_after_the_claim_releases_it_again(fake_redis) -> None:
         fake_redis: In-process Redis stand-in from conftest.
     """
     store = MagicMock(wraps=fake_redis)
-    store.hset.side_effect = RuntimeError("the store went away mid-write")
+    store.pipeline.side_effect = RuntimeError("the store went away mid-write")
 
     with pytest.raises(RuntimeError, match="went away"):
         create_cohort_record(store, alias=ALIAS, passphrase=PASSPHRASE, retention_seconds=RETENTION)
 
     assert fake_redis.get(alias_key(ALIAS)) is None
+
+
+class _HalfAppliedPipeline:
+    """A pipeline whose queued write lands but whose EXEC never returns.
+
+    The transaction is what normally makes the record and its TTL one step, but a
+    client that applied the HSET and then lost the connection before EXEC looks
+    exactly like this from the caller's side. It is the state the rollback exists
+    for, so it is built here rather than assumed impossible.
+    """
+
+    def __init__(self, store) -> None:
+        """Record the store the queued write is applied to.
+
+        Args:
+            store: The Redis stand-in to write through to.
+        """
+        self._store = store
+
+    def hset(self, *args, **kwargs):
+        """Apply the write immediately, as a server that received it would.
+
+        Args:
+            *args: Passed to the store.
+            **kwargs: Passed to the store.
+
+        Returns:
+            _HalfAppliedPipeline: Self, so calls chain as redis-py's do.
+        """
+        self._store.hset(*args, **kwargs)
+        return self
+
+    def expire(self, *_args, **_kwargs):
+        """Queue an expiry that is never applied.
+
+        Args:
+            *_args: Ignored.
+            **_kwargs: Ignored.
+
+        Returns:
+            _HalfAppliedPipeline: Self, so calls chain as redis-py's do.
+        """
+        return self
+
+    def execute(self):
+        """Fail the way a dropped connection does.
+
+        Raises:
+            RuntimeError: Always.
+        """
+        msg = "the store went away between writes"
+        raise RuntimeError(msg)
+
+
+def test_a_failure_after_the_record_leaves_no_unaddressable_cohort(fake_redis) -> None:
+    """A cohort whose TTL was never set must not be left behind.
+
+    The identifier is minted inside the creation and only reaches the caller in
+    the response, so a creation that raises never reveals it. A hash written
+    without its expiry is therefore permanent and unreachable at once: nothing
+    can open it, nothing can delete it, and it still holds an alias and a
+    passphrase hash.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+    """
+    store = MagicMock(wraps=fake_redis)
+    store.pipeline.return_value = _HalfAppliedPipeline(fake_redis)
+
+    with pytest.raises(RuntimeError, match="went away"):
+        create_cohort_record(store, alias=ALIAS, passphrase=PASSPHRASE, retention_seconds=RETENTION)
+
+    assert fake_redis.keys(f"{COHORT_KEY_PREFIX}*") == [], "a cohort record survived with no way to reach it"
+    assert fake_redis.get(alias_key(ALIAS)) is None
+
+
+def test_a_created_cohort_carries_a_ttl(fake_redis) -> None:
+    """The happy path still sets the retention the rollback above exists for.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+    """
+    created = create_cohort_record(fake_redis, alias=ALIAS, passphrase=PASSPHRASE, retention_seconds=RETENTION)
+
+    assert 0 < fake_redis.ttl(cohort_key(created["cohort_id"])) <= RETENTION
 
 
 def test_the_alias_is_reusable_after_a_refused_creation(client) -> None:

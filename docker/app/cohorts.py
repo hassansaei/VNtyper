@@ -137,6 +137,31 @@ def preferred_passphrase(header_value: str | None, query_value: str | None) -> s
     return query_value
 
 
+def _discard_partial_cohort(store: Any, key: str, claimed_alias: str | None) -> None:
+    """Undo what a failed creation may have written.
+
+    Called while an exception is propagating, so neither delete may replace it
+    with one of its own: what the caller needs to see is why the creation failed,
+    not why the tidying did.
+
+    Args:
+        store: Redis client for the cohort database.
+        key: The cohort's metadata key.
+        claimed_alias: The alias claimed for this cohort, if any.
+    """
+    try:
+        store.delete(key)
+    except Exception as exc:  # noqa: BLE001 - reported, never raised over the original
+        logger.error(f"Could not remove the partial cohort record {key}: {exc}")
+    if claimed_alias is None:
+        return
+    try:
+        store.delete(alias_key(claimed_alias))
+        logger.error(f"Released the claim on alias {claimed_alias}: its cohort record was not written")
+    except Exception as exc:  # noqa: BLE001 - reported, never raised over the original
+        logger.error(f"Could not release the claim on alias {claimed_alias}: {exc}")
+
+
 def create_cohort_record(
     store: Any,
     *,
@@ -202,7 +227,13 @@ def create_cohort_record(
 
     key = cohort_key(cohort_id)
     try:
-        store.hset(
+        # The record and its expiry go in one round trip. Written separately, a
+        # failure between them leaves a cohort hash with no TTL, holding an alias
+        # and a passphrase hash: the identifier is minted in here and only reaches
+        # the caller in the response, so a creation that raises never reveals it.
+        # That record would be unreachable and permanent at the same time.
+        pipeline = store.pipeline()
+        pipeline.hset(
             key,
             mapping={
                 "alias": alias or "",
@@ -210,11 +241,13 @@ def create_cohort_record(
                 "created_at": datetime.now(tz=timezone.utc).isoformat(),
             },
         )
-        store.expire(key, retention_seconds)
+        pipeline.expire(key, retention_seconds)
+        pipeline.execute()
     except Exception:
-        if claimed_alias is not None:
-            store.delete(alias_key(claimed_alias))
-            logger.error(f"Released the claim on alias {claimed_alias}: its cohort record was not written")
+        # Belt and braces behind the transaction: a client that applied the HSET
+        # and then lost the connection before EXEC is indistinguishable from here,
+        # so the key is deleted rather than assumed absent.
+        _discard_partial_cohort(store, key, claimed_alias)
         raise
 
     logger.info(f"Created cohort {cohort_id}")
