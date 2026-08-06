@@ -60,9 +60,17 @@ def load_config(config_path=None):
 
 def main(argv: list[str] | None = None) -> None:
     """
-    Main function to parse arguments and execute corresponding subcommands.
-    With this setup, global parameters can now be placed before or after
-    the subcommand.
+    Parse arguments and dispatch to the subcommand's handler.
+
+    The global options (``-l/--log-level``, ``-f/--log-file``, ``-v/--version``,
+    ``--config-path``) are top-level only: they must appear **before** the
+    subcommand. ``build_parser`` registers them on the shared parent parser but
+    does not pass that parent to ``add_parser``, so ``vntyper pipeline
+    --log-level DEBUG`` is a usage error and always has been. This docstring
+    previously claimed either position worked;
+    ``tests/unit/test_cli_parser_contract.py`` now pins the real behaviour on
+    every subcommand, so making both positions work would be a visible change
+    rather than an accidental one.
 
     Args:
         argv (list[str] | None): Argument list to parse. Defaults to None, which
