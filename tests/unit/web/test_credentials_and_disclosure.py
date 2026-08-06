@@ -339,6 +339,10 @@ def test_redis_url_percent_encodes_the_credential() -> None:
     assert parts.hostname == "redis"
     assert parts.port == 6379
     assert parts.path == "/2"
+    # `SplitResult.password` is `str | None`. Asserting it is present first is the
+    # difference between "the URL carries no credential at all" failing as a clear
+    # assertion here and failing as a TypeError inside unquote() several frames down.
+    assert parts.password is not None, "the URL carries no credential section"
     assert unquote(parts.password) == password
     assert password not in url, "the credential must be encoded, not interpolated raw"
 
