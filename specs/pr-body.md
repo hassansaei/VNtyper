@@ -1,7 +1,8 @@
 # Follow-ups to #179: close #181–#188, #192, #194–#197
 
-Branch `fix/issue-181-197-followups`, 45 commits on top of `4fd638a` (v2.0.6), tip
-`434f792`. The last nine commits answer an adversarial review of this PR — see
+Branch `fix/issue-181-197-followups`, 47 commits on top of `4fd638a` (v2.0.6), tip
+`28e0ab7`, gated by golden-cohort **run 5** (`4fd638a` → `9816f86`). The last eleven
+commits answer an adversarial review of this PR — see
 **[Adversarial review](#adversarial-review)** at the end, which includes a **merge
 blocker that review found and this branch had introduced**.
 
