@@ -1,0 +1,315 @@
+"""The per-sample HTML report, rendered end to end from a pipeline summary.
+
+``generate_summary_report`` was 4% covered and only reachable by running the
+whole pipeline, which is why four separate defects lived in it undetected. These
+tests build a ``pipeline_summary.json`` in ``tmp_path``, render the **real**
+shipped template, and assert on the HTML that comes out.
+
+Nothing here mocks the template or the report configuration: a test that asserts
+on a context dict cannot see a template that ignores the value, and the template
+is where two of the four defects were.
+
+IGV generation is never triggered -- ``bed_file`` is left unset, so
+``create_report`` is never invoked and the tier stays pure.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+
+import vntyper
+from vntyper.cli import load_config
+from vntyper.scripts import summary_steps
+from vntyper.scripts.generate_report import generate_summary_report
+
+pytestmark = pytest.mark.unit
+
+TEMPLATE_DIR = Path(vntyper.__file__).resolve().parent / "templates"
+
+#: A Kestrel row as it reaches the report: the pipeline emits both the raw motif
+#: pair (`Motifs`) and the annotated motif (`Motif`), and both are load-bearing
+#: upstream (contract C3 / AGENTS.md trap 3).
+KESTREL_ROW = {
+    "Motifs": "X-5",
+    "Motif": "5",
+    "Variant": "Insertion",
+    "POS": 67,
+    "REF": "G",
+    "ALT": "GG",
+    "Motif_sequence": "GGCCACCACCCTG",
+    "Estimated_Depth_AlternateVariant": 120,
+    "Estimated_Depth_Variant_ActiveRegion": 12000,
+    "Depth_Score": 0.01,
+    "Confidence": "High_Precision",
+    "Flag": "Not flagged",
+}
+
+COVERAGE_ROW = {
+    "mean": 250.0,
+    "median": 248.0,
+    "stdev": 12.5,
+    "min": 100,
+    "max": 400,
+    "region_length": 1000,
+    "uncovered_bases": 5,
+    "percent_uncovered": 0.5,
+}
+
+
+def write_summary(output_dir: Path, *steps: dict, **top_level) -> Path:
+    """Write a ``pipeline_summary.json`` with the given steps.
+
+    Args:
+        output_dir: Directory to write into.
+        *steps: Step mappings, already shaped.
+        **top_level: Extra top-level keys, e.g. ``input_files``.
+
+    Returns:
+        Path: The file written.
+    """
+    payload = {"version": "9.9.9", "input_files": {}, "steps": list(steps), **top_level}
+    path = output_dir / "pipeline_summary.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def tabular_step(name: str, rows: list[dict]) -> dict:
+    """Shape a tsv/csv-derived step the way ``summary.py`` records it."""
+    return {"step": name, "parsed_result": {"comments": [], "data": rows}}
+
+
+def render(output_dir: Path, config=None, **kwargs) -> str:
+    """Render the report into ``output_dir`` and return the HTML."""
+    generate_summary_report(
+        output_dir=str(output_dir),
+        template_dir=str(TEMPLATE_DIR),
+        report_file="summary_report.html",
+        log_file=kwargs.pop("log_file", None),
+        config=config if config is not None else load_config(None),
+        **kwargs,
+    )
+    return (output_dir / "summary_report.html").read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def positive_summary(tmp_path):
+    """A Kestrel-positive, adVNTR-absent run with good coverage."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        input_files={"bam": "sample.bam"},
+    )
+    return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# The report renders at all
+# ---------------------------------------------------------------------------
+
+
+def test_a_report_is_written(positive_summary) -> None:
+    html = render(positive_summary)
+    assert html.lstrip().startswith("<!DOCTYPE html>")
+    assert "Summary Report" in html
+
+
+def test_the_config_is_required(tmp_path) -> None:
+    with pytest.raises(ValueError, match="Config dictionary must be provided"):
+        generate_summary_report(
+            output_dir=str(tmp_path),
+            template_dir=str(TEMPLATE_DIR),
+            report_file="r.html",
+            log_file=None,
+            config=None,
+        )
+
+
+def test_a_missing_pipeline_summary_still_renders(tmp_path) -> None:
+    """A report with nothing in it is a usable diagnostic; a traceback is not."""
+    html = render(tmp_path)
+    assert "Summary Report" in html
+    assert "Not calculated" in html
+
+
+# ---------------------------------------------------------------------------
+# Coverage - contract C1 read through to the HTML
+# ---------------------------------------------------------------------------
+
+
+def test_every_coverage_statistic_reaches_the_html(positive_summary) -> None:
+    html = render(positive_summary)
+    for value in ("250.0", "248.0", "12.5", "100", "400", "1000", "0.5"):
+        assert value in html, f"coverage value {value} is missing from the report"
+
+
+def test_low_coverage_is_flagged_red(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": 3.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    html = render(tmp_path)
+    assert "color:red" in html
+
+
+def test_coverage_that_was_never_calculated_says_so(tmp_path) -> None:
+    write_summary(tmp_path, tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]))
+    assert "Not calculated" in render(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# The Kestrel table
+# ---------------------------------------------------------------------------
+
+
+def test_the_kestrel_table_carries_the_display_headings(positive_summary) -> None:
+    html = render(positive_summary)
+    for heading in ("Position", "Depth (Variant)", "Depth (Region)", "Depth Score", "Confidence", "Flag"):
+        assert f"<th>{heading}</th>" in html
+
+
+def test_the_confidence_column_is_colour_coded(positive_summary) -> None:
+    html = render(positive_summary)
+    assert '<span style="color:red;font-weight:bold;">High_Precision</span>' in html
+
+
+def test_a_negative_run_renders_its_placeholder_row(tmp_path) -> None:
+    """`output_empty_result` writes a `Motif` column and no `Motifs` at all --
+    the shape that made the missing-column defect invisible to a positive run."""
+    negative_row = {
+        "Motif": "None",
+        "Variant": "None",
+        "POS": "None",
+        "REF": "None",
+        "ALT": "None",
+        "Motif_sequence": "None",
+        "Estimated_Depth_AlternateVariant": "None",
+        "Estimated_Depth_Variant_ActiveRegion": "None",
+        "Depth_Score": "None",
+        "Confidence": "Negative",
+    }
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [negative_row]),
+    )
+    html = render(tmp_path)
+    assert "Negative" in html
+
+
+# ---------------------------------------------------------------------------
+# adVNTR
+# ---------------------------------------------------------------------------
+
+
+def test_an_absent_advntr_step_says_it_was_not_performed(positive_summary) -> None:
+    assert "adVNTR genotyping was not performed." in render(positive_summary)
+
+
+def test_an_advntr_step_with_no_rows_says_nothing_was_found(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, []),
+    )
+    assert "No pathogenic variants identified by adVNTR." in render(tmp_path)
+
+
+def test_advntr_rows_are_tabulated(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(
+            summary_steps.STEP_ADVNTR,
+            [{"VID": "25561", "Variant": "I22_2_G_LEN1", "NumberOfSupportingReads": 9, "Flag": "Not flagged"}],
+        ),
+    )
+    html = render(tmp_path)
+    assert "25561" in html
+    assert "<th>NumberOfSupportingReads</th>" in html
+
+
+# ---------------------------------------------------------------------------
+# Cross-match
+# ---------------------------------------------------------------------------
+
+
+def test_a_cross_match_hit_is_reported(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
+        tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "Yes"}]),
+    )
+    assert "At least one match was found" in render(tmp_path)
+
+
+def test_a_cross_match_miss_is_reported(tmp_path) -> None:
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
+        tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "No"}]),
+    )
+    assert "No matches were found" in render(tmp_path)
+
+
+def test_no_cross_match_step_means_no_cross_match_section(positive_summary) -> None:
+    assert "Cross-Match Summary" not in render(positive_summary)
+
+
+# ---------------------------------------------------------------------------
+# The BAM header block
+# ---------------------------------------------------------------------------
+
+
+def test_the_bam_header_warning_is_shown(tmp_path) -> None:
+    """`BAM Header Parsing` records a flat object, not {"data": [...]}."""
+    write_summary(
+        tmp_path,
+        {
+            "step": summary_steps.STEP_BAM_HEADER,
+            "parsed_result": {
+                "warning": "Declared assembly disagrees with chr1 length",
+                "alignment_pipeline": "bwa mem",
+                "assembly_text": "GRCh38",
+                "assembly_contig": "chr1",
+            },
+        },
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    html = render(tmp_path)
+    assert "Declared assembly disagrees with chr1 length" in html
+    assert "bwa mem" in html
+
+
+# ---------------------------------------------------------------------------
+# The pipeline log
+# ---------------------------------------------------------------------------
+
+
+def test_the_pipeline_log_is_embedded(positive_summary) -> None:
+    log_file = positive_summary / "pipeline.log"
+    log_file.write_text("a distinctive log line\n", encoding="utf-8")
+    assert "a distinctive log line" in render(positive_summary, log_file=str(log_file))
+
+
+def test_no_log_file_says_so_rather_than_failing(positive_summary) -> None:
+    assert "No pipeline log file was provided." in render(positive_summary, log_file=None)
+
+
+# ---------------------------------------------------------------------------
+# The version and input files come from the summary, not from the caller
+# ---------------------------------------------------------------------------
+
+
+def test_the_version_and_input_files_come_from_the_summary(positive_summary) -> None:
+    """`cli_report` used to pass both in; the generator reads them itself, which
+    is why passing them was both wrong and unnecessary."""
+    html = render(positive_summary)
+    assert "9.9.9" in html
+    assert "sample.bam" in html
