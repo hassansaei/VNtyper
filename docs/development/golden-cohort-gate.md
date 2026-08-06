@@ -3,18 +3,31 @@
 Before-versus-after comparison of genotyping output across the whole local test cohort,
 run to decide whether the deliberately behaviour-changing commits in #179 may ship.
 
-**Verdict: PASS.** Every genotype field, every `Confidence` label and every `Flag` is
-byte-identical between the two commits, on every sample and every assembly. The only
-differences are in how the HTML report *presents* an unchanged result, and each one is
-attributable to a named commit and is a correction of a documented reporting defect.
+The gate has been run twice. **A verdict attests one candidate commit and nothing after
+it**, so read the run whose candidate matches the tree you are judging.
 
-| | |
-| --- | --- |
-| Baseline ("before") | `2fcc6e3` — merge-base with `main` |
-| Candidate ("after") | `7344c62` — tip of `test/issue-179-test-strategy` |
-| Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) |
-| Runs total | 116, plus 6 deliberate-mismatch probes |
-| Non-zero exits | 0 before, 0 after |
+| Run | Candidate ("after") | Verdict | Attests |
+| --- | --- | --- | --- |
+| 1 | `7344c62` | PASS | the branch as it stood at `7344c62` |
+| 2 | `1792345` | PASS | **the branch tip**, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096` |
+
+Run 2 is the attestation of record: run 1 predates 24 commits, five of which change
+production code. Run 1 is kept because it is the measurement several of the adjudications
+below were written against, not because it stands in for the tip.
+
+**Verdict: PASS, both runs.** Every genotype field, every `Confidence` label and every
+`Flag` is byte-identical between baseline and candidate, on every sample and every
+assembly. The only differences are in how the HTML report *presents* an unchanged result,
+and each one is attributable to a named commit and is a correction of a documented
+reporting defect.
+
+| | Run 1 | Run 2 |
+| --- | --- | --- |
+| Baseline ("before") | `2fcc6e3` — merge-base with `main` | `2fcc6e3` |
+| Candidate ("after") | `7344c62` | `1792345` — tip of `test/issue-179-test-strategy` |
+| Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) | same 58, same matrix |
+| Runs total | 116, plus 6 deliberate-mismatch probes | 116, plus 6 probes |
+| Non-zero exits | 0 before, 0 after | 0 before, 0 after |
 
 ## Method
 
@@ -49,7 +62,7 @@ as its first line; all 58 before-side logs report the baseline tree with the mar
 `advntr_config.json` and `report_config.json`, so the baseline configuration was in force
 as well as the baseline code.
 
-## Result
+## Result — run 1, candidate `7344c62`
 
 | Compared | Cases with a delta |
 | --- | --- |
@@ -81,7 +94,104 @@ The call each sample yields, identical on all six assemblies and identical on bo
 | `example_dfc3` | `5-E` | Deletion | `High_Precision*` | Not flagged |
 | `example_40cf` (hg38 only) | — | — | `Negative` | — |
 
+## Result — run 2, candidate `1792345` (the branch tip)
+
+Same baseline, same 58-case matrix, same comparison. Re-run because run 1's candidate is
+24 commits behind the tip and five of those commits change production code: `d144505`
+(adVNTR compound-variant repair restored to crash-only), `c51052c` and `b4059ce`
+(assembly guard), `7e58eb8` (shell quoting at three call sites) and `2c92096`
+(`--output-name` rejection).
+
+| Compared | Cases with a delta |
+| --- | --- |
+| Exit code | 0 / 58 |
+| Kestrel variant set (rows added or removed) | 0 / 58 |
+| Kestrel `Confidence` | 0 / 58 |
+| Kestrel `Flag` | 0 / 58 |
+| Any other Kestrel column, including `Motifs` | 0 / 58 |
+| `kestrel_pre_result.tsv` | 0 / 58 |
+| adVNTR variant set, genotype fields, `Insertion_len`, `Flag` | 0 / 3 |
+| Coverage summary | 0 / 58 |
+| Recorded pipeline steps | 0 / 58 |
+| Screening summary **text** | 1 / 58 |
+| Screening summary **emphasis** | 11 / 58 |
+| Rendered `Motif` **cell** (display only) | 48 / 58 |
+| HTML entity escaping (display only) | 58 / 58 |
+
+The per-sample call table is unchanged from run 1 — same six motif pairs, same
+`Confidence`, same `Flag`, on all six assemblies. The three adVNTR runs reproduce run 1
+exactly, VID `25561` throughout:
+
+| Case | RU | Pvalue | Flag |
+| --- | --- | --- | --- |
+| `a5c1_hg19_advntr` | `2` | `6.78296229901e-07` | Not flagged |
+| `b178_hg19_advntr` | `4` | `3.82652062679e-56` | Not flagged |
+| `dfc3_hg19_advntr` | `2,2,2,2,2` | `1.5504014332800002e-18` | `Polymorphic_Call` |
+
+`dfc3` is the compound call `D17_2&D18_2&D19_2&D20_2&D21_2`, the input class `d144505`
+rewrote. Its row is identical on both sides in every column, `Insertion_len` included.
+
+### Run 2's proof of which code ran
+
+Same failure mode, same defence, re-demonstrated on this tree. With the process CWD set
+to the `2fcc6e3` worktree and no `PYTHONPATH`, a script run from outside the tree resolved
+`vntyper.__file__` to `…/issue-179-impl/vntyper/__init__.py` and reported
+`vntyper.scripts.pipeline_guards` **present** — i.e. it would have run the candidate code
+while appearing to run the baseline. With `PYTHONPATH` pinned to the baseline worktree the
+same script resolved to `…/before-2fcc6e3/vntyper/__init__.py` with the marker **absent**.
+
+Every one of the 122 runs was launched through a wrapper that prints its resolved
+`vntyper.__file__` and marker state as its first line and exits before doing any work
+unless both agree with its side. All 61 before-side runs report the baseline tree with
+`pipeline_guards=False`; all 61 after-side runs report the candidate tree with
+`pipeline_guards=True`. No run reached the pipeline with the wrong package.
+
+### Run 2's assembly-guard verdicts — `b4059ce` rejects nothing
+
+The guard reached `agree` on **58 of 58** after-side cases: 20 `hg19`, 9 `hg38`,
+8 `GRCh38`, 7 each `GRCh37` / `hg19_ensembl` / `hg38_ensembl`. Zero `mismatch`, zero
+`undetermined`, and — the question `b4059ce` raises — **zero `conflict`**. No cohort
+header names two builds at once, so making that state fatal rejects no sample that
+previously succeeded. `c51052c` is confirmed the same way: the verdict no longer depends
+on contig order and every cohort header still decides.
+
+The two deliberate mismatch probes behave as in run 1: exit 1 on both sides, only the
+failure point moves. One consequence is worth naming because it is the sole non-genotype
+difference outside the report — on the after side those two runs write **no**
+`pipeline_summary.json`, because the guard refuses before the first step is recorded,
+whereas the baseline got as far as recording `BAM Header Parsing` and
+`BAM to FASTQ Conversion` before failing downstream. Both sides still exit 1; no run that
+succeeded before fails now. The naming probe (a `GRCh38` BAM declared `hg38`) exits 0 on
+both sides and the guard agrees.
+
+### Run 2's presentation deltas
+
+The four in the run-1 adjudication below reproduce identically (D1, ten negative cases;
+D2, `dfc3_hg19_advntr`). Run 2 additionally quantified two the run-1 record mentions but
+did not count, both confined to the rendered HTML:
+
+* **Rendered `Motif` cell**, 48 of 58 — `8a76512`. The column now shows the annotated
+  motif rather than the raw pair: `4-5`→`5`, `5C-Q`→`5C`, `S-Q`→`Q`, `L-6p`→`L`,
+  `D-C`→`D`, `5-E`→`E`. The `Motifs` column of `kestrel_result.tsv` is unchanged on all
+  58 cases, asserted directly — this is display only.
+* **HTML entity escaping**, 58 of 58 — `bda7e05`. The `&&` inside the recorded samtools
+  command is now emitted as `&amp;&amp;`. Two occurrences per report; the command string
+  itself is unchanged.
+
+No presentation delta in run 2 is unattributed.
+
+### How run 2 differs procedurally from run 1
+
+Three deviations, none of which touch what is compared: both sides read the BAMs from the
+`issue-179-impl` worktree's `tests/data` by absolute path (run 1 used a per-side relative
+path), every run used `--threads 2`, and eight cases ran concurrently. The case matrix
+itself was reproduced from run 1's `make_matrix.py` verbatim — same 58 ids, same
+assemblies, same five non-fast samples, same three adVNTR samples with
+`--advntr-max-coverage 300`, same three probes.
+
 ## Adjudication of every difference
+
+The deltas below were adjudicated against run 1 and re-observed unchanged in run 2.
 
 ### D1 — screening emphasis on 10 negative cases (`5527a49`, expected)
 
@@ -145,8 +255,9 @@ non-regressive here but not exercised on the defect itself.
 cohort: replacing the greedy `(LEN.*)` with a bounded `(LEN\d+)` changed `Insertion_len`
 for compound states whose `LEN` is followed by a further `&` part, and therefore changed
 which rows survive the frameshift filter — a reported-genotype change for inputs that
-never crashed. Restored to crash-only in a later commit on this branch by keeping the
-greedy pattern and bounding the *split* instead; a differential sweep of 2380 probes
+never crashed. Restored to crash-only by `d144505` — later on this branch, and therefore
+inside run 2 but not run 1 — by keeping the greedy pattern and bounding the *split*
+instead; a differential sweep of 2380 probes
 against `a7c3d9e^` shows 572/572 previously non-crashing inputs identical. The underlying
 "what should `Insertion_len` be for a compound call" question is filed for the domain
 owner as **B8** in [CI/CD follow-ups](ci-followups.md).
