@@ -153,7 +153,7 @@ def _describe(action: argparse.Action) -> ParserRow:
     return (
         tuple(action.option_strings),
         type(action).__name__,
-        action.type.__name__ if action.type is not None else None,
+        getattr(action.type, "__name__", None),
         action.default,
         action.required,
         tuple(action.choices) if action.choices else None,
@@ -277,6 +277,7 @@ def test_reference_assembly_offers_exactly_what_the_registry_knows(command: str)
     action = next(
         action for action in _subparsers(build_parser())[command]._actions if action.dest == "reference_assembly"
     )
+    assert action.choices is not None, f"{command} --reference-assembly stopped constraining its values"
     assert sorted(action.choices) == sorted(assemblies)
 
 

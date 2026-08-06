@@ -30,7 +30,7 @@ from vntyper.scripts.pipeline import run_pipeline
 
 pytestmark = pytest.mark.unit
 
-MINIMAL_CONFIG = {
+MINIMAL_CONFIG: dict[str, dict[str, object]] = {
     "default_values": {
         "output_dir": "out",
         "threads": 4,
