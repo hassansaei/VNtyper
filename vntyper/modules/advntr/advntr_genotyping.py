@@ -13,33 +13,50 @@ from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
 
-#: Matches greedily from the first ``LEN`` token to the end of an adVNTR ``State`` string.
+#: Every ``LEN<n>`` token in an adVNTR ``State`` string.
 #:
-#: This is the historic expression and it is deliberately kept. Everything after the first
-#: ``LEN`` becomes ``Insertion_len``, so a single-part state leaves a bare number
-#: (``I22_2_G_LEN1`` -> ``"1"``) while any state with a further ``&`` part leaves a
-#: non-numeric remainder (``I9_2_A_LEN2&D50_2`` -> ``"2&D50_2"``) that
-#: ``pd.to_numeric(errors="coerce")`` turns into ``NaN`` and then **zero**. That zero
-#: decides which rows pass the frameshift filter and therefore which adVNTR genotypes are
-#: reported, so it is a clinical-output decision, not a parsing detail: it is pinned by
-#: ``tests/unit/test_advntr_output_parsing.py::TestInsertionLenIsCharacterised`` and may
-#: only change deliberately. Whether it *should* become the first part's length or the sum
-#: over all parts is filed for the domain owner, not decided here.
-GREEDY_INSERTION_LEN_PATTERN = r"(LEN.*)"
+#: #192 defines the inserted length of a compound state as the **sum** of these, not the
+#: first and not zero. @hassansaei, 2026-08-06: "use the sum of inserted lengths [...]
+#: ``I9_2_A_LEN9&I50_2_A_LEN3`` to Insertion_len = 9 + 3 = 12 (not first-LEN-only). [...]
+#: Do not keep first-LEN-wins as the defined semantics."
+#:
+#: What this replaced, recorded because #192 and the #198 PR body both diagnose it wrongly
+#: as "first-LEN-wins": the historic expression was ``(LEN.*)``, greedy to the end of the
+#: string, whose remainder was then split on ``LEN`` and coerced with
+#: ``pd.to_numeric(errors="coerce")``. A single terminal ``LEN`` left a bare number and
+#: parsed (``I22_2_G_LEN1`` -> 1), but *any* material after the first ``LEN`` -- a second
+#: ``LEN``, a further ``&`` part, even a trailing ``&`` -- left a non-numeric remainder
+#: that became **zero**. ``I9_2_A_LEN9&I50_2_A_LEN3`` gave 0, not 9. No input ever
+#: behaved as "first-LEN-wins".
+#:
+#: ``Insertion_len`` feeds ``frame = abs(Insertion_len - Deletion_length)``, and 0 is in
+#: neither ``ins_frame`` (3n+1) nor ``del_frame`` (3n+2), so a collapsed pure-insertion
+#: compound was dropped in silence. Summation makes those calls visible; it also drops a
+#: net-in-frame compound such as ``I9_2_A_LEN2&D50_2&D51_2`` that the zero had been
+#: keeping. Both directions are pinned by
+#: ``tests/unit/test_advntr_output_parsing.py::TestSummedInsertionLength``.
+LEN_TOKEN_PATTERN = re.compile(r"LEN(\d+)")
 
-#: ``str.split`` bound for the ``LEN`` split, and the whole of the compound-variant repair.
-#:
-#: A ``State`` naming two insertions -- ``I9_2_A_LEN9&I50_2_A_LEN3`` -- extracts to
-#: ``LEN9&I50_2_A_LEN3``, which contains *two* ``LEN`` tokens. An unbounded split would
-#: yield three fields for a two-column assignment and raise, and the broad handler in
-#: :func:`process_advntr_output` would then return without writing a file: one compound
-#: call would take every other variant in the sample with it.
-#:
-#: Splitting at most once makes that shape impossible while leaving every state that
-#: already produces two fields byte for byte unchanged -- the bound only ever fires on the
-#: compound input, and it gives that input the same treatment every other multi-part
-#: remainder gets: non-numeric, coerced to zero.
-INSERTION_LEN_SPLIT_LIMIT = 1
+
+def sum_insertion_lengths(variant: str) -> int:
+    """Total inserted bases named by every ``LEN`` token in an adVNTR ``State`` string.
+
+    Implements the #192 decision: a compound state's inserted length is the sum over all
+    of its parts, so ``I9_2_A_LEN9&I50_2_A_LEN3`` is 12. A state naming no ``LEN`` token,
+    or naming one that is malformed (``LENX``), contributes 0.
+
+    Args:
+        variant (str): An adVNTR ``State``/``Variant`` string, possibly compound
+            (parts joined by ``&``).
+
+    Returns:
+        int: The sum of every ``LEN<n>``; 0 when there is none. A non-string input
+            (a ``NaN`` from an empty ``State`` column) is 0, as the historic
+            ``str.extract`` pipeline it replaces also was.
+    """
+    if not isinstance(variant, str):
+        return 0
+    return sum(int(match) for match in LEN_TOKEN_PATTERN.findall(variant))
 
 
 # -------------------------------------------------------------------------
@@ -160,13 +177,8 @@ def advntr_processing_del(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract(GREEDY_INSERTION_LEN_PATTERN)[0]
-    logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
-    df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
-    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=INSERTION_LEN_SPLIT_LIMIT, expand=True)
-    logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
-    df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
-    df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
+    df1["Insertion_len"] = df1["Variant"].map(sum_insertion_lengths).astype(int)
+    logger.debug("Summed every 'LEN' token in 'Variant' into 'Insertion_len' (#192).")
     df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
     df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
@@ -204,13 +216,8 @@ def advntr_processing_ins(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract(GREEDY_INSERTION_LEN_PATTERN)[0]
-    logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
-    df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
-    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=INSERTION_LEN_SPLIT_LIMIT, expand=True)
-    logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
-    df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
-    df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
+    df1["Insertion_len"] = df1["Variant"].map(sum_insertion_lengths).astype(int)
+    logger.debug("Summed every 'LEN' token in 'Variant' into 'Insertion_len' (#192).")
     df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
     df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)

@@ -267,16 +267,17 @@ class TestPathsThatWriteNoFile:
 
 class TestCompoundVariants:
     """
-    A ``State`` naming two insertions (``I9_2_A_LEN9&I50_2_A_LEN3``) used to raise inside
+    A ``State`` naming two insertions (``I9_2_A_LEN9&I50_2_A_LEN3``) once raised inside
     ``advntr_processing_del``: the greedy ``extract("(LEN.*)")`` matched
     ``LEN9&I50_2_A_LEN3``, and splitting *that* on ``LEN`` yields *three* parts for a
     two-column assignment. The ``ValueError`` was swallowed by the broad handler, so the
     stage returned having written nothing -- discarding every other variant in the sample.
 
-    The repair is deliberately **crash-only**: the extraction stays greedy and the split is
-    bounded to one, so every ``State`` that produced two parts before still produces exactly
-    the same two parts, and only the shape that used to raise takes a new path. See
-    :class:`TestInsertionLenIsCharacterised` for the behaviour that is pinned byte for byte.
+    The first repair was crash-only: the extraction stayed greedy and the split was bounded
+    to one, which stopped the raise by giving the shape the same zero every other multi-part
+    remainder already got. #192 replaced that zero with the sum over every ``LEN`` token,
+    so the shape now carries a real length. See :class:`TestSummedInsertionLength` for the
+    decision and :class:`TestInsertionLenAndFrameAfterFiltering` for the table it produces.
     """
 
     COMPOUND = "I9_2_A_LEN9&I50_2_A_LEN3"
@@ -293,21 +294,35 @@ class TestCompoundVariants:
         assert list(df.columns) == FINAL_COLUMNS
         assert CANONICAL_VARIANT in set(df["Variant"]), "the unrelated canonical variant must survive"
 
-    @pytest.mark.parametrize("state", ["I9_2_A_LEN9&I50_2_A_LEN3", "I9_2_A_LEN1&I50_2_A_LEN3"])
-    def test_the_two_len_shape_no_longer_raises_and_still_writes_a_result(self, tmp_path, caplog, state):
+    @pytest.mark.parametrize(
+        ("state", "reported"),
+        [
+            # 9 + 3 = 12, a multiple of 3: in frame, so both halves drop it.
+            ("I9_2_A_LEN9&I50_2_A_LEN3", False),
+            # 1 + 3 = 4 == 1 mod 3: a frameshift, so the insertion half reports it. Under
+            # the pre-#192 zero this fell to the negative placeholder like the row above.
+            ("I9_2_A_LEN1&I50_2_A_LEN3", True),
+        ],
+    )
+    def test_the_two_len_shape_neither_raises_nor_is_forced_to_the_placeholder(self, tmp_path, caplog, state, reported):
         """
         The crash shape: two ``LEN`` tokens in one ``State``. Before the repair both filters
         raised ``ValueError`` and :func:`process_advntr_output` returned having written no
         file at all, leaving ``pipeline.py`` pointing at a path that does not exist. It now
-        parses; the row itself does not survive the frameshift filter, so the sample falls to
-        the negative placeholder -- but the file is written and no error is logged.
+        parses, and since #192 its two lengths are summed rather than read as zero -- so
+        whether it reaches the report is decided by the #182 frameshift rule on the summed
+        length, not by the parse collapsing.
         """
         source = write_advntr_output(tmp_path, ADVNTR_HEADER + f"25561\t{state}\t11\t153.98\t0.0001\n")
 
         with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
             advntr.process_advntr_output(str(source), str(tmp_path), "output")
 
-        assert_is_negative_placeholder(read_result(tmp_path))
+        df = read_result(tmp_path)
+        if reported:
+            assert list(df["Variant"]) == [state]
+        else:
+            assert_is_negative_placeholder(df)
         assert not [r for r in caplog.records if r.levelno >= logging.ERROR], "the parse must not fail any more"
 
     def test_a_compound_variant_is_annotated_part_by_part(self, tmp_path, ru_config):
@@ -335,70 +350,195 @@ def state_frame(state: str) -> pd.DataFrame:
     )
 
 
-class TestInsertionLenIsCharacterised:
+def reported_rows(state: str) -> int:
+    """Rows ``state`` contributes to ``output_adVNTR_result.tsv``.
+
+    ``process_advntr_output`` concatenates the deletion half and the insertion half, so a
+    state is reported when *either* filter keeps it. Which half keeps it is invisible in
+    the result file; whether one of them does is the whole of the reported outcome.
     """
-    Characterisation, **not** endorsement, of how ``Insertion_len`` is derived.
+    return len(advntr.advntr_processing_del(state_frame(state))) + len(advntr.advntr_processing_ins(state_frame(state)))
 
-    Every expectation below was measured by running the real function at ``a7c3d9e^`` --
-    the commit before the compound-variant repair -- against these exact inputs. The
-    derivation is arguably wrong (see the "first LEN wins vs sum of LENs vs NaN->0" finding
-    filed for the domain owner), but it decides which rows pass the frameshift filter and
-    therefore which adVNTR genotypes get reported. It may only change by a deliberate,
-    reviewed decision, and this test is what makes such a change visible.
 
-    The rule the historic code implements: extract greedily from the first ``LEN`` to the
-    end of the string, then take everything after that first ``LEN``. A single-part state
-    leaves a bare number (``I22_2_G_LEN1`` -> ``1``); any state with a further ``&`` part
-    leaves a non-numeric remainder (``I9_2_A_LEN2&D50_2`` -> ``"2&D50_2"``), which
-    ``pd.to_numeric(errors="coerce")`` turns into ``NaN`` and then **zero**.
+class TestSummedInsertionLength:
+    """
+    Specification (#192, decided 2026-08-06): every ``LEN`` token in a ``State`` counts.
+
+    @hassansaei: "For compound adVNTR states [...] use the **sum** of inserted lengths and
+    the **sum** of deleted lengths when computing the net length that feeds the pathogenic
+    frameshift filter (``frame = abs(Insertion_len - Deletion_length)``, with the same
+    3n+1 / 3n+2 rule as #182). Example: ``I9_2_A_LEN9&I50_2_A_LEN3`` to Insertion_len =
+    9 + 3 = 12 (not first-LEN-only). [...] Do not keep first-LEN-wins as the defined
+    semantics."
+
+    **The diagnosis in #192 and in the #198 PR body is wrong, and is corrected here.**
+    Both call the historic behaviour "first-LEN-wins". Measured against the real parser,
+    *no input behaved that way*: the historic expression extracted greedily from the first
+    ``LEN`` to the end of the string, so any material following that first ``LEN`` left a
+    non-numeric remainder that ``pd.to_numeric(errors="coerce")`` turned into **zero**.
+    ``I9_2_A_LEN9&I50_2_A_LEN3`` gave 0, not 9. The precise historic rule was: the value
+    collapses to zero exactly when material follows the first ``LEN``; a compound whose
+    only ``LEN`` is terminal parsed correctly. Where it collapsed, a pure-insertion
+    compound got ``frame == 0``, and 0 is in neither ``ins_frame`` (3n+1) nor ``del_frame``
+    (3n+2) -- so those states were dropped in silence. That is a worse defect than the
+    issue describes.
+    """
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            # --- unchanged by this commit: a single terminal LEN already parsed ---
+            ("I22_2_G_LEN1", 1),
+            ("I50_2&I9_2_A_LEN3", 3),
+            ("I50_2&D9_2&I80_2_A_LEN7", 7),
+            ("D8_2&D9_2&I9_2_A_LEN9", 9),
+            # --- unchanged by this commit: no LEN token at all ---
+            ("D17_2&D18_2&D19_2&D20_2&D21_2", 0),  # the golden cohort's only compound call
+            ("D50_2", 0),
+            ("", 0),
+            ("NOT_A_VARIANT", 0),
+            ("I9_2_A_LENX", 0),  # a malformed LEN is not a LEN token
+            # --- changed: material follows the first LEN, so this used to be 0 ---
+            ("I9_2_A_LEN9&I50_2_A_LEN3", 12),  # his worked example: 9 + 3
+            ("I9_2_A_LEN9&I50_2_A_LEN3&I80_2_A_LEN1", 13),
+            ("I9_2_A_LEN2&D50_2", 2),
+            ("I9_2_A_LEN9&", 9),  # a trailing & no longer collapses the value to 0
+        ],
+    )
+    def test_every_len_token_is_summed(self, state, expected):
+        assert advntr.sum_insertion_lengths(state) == expected
+
+    @pytest.mark.parametrize("variant", [None, float("nan"), 12])
+    def test_a_non_string_state_sums_to_zero_rather_than_raising(self, variant):
+        """The historic pipeline tolerated a NaN ``Variant`` (``str.extract`` -> NaN -> 0).
+
+        Characterisation of that tolerance, carried across deliberately so the helper is a
+        total function. It is not a claim that a NaN ``State`` is supported input: the
+        surrounding ``Deletion_length`` cast raises on one long before this is reached.
+        """
+        assert advntr.sum_insertion_lengths(variant) == 0
+
+    def test_the_maintainers_worked_example_does_not_by_itself_change_survival(self):
+        """Recorded so the example is not mistaken for the regression test.
+
+        9 + 3 = 12 and 12 % 3 == 0, so this state is filtered out under BOTH semantics --
+        it was dropped at ``Insertion_len == 0`` before and is dropped as an in-frame
+        12 bp insertion now. It pins the arithmetic @hassansaei specified; it does not
+        demonstrate a changed outcome. The three tests below do that.
+        """
+        assert advntr.sum_insertion_lengths("I9_2_A_LEN9&I50_2_A_LEN3") == 12
+        assert 12 % 3 == 0
+        assert reported_rows("I9_2_A_LEN9&I50_2_A_LEN3") == 0
+
+    def test_a_compound_insertion_summation_admits_was_dropped_before(self):
+        """The insertion path: summation can only ADD rows there, never remove them.
+
+        ``frame = abs(Insertion_len - Deletion_length)``; ``Deletion_length`` is
+        ``count("D") == 0`` here; the #182 insertion filter keeps 3n+1::
+
+            I9_2_A_LEN9&I50_2_A_LEN1
+              before:    Insertion_len = 0,  frame = 0,  0 in neither series -> DROPPED
+              summation: Insertion_len = 10, frame = 10, 10 % 3 == 1         -> KEPT
+
+        Every state whose value collapsed was 0, and 0 satisfies neither ``Insertion_len
+        >= 1`` nor either frame series, so no collapsed state survived at all. On the
+        insertion side summation is therefore monotone-additive: it makes real pathogenic
+        compound calls visible and cannot lose one.
+        """
+        kept = advntr.advntr_processing_ins(state_frame("I9_2_A_LEN9&I50_2_A_LEN1"))
+
+        assert len(kept) == 1
+        assert kept["Insertion_len"].iloc[0] == 10
+        assert list(kept["frame"]) == ["10"]
+
+    def test_the_deletion_half_can_lose_a_row_the_insertion_half_then_keeps(self):
+        """The deletion path is NOT monotone -- but this state is still reported.
+
+        ``I9_2_A_LEN3&D50_2&D51_2`` (``Deletion_length = count("D") = 2``)::
+
+            before:    Insertion_len = 0, frame = |0-2| = 2, 2 in del_frame -> kept by del
+            summation: Insertion_len = 3, frame = |3-2| = 1, 1 in ins_frame -> kept by ins
+
+        The row moves from the deletion half to the insertion half. Because
+        ``process_advntr_output`` concatenates the two halves, the reported output is
+        unchanged; only which filter accounts for the row changes, and that is not a
+        column of ``output_adVNTR_result.tsv``.
+
+        The task brief predicted this state as the "a reported call disappears" case. It
+        is not: measured, the insertion half picks it up. The state that genuinely stops
+        being reported is the net-in-frame one below.
+        """
+        assert len(advntr.advntr_processing_del(state_frame("I9_2_A_LEN3&D50_2&D51_2"))) == 0
+        assert len(advntr.advntr_processing_ins(state_frame("I9_2_A_LEN3&D50_2&D51_2"))) == 1
+        assert reported_rows("I9_2_A_LEN3&D50_2&D51_2") == 1
+
+    def test_a_net_in_frame_compound_stops_being_reported_at_all(self):
+        """The one direction that removes a reported call. Asserted, not discovered later.
+
+        ``I9_2_A_LEN2&D50_2&D51_2`` -- 2 inserted bases against 2 deleted bases::
+
+            before:    Insertion_len = 0, frame = |0-2| = 2, 2 in del_frame -> REPORTED
+            summation: Insertion_len = 2, frame = |2-2| = 0, 0 in neither   -> DROPPED
+
+        This is a reported adVNTR call disappearing, so it is pinned here and called out
+        in the commit message and the PR body. @hassansaei's decision on #192 authorises
+        it: the quantity the frameshift filter tests is the *net* indel length, and a net
+        change of 0 is in frame, so the row was only ever reported because the inserted
+        bases were being read as zero.
+        """
+        assert reported_rows("I9_2_A_LEN2&D50_2&D51_2") == 0
+
+
+class TestInsertionLenAndFrameAfterFiltering:
+    """
+    The whole table each filter produces for a state: derivation, frame, and survival.
+
+    Three rules meet here and they do not have the same standing, so the table is not a
+    blanket endorsement of any row:
+
+    * the ``Insertion_len`` **derivation** is specified by #192 (see
+      :class:`TestSummedInsertionLength`);
+    * the ``frame`` **membership rule** (3n+1 insertions, 3n+2 deletions) is specified by
+      #182;
+    * the interaction between the two ``>= 1`` guards -- why a pure 1 bp deletion reaches
+      neither filter -- is a live defect and stays **characterised**, in
+      ``tests/unit/test_advntr_frameshift_filter.py``.
+
+    Every expectation below was re-measured against the real functions at this commit.
     """
 
     #: ``(state, function, surviving Insertion_len values, surviving frame values)``.
-    #: Measured at ``a7c3d9e^``; the two two-``LEN`` states raised there and are covered by
-    #: :meth:`TestCompoundVariants.test_the_two_len_shape_no_longer_raises_and_still_writes_a_result`.
-    PARENT_BEHAVIOUR = [
-        # A single-part insertion: the remainder is a bare number, so it is used as-is.
+    MEASURED_BEHAVIOUR = [
+        # A single-part insertion. Unchanged by #192: one terminal LEN always parsed.
         ("I22_2_G_LEN1", "ins", [1], ["1"]),
         ("I22_2_G_LEN1", "del", [], []),
-        # A compound whose LEN sits in the last part: the remainder is still bare.
+        # A compound whose only LEN sits in the last part. Also unchanged by #192.
         ("D8_2&D9_2&I9_2_A_LEN9", "ins", [9], ["7"]),
         ("D2_2&I2_2_C_LEN5", "ins", [5], ["4"]),
         ("D49_2&I49_2_A_LEN12", "del", [12], ["11"]),
-        # No LEN at all: fillna("LEN") leaves an empty remainder, replaced with "0".
+        # No LEN token at all -- 0 before and after.
         ("D58_2&D59_2", "del", [0], ["2"]),
         ("D8_2", "ins", [], []),
         ("NOT_A_VARIANT", "ins", [], []),
         ("NOT_A_VARIANT", "del", [], []),
-        # The two states F1 named. A LEN followed by another '&' part leaves a non-numeric
-        # remainder, so Insertion_len is ZERO -- not the 2 a bounded "first LEN wins"
-        # extraction would give. That zero is what decides both rows.
-        ("I9_2_A_LEN2&D50_2", "ins", [], []),
-        ("I9_2_A_LEN2&D50_2", "del", [], []),
-        ("I9_2_A_LEN2&D50_2&D51_2", "ins", [], []),
-        ("I9_2_A_LEN2&D50_2&D51_2", "del", [0], ["2"]),
+        # #192 changed these. Before, material after the first LEN collapsed the value to
+        # zero; now the LEN tokens are summed, so the net length decides.
+        ("I9_2_A_LEN2&D50_2", "ins", [2], ["1"]),  # was [] -- 2 inserted, 1 deleted, net +1
+        ("I9_2_A_LEN2&D50_2", "del", [], []),  # unchanged: frame 1 is not 3n+2
+        ("I9_2_A_LEN2&D50_2&D51_2", "ins", [], []),  # unchanged: net 0 is not 3n+1
+        ("I9_2_A_LEN2&D50_2&D51_2", "del", [], []),  # was [0]/["2"] -- net 0 is in frame
+        ("I9_2_A_LEN9&I50_2_A_LEN3", "ins", [], []),  # 12 inserted, in frame
+        ("I9_2_A_LEN1&I50_2_A_LEN3", "ins", [4], ["4"]),  # 4 inserted, a frameshift
     ]
 
-    @pytest.mark.parametrize(("state", "which", "lengths", "frames"), PARENT_BEHAVIOUR)
-    def test_the_filters_match_the_pre_repair_behaviour(self, state, which, lengths, frames):
+    @pytest.mark.parametrize(("state", "which", "lengths", "frames"), MEASURED_BEHAVIOUR)
+    def test_the_filters_produce_the_measured_insertion_len_and_frame(self, state, which, lengths, frames):
         run = advntr.advntr_processing_ins if which == "ins" else advntr.advntr_processing_del
 
         out = run(state_frame(state))
 
         assert list(out["Insertion_len"]) == lengths, f"{state} ({which}) Insertion_len"
         assert list(out["frame"]) == frames, f"{state} ({which}) frame"
-
-    @pytest.mark.parametrize("state", ["I9_2_A_LEN9&I50_2_A_LEN3", "I9_2_A_LEN1&I50_2_A_LEN3"])
-    def test_the_repaired_two_len_shape_coerces_to_zero_like_every_other_multipart_state(self, state):
-        """
-        The only inputs whose value is new. They raised before, so there is no prior value to
-        preserve; the repair gives them the same treatment every other multi-part remainder
-        already got -- non-numeric, coerced to zero -- rather than inventing a "first LEN
-        wins" policy that no non-crashing input has ever been subject to.
-        """
-        out = advntr.advntr_processing_ins(state_frame(state))
-
-        assert out.empty, "Insertion_len 0 fails the `Insertion_len >= 1` gate"
-        assert advntr.advntr_processing_del(state_frame(state)).empty
 
 
 # ---------------------------------------------------------------------------
