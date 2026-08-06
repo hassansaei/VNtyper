@@ -260,6 +260,13 @@ patch-coverage:
 # starts - the env var stops new caches, the deletion stops old ones, and both are
 # needed. The full explanation is in that file's module docstring.
 #
+# While this runs, vntyper/scripts/*.py is REWRITTEN IN PLACE, so do not build, package
+# or install from the tree: a docker build, pip install or python -m build started
+# mid-sweep bakes a live mutant into its artefact. One image built this way crashed in
+# the container with a pandas KeyError that read exactly like a production bug. The
+# harness's finally-restore protects the repo, not anything already built from it.
+# Check with `git diff --quiet -- vntyper/` immediately before and after such a step.
+#
 # Takes ~15-30 min: every mutant is a separate pytest run. Use --module to scope it.
 mutation:
 	@echo "$(BLUE)Running advisory mutation testing (not a gate)...$(RESET)"

@@ -176,6 +176,25 @@ biased by the scoping.
     the environment variable stops new caches, the deletion stops old ones,
     and both are required.
 
+!!! danger "Nothing may build or install from the tree while a sweep runs"
+
+    The harness rewrites `vntyper/scripts/*.py` **in place**, so for most of
+    a run the working tree holds a deliberately broken module. Anything
+    that snapshots source mid-sweep bakes that mutant into its artefact -
+    a docker build, `pip install`, `python -m build`, a tarball.
+
+    This has happened: an image built during a sweep crashed in the
+    container at `motif_processing.py` with a pandas `KeyError`, which
+    reads exactly like a production bug and cost a full diagnosis cycle
+    before it was traced back to the sweep. Rebuilding from a clean tree
+    passed.
+
+    The `finally` restore protects the **repository**, not any artefact
+    already produced from it. Run `git diff --quiet -- vntyper/`
+    immediately before and after any build, package or install step; if it
+    reports a difference you did not make, a sweep is running and the
+    artefact is void.
+
 ## Related: branch coverage is measured but not enabled
 
 Mutation testing and branch coverage were investigated together, because both

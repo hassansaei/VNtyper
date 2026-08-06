@@ -412,6 +412,27 @@ def test_the_page_records_that_branch_coverage_is_measured_but_not_enabled() -> 
     assert "144 more covered units" in page
 
 
+def test_the_page_warns_against_building_from_the_tree_during_a_sweep() -> None:
+    """
+    The harness rewrites `vntyper/scripts/*.py` in place, so a build started mid-sweep
+    bakes a live mutant into its artefact.
+
+    This is not hypothetical: a Docker image built during a sweep crashed in the
+    container with a pandas `KeyError` in `motif_processing.py`, which reads exactly
+    like a production bug and cost a diagnosis cycle before it was traced back. The
+    `finally` restore protects the repository, not anything already built from it, so
+    the warning has to be on the page next to the `.pyc` one - both are "the result you
+    got is not the result you think you got".
+    """
+    result = mutation_test.ModuleResult(path="vntyper/scripts/scoring.py", killed=4, survived=0)
+
+    page = mutation_test.format_markdown([result], elapsed=1.0)
+
+    assert "in place" in page
+    assert "docker build" in page.lower()
+    assert "git diff --quiet -- vntyper/" in page
+
+
 def test_the_page_says_the_43_5_percent_baseline_is_not_directly_comparable() -> None:
     """
     Different mutant population, different modules - the totals do not line up.
