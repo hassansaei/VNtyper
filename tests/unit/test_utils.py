@@ -65,6 +65,4 @@ def test_validate_bam_file_nonexistent():
     """
     with pytest.raises(ValueError) as exc:
         validate_bam_file("nonexistent.bam")
-    assert "does not exist" in str(
-        exc.value
-    ), "Expected ValueError for nonexistent file."
+    assert "does not exist" in str(exc.value), "Expected ValueError for nonexistent file."

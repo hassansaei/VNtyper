@@ -457,7 +457,6 @@ class TestDataStructures:
         for source in REFERENCE_SOURCES.keys():
             assert source in used_sources, f"Reference source '{source}' is unused"
 
-
     def test_coordinate_systems_have_required_fields(self):
         """Test that coordinate systems have all required fields."""
         required_fields = {"chromosome", "bam_region_coords", "vntr_region_coords"}

@@ -147,8 +147,7 @@ def main() -> int:
 
     if total is None:
         emit(
-            "Could not read coverage data. Run a coverage command first, e.g. "
-            "`make test-unit-cov`.",
+            "Could not read coverage data. Run a coverage command first, e.g. `make test-unit-cov`.",
             gh_command="error",
         )
         return 1

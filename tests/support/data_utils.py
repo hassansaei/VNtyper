@@ -240,9 +240,13 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
                     ratio = file_count / total_files
                     if ratio > 0.9 or (ratio > 0.8 and files_at_root < 5):
                         common_prefix = dominant_dir
-                        logger.info(f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})")
+                        logger.info(
+                            f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})"
+                        )
                     else:
-                        logger.info(f"Mixed archive structure detected (ratio: {ratio:.1%}, root files: {files_at_root})")
+                        logger.info(
+                            f"Mixed archive structure detected (ratio: {ratio:.1%}, root files: {files_at_root})"
+                        )
                         logger.info("Will extract all files normally (no prefix stripping)")
 
                 if common_prefix:

@@ -351,9 +351,7 @@ def main():
             truth_status = row[args.status_col].strip().lower()
             sample_id = bam_path.stem
 
-            logging.info(
-                f"Processing sample {sample_id} with expected status '{truth_status}'"
-            )
+            logging.info(f"Processing sample {sample_id} with expected status '{truth_status}'")
 
             if not bam_path.is_file():
                 logging.error(f"BAM file not found: {bam_path}. Skipping sample.")
@@ -362,14 +360,8 @@ def main():
             # Determine the expected vntyper output directory.
             vntyper_out_dir = args.output_dir / f"{bam_path.stem}_vntyper_output"
             # Check if results already exist (i.e. a kestrel_result.tsv file is present)
-            if (
-                not args.recompute
-                and vntyper_out_dir.exists()
-                and any(vntyper_out_dir.rglob("kestrel_result.tsv"))
-            ):
-                logging.info(
-                    f"vntyper output already exists for {bam_path.name}, skipping recomputation"
-                )
+            if not args.recompute and vntyper_out_dir.exists() and any(vntyper_out_dir.rglob("kestrel_result.tsv")):
+                logging.info(f"vntyper output already exists for {bam_path.name}, skipping recomputation")
             else:
                 try:
                     vntyper_out_dir = run_vntyper(
@@ -433,9 +425,7 @@ def main():
     sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0  # Recall
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
     accuracy = (tp + tn) / total if total > 0 else 0
-    precision = (
-        tp / (tp + fp) if (tp + fp) > 0 else 0
-    )  # Positive Predictive Value (PPV)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0  # Positive Predictive Value (PPV)
     npv = tn / (tn + fn) if (tn + fn) > 0 else 0  # Negative Predictive Value (NPV)
 
     # Compute standard errors and 95% confidence intervals.
@@ -455,18 +445,10 @@ def main():
     logging.info(
         f"Sensitivity (Recall): {sensitivity:.3f} (SE: {sens_se:.3f}, CI: [{sens_lower:.3f}, {sens_upper:.3f}])"
     )
-    logging.info(
-        f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])"
-    )
-    logging.info(
-        f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])"
-    )
-    logging.info(
-        f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])"
-    )
-    logging.info(
-        f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])"
-    )
+    logging.info(f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])")
+    logging.info(f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])")
+    logging.info(f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])")
+    logging.info(f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])")
 
     # Write detailed per-sample results to summary CSV.
     with args.summary_output.open("w", newline="") as csvfile:

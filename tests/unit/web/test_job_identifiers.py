@@ -42,6 +42,7 @@ def _report_celery_status(monkeypatch: pytest.MonkeyPatch, web_app, status: str)
     """
     monkeypatch.setattr(web_app, "AsyncResult", lambda task_id: SimpleNamespace(status=status, info=None))
 
+
 # Values a caller could send that cannot have come from this service. The queue
 # key is the interesting one: it lives in the same Redis database as the job
 # mappings and holds a list, so reading it as a string is a type error.

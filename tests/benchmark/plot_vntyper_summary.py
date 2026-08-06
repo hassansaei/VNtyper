@@ -204,8 +204,7 @@ def main():
     ]
     for m in vntyper_metrics + common_metrics:
         df.loc[
-            df["confidence"].fillna("").str.contains("Negative", case=False)
-            & df[m].isna(),
+            df["confidence"].fillna("").str.contains("Negative", case=False) & df[m].isna(),
             m,
         ] = 0.0
 
@@ -217,9 +216,7 @@ def main():
         df["advntr_NumberOfSupportingReads"],
         df["advntr_MeanCoverage"],
         df["advntr_Pvalue"],
-    ) = zip(
-        *df.apply(lambda row: parse_advntr_result(row.get("advntr_result", "")), axis=1)
-    )
+    ) = zip(*df.apply(lambda row: parse_advntr_result(row.get("advntr_result", "")), axis=1))
     # 5) Compute a new column "advntr_call" for advntr results.
     df["advntr_call"] = df.apply(get_advntr_call, axis=1)
 
@@ -254,9 +251,7 @@ def main():
         num_metrics = len(metrics_to_plot)
         cols = 2
         rows_subplot = (num_metrics + cols - 1) // cols
-        fig, axes = plt.subplots(
-            nrows=rows_subplot, ncols=cols, figsize=(18, 10), sharey=False
-        )
+        fig, axes = plt.subplots(nrows=rows_subplot, ncols=cols, figsize=(18, 10), sharey=False)
         axes = axes.flatten()
 
         for idx, metric in enumerate(metrics_to_plot):

@@ -212,9 +212,7 @@ def calculate_vntr_coverage(
                     coverage_values.append(coverage)
                 except ValueError:
                     continue
-    mean_coverage = (
-        sum(coverage_values) / len(coverage_values) if coverage_values else 0
-    )
+    mean_coverage = sum(coverage_values) / len(coverage_values) if coverage_values else 0
     logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
     return mean_coverage
 
@@ -320,12 +318,8 @@ def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
         summary = {
             # Use the vntyper output directory name as a fallback
             "file_analyzed": vntyper_output_dir.name,
-            "Estimated_Depth_AlternateVariant": df[
-                "Estimated_Depth_AlternateVariant"
-            ].tolist(),
-            "Estimated_Depth_Variant_ActiveRegion": df[
-                "Estimated_Depth_Variant_ActiveRegion"
-            ].tolist(),
+            "Estimated_Depth_AlternateVariant": df["Estimated_Depth_AlternateVariant"].tolist(),
+            "Estimated_Depth_Variant_ActiveRegion": df["Estimated_Depth_Variant_ActiveRegion"].tolist(),
             "Depth_Score": df["Depth_Score"].tolist(),
             "Confidence": df["Confidence"].tolist(),
         }
@@ -334,9 +328,7 @@ def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
         logging.error(f"Failed to parse vntyper results from {result_file}: {e}")
         return None
     except Exception as e:
-        logging.error(
-            f"Unexpected error while parsing vntyper results from {result_file}: {e}"
-        )
+        logging.error(f"Unexpected error while parsing vntyper results from {result_file}: {e}")
         return None
 
 
@@ -421,9 +413,7 @@ def parse_pipeline_log(vntyper_output_dir: Path) -> Optional[float]:
         return None
 
 
-def calculate_required_fraction(
-    desired_coverage: int, current_coverage: float
-) -> float:
+def calculate_required_fraction(desired_coverage: int, current_coverage: float) -> float:
     """
     Calculate the fraction of reads to keep to achieve desired coverage.
 
@@ -439,9 +429,7 @@ def calculate_required_fraction(
         return 1.0
     fraction = desired_coverage / current_coverage
     fraction = min(max(fraction, 0.0), 1.0)  # Clamp between 0 and 1
-    logging.info(
-        f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}"
-    )
+    logging.info(f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}")
     return fraction
 
 
@@ -605,10 +593,7 @@ def main():
         if not (0 < fraction <= 1):
             logging.warning(f"Invalid fraction {fraction}. Skipping.")
             continue
-        output_bam = (
-            args.output_dir
-            / f"{args.input_bam.stem}_downsampled_{int(fraction*100)}p.bam"
-        )
+        output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{int(fraction * 100)}p.bam"
         subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
@@ -657,13 +642,9 @@ def main():
                         "file_analyzed": summary.get("file_analyzed", output_bam.name),
                         "method": "fraction",
                         "value": fraction,
-                        "confidence": ", ".join(
-                            map(str, summary.get("Confidence", []))
-                        ),
+                        "confidence": ", ".join(map(str, summary.get("Confidence", []))),
                         "Estimated_Depth_AlternateVariant": ", ".join(
-                            map(
-                                str, summary.get("Estimated_Depth_AlternateVariant", [])
-                            )
+                            map(str, summary.get("Estimated_Depth_AlternateVariant", []))
                         ),
                         "Estimated_Depth_Variant_ActiveRegion": ", ".join(
                             map(
@@ -671,17 +652,9 @@ def main():
                                 summary.get("Estimated_Depth_Variant_ActiveRegion", []),
                             )
                         ),
-                        "Depth_Score": ", ".join(
-                            map(str, summary.get("Depth_Score", []))
-                        ),
-                        "analysis_time_minutes": (
-                            analysis_time if analysis_time is not None else ""
-                        ),
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "Depth_Score": ", ".join(map(str, summary.get("Depth_Score", []))),
+                        "analysis_time_minutes": (analysis_time if analysis_time is not None else ""),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
             else:
@@ -695,22 +668,14 @@ def main():
                         "Estimated_Depth_Variant_ActiveRegion": "",
                         "Depth_Score": "",
                         "analysis_time_minutes": "",
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
 
     # Step 4: Downsample to absolute coverages
     for coverage in args.coverages:
-        fraction = calculate_required_fraction(
-            desired_coverage=coverage, current_coverage=current_coverage
-        )
-        output_bam = (
-            args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
-        )
+        fraction = calculate_required_fraction(desired_coverage=coverage, current_coverage=current_coverage)
+        output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
         subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
@@ -759,13 +724,9 @@ def main():
                         "file_analyzed": summary.get("file_analyzed", output_bam.name),
                         "method": "coverage",
                         "value": coverage,
-                        "confidence": ", ".join(
-                            map(str, summary.get("Confidence", []))
-                        ),
+                        "confidence": ", ".join(map(str, summary.get("Confidence", []))),
                         "Estimated_Depth_AlternateVariant": ", ".join(
-                            map(
-                                str, summary.get("Estimated_Depth_AlternateVariant", [])
-                            )
+                            map(str, summary.get("Estimated_Depth_AlternateVariant", []))
                         ),
                         "Estimated_Depth_Variant_ActiveRegion": ", ".join(
                             map(
@@ -773,17 +734,9 @@ def main():
                                 summary.get("Estimated_Depth_Variant_ActiveRegion", []),
                             )
                         ),
-                        "Depth_Score": ", ".join(
-                            map(str, summary.get("Depth_Score", []))
-                        ),
-                        "analysis_time_minutes": (
-                            analysis_time if analysis_time is not None else ""
-                        ),
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "Depth_Score": ", ".join(map(str, summary.get("Depth_Score", []))),
+                        "analysis_time_minutes": (analysis_time if analysis_time is not None else ""),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
             else:
@@ -797,11 +750,7 @@ def main():
                         "Estimated_Depth_Variant_ActiveRegion": "",
                         "Depth_Score": "",
                         "analysis_time_minutes": "",
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
 

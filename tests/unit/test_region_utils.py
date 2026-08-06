@@ -88,7 +88,7 @@ class TestResolveAssemblyAlias:
 class TestGetRegionString:
     """Test dynamic region string generation."""
 
-    @patch('vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam')
+    @patch("vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam")
     def test_get_region_hg19_ucsc(self, mock_get_chr):
         """Test getting region string for hg19 with UCSC naming."""
         mock_get_chr.return_value = "chr1"
@@ -99,63 +99,43 @@ class TestGetRegionString:
                     "GRCh37": {
                         "bam_region_coords": "155158000-155163000",
                         "vntr_region_coords": "155160500-155162000",
-                        "chromosome": 1
+                        "chromosome": 1,
                     }
                 }
             }
         }
 
-        result = get_region_string(
-            "test.bam", "hg19", "bam_region_coords", config
-        )
+        result = get_region_string("test.bam", "hg19", "bam_region_coords", config)
         assert result == "chr1:155158000-155163000"
 
-    @patch('vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam')
+    @patch("vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam")
     def test_get_region_grch37_ncbi(self, mock_get_chr):
         """Test getting region string for GRCh37 with NCBI naming."""
         mock_get_chr.return_value = "NC_000001.10"
 
         config = {
             "bam_processing": {
-                "assemblies": {
-                    "GRCh37": {
-                        "bam_region_coords": "155158000-155163000",
-                        "chromosome": 1
-                    }
-                },
-                "known_chromosome_naming": {
-                    "GRCh37": {"ncbi": "NC_000001.10"}
-                }
+                "assemblies": {"GRCh37": {"bam_region_coords": "155158000-155163000", "chromosome": 1}},
+                "known_chromosome_naming": {"GRCh37": {"ncbi": "NC_000001.10"}},
             }
         }
 
-        result = get_region_string(
-            "test.bam", "GRCh37", "bam_region_coords", config
-        )
+        result = get_region_string("test.bam", "GRCh37", "bam_region_coords", config)
         assert result == "NC_000001.10:155158000-155163000"
 
-    @patch('vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam')
+    @patch("vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam")
     def test_get_region_hg38(self, mock_get_chr):
         """Test getting region string for hg38."""
         mock_get_chr.return_value = "chr1"
 
         config = {
-            "bam_processing": {
-                "assemblies": {
-                    "GRCh38": {
-                        "bam_region_coords": "155184000-155194000",
-                        "chromosome": 1
-                    }
-                }
-            }
+            "bam_processing": {"assemblies": {"GRCh38": {"bam_region_coords": "155184000-155194000", "chromosome": 1}}}
         }
 
-        result = get_region_string(
-            "test.bam", "hg38", "bam_region_coords", config
-        )
+        result = get_region_string("test.bam", "hg38", "bam_region_coords", config)
         assert result == "chr1:155184000-155194000"
 
-    @patch('vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam')
+    @patch("vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam")
     def test_caching(self, mock_get_chr):
         """Test that chromosome names are cached."""
         mock_get_chr.return_value = "chr1"
@@ -166,7 +146,7 @@ class TestGetRegionString:
                     "GRCh37": {
                         "bam_region_coords": "155158000-155163000",
                         "vntr_region_coords": "155160500-155162000",
-                        "chromosome": 1
+                        "chromosome": 1,
                     }
                 }
             }
@@ -176,16 +156,12 @@ class TestGetRegionString:
         clear_chromosome_cache()
 
         # First call should invoke get_chromosome_name_from_bam
-        result1 = get_region_string(
-            "test.bam", "hg19", "bam_region_coords", config
-        )
+        result1 = get_region_string("test.bam", "hg19", "bam_region_coords", config)
         assert result1 == "chr1:155158000-155163000"
         assert mock_get_chr.call_count == 1
 
         # Second call should use cached value
-        result2 = get_region_string(
-            "test.bam", "hg19", "vntr_region_coords", config
-        )
+        result2 = get_region_string("test.bam", "hg19", "vntr_region_coords", config)
         assert result2 == "chr1:155160500-155162000"
         assert mock_get_chr.call_count == 1  # Still 1, used cache
 
@@ -194,69 +170,42 @@ class TestGetRegionString:
         config = {"bam_processing": {}}
 
         with pytest.raises(KeyError, match="Configuration missing"):
-            get_region_string(
-                "test.bam", "hg19", "bam_region_coords", config
-            )
+            get_region_string("test.bam", "hg19", "bam_region_coords", config)
 
     def test_missing_region_type(self):
         """Test error when region type not found."""
-        config = {
-            "bam_processing": {
-                "assemblies": {
-                    "GRCh37": {
-                        "chromosome": 1
-                    }
-                }
-            }
-        }
+        config = {"bam_processing": {"assemblies": {"GRCh37": {"chromosome": 1}}}}
 
         with pytest.raises(KeyError, match="Region type"):
-            get_region_string(
-                "test.bam", "hg19", "nonexistent_region", config
-            )
+            get_region_string("test.bam", "hg19", "nonexistent_region", config)
 
 
 class TestGetRegionStringWithFallback:
     """Test region string resolution with fallback to legacy format."""
 
-    @patch('vntyper.scripts.region_utils.get_region_string')
+    @patch("vntyper.scripts.region_utils.get_region_string")
     def test_new_format_success(self, mock_get_region):
         """Test successful resolution with new format."""
         mock_get_region.return_value = "chr1:155158000-155163000"
 
         config = {
-            "bam_processing": {
-                "assemblies": {
-                    "GRCh37": {
-                        "bam_region_coords": "155158000-155163000",
-                        "chromosome": 1
-                    }
-                }
-            }
+            "bam_processing": {"assemblies": {"GRCh37": {"bam_region_coords": "155158000-155163000", "chromosome": 1}}}
         }
 
-        result = get_region_string_with_fallback(
-            "test.bam", "hg19", "bam_region", config
-        )
+        result = get_region_string_with_fallback("test.bam", "hg19", "bam_region", config)
         assert result == "chr1:155158000-155163000"
 
-    @patch('vntyper.scripts.region_utils.get_region_string')
+    @patch("vntyper.scripts.region_utils.get_region_string")
     def test_fallback_to_legacy(self, mock_get_region):
         """Test fallback to legacy config format."""
         mock_get_region.side_effect = KeyError("Missing config")
 
-        config = {
-            "bam_processing": {
-                "bam_region_hg19": "chr1:155158000-155163000"
-            }
-        }
+        config = {"bam_processing": {"bam_region_hg19": "chr1:155158000-155163000"}}
 
-        result = get_region_string_with_fallback(
-            "test.bam", "hg19", "bam_region", config
-        )
+        result = get_region_string_with_fallback("test.bam", "hg19", "bam_region", config)
         assert result == "chr1:155158000-155163000"
 
-    @patch('vntyper.scripts.region_utils.get_region_string')
+    @patch("vntyper.scripts.region_utils.get_region_string")
     def test_both_formats_fail(self, mock_get_region):
         """Test error when both new and legacy formats fail."""
         mock_get_region.side_effect = KeyError("Missing config")
@@ -264,9 +213,7 @@ class TestGetRegionStringWithFallback:
         config = {"bam_processing": {}}
 
         with pytest.raises(ValueError, match="Neither new nor legacy format"):
-            get_region_string_with_fallback(
-                "test.bam", "hg19", "bam_region", config
-            )
+            get_region_string_with_fallback("test.bam", "hg19", "bam_region", config)
 
 
 class TestCacheManagement:

@@ -36,13 +36,13 @@ class TestTryCompressVcfWithBcftools:
 
         This is the primary use case for the fix - tests without bcftools installed.
         """
-        with patch('shutil.which', return_value=None):
+        with patch("shutil.which", return_value=None):
             with tempfile.TemporaryDirectory() as tmpdir:
                 input_vcf = os.path.join(tmpdir, "input.vcf")
                 output_vcf_gz = os.path.join(tmpdir, "output.vcf.gz")
 
                 # Create dummy input file
-                with open(input_vcf, 'w') as f:
+                with open(input_vcf, "w") as f:
                     f.write("##fileformat=VCFv4.2\n")
 
                 result = _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, tmpdir)
@@ -56,13 +56,13 @@ class TestTryCompressVcfWithBcftools:
 
         Handles cases like corrupted VCF files or bcftools errors.
         """
-        with patch('shutil.which', return_value='/usr/bin/bcftools'):
-            with patch('vntyper.scripts.kestrel_genotyping.run_command', return_value=False):
+        with patch("shutil.which", return_value="/usr/bin/bcftools"):
+            with patch("vntyper.scripts.kestrel_genotyping.run_command", return_value=False):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     input_vcf = os.path.join(tmpdir, "input.vcf")
                     output_vcf_gz = os.path.join(tmpdir, "output.vcf.gz")
 
-                    with open(input_vcf, 'w') as f:
+                    with open(input_vcf, "w") as f:
                         f.write("##fileformat=VCFv4.2\n")
 
                     result = _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, tmpdir)
@@ -75,13 +75,13 @@ class TestTryCompressVcfWithBcftools:
 
         This is the optimal case - bcftools installed and working.
         """
-        with patch('shutil.which', return_value='/usr/bin/bcftools'):
-            with patch('vntyper.scripts.kestrel_genotyping.run_command', return_value=True):
+        with patch("shutil.which", return_value="/usr/bin/bcftools"):
+            with patch("vntyper.scripts.kestrel_genotyping.run_command", return_value=True):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     input_vcf = os.path.join(tmpdir, "input.vcf")
                     output_vcf_gz = os.path.join(tmpdir, "output.vcf.gz")
 
-                    with open(input_vcf, 'w') as f:
+                    with open(input_vcf, "w") as f:
                         f.write("##fileformat=VCFv4.2\n")
 
                     result = _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, tmpdir)
@@ -90,13 +90,13 @@ class TestTryCompressVcfWithBcftools:
 
     def test_correct_bcftools_command_called(self):
         """Verify the correct bcftools command is constructed and executed."""
-        with patch('shutil.which', return_value='/usr/bin/bcftools'):
-            with patch('vntyper.scripts.kestrel_genotyping.run_command', return_value=True) as mock_run:
+        with patch("shutil.which", return_value="/usr/bin/bcftools"):
+            with patch("vntyper.scripts.kestrel_genotyping.run_command", return_value=True) as mock_run:
                 with tempfile.TemporaryDirectory() as tmpdir:
                     input_vcf = os.path.join(tmpdir, "input.vcf")
                     output_vcf_gz = os.path.join(tmpdir, "output.vcf.gz")
 
-                    with open(input_vcf, 'w') as f:
+                    with open(input_vcf, "w") as f:
                         f.write("##fileformat=VCFv4.2\n")
 
                     _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, tmpdir)
@@ -123,9 +123,9 @@ class TestSelectBestVcfFile:
             vcf = os.path.join(tmpdir, "output_indel.vcf")
 
             # Create both files
-            with open(vcf_gz, 'w') as f:
+            with open(vcf_gz, "w") as f:
                 f.write("compressed")
-            with open(vcf, 'w') as f:
+            with open(vcf, "w") as f:
                 f.write("uncompressed")
 
             result = _select_best_vcf_file(tmpdir)
@@ -142,7 +142,7 @@ class TestSelectBestVcfFile:
             vcf = os.path.join(tmpdir, "output_indel.vcf")
 
             # Create only uncompressed file
-            with open(vcf, 'w') as f:
+            with open(vcf, "w") as f:
                 f.write("uncompressed")
 
             result = _select_best_vcf_file(tmpdir)
@@ -182,11 +182,11 @@ class TestSelectBestVcfFile:
             vcf = os.path.join(tmpdir, "output_indel.vcf")
 
             # Create uncompressed first (older timestamp)
-            with open(vcf, 'w') as f:
+            with open(vcf, "w") as f:
                 f.write("uncompressed - created first")
 
             # Create compressed second (newer timestamp)
-            with open(vcf_gz, 'w') as f:
+            with open(vcf_gz, "w") as f:
                 f.write("gz")
 
             result = _select_best_vcf_file(tmpdir)
@@ -209,14 +209,12 @@ class TestBcftoolsIntegration:
             output_vcf_gz = os.path.join(tmpdir, "output_indel.vcf.gz")
 
             # Create input VCF
-            with open(input_vcf, 'w') as f:
+            with open(input_vcf, "w") as f:
                 f.write("##fileformat=VCFv4.2\n#CHROM\tPOS\n")
 
             # Simulate bcftools unavailable
-            with patch('shutil.which', return_value=None):
-                compress_result = _try_compress_vcf_with_bcftools(
-                    input_vcf, output_vcf_gz, tmpdir
-                )
+            with patch("shutil.which", return_value=None):
+                compress_result = _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, tmpdir)
 
             assert compress_result is False, "Compression should fail"
             assert not os.path.exists(output_vcf_gz), "Compressed file should not exist"
@@ -236,19 +234,17 @@ class TestBcftoolsIntegration:
             output_vcf_gz = os.path.join(tmpdir, "output_indel.vcf.gz")
 
             # Create input VCF
-            with open(input_vcf, 'w') as f:
+            with open(input_vcf, "w") as f:
                 f.write("##fileformat=VCFv4.2\n#CHROM\tPOS\n")
 
             # Simulate bcftools available and succeeds
-            with patch('shutil.which', return_value='/usr/bin/bcftools'):
-                with patch('vntyper.scripts.kestrel_genotyping.run_command', return_value=True):
+            with patch("shutil.which", return_value="/usr/bin/bcftools"):
+                with patch("vntyper.scripts.kestrel_genotyping.run_command", return_value=True):
                     # Also create the output file to simulate successful compression
-                    with open(output_vcf_gz, 'w') as f:
+                    with open(output_vcf_gz, "w") as f:
                         f.write("compressed")
 
-                    compress_result = _try_compress_vcf_with_bcftools(
-                        input_vcf, output_vcf_gz, tmpdir
-                    )
+                    compress_result = _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, tmpdir)
 
             assert compress_result is True, "Compression should succeed"
 

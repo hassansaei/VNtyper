@@ -29,9 +29,9 @@ pytestmark = pytest.mark.unit
 def test_split_depth_and_calculate_frame_score_empty_df(df_input, expected_len):
     """Verify that an empty input DataFrame remains empty."""
     out = split_depth_and_calculate_frame_score(df_input)
-    assert (
-        len(out) == expected_len
-    ), "Empty input should yield empty output after split_depth_and_calculate_frame_score."
+    assert len(out) == expected_len, (
+        "Empty input should yield empty output after split_depth_and_calculate_frame_score."
+    )
 
 
 def test_split_depth_and_calculate_frame_score_no_frameshift():
@@ -45,9 +45,7 @@ def test_split_depth_and_calculate_frame_score_no_frameshift():
     # Arrange
     df = pd.DataFrame(
         {
-            "Sample": [
-                "Del:10:100"
-            ],  # Only the first 'Del' part is not used, but we keep format for test
+            "Sample": ["Del:10:100"],  # Only the first 'Del' part is not used, but we keep format for test
             "REF": ["ATG"],  # length 3
             "ALT": ["ATGATG"],  # length 6  -> difference = 3 -> multiple of 3
             "Motifs": ["mock_motif"],
@@ -63,15 +61,14 @@ def test_split_depth_and_calculate_frame_score_no_frameshift():
     # Assert - row is retained with is_frameshift flag
     assert len(out) == 1, "Row should be retained in the DataFrame"
     assert "is_frameshift" in out.columns, "Should have 'is_frameshift' column"
-    assert not out.loc[0, "is_frameshift"], \
+    assert not out.loc[0, "is_frameshift"], (
         "Variant with multiple-of-3 difference should be marked as is_frameshift=False"
+    )
 
     # Assert - Frame_Score calculation is correct
     assert "Frame_Score" in out.columns, "Should have 'Frame_Score' column"
     expected_frame_score = (6 - 3) / 3  # (alt_len - ref_len) / 3 = 1.0
-    assert (
-        out.loc[0, "Frame_Score"] == expected_frame_score
-    ), f"Frame_Score should be {expected_frame_score}"
+    assert out.loc[0, "Frame_Score"] == expected_frame_score, f"Frame_Score should be {expected_frame_score}"
 
 
 def test_split_depth_and_calculate_frame_score_frameshift():
@@ -93,14 +90,10 @@ def test_split_depth_and_calculate_frame_score_frameshift():
         }
     )
     out = split_depth_and_calculate_frame_score(df)
-    assert (
-        not out.empty
-    ), "Expected to retain a frameshift variant (difference not multiple of 3)."
+    assert not out.empty, "Expected to retain a frameshift variant (difference not multiple of 3)."
     assert "Frame_Score" in out.columns, "Output should have a 'Frame_Score' column."
     # Check that is_frameshift was True
-    assert (
-        "is_frameshift" in out.columns
-    ), "Output should have 'is_frameshift' marking frameshift or not."
+    assert "is_frameshift" in out.columns, "Output should have 'is_frameshift' marking frameshift or not."
     assert all(out["is_frameshift"]), "All retained rows should be frameshift variants."
 
 
@@ -129,25 +122,17 @@ def test_split_frame_score_basic():
     # We drop 'is_frameshift', 'ref_len', 'alt_len'
     # We keep 'direction', 'frameshift_amount', 'Frame_Score', etc.
     expected_columns = {"Frame_Score", "direction", "frameshift_amount"}
-    assert expected_columns.issubset(
-        set(out.columns)
-    ), f"Output must contain at least: {expected_columns}"
+    assert expected_columns.issubset(set(out.columns)), f"Output must contain at least: {expected_columns}"
 
     # direction = sign(alt_len - ref_len)
     # frameshift_amount = abs(alt_len - ref_len) % 3
     # For row0: alt_len - ref_len = 1 => direction=1, frameshift_amount=1
     # For row1: alt_len - ref_len = -2 => direction < 0 => -1, frameshift_amount=2
     assert out.loc[0, "direction"] == 1, "Expected direction=1 for alt_len-ref_len=1."
-    assert (
-        out.loc[0, "frameshift_amount"] == 1
-    ), "Expected frameshift_amount=1 for difference=1."
+    assert out.loc[0, "frameshift_amount"] == 1, "Expected frameshift_amount=1 for difference=1."
 
-    assert (
-        out.loc[1, "direction"] == -1
-    ), "Expected direction=-1 for alt_len-ref_len=-2."
-    assert (
-        out.loc[1, "frameshift_amount"] == 2
-    ), "Expected frameshift_amount=2 for difference=-2."
+    assert out.loc[1, "direction"] == -1, "Expected direction=-1 for alt_len-ref_len=-2."
+    assert out.loc[1, "frameshift_amount"] == 2, "Expected frameshift_amount=2 for difference=-2."
 
 
 def test_extract_frameshifts_empty_df():
@@ -184,30 +169,27 @@ def test_extract_frameshifts_mixed():
     assert len(out) == 5, "All 5 rows should be retained in the DataFrame"
 
     # Assert - is_valid_frameshift column exists
-    assert (
-        "is_valid_frameshift" in out.columns
-    ), "Should have 'is_valid_frameshift' column"
+    assert "is_valid_frameshift" in out.columns, "Should have 'is_valid_frameshift' column"
 
     # Assert - correct rows are marked as valid frameshifts
     # Row 0: direction=1, frameshift_amount=1 => valid insertion (3n+1)
-    assert out.loc[0, "is_valid_frameshift"], \
-        "Row 0 (ins_ok) should be valid: direction>0 and frameshift_amount=1"
+    assert out.loc[0, "is_valid_frameshift"], "Row 0 (ins_ok) should be valid: direction>0 and frameshift_amount=1"
 
     # Row 1: direction=1, frameshift_amount=2 => invalid (wrong frameshift amount for insertion)
-    assert not out.loc[1, "is_valid_frameshift"], \
+    assert not out.loc[1, "is_valid_frameshift"], (
         "Row 1 (ins_wrong) should be invalid: direction>0 but frameshift_amount=2"
+    )
 
     # Row 2: direction=-1, frameshift_amount=2 => valid deletion (3n+2)
-    assert out.loc[2, "is_valid_frameshift"], \
-        "Row 2 (del_ok) should be valid: direction<0 and frameshift_amount=2"
+    assert out.loc[2, "is_valid_frameshift"], "Row 2 (del_ok) should be valid: direction<0 and frameshift_amount=2"
 
     # Row 3: direction=-1, frameshift_amount=1 => invalid (wrong frameshift amount for deletion)
-    assert not out.loc[3, "is_valid_frameshift"], \
+    assert not out.loc[3, "is_valid_frameshift"], (
         "Row 3 (del_wrong) should be invalid: direction<0 but frameshift_amount=1"
+    )
 
     # Row 4: direction=1, frameshift_amount=1 => valid insertion (3n+1)
-    assert out.loc[4, "is_valid_frameshift"], \
-        "Row 4 (ins_ok2) should be valid: direction>0 and frameshift_amount=1"
+    assert out.loc[4, "is_valid_frameshift"], "Row 4 (ins_ok2) should be valid: direction>0 and frameshift_amount=1"
 
     # Assert - verify the count of valid frameshifts
     valid_count = out["is_valid_frameshift"].sum()

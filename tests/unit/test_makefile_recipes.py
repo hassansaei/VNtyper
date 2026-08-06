@@ -139,9 +139,7 @@ def test_recipe_is_valid_shell_when_tool_is_absent(var: str) -> None:
             capture_output=True,
             text=True,
         )
-        assert expanded.returncode == 0, (
-            f"`make --dry-run {target} {var}=` failed:\n{expanded.stderr}"
-        )
+        assert expanded.returncode == 0, f"`make --dry-run {target} {var}=` failed:\n{expanded.stderr}"
 
         checked = subprocess.run(
             ["sh", "-n"],
