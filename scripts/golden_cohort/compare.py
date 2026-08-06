@@ -8,6 +8,16 @@ written up without re-deriving anything.
 An artefact present on one side and absent on the other is a delta, not a skip. A gate
 whose comparison quietly narrows when a file stops being written reports a pass it did not
 measure.
+
+Absent on **both** sides is the one case this module cannot judge on its own, and it is
+where the gate's worst failure lived. ``_presence`` classifies it ``absent_both``,
+``diff_case`` excludes it from the delta list and ``_summarise`` excludes it from the
+compared count - all correct, because a non-adVNTR case legitimately has no adVNTR output
+and manufacturing 56 deltas out of that would drown the signal. But it means two runs that
+both died before writing anything compared *equal*. The judgement of whether an absence is
+legitimate cannot be made here; it is made per case, from the matrix's ``expect_exit`` and
+``required_artifacts``, by :mod:`golden_cohort.admissibility`, and folded in as the
+``EXPECTATION`` delta below.
 """
 
 from __future__ import annotations
@@ -54,15 +64,49 @@ COHORT_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "cohort_output_files": ("sequence", ()),
 }
 
-#: Recorded on both sides and deliberately **not** compared, with why. ``vntyper cohort``
-#: discovers samples into a set, so this order is not reproducible even between two runs of
-#: the same code; comparing it would manufacture a delta on every cohort case.
+#: Why cohort sample order is recorded but not compared.
+#:
+#: The note this replaces said cohort discovery "returns a set, so order is not
+#: reproducible", and cited
+#: ``tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today``.
+#: Both halves were wrong by the time they shipped. That test is not in the repository -
+#: it was replaced by ``test_the_discovered_directories_come_back_sorted`` when the
+#: determinism fix landed - and ``discover_sample_directories`` now ends
+#: ``return sorted(processed_dirs), temp_dirs``, so for fixed input directories the order
+#: *is* reproducible.
+#:
+#: Two narrower reasons survive, and the sort is justified by the first of them alone for
+#: any comparison whose baseline predates the fix:
+#:
+#: 1. **Cross-version.** A baseline older than the determinism fix iterates the ``set``
+#:    directly - at ``4fd638a``, run 4's baseline, ``cohort_summary.py`` reads
+#:    ``for sample_dir in processed_dirs:`` over an unsorted set. ``Path.__hash__`` is the
+#:    hash of the path string and Python randomises string hashing per process, so that
+#:    side's order differs between two runs of *itself*. Comparing order across such a
+#:    pair measures the interpreter's hash seed.
+#: 2. **ZIP inputs, on any version.** Each ZIP is extracted to
+#:    ``tempfile.mkdtemp(prefix="cohort_zip_")``, whose random suffix is part of the path
+#:    and therefore part of the sort key. Two runs over the same ZIP sort its samples into
+#:    different absolute positions.
+#:
+#: What this costs is stated rather than hidden: because the order is normalised away, a
+#: change that fixes or breaks cohort ordering is invisible to this gate. It is attested by
+#: the unit tests named above and by
+#: ``test_processes_with_different_hash_seeds_discover_the_same_order``, not by any run of
+#: this harness.
+COHORT_ORDER_WHY = (
+    "cohort sample order is not comparable across a version boundary: a baseline predating the "
+    "determinism fix iterates the discovery set directly and so differs between two runs of itself, and a "
+    "ZIP input extracts to a randomly-named tempdir on any version, which is part of the sort key. "
+    "vntyper.scripts.cohort_inputs.discover_sample_directories does return sorted() today, pinned by "
+    "tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted and "
+    "::test_processes_with_different_hash_seeds_discover_the_same_order - so the ordering fix itself is "
+    "attested by those tests and NOT by this gate. Each side's raw order is recorded here uncompared."
+)
+
+#: Recorded on both sides and deliberately **not** compared, with why.
 UNCOMPARED: dict[str, str] = {
-    "cohort_sample_order_raw": (
-        "cohort sample order comes out of a set and is not reproducible between processes "
-        "(tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today); "
-        "each side's order is recorded here so the defect stays visible"
-    ),
+    "cohort_sample_order_raw": COHORT_ORDER_WHY,
     "launch_line": "the resolution proof, which names its own tree and therefore differs by construction",
 }
 
@@ -88,6 +132,16 @@ def _row_key(row: dict[str, str], key_columns: tuple[str, ...]) -> str:
 def diff_table(before: Any, after: Any, key_columns: tuple[str, ...]) -> dict[str, Any]:
     """Compare two parsed tables as keyed row sets.
 
+    The ``##`` provenance banner counts. It is compared *after* normalisation, which has
+    already replaced the analysis timestamp and the VNtyper version - the two things that
+    differ by construction - with placeholders, so anything still differing in it is a real
+    change to what the file says about itself. This used to be computed and then discarded:
+    ``provenance_changed`` was attached to the detail while ``status`` stayed ``"same"``,
+    so it never became a delta and never reached the verdict. Folding it in costs nothing
+    on the recorded runs - run 4 has zero provenance changes across all 118 Kestrel tables,
+    3 adVNTR tables and 59 coverage tables - and it is the only way a banner that quietly
+    stops naming the pipeline version would be seen.
+
     Args:
         before: The baseline table, or None.
         after: The candidate table, or None.
@@ -95,7 +149,8 @@ def diff_table(before: Any, after: Any, key_columns: tuple[str, ...]) -> dict[st
 
     Returns:
         dict[str, Any]: ``status`` plus, when it differs, ``rows_added``, ``rows_removed``,
-        ``cells_changed``, ``columns_added`` and ``columns_removed``.
+        ``cells_changed``, ``columns_added``, ``columns_removed`` and, when the banner
+        moved, ``provenance_before`` / ``provenance_after``.
     """
     presence = _presence(before, after)
     if presence is not None:
@@ -119,11 +174,12 @@ def diff_table(before: Any, after: Any, key_columns: tuple[str, ...]) -> dict[st
     columns_removed = sorted(set(before["columns"]) - set(after["columns"]))
     provenance_changed = before.get("provenance") != after.get("provenance")
 
-    same = not (added or removed or cells or columns_added or columns_removed)
+    same = not (added or removed or cells or columns_added or columns_removed or provenance_changed)
     detail: dict[str, Any] = {
         "status": "same" if same else "differ",
         "row_count_before": len(before_rows),
         "row_count_after": len(after_rows),
+        "provenance_changed": provenance_changed,
     }
     if not same:
         detail.update(
@@ -318,7 +374,11 @@ def compare_sides(
             "kind": "pipeline",
             "group": groups.get(case_id, "unknown"),
             **diff_case(before, after, PIPELINE_ARTIFACTS),
+            **_expectation_detail(
+                before_side["pipeline_results"].get(case_id), after_side["pipeline_results"].get(case_id)
+            ),
         }
+        _fold_expectation_into_deltas(cases[case_id])
 
     all_cohort_ids = sorted(set(before_side.get("cohort_results", {})) | set(after_side.get("cohort_results", {})))
     for case_id in all_cohort_ids:
@@ -342,25 +402,105 @@ def compare_sides(
             before_root / "cohorts" / case_id, before_root / "logs" / case_id, before_rules
         )
         after = artifacts.read_cohort_case(after_root / "cohorts" / case_id, after_root / "logs" / case_id, after_rules)
-        cases[case_id] = {"kind": "cohort", "group": "cohort", **diff_case(before, after, COHORT_ARTIFACTS)}
+        cases[case_id] = {
+            "kind": "cohort",
+            "group": "cohort",
+            **diff_case(before, after, COHORT_ARTIFACTS),
+            **_expectation_detail(before_record, after_record),
+        }
+        _fold_expectation_into_deltas(cases[case_id])
 
     summary = _summarise(cases)
     blocked = sorted(case_id for case_id, case in cases.items() if case.get("blocked"))
     launch_ok = bool(before_side.get("launch_verified")) and bool(after_side.get("launch_verified"))
+    unmet = sorted(case_id for case_id, case in cases.items() if case.get("expectation_problems"))
+    check = matrix.get("check") or {}
+    # A matrix that predates `attestation_grade` says nothing either way, so it is treated
+    # as attestation-grade: this must not retroactively downgrade runs 1-4.
+    attestation_grade = bool(check.get("attestation_grade", True))
 
     return {
         "harness_version": HARNESS_VERSION,
-        "before": {key: before_side[key] for key in ("side", "tree", "marker", "expect_marker", "launch_verified")},
-        "after": {key: after_side[key] for key in ("side", "tree", "marker", "expect_marker", "launch_verified")},
+        "before": _side_summary(before_side),
+        "after": _side_summary(after_side),
         "matrix_check": matrix.get("check"),
+        "attestation_grade": attestation_grade,
         "normalisation": normalisation,
         "uncompared": UNCOMPARED,
         "summary": summary,
         "blocked_cases": blocked,
+        "expectations_unmet": unmet,
         "launch_verified_both_sides": launch_ok,
-        "verdict": _verdict(summary, blocked, launch_ok),
+        "verdict": _verdict(summary, blocked, launch_ok, unmet, attestation_grade),
         "cases": cases,
     }
+
+
+#: The fields of a side record the result document quotes back. ``revision`` is what turns
+#: "this run attests commit X" from an assertion into a record; a side written by an older
+#: harness has no such key and reports None rather than a plausible-looking blank.
+SIDE_SUMMARY_KEYS: tuple[str, ...] = (
+    "side",
+    "tree",
+    # The version of the harness that *produced* the side, which is not necessarily the one
+    # comparing it. A 1.0.0 side enforced no case expectation and recorded no revision, so
+    # a result document mixing the two must say which measured what.
+    "harness_version",
+    "marker",
+    "expect_marker",
+    "launch_verified",
+    "revision",
+    "cases_launched",
+    "expectations_met",
+)
+
+
+def _side_summary(side: dict[str, Any]) -> dict[str, Any]:
+    """Quote the fields of one side record the result document carries.
+
+    Args:
+        side: The side's ``side.json``.
+
+    Returns:
+        dict[str, Any]: The quoted fields, with None for anything an older harness did not
+        record.
+    """
+    return {key: side.get(key) for key in SIDE_SUMMARY_KEYS}
+
+
+def _expectation_detail(before_record: dict[str, Any] | None, after_record: dict[str, Any] | None) -> dict[str, Any]:
+    """Collect what each side's runner said about whether this case did what it declared.
+
+    Args:
+        before_record: The baseline side's runner record for this case, or None.
+        after_record: The candidate side's runner record for this case, or None.
+
+    Returns:
+        dict[str, Any]: ``expectation_problems`` keyed by side, empty when both sides met
+        their expectation or when neither side recorded one (an older run root).
+    """
+    problems: dict[str, list[str]] = {}
+    for side, record in (("before", before_record), ("after", after_record)):
+        found = (record or {}).get("expectation_problems") or []
+        if found:
+            problems[side] = list(found)
+    return {"expectation_problems": problems}
+
+
+def _fold_expectation_into_deltas(case: dict[str, Any]) -> None:
+    """Make an unmet expectation a delta, in place.
+
+    This is the fix for the gate's worst failure. Two sides that both exit 1 without
+    writing a genotype artefact produce nothing but ``absent_both`` statuses, which
+    ``diff_case`` correctly excludes from the delta list - so the case, and then the run,
+    came back ``IDENTICAL``. An unmet expectation is now a delta in its own right,
+    independent of whether the two sides failed identically.
+
+    Args:
+        case: The per-case comparison result, mutated in place.
+    """
+    if case.get("expectation_problems") and "EXPECTATION" not in case.get("deltas", []):
+        case.setdefault("deltas", []).insert(0, "EXPECTATION")
 
 
 def _summarise(cases: dict[str, Any]) -> dict[str, Any]:
@@ -392,22 +532,66 @@ def _summarise(cases: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _verdict(summary: dict[str, Any], blocked: list[str], launch_ok: bool) -> str:
+def _verdict(
+    summary: dict[str, Any],
+    blocked: list[str],
+    launch_ok: bool,
+    unmet: list[str],
+    attestation_grade: bool,
+) -> str:
     """Turn the summary into one word.
+
+    The order is worst-first and is not arbitrary. ``BLOCKED`` means a case never ran;
+    ``UNVERIFIED`` means it ran but the harness cannot say which package it ran;
+    ``EXPECTATIONS_UNMET`` means it ran the right package and then did not do what the
+    matrix said it would, which makes every "same" beneath it meaningless; only after those
+    three is a difference in output the interesting finding.
+
+    ``REDUCED`` is the fourth word and is the point of C4: a clean run over a matrix that
+    is not the documented one must not be reported with the same word as a clean run over
+    the documented one. It is exactly as free of deltas as ``IDENTICAL`` and attests
+    strictly less, and the two used to be indistinguishable.
 
     Args:
         summary: The rolled-up summary.
         blocked: Cohort cases that were refused.
         launch_ok: Whether every run on both sides verified its package resolution.
+        unmet: Cases where either side failed its declared exit code or artefact set.
+        attestation_grade: Whether the matrix was the documented one, unfiltered.
 
     Returns:
-        str: ``BLOCKED``, ``UNVERIFIED``, ``IDENTICAL`` or ``DELTAS``.
+        str: ``BLOCKED``, ``UNVERIFIED``, ``EXPECTATIONS_UNMET``, ``DELTAS``, ``REDUCED``
+        or ``IDENTICAL``.
     """
     if blocked:
         return "BLOCKED"
     if not launch_ok:
         return "UNVERIFIED"
-    return "IDENTICAL" if not summary["cases_with_any_delta"] else "DELTAS"
+    if unmet:
+        return "EXPECTATIONS_UNMET"
+    if summary["cases_with_any_delta"]:
+        return "DELTAS"
+    return "IDENTICAL" if attestation_grade else "REDUCED"
+
+
+def _render_revision(side: dict[str, Any]) -> str:
+    """Render one side's recorded revision for the human summary.
+
+    Args:
+        side: The quoted side summary.
+
+    Returns:
+        str: The commit and its cleanliness, or an explicit statement that the harness did
+        not record one - never a blank that reads as "clean".
+    """
+    revision = side.get("revision") or {}
+    head = revision.get("head")
+    if not head:
+        return "**revision not recorded**"
+    state = "dirty" if revision.get("dirty_relevant") else "clean"
+    if revision.get("dirty_relevant") is None:
+        state = "cleanliness unknown"
+    return f"`{head[:12]}` ({revision.get('branch') or 'detached'}, {state})"
 
 
 def render_text(result: dict[str, Any]) -> str:
@@ -423,32 +607,48 @@ def render_text(result: dict[str, Any]) -> str:
     lines.append("# Golden-cohort gate result")
     lines.append("")
     lines.append(f"- Harness version: `{result['harness_version']}`")
-    lines.append(
-        f"- Before: `{result['before']['tree']}` (marker `{result['before']['marker']}` expected "
-        f"{result['before']['expect_marker']})"
-    )
-    lines.append(
-        f"- After: `{result['after']['tree']}` (marker `{result['after']['marker']}` expected "
-        f"{result['after']['expect_marker']})"
-    )
+    for label in ("before", "after"):
+        side = result[label]
+        lines.append(
+            f"- {label.capitalize()}: {_render_revision(side)} at `{side['tree']}` "
+            f"(marker `{side['marker']}` expected {side['expect_marker']})"
+        )
     lines.append(
         f"- Package resolution verified on every run, both sides: "
         f"**{'yes' if result['launch_verified_both_sides'] else 'NO'}**"
     )
     lines.append(f"- Verdict: **{result['verdict']}**")
+    if not result.get("attestation_grade", True):
+        lines.append(
+            "- **Not attestation-grade**: the matrix was filtered or deviates from the documented contract, "
+            "so a clean result is reported as `REDUCED` rather than `IDENTICAL`."
+        )
     lines.append("")
 
     check = result.get("matrix_check") or {}
     if check:
         counts = check.get("counts", {})
         lines.append(
-            f"Matrix derived from `tests/data`: {counts.get('total')} cases "
-            f"({counts.get('base')} base, {counts.get('nonfast')} non-fast, {counts.get('advntr')} adVNTR) "
-            f"plus {counts.get('probes')} probes."
+            f"Matrix: {counts.get('total')} cases ({counts.get('base')} base **derived from `tests/data`**, "
+            f"{counts.get('nonfast')} non-fast and {counts.get('advntr')} adVNTR **selected by declared policy**) "
+            f"plus {counts.get('probes')} probes, also policy."
         )
         if check.get("skipped"):
-            lines.append("A case filter was in force, so the check against the gate page's counts is advisory.")
+            lines.append("A case filter was in force, so this run is not attestation-grade.")
         lines.extend(f"- **Differs from the gate page**: {mismatch}" for mismatch in check.get("mismatches", []))
+        lines.append("")
+
+    if result.get("expectations_unmet"):
+        lines.append("## Cases that did not do what the matrix declared")
+        lines.append("")
+        lines.append(
+            "A case here did not exit as declared, or exited as declared and wrote none of the artefacts it "
+            "must produce. Every comparison beneath it is comparing two absences."
+        )
+        lines.append("")
+        for case_id in result["expectations_unmet"]:
+            for side, problems in sorted(result["cases"][case_id]["expectation_problems"].items()):
+                lines.extend(f"- `{case_id}` ({side}): {problem}" for problem in problems)
         lines.append("")
 
     lines.append("## Cases with a delta, per compared artefact")

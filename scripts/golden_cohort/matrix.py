@@ -29,6 +29,25 @@ The individual ids are a reconstruction, not a recovery. They are declared here 
 choice is visible and can be overridden with ``--non-fast-cases`` rather than being
 buried in a lost script.
 
+What "derived" does and does not mean
+-------------------------------------
+Only the **base cases** are derived. The five non-fast ids, the three adVNTR ids and the
+three probes are hardcoded policy, resolved against the derived set. Anything that
+describes this matrix as "derived" without that qualification is overstating it, and the
+gate page has done exactly that.
+
+Drift is fatal by default
+-------------------------
+:func:`check_matrix` compares the derivation against the 50/5/3/3 contract the gate page
+records. That check used to be advisory in every direction: ``build_matrix`` logged the
+deviations as warnings, ``cmd_matrix`` returned 0 regardless, and the comparison's verdict
+ignored them - so a silently reduced run earned the same ``IDENTICAL`` as a full one, and a
+``--case`` filter matching nothing produced a zero-case matrix that every ``all()`` in the
+harness then agreed was verified. ``strict=True`` now refuses to build a drifted matrix at
+all, and a zero-case matrix is refused whether strict or not. A deliberately reduced run is
+still available through ``--case`` or ``--allow-matrix-drift``, but it is recorded as not
+attestation-grade and the comparison gives it a different verdict word.
+
 Attributes:
     ASSEMBLIES: The six assemblies the cohort is provided at, in the page's order.
     NON_FAST_CASE_IDS: Which derived cases repeat without ``--fast-mode``.
@@ -43,6 +62,8 @@ import logging
 import re
 from pathlib import Path
 from typing import Any
+
+from golden_cohort.admissibility import COHORT_REQUIRED_ARTIFACTS, PIPELINE_REQUIRED_ARTIFACTS
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +174,7 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 "fast_mode": True,
                 "advntr": False,
                 "expect_exit": "zero",
+                "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
             }
         )
     log.append(f"subset BAMs: {sum(1 for c in cases if c['source'] == 'subset')}")
@@ -179,6 +201,7 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                     "fast_mode": True,
                     "advntr": False,
                     "expect_exit": "zero",
+                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
                 }
             )
         log.append(f"remapped BAMs: {sum(1 for c in cases if c['source'].startswith('remapped'))}")
@@ -275,6 +298,11 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Args:
         base_cases: The derived BAM-by-assembly cases.
 
+    A probe expected to exit nonzero declares **no** required artefacts: the whole point of
+    the two mismatch probes is that the run refuses, and run 4 measured that they produce
+    none of the five pipeline artefacts on either side. The naming probe is expected to
+    exit zero and therefore carries the full requirement, which it met on both sides.
+
     Returns:
         list[dict]: The probe cases. Probes are run and compared but are not part of the
         58-case matrix, exactly as the page counts them.
@@ -293,6 +321,7 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "true_assembly": base["assembly"],
                 "expect_exit": expectation,
                 "repeat_of": base["case_id"],
+                "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS) if expectation == "zero" else [],
             }
         )
         probes.append(probe)
@@ -302,8 +331,14 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
     """Build the cohort-mode cases over the per-sample output directories.
 
-    The gate page records cohort mode as **not covered**, which is why these exist. The
-    flags are read off ``vntyper/scripts/cli_parser.py``: ``-i/--input-dirs`` (or
+    These exist because cohort mode was uncovered by every run of this gate up to and
+    including run 3, which the gate page's "What this gate does not cover" section said in
+    so many words. The page is a growing record, so this docstring deliberately does not
+    quote its current state - an earlier version of this sentence claimed the page still
+    records cohort mode as not covered, which stopped being true the moment run 4 was
+    written up with these four cases in it.
+
+    The flags are read off ``vntyper/scripts/cli_parser.py``: ``-i/--input-dirs`` (or
     ``--input-file``, one of which is required), ``-o/--output-dir`` (required),
     ``--summary-file``, ``--summary-formats`` and ``--pseudonymize-samples``.
 
@@ -335,6 +370,7 @@ def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
             "pseudonymize": None,
             "expect_exit": "zero",
             "allow_missing_inputs": False,
+            "required_artifacts": list(COHORT_REQUIRED_ARTIFACTS),
         },
         {
             "case_id": "cohort_multi_pseudonymized",
@@ -345,6 +381,8 @@ def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
             "pseudonymize": "sample_",
             "expect_exit": "zero",
             "allow_missing_inputs": False,
+            # The only case that writes it at all, so it is the only case that can require it.
+            "required_artifacts": [*COHORT_REQUIRED_ARTIFACTS, "pseudonymization_table.tsv"],
         },
         {
             "case_id": "cohort_single",
@@ -355,6 +393,7 @@ def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
             "pseudonymize": None,
             "expect_exit": "zero",
             "allow_missing_inputs": False,
+            "required_artifacts": list(COHORT_REQUIRED_ARTIFACTS),
         },
         {
             "case_id": "cohort_empty",
@@ -366,6 +405,10 @@ def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
             "pseudonymize": None,
             "expect_exit": "zero",
             "allow_missing_inputs": True,
+            # Writes only `cohort.log` and exits 0 by design, so it can require nothing.
+            # This is the one legitimate "exited zero, produced no substantive output" case
+            # in the matrix, and it says so here rather than being an unexplained exemption.
+            "required_artifacts": [],
         },
     ]
 
@@ -378,8 +421,11 @@ def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> d
         probes: The probe cases.
 
     Returns:
-        dict[str, Any]: ``counts``, ``documented`` and ``mismatches``. An empty
-        ``mismatches`` means this run's matrix is the one runs 1-3 measured.
+        dict[str, Any]: ``counts``, ``documented``, ``mismatches`` and
+        ``attestation_grade``. An empty ``mismatches`` means this run's matrix is the one
+        runs 1-3 measured; ``attestation_grade`` additionally requires that no case filter
+        narrowed it, and is what :func:`golden_cohort.compare._verdict` reads to decide
+        whether a clean result may be called ``IDENTICAL`` at all.
     """
     by_assembly: dict[str, int] = {}
     by_group: dict[str, int] = {}
@@ -412,7 +458,13 @@ def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> d
         if assembly not in DOCUMENTED_ASSEMBLY_COUNTS
     )
 
-    return {"counts": counts, "documented": documented, "mismatches": mismatches}
+    return {
+        "counts": counts,
+        "documented": documented,
+        "mismatches": mismatches,
+        "skipped": False,
+        "attestation_grade": not mismatches,
+    }
 
 
 def build_matrix(
@@ -424,6 +476,7 @@ def build_matrix(
     case_filter: list[str] | None = None,
     include_probes: bool = True,
     include_cohort: bool = True,
+    strict: bool = True,
 ) -> dict[str, Any]:
     """Derive the whole matrix, log what was derived, and self-check it against the page.
 
@@ -433,13 +486,25 @@ def build_matrix(
         advntr_ids: Override for :data:`ADVNTR_CASE_IDS`.
         advntr_max_coverage: The ``--advntr-max-coverage`` value.
         case_filter: If given, keep only cases whose id contains one of these substrings.
-            For smoke tests; the check against the page's counts is skipped when it is used
-            and the matrix records that it was.
+            For smoke tests; the check against the page's counts becomes advisory when it
+            is used, the matrix records that it was, and the result is marked as not
+            attestation-grade so the comparison cannot call it ``IDENTICAL``.
         include_probes: Whether to build the deliberate-mismatch probes.
         include_cohort: Whether to build the cohort-mode cases.
+        strict: Refuse to return an unfiltered matrix that deviates from the documented
+            contract. Set False only for a deliberately reduced run, which is then also
+            marked as not attestation-grade.
 
     Returns:
         dict[str, Any]: The matrix, ready to be written to ``matrix.json``.
+
+    Raises:
+        ValueError: If the matrix has no pipeline cases at all, or if ``strict`` and no
+            case filter is in force and the derivation deviates from the documented
+            counts. Both used to be warnings. A zero-case matrix is the more insidious of
+            the two: ``all()`` over an empty mapping is True, so a side that ran nothing
+            reported ``launch_verified`` and compared clean against another side that also
+            ran nothing.
     """
     base_cases, log = derive_base_cases(data_dir)
     cases, policy_log = apply_policies(
@@ -465,14 +530,40 @@ def build_matrix(
     cohort_cases = build_cohort_cases([case["case_id"] for case in cases]) if include_cohort else []
     check = check_matrix(cases, probes)
     check["skipped"] = bool(case_filter)
+    check["strict"] = bool(strict)
+    check["attestation_grade"] = not check["mismatches"] and not check["skipped"]
 
     for line in log:
         logger.info(f"matrix: {line}")
     logger.info(f"matrix: counts {check['counts']}")
+
+    if not cases:
+        msg = (
+            f"The matrix has no pipeline cases (data_dir={data_dir}, case filter={case_filter!r}). "
+            "Refusing to build it: a zero-case side runs nothing, and every `all()` in this harness "
+            "agrees vacuously that nothing was verified, so the comparison would report IDENTICAL over "
+            "two runs that never happened."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
     if check["skipped"]:
-        logger.warning("matrix: a case filter is in force, so the check against the gate page's counts is advisory")
+        logger.warning(
+            "matrix: a case filter is in force, so this run is NOT attestation-grade and its comparison "
+            "verdict will say so"
+        )
     for mismatch in check["mismatches"]:
         logger.warning(f"matrix: DIFFERS FROM THE GATE PAGE - {mismatch}")
+    if check["mismatches"] and strict and not check["skipped"]:
+        msg = (
+            f"The derived matrix deviates from the contract the gate page records: "
+            f"{'; '.join(check['mismatches'])}. Refusing to launch an attestation run over a matrix that is "
+            "not the one the page describes - a reduced run earns the same IDENTICAL verdict as a full one, "
+            "which is how a shrinking gate stays invisible. Either fix tests/data or the policy, or pass "
+            "--allow-matrix-drift to run it knowingly as a non-attestation run."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
 
     return {
         "data_dir": str(data_dir),

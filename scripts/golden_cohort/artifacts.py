@@ -258,11 +258,7 @@ def read_pipeline_case(output_dir: Path, log_dir: Path, rules: list[Rule]) -> di
             if line.strip()
         ]
 
-    step_records = []
-    for step in steps:
-        record = {key: value for key, value in step.items() if key not in normalise.DROPPED_KEYS}
-        record.pop("parsed_result", None)
-        step_records.append(normalise.apply_deep(record, rules))
+    step_records = [normalise.apply_deep(normalise.strip_step_record(step), rules) for step in steps]
 
     return {
         "exit_code": result.get("exit_code"),

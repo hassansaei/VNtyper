@@ -1,10 +1,12 @@
 """The golden-cohort gate harness (#179).
 
-``docs/development/golden-cohort-gate.md`` describes three runs of a before-versus-after
-comparison over the whole local test cohort. The scripts that produced those runs lived
-in ``/tmp`` and are gone, so the instrument backing every genotype claim on this project
-had to be rebuilt from prose each time, by a different person, with no guarantee it was
-the same instrument. This package **is** that instrument, committed.
+``docs/development/golden-cohort-gate.md`` describes a series of before-versus-after
+comparisons over the whole local test cohort - one section per run, so this docstring
+deliberately does not say how many there are; the sentence it replaces said "three" and was
+wrong from the day run 4 was written up. The scripts that produced the first three lived in
+``/tmp`` and are gone, so the instrument backing every genotype claim on this project had
+to be rebuilt from prose each time, by a different person, with no guarantee it was the
+same instrument. This package **is** that instrument, committed.
 
 Entry point: ``scripts/golden_cohort_gate.py``. Nothing here is imported by
 ``vntyper``; the harness only ever drives it as a subprocess, through
@@ -12,8 +14,10 @@ Entry point: ``scripts/golden_cohort_gate.py``. Nothing here is imported by
 rather than an assumption.
 
 Modules:
-    matrix: Derive the case matrix from what is actually in ``tests/data``.
+    matrix: Derive the base cases from ``tests/data`` and apply the declared policies.
     launcher: The in-process wrapper that proves which tree a run executed.
+    admissibility: The checks that decide whether a run is admissible as evidence at all -
+        per-case exit and artefact expectations, side opposition, and revision recording.
     runner: Execute one side of the comparison.
     artifacts: Read one run's comparable artefacts off disk.
     normalise: The substitutions applied to everything that differs by construction.
@@ -24,4 +28,11 @@ from __future__ import annotations
 
 #: Bumped when the harness changes what it measures or how it normalises, so a written-up
 #: run can name the instrument version as well as the two commits.
-HARNESS_VERSION = "1.0.0"
+#:
+#: 1.1.0 enforces each case's declared exit code and required artefacts, refuses a
+#: comparison of two sides that are not opposed, records each side's git revision and
+#: working-tree state, refuses a drifted or empty matrix, keeps the ``md5sum`` of step
+#: result files that have no direct comparator, and folds a changed provenance banner into
+#: a table's status. Runs recorded under 1.0.0 measured strictly less; the four runs on the
+#: gate page were all produced by 1.0.0.
+HARNESS_VERSION = "1.1.0"

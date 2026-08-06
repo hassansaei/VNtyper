@@ -3,8 +3,20 @@
 Before-versus-after comparison of genotyping output across the whole local test cohort,
 run to decide whether the deliberately behaviour-changing commits in #179 may ship.
 
-The gate has been run four times. **A verdict attests one candidate commit and nothing
-after it**, so read the run whose candidate matches the tree you are judging.
+The gate has been run four times. **A verdict is intended to attest one candidate commit
+and nothing after it**, so read the run whose candidate matches the tree you are judging.
+
+**How the candidate commit is known, and by whom.** For all four runs it is the operator's
+record, not the instrument's: the harness that produced them (version `1.0.0`) never ran
+`git rev-parse`, never looked at whether the working tree was clean, and never accepted an
+expected SHA. Each side's `side.json` recorded a *path*, and a path is a different commit
+ten minutes later. So the SHAs in the table below are asserted, and nothing in the run
+artefacts can confirm or contradict them. From harness `1.1.0` that changes: every side
+records its `HEAD`, its branch and whether `vntyper/`, `docker/` or `scripts/` had
+uncommitted changes when it ran, `compare` refuses a recorded revision that disagrees with
+`--expect-before-sha` / `--expect-after-sha`, and `--require-clean` refuses a side that ran
+over uncommitted edits. **The next run's candidate commit will be a recorded fact; these
+four are not.**
 
 | Run | Candidate ("after") | Baseline | Verdict | Attests |
 | --- | --- | --- | --- | --- |
@@ -24,14 +36,18 @@ None of the four runs attests "the branch tip" as a standing property — a tip 
 commit does not. Each run's candidate is named above and in its own result section.
 
 For run 4 that distinction happens to be inert, and this is measured rather than assumed.
-One commit sits after `ec67fff` on the branch, `685db2c` (`docs(agents)`), and
+**Two** commits sit after `ec67fff` on the branch — `685db2c` (`docs(agents)`) and
+`9b5486e` (`docs(gate)`, this page's run-4 section) — and
 
 ```
 git diff --stat ec67fff..HEAD -- vntyper/ docker/ scripts/
 ```
 
-is empty, so the branch tip is code-identical to the attested candidate. That covers
-`685db2c` and nothing committed after it.
+is empty, so the branch tip is code-identical to the attested candidate. That covers both
+of them and nothing committed after them. (This paragraph named only `685db2c` until
+`9b5486e` landed, which is the hazard of counting commits in prose: the sentence was true
+when written and false one commit later. The `git diff --stat` above is the part that does
+not go stale, because it names the candidate and `HEAD` rather than an enumeration.)
 
 **Verdict: PASS, all four runs.** Every genotype field, every `Confidence` label and every
 `Flag` is byte-identical between baseline and candidate, on every sample and every
@@ -51,7 +67,7 @@ recorded as *PASS with two attributed deltas* rather than folded into the senten
 | Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) | same 58, same matrix | same 58, same matrix | the same 58, **derived from `tests/data` rather than hardcoded**, plus 4 cohort-mode cases |
 | Runs total | 116, plus 6 deliberate-mismatch probes | 116, plus 6 probes | 116, plus 6 probes | 130 (65 per side), probes and cohort cases included |
 | Non-zero exits | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after |
-| Executed shell commands compared | no | no | **yes** — 480 per side | **yes** — 18 per case per side |
+| Executed shell commands compared | no | no | **yes** — 480 per side | **yes** — 1,111 per side across 61 cases |
 | Cohort mode covered | no | no | no | **yes** — 4 cases |
 
 ## Method
@@ -62,15 +78,26 @@ the 7 multi-reference samples at all six assemblies (`hg19`, `hg38`, `GRCh37`, `
 guard `example_40cf`. Five cases repeat without `--fast-mode` so the unmapped-read pipes
 are exercised, and three run `--extra-modules advntr`.
 
-Compared per case: the full `kestrel_result.tsv` row set (all 28 columns, keyed on
-`Motifs`/`POS`/`REF`/`ALT`/`Variant`), the pre-filter `kestrel_pre_result.tsv`,
+Compared per case: the complete `kestrel_result.tsv` header and row set, keyed on
+`Motifs`/`POS`/`REF`/`ALT`/`Variant` — every column that is present, without asserting a
+column count. (An earlier version of this sentence said "all 28 columns". There is no
+28-column `kestrel_result.tsv` in run 4: 49 of the 59 files carry **27** columns and the
+ten negative-call sentinels carry **10**. The comparator never had a count to be right or
+wrong about — it diffs `columns_added` / `columns_removed` and the keyed rows — so the
+number was decoration, and wrong decoration.) Also the pre-filter `kestrel_pre_result.tsv`,
 `output_adVNTR_result.tsv` where adVNTR ran, `coverage_summary.tsv`, the report's
 screening-summary sentence and its computed emphasis, the recorded pipeline steps, and
 the exit code. Run 3 adds the executed shell command strings, recorded at the
 `subprocess` boundary.
 
-Run 4 derives that matrix from `tests/data` at run time rather than reproducing a
-hardcoded list, and adds four `vntyper cohort` cases — `cohort_multi`,
+Run 4 derives the **50 base cases** from `tests/data` at run time rather than reproducing a
+hardcoded list. The rest of the matrix is *not* derived and this page has said otherwise:
+the five non-fast ids, the three adVNTR ids and the three probes are declared policy
+(`NON_FAST_CASE_IDS`, `ADVNTR_CASE_IDS`, `PROBE_SPECS` in
+`scripts/golden_cohort/matrix.py`), resolved against the derived set so that a policy
+naming a case the data no longer provides is an error rather than a silent shrink. Only the
+adVNTR selection is recoverable from this page; the non-fast one is a reconstruction, and
+`matrix.py`'s docstring says so. Run 4 also adds four `vntyper cohort` cases — `cohort_multi`,
 `cohort_multi_pseudonymized`, `cohort_single` and `cohort_empty` — comparing each cohort
 export (`cohort_kestrel_{csv,tsv,json}`, `cohort_advntr_{csv,tsv,json}`), the rendered
 cohort tables, the category counts and totals, the set of cohort output files, and the
@@ -351,8 +378,10 @@ against `4fd638a`, the merge-base with `main` and the 2.0.6 release. It is **the
 in this project's history to cover cohort mode at all** — runs 1–3 did not, and this
 page's own "What this gate does not cover" section said so.
 
-The matrix is derived from `tests/data` at run time rather than hardcoded: 58 cases
-(50 base, 5 non-fast, 3 adVNTR), plus the 3 probes, plus **4 cohort-mode cases** —
+The 50 base cases are derived from `tests/data` at run time rather than hardcoded; the
+non-fast, adVNTR and probe selections are declared policy resolved against them (see
+[Method](#method)). 58 cases (50 base, 5 non-fast, 3 adVNTR), plus the 3 probes, plus
+**4 cohort-mode cases** —
 `cohort_multi`, `cohort_multi_pseudonymized`, `cohort_single`, `cohort_empty`. 65 runs per
 side, 130 in total. Marker module `vntyper.scripts.cohort_rules`, absent at `4fd638a` and
 present at `ec67fff`: **all 65 runs on each side verified their package resolution before
@@ -390,8 +419,7 @@ and the raw result file should not be read as endorsing this one.
 
 ### Run 4's delta 1 — the duplicate kestrel help flag (`2873ad3`)
 
-`executed_commands` differs on 61 of 61 cases, and the command **count is identical at 18
-per side**. Exactly one command changed:
+`executed_commands` differs on 61 of 61 cases. Exactly one command changed:
 
 | | |
 | --- | --- |
@@ -402,6 +430,14 @@ That is the `get_tool_versions` duplicate-help-flag fix in `2873ad3`. It is a ve
 run once per invocation: it reads no sample data and feeds no genotype. That it appears on
 every case is a property of running once per invocation, not evidence of breadth of
 effect — and every genotype artefact in the table above is 0.
+
+**The command counts.** 1,111 recorded commands per side across the 61 cases, and the
+count matched between the two sides on **every one of the 61 cases** — which is the
+statement that matters, because a changed *count* is what a new or dropped subprocess looks
+like. The per-case count is not uniform: 42 cases record 18, and the rest run 9, 17, 19,
+20, 21, 22, 24 or 28. An earlier version of this section said "the command count is
+identical at 18 per side", which took the mode for the whole distribution and multiplied
+out to 1,098 rather than the 1,111 actually recorded.
 
 ### Run 4's delta 2 — leaked working columns in the cohort exports (`90f61fa`)
 
@@ -451,16 +487,77 @@ is for, and is not the same as showing that it fires when it should.
 **#188 is not exercised.** The cohort has no CRAM input. Its evidence is a hand-run
 end-to-end CRAM comparison, which is not in CI.
 
+**The Kestrel allele-shape guard is not exercised, and this is counted rather than
+argued.** `102c46f` added `_assert_kestrel_allele_contract` in
+`vntyper/scripts/file_processing.py`, which raises on a VCF record whose REF *and* ALT are
+both longer than one base. The pinned Kestrel 1.0.1 cannot emit such a record — it anchors
+every indel on a single reference base — and the run confirms it: across the **236 Kestrel
+VCFs per side** (`output.vcf`, `output_indel.vcf`, `output_insertion.vcf`,
+`output_deletion.vcf` for each of the 59 cases that reach Kestrel), **460,849 data records
+per side, zero** carry two multi-base alleles. So the new raise never fired, and the
+`filter_indel_vcf` re-routing it protects was never taken either. `advntr_result` and
+`kestrel_result` both being 0 here is silence about that guard, not confirmation of it; its
+evidence is `tests/unit/test_file_processing.py`.
+
+**#195's per-row malformed-motif containment is not exercised either, for the same kind of
+reason.** `11e2300` replaced a column-wide `str.count("-").max() != 1` gate — which let one
+malformed motif ID suppress an entire sample's call — with a per-row drop. Firing it needs
+a `Motifs` value that is not exactly two half-motif names joined by one dash, and the
+cohort contains none: across the after side's 118 Kestrel tables, **44,227 non-empty
+`Motifs` values (44,178 in `kestrel_pre_result.tsv`, 49 in `kestrel_result.tsv`) all
+contain exactly one dash**, and the before side is identical. The containment therefore had
+nothing to contain, and what run 4 shows is that the rewrite changes no call on well-formed
+input — not that it contains a malformed one. That is
+`tests/unit/test_motif_decisions.py`'s job.
+
 **Cohort sample ordering is normalised away and is therefore not attested by this gate.**
-The harness sorts cohort rows before comparing them, because the baseline discovers samples
-into a set and its order is not reproducible even between two runs of the same code. The
-candidate now sorts them deterministically (`90f61fa`), so the ordering fix is attested by
-unit tests and not by this run — a normalisation is a claim that a difference does not
-matter, and here it also means the fix to that difference is invisible. The harness's
-normalisation note still cites
-`tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today`, a
-characterisation test that `90f61fa` deleted when it made the order deterministic; that
-note needs updating to point at the replacement tests.
+The harness sorts cohort rows before comparing them. Two reasons survive scrutiny, and only
+the first applies to run 4's pair:
+
+1. **The baseline predates the determinism fix.** At `4fd638a`, `cohort_summary.py`
+   iterates the discovery set directly (`for sample_dir in processed_dirs:`). `Path.__hash__`
+   is the hash of the path string and Python randomises string hashing per process, so that
+   side's row order differs between two runs *of itself*. Comparing order across such a pair
+   measures the interpreter's hash seed.
+2. **ZIP inputs, on any version.** Each ZIP extracts to
+   `tempfile.mkdtemp(prefix="cohort_zip_")`, whose random suffix is part of the path and so
+   part of the sort key.
+
+The candidate sorts fixed input directories deterministically (`90f61fa`:
+`return sorted(processed_dirs), temp_dirs`), so the ordering fix is attested by
+`tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted`,
+`::test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string` and
+`::test_processes_with_different_hash_seeds_discover_the_same_order` — not by this run. A
+normalisation is a claim that a difference does not matter, and here it also means the fix
+to that difference is invisible.
+
+The harness's normalisation note used to cite
+`tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today` — a test
+`90f61fa` renamed, so the citation named nothing in the repository — and to say discovery
+"returns a set, so order is not reproducible", which is false for fixed directories on the
+candidate. Both are corrected in `scripts/golden_cohort/compare.py`
+(`COHORT_ORDER_WHY`), and `tests/unit/test_golden_cohort_compare.py` now reads
+`test_cohort_inputs.py` and fails if the note cites a test that is not defined there.
+
+## The instrument itself — harness `1.0.0` versus `1.1.0`
+
+All four runs above were produced by harness `1.0.0`. A review of that harness found that
+it could return `IDENTICAL` over two runs that had both failed producing nothing, and
+`1.1.0` is the response. What changed, and what each change would have done to run 4:
+
+| Change | Effect on run 4, measured against its raw artefacts |
+| --- | --- |
+| Every case's declared `expect_exit` is enforced. It was written seven times in `matrix.py` and read nowhere, so two sides that both exited 1 without writing a genotype artefact compared `absent_both` on every field and earned `IDENTICAL`. | **None.** 0 expectation violations across all 65 cases on both sides; the two mismatch probes exit 1 as declared and the other 63 exit 0. |
+| A case expected to exit zero must also have written its declared artefacts (`pipeline_summary.json`, both Kestrel tables, the coverage summary, the report; adVNTR stays optional; `cohort_empty` declares none, since it writes only its log by design). | **None.** All 59 zero-expected pipeline cases wrote all five on both sides; the three exporting cohort cases wrote all seven. |
+| `compare` refuses two sides that share a run root, a source tree, a commit or a marker expectation, that are mislabelled, or that recorded no case results. | **None.** Run 4's two sides are properly opposed. |
+| Each side records its `HEAD`, branch and working-tree state; `compare` can verify them. | **Not retroactive.** Run 4's sides have no `revision` key, and `compare` warns rather than refuses so existing run roots stay readable. |
+| An unfiltered matrix that deviates from the documented 50/5/3/3 contract is refused before launching, a zero-case matrix always, and a clean result over a reduced matrix reads `REDUCED` rather than `IDENTICAL`. | **None.** Run 4's `matrix.json` records zero mismatches and no filter. |
+| `md5sum` is kept for step result files with no direct comparator — `pipeline_info.json` (which carries the assembly guard's verdict), `output_R1.fastq.gz` and `cross_match_results.tsv` — and dropped only for the three the harness parses row by row. | **None.** Those three checksums are identical between the two sides on 59/59, 59/59 and 3/3 cases. (`kestrel_result.tsv`'s differs on 59 of 59, which is what the original justification was written for and why it stays dropped.) |
+| A changed `##` provenance banner now makes a table `differ` instead of being computed and discarded. | **None.** 0 provenance changes across all 180 compared tables. |
+
+So `1.1.0` measures strictly more than `1.0.0` and, on run 4's artefacts, finds exactly
+what `1.0.0` found. That is a check on the change, not a defence of the old harness: the
+point of the fixes is the runs where the two would *not* agree.
 
 ## Correction — runs 2 and 3 overstated what the adVNTR comparison covered
 
@@ -588,6 +685,13 @@ Still true of every run, run 4 included:
   pinned by `tests/unit/test_shell_quoting.py`, not by this gate.
 * `Insertion_len`, on any run. It is not a column of `output_adVNTR_result.tsv` — see the
   correction above.
+* A Kestrel VCF record carrying two multi-base alleles, and therefore `102c46f`'s
+  allele-shape guard: 0 of 460,849 records per side. See run 4's limits above.
+* A `Motifs` value that is not two half-motif names joined by one dash, and therefore
+  `11e2300`'s per-row containment: 0 of 44,227 non-empty values per side.
+* **Which commit each side ran**, on runs 1–4. Harness `1.0.0` recorded a path; the SHAs
+  above are the operator's record. Harness `1.1.0` records `HEAD` and the working-tree
+  state per side and can be told to verify them.
 
 No longer true, and the change is run 4's:
 

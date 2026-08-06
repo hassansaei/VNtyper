@@ -10,6 +10,16 @@ Ordering is explicit and is not an implementation detail: ``vntyper cohort`` rea
 cases run first and a cohort case whose inputs are missing is **refused** rather than run.
 A cohort over nothing produces a report over nothing and compares clean, which is the worst
 possible failure for a gate.
+
+Every case is also judged against what its matrix entry declared - its ``expect_exit`` and,
+for a case expected to exit zero, the artefacts it must have written. See
+:mod:`golden_cohort.admissibility` for why that is not optional: without it, two sides that
+both die before writing anything compare *equal*.
+
+The side record names the revision each side ran, not merely the path. ``side.json``
+carries ``revision`` with the tree's ``HEAD``, its branch and whether the genotype-bearing
+paths were dirty, so "this run attests commit X" is something the instrument recorded
+rather than something its operator asserted afterwards.
 """
 
 from __future__ import annotations
@@ -25,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from golden_cohort import HARNESS_VERSION, launcher
+from golden_cohort import HARNESS_VERSION, admissibility, launcher
 from golden_cohort.artifacts import read_json
 
 logger = logging.getLogger(__name__)
@@ -95,30 +105,34 @@ def cohort_argv(case: dict[str, Any], output_dir: Path, input_dirs: list[Path]) 
 
 def _run_one(
     *,
-    case_id: str,
+    case: dict[str, Any],
     argv: list[str],
     tree: Path,
     side: str,
     marker: str,
     expect_marker: bool,
+    output_dir: Path,
     log_dir: Path,
     timeout: int,
 ) -> dict[str, Any]:
     """Launch one case through the wrapper and record everything about the launch.
 
     Args:
-        case_id: The case's id.
+        case: The matrix entry, which supplies the case id and the expectations.
         argv: The ``vntyper`` argument list.
         tree: The side's source tree.
         side: ``before`` or ``after``.
         marker: The marker module name.
         expect_marker: Whether the marker must be present on this side.
+        output_dir: Where the case writes, so its required artefacts can be checked.
         log_dir: Where to write the logs, the command record and ``result.json``.
         timeout: Seconds before the case is killed.
 
     Returns:
-        dict[str, Any]: The record also written to ``<log_dir>/result.json``.
+        dict[str, Any]: The record also written to ``<log_dir>/result.json``, including
+        the ``expectation_met`` / ``expectation_problems`` judgement.
     """
+    case_id = case["case_id"]
     log_dir.mkdir(parents=True, exist_ok=True)
     commands_log = log_dir / "commands.jsonl"
     command = [
@@ -180,10 +194,13 @@ def _run_one(
         "timed_out": timed_out,
         "seconds": round(time.monotonic() - started, 2),
     }
+    record.update(admissibility.check_case(case, record, output_dir))
     (log_dir / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
     status = "ABORTED" if aborted else f"exit {exit_code}"
     logger.info(f"[{side}] {case_id}: {status} in {record['seconds']}s")
+    for problem in record["expectation_problems"]:
+        logger.error(f"[{side}] {case_id} did not do what the matrix declared: {problem}")
     return record
 
 
@@ -231,12 +248,13 @@ def run_side(
         output_dir = cases_root / case["case_id"]
         argv = pipeline_argv(case, output_dir, threads=threads, advntr_threads=advntr_threads)
         record = _run_one(
-            case_id=case["case_id"],
+            case=case,
             argv=argv,
             tree=tree,
             side=side,
             marker=marker,
             expect_marker=expect_marker,
+            output_dir=output_dir,
             log_dir=logs_root / case["case_id"],
             timeout=timeout,
         )
@@ -271,10 +289,18 @@ def run_side(
     launched = {
         case_id: item for case_id, item in {**results, **cohort_results}.items() if not item.get("blocked", False)
     }
+    # `all()` over an empty mapping is True, so a side that launched nothing used to report
+    # itself verified. It is not verified; it is unmeasured. `build_matrix` refuses a
+    # zero-case matrix, and this is the second lock on the same door.
+    launch_verified = bool(launched) and all(item["launch_verified"] for item in launched.values())
+    unmet = sorted(case_id for case_id, item in launched.items() if not item.get("expectation_met", True))
+    revision = admissibility.describe_tree(tree)
+
     record = {
         "harness_version": HARNESS_VERSION,
         "side": side,
         "tree": str(tree.resolve()),
+        "revision": revision,
         "run_root": str(run_root.resolve()),
         "marker": marker,
         "expect_marker": "present" if expect_marker else "absent",
@@ -284,15 +310,28 @@ def run_side(
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "pipeline_results": results,
         "cohort_results": cohort_results,
-        "launch_verified": all(item["launch_verified"] for item in launched.values()),
+        "launch_verified": launch_verified,
+        "cases_launched": len(launched),
+        "expectations_unmet": unmet,
+        "expectations_met": not unmet,
     }
     (run_root / "side.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
     unverified = [case_id for case_id, item in launched.items() if not item["launch_verified"]]
-    if unverified:
+    if not launched:
+        logger.error(f"[{side}] launched no cases at all, so nothing about this side is verified")
+    elif unverified:
         logger.error(f"[{side}] {len(unverified)} case(s) did not verify their package resolution: {unverified}")
     else:
         logger.info(f"[{side}] all {len(launched)} runs verified their package resolution")
+
+    if unmet:
+        logger.error(f"[{side}] {len(unmet)} case(s) did not do what the matrix declared they would: {unmet}")
+    if revision.get("head"):
+        dirty = " (DIRTY)" if revision.get("dirty_relevant") else ""
+        logger.info(f"[{side}] ran {revision['head']} on {revision.get('branch')}{dirty}")
+    else:
+        logger.warning(f"[{side}] could not record a revision for {tree}: {revision.get('error')}")
     return record
 
 
@@ -369,17 +408,24 @@ def _run_cohorts(
                 "aborted": False,
                 "timed_out": False,
                 "seconds": 0.0,
+                # A refused case has no exit code and wrote nothing, so it has no
+                # expectation to meet or miss. It is reported as blocked, which is a
+                # stronger finding than an unmet expectation and is never silent.
+                "expectation_met": True,
+                "expectation_problems": [],
+                "missing_artifacts": [],
             }
             continue
 
         argv = cohort_argv(case, output_dir, input_dirs)
         record = _run_one(
-            case_id=case["case_id"],
+            case=case,
             argv=argv,
             tree=tree,
             side=side,
             marker=marker,
             expect_marker=expect_marker,
+            output_dir=output_dir,
             log_dir=logs_root / case["case_id"],
             timeout=timeout,
         )

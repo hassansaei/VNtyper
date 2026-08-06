@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Reproduce the golden-cohort gate (#179): one entry point, one instrument.
 
-``docs/development/golden-cohort-gate.md`` records three before-versus-after runs over the
-whole local test cohort. The scripts that produced them were never committed, so the
-instrument backing every genotype claim on this project had to be reconstructed from prose
-each time. This is that instrument.
+``docs/development/golden-cohort-gate.md`` records a series of before-versus-after runs
+over the whole local test cohort. The scripts that produced the first three were never
+committed, so the instrument backing every genotype claim on this project had to be
+reconstructed from prose each time. This is that instrument. (The page grows a section per
+run, so nothing here counts them - a docstring that names a total is wrong on the day the
+next run lands, and two in this package were.)
 
-What it does that the three recorded runs did:
+What it does that the first three recorded runs did:
 
-* derives the 58-case matrix from what is in ``tests/data`` rather than from a list, and
-  self-checks the result against the counts the page records;
+* derives the 50 base cases from what is in ``tests/data`` rather than from a list, and
+  self-checks the whole matrix against the counts the page records. The five non-fast ids,
+  the three adVNTR ids and the three probes are **not** derived: they are declared policy,
+  resolved against the derived set. See :mod:`golden_cohort.matrix`;
 * launches **every** run through a wrapper that prints its resolved ``vntyper.__file__``
   and marker-module state as its first line and refuses to start unless both agree with
   its side, because the editable finder otherwise makes a baseline checkout run candidate
@@ -18,8 +22,22 @@ What it does that the three recorded runs did:
   summary, the screening sentence and its computed emphasis, the recorded pipeline steps,
   the executed shell commands and the exit code.
 
-What it adds: **cohort mode**, which the page's own "What this gate does not cover" section
-names as a gap, and which ``1c6c9d6`` has since refactored across five new modules.
+What it adds: **cohort mode**, uncovered by runs 1-3 and refactored across five new modules
+by ``1c6c9d6``.
+
+What it refuses, all of which it used to permit (see :mod:`golden_cohort.admissibility`):
+
+* a case that did not exit as its matrix entry declared, or that exited zero and wrote none
+  of the artefacts it must produce - without this, two sides that both die before writing
+  a genotype artefact compare *equal* and the gate exits 0;
+* a comparison of a run root against itself, of two identically-labelled sides, of two
+  identical trees or commits, or of two sides that expected the same marker state;
+* an unfiltered attestation run whose derived matrix deviates from the documented contract,
+  and any matrix with no cases at all.
+
+What it records that it used to assert: the ``HEAD`` each side ran and whether its
+genotype-bearing paths were dirty, into ``side.json``. ``--expect-before-sha`` /
+``--expect-after-sha`` turn that record into a check.
 
 Typical use (the baseline worktree is created by whoever runs the gate, not by this
 script - it takes the path):
@@ -34,11 +52,16 @@ script - it takes the path):
         --expect-marker present
     python scripts/golden_cohort_gate.py compare --before-root /scratch/gate/before \\
         --after-root /scratch/gate/after --json /scratch/gate/result.json \\
-        --text /scratch/gate/result.md
+        --text /scratch/gate/result.md --expect-after-sha ec67fff
 
 Exit codes:
-    0: the command succeeded (for ``compare``, that means no delta and both sides verified)
-    1: a delta, an unverified run, a blocked cohort case, or a usage error
+    0: the command succeeded. For ``compare`` that means the verdict is ``IDENTICAL`` and
+       nothing weaker - a clean run over a reduced matrix is ``REDUCED`` and exits 1, on
+       purpose, so that `gate compare && echo PASS` cannot print PASS for a run that
+       measured less than the attestation matrix.
+    1: a delta, an unmet case expectation, an unverified run, a blocked cohort case, a
+       reduced matrix, a revision mismatch, two sides that are not opposed, or a usage
+       error.
 """
 
 from __future__ import annotations
@@ -55,7 +78,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from golden_cohort import HARNESS_VERSION, compare, launcher, matrix, normalise, runner  # noqa: E402
+from golden_cohort import (  # noqa: E402
+    HARNESS_VERSION,
+    admissibility,
+    compare,
+    launcher,
+    matrix,
+    normalise,
+    runner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +135,14 @@ def build_parser() -> argparse.ArgumentParser:
             help="Comma-separated base case ids that repeat without --fast-mode. See matrix.py.",
         )
         target.add_argument("--advntr-cases", default=None, help="Comma-separated base case ids that run adVNTR.")
+        target.add_argument(
+            "--allow-matrix-drift",
+            action="store_true",
+            help=(
+                "Build the matrix even though it deviates from the documented contract. The run is then "
+                "recorded as not attestation-grade and a clean comparison of it reads REDUCED, not IDENTICAL."
+            ),
+        )
 
     parser_matrix = subparsers.add_parser("matrix", help="Derive and print the case matrix.")
     add_matrix_options(parser_matrix)
@@ -139,6 +178,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser_compare.add_argument("--after-root", type=Path, required=True)
     parser_compare.add_argument("--json", dest="json_out", type=Path, default=None)
     parser_compare.add_argument("--text", dest="text_out", type=Path, default=None)
+    parser_compare.add_argument(
+        "--expect-before-sha", default=None, help="Refuse unless the baseline side recorded this commit."
+    )
+    parser_compare.add_argument(
+        "--expect-after-sha", default=None, help="Refuse unless the candidate side recorded this commit."
+    )
+    parser_compare.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="Refuse if either side's vntyper/, docker/ or scripts/ had uncommitted changes when it ran.",
+    )
 
     return parser
 
@@ -170,6 +220,7 @@ def _matrix_from_args(args: argparse.Namespace) -> dict[str, Any]:
         case_filter=args.case or None,
         include_probes=not args.no_probes,
         include_cohort=not args.no_cohort,
+        strict=not args.allow_matrix_drift,
     )
 
 
@@ -180,9 +231,15 @@ def cmd_matrix(args: argparse.Namespace) -> int:
         args: The parsed arguments.
 
     Returns:
-        int: 0 always; a mismatch against the page's counts is logged, not fatal.
+        int: 0 if the matrix could be built, 1 if it deviates from the documented contract
+        or has no cases. This used to return 0 unconditionally, which meant a silently
+        reduced matrix passed its own self-check.
     """
-    built = _matrix_from_args(args)
+    try:
+        built = _matrix_from_args(args)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
     text = json.dumps(built, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -300,9 +357,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         args: The parsed arguments.
 
     Returns:
-        int: 0 if every run verified its package resolution and no cohort case was refused.
+        int: 0 if every run verified its package resolution, every case did what the matrix
+        declared it would, and no cohort case was refused. The matrix is built **before**
+        anything launches, so a drifted or empty matrix fails here rather than after an
+        hour of pipeline runs.
     """
-    built = _matrix_from_args(args)
+    try:
+        built = _matrix_from_args(args)
+    except ValueError as exc:
+        logger.error(str(exc))
+        return 1
     record = runner.run_side(
         matrix=built,
         tree=args.tree.resolve(),
@@ -319,7 +383,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     blocked = [case_id for case_id, item in record["cohort_results"].items() if item.get("blocked")]
     if blocked:
         logger.error(f"cohort cases refused for missing inputs: {blocked}")
-    return 0 if record["launch_verified"] and not blocked else 1
+    return 0 if record["launch_verified"] and record["expectations_met"] and not blocked else 1
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -329,12 +393,43 @@ def cmd_compare(args: argparse.Namespace) -> int:
         args: The parsed arguments.
 
     Returns:
-        int: 0 when the verdict is ``IDENTICAL``, 1 otherwise.
+        int: 0 when the verdict is ``IDENTICAL``, 1 otherwise. Two sides that are not
+        genuinely opposed, or whose recorded revisions disagree with what the caller
+        expected, are refused before any artefact is read - a comparison of a tree against
+        itself is not a passing gate, it is the absence of one.
     """
     before_root = args.before_root.resolve()
     after_root = args.after_root.resolve()
     before_side = runner.load_side(before_root)
     after_side = runner.load_side(after_root)
+
+    problems = admissibility.check_sides_opposed(before_root, after_root, before_side, after_side)
+    problems.extend(admissibility.verify_revision(before_side.get("revision"), args.expect_before_sha, side="before"))
+    problems.extend(admissibility.verify_revision(after_side.get("revision"), args.expect_after_sha, side="after"))
+    if args.require_clean:
+        for label, side in (("before", before_side), ("after", after_side)):
+            revision = side.get("revision") or {}
+            if revision.get("dirty_relevant"):
+                problems.append(
+                    f"{label}: {len(revision.get('dirty_paths', []))} uncommitted change(s) under "
+                    f"{revision.get('revision_paths')} when it ran, so it attests no commit"
+                )
+    for label, side in (("before", before_side), ("after", after_side)):
+        revision = side.get("revision") or {}
+        if not revision.get("head"):
+            logger.warning(
+                f"{label}: no revision was recorded for this side, so this comparison names a path and not a "
+                "commit. Re-run the side with a harness that records one before writing an attestation."
+            )
+        elif revision.get("dirty_relevant"):
+            logger.warning(
+                f"{label}: ran {revision['head']} with {len(revision.get('dirty_paths', []))} uncommitted "
+                f"change(s) under {revision.get('revision_paths')}, so it attests that commit plus edits."
+            )
+    if problems:
+        for problem in problems:
+            logger.error(f"refusing to compare: {problem}")
+        return 1
 
     # Both sides read the same `tests/data` by absolute path, exactly as run 2 and run 3
     # did, so the data root is shared and must normalise to one placeholder on both sides.
