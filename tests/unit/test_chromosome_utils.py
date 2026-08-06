@@ -401,6 +401,52 @@ class TestDetectAssemblyChr1Length:
             f"Chr1 length check should detect hg19/GRCh37 with ENSEMBL naming despite alternates, got {assembly}"
         )
 
+    @pytest.mark.parametrize(
+        "name,length,expected",
+        [
+            ("NC_000001.10", 249250621, "GRCh37"),
+            ("NC_000001.11", 248956422, "GRCh38"),
+            ("nc_000001.10", 249250621, "GRCh37"),
+        ],
+    )
+    def test_ncbi_named_chr1_is_recognised(self, name, length, expected):
+        """An NCBI-named BAM must not be invisible to assembly detection.
+
+        `chromosome_utils` handles NCBI naming everywhere else; searching only
+        "chr1"/"1" here made every NCBI-named BAM undetectable, which in turn
+        makes assembly reconciliation abstain on exactly the inputs it exists
+        to check.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        assert detect_assembly_from_chr1_length([{"name": name, "length": length}]) == expected
+
+    def test_the_length_decides_not_the_accession_version(self):
+        """`.11` is the GRCh38 chr1 accession, but the length is the evidence."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "NC_000001.11", "length": 249250621}]
+        assert detect_assembly_from_chr1_length(contigs) == "GRCh37"
+
+    @pytest.mark.parametrize("name", ["NC_000012.11", "NC_012920.1", "NC_000021.8"])
+    def test_other_ncbi_accessions_are_not_mistaken_for_chr1(self, name):
+        """A chr1-length value on another accession must not be read as chr1."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        assert detect_assembly_from_chr1_length([{"name": name, "length": 249250621}]) is None
+
+    @pytest.mark.parametrize("length", ["not-a-number", "249250621", 249250621.0, []])
+    def test_a_non_integer_chr1_length_returns_none_instead_of_crashing(self, length):
+        """`parse_contigs_from_header` drops these, but the function is public.
+
+        The length went straight into a `,`-formatted f-string, so a string
+        length raised `ValueError: Cannot specify ',' with 's'` before any
+        comparison happened.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        assert detect_assembly_from_chr1_length([{"name": "chr1", "length": length}]) is None
+
     def test_case_insensitive_chr1_naming(self):
         """
         Test case-insensitive chr1 detection.

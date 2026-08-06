@@ -210,13 +210,10 @@ def test_the_canonical_contigs_are_detected_as_their_assembly(convention: str) -
 
     for assembly in ("GRCh37", "GRCh38"):
         detected = detect_assembly_from_chr1_length(bam_contigs(convention=convention, assembly=assembly))
-        if convention == "ncbi":
-            # Known gap: production searches only "chr1"/"1", so an NCBI-named
-            # chr1 is invisible to it. Pinned here so closing that gap is a
-            # visible, deliberate change rather than a silent one.
-            assert detected is None
-        else:
-            assert detected == assembly
+        # NCBI used to be pinned to None here: production searched only
+        # "chr1"/"1", so an NCBI-named chr1 was invisible to it. That gap is
+        # closed, so all three conventions now answer with the real build.
+        assert detected == assembly
 
 
 def test_unknown_chr1_length_fixture_matches_no_assembly() -> None:

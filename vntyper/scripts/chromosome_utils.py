@@ -28,6 +28,35 @@ CHR1_LENGTHS = {
     "hg38": 248956422,  # Alias for GRCh38
 }
 
+# Chr1 under every naming convention this module already handles elsewhere:
+# UCSC ("chr1"), ENSEMBL ("1") and NCBI RefSeq ("NC_000001.10" / ".11").
+# The accession version is deliberately not read as evidence of the build --
+# the length is the evidence, and a mislabelled accession must not override it.
+CHR1_NAMES = frozenset({"chr1", "1"})
+NCBI_CHR1_PATTERN = re.compile(r"^nc_0*1(\.\d+)?$")
+
+
+def is_chr1_name(contig_name: str) -> bool:
+    """Return whether a contig name denotes chromosome 1.
+
+    Args:
+        contig_name (str): Contig name from a BAM/CRAM header.
+
+    Returns:
+        bool: True for "chr1", "1" and any ``NC_000001.<version>`` accession,
+        in any case; False otherwise.
+
+    Examples:
+        >>> is_chr1_name("chr1")
+        True
+        >>> is_chr1_name("NC_000001.11")
+        True
+        >>> is_chr1_name("NC_000012.11")
+        False
+    """
+    lowered = contig_name.lower()
+    return lowered in CHR1_NAMES or bool(NCBI_CHR1_PATTERN.match(lowered))
+
 
 def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
     """
@@ -45,6 +74,7 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
         str | None: Assembly name ('GRCh38', 'hg38', 'GRCh37', 'hg19') or None if:
                    - Chr1 not found in contigs
                    - Chr1 length doesn't match known assemblies
+                   - Chr1 length is missing or not an integer
                    - Contigs list is empty
 
     Examples:
@@ -57,7 +87,7 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
         'GRCh37'
 
     Notes:
-        - Handles both UCSC ('chr1') and ENSEMBL ('1') naming conventions
+        - Handles UCSC ('chr1'), ENSEMBL ('1') and NCBI ('NC_000001.10') naming
         - Returns first matching assembly name (GRCh* names prioritized over hg* aliases)
         - Most reliable detection method (proven in frontend, 95%+ success rate)
         - Unaffected by alternate contigs (chr1_random, chr1_alt, etc.)
@@ -70,16 +100,22 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
         logger.debug("Empty contigs list provided to detect_assembly_from_chr1_length")
         return None
 
-    # Find chr1 (handles both UCSC "chr1" and ENSEMBL "1" naming, case-insensitive)
-    chr1 = next((c for c in contigs if c.get("name", "").lower() in ["chr1", "1"]), None)
+    # Find chr1 under any supported naming convention, case-insensitive
+    chr1 = next((c for c in contigs if is_chr1_name(c.get("name", ""))), None)
 
     if not chr1:
-        logger.debug("Chr1 not found in contigs (tried 'chr1' and '1')")
+        logger.debug("Chr1 not found in contigs (tried 'chr1', '1' and NC_000001.*)")
         return None
 
     chr1_length = chr1.get("length")
     if chr1_length is None:
         logger.warning("Chr1 found but length is None")
+        return None
+
+    if not isinstance(chr1_length, int):
+        # A float would compare equal to the integer constants and a string
+        # would crash the formatted log line below; neither is a length.
+        logger.warning(f"Chr1 found but length is not an integer: {chr1_length!r}")
         return None
 
     logger.debug(f"Chr1 length: {chr1_length:,} bp")
