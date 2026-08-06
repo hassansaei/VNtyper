@@ -183,6 +183,77 @@ class TestRepeatUnitSeven:
 
         assert evaluate_condition(row, flagging_rules["Repeat_Unit_7"]) is False
 
+    #: The expression as it shipped before the repair. Kept as a literal so the "it could
+    #: never fire" claim is *asserted* rather than asserted-about-the-past in prose.
+    HISTORIC_EXPRESSION = "RU == 7"
+
+    #: Row shapes spanning every ``RU`` the annotator can emit: the target unit, another
+    #: unit, compound joins in both orders, a look-alike, the no-config placeholder and a
+    #: missing value.
+    RU_VALUES = ["7", "2", "6", "7,2", "2,7", "77", "7.0", "", "Not applicable", None]
+
+    def probe_rows(self) -> pd.DataFrame:
+        """The full result schema, so a rule reading any column resolves it."""
+        import itertools
+
+        return pd.DataFrame(
+            [
+                {
+                    "VID": "25561",
+                    "Variant": variant,
+                    "NumberOfSupportingReads": reads,
+                    "MeanCoverage": 153.98,
+                    "Pvalue": 0.0001,
+                    "RU": ru,
+                    "POS": "1",
+                    "REF": "A",
+                    "ALT": "AA",
+                }
+                for ru, variant, reads in itertools.product(
+                    self.RU_VALUES,
+                    ["I22_2_G_LEN1", "I10_2_A_LEN1", "I26_7_A_LEN25", "I3_7_A_LEN1"],
+                    [3, 9, 10, 11, 42],
+                )
+            ]
+        )
+
+    def test_the_historic_expression_could_not_fire_for_any_row(self, flagging_rules):
+        """``RU`` is always a ``str``, so ``RU == 7`` was dead code, not a live rule."""
+        rows = self.probe_rows()
+        assert len(rows) >= 100, f"vacuity guard: only {len(rows)} probe rows"
+
+        fired = [
+            index for index, row in rows.iterrows() if evaluate_condition(row, self.HISTORIC_EXPRESSION) is not False
+        ]
+
+        assert not fired, f"the historic integer comparison fired for rows {fired}"
+
+    def test_the_repair_only_ever_adds_a_flag_and_moves_no_other_column(self, flagging_rules):
+        """
+        The safety argument for shipping this change: reviving the rule is monotone. No row
+        loses a flag, the only flag any row gains is ``Repeat_Unit_7``, and no genotype
+        column moves -- ``add_flags`` appends a column and filters nothing.
+        """
+        from vntyper.scripts.flagging import add_flags
+
+        historic_rules = {**flagging_rules, "Repeat_Unit_7": self.HISTORIC_EXPRESSION}
+        rows = self.probe_rows()
+
+        before = add_flags(rows.copy(), historic_rules)
+        after = add_flags(rows.copy(), flagging_rules)
+
+        def flags(frame, index):
+            return set(str(frame.iloc[index]["Flag"]).split(", ")) - {"Not flagged"}
+
+        gained = set()
+        for index in range(len(rows)):
+            was, now = flags(before, index), flags(after, index)
+            assert not was - now, f"row {index} ({rows.iloc[index]['RU']!r}) lost flags {sorted(was - now)}"
+            gained |= now - was
+
+        assert gained == {"Repeat_Unit_7"}, f"unexpected new flags: {sorted(gained)}"
+        pd.testing.assert_frame_equal(before.drop(columns=["Flag"]), after.drop(columns=["Flag"]))
+
     def test_end_to_end_a_repeat_unit_seven_call_is_flagged_in_the_result_file(self, tmp_path, ru_config):
         source = tmp_path / "output_adVNTR.vcf"
         source.write_text(ADVNTR_HEADER + "25561\tI26_7_A_LEN1\t11\t153.98\t0.0001\n")
