@@ -30,8 +30,7 @@ _DYNAMIC_EXPANSIONS = {
 def _summary(*steps: str) -> dict:
     return {
         "steps": [
-            {"step": name, "parsed_result": {"comments": [], "data": [{"n": str(i)}]}}
-            for i, name in enumerate(steps)
+            {"step": name, "parsed_result": {"comments": [], "data": [{"n": str(i)}]}} for i, name in enumerate(steps)
         ]
     }
 
