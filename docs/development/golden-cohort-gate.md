@@ -707,3 +707,101 @@ Covered only in one direction, run 4:
   `kestrel_result` is weak evidence rather than confirmation.
 * No run detects two changes whose deltas cancel exactly on the same field of the same
   sample. Run 4 is a single tip run, not one run per genotype-affecting commit.
+
+---
+
+## Run 5 — `4fd638a` → `9816f86`, after the adversarial review
+
+Run 5 gates the nine commits that answer an adversarial review of PR #199 (Codex
+`gpt-5.6-sol`, `xhigh`, five scoped read-only lanes; 47 findings, 6 Critical). It is the
+first run taken with harness **1.1.0**, and the first on this project whose candidate side
+can prove which revision it executed.
+
+- Before: `4fd638a` (v2.0.6), **revision not recorded** — see the caveat below
+- After: `9816f867c28f` on `fix/issue-181-197-followups`, **clean**, recorded by the
+  harness and verified by `compare --expect-after-sha --require-clean`
+- 65 runs per side, package resolution verified on every one, both sides
+- Verdict: **DELTAS**, in two classes, both fully attributed
+
+### Every genotype artefact is unchanged
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `kestrel_result` | **0** | 59 |
+| `kestrel_pre_result` | **0** | 59 |
+| `advntr_result` | **0** | 3 |
+| `coverage_summary` | **0** | 59 |
+| `report_tables` | **0** | 59 |
+| `screening_summary` | **0** | 59 |
+| `cross_match_summary` | **0** | 3 |
+| `exit_code` | **0** | 65 |
+| `pipeline_steps` / `pipeline_step_records` | **0** | 61 |
+| `cohort_category_counts` / `cohort_category_totals` / `cohort_tables` | **0** | 3 |
+| `pseudonymization_table` | **0** | 1 |
+| `cohort_output_files` | **0** | 4 |
+
+### Run 5's delta 1 — the duplicate kestrel help flag, again (`2873ad3`)
+
+`executed_commands` differs on 61 of 61 per-sample cases. The whole of it is one
+substitution, measured rather than assumed: normalising the two per-side roots the way the
+gate does and diffing all 65 cases gives **122 differing lines across 61 cases — exactly
+two per case, one removed and one added — and nothing else**:
+
+```
+- java -jar vntyper/dependencies/kestrel/kestrel.jar -h -jar vntyper/dependencies/kestrel/kestrel.jar -h
++ java -jar vntyper/dependencies/kestrel/kestrel.jar -h
+```
+
+That is D6. The four cases without the delta are the cohort cases, which never invoke the
+version probe. Zero unattributed command lines.
+
+### Run 5's delta 2 — the leaked working columns (`90f61fa`)
+
+The six cohort export artefacts differ on 3 of 3 cohort cases. Set-wise, on both algorithms:
+
+| Export | Before | After | Removed | Added |
+| --- | --- | --- | --- | --- |
+| `cohort_kestrel.csv` | 31 columns | 29 | `__row_result`, `__unified` | none |
+| `cohort_advntr.csv` | 15 columns | 13 | `__row_result`, `__unified` | none |
+
+Exactly the two renderer-created working columns, on both. **No legitimate column was
+dropped and none was added**; the projection also reorders columns to lead with the
+display set. `cohort_category_counts`, `cohort_category_totals` and `cohort_tables` are
+unchanged, so the categorisation those exports feed is unaffected.
+
+### What run 5 does not attest
+
+Everything under *What run 4 does not attest* still applies — it is one run at the tip,
+not one per commit, and cannot exclude two changes producing offsetting deltas that cancel
+on the same field of the same sample. In addition:
+
+**It cannot attest the adVNTR signed-frame fix (`ad515c6`), which is the most
+consequential commit it covers.** `advntr_result` shows 0 deltas on 3 of 3 adVNTR cases —
+and that is *silence, not evidence*. A verdict changes only for a **mixed** state
+(`Insertion_len >= 1` and `Deletion_length >= 1`) with Δ % 3 == 2, and the cohort contains
+no mixed adVNTR state at all: `dfc3` is `D17_2&D18_2&D19_2&D20_2&D21_2`, a pure 5-base
+deletion. The evidence for that commit is its 52,511-probe differential sweep — 9,782
+states change verdict, every one with Δ % 3 == 2, nothing newly reported, 0 of 23,064 pure
+states moved, all now hard failure conditions of the sweep — plus three states in
+`advntr_config.json`'s `Polymorphic_Call` list. Not this run.
+
+**The baseline's revision is not recorded.** The before side is a `git archive` extraction
+of `4fd638a`, because the shared main worktree belongs to another checkout. An extraction
+has no `.git`, so harness 1.1.0 logged a warning and the baseline SHA remains operator
+record, exactly as described under *attestation* above. The candidate side **is** recorded
+and was verified. The next run taken from two real checkouts can pin both.
+
+**The baseline shares the candidate's `reference/` tree.** The extraction carries tracked
+files only, and the adVNTR VNTR database is an installed artefact resolved at the relative
+path `reference/vntr_db_advntr/<assembly>_muc1.db` (trap 7: paths are relative to the
+process CWD, and each side runs with cwd set to its own tree). The first attempt failed
+because of this, and the new expectation check named all six affected cases rather than
+comparing them as `absent_both` — which is what the pre-1.1.0 harness would have done.
+Sharing one reference tree is sound rather than expedient: `git diff 4fd638a..HEAD --
+reference/` is empty, and `reference/**` is a base-image content-hash input that must be
+identical on both sides.
+
+**The CRAM path is still not in the cohort.** #188's fixtures now exist —
+`make cram-fixtures` derives a verified CRAM beside every cohort BAM — but no CRAM case is
+in the matrix yet, so `175011e` is attested by the measurements in its own commit message
+and by a BAM-versus-CRAM equivalence run, not by this gate.

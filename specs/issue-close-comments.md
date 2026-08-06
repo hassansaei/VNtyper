@@ -1,10 +1,14 @@
 # Close comments for #181–#197
 
-One section per issue, ready to paste as a comment before closing. **Do not close any of
-these until the golden-cohort run at `ec67fff` has reported**: the six gated issues
-(#184, #185, #188, #192, #195, and #196's ratchet) each carry a
-`GOLDEN-COHORT: <fill in>` line that must be replaced with the real verdict and run
-reference before the comment is posted. The four non-gated issues can go as they stand.
+One section per issue — thirteen in all — ready to paste as a comment before closing. Six
+are gated on a golden-cohort run (#184, #185, #188, #192, #195, and #196's ratchet); the
+remaining **seven** can go as they stand.
+
+Three `GOLDEN-COHORT: <fill in>` placeholders survived the run-4 pass — #184, #185 and
+#195 — and are filled below from **run 5** (`4fd638a` → `9816f86`), which supersedes the
+run-4 reference these lines originally carried. **Do not paste a section whose
+`GOLDEN-COHORT:` line still reads `<fill in>`**; that text has no business on a public
+clinical-software issue.
 
 Branch: `fix/issue-181-197-followups`, merge base `4fd638a` (v2.0.6).
 
@@ -148,7 +152,9 @@ mutants are deleted rather than hand-excused.
 
 `confidence_assignment.py` is at 100% line and branch coverage.
 
-**GOLDEN-COHORT: `<fill in — run at ec67fff>`.** Read the result with this caveat, which
+**GOLDEN-COHORT: run 5 (`4fd638a` → `9816f86`), 65 runs per side. `kestrel_result` 0
+deltas on 59 cases; `report_tables` and `screening_summary` likewise 0 on 59.** Read the
+result with this caveat, which
 is stated in the commit and repeated here so the closed issue carries it: **a cohort PASS
 is weak evidence for this change.** Exact float equality with 0.00515 requires alt depth
 to be an exact multiple of 103, essentially unreachable on real data, so the cohort very
@@ -202,7 +208,8 @@ assignment is unconditional on each non-empty return path.
 `motif_correction_and_annotation` looks risky because its `keep_cols` drops most columns,
 but it returns the untouched deep copy.
 
-**GOLDEN-COHORT: `<fill in — run at ec67fff>`.** Expected no-op — the raise should never
+**GOLDEN-COHORT: run 5 (`4fd638a` → `9816f86`), 65 runs per side, `exit_code` 0 deltas on
+65 cases and `kestrel_pre_result` 0 deltas on 59.** Expected no-op — the raise should never
 fire on the cohort. A cohort *difference* here would mean a stage really is omitting a
 gate, which is a finding, not a reason to weaken the raise. A PASS proves only that no
 shipped stage omits a gate on the cohort's inputs.
@@ -517,10 +524,14 @@ looks like: this stage marks and `filter_final_dataframe` filters (AGENTS.md tra
 The oracle was initially too weak — a `<` → `<=` mutation survived it — so a POS-60
 boundary test was added **before any code moved** and the hash re-derived.
 
-**GOLDEN-COHORT: `<fill in — run at ec67fff>`.** The expected delta is none, since real
+**GOLDEN-COHORT: run 5 (`4fd638a` → `9816f86`), 65 runs per side, `kestrel_result` and
+`kestrel_pre_result` 0 deltas on 59 cases each.** The expected delta is none, since real
 motif IDs carry exactly one dash — **but that is an expectation, not evidence, and this
 comment says so deliberately.** The oracle is an equivalence proof for the extraction, not
-for the dash-gate fix.
+for the dash-gate fix. Measured on run 5's own artefacts: all **44,227** non-empty `Motifs`
+values across the after side's 118 Kestrel tables contain exactly one dash, so the
+per-row containment this issue fixes was never exercised by the cohort. Run 5's
+attestation lists it under what the run does not cover.
 
 Noted, not fixed, and filed separately: the `POS_fasta` threshold rebase updates a column
 nothing reads afterwards. Pinned by a test.
