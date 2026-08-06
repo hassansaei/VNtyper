@@ -10,6 +10,17 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
+# These five names are matched by exact string comparison against what pipeline.py
+# records. A typo does not fail - it silently drops a report section (AGENTS.md
+# trap 5), so they are named, never spelled out.
+from vntyper.scripts.summary_steps import (
+    STEP_ADVNTR,
+    STEP_BAM_HEADER,
+    STEP_COVERAGE,
+    STEP_CROSS_MATCH,
+    STEP_KESTREL,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -497,7 +508,7 @@ def generate_summary_report(
     # Extract header info from BAM Header Parsing step (if available)
     header_info = {}
     for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "BAM Header Parsing":
+        if step.get("step") == STEP_BAM_HEADER:
             header_info = step.get("parsed_result", {})
             break
 
@@ -517,7 +528,7 @@ def generate_summary_report(
     vntr_uncovered_bases = None
     percent_vntr_uncovered = None
     for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "Coverage Calculation":
+        if step.get("step") == STEP_COVERAGE:
             coverage_info = step.get("parsed_result", {}).get("data", [])
             if coverage_info and isinstance(coverage_info, list) and len(coverage_info) > 0:
                 try:
@@ -549,9 +560,9 @@ def generate_summary_report(
     advntr_data = []
     advntr_available = False
     for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "Kestrel Genotyping":
+        if step.get("step") == STEP_KESTREL:
             kestrel_data = step.get("parsed_result", {}).get("data", [])
-        elif step.get("step") == "adVNTR Genotyping":
+        elif step.get("step") == STEP_ADVNTR:
             advntr_data = step.get("parsed_result", {}).get("data", [])
             advntr_available = True
 
@@ -772,7 +783,7 @@ def generate_summary_report(
     # Extract cross-match summary message from the pipeline summary if available.
     cross_match_message = ""
     for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "Cross-Match Variant Comparison":
+        if step.get("step") == STEP_CROSS_MATCH:
             data = step.get("parsed_result", {}).get("data", [])
             if any(item.get("Match") == "Yes" for item in data):
                 cross_match_message = "At least one match was found between Kestrel and adVNTR results."

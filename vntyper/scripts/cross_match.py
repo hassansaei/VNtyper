@@ -16,6 +16,11 @@ It accepts already‑parsed results (e.g. from a pipeline summary) without re‑
 import csv
 import logging
 
+# These names are matched by exact string comparison against what pipeline.py
+# records. A typo does not fail - it silently drops the cross-match section
+# (AGENTS.md trap 5), so they are named, never spelled out.
+from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_KESTREL
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_MATCH_LOGIC = (
@@ -178,8 +183,8 @@ def extract_results_from_pipeline_summary(summary):
     kestrel_records = None
     advntr_records = None
     for step in summary.get("steps", []):
-        if step.get("step") == "Kestrel Genotyping":
+        if step.get("step") == STEP_KESTREL:
             kestrel_records = step.get("parsed_result", {}).get("data", [])
-        elif step.get("step") == "adVNTR Genotyping":
+        elif step.get("step") == STEP_ADVNTR:
             advntr_records = step.get("parsed_result", {}).get("data", [])
     return kestrel_records, advntr_records

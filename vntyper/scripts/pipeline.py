@@ -37,6 +37,17 @@ from vntyper.scripts.summary import (
     start_summary,
     write_summary,
 )
+
+# The five step names are matched by exact string comparison in generate_report.py,
+# cohort_summary.py and cross_match.py. A typo does not fail - it silently drops a
+# report section (AGENTS.md trap 5), so they are named, never spelled out.
+from vntyper.scripts.summary_steps import (
+    STEP_ADVNTR,
+    STEP_BAM_HEADER,
+    STEP_COVERAGE,
+    STEP_CROSS_MATCH,
+    STEP_KESTREL,
+)
 from vntyper.scripts.utils import (
     create_output_directories,
     get_tool_versions,
@@ -314,7 +325,7 @@ def run_pipeline(
                 header_parse_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "BAM Header Parsing",
+                    STEP_BAM_HEADER,
                     str(Path(dirs["fastq_bam_processing"]) / "pipeline_info.json"),
                     "json",
                     "parse_header_pipeline_info(extracted header)",
@@ -496,7 +507,7 @@ def run_pipeline(
         cov_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,
-            "Coverage Calculation",
+            STEP_COVERAGE,
             str(Path(dirs["coverage"]) / "coverage_summary.tsv"),
             "tsv",
             "calculate_vntr_coverage(...)",
@@ -531,7 +542,7 @@ def run_pipeline(
         kestrel_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,
-            "Kestrel Genotyping",
+            STEP_KESTREL,
             os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
             "tsv",
             "run_kestrel(...)",
@@ -613,7 +624,7 @@ def run_pipeline(
                 advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "adVNTR Genotyping",
+                    STEP_ADVNTR,
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
                     "tsv",
                     "run_advntr(...), process_advntr_output(...)",
@@ -640,7 +651,7 @@ def run_pipeline(
                 cross_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "Cross-Match Variant Comparison",
+                    STEP_CROSS_MATCH,
                     cross_match_output,
                     "tsv",
                     "cross_match_variants(kestrel_results, advntr_results)",

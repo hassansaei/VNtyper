@@ -27,6 +27,16 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from jinja2 import Environment, FileSystemLoader
 
+# These names are matched by exact string comparison against what pipeline.py
+# records. A typo does not fail - it silently drops a section (AGENTS.md trap 5),
+# so they are named, never spelled out.
+from vntyper.scripts.summary_steps import (
+    STEP_ADVNTR,
+    STEP_BAM_HEADER,
+    STEP_COVERAGE,
+    STEP_KESTREL,
+)
+
 logger = logging.getLogger(__name__)
 
 matplotlib.use("Agg")
@@ -393,15 +403,15 @@ def load_pipeline_summary_for_sample(sample_dir):
         additional_stats["coverage"] = {}
 
         for step in summary.get("steps", []):
-            if step.get("step") == "Kestrel Genotyping":
+            if step.get("step") == STEP_KESTREL:
                 kestrel_data = step.get("parsed_result", {}).get("data", [])
-            elif step.get("step") == "adVNTR Genotyping":
+            elif step.get("step") == STEP_ADVNTR:
                 advntr_data = step.get("parsed_result", {}).get("data", [])
-            elif step.get("step") == "BAM Header Parsing":
+            elif step.get("step") == STEP_BAM_HEADER:
                 parsed = step.get("parsed_result", {})
                 additional_stats["assembly"] = parsed.get("assembly_text", "N/A")
                 additional_stats["pipeline"] = parsed.get("alignment_pipeline", "N/A")
-            elif step.get("step") == "Coverage Calculation":
+            elif step.get("step") == STEP_COVERAGE:
                 parsed = step.get("parsed_result", {})
                 data_list = parsed.get("data", [])
                 if data_list:
