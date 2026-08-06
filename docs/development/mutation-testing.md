@@ -18,10 +18,10 @@ deliberate defect, runs the tests, and records whether anything failed. A
 
 **95 of 121 mutants killed - a raw mutation score of 78.5%.**
 
-Of the 26 survivors, 2 are hand-classified as
+Of the 26 survivors, 4 are hand-classified as
 *equivalent* (the mutation cannot change observable behaviour, so no test could
-ever kill it) and 24 are genuine gaps. Excluding the equivalent
-mutants the score is **79.8%** (95/119).
+ever kill it) and 22 are genuine gaps. Excluding the equivalent
+mutants the score is **81.2%** (95/117).
 
 Both numbers are given because neither alone is honest: the raw score
 understates the suite by counting unkillable mutants against it, and the
@@ -49,7 +49,6 @@ kills one is a test that would have caught a real defect of that shape.
 | --- | ---: | --- |
 | `vntyper/scripts/confidence_assignment.py` | 133 | `0` &rarr; `1` |
 | `vntyper/scripts/confidence_assignment.py` | 138 | `-` &rarr; `+` |
-| `vntyper/scripts/flagging.py` | 243 | `False` &rarr; `True` |
 | `vntyper/scripts/motif_decisions.py` | 79 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 216 | `False` &rarr; `True` |
 | `vntyper/scripts/motif_processing.py` | 231 | `==` &rarr; `!=` |
@@ -60,7 +59,6 @@ kills one is a test that would have caught a real defect of that shape.
 | `vntyper/scripts/motif_processing.py` | 330 | `False` &rarr; `True` |
 | `vntyper/scripts/motif_processing.py` | 337 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 341 | `False` &rarr; `True` |
-| `vntyper/scripts/motif_processing.py` | 342 | `60` &rarr; `61` |
 | `vntyper/scripts/motif_processing.py` | 367 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 487 | `True` &rarr; `False` |
 | `vntyper/scripts/motif_processing.py` | 491 | `-` &rarr; `+` |
@@ -92,6 +90,8 @@ not a supported input.
 | Module | Line | Mutation | Why it cannot be killed |
 | --- | ---: | --- | --- |
 | `vntyper/scripts/flagging.py` | 150 | `False` &rarr; `True` | `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly |
+| `vntyper/scripts/flagging.py` | 243 | `False` &rarr; `True` | `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name |
+| `vntyper/scripts/motif_processing.py` | 342 | `60` &rarr; `61` | `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60 |
 | `vntyper/scripts/variant_parsing.py` | 114 | `0.0` &rarr; `1.0` | `.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469 |
 
 ## How this compares to the 43.5% baseline
@@ -268,7 +268,8 @@ vntyper/scripts/confidence_assignment.py
 vntyper/scripts/flagging.py
   [E] line  150  'False' -> 'True'
           equivalent: `.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly
-  [ ] line  243  'False' -> 'True'
+  [E] line  243  'False' -> 'True'
+          equivalent: `itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name
 
 vntyper/scripts/motif_decisions.py
   [ ] line   79  'True' -> 'False'
@@ -283,7 +284,8 @@ vntyper/scripts/motif_processing.py
   [ ] line  330  'False' -> 'True'
   [ ] line  337  'True' -> 'False'
   [ ] line  341  'False' -> 'True'
-  [ ] line  342  '60' -> '61'
+  [E] line  342  '60' -> '61'
+          equivalent: `.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60
   [ ] line  367  'True' -> 'False'
   [ ] line  487  'True' -> 'False'
   [ ] line  491  '-' -> '+'
@@ -298,10 +300,5 @@ vntyper/scripts/motif_processing.py
 vntyper/scripts/variant_parsing.py
   [E] line  114  '0.0' -> '1.0'
           equivalent: `.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469
-
-STALE EQUIVALENCE ENTRIES (no longer match a surviving mutant)
-------------------------------------------------------------
-    ('vntyper/scripts/flagging.py', 238, 'False', 'True')
-    ('vntyper/scripts/motif_processing.py', 315, '60', '61')
 
 ```
