@@ -8,16 +8,24 @@ than relying on any later layer to cope with a name it was never designed for.
 Two rules apply, and both must hold:
 
 1. The name must match a strict allowlist -- a plain, single-segment filename
-   made of ASCII letters, digits, dot, dash and underscore, ending in one of the
-   extensions the caller expects.
+   made of ASCII letters, digits, dot, dash, underscore and plus, ending in one
+   of the extensions the caller expects. The extension is matched without regard
+   to case, because sequencers and LIMS exports routinely upper-case it and
+   refusing `SAMPLE.BAM` buys nothing.
 2. The resulting path must resolve to a direct child of the job directory.
 
 Rule 2 is unreachable past rule 1 today; it is kept as an independent check so
 that widening the allowlist later cannot silently widen where files land.
 
-Names are never repaired. A name that fails is refused, so the caller can answer
-the request with an error instead of storing the upload under a name the client
-did not ask for.
+The allowlist stays ASCII-only. A non-ASCII name raises normalisation and
+encoding questions -- which of several byte sequences is "the" name, and which
+of them the pipeline's tooling will reproduce -- for no clinical benefit, so it
+is refused, and the refusal says so explicitly.
+
+Names are never repaired, and never rewritten. A name that fails is refused, so
+the caller can answer the request with an error instead of storing the upload
+under a name the client did not ask for; a name that passes is used exactly as
+it was sent, case included.
 
 Size is constrained on the same terms. `save_upload_bounded` counts the bytes it
 copies and stops the moment the running total passes the caller's ceiling, so
@@ -56,8 +64,15 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 # A leading alphanumeric rules out dotfiles, `.`, `..` and leading-dash names.
 # The body excludes every path separator and every character with a meaning to a
-# shell, so the name stays a single, inert path segment.
-_SAFE_STEM = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+# shell, so the name stays a single, inert path segment. `+` is in the set
+# because it is neither of those and is how tumour/normal pairs are
+# conventionally named; the characters that are absent are absent deliberately.
+_SAFE_STEM = r"[A-Za-z0-9][A-Za-z0-9._+-]*"
+
+# What the allowlist accepts, in the words a caller whose name was refused needs.
+SAFE_NAME_DESCRIPTION = (
+    "Use a plain filename of ASCII letters, digits, dot, dash, underscore or plus, starting with a letter or a digit"
+)
 
 
 @cache
@@ -68,12 +83,17 @@ def _name_pattern(allowed_extensions: tuple[str, ...]) -> re.Pattern[str]:
         allowed_extensions: Lowercase extensions, without the leading dot.
 
     Returns:
-        re.Pattern[str]: A pattern anchored at both ends. `\\Z` is used rather
-            than `$`, because `$` also matches immediately before a trailing
-            newline.
+        re.Pattern[str]: A pattern anchored at both ends, matching the extension
+            without regard to case. `\\Z` is used rather than `$`, because `$`
+            also matches immediately before a trailing newline. `re.ASCII`
+            accompanies `re.IGNORECASE` and is load-bearing rather than
+            decorative: a Unicode-aware case-insensitive match folds four
+            non-ASCII letters onto ASCII ones, so `[A-Za-z]` would start
+            accepting them and the allowlist would quietly stop being
+            ASCII-only.
     """
     alternation = "|".join(re.escape(extension) for extension in allowed_extensions)
-    return re.compile(rf"{_SAFE_STEM}\.(?:{alternation})\Z")
+    return re.compile(rf"{_SAFE_STEM}\.(?:{alternation})\Z", re.IGNORECASE | re.ASCII)
 
 
 def _describe(allowed_extensions: Sequence[str]) -> str:
@@ -116,7 +136,11 @@ def safe_upload_path(
     candidate = filename or ""
 
     if len(candidate) > MAX_FILENAME_LENGTH or not _name_pattern(extensions).match(candidate):
-        msg = f"Uploaded filename is not an acceptable {_describe(extensions)} name"
+        msg = (
+            f"Uploaded filename is not an acceptable {_describe(extensions)} name. "
+            f"{SAFE_NAME_DESCRIPTION}, ending in the extension in any case, "
+            f"and at most {MAX_FILENAME_LENGTH} characters long"
+        )
         logger.error(msg)
         raise ValueError(msg)
 

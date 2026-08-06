@@ -35,6 +35,7 @@ UNSAFE_NAMES = [
     ("a*.bam", "glob wildcard"),
     ("~/a.bam", "tilde is expanded by the shell"),
     ("-a.bam", "a leading dash can be read as an option by a downstream tool"),
+    ("+a.bam", "a plus is permitted inside a name but not as its first character"),
     ("", "an empty name yields the directory itself, not a file"),
     (None, "no filename part at all"),
     ("x.txt", "not an alignment file"),
@@ -48,11 +49,17 @@ UNSAFE_NAMES = [
     ("a.bam\r", "trailing carriage return"),
     ("a.bam ", "trailing space"),
     ("..\\..\\x.bam", "backslash separators: os.path.basename is a no-op under POSIX"),
-    ("X.BAM", "uppercase extension is deliberately not accepted"),
-    ("x.Bam", "mixed-case extension is deliberately not accepted"),
     ("‮emag.bam", "right-to-left override disguises how the name reads"),
     ("a" * 252 + ".bam", "256 characters, past the 255-byte filesystem limit"),
     ("x.bai", "an index extension is not an alignment file"),
+    # The allowlist is ASCII-only. Matching an extension case-insensitively is
+    # exactly where that can be lost: Python's IGNORECASE folds across Unicode
+    # unless it is told not to, so `[A-Za-z]` starts matching these four.
+    ("Müller.bam", "non-ASCII: normalisation and encoding questions with no clinical benefit"),
+    ("KKlein.bam", "U+212A KELVIN SIGN case-folds to 'k' under a Unicode-aware match"),
+    ("ſample.bam", "U+017F LATIN SMALL LETTER LONG S case-folds to 's'"),
+    ("İ.bam", "U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE case-folds to 'i'"),
+    ("ı.bam", "U+0131 LATIN SMALL LETTER DOTLESS I case-folds to 'i'"),
 ]
 
 
@@ -78,6 +85,16 @@ def test_rejects_unsafe_filenames(tmp_path: Path, filename, reason: str) -> None
         "a..bam",  # consecutive dots inside the stem are fine; they cannot traverse
         "0.bam",  # a digit is a valid first character
         "a" * 251 + ".bam",  # exactly 255 characters: the limit itself is allowed
+        # A plus is neither a path separator nor a shell metacharacter, and it is
+        # how tumour/normal pairs are conventionally named.
+        "sample+tumor.bam",
+        # Sequencers and LIMS exports routinely upper-case the extension. The
+        # name is stored exactly as sent; only the *match* ignores case.
+        "SAMPLE.BAM",
+        "X.BAM",
+        "x.Bam",
+        "S1.CRAM",
+        "S1.Cram",
     ],
 )
 def test_accepts_and_contains_safe_filenames(tmp_path: Path, filename: str) -> None:
@@ -91,6 +108,33 @@ def test_accepts_and_contains_safe_filenames(tmp_path: Path, filename: str) -> N
 
     assert result.parent == tmp_path
     assert result.name == filename
+
+
+@pytest.mark.parametrize("filename", ["SAMPLE.BAM", "Sample.Bam", "sample+tumor.bam", "S1.CRAM.CRAI"])
+def test_an_accepted_name_is_never_case_folded_or_rewritten(tmp_path: Path, filename: str) -> None:
+    """Matching an extension without regard to case does not change the name.
+
+    Storing `SAMPLE.BAM` as `sample.bam` would hand the worker a path the client
+    never named, and two submissions differing only in case would collide.
+
+    Args:
+        tmp_path: Stand-in for the per-job input directory.
+        filename: A name that must be stored exactly as sent.
+    """
+    extensions = INDEX_EXTENSIONS if filename.lower().endswith(("bai", "crai")) else ALIGNMENT_EXTENSIONS
+
+    assert Path(safe_upload_path(str(tmp_path), filename, extensions)).name == filename
+
+
+@pytest.mark.parametrize("filename", ["sample.BAI", "S1.cram.CRAI", "sample+tumor.bam.bai"])
+def test_the_index_slot_matches_its_extensions_the_same_way(tmp_path: Path, filename: str) -> None:
+    """Both upload slots apply one rule, so neither can drift from the other.
+
+    Args:
+        tmp_path: Stand-in for the per-job input directory.
+        filename: An index name that must be accepted.
+    """
+    assert Path(safe_upload_path(str(tmp_path), filename, INDEX_EXTENSIONS)).name == filename
 
 
 def test_result_is_always_inside_the_job_directory(tmp_path: Path) -> None:
@@ -134,6 +178,24 @@ def test_error_message_names_the_accepted_extensions(tmp_path: Path) -> None:
     assert ".bam" in message
     assert ".cram" in message
     assert "totally-not-a-bam" not in message
+
+
+def test_error_message_says_which_characters_are_acceptable(tmp_path: Path) -> None:
+    """A caller whose name is refused is told what to send instead.
+
+    The ASCII-only rule is the one a legitimate name is most likely to fall foul
+    of, and it is not guessable from the extension list alone, so the message
+    states it rather than leaving the caller to experiment.
+
+    Args:
+        tmp_path: Stand-in for the per-job input directory.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        safe_upload_path(str(tmp_path), "Müller.bam")
+
+    message = str(excinfo.value)
+    assert "ASCII" in message
+    assert "Müller" not in message
 
 
 @pytest.mark.parametrize("filename", ["sample.bam.bai", "sample.bai", "S1.cram.crai", "S1.crai"])
