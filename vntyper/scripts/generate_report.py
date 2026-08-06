@@ -293,21 +293,30 @@ def build_advntr_frame(advntr_data):
     return frame[[col for col in ADVNTR_DISPLAY_COLUMNS if col in frame.columns]]
 
 
-def build_cross_match_message(pipeline_summary):
-    """Summarise the cross-match step in one sentence.
+def build_cross_match_summary(pipeline_summary):
+    """Summarise the cross-match step as a sentence *and* the state that sentence describes.
+
+    The boolean is returned alongside the text rather than derived from it. The template
+    used to decide emphasis by asking whether the message contained ``"match"``, and both
+    fixed sentences do - so "No matches were found" rendered in the positive style. This
+    is the same rule that governs ``summary_is_positive`` (AGENTS.md trap 11): emphasis
+    comes from the computed state, never from searching the wording.
 
     Args:
         pipeline_summary (dict): The parsed ``pipeline_summary.json``.
 
     Returns:
-        str: The sentence, or "" when the cross-match step did not run.
+        tuple[str, bool]: The sentence and whether it reports a match. ``("", False)``
+            when the cross-match step did not run - no section is rendered, and the flag
+            must not default to the emphasised state.
     """
     if get_step(pipeline_summary, STEP_CROSS_MATCH) is None:
-        return ""
+        return "", False
     data = get_step_data(pipeline_summary, STEP_CROSS_MATCH)
-    if any(item.get("Match") == "Yes" for item in data):
-        return "At least one match was found between Kestrel and adVNTR results."
-    return "No matches were found between Kestrel and adVNTR results."
+    is_positive = any(item.get("Match") == "Yes" for item in data)
+    if is_positive:
+        return "At least one match was found between Kestrel and adVNTR results.", True
+    return "No matches were found between Kestrel and adVNTR results.", False
 
 
 def generate_summary_report(
@@ -466,7 +475,7 @@ def generate_summary_report(
         )
         logger.debug("adVNTR results converted to HTML.")
 
-    cross_match_message = build_cross_match_message(pipeline_summary)
+    cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
 
     # Autoescaping is on: everything reaching the report from a sample - file
     # names, BAM header fields, motif sequences, log lines - is attacker-influenced
@@ -543,6 +552,7 @@ def generate_summary_report(
         "summary_text": screening.text,
         "summary_is_positive": screening.is_positive,
         "cross_match_message": cross_match_message,
+        "cross_match_is_positive": cross_match_is_positive,
     }
 
     try:

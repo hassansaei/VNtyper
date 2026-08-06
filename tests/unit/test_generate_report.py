@@ -14,13 +14,14 @@ IGV generation is never triggered -- ``bed_file`` is left unset, so
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 import vntyper
 from vntyper.cli import load_config
-from vntyper.scripts import summary_steps
+from vntyper.scripts import generate_report, summary_steps
 from vntyper.scripts.generate_report import generate_summary_report
 
 pytestmark = pytest.mark.unit
@@ -344,6 +345,13 @@ def test_advntr_rows_are_tabulated(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _cross_match_paragraph(html: str) -> str:
+    """Return the `<p>` that carries the cross-match sentence, class attribute and all."""
+    match = re.search(r'<p class="summary-box[^"]*">\s*(?:At least one match|No matches)[^<]*</p>', html)
+    assert match, "the cross-match paragraph should be in the report"
+    return match.group(0)
+
+
 def test_a_cross_match_hit_is_reported(tmp_path) -> None:
     write_summary(
         tmp_path,
@@ -351,17 +359,56 @@ def test_a_cross_match_hit_is_reported(tmp_path) -> None:
         tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
         tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "Yes"}]),
     )
-    assert "At least one match was found" in render(tmp_path)
+    html = render(tmp_path)
+
+    assert "At least one match was found" in html
+    assert "summary-positive" in _cross_match_paragraph(html)
 
 
-def test_a_cross_match_miss_is_reported(tmp_path) -> None:
+def test_a_cross_match_miss_is_not_styled_as_a_hit(tmp_path) -> None:
+    """
+    Emphasis must come from the computed state, never from searching the sentence.
+
+    The template asked whether the message contained "match" - and *both* fixed sentences
+    do, so "No matches were found between Kestrel and adVNTR results." rendered in the
+    positive style. This is the identical defect already fixed for the screening summary,
+    in a second place, and the previous test missed it by asserting only on the text.
+    """
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
         tabular_step(summary_steps.STEP_ADVNTR, [{"VID": "25561", "Flag": "Not flagged"}]),
         tabular_step(summary_steps.STEP_CROSS_MATCH, [{"Match": "No"}]),
     )
-    assert "No matches were found" in render(tmp_path)
+    html = render(tmp_path)
+
+    assert "No matches were found" in html
+    assert "summary-positive" not in _cross_match_paragraph(html)
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([{"Match": "Yes"}], True),
+        ([{"Match": "No"}], False),
+        ([{"Match": "No"}, {"Match": "Yes"}], True),
+        ([{"Match": "no"}], False),
+        ([{}], False),
+        ([], False),
+    ],
+)
+def test_the_cross_match_state_is_computed_from_the_rows(rows, expected) -> None:
+    """One row matching is a hit; the sentence is a consequence of the state, not its source."""
+    summary = {"steps": [tabular_step(summary_steps.STEP_CROSS_MATCH, rows)]}
+
+    _message, is_positive = generate_report.build_cross_match_summary(summary)
+
+    assert is_positive is expected
+
+
+def test_a_missing_cross_match_step_is_neither_positive_nor_worded() -> None:
+    """No step, no section - and the flag must not default to the emphasised state."""
+    assert generate_report.build_cross_match_summary({"steps": []}) == ("", False)
 
 
 def test_no_cross_match_step_means_no_cross_match_section(positive_summary) -> None:

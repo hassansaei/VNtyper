@@ -303,7 +303,13 @@
 
         {% if cross_match_message and advntr_available %}
             <h2>Cross-Match Summary</h2>
-            <p class="summary-box {% if 'match' in cross_match_message|lower %}summary-positive{% endif %}">
+            {#
+              Same rule as the screening summary above, and the same defect: this
+              asked whether the sentence contained "match", and both fixed sentences
+              do - so "No matches were found" rendered in the positive style. The
+              state is computed in `build_cross_match_summary` and passed in.
+            #}
+            <p class="summary-box {% if cross_match_is_positive %}summary-positive{% endif %}">
                 {{ cross_match_message|safe }}
             </p>
         {% endif %}
