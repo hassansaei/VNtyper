@@ -227,9 +227,17 @@ def get_tool_versions(config):
 
     for tool, command in tools.items():
         version_flag = version_commands.get(tool, "")
-        # Special handling for kestrel as it needs the java_path in front
+        # Special handling for kestrel as it needs the java_path in front.
+        # The flag is folded into ``command`` here, so it must not ALSO be passed to
+        # get_tool_version: that builds its argv as
+        # ``shlex.split(command) + shlex.split(version_flag)``, which used to hand
+        # subprocess.run ``java -jar <jar> -h -jar <jar> -h``. Clearing version_flag,
+        # rather than dropping the pre-built command, is deliberate: get_tool_version
+        # selects its kestrel parse on ``"java" in command and "kestrel" in command``,
+        # so ``command`` has to keep carrying both substrings.
         if tool == "kestrel":
             command = f"{tools.get('java_path', 'java')} {version_flag}"
+            version_flag = ""
         versions[tool] = get_tool_version(command, version_flag)
 
     return versions
@@ -329,9 +337,16 @@ def validate_bam_file(file_path, cwd=None):
     # Perform samtools quickcheck
     # Quoted because `run_command` runs with shell=True: an unquoted path containing a
     # space becomes two operands, and one containing a metacharacter is executed.
+    #
+    # critical=False, not True: `run_command`'s critical path raises RuntimeError and
+    # never returns False, which made the `if not success:` branch below unreachable and
+    # the documented `Raises: ValueError` untrue on a real quickcheck failure. This
+    # function aborts the run itself, by raising, so `run_command` does not also need
+    # to -- and the exception callers see is the ValueError every other check here (and
+    # `validate_fastq_file`) raises for unusable input.
     command = f"samtools quickcheck -v {quote_path(file_path)}"
     log_file = f"{file_path}.quickcheck.log"
-    success = run_command(command, log_file, critical=True, cwd=cwd)
+    success = run_command(command, log_file, critical=False, cwd=cwd)
     if not success:
         logger.error(f"Alignment file failed quickcheck: {file_path}")
         raise ValueError(f"Alignment file failed quickcheck: {file_path}")

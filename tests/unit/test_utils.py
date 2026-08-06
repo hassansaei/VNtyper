@@ -348,27 +348,35 @@ def test_get_tool_versions_with_no_tools_configured_returns_an_empty_dict():
     assert get_tool_versions({}) == {}
 
 
-def test_get_tool_versions_kestrel_command_duplicates_the_help_flag_today():
+#: Tail of the real ``java -jar kestrel.jar -h`` output: the last line is what
+#: ``get_tool_version`` parses (``output.split("\n")[-1].split(": ")[1]``, utils.py:182).
+KESTREL_HELP_OUTPUT = "Usage: kestrel [options]\n  -h[<TOPIC>]  Show help\nkestrel version: 1.0.1"
+
+#: First line of ``java --version``, which is all ``get_tool_version`` keeps (utils.py:185).
+JAVA_VERSION_OUTPUT = "openjdk 11.0.23-internal 2024-04-16\nOpenJDK Runtime Environment (build 11.0.23-internal)"
+
+
+def test_get_tool_versions_passes_the_kestrel_help_flag_exactly_once():
     """
-    CHARACTERISATION of a live defect. Do not "fix" this here.
+    SPECIFICATION: kestrel is invoked as ``java -jar <jar> -h``, once.
 
-    get_tool_versions builds ``command`` for kestrel as
+    get_tool_versions used to build ``command`` for kestrel as
     ``f"{java_path} {version_flag}"`` (utils.py:232), which already embeds the
-    ``-jar "<path>" -h`` flag, and then calls
-    ``get_tool_version(command, version_flag)`` with that SAME ``version_flag``
-    again (utils.py:233). get_tool_version concatenates
-    ``shlex.split(command) + shlex.split(version_flag)`` (utils.py:155), so the
-    argv handed to ``subprocess.run`` duplicates ``-jar <path> -h``: it becomes
-    ``java -jar k.jar -h -jar k.jar -h`` instead of ``java -jar k.jar -h``.
+    ``-jar "<path>" -h`` flag, and then call ``get_tool_version(command,
+    version_flag)`` with that SAME ``version_flag`` again (utils.py:233).
+    get_tool_version concatenates ``shlex.split(command) + shlex.split(version_flag)``
+    (utils.py:155), so the argv reaching ``subprocess.run`` was
+    ``java -jar k.jar -h -jar k.jar -h``. That happened to exit 0 against the pinned
+    kestrel build -- its arg parser stops at the first ``-h`` -- but nothing in
+    get_tool_versions depends on kestrel continuing to ignore trailing garbage: a
+    stricter parser returns "unknown" (utils.py:183), raises IndexError into
+    "unknown" (utils.py:194-196), or yields a usage banner that parses into a
+    plausible-looking garbage version (``"Usage: kestrel [options]".split(": ")[1]``).
 
-    This does not currently crash -- kestrel's arg parser tolerates the extra
-    tokens in the cases observed in this repo's fixtures -- but it is not the
-    intended invocation, and a stricter arg parser would make version
-    detection silently report "unknown" (get_tool_version's blanket
-    ``except Exception`` -> "unknown" is exactly the "silently wrong answer"
-    shape this codebase keeps producing). Filed as
-    issue-utils-kestrel-duplicate-version-flag.md; not fixed here per
-    AGENT-RULES section 8 and the orchestrator's do-not-fix instruction.
+    Filed as issue-utils-kestrel-duplicate-version-flag.md and fixed on the
+    repository owner's instruction: ``version_flag`` is cleared once it has been
+    folded into ``command``. Asserting the exact argv, not just its length, is the
+    point -- the operand list is the whole defect.
     """
     config = {
         "tools": {
@@ -385,17 +393,48 @@ def test_get_tool_versions_kestrel_command_duplicates_the_help_flag_today():
 
     kestrel_calls = [call for call in mocked_run.call_args_list if "-jar" in call.args[0]]
     assert len(kestrel_calls) == 1, "expected exactly one subprocess.run call built for kestrel"
-    argv = kestrel_calls[0].args[0]
 
-    assert argv == [
+    assert kestrel_calls[0].args[0] == [
         "/usr/bin/java",
         "-jar",
         "/opt/kestrel/kestrel-1.0.1.jar",
         "-h",
-        "-jar",
-        "/opt/kestrel/kestrel-1.0.1.jar",
-        "-h",
-    ], "the -jar/-h pair should appear exactly once if this is ever fixed"
+    ]
+
+
+def test_get_tool_versions_reports_the_kestrel_version_from_its_help_banner():
+    """
+    SPECIFICATION: removing the duplicated flag must not move the reported version.
+
+    ``get_tool_version`` dispatches its kestrel parse on the *command* string --
+    ``if "java" in command and "kestrel" in command`` (utils.py:179) -- so the fix
+    had to keep the pre-built ``command`` and drop the second ``version_flag``. The
+    other candidate fix (stop pre-building ``command``, pass ``java_path`` alone and
+    let get_tool_version append the flag) breaks that dispatch: with the shipped
+    config's ``java_path == "java"``, ``"kestrel" in command`` is then False, and the
+    ``command.startswith("java")`` branch (utils.py:184-185) takes over and reports
+    the *first* line of kestrel's help banner -- ``"Usage: kestrel [options]"`` --
+    as the kestrel version. That was confirmed by inducing it here. The argv
+    assertion above still passes under that mutation, so this test is the only thing
+    holding the reported version in place.
+    """
+    config = {
+        "tools": {
+            "kestrel": "vntyper/dependencies/kestrel/kestrel.jar",
+            "java_path": "java",
+        }
+    }
+
+    def fake_run(argv, **kwargs):
+        return _completed_process(stdout=KESTREL_HELP_OUTPUT if "-jar" in argv else JAVA_VERSION_OUTPUT)
+
+    with patch("vntyper.scripts.utils.subprocess.run", side_effect=fake_run):
+        versions = get_tool_versions(config)
+
+    assert versions == {
+        "kestrel": "1.0.1",
+        "java_path": "openjdk 11.0.23-internal 2024-04-16",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -572,26 +611,33 @@ def test_validate_bam_file_raises_when_run_command_reports_quickcheck_failure(tm
         validate_bam_file(str(bam_file))
 
 
-def test_validate_bam_file_quickcheck_failure_raises_runtimeerror_not_valueerror_today(tmp_path):
+def test_validate_bam_file_raises_valueerror_when_the_real_quickcheck_fails(tmp_path, caplog):
     """
-    CHARACTERISATION of a live defect. Do not "fix" this here.
+    SPECIFICATION: a failed quickcheck raises the documented ValueError, naming the file.
 
-    validate_bam_file's own docstring promises
-    ``Raises: ValueError: If any validation check fails.``, and utils.py:334-337
-    reads as though a failed quickcheck raises ValueError. But the call at
-    utils.py:334 hardcodes ``critical=True``, and run_command's contract (see
-    ``test_run_command_contract.py::test_a_critical_failure_raises_runtime_error``)
-    is: a critical failure RAISES RuntimeError, it never returns False. So on a
-    real quickcheck failure, ``if not success:`` at utils.py:335 is
-    unreachable -- the caller gets ``RuntimeError("Critical command failed: ...")``
-    instead of the documented ValueError, and an ``except ValueError`` around a
-    ``validate_bam_file()`` call will not catch it.
+    This is the end-to-end counterpart of the test above: nothing is stubbed between
+    validate_bam_file and ``subprocess.Popen``, so it exercises the real
+    ``run_command`` and pins the type a caller actually sees.
 
-    ``pipeline.py``'s own call sites (pipeline.py:219,221) sit inside a
-    ``try`` whose matching clause is a blanket ``except Exception:``
-    (pipeline.py:715), so this is currently benign there; any other caller
-    that catches ``ValueError`` specifically is not protected. Filed as
-    issue-utils-validate-bam-file-wrong-exception-type.md; not fixed here.
+    validate_bam_file used to call ``run_command(..., critical=True, ...)``, and
+    run_command's critical path *raises* ``RuntimeError`` rather than returning False
+    (utils.py:66-73, pinned by
+    ``test_run_command_contract.py::test_a_critical_failure_raises_runtime_error``).
+    The ``if not success:`` branch was therefore unreachable by construction and the
+    documented ``Raises: ValueError`` was never true on a real failure. Passing
+    ``critical=False`` makes the documented contract real: validate_bam_file aborts
+    the run itself, by raising, so run_command does not also need to.
+
+    ValueError, not RuntimeError, is the type this repository uses for "the input the
+    user handed us is not usable" -- it is what validate_bam_file's own three earlier
+    checks raise, what its sibling validate_fastq_file raises for every failure, what
+    ``cli.py:110`` catches to turn a usage error into a clean exit, and what
+    ``test_pipeline_guards.py`` already models a validate_bam_file failure as.
+    ``RuntimeError`` is this repository's "an execution we depended on failed"
+    (``cli_handlers.py:406``); a truncated BAM is a verdict about the input, not an
+    infrastructure failure. Filed as
+    issue-utils-validate-bam-file-wrong-exception-type.md and fixed on the repository
+    owner's instruction, in the same fail-loud direction as issue #185.
     """
     bam_file = tmp_path / "broken.bam"
     bam_file.touch()
@@ -599,12 +645,16 @@ def test_validate_bam_file_quickcheck_failure_raises_runtimeerror_not_valueerror
     failing_process.stdout = [b"[E::hts_open] truncated file\n"]
     failing_process.wait.return_value = 1
     failing_process.returncode = 1
+    caplog.set_level(logging.ERROR, logger=UTILS_LOGGER)
 
     with (
         patch("vntyper.scripts.utils.subprocess.Popen", return_value=failing_process),
-        pytest.raises(RuntimeError, match="Critical command failed"),
+        pytest.raises(ValueError) as excinfo,
     ):
         validate_bam_file(str(bam_file))
+
+    assert str(excinfo.value) == f"Alignment file failed quickcheck: {bam_file}"
+    assert _logged(caplog.records, f"Alignment file failed quickcheck: {bam_file}")
 
 
 # ---------------------------------------------------------------------------
