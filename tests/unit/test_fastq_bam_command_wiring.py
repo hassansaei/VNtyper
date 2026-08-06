@@ -10,13 +10,16 @@ hand-rolls its own string next to it.
 Every expected string here was captured from the code as it stood *before*
 ``command_builders`` existed, so this file doubles as the proof that the
 extraction is behaviour-preserving. The only differences from that capture are the
-three deliberate fixes:
+four deliberate fixes:
 
 * ``set -o pipefail; `` on the three multi-stage pipes,
-* the CRAM process substitution calling the configured samtools instead of a bare
-  ``samtools``,
+* the CRAM unmapped-read extractor calling the configured samtools instead of a
+  bare ``samtools``,
 * ``shlex.quote`` around interpolated paths, which is a no-op for every path that
-  needs no quoting - hence the byte-identical strings below.
+  needs no quoting - hence the byte-identical strings below,
+* the CRAM unmapped-read extractor writing through a plain pipe rather than a
+  ``tee >(...)`` process substitution the shell does not wait for - see the
+  section on that path below for the measurement.
 
 ``run_command`` is mocked throughout; nothing here starts a process.
 """
@@ -163,27 +166,171 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     ]
 
 
-def test_the_cram_path_uses_the_configured_samtools_inside_the_substitution(tmp_path):
+# ---------------------------------------------------------------------------
+# The CRAM unmapped-read path
+#
+# This branch used to be
+#     ... | tee >(samtools view -b -f 12 - -o unmapped.bam) > /dev/null
+# and bash does not wait for a ``>(...)`` process substitution: the shell returned
+# as soon as ``tee`` exited, while the substituted samtools was still flushing
+# ``unmapped.bam``. ``process_bam_to_fastq`` runs ``samtools merge`` against that
+# file on the very next line.
+#
+# Measured against a synthetic 600k-read CRAM with samtools 1.20, ten trials each:
+# with the substitution the file held 199,797 of 200,000 unmapped reads at the
+# instant the shell returned and ``samtools merge`` accepted it with only a
+# ``W::bam_hdr_read`` warning; with the plain pipe below it held 200,000 every time.
+# The reads at stake are exactly the ones this stage exists to recover for Kestrel,
+# so the old shape could under-call a sample with no pipeline error at all.
+#
+# The tests below pin the pipe. ``tee`` is not merely unnecessary, it is the defect:
+# its own stdout went to ``/dev/null``, so the substitution was the only consumer.
+# ---------------------------------------------------------------------------
+
+
+def _cram_unmapped_command(tmp_path, **overrides):
+    """
+    Drive the CRAM branch and return its single unmapped-read extraction command.
+
+    Args:
+        tmp_path (Path): pytest temporary directory.
+        **overrides: Passed through to ``_run_bam_to_fastq``.
+
+    Returns:
+        str: The one emitted command containing ``-f 12``.
+    """
+    config = {**CONFIG, "tools": {**CONFIG["tools"], "samtools": "/envs/vntyper/bin/samtools"}}
+    kwargs = {
+        "fast_mode": False,
+        "file_format": "cram",
+        "in_bam": "/data/sample.cram",
+        "config": config,
+    }
+    kwargs.update(overrides)
+
+    commands = _run_bam_to_fastq(tmp_path, **kwargs)
+    filters = [c for c in commands if "-f 12" in c]
+    assert len(filters) == 1, f"expected exactly one unmapped-read extraction command, got {filters}"
+    return filters[0]
+
+
+def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
+    """
+    The whole command, byte for byte.
+
+    The double space after ``view`` is the empty ``cram_ref_option`` and is
+    preserved from the pre-extraction code, as it is in every other builder.
+    """
+    assert _cram_unmapped_command(tmp_path) == (
+        f"set -o pipefail; /envs/vntyper/bin/samtools view  -@ 4 -h /data/sample.cram | "
+        f"/envs/vntyper/bin/samtools view -b -f 12 -@ 4 - -o {tmp_path}/output_unmapped.bam"
+    )
+
+
+def test_the_cram_unmapped_command_has_no_process_substitution(tmp_path):
+    """
+    No ``>(...)``, and no ``tee`` for it to hang off.
+
+    This is the assertion that fails if the race is reintroduced. ``tee``'s stdout
+    went to ``/dev/null``, so the substitution was the pipeline's only consumer -
+    there is nothing for a second output to feed.
+    """
+    command = _cram_unmapped_command(tmp_path)
+
+    assert ">(" not in command, "a process substitution is not waited for; the merge would race the writer"
+    assert "tee" not in command, "tee had exactly one consumer, so it was pure overhead"
+    assert "/dev/null" not in command, "nothing is discarded any more; the writer consumes the whole stream"
+
+
+def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
+    """
+    The writing samtools must be a **stage**, which is what makes bash wait for it.
+
+    Two stages joined by one ``|``: the reader streams the CRAM, the writer filters
+    flag 12 into the output BAM. Because the writer is in the pipeline, the shell
+    does not return until it has exited, and ``pipefail`` covers its exit status.
+    """
+    command = _cram_unmapped_command(tmp_path)
+    stages = command.removeprefix("set -o pipefail; ").split(" | ")
+
+    assert len(stages) == 2, f"expected a two-stage pipeline, got {len(stages)}: {stages}"
+    reader, writer = stages
+    assert reader.endswith("-h /data/sample.cram"), f"the reader must end at the CRAM input: {reader}"
+    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 12"), f"the writer is not stage two: {writer}"
+    assert writer.endswith(f"- -o {tmp_path}/output_unmapped.bam"), (
+        f"the writer must read stdin and write the unmapped BAM: {writer}"
+    )
+
+
+def test_the_cram_unmapped_command_sets_pipefail(tmp_path):
+    """
+    ``pipefail`` is only meaningful now that the writer is in the pipeline.
+
+    Under the substitution it bought nothing: a writer that consumed its whole input
+    and then failed never made ``tee`` see EPIPE, so the command exited 0 and the
+    stage carried on with a BAM that was never finished.
+    """
+    command = _cram_unmapped_command(tmp_path)
+
+    assert "|" in command, "this test is checking the wrong command if there is no pipe in it"
+    assert command.startswith("set -o pipefail; "), "without pipefail a failed writer exits 0"
+
+
+def test_the_cram_unmapped_command_uses_the_configured_samtools_in_both_stages(tmp_path):
     """
     D2 through the real call site.
 
-    The stage passes ``config["tools"]["samtools"]`` to the builder for both the
-    outer command and the inner one. A bare ``samtools`` here would resolve against
-    whatever PATH ``mamba run`` set up.
+    The stage passes ``config["tools"]["samtools"]`` to the builder for both stages.
+    A bare ``samtools`` in either would resolve against whatever PATH ``mamba run``
+    set up, so the unmapped reads would be extracted by a different build - or by
+    nothing at all, while the pipeline reported success.
+    """
+    command = _cram_unmapped_command(tmp_path)
+
+    assert command.count("/envs/vntyper/bin/samtools") == 2, f"both stages must use the configured samtools: {command}"
+    assert [token for token in command.split() if token == "samtools"] == [], (
+        f"a bare `samtools` token means the mismatch is back: {command}"
+    )
+
+
+def test_a_hostile_cram_path_survives_both_stages_of_the_pipe(tmp_path):
+    """
+    Every interpolated path stays one operand, on both sides of the ``|``.
+
+    Now that the command is an ordinary pipeline, ``shlex.split`` parses it the way
+    bash does with no special-casing - which the ``>(...)`` form needed.
+    """
+    hostile_cram = "/data/patient sample/it's a CRAM.cram"
+    output_dir = tmp_path / "run one"
+    output_dir.mkdir()
+
+    command = _cram_unmapped_command(tmp_path, in_bam=hostile_cram, output=str(output_dir))
+    tokens = shlex.split(command.removeprefix("set -o pipefail; "))
+
+    assert hostile_cram in tokens, f"the input CRAM did not survive as one operand: {command}"
+    assert str(output_dir / "output_unmapped.bam") in tokens, (
+        f"the output BAM did not survive as one operand: {command}"
+    )
+
+
+def test_the_merge_runs_immediately_after_the_cram_unmapped_extraction(tmp_path):
+    """
+    The adjacency that made the race matter, pinned.
+
+    ``samtools merge`` is the next command the stage emits after the extraction, so
+    any part of ``unmapped.bam`` not written by the time ``run_command`` returns is
+    simply absent from the merged BAM. Nothing sleeps, polls or re-checks in between.
     """
     config = {**CONFIG, "tools": {**CONFIG["tools"], "samtools": "/envs/vntyper/bin/samtools"}}
-
     commands = _run_bam_to_fastq(
         tmp_path, fast_mode=False, file_format="cram", in_bam="/data/sample.cram", config=config
     )
 
-    filter_commands = [c for c in commands if ">(" in c]
-    assert len(filter_commands) == 1, f"expected exactly one process-substitution command, got {filter_commands}"
-    assert filter_commands[0] == (
-        f"set -o pipefail; /envs/vntyper/bin/samtools view  -@ 4 -h /data/sample.cram | tee "
-        f" >(/envs/vntyper/bin/samtools view -b -f 12 -@ 4 - -o {tmp_path}/output_unmapped.bam) "
-        f"> /dev/null"
-    )
+    extraction = next(i for i, c in enumerate(commands) if "-f 12" in c)
+    assert commands[extraction + 1] == (
+        f"/envs/vntyper/bin/samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
+        f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam"
+    ), f"the merge must be the very next command: {commands[extraction + 1]}"
 
 
 def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):

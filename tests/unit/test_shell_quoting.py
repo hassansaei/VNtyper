@@ -2,9 +2,15 @@
 Pin the shell quoting of caller-controlled paths at the sites `run_command` still builds by hand.
 
 `command_builders.py` quotes every interpolated path with :func:`~vntyper.scripts.command_builders.quote_path`,
-but several call sites were never migrated to it. `run_command` uses ``shell=True`` deliberately (it needs
-process substitution for the CRAM unmapped-read path), so an unquoted operand containing a space is split
-by Bash into two, and one containing a metacharacter is executed.
+but several call sites were never migrated to it. `run_command` uses ``shell=True`` deliberately - every
+command it is given is shell syntax (pipes, ``&&``, redirects) and the ``set -o pipefail`` prefix is a
+non-POSIX ``set`` option that pinning ``/bin/bash`` guarantees - so an unquoted operand containing a space
+is split by Bash into two, and one containing a metacharacter is executed.
+
+(That rationale used to be stated as "it needs process substitution for the CRAM unmapped-read path". The
+CRAM branch no longer uses process substitution - it is a plain pipe, see
+:func:`~vntyper.scripts.command_builders.build_cram_unmapped_filter_command` - but ``shell=True`` and
+``executable="/bin/bash"`` are still required, and so is the quoting this module pins.)
 
 The quoted sites - samtools quickcheck in `utils.validate_bam_file`, and the SAM->BAM conversion, its
 index and the bcftools sort in `kestrel_genotyping` - each get a path with a space *and* a single quote
