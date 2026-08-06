@@ -84,6 +84,37 @@ def _clean(value: str | None) -> str | None:
     return (value or "").strip() or None
 
 
+def preferred_passphrase(header_value: str | None, query_value: str | None) -> str | None:
+    """Choose which of the two ways in carried the caller's passphrase.
+
+    The cohort read routes are GETs, so their passphrase used to travel in the
+    query string -- which is part of the request line, and therefore ends up in
+    server and proxy access logs, in browser history and in ``Referer`` headers.
+    A request header carries it instead. The query parameter still works, and is
+    marked deprecated rather than removed, because existing clients use it.
+
+    The header wins when both are present. "Whichever verifies" would turn two
+    credentials into two attempts at one, and a caller sending both is better
+    told plainly which was used.
+
+    Neither value is trimmed. Only the *emptiness* test uses the trimmed form, so
+    that a header a proxy adds unconditionally does not blank out a credential
+    the caller did send, while a passphrase with leading or trailing whitespace
+    still verifies against the hash made from it.
+
+    Args:
+        header_value: The passphrase from the request header, if any.
+        query_value: The passphrase from the query string, if any.
+
+    Returns:
+        str | None: The passphrase to authorize with, or None if neither way in
+            carried one.
+    """
+    if _clean(header_value) is not None:
+        return header_value
+    return query_value
+
+
 def create_cohort_record(
     store: Any,
     *,

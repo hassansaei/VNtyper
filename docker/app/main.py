@@ -19,6 +19,7 @@ from fastapi import (
     FastAPI,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -31,7 +32,7 @@ from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from .cohorts import cohort_job_ids, create_cohort_record, resolve_cohort
+from .cohorts import cohort_job_ids, create_cohort_record, preferred_passphrase, resolve_cohort
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
 from .identifiers import is_job_id
 from .job_workspace import job_workspace
@@ -645,6 +646,27 @@ def health_check():
     return {"status": "ok"}
 
 
+# The two cohort read routes are GETs, so their credential used to have nowhere
+# to travel but the query string -- which is part of the request line, and so is
+# written to server and proxy access logs, kept in browser history and sent on
+# in `Referer` headers. The header below carries it instead. The query parameter
+# still works and is documented as deprecated rather than removed: the web UI
+# and the `vntyper online` CLI subcommand both use it.
+COHORT_PASSPHRASE_HEADER = "X-Cohort-Passphrase"
+
+PASSPHRASE_HEADER_DESCRIPTION = (
+    "Passphrase protecting the cohort. Preferred over the `passphrase` query "
+    "parameter, and used instead of it when both are supplied."
+)
+
+PASSPHRASE_QUERY_DESCRIPTION = (
+    "Passphrase protecting the cohort. Deprecated: a query string is recorded "
+    f"in access logs and browser history, so send the `{COHORT_PASSPHRASE_HEADER}` "
+    "request header instead. Still accepted, and still required if the header is "
+    "not sent."
+)
+
+
 class JobQueueResponse(BaseModel):
     total_jobs_in_queue: int = Field(..., description="Total number of jobs in the queue.")
 
@@ -757,7 +779,10 @@ def get_job_queue(
 def get_cohort_status(
     cohort_id: str | None = Query(None, description="Cohort identifier (required)"),
     alias: str | None = Query(None, description="Cohort alias, checked against the cohort"),
-    passphrase: str | None = Query(None, description="Passphrase protecting the cohort (required)"),
+    passphrase: str | None = Query(None, deprecated=True, description=PASSPHRASE_QUERY_DESCRIPTION),
+    header_passphrase: str | None = Header(
+        None, alias=COHORT_PASSPHRASE_HEADER, description=PASSPHRASE_HEADER_DESCRIPTION
+    ),
 ):
     """
     **Description:**
@@ -768,7 +793,8 @@ def get_cohort_status(
 
     - **cohort_id**: The unique identifier of the cohort. Required.
     - **alias**: (Optional) The alias of the cohort, checked against it.
-    - **passphrase**: The passphrase protecting the cohort. Required.
+    - **passphrase**: The passphrase protecting the cohort. Required, and deprecated in this position: prefer the `X-Cohort-Passphrase` header, which is not written to access logs or browser history.
+    - **X-Cohort-Passphrase**: The passphrase protecting the cohort. Preferred, and used instead of the query parameter when both are supplied.
 
     **Returns:**
 
@@ -777,6 +803,7 @@ def get_cohort_status(
     - **jobs**: A list of job statuses within the cohort.
     """
     # Reuse the get_cohort_jobs function to retrieve job_ids
+    passphrase = preferred_passphrase(header_passphrase, passphrase)
     response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
     job_ids = response["job_ids"]
 
@@ -882,7 +909,10 @@ def _remove_temp_file(path: str) -> None:
 def cohort_download(
     cohort_id: str | None = Query(None, description="Cohort identifier (required)"),
     alias: str | None = Query(None, description="Cohort alias, checked against the cohort"),
-    passphrase: str | None = Query(None, description="Passphrase protecting the cohort (required)"),
+    passphrase: str | None = Query(None, deprecated=True, description=PASSPHRASE_QUERY_DESCRIPTION),
+    header_passphrase: str | None = Header(
+        None, alias=COHORT_PASSPHRASE_HEADER, description=PASSPHRASE_HEADER_DESCRIPTION
+    ),
 ):
     """
     **Description:**
@@ -894,13 +924,15 @@ def cohort_download(
 
     - **cohort_id**: The unique identifier of the cohort. Required.
     - **alias**: (Optional) The alias of the cohort, checked against it.
-    - **passphrase**: The passphrase protecting the cohort. Required.
+    - **passphrase**: The passphrase protecting the cohort. Required, and deprecated in this position: prefer the `X-Cohort-Passphrase` header, which is not written to access logs or browser history.
+    - **X-Cohort-Passphrase**: The passphrase protecting the cohort. Preferred, and used instead of the query parameter when both are supplied.
 
     **Returns:**
 
     - **FileResponse**: A ZIP file containing all `.zip` results for the cohort.
     """
     # Retrieve job IDs for the given cohort
+    passphrase = preferred_passphrase(header_passphrase, passphrase)
     response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
     job_ids = response["job_ids"]
 
