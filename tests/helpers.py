@@ -211,28 +211,42 @@ def assert_log10_tolerance(
     )
 
 
-def assert_pattern_match(actual: str, expected: str, field_name: str) -> None:
+def assert_pattern_match(actual: str, expected: str, field_name: str, allow_wildcard: bool = False) -> None:
     """
-    Assert string matches pattern (supports wildcard * suffix).
+    Assert a string equals the expected value.
+
+    Comparison is **literal by default**. This helper used to treat a trailing
+    ``*`` as a wildcard, and it is applied to ``Confidence`` -- where
+    ``High_Precision*`` is a literal label this codebase emits, not a pattern.
+    The star made expecting ``High_Precision*`` silently accept plain
+    ``High_Precision``, so the boundary between the two confidence levels was
+    never asserted by either slow tier. The four labels that reach this function
+    are ``High_Precision*``, ``High_Precision``, ``Low_Precision`` and
+    ``Negative``; none of them is a pattern.
+
+    Prefix matching is still available, but a caller has to ask for it.
 
     Args:
         actual: Actual string value
-        expected: Expected pattern (use "prefix*" for wildcard)
+        expected: Expected value. With ``allow_wildcard=True``, a trailing ``*``
+            is a prefix wildcard.
         field_name: Field name for error messages
+        allow_wildcard: Opt in to treating a trailing ``*`` as a wildcard.
 
     Raises:
-        AssertionError: If pattern doesn't match
+        AssertionError: If the value does not match, or if ``expected`` is a bare
+            ``"*"`` under ``allow_wildcard`` -- that matches everything and so
+            asserts nothing.
 
     Examples:
         >>> assert_pattern_match("High_Precision*", "High_Precision*", "Confidence")
-        >>> assert_pattern_match("High_Precision_v2", "High_Precision*", "Confidence")
+        >>> assert_pattern_match("High_Precision_v2", "High_Precision*", "Confidence", allow_wildcard=True)
     """
-    if expected.endswith("*"):
-        # Wildcard match
+    if allow_wildcard and expected.endswith("*"):
         prefix = expected[:-1]
+        assert prefix, f"{field_name}: a bare '*' matches every value and so asserts nothing"
         assert actual.startswith(prefix), f"{field_name}: Expected to start with '{prefix}', got '{actual}'"
     else:
-        # Exact match
         assert actual == expected, f"{field_name}: Expected '{expected}', got '{actual}'"
 
 
@@ -260,6 +274,12 @@ def validate_kestrel_output(output_dir: Path, expected: dict[str, Any]) -> None:
             "Confidence": "High_Precision*"
         }
     """
+    assert expected, (
+        "validate_kestrel_output was given no expected values, so it would assert "
+        "nothing about the genotype at all. Populate kestrel_assertions in "
+        "tests/test_data_config.json."
+    )
+
     kestrel_file = output_dir / "kestrel" / "kestrel_result.tsv"
     assert_file_exists(kestrel_file, "Kestrel result file")
 
@@ -376,9 +396,31 @@ def validate_advntr_output(output_dir: Path, expected: dict[str, Any]) -> None:
 # ============================================================================
 
 
+#: Exactly the header `fastq_bam_processing.calculate_vntr_coverage` writes, in
+#: order. These are lowercase; this helper used to read `Mean`, `Median` and
+#: `Uncovered%` with `0` defaults, so every lookup missed, every metric came back
+#: `0.0`, and the only caller - which asserts `mean_cov >= 0` - could not fail.
+#: tests/unit/test_helpers.py derives this list from the production writer, so the
+#: two cannot drift apart.
+COVERAGE_COLUMNS = (
+    "mean",
+    "median",
+    "stdev",
+    "min",
+    "max",
+    "region_length",
+    "uncovered_bases",
+    "percent_uncovered",
+)
+
+
 def validate_coverage_output(output_dir: Path) -> dict[str, float]:
     """
     Validate coverage summary exists and parse basic metrics.
+
+    Every column production writes must be present. A missing or renamed column
+    fails loudly rather than defaulting to zero: a coverage metric that silently
+    reads 0.0 turns the caller's `mean_cov >= 0` assertion into a no-op.
 
     Args:
         output_dir: Output directory containing coverage/ subdirectory
@@ -387,7 +429,8 @@ def validate_coverage_output(output_dir: Path) -> dict[str, float]:
         Dict with mean_cov, median_cov, uncovered_pct
 
     Raises:
-        AssertionError: If file missing or unparseable
+        AssertionError: If the file is missing, has no data rows, is missing a
+            column, or carries a value that is not a number.
     """
     coverage_file = output_dir / "coverage" / "coverage_summary.tsv"
     assert_file_exists(coverage_file, "Coverage summary file")
@@ -399,10 +442,21 @@ def validate_coverage_output(output_dir: Path) -> dict[str, float]:
 
     assert len(rows) > 0, "Coverage summary has no data rows"
 
-    # Return first row metrics (basic validation)
     row = rows[0]
+    missing = [column for column in COVERAGE_COLUMNS if row.get(column) is None]
+    assert not missing, (
+        f"Coverage summary is missing column(s) {missing}. Found {sorted(k for k in row if k is not None)}. "
+        f"Expected exactly what calculate_vntr_coverage writes: {list(COVERAGE_COLUMNS)}."
+    )
+
+    def _as_float(column: str) -> float:
+        try:
+            return float(row[column])
+        except ValueError as exc:
+            raise AssertionError(f"Coverage summary column '{column}' is not a number: {row[column]!r}") from exc
+
     return {
-        "mean_cov": float(row.get("Mean", 0)),
-        "median_cov": float(row.get("Median", 0)),
-        "uncovered_pct": float(row.get("Uncovered%", "0").rstrip("%")),
+        "mean_cov": _as_float("mean"),
+        "median_cov": _as_float("median"),
+        "uncovered_pct": _as_float("percent_uncovered"),
     }
