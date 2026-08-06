@@ -415,6 +415,77 @@ def test_a_request_with_no_body_is_handed_the_untouched_stream() -> None:
     assert seen["send"] is recorder
 
 
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_a_body_arriving_with_no_framing_headers_is_still_counted(method: str) -> None:
+    """The count is enabled by the method, not by a header the client chooses.
+
+    `Content-Length` and `Transfer-Encoding` are the client's to send. Deciding
+    whether to count on their presence makes the ceiling something the sender can
+    switch off, and an ASGI server that delivered body messages without either
+    would bypass it without the sender doing anything at all. Any method that may
+    carry a body is counted, framing or none.
+
+    Args:
+        method: The HTTP method under test.
+    """
+    received: list[int] = []
+    receive, pulled = _stream([b"x" * CHUNK] * 64)
+    recorder = _Recorder()
+    middleware = RequestSizeLimitMiddleware(_draining_app(received), max_bytes=CEILING)
+
+    asyncio.run(middleware(_scope(method=method, headers=[]), receive, recorder))
+
+    assert recorder.status == 413
+    assert sum(received) <= CEILING
+    assert sum(pulled) <= CEILING + CHUNK
+
+
+def test_a_body_arriving_with_no_framing_headers_is_delivered_when_it_fits() -> None:
+    """Counting an unframed body must not truncate a legitimate one.
+
+    Without this, the test above would also pass against a middleware that
+    refused every unframed request outright.
+    """
+    received: list[int] = []
+    chunks = [b"a" * CHUNK, b"b" * 17]
+    receive, _ = _stream(chunks)
+    recorder = _Recorder()
+    middleware = RequestSizeLimitMiddleware(_draining_app(received), max_bytes=CEILING)
+
+    asyncio.run(middleware(_scope(method="POST", headers=[]), receive, recorder))
+
+    assert recorder.status == 200
+    assert received == [len(chunk) for chunk in chunks]
+
+
+def test_a_get_that_declares_a_body_is_counted_too() -> None:
+    """The header stays useful as an early answer where the method allows none.
+
+    A GET is passed through when it says it has no body, because that is what
+    keeps this middleware out of the way of the streaming downloads. One that
+    announces a body is counted like anything else.
+    """
+    recorder = _Recorder()
+
+    async def never_called() -> dict[str, Any]:
+        """Fail if the body is read at all.
+
+        Returns:
+            dict[str, Any]: Never returns.
+
+        Raises:
+            AssertionError: Always.
+        """
+        raise AssertionError("the body was read despite an over-large declared length")
+
+    middleware = RequestSizeLimitMiddleware(_draining_app([]), max_bytes=CEILING)
+    scope = _scope(method="GET", headers=[(b"content-length", str(CEILING + 1).encode())])
+
+    asyncio.run(middleware(scope, never_called, recorder))
+
+    assert recorder.status == 413
+
+
 def test_a_non_http_scope_is_passed_straight_through() -> None:
     """Lifespan and websocket traffic has no request body to bound."""
     seen: list[str] = []

@@ -27,9 +27,15 @@ allowance is orders of magnitude more than this API's form actually needs and
 orders of magnitude less than the upload ceiling, which is what lets one number
 govern both bounds without either being wrong.
 
-Requests with no body are handed the original `receive` and `send` untouched:
-there is nothing to count, and passing the callables straight through keeps this
+Whether to count is decided on the request method, not on the framing headers.
+`Content-Length` and `Transfer-Encoding` are the sender's to send or to omit, so
+a counter enabled by their presence is a counter the sender can switch off.
+Methods whose semantics carry no body -- GET, HEAD, OPTIONS -- are handed the
+original `receive` and `send` untouched when they announce none: there is
+nothing to count, and passing the callables straight through keeps this
 middleware out of the way of streamed responses such as the result downloads.
+The headers still decide in that one direction: a GET that does announce a body
+is counted like anything else.
 """
 
 import json
@@ -59,10 +65,17 @@ ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 # not as a second, independently meaningful limit.
 REQUEST_FRAMING_ALLOWANCE = 64 * 1024
 
-# A request carries a body if and only if it says so with one of these
-# (RFC 9112 section 6). Anything else -- every GET this service answers, the
-# health check, the download routes -- has no body to bound.
+# How a request announces a body (RFC 9112 section 6). Useful as an early
+# answer, never as the reason to start counting: both headers are the client's
+# to send or omit.
 BODY_HEADERS: tuple[bytes, ...] = (b"content-length", b"transfer-encoding")
+
+# Methods whose semantics carry no request body. Everything else is counted
+# whatever its headers say. These three are the only methods this service
+# answers without one -- the health check, the version route, the downloads --
+# and passing them through untouched is what keeps a streamed response out of
+# this middleware's way.
+BODYLESS_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def configured_max_request_bytes() -> int:
@@ -105,6 +118,26 @@ def _has_body(headers: list[tuple[bytes, bytes]]) -> bool:
         bool: True if the request carries a body framing header.
     """
     return any(name.lower() in BODY_HEADERS for name, _ in headers)
+
+
+def _may_carry_body(method: str, headers: list[tuple[bytes, bytes]]) -> bool:
+    """Report whether a request has to be counted.
+
+    The decision is made on the method, which the routing layer acts on, rather
+    than on the framing headers, which the sender chooses. A body delivered
+    without either header -- by a server that frames the request some other way,
+    or by a client that simply omits them -- is still a body, and is still
+    counted. The headers only widen the answer: a method that normally carries
+    no body is counted anyway once it announces one.
+
+    Args:
+        method: The request method from the ASGI scope.
+        headers: Raw ASGI header pairs.
+
+    Returns:
+        bool: True if the body of this request must be bounded.
+    """
+    return method.upper() not in BODYLESS_METHODS or _has_body(headers)
 
 
 async def _refuse(send: Send, max_bytes: int) -> None:
@@ -180,7 +213,7 @@ class RequestSizeLimitMiddleware:
             return
 
         headers = list(scope.get("headers") or [])
-        if not _has_body(headers):
+        if not _may_carry_body(str(scope.get("method") or ""), headers):
             await self.app(scope, receive, send)
             return
 
