@@ -1,18 +1,60 @@
 # tests/unit/test_variant_parsing.py
 
 """
-Unit tests for variant_parsing.py, focusing on filter_by_alt_values_and_finalize().
+Unit tests for variant_parsing.py.
 
-Ensures that ALT-based filtering rules are correctly applied:
-  - 'GG' alt requires a minimum Depth_Score.
-  - exclude_alts removed from final DataFrame.
-  - left/right columns dropped at the end.
+Covers both public functions:
+  - filter_by_alt_values_and_finalize(): 'GG' alt requires a minimum Depth_Score;
+    exclude_alts removed from final DataFrame; left/right columns retained.
+  - read_vcf_without_comments(): parses a (possibly gzipped) VCF, skipping '##'
+    meta lines, taking '#CHROM' as the header, and collecting only the lines that
+    come after a header has been seen.
+
+Mutation-killing coverage for read_vcf_without_comments()
+-----------------------------------------------------------
+Three surviving mutants (docs/development/mutation-testing.md) live in this
+function's two compound boolean conditions:
+
+    line 59: elif not line.startswith("##") and header:
+    line 68: if data and header:
+
+For line 59, let P = "line.startswith('##')" (line looks like a meta/comment
+line) and H = "header is truthy" (the '#CHROM' line has already been seen).
+The correct condition is `(not P) and H`. Truth table against the two mutants
+(M1 = `not` deleted -> `P and H`; M2 = `and` -> `or` -> `(not P) or H`):
+
+    P     H     correct=(not P) and H   M1=(P and H)   M2=((not P) or H)
+    False False        False                False            True   <- M2 differs (test: pre-header data line)
+    False True         True                 False            True   <- M1 differs
+    True  False        False                False            False
+    True  True         False                True             True   <- M1 and M2 both differ (test: post-header comment)
+
+Row (False, False) is the case that isolates M2 alone: a data-shaped line
+appearing *before* any '#CHROM' header must be dropped under `and`, but would
+leak through under `or`. Row (True, True) isolates M1: a '##' comment line
+appearing *after* the header is seen must still be skipped under the real
+`not`, but would be captured as data if `not` is deleted.
+
+For line 68, let D = "data is non-empty" and H = "header is truthy". The
+correct condition is `D and H`; the mutant is `D or H`. Because line 59's real
+(unmutated) `and` guarantees data can only be populated once header is
+already truthy, the only reachable case that distinguishes `D and H` from
+`D or H` is D=False, H=True: a file containing only the '#CHROM' header line
+and no data rows. Real code returns a columnless `pd.DataFrame()`; the `or`
+mutant returns `pd.DataFrame([], columns=header)`, which has the header's
+columns even though it is still row-empty.
 """
+
+import gzip
+import logging
 
 import pandas as pd
 import pytest
 
-from vntyper.scripts.variant_parsing import filter_by_alt_values_and_finalize
+from vntyper.scripts.variant_parsing import (
+    filter_by_alt_values_and_finalize,
+    read_vcf_without_comments,
+)
 
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
@@ -199,3 +241,185 @@ def test_filter_by_alt_values_drop_left_right(kestrel_config_mock):
     # Assert - verify the data in left/right columns is unchanged
     assert all(out["left"] == "some_left_data"), "'left' column data should be preserved"
     assert all(out["right"] == "some_right_data"), "'right' column data should be preserved"
+
+
+# ---------------------------------------------------------------------------
+# read_vcf_without_comments()
+# ---------------------------------------------------------------------------
+#
+# HEADER_LINE below has 5 columns; every data-shaped line used in these tests
+# also has exactly 5 tab-separated fields, so a line that leaks through a
+# mutated filter still produces a row pandas can construct (no accidental
+# shape-mismatch crash masking the real assertion).
+
+HEADER_LINE = "#CHROM\tPOS\tID\tREF\tALT"
+
+
+def _write_vcf(path, lines, gzipped):
+    """Write `lines` (no trailing newlines) to `path`, one per line, plain or gzip."""
+    content = "\n".join(lines) + "\n"
+    if gzipped:
+        with gzip.open(path, "wt") as f:
+            f.write(content)
+    else:
+        with open(path, "w") as f:
+            f.write(content)
+
+
+@pytest.mark.parametrize("gzipped", [False, True], ids=["plain", "gzip"])
+def test_read_vcf_without_comments_parses_meta_header_and_data_rows(tmp_path, gzipped):
+    """Baseline: '##' meta lines are skipped, '#CHROM' becomes the header, data rows are kept.
+
+    Covers the open_func selection branch (plain vs. gzip) and the normal,
+    fully-populated path through both compound conditions. This also happens
+    to kill the line 59 `not`-deleted mutant on its own: under that mutant no
+    ordinary data row (which never starts with '##') could ever be appended,
+    so the two data rows below would vanish entirely.
+    """
+    vcf_path = tmp_path / ("sample.vcf.gz" if gzipped else "sample.vcf")
+    _write_vcf(
+        vcf_path,
+        [
+            "##fileformat=VCFv4.2",
+            "##source=test",
+            HEADER_LINE,
+            "chr1\t100\trs1\tA\tT",
+            "chr1\t200\trs2\tG\tC",
+        ],
+        gzipped,
+    )
+
+    out = read_vcf_without_comments(str(vcf_path))
+
+    assert list(out.columns) == ["#CHROM", "POS", "ID", "REF", "ALT"]
+    assert out.shape == (2, 5)
+    assert out.loc[0, "ID"] == "rs1"
+    assert out.loc[0, "POS"] == "100"
+    assert out.loc[1, "ID"] == "rs2"
+    assert out.loc[1, "ALT"] == "C"
+
+
+def test_read_vcf_without_comments_missing_file_returns_empty_dataframe(tmp_path, caplog):
+    """A nonexistent path hits the FileNotFoundError branch and returns an empty DataFrame."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.variant_parsing")
+    missing_path = tmp_path / "does_not_exist.vcf"
+
+    out = read_vcf_without_comments(str(missing_path))
+
+    assert out.empty
+    assert list(out.columns) == []
+    assert any("VCF file not found" in r.message and str(missing_path) in r.message for r in caplog.records), (
+        "Expected a 'VCF file not found' error log naming the missing path."
+    )
+
+
+def test_read_vcf_without_comments_unreadable_path_returns_empty_dataframe(tmp_path, caplog):
+    """A path that raises something other than FileNotFoundError (e.g. IsADirectoryError)
+    hits the generic `except Exception` branch and still returns an empty DataFrame
+    rather than propagating.
+    """
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.variant_parsing")
+    # Opening a directory with open(..., "rt") raises IsADirectoryError, a subclass of
+    # OSError but NOT of FileNotFoundError, so this exercises the second except clause.
+    directory_path = tmp_path
+
+    out = read_vcf_without_comments(str(directory_path))
+
+    assert out.empty
+    assert list(out.columns) == []
+    assert any("Error reading VCF file" in r.message for r in caplog.records)
+
+
+def test_read_vcf_without_comments_no_header_line_returns_empty_dataframe(tmp_path):
+    """A file with only '##' meta lines and no '#CHROM' line never sets `header`,
+    so no line is ever collected as data and the result is empty.
+    """
+    vcf_path = tmp_path / "no_header.vcf"
+    _write_vcf(vcf_path, ["##fileformat=VCFv4.2", "##source=test"], gzipped=False)
+
+    out = read_vcf_without_comments(str(vcf_path))
+
+    assert out.empty
+    assert list(out.columns) == []
+
+
+def test_data_line_before_the_header_is_dropped_not_leaked_in(tmp_path):
+    """Kills the line 59 `elif not line.startswith("##") and header:` `and` -> `or` mutant.
+
+    Truth-table row P=False, H=False (see module docstring): a line that does not
+    start with '##' but arrives *before* the '#CHROM' header is seen must be
+    dropped under the real `and` (header is falsy, so the whole condition is
+    falsy). Under the `or` mutant, `not line.startswith("##")` alone is True,
+    so the pre-header line would be appended to `data` regardless of `header`,
+    producing an extra row. No existing test put a data-shaped line before the
+    header, so nothing previously distinguished `and` from `or` here.
+    """
+    vcf_path = tmp_path / "leading_data_line.vcf"
+    _write_vcf(
+        vcf_path,
+        [
+            "chr0\t1\tpre_header\tA\tT",  # not '##', but header is still None here
+            HEADER_LINE,
+            "chr1\t100\trs1\tA\tT",
+        ],
+        gzipped=False,
+    )
+
+    out = read_vcf_without_comments(str(vcf_path))
+
+    # Under the real `and`, only the post-header row survives.
+    assert len(out) == 1, "The pre-header line must not be captured as a data row."
+    assert out.iloc[0]["ID"] == "rs1"
+    assert "pre_header" not in out["ID"].tolist()
+
+
+def test_meta_comment_after_the_header_is_still_skipped_not_captured(tmp_path):
+    """Kills the line 59 `elif not line.startswith("##") and header:` `not`-deleted mutant.
+
+    Truth-table row P=True, H=True (see module docstring): a '##' comment line
+    appearing *after* the header is seen must still be skipped, because the
+    real condition requires `not line.startswith("##")`. If `not` is deleted,
+    the condition becomes `line.startswith("##") and header`, which is True
+    for this line (and False for every subsequent ordinary data row, since
+    those never start with '##') -- so the mutant would capture the comment
+    line as the sole data row and drop the real one.
+    """
+    vcf_path = tmp_path / "late_comment.vcf"
+    _write_vcf(
+        vcf_path,
+        [
+            HEADER_LINE,
+            "##late_comment\tX\tY\tZ\tW",  # 5 fields, matches the header's column count
+            "chr1\t100\trs1\tA\tT",
+        ],
+        gzipped=False,
+    )
+
+    out = read_vcf_without_comments(str(vcf_path))
+
+    assert len(out) == 1, "Exactly the one real data row should survive."
+    assert out.iloc[0]["ID"] == "rs1", "The '##' comment row must not be captured as data."
+    assert out.iloc[0]["#CHROM"] == "chr1", "The '##' comment row must not be captured as data."
+
+
+def test_header_only_no_data_rows_returns_a_columnless_empty_dataframe(tmp_path):
+    """Kills the line 68 `if data and header:` `and` -> `or` mutant.
+
+    Truth-table case D=False, H=True (see module docstring): a file with a
+    '#CHROM' header line and no data rows leaves `data == []` (falsy) and
+    `header` truthy. The real `and` short-circuits to False, so the function
+    returns a bare `pd.DataFrame()` with no columns. Under the `or` mutant,
+    `header` alone makes the condition True, so it would instead return
+    `pd.DataFrame([], columns=header)` -- still row-empty, but carrying the
+    header's 5 columns. `out.empty` is True either way, so the assertion has
+    to inspect the columns, not just emptiness.
+    """
+    vcf_path = tmp_path / "header_only.vcf"
+    _write_vcf(vcf_path, [HEADER_LINE], gzipped=False)
+
+    out = read_vcf_without_comments(str(vcf_path))
+
+    assert out.empty
+    assert list(out.columns) == [], (
+        "A header with no data rows must produce a columnless empty DataFrame, not one carrying the header's columns."
+    )
