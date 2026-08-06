@@ -43,6 +43,7 @@ from vntyper.scripts.artifact_names import (
     COVERAGE_BASENAME,
     PIPELINE_BASENAME,
     pipeline_artifact_paths,
+    select_best_vcf_file,
 )
 
 pytestmark = pytest.mark.unit
@@ -403,7 +404,7 @@ def test_the_compressed_vcf_wins_when_both_exist(tmp_path: Path) -> None:
     (kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf").touch()
     (kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz").touch()
 
-    assert pipeline._select_best_vcf_file(str(kestrel_dir)) == str(kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz")
+    assert select_best_vcf_file(str(kestrel_dir)) == str(kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz")
 
 
 # --------------------------------------------------------------------------------------

@@ -3,7 +3,7 @@ Unit tests for bcftools optional functionality (Issue: bcftools dependency fix).
 
 Tests the helper functions that make bcftools optional for IGV report generation:
 - _try_compress_vcf_with_bcftools() in kestrel_genotyping.py
-- _select_best_vcf_file() in pipeline.py
+- select_best_vcf_file() in artifact_names.py (moved out of pipeline.py in #179)
 
 Test Coverage:
 - bcftools availability detection
@@ -22,8 +22,8 @@ from unittest.mock import patch
 
 import pytest
 
+from vntyper.scripts.artifact_names import select_best_vcf_file as _select_best_vcf_file
 from vntyper.scripts.kestrel_genotyping import _try_compress_vcf_with_bcftools
-from vntyper.scripts.pipeline import _select_best_vcf_file
 
 
 @pytest.mark.unit

@@ -130,6 +130,47 @@ def pipeline_artifact_paths(
     }
 
 
+def select_best_vcf_file(kestrel_dir: str | os.PathLike[str]) -> str | None:
+    """Pick the VCF the IGV report should use, preferring the compressed one.
+
+    Both candidates are Kestrel's own output names, which Kestrel derives from its
+    ``output_dir`` and the same literal :data:`PIPELINE_BASENAME` - not from anything
+    the caller passes. Reconstructing them here rather than in ``pipeline.py`` keeps
+    the reconstruction next to the declaration it has to match.
+
+    Args:
+        kestrel_dir: The Kestrel output directory.
+
+    Returns:
+        str | None: The compressed VCF if it exists, otherwise the uncompressed one,
+        otherwise None. A missing VCF is not an error - bcftools is optional, and the
+        report is generated without the VCF track.
+    """
+    # Built from ``kestrel_dir`` directly rather than through
+    # :func:`pipeline_artifact_paths`, so that a caller passing a directory not named
+    # ``kestrel`` gets the same answer it got before this moved out of pipeline.py.
+    vcf_gz = os.path.join(kestrel_dir, f"{PIPELINE_BASENAME}_indel.vcf.gz")
+    vcf = os.path.join(kestrel_dir, f"{PIPELINE_BASENAME}_indel.vcf")
+
+    if os.path.exists(vcf_gz):
+        logger.debug(f"Using compressed VCF for IGV report: {vcf_gz}")
+        return vcf_gz
+
+    if os.path.exists(vcf):
+        logger.info(
+            f"Using uncompressed VCF for IGV report: {vcf}. "
+            "Compressed VCF not available (bcftools may not be installed)."
+        )
+        return vcf
+
+    logger.warning(
+        f"No VCF file found in {kestrel_dir}. "
+        "IGV report will be generated without VCF track. "
+        f"Expected files: {os.path.basename(vcf_gz)} or {os.path.basename(vcf)}"
+    )
+    return None
+
+
 def validate_output_name(output_name: str | None) -> str:
     """Accept only the basename the pipeline can actually honour.
 

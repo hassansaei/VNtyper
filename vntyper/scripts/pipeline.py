@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
+from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
 from vntyper.scripts.cross_match import (
@@ -76,52 +77,6 @@ def write_bed_file(regions, bed_file_path):
             except ValueError as e:
                 logger.error(f"Invalid region format: {region}. Expected format 'chr:start-end'.")
                 raise ValueError(f"Invalid region format: {region}. Expected format 'chr:start-end'.") from e
-
-
-def _select_best_vcf_file(kestrel_dir):
-    """
-    Select the best available VCF file for IGV report generation.
-
-    This function follows the KISS (Keep It Simple, Stupid) principle by
-    implementing a straightforward preference: compressed VCF if available,
-    otherwise uncompressed VCF.
-
-    Args:
-        kestrel_dir (str): Path to the kestrel output directory.
-
-    Returns:
-        str or None: Path to the best available VCF file, or None if neither exists.
-            Returns compressed .vcf.gz if it exists (preferred),
-            otherwise uncompressed .vcf if it exists,
-            otherwise None.
-
-    Notes:
-        - This function has a single responsibility (SRP): file selection
-        - Logs informatively at different levels based on the outcome
-        - Defensive programming: handles all three cases (compressed, uncompressed, none)
-    """
-    # Prefer compressed VCF (optimal for IGV and file size)
-    vcf_gz = os.path.join(kestrel_dir, "output_indel.vcf.gz")
-    vcf = os.path.join(kestrel_dir, "output_indel.vcf")
-
-    if os.path.exists(vcf_gz):
-        logger.debug(f"Using compressed VCF for IGV report: {vcf_gz}")
-        return vcf_gz
-
-    if os.path.exists(vcf):
-        logger.info(
-            f"Using uncompressed VCF for IGV report: {vcf}. "
-            "Compressed VCF not available (bcftools may not be installed)."
-        )
-        return vcf
-
-    # Neither file exists - this is unusual and should be logged
-    logger.warning(
-        f"No VCF file found in {kestrel_dir}. "
-        "IGV report will be generated without VCF track. "
-        "Expected files: output_indel.vcf.gz or output_indel.vcf"
-    )
-    return None
 
 
 def run_pipeline(
@@ -674,8 +629,7 @@ def run_pipeline(
         template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
 
         # Select best available VCF file (compressed preferred, uncompressed fallback)
-        # Uses modular helper following KISS principle and defensive programming
-        vcf_file = _select_best_vcf_file(dirs["kestrel"])
+        vcf_file = select_best_vcf_file(dirs["kestrel"])
         bam_out = os.path.join(dirs["kestrel"], "output.bam")
         bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]
