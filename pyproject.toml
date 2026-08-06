@@ -329,7 +329,7 @@ show_missing = true
 # a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
 # six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
 # realistically be tested (see "Changing existing code" in AGENTS.md).
-fail_under = 42
+fail_under = 48
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
