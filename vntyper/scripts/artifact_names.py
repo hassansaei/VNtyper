@@ -1,12 +1,13 @@
 """The single declaration of the basename every pipeline artefact is named from.
 
 ``vntyper pipeline`` accepts ``-n/--output-name`` and ``config.json`` carries a
-``default_values.output_name``. Neither has ever reached the pipeline: ``cli.py``
-resolved the value and then dropped it, because ``run_pipeline`` has no such
-parameter. Every artefact is named from a literal instead.
+``default_values.output_name``. Neither can reach the pipeline: ``run_pipeline`` has no
+such parameter, and every artefact is named from a literal. A value other than that
+literal is therefore refused rather than accepted and quietly dropped.
 
-That is not a one-line fix, and this module exists to say exactly why. Enumerating the
-surface (``tests/unit/test_pipeline_artifact_paths.py``) splits it three ways:
+Honouring one is not a one-line change, and this module exists to say exactly why.
+Enumerating the surface (``tests/unit/test_pipeline_artifact_paths.py``) splits it three
+ways:
 
 **1. Movable.** ``process_bam_to_fastq``, ``process_fastq``, ``align_and_sort_fastq``,
 ``run_advntr`` and ``process_advntr_output`` each take an ``output_name`` argument.
@@ -174,11 +175,11 @@ def select_best_vcf_file(kestrel_dir: str | os.PathLike[str]) -> str | None:
 def validate_output_name(output_name: str | None) -> str:
     """Accept only the basename the pipeline can actually honour.
 
-    ``--output-name`` used to be resolved and then dropped, so asking for one had no
-    effect and no error. Silently ignoring it is the worse half of the defect: a user
-    who asks for ``-n mysample`` and then looks for ``mysample_*`` finds nothing, and
-    a caller that greps the output directory for its own basename gets an empty
-    result that looks like a negative genotype.
+    A basename the pipeline cannot honour is refused, not accepted and ignored.
+    Accepting it silently is the worse answer: a user who asks for ``-n mysample``
+    and then looks for ``mysample_*`` finds nothing, and a caller that greps the
+    output directory for its own basename gets an empty result that looks like a
+    negative genotype.
 
     Args:
         output_name: The resolved value, or None to accept the default.

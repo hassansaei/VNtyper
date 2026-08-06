@@ -18,8 +18,8 @@ These pin two things the rest of the pipeline silently depends on:
    in the report layer -- it must always be written, with exactly these values.
 
 They also cover the three paths on which :func:`process_advntr_output` returns *without*
-writing a file. A caller that gets no file today does not see the real cause; it sees a
-misleading downstream failure much later.
+writing a file. A caller that gets no file does not see the real cause at that point; it
+sees a misleading downstream failure much later, so which paths reach it is pinned.
 """
 
 import logging

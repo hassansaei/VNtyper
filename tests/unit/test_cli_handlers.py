@@ -1,18 +1,17 @@
 """``handle_pipeline``: the seam between parsed arguments and ``run_pipeline``.
 
-The handler is where CLI values become pipeline arguments, and two of them were being
-lost on the way:
+The handler is where CLI values become pipeline arguments, and two of them are pinned
+here because losing one costs nothing visible:
 
-* ``--output-name`` was resolved from ``config.json`` and then **dropped** - the call to
-  ``run_pipeline`` never mentions it. See :mod:`vntyper.scripts.artifact_names` for why
-  it is now refused rather than threaded.
-* ``--extra-modules`` was tested by exact string membership with no comma split and no
-  validation, so ``--extra-modules advntr,shark`` matched neither name and produced a
-  silent Kestrel-only run.
+* ``--output-name`` is refused rather than threaded. ``run_pipeline`` takes no such
+  parameter; see :mod:`vntyper.scripts.artifact_names` for why honouring it is not a
+  one-line change.
+* ``--extra-modules`` is comma-split and validated against the known module names, so
+  ``--extra-modules advntr,shark`` selects both.
 
-Both failed the same way: quietly, with a green exit code and a report that reads as a
-negative genotype. These tests drive the real handler with ``run_pipeline`` stubbed and
-assert on what it was asked to do.
+A value lost between the two would fail quietly: a green exit code and a report that
+reads as a negative genotype. These tests drive the real handler with ``run_pipeline``
+stubbed and assert on what it was asked to do.
 """
 
 import ast

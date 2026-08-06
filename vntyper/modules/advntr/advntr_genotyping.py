@@ -30,15 +30,15 @@ GREEDY_INSERTION_LEN_PATTERN = r"(LEN.*)"
 #: ``str.split`` bound for the ``LEN`` split, and the whole of the compound-variant repair.
 #:
 #: A ``State`` naming two insertions -- ``I9_2_A_LEN9&I50_2_A_LEN3`` -- extracts to
-#: ``LEN9&I50_2_A_LEN3``, which contains *two* ``LEN`` tokens; an unbounded split yields
-#: three fields for a two-column assignment and raises ``ValueError``. The broad handler in
-#: :func:`process_advntr_output` swallowed it and returned without writing a file, so one
-#: compound call silently discarded every other variant in the sample.
+#: ``LEN9&I50_2_A_LEN3``, which contains *two* ``LEN`` tokens. An unbounded split would
+#: yield three fields for a two-column assignment and raise, and the broad handler in
+#: :func:`process_advntr_output` would then return without writing a file: one compound
+#: call would take every other variant in the sample with it.
 #:
 #: Splitting at most once makes that shape impossible while leaving every state that
-#: already produced two fields byte for byte unchanged -- the bound only ever fires on the
-#: input that used to crash, and it gives that input the same treatment every other
-#: multi-part remainder already got: non-numeric, coerced to zero.
+#: already produces two fields byte for byte unchanged -- the bound only ever fires on the
+#: compound input, and it gives that input the same treatment every other multi-part
+#: remainder gets: non-numeric, coerced to zero.
 INSERTION_LEN_SPLIT_LIMIT = 1
 
 

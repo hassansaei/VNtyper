@@ -291,10 +291,11 @@
         <h2>Screening Summary</h2>
         {#
           Emphasis comes from the computed screening state, never from the text.
-          This condition used to search the rendered message for a giveaway word,
-          and no configured message contains it -- only the fallback default
-          does -- so every configured message, "No variant detected by either
-          genotyping method" included, rendered as a positive finding.
+          The message is written by configuration and its wording is not evidence
+          of anything: a condition that searched it for a word would put a
+          positive style on whichever messages happened to contain that word,
+          "No variant detected by either genotyping method" among them.
+          `tests/unit/test_generate_report.py` pins this.
         #}
         <p class="summary-box {% if summary_is_positive %}summary-positive{% endif %}">
             {{ summary_text|safe }}

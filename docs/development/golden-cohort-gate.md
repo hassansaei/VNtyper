@@ -89,11 +89,11 @@ The call each sample yields, identical on all six assemblies and identical on bo
 plus its non-fast rerun: the box lost its `summary-positive` styling. The sentence is
 unchanged in both — "No variant detected. Note: adVNTR genotyping was not performed."
 
-The old template decided emphasis with `'negative' not in summary_text`. That sentence
-does not contain the word, so a **negative screening was rendered with positive
-emphasis**. Emphasis now comes from the computed `summary_is_positive` state. The
-genotype was `Negative` before and after; only the styling of the correct result changed,
-and it changed in the safe direction.
+Emphasis now comes from the computed `summary_is_positive` state rather than from
+searching the rendered sentence, so a message whose wording does not match what a text
+search expects no longer carries the emphasis of the opposite result. The genotype was
+`Negative` on both sides; only the styling of the correct result changed, and it changed
+in the safe direction.
 
 ### D2 — screening sentence on `dfc3_hg19_advntr` (`77d590b`, expected)
 
@@ -106,9 +106,10 @@ This is the most consequential finding of the exercise, and it is a **fix, not a
 regression**. Kestrel called `High_Precision*` and adVNTR called VID 25561
 `D17_2&D18_2&D19_2&D20_2&D21_2` flagged `Polymorphic_Call`, on both sides identically.
 The state (`kestrel_result = High_Precision`, `advntr_result = positive flagged`,
-`quality_metrics_pass = true`) had no rule in `report_config.json`, so it fell through to
-`screening_summary_default` — and the report of a double-positive sample said the
-screening was negative. `77d590b` added the 15 missing rules; this state now has one.
+`quality_metrics_pass = true`) had no rule in `report_config.json` and therefore fell
+through to `screening_summary_default`, which is the negative sentence. `77d590b` added
+the 15 rules that were missing, so every reachable state now has one and no state falls
+through to the default.
 
 Attribution note: the Kestrel and adVNTR result files are byte-identical here, so this is
 **not** caused by `52f822e`. The flag was already firing before the change.

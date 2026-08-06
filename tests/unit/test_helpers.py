@@ -1,21 +1,22 @@
 """Tests for the shared assertion helpers in ``tests/helpers.py``.
 
 ``tests/helpers.py`` is the assertion oracle for both slow tiers -- the pytest
-integration tests and the Docker integration tests -- and it had no tests of its
-own. Two of its validators could not fail:
+integration tests and the Docker integration tests -- so a validator of its own
+that cannot fail makes "no regression" unsubstantiable. Two of them are pinned
+here for that reason:
 
-* ``validate_coverage_output`` read ``Mean``, ``Median`` and ``Uncovered%`` from
-  a file whose columns production writes as ``mean``, ``median`` and
-  ``percent_uncovered``, with ``0`` defaults. Every lookup missed, every metric
-  came back ``0.0``, and the only caller asserts ``mean_cov >= 0``.
-* ``assert_pattern_match`` treated a trailing ``*`` as a glob. It is applied to
-  ``Confidence``, and ``High_Precision*`` is a *literal* confidence label in this
-  codebase -- so expecting ``High_Precision*`` silently accepted plain
-  ``High_Precision``, erasing the very boundary the assertion exists to check.
+* ``validate_coverage_output`` must read the column names production actually
+  writes -- ``mean``, ``median``, ``percent_uncovered``. Reading any other name
+  with a ``0`` default returns ``0.0`` for every metric, and the only caller
+  asserts ``mean_cov >= 0``.
+* ``assert_pattern_match`` must compare a trailing ``*`` literally, not as a
+  glob. It is applied to ``Confidence``, and ``High_Precision*`` is a *literal*
+  confidence label in this codebase, so glob semantics would let plain
+  ``High_Precision`` satisfy an expectation of ``High_Precision*`` and erase the
+  boundary the assertion exists to check.
 
-A validator that cannot fail is worse than no validator: it makes "no
-regression" unsubstantiable. These tests pin both fixes, and both wrong
-behaviours are asserted against explicitly so they cannot come back.
+Both are asserted from the failing side as well as the passing one, so a
+validator that stops discriminating fails these tests.
 """
 
 import re

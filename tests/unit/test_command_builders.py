@@ -8,26 +8,25 @@ process substitution, which no argv list can express). Because the command is a
 string, the only place quoting can happen is at construction. That is what this
 module pins.
 
-Three separate classes of defect live here:
+Three properties are pinned, each because breaking it is silent:
 
-* **Unquoted interpolation.** A sample name, output directory or BAM path
-  containing a space split one argument into two; one containing ``;`` or a
-  backtick executed something. The web service now rejects hostile names at its
-  own boundary - this is the complement, not the alternative: the CLI has no such
-  boundary at all.
-* **The CRAM binary mismatch.** The outer command used ``{samtools_path}`` while
-  the ``>(...)`` substitution called a bare ``samtools``. Under ``mamba run``
-  those resolve to different binaries, so unmapped-read extraction silently ran a
-  different samtools than the rest of the pipeline - or none.
-* **The missing ``pipefail``.** ``samtools sort -n | samtools fastq`` reports the
-  exit status of ``samtools fastq`` alone. A ``sort`` that died half-way still
-  exits 0, so the pipeline carried on with a **truncated FASTQ** and genotyped a
-  fraction of the reads. That is the silent-wrong-answer class this effort exists
-  to remove.
+* **Every interpolated value is quoted.** A sample name, output directory or BAM
+  path is caller-supplied text that reaches a shell, so an unquoted one would
+  split on whitespace or be read as syntax. The web service constrains names at
+  its own boundary; this is the complement, not the alternative, because the CLI
+  has no such boundary at all.
+* **The CRAM path uses one samtools.** The outer command and the ``>(...)``
+  substitution must both call ``{samtools_path}``: under ``mamba run`` a bare
+  ``samtools`` resolves to a different binary, so unmapped-read extraction would
+  run something other than the rest of the pipeline, or nothing.
+* **Pipelines set ``pipefail``.** ``samtools sort -n | samtools fastq`` otherwise
+  reports the exit status of ``samtools fastq`` alone, so a ``sort`` that died
+  half-way exits 0 and the pipeline continues with a **truncated FASTQ**,
+  genotyping a fraction of the reads. That is the silent-wrong-answer class this
+  effort exists to remove.
 
-The expected strings below were captured from the code as it stood before the
-extraction and are asserted byte for byte, so the refactor is provably
-behaviour-preserving apart from the three deliberate fixes above.
+The expected strings below are asserted byte for byte, so the extraction of these
+builders is provably behaviour-preserving apart from the three properties above.
 
 Nothing here starts a real process.
 """

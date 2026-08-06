@@ -13,7 +13,9 @@ Two properties are pinned here:
 1. A submission refused for any reason leaves neither the upload nor the
    directories that were created to hold it.
 2. An accepted submission is unaffected -- the same directories are created and
-   kept, and the job is enqueued.
+   kept, and the job is enqueued. That holds from the moment the task is
+   accepted, not only at the end of the request: a worker owns the input
+   directory from then on, so a later failure must keep it.
 
 The assertions look at the filesystem rather than at status codes, because a
 status code cannot distinguish "refused" from "refused and cleaned up".

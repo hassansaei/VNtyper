@@ -56,11 +56,11 @@ MAX_ALIAS_CHARS = 64
 #: in one are indistinguishable wherever a human reads them.
 _ALIAS_FORBIDDEN = re.compile(r"[\x00-\x1f\x7f]")
 
-# The two cohort read routes are GETs, so their credential used to have nowhere
-# to travel but the query string -- part of the request line, and so written to
-# every server and proxy access log on the path, kept in browser history and
-# sent on in ``Referer`` headers. This header carries it instead. The query
-# parameter still works and is documented as deprecated rather than removed:
+# The two cohort read routes are GETs, so a credential in the query string would
+# travel in the request line -- written to every server and proxy access log on
+# the path, kept in browser history and sent on in ``Referer`` headers. This
+# header carries it instead. The query parameter still works and is documented
+# as deprecated rather than removed:
 # the web UI and the ``vntyper online`` CLI subcommand both use it. The three
 # names below live here, beside ``preferred_passphrase``, so the rule and the
 # words that describe it to a client author cannot drift apart.
@@ -158,11 +158,11 @@ def _clean(value: str | None) -> str | None:
 def preferred_passphrase(header_value: str | None, query_value: str | None) -> str | None:
     """Choose which of the two ways in carried the caller's passphrase.
 
-    The cohort read routes are GETs, so their passphrase used to travel in the
-    query string -- which is part of the request line, and therefore ends up in
-    server and proxy access logs, in browser history and in ``Referer`` headers.
-    A request header carries it instead. The query parameter still works, and is
-    marked deprecated rather than removed, because existing clients use it.
+    The cohort read routes are GETs, and a passphrase in the query string travels
+    in the request line -- which ends up in server and proxy access logs, in
+    browser history and in ``Referer`` headers. The preferred way in is a request
+    header. The query parameter still works, and is marked deprecated rather than
+    removed, because existing clients use it.
 
     The header wins when both are present. "Whichever verifies" would turn two
     credentials into two attempts at one, and a caller sending both is better

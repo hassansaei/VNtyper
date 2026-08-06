@@ -122,8 +122,8 @@ must all be given the same value, so the application refuses to start without it
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-If you are updating an existing deployment that never set `REDIS_PASSWORD`, set it to a
-newly generated value rather than reusing what the service was previously running with.
+When bringing an existing deployment onto this release, generate a new value rather than
+carrying one over.
 
 Do not set `CELERY_BROKER_URL` or `CELERY_RESULT_BACKEND`. Celery prefers those over the
 broker URL the application passes it, so setting them replaces the URL
