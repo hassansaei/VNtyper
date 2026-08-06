@@ -3,6 +3,29 @@
 Branch `fix/issue-181-197-followups`, on top of `4fd638a` (v2.0.6), gated by
 golden-cohort **run 5** (`4fd638a` → `9816f86`).
 
+## Issues
+
+Closes #181.
+Closes #182.
+Closes #183.
+Closes #184.
+Closes #185.
+Closes #186.
+Closes #187.
+Closes #188.
+Closes #192.
+Closes #194.
+Closes #195.
+Closes #196.
+Closes #197.
+
+**Left open deliberately, each with a written reason and a trigger** — see §6: #189,
+#191, #193.
+
+**Filed by this PR, not closed by it.** These are defects found while doing the work, or
+by the adversarial review of it, that need a decision rather than a unilateral fix: #200,
+#201, #202, #203, #204, #205, #206, #207, #208, #209, #210, #211.
+
 > **On the commit count and tip SHA:** they are deliberately not stated here. Three times
 > in this PR a hardcoded count and tip went stale, because *a number describing a branch,
 > written inside a commit on that branch, invalidates itself the moment it is written* —
