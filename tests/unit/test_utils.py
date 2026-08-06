@@ -41,6 +41,21 @@ def _completed_process(stdout="", stderr=""):
     return result
 
 
+def _logged(records, text, *, logger=UTILS_LOGGER, level=logging.ERROR):
+    """
+    True if some captured record at ``level`` from ``logger`` contains ``text``.
+
+    ``caplog.set_level(level, logger=logger)`` only raises that logger's effective
+    level so its records aren't filtered out -- the caplog handler itself is attached
+    at the root logger and captures everything that propagates there, from any logger,
+    at or above the *root's* level. A bare ``any(text in r.message for r in
+    caplog.records)`` therefore passes just as well for a message emitted by a
+    different logger (or at a different level) as for the one under test. Pinning both
+    ``r.name`` and ``r.levelno`` here closes that gap.
+    """
+    return any(text in r.message and r.name == logger and r.levelno == level for r in records)
+
+
 def test_run_command_success(tmp_path):
     """
     Test successful execution of a shell command.
@@ -201,7 +216,7 @@ def test_create_output_directories_logs_and_reraises_when_makedirs_fails(tmp_pat
     ):
         create_output_directories(str(base))
 
-    assert any("Failed to create directory" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Failed to create directory")
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +280,7 @@ def test_get_tool_version_returns_unknown_and_logs_when_the_binary_is_missing(ca
     caplog.set_level(logging.ERROR, logger=UTILS_LOGGER)
     with patch("vntyper.scripts.utils.subprocess.run", side_effect=FileNotFoundError("no such file")):
         assert get_tool_version("fastp", "--version") == "unknown"
-    assert any("Command not found" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Command not found")
 
 
 def test_get_tool_version_returns_unknown_and_logs_on_permission_denied(caplog):
@@ -273,7 +288,7 @@ def test_get_tool_version_returns_unknown_and_logs_on_permission_denied(caplog):
     caplog.set_level(logging.ERROR, logger=UTILS_LOGGER)
     with patch("vntyper.scripts.utils.subprocess.run", side_effect=PermissionError("denied")):
         assert get_tool_version("fastp", "--version") == "unknown"
-    assert any("Permission denied" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Permission denied")
 
 
 def test_get_tool_version_returns_unknown_and_logs_on_malformed_tool_output(caplog):
@@ -285,7 +300,7 @@ def test_get_tool_version_returns_unknown_and_logs_on_malformed_tool_output(capl
         return_value=_completed_process(stdout="only\nfastp\n"),
     ):
         assert get_tool_version("fastp", "--version") == "unknown"
-    assert any("Failed to parse version" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Failed to parse version")
 
 
 def test_get_tool_version_returns_unknown_and_logs_on_unexpected_error(caplog):
@@ -295,7 +310,7 @@ def test_get_tool_version_returns_unknown_and_logs_on_unexpected_error(caplog):
     with patch("vntyper.scripts.utils.subprocess.run") as mock_run:
         assert get_tool_version('fastp "unterminated', "") == "unknown"
     mock_run.assert_not_called()
-    assert any("Failed to get version for" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Failed to get version for")
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +429,7 @@ def test_search_logs_and_reraises_on_an_invalid_regex(caplog):
     with pytest.raises(re.error):
         search("(unclosed", df)
 
-    assert any("Error during regex search" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Error during regex search")
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +454,7 @@ def test_load_config_raises_and_logs_on_malformed_json(tmp_path, caplog):
     with pytest.raises(json.JSONDecodeError):
         load_config(str(config_path))
 
-    assert any("Error decoding JSON" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Error decoding JSON")
 
 
 def test_load_config_raises_and_logs_on_an_unreadable_user_config(tmp_path, caplog):
@@ -450,7 +465,7 @@ def test_load_config_raises_and_logs_on_an_unreadable_user_config(tmp_path, capl
     with pytest.raises(OSError):
         load_config(str(tmp_path))
 
-    assert any("Unexpected error loading config file" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Unexpected error loading config file")
 
 
 def test_load_config_falls_back_to_the_package_default_when_no_path_is_given():
@@ -488,7 +503,7 @@ def test_load_config_exits_when_the_package_default_config_is_unreadable(caplog)
         load_config(None)
 
     assert excinfo.value.code == 1
-    assert any("Default config file not found" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Default config file not found")
 
 
 # ---------------------------------------------------------------------------
@@ -522,8 +537,31 @@ def test_validate_bam_file_accepts_the_cram_extension(tmp_path):
         validate_bam_file(str(cram_file))  # must not raise
 
 
+def test_validate_bam_file_passes_cwd_through_to_run_command(tmp_path):
+    """
+    utils.py:334 -- ``cwd`` is threaded into the quickcheck ``run_command`` call
+    unchanged, not dropped or replaced.
+
+    AGENTS.md trap 7: every tool and reference path in ``config.json`` is relative to
+    the process working directory, and ``pipeline.py`` pins ``project_root =
+    os.getcwd()`` and threads it into this call (and the Java/samtools calls
+    elsewhere) specifically so quickcheck resolves paths against the right directory.
+    Dropping ``cwd=cwd`` here leaves every other assertion in this file passing while
+    quickcheck silently resolves against whatever directory the process happened to
+    inherit.
+    """
+    bam_file = tmp_path / "sample.bam"
+    bam_file.touch()
+
+    with patch("vntyper.scripts.utils.run_command", return_value=True) as mocked_run_command:
+        validate_bam_file(str(bam_file), cwd="/somewhere")
+
+    _, kwargs = mocked_run_command.call_args
+    assert kwargs["cwd"] == "/somewhere"
+
+
 def test_validate_bam_file_raises_when_run_command_reports_quickcheck_failure(tmp_path):
-    """utils.py:335-337 -- run_command()==False is turned into a ValueError naming the file."""
+    """utils.py:336-337 -- run_command()==False is turned into a ValueError naming the file."""
     bam_file = tmp_path / "broken.bam"
     bam_file.touch()
 
@@ -641,4 +679,4 @@ def test_validate_fastq_file_wraps_unexpected_read_errors(tmp_path, caplog):
     with pytest.raises(gzip.BadGzipFile):
         validate_fastq_file(str(fastq_file))
 
-    assert any("Error validating FASTQ file" in r.message for r in caplog.records)
+    assert _logged(caplog.records, "Error validating FASTQ file")
