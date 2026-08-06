@@ -313,12 +313,23 @@ def _construct_ncbi_accession(chromosome_number: int, assembly: str) -> str:
     - Chr Y: NC_000024.XX
     - MT: NC_012920.1
 
+    Both spellings of each build are accepted: the UCSC-style alias ("hg19",
+    "hg38") and the build name ("GRCh37", "GRCh38"), plus every other alias the
+    reference registry knows. `_build_chromosome_name` normalises to the build
+    name before calling this, so accepting only "hg19" silently built every
+    GRCh37 accession from the GRCh38 table.
+
     Args:
         chromosome_number (int): Chromosome number (1-25)
-        assembly (str): Assembly name (hg19 or hg38)
+        assembly (str): Assembly name or alias (e.g. "hg19", "GRCh37",
+            "hg38_ncbi"). An unrecognised name falls back to GRCh37, matching
+            `_build_chromosome_name` and `region_utils.resolve_assembly_alias`.
 
     Returns:
         str: NCBI accession (e.g., "NC_000001.10")
+
+    Raises:
+        ValueError: If the chromosome number has no accession.
     """
     # Define NCBI versions for each assembly
     # GRCh37/hg19 versions
@@ -379,8 +390,16 @@ def _construct_ncbi_accession(chromosome_number: int, assembly: str) -> str:
         25: "1",  # 23=X, 24=Y, 25=MT
     }
 
-    # Select version table based on assembly
-    versions = grch37_versions if assembly == "hg19" else grch38_versions
+    # Select version table by coordinate system, not by one hardcoded spelling.
+    from vntyper.scripts.reference_registry import get_coordinate_system
+
+    try:
+        coordinate_system = get_coordinate_system(assembly)
+    except ValueError:
+        logger.warning(f"Unknown assembly '{assembly}' for NCBI accession lookup, defaulting to GRCh37")
+        coordinate_system = "GRCh37"
+
+    versions = grch37_versions if coordinate_system == "GRCh37" else grch38_versions
     version = versions.get(chromosome_number)
 
     if version is None:

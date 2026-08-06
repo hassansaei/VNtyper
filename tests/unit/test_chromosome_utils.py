@@ -131,9 +131,83 @@ class TestBuildChromosomeName:
         with pytest.raises(ValueError, match="Invalid chromosome number"):
             _build_chromosome_name(26, "ucsc", "hg19", config)
 
+    @pytest.mark.parametrize(
+        "reference_assembly,expected",
+        [
+            # The real caller normalises to the build name before calling
+            # `_construct_ncbi_accession`, so this is the contract that matters.
+            ("GRCh37", "NC_000001.10"),
+            ("hg19", "NC_000001.10"),
+            ("GRCh38", "NC_000001.11"),
+            ("hg38", "NC_000001.11"),
+        ],
+    )
+    def test_ncbi_chr1_without_the_config_shortcut_uses_the_declared_build(self, reference_assembly, expected):
+        """No `known_chromosome_naming` in config: the accession must still be the declared build's."""
+        assert _build_chromosome_name(1, "ncbi", reference_assembly, {}) == expected
+
+    @pytest.mark.parametrize(
+        "reference_assembly,chromosome_number,expected",
+        [
+            ("GRCh37", 5, "NC_000005.9"),
+            ("hg19", 5, "NC_000005.9"),
+            ("GRCh38", 5, "NC_000005.10"),
+            ("hg38", 5, "NC_000005.10"),
+        ],
+    )
+    def test_ncbi_non_chr1_uses_the_declared_build(self, reference_assembly, chromosome_number, expected):
+        """The config shortcut only covers chr1; every other chromosome is constructed."""
+        config = {"bam_processing": {"known_chromosome_naming": {"GRCh37": {"ncbi": "NC_000001.10"}}}}
+        assert _build_chromosome_name(chromosome_number, "ncbi", reference_assembly, config) == expected
+
 
 class TestConstructNcbiAccession:
     """Test NCBI accession construction."""
+
+    # Real RefSeq accessions, written out independently of the version tables in
+    # `chromosome_utils`. Both spellings of each build must select the same table:
+    # `_build_chromosome_name` normalises to "GRCh37"/"GRCh38" before calling,
+    # while the docstring and the test builders use "hg19"/"hg38".
+    GRCH37_ACCESSIONS = {
+        1: "NC_000001.10",
+        2: "NC_000002.11",
+        5: "NC_000005.9",
+        7: "NC_000007.13",
+        22: "NC_000022.10",
+        23: "NC_000023.10",
+        24: "NC_000024.9",
+        25: "NC_012920.1",
+    }
+    GRCH38_ACCESSIONS = {
+        1: "NC_000001.11",
+        2: "NC_000002.12",
+        5: "NC_000005.10",
+        7: "NC_000007.14",
+        22: "NC_000022.11",
+        23: "NC_000023.11",
+        24: "NC_000024.10",
+        25: "NC_012920.1",
+    }
+
+    @pytest.mark.parametrize("assembly", ["hg19", "GRCh37"])
+    def test_both_spellings_of_grch37_select_the_grch37_table(self, assembly):
+        for chromosome_number, expected in self.GRCH37_ACCESSIONS.items():
+            assert _construct_ncbi_accession(chromosome_number, assembly) == expected, (
+                f"chromosome {chromosome_number} under assembly spelling {assembly!r}"
+            )
+
+    @pytest.mark.parametrize("assembly", ["hg38", "GRCh38"])
+    def test_both_spellings_of_grch38_select_the_grch38_table(self, assembly):
+        for chromosome_number, expected in self.GRCH38_ACCESSIONS.items():
+            assert _construct_ncbi_accession(chromosome_number, assembly) == expected, (
+                f"chromosome {chromosome_number} under assembly spelling {assembly!r}"
+            )
+
+    def test_the_two_builds_do_not_share_an_accession_except_the_mitochondrion(self):
+        """Guards the test above from passing because both tables happen to agree."""
+        differing = [n for n in self.GRCH37_ACCESSIONS if self.GRCH37_ACCESSIONS[n] != self.GRCH38_ACCESSIONS[n]]
+        assert len(differing) == len(self.GRCH37_ACCESSIONS) - 1
+        assert self.GRCH37_ACCESSIONS[25] == self.GRCH38_ACCESSIONS[25] == "NC_012920.1"
 
     def test_construct_grch37_chr1(self):
         """Test GRCh37 chr1 accession."""
