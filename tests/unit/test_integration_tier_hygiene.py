@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import ast
 import re
-from pathlib import Path
+import shlex
+from pathlib import Path, PurePosixPath
 
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
@@ -127,6 +129,31 @@ def test_the_integration_module_redefines_no_data_utility() -> None:
     )
 
 
+def _call_nodes(path: Path, name: str) -> list[ast.Call]:
+    """Every invocation of ``name`` in a module, as AST call nodes.
+
+    Matched on ``ast.Call``, so a bare name reference (``_ = run_bam_test_case``), an
+    import, or a mention in a docstring does not count - only a real invocation. Both
+    ``f(...)`` and ``mod.f(...)`` forms match, keyed on the final attribute name.
+
+    Args:
+        path: Module to inspect.
+        name: Function name to look for.
+
+    Returns:
+        list[ast.Call]: The matching call nodes, in traversal order.
+    """
+    return [
+        node
+        for node in ast.walk(_parse(path))
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == name)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
+        )
+    ]
+
+
 def test_the_integration_module_does_not_assert_kestrel_fields_itself() -> None:
     """Kestrel validation must be delegated to the shared orchestration.
 
@@ -134,15 +161,27 @@ def test_the_integration_module_does_not_assert_kestrel_fields_itself() -> None:
     expecting ``Negative``, so the two negative-control samples asserted nothing about
     the call itself. Delegating keeps the local and Docker tiers literally identical.
 
+    The delegation is checked on the AST rather than with a substring search: an import,
+    a docstring mention or a bare name reference (``_ = run_bam_test_case``) all contain
+    the string while validating nothing, and a substring guard stays green through
+    exactly that edit.
+
     Raises:
         AssertionError: If the module names Kestrel result columns directly, or does not
-            call ``run_bam_test_case``.
+            actually call ``run_bam_test_case`` with arguments.
     """
     source = INTEGRATION_MODULE.read_text(encoding="utf-8")
 
-    assert "run_bam_test_case" in source, (
+    calls = _call_nodes(INTEGRATION_MODULE, "run_bam_test_case")
+    assert calls, (
         f"{INTEGRATION_MODULE.name} must validate BAM cases through "
-        "tests.support.orchestration.run_bam_test_case, which the Docker tier also uses."
+        "tests.support.orchestration.run_bam_test_case, which the Docker tier also uses. "
+        "No call to it was found in the AST - importing the name, or referencing it "
+        "without calling it, validates nothing."
+    )
+    assert any(call.args or call.keywords for call in calls), (
+        f"{INTEGRATION_MODULE.name} calls run_bam_test_case() without passing the case, "
+        "the runner or the output directory, so it cannot be validating anything."
     )
 
     inline = [column for column in ("Confidence", "Depth_Score", "Estimated_Depth_") if column in source]
@@ -212,6 +251,84 @@ def test_the_integration_tier_is_not_in_the_unit_tier() -> None:
     )
 
 
+# Shell tokens that may precede a command without changing which command runs.
+_TRANSPARENT_PREFIXES = frozenset({"sudo", "time", "env", "nice", "exec", "command", "xvfb-run"})
+
+
+def _is_cron_scheduled(workflow: dict) -> bool:
+    """Does this parsed workflow declare a ``schedule:`` trigger with a cron entry?
+
+    PyYAML resolves the bare key ``on`` to the boolean ``True`` under YAML 1.1, so the
+    trigger block has to be looked up under both spellings.
+
+    Args:
+        workflow: A parsed GitHub Actions workflow document.
+
+    Returns:
+        bool: True if at least one cron schedule is declared.
+    """
+    triggers = workflow.get("on", workflow.get(True))
+    if not isinstance(triggers, dict):
+        return False
+    schedule = triggers.get("schedule")
+    if not isinstance(schedule, list):
+        return False
+    return any(isinstance(entry, dict) and entry.get("cron") for entry in schedule)
+
+
+def _run_scripts(workflow: dict) -> list[str]:
+    """Every ``run:`` script body in a parsed workflow.
+
+    Args:
+        workflow: A parsed GitHub Actions workflow document.
+
+    Returns:
+        list[str]: The shell scripts, one per step that declares ``run:``.
+    """
+    scripts: list[str] = []
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        return scripts
+    for job in jobs.values():
+        steps = job.get("steps") if isinstance(job, dict) else None
+        if not isinstance(steps, list):
+            continue
+        scripts.extend(step["run"] for step in steps if isinstance(step, dict) and isinstance(step.get("run"), str))
+    return scripts
+
+
+def _executes_make_target(script: str, target: str) -> bool:
+    """Does this shell script actually *run* ``make <target>``?
+
+    Splits the script into commands, drops comments and transparent prefixes, then
+    requires a command whose executable is ``make`` and whose arguments include the
+    target as a token in its own right. ``echo 'make test-integration'`` therefore does
+    not count: the executable is ``echo`` and the make invocation is a quoted string it
+    prints. Neither does a commented-out line.
+
+    Args:
+        script: The body of a workflow step's ``run:`` key.
+        target: The make target that must be invoked.
+
+    Returns:
+        bool: True if the script invokes the target.
+    """
+    for line in script.splitlines():
+        for segment in re.split(r"&&|\|\||;|\||\bthen\b|\belse\b|\bdo\b", line):
+            try:
+                tokens = shlex.split(segment, comments=True)
+            except ValueError:
+                continue
+            # Drop leading `VAR=value` assignments and prefixes that just wrap a command.
+            while tokens and (
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]) or tokens[0] in _TRANSPARENT_PREFIXES
+            ):
+                tokens = tokens[1:]
+            if tokens and PurePosixPath(tokens[0]).name == "make" and target in tokens[1:]:
+                return True
+    return False
+
+
 def test_a_scheduled_workflow_runs_the_integration_tier() -> None:
     """Some workflow must run the integration tier on a timer.
 
@@ -219,22 +336,32 @@ def test_a_scheduled_workflow_runs_the_integration_tier() -> None:
     the vendored Kestrel JAR - rot on their own schedule, not on the repository's. Until
     a cron looked for it, the first person to notice was whoever opened the next PR.
 
+    The workflow is parsed rather than grepped, and the step's shell is parsed rather
+    than substring-matched. A grep for ``make test-integration`` is satisfied by a
+    comment, by a job name, or by ``echo 'make test-integration'`` - none of which run
+    anything, which is precisely the failure this test exists to make impossible.
+
     Raises:
-        AssertionError: If no scheduled workflow invokes the integration tier.
+        AssertionError: If no scheduled workflow actually executes the tier.
     """
     if not WORKFLOWS.is_dir():
         pytest.skip("no GitHub Actions workflows present in this tree")
 
-    scheduled_with_integration = [
-        path.name
-        for path in sorted(WORKFLOWS.glob("*.yml"))
-        for text in [path.read_text(encoding="utf-8")]
-        if re.search(r"^\s*schedule:\s*$", text, re.MULTILINE)
-        and re.search(r"^\s*-\s*cron:", text, re.MULTILINE)
-        and "make test-integration" in text
-    ]
+    paths = sorted(set(WORKFLOWS.glob("*.yml")) | set(WORKFLOWS.glob("*.yaml")))
+    scheduled_with_integration = []
+    for path in paths:
+        try:
+            workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            continue
+        if not isinstance(workflow, dict) or not _is_cron_scheduled(workflow):
+            continue
+        if any(_executes_make_target(script, "test-integration") for script in _run_scripts(workflow)):
+            scheduled_with_integration.append(path.name)
+
     assert scheduled_with_integration, (
-        "No workflow runs `make test-integration` on a `schedule:` trigger. "
-        "ci-tests.yml gates on `-m unit` only, so without this the pipeline is never "
-        "exercised end to end by CI at all."
+        "No workflow *executes* `make test-integration` in a step of a workflow with a "
+        "`schedule:` cron trigger. ci-tests.yml gates on `-m unit` only, so without this "
+        "the pipeline is never exercised end to end by CI at all. Note that mentioning "
+        "the command - in a comment, a step name, or an `echo` - does not run it."
     )

@@ -11,10 +11,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import coverage_gate  # noqa: E402
 
+# The floor is a ratchet: it only ever moves up. Pinning the literal here is the point -
+# a `>=` bound would let someone lower `fail_under` in pyproject.toml all the way to the
+# bound and still leave this test green, which is exactly the regression the gate exists
+# to prevent. When you legitimately raise the floor (use the number `make test-unit-cov`
+# prints, never the rounded TOTAL column), raise this literal in the same commit.
+CURRENT_COVERAGE_FLOOR = 66.0
+
 
 def test_read_floor_returns_the_configured_value() -> None:
-    """The floor is parsed from the real pyproject.toml."""
-    assert coverage_gate.read_floor() >= 25.0
+    """The floor parsed from the real pyproject.toml is exactly the pinned value.
+
+    Raises:
+        AssertionError: If `fail_under` drifts from ``CURRENT_COVERAGE_FLOOR`` in either
+            direction - lowered (a silent weakening of CI) or raised without updating
+            this pin.
+    """
+    floor = coverage_gate.read_floor()
+    assert floor == CURRENT_COVERAGE_FLOOR, (
+        f"pyproject.toml [tool.coverage.report] fail_under is {floor:.0f}, but this test "
+        f"pins it at {CURRENT_COVERAGE_FLOOR:.0f}. The floor is a ratchet: never lower it "
+        "to make a build pass - add tests instead. If you raised it, update "
+        "CURRENT_COVERAGE_FLOOR here in the same commit."
+    )
+    assert floor >= CURRENT_COVERAGE_FLOOR, "The coverage floor must never be lowered."
 
 
 def test_read_floor_raises_when_pyproject_is_unreadable(monkeypatch, tmp_path) -> None:

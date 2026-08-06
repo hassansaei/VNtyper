@@ -55,6 +55,11 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "types-requests>=2.0.0",
+    # tests/unit/test_integration_tier_hygiene.py parses the workflow files rather
+    # than grepping them, so the tier that must run on a fresh clone needs a YAML
+    # parser. It arrives transitively today (igv-reports requires it); declared
+    # here so the unit tier does not depend on a runtime dependency's own tree.
+    "pyyaml>=6.0",
     # docker/app (FastAPI + Celery web service) deps. None of these ship with the
     # vntyper package; docker/app itself is installed from
     # docker/requirements-web.txt, not from this project.
