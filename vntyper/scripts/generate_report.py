@@ -35,6 +35,7 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
     ADVNTR_DISPLAY_COLUMNS,
     EMPTY_SESSION_DICTIONARY,
@@ -562,7 +563,8 @@ def generate_summary_report(
         logger.error("Failed to render the report template: %s", e)
         raise
 
-    report_file_path = Path(output_dir) / report_file
+    # `--report-file` is documented as a name; this is what makes that true.
+    report_file_path = contained_output_path(output_dir, report_file, "--report-file")
     try:
         with open(report_file_path, "w") as f:
             f.write(rendered_html)

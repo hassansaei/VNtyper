@@ -192,7 +192,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="If provided, search this directory (and its subdirs) for standard pipeline output filenames.",
     )
-    parser_report.add_argument("--report-file", type=str, default=None, help="Name of the output report file.")
+    parser_report.add_argument(
+        "--report-file",
+        type=str,
+        default=None,
+        help="Name of the output report file: a single file name, written inside --output-dir. A path is refused.",
+    )
     parser_report.add_argument("--bed-file", type=Path, help="Path to the BED file for IGV reports.")
     parser_report.add_argument("--bam-file", type=Path, help="Path to the BAM file for IGV reports.")
     parser_report.add_argument(
@@ -236,7 +241,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--summary-file",
         type=str,
         default=None,
-        help="Name of the cohort summary report file.",
+        help=(
+            "Name of the cohort summary report file: a single file name, written inside "
+            "--output-dir. A path is refused."
+        ),
     )
     # New argument for cohort: additional output formats (comma-separated)
     parser_cohort.add_argument(

@@ -30,6 +30,7 @@ from jinja2 import Environment, FileSystemLoader
 # These names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops a section (AGENTS.md trap 5),
 # so they are named, never spelled out.
+from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
@@ -631,7 +632,8 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         logger.error(f"Failed to render the cohort summary template: {e}")
         raise
 
-    report_file_path = Path(output_dir) / summary_file
+    # `--summary-file` is documented as a name; this is what makes that true.
+    report_file_path = contained_output_path(output_dir, summary_file, "--summary-file")
     try:
         with open(report_file_path, "w") as f:
             f.write(rendered_html)
