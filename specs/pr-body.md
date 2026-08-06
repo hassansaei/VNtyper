@@ -1,8 +1,16 @@
 # Follow-ups to #179: close #181–#188, #192, #194–#197
 
-Branch `fix/issue-181-197-followups`, 47 commits on top of `4fd638a` (v2.0.6), tip
-`28e0ab7`, gated by golden-cohort **run 5** (`4fd638a` → `9816f86`). The last eleven
-commits answer an adversarial review of this PR — see
+Branch `fix/issue-181-197-followups`, on top of `4fd638a` (v2.0.6), gated by
+golden-cohort **run 5** (`4fd638a` → `9816f86`).
+
+> **On the commit count and tip SHA:** they are deliberately not stated here. Three times
+> in this PR a hardcoded count and tip went stale, because *a number describing a branch,
+> written inside a commit on that branch, invalidates itself the moment it is written* —
+> the fix commit is the (n+1)th. GitHub renders both live at the top of this page; read
+> them there. This is the same defect class the PR is about, and the durable repair is to
+> delete the self-referential number rather than keep correcting it.
+
+The final commits answer an adversarial review of this PR — see
 **[Adversarial review](#adversarial-review)** at the end, which includes a **merge
 blocker that review found and this branch had introduced**.
 
@@ -157,7 +165,7 @@ documented as such and overridable with `--non-fast-cases`.
 | After phase 3 (`debee23`) | 74.22% **branch-inclusive** | 74 |
 | After the cohort split (`c6d967a`) | 79.02% branch-inclusive | 79 |
 | `ec67fff` | 80.24% branch-inclusive | 80 |
-| Branch tip (`434f792`) | **80.37% branch-inclusive** | **80** |
+| After the review fixes | **80.37% branch-inclusive** | **80** |
 
 Statement-only coverage of the same suite is 80.77%, so the two are not interchangeable
 and deleting `branch = true` would *raise* the reported total while covering strictly
