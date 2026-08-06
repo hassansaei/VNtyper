@@ -17,12 +17,16 @@ Characterisation throughout, with one exception noted in its own docstring.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import pytest
 
+from vntyper.scripts.cohort_inputs import parse_pipeline_summary
 from vntyper.scripts.cohort_tables import (
     ADVNTR_DISPLAY_COLUMNS,
     KESTREL_DISPLAY_COLUMNS,
+    KESTREL_HTML_COLUMNS,
     TABLE_CLASSES,
     additional_stats_frame,
     advntr_table_html,
@@ -35,6 +39,37 @@ pytestmark = pytest.mark.unit
 
 INJECTION = "<script>alert(1)</script>"
 ESCAPED = "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def _probe(column: str) -> str:
+    """Build the injection probe written into one column.
+
+    One probe per column rather than one shared string, so a failure names the column
+    that reached the page as markup instead of only saying that something did.
+
+    Args:
+        column: The column the probe is written into. Column names here are word
+            characters only, so nothing in the name needs escaping itself.
+
+    Returns:
+        str: Markup that executes if it reaches the page unescaped.
+    """
+    return f"<script>{column}</script>"
+
+
+def _escaped_probe(column: str) -> str:
+    """The form :func:`_probe` must appear in once the table has escaped it.
+
+    Written out rather than computed with ``html.escape``, so the assertion does not
+    reduce to running the escaper under test against itself.
+
+    Args:
+        column: The column the probe was written into.
+
+    Returns:
+        str: The escaped probe.
+    """
+    return f"&lt;script&gt;{column}&lt;/script&gt;"
 
 
 # ---------------------------------------------------------------------------
@@ -77,10 +112,15 @@ def test_a_non_string_is_returned_unchanged(value: object) -> None:
 
     This is the one behavioural difference from `report_formatting.confidence_html`,
     which does stringify. The two are not interchangeable.
-    """
-    result = confidence_span(value)
 
-    assert result is value or (isinstance(result, float) and isinstance(value, float))
+    Identity, not equality. The assertion used to be
+    `result is value or (isinstance(result, float) and isinstance(value, float))`, whose
+    second disjunct is satisfied by *any* float for the two float parameters - so
+    returning `0.0`, or `float(value) + 1`, passed it. `is` is also what makes the NaN
+    parameter mean anything: `float("nan") == float("nan")` is False, so an equality
+    assertion could not have been written for it at all.
+    """
+    assert confidence_span(value) is value
 
 
 # ---------------------------------------------------------------------------
@@ -134,25 +174,43 @@ def test_the_confidence_column_becomes_a_colour_span() -> None:
 
 
 def test_confidence_is_the_only_column_exempt_from_escaping() -> None:
-    frame = pd.DataFrame(
-        [
-            {
-                "Sample": INJECTION,
-                "Motif": INJECTION,
-                "Variant": INJECTION,
-                "REF": INJECTION,
-                "ALT": INJECTION,
-                "Motif_sequence": INJECTION,
-                "Flag": INJECTION,
-                "Confidence": "High_Precision",
-            }
-        ]
-    )
+    """The exemption list itself, asserted whole rather than by membership.
+
+    `kestrel_table_html` ends in `to_html(escape=False)`, so any column named here
+    reaches the page as markup. Widening the list is therefore a security change and has
+    to fail a test.
+
+    This test previously built a frame of seven columns and counted seven escapes, and
+    that could not fail: `KESTREL_DISPLAY_COLUMNS` has twelve members, so
+    `KESTREL_HTML_COLUMNS = ("Confidence", "POS")` passed it - the frame had no `POS` -
+    and passed the oracle fingerprint and the whole unit tier with it. Asserting the
+    tuple is what closes that; the test below is what makes the *consequence* of
+    widening it visible as well.
+    """
+    assert KESTREL_HTML_COLUMNS == ("Confidence",)
+
+
+def test_every_kestrel_display_column_but_confidence_is_escaped() -> None:
+    """Every column of the table except the one constructed fragment, probed.
+
+    The probes are derived from `KESTREL_DISPLAY_COLUMNS`, so a column added to the
+    table is covered the day it is added rather than the day someone remembers to extend
+    a hand-written list. The one exclusion is spelled `"Confidence"` as a literal and
+    **not** taken from `KESTREL_HTML_COLUMNS`: reading the exemption list here would make
+    the test follow whatever that list says, which is exactly how the previous version
+    could not see `POS` being exempted. Written this way, exempting a second column fails
+    this test as well as the one above - including if it is done by passing
+    `html_columns` at the call site without touching the constant.
+    """
+    assert "Confidence" in KESTREL_DISPLAY_COLUMNS  # else the exclusion below excludes nothing
+    escapable = [column for column in KESTREL_DISPLAY_COLUMNS if column != "Confidence"]
+    frame = pd.DataFrame([{**{column: _probe(column) for column in escapable}, "Confidence": "High_Precision"}])
 
     html = kestrel_table_html(frame)
 
-    assert INJECTION not in html
-    assert html.count(ESCAPED) == 7
+    for column in escapable:
+        assert _probe(column) not in html, f"{column} reached the page as markup"
+        assert _escaped_probe(column) in html, f"{column} did not reach the page at all"
 
 
 def test_the_frame_handed_to_the_kestrel_table_is_not_modified() -> None:
@@ -209,13 +267,21 @@ def test_the_advntr_table_renders_its_columns_in_the_declared_order() -> None:
 
 def test_the_advntr_table_has_no_escaping_exemption_at_all() -> None:
     """Nothing constructs markup for this table, so no column is exempt - including
-    `Confidence`, were one ever to appear in an adVNTR frame."""
-    frame = pd.DataFrame([{"Sample": INJECTION, "VID": INJECTION, "Flag": INJECTION}])
+    `Confidence`, were one ever to appear in an adVNTR frame.
+
+    `advntr_table_html` takes `escaped_table_html`'s default `html_columns=()`, so there
+    is no exemption list to pin the way there is for Kestrel; what pins it is that
+    *every* display column is probed. This used to cover three of the eleven columns and
+    count three escapes, which is the same shape of hole the Kestrel test had: adding an
+    exemption for `POS` or `Pvalue` passed it.
+    """
+    frame = pd.DataFrame([{column: _probe(column) for column in ADVNTR_DISPLAY_COLUMNS}])
 
     html = advntr_table_html(frame)
 
-    assert INJECTION not in html
-    assert html.count(ESCAPED) == 3
+    for column in ADVNTR_DISPLAY_COLUMNS:
+        assert _probe(column) not in html, f"{column} reached the page as markup"
+        assert _escaped_probe(column) in html, f"{column} did not reach the page at all"
 
 
 def test_an_empty_advntr_frame_renders_as_nothing_at_all() -> None:
@@ -227,14 +293,42 @@ def test_an_empty_advntr_frame_renders_as_nothing_at_all() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _stats_row_of_probes() -> dict[str, Any]:
+    """Build one statistics row carrying a probe in every column the cohort produces.
+
+    The keys are taken from `parse_pipeline_summary({})`, which is the function that
+    decides what a statistics row contains, so a statistic added there is probed without
+    this file being touched. `coverage` is the one key that is not a column: it is a
+    nested mapping `additional_stats_frame` spreads into `cov_`-prefixed columns.
+
+    Returns:
+        dict[str, Any]: One row, as `load_pipeline_summary_for_sample` would return it
+        with its `Sample` key added.
+    """
+    _, _, defaults = parse_pipeline_summary({})
+    row: dict[str, Any] = {"Sample": _probe("Sample")}
+    row.update({key: _probe(key) for key in defaults if key != "coverage"})
+    row["coverage"] = {"mean": _probe("cov_mean")}
+    return row
+
+
 def test_the_statistics_table_escapes_every_column() -> None:
-    """Assembly, version and pipeline are read out of each sample's summary."""
-    frame = pd.DataFrame([{"Sample": INJECTION, "assembly": INJECTION, "version": "2.0.6"}])
+    """Assembly, version and pipeline are read out of each sample's summary.
+
+    This table has no display list and no exemption list - `stats_table_html` renders
+    whatever frame it is handed with `escaped_table_html`'s default `html_columns=()` -
+    so the probe set is derived from the frame's own columns, and the frame is built the
+    way a cohort run builds it. That is what makes the assertion total rather than a
+    sample of three columns, which is what it used to be.
+    """
+    frame = additional_stats_frame([_stats_row_of_probes()])
+    assert "cov_mean" in frame.columns  # the coverage flattening path was exercised
 
     html = stats_table_html(frame)
 
-    assert INJECTION not in html
-    assert html.count(ESCAPED) == 2
+    for column in frame.columns:
+        assert _probe(column) not in html, f"{column} reached the page as markup"
+        assert _escaped_probe(column) in html, f"{column} did not reach the page at all"
 
 
 def test_an_empty_statistics_table_renders_as_nothing_at_all() -> None:

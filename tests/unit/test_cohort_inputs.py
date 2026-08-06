@@ -10,7 +10,10 @@ This was 120 lines of `cohort_summary.py` reachable only by calling the whole co
 pipeline, and it was the largest single uncovered block in the file. Everything here is
 **characterisation** - it records what a cohort run does today, including the behaviour
 named `..._today` - except the three discovery-order tests, which are specifications and
-say so in their own docstrings. No other test in this file has been ratified.
+say so in their own docstrings. No other test in this file has been ratified. The three
+specifications are about **directory** inputs; what zip inputs do to sample order and
+sample identity is characterised, not specified, and the `..._today` tests in the zip
+section say why.
 
 Step names are matched by exact string comparison against what `pipeline.py` writes
 (AGENTS.md trap 5), so this file asserts against `summary_steps.STEP_*` for the same
@@ -24,6 +27,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -217,8 +221,17 @@ def test_processes_with_different_hash_seeds_discover_the_same_order(tmp_path) -
     the only way to observe it, so this spawns five - ten samples each, because a
     two-element set can agree by luck and a ten-element one cannot.
 
-    A stable fingerprint in `test_cohort_summary_oracle.py` depends on this: a report
-    whose row order moved with the hash seed could not have one.
+    **Scope: directory inputs.** The ten samples are directories under `tmp_path`, whose
+    paths are the same in all five children, so the sort is over a fixed set of strings
+    and is total. It does not carry over to zip inputs: their sort key ends in
+    `tempfile.mkdtemp`'s random suffix, so it differs between processes whatever the hash
+    seed is. See
+    `test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today`.
+
+    The claim this test does **not** support, and used to: that the stable fingerprint in
+    `test_cohort_summary_oracle.py` is evidence for the same fix. That fingerprint is
+    taken from `generate_cohort_summary_report`, which never calls this function, so it
+    was stable across hash seeds before the fix too.
     """
     for index in range(10):
         _write_summary(tmp_path / "cohort" / f"sample_{index:02d}")
@@ -278,6 +291,74 @@ def test_a_zip_of_several_samples_is_searched_recursively(tmp_path) -> None:
 
     try:
         assert [d.name for d in dirs] == ["sample_one", "sample_two"]
+    finally:
+        cleanup_temp_dirs(temp_dirs)
+
+
+def test_a_zip_rooted_sample_is_identified_by_its_extraction_directory_today(tmp_path) -> None:
+    """Characterisation of a defect, not a guarantee: a zip-rooted sample has no name.
+
+    When `pipeline_summary.json` sits at the root of the archive - which is the layout
+    the web worker produces - the discovered "sample directory" *is* the extraction
+    directory, and that is `tempfile.mkdtemp(prefix="cohort_zip_")`. `aggregate_cohort`
+    takes the sample's identity from `Path(sample_dir).name`, so the sample is reported,
+    exported and pseudonymised under a random `cohort_zip_XXXXXXXX` string that is
+    different on every run and carries nothing of the archive's own name.
+
+    What the right identity is - the archive stem, a name carried inside the summary, or
+    the job id the web service already holds - is a design decision, so this records the
+    behaviour rather than changing it. The orchestrator will file it; there is no issue
+    file for it in `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/` yet.
+    """
+    archive = _zip_of(tmp_path, "patient_one.zip", {"pipeline_summary.json": '{"version": "2.0.6"}'})
+
+    dirs, temp_dirs = discover_sample_directories([str(archive)])
+
+    try:
+        (sample,) = dirs
+        assert sample.name.startswith("cohort_zip_")
+        assert "patient_one" not in str(sample)
+    finally:
+        cleanup_temp_dirs(temp_dirs)
+
+
+def test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today(tmp_path, monkeypatch) -> None:
+    """Characterisation of a defect, not a guarantee: multi-zip order is not reproducible.
+
+    `discover_sample_directories` sorts, so directory inputs come back in an order two
+    processes agree on - that is what
+    `test_processes_with_different_hash_seeds_discover_the_same_order` pins. The sort key
+    for a zip-rooted sample is the extraction directory's full path, and its last
+    component is `tempfile.mkdtemp`'s random suffix, so for zips the sort is total but
+    the thing being sorted is different every run. Two archives therefore come back in a
+    different order each time, and the report's row order follows.
+
+    `mkdtemp` is stubbed here to hand out chosen suffixes, because the defect is that the
+    order follows those suffixes - and an assertion against genuinely random ones would
+    either be flaky or would assert nothing. The archive given **first**, whose name sorts
+    **first**, is deliberately the one that extracts to the suffix sorting **last**: it
+    comes back second, so neither the input order nor the archive name decides.
+
+    Fixing it means giving a zip-rooted sample a stable identity, which is the same design
+    decision as in the test above and is filed with it.
+    """
+    first = _zip_of(tmp_path, "aaa_cohort.zip", {"pipeline_summary.json": '{"version": "AAA"}'})
+    second = _zip_of(tmp_path, "zzz_cohort.zip", {"pipeline_summary.json": '{"version": "ZZZ"}'})
+    suffixes = iter(["zzzzzzzz", "aaaaaaaa"])
+
+    def _mkdtemp(prefix: str = "") -> str:
+        directory = tmp_path / "extracted" / f"{prefix}{next(suffixes)}"
+        directory.mkdir(parents=True)
+        return str(directory)
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
+
+    dirs, temp_dirs = discover_sample_directories([str(first), str(second)])
+
+    try:
+        assert [d.name for d in dirs] == ["cohort_zip_aaaaaaaa", "cohort_zip_zzzzzzzz"]
+        # And with the order goes the data: the second archive's sample is reported first.
+        assert load_pipeline_summary_for_sample(dirs[0])[2]["version"] == "ZZZ"
     finally:
         cleanup_temp_dirs(temp_dirs)
 
@@ -533,12 +614,46 @@ def test_a_pseudonym_is_the_prefix_and_five_hex_digits() -> None:
 
 def test_the_same_sample_name_always_gets_the_same_pseudonym() -> None:
     """The mapping has to be stable so a cohort re-run stays comparable to its
-    predecessor and to the pseudonymization table written beside it."""
+    predecessor and to the pseudonymization table written beside it.
+
+    Two calls in one interpreter, so on its own this shows only that the function is not
+    stateful; it cannot see a mapping that varied between processes. What establishes
+    cross-process stability is `test_a_pseudonym_is_the_prefix_and_five_hex_digits`
+    above, which pins an exact literal - `md5` is a fixed digest with no per-process
+    salt, unlike `hash()`, so a recorded value is the whole guarantee.
+    """
     assert pseudonymized_sample_name("x", "s1") == pseudonymized_sample_name("x", "s1")
 
 
-def test_different_sample_names_get_different_pseudonyms() -> None:
+def test_two_particular_sample_names_get_different_pseudonyms() -> None:
+    """`s1` and `s2` do not collide. That is all this shows, and it used to be named as
+    though it showed injectivity - which the function does not have; see below."""
     assert pseudonymized_sample_name("x", "s1") != pseudonymized_sample_name("x", "s2")
+
+
+def test_two_sample_names_can_share_a_pseudonym_today() -> None:
+    """Characterisation of a defect, not a guarantee: pseudonyms are not injective.
+
+    The pseudonym is the first **five** hex characters of an MD5 - 20 bits, about a
+    million values - so a cohort of a few thousand samples is already odds-on to contain
+    a collision by the birthday bound. `sample_42` and `sample_919` are the first
+    colliding pair among `sample_0`..`sample_19999`, and both land on `168eb`.
+
+    Two consequences, both real rather than theoretical:
+
+    * `aggregate_cohort` builds `sample_mapping[pseudonym] = original_sample`, so the
+      second sample's entry **overwrites** the first in `pseudonymization_table.tsv` and
+      one of the two originals cannot be recovered from it;
+    * both samples' rows are reported under the same `Sample` value, so the cohort's
+      Kestrel table shows them as one sample with two calls.
+
+    Widening the slice, or salting it per cohort, changes every pseudonym in every
+    existing report, so it is a recorded decision rather than a fix to make here. The
+    orchestrator will file it; there is no issue file for it in
+    `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/` yet.
+    """
+    assert pseudonymized_sample_name("anon_", "sample_42") == "anon_168eb"
+    assert pseudonymized_sample_name("anon_", "sample_919") == "anon_168eb"
 
 
 def test_the_prefix_may_be_any_value_the_cli_accepted() -> None:

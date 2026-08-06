@@ -23,6 +23,7 @@ import pytest
 
 from vntyper.cli import load_config
 from vntyper.scripts import cohort_summary
+from vntyper.scripts.cohort_tables import ADVNTR_DISPLAY_COLUMNS, KESTREL_DISPLAY_COLUMNS
 
 pytestmark = pytest.mark.unit
 
@@ -66,14 +67,34 @@ def test_a_sample_name_is_not_rendered_as_markup_in_the_advntr_table(tmp_path) -
     assert ESCAPED in html
 
 
-@pytest.mark.parametrize("column", ["Motif", "Variant", "REF", "ALT", "Motif_sequence", "Flag"])
+@pytest.mark.parametrize("column", [c for c in KESTREL_DISPLAY_COLUMNS if c != "Confidence"])
 def test_no_kestrel_column_is_rendered_as_markup(tmp_path, column) -> None:
-    """Every column of the table is sample-derived, not only the sample name."""
+    """Every column of the table is sample-derived, not only the sample name.
+
+    The parametrization is derived from `KESTREL_DISPLAY_COLUMNS` rather than listed by
+    hand. The hand-written list it replaces named six of the twelve columns and omitted
+    `POS` and the three depth columns, so exempting any of those from escaping did not
+    fail here either - the same hole `test_cohort_tables.py` had. `Confidence` is
+    excluded as a literal, not by reading `KESTREL_HTML_COLUMNS`, so widening that
+    constant makes this parametrization grow rather than shrink.
+    """
     frame = pd.DataFrame([{"Sample": "s1", column: INJECTION}])
 
     html = _render(tmp_path, kestrel_df=frame)
 
     assert INJECTION not in html
+    assert ESCAPED in html
+
+
+@pytest.mark.parametrize("column", ADVNTR_DISPLAY_COLUMNS)
+def test_no_advntr_column_is_rendered_as_markup(tmp_path, column) -> None:
+    """The adVNTR table has no exemption at all, so every one of its columns is probed."""
+    frame = pd.DataFrame([{"Sample": "s1", "VID": "25561", column: INJECTION}])
+
+    html = _render(tmp_path, advntr_df=frame)
+
+    assert INJECTION not in html
+    assert ESCAPED in html
 
 
 def test_the_additional_statistics_table_is_escaped(tmp_path) -> None:

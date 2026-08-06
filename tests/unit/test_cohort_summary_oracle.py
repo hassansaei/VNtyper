@@ -5,11 +5,25 @@
 function had to produce byte-identical output to the code it replaced. This file is the
 instrument that says so.
 
-Why it is load-bearing rather than ceremonial: the golden-cohort gate
-(`docs/development/golden-cohort-gate.md`) runs **no cohort-mode case at all**, so it
-produces no delta for any change to this file. This oracle and
-`tests/unit/test_cohort_summary_escaping.py` are the only two instruments on the cohort
-report. If a refactor makes either of them need editing, the refactor changed behaviour.
+Why it is load-bearing rather than ceremonial: it is the only instrument that pins the
+whole assembled page at once, and the only one that does so against a recorded constant.
+
+The golden-cohort gate (`docs/development/golden-cohort-gate.md`) **does** now run cohort
+mode - `scripts/golden_cohort/matrix.py::build_cohort_cases` defines four cases,
+`cohort_multi`, `cohort_multi_pseudonymized`, `cohort_single` and `cohort_empty`, and run 4
+of the gate is the first in this project's history to cover cohort mode at all. Two limits
+on what that buys, both recorded on the gate page: it is a before-versus-after comparison
+of two commits, run by hand and wired into no CI job or `make` target, so it produces
+nothing until someone runs it and it attests one candidate commit and nothing after it;
+and it **sorts** cohort rows before comparing them, so sample ordering is normalised away
+there and is attested only by unit tests.
+
+The per-module suites - `test_cohort_tables.py`, `test_cohort_categories.py`,
+`test_cohort_rules.py`, `test_cohort_inputs.py`, `test_cohort_exports.py` - and
+`test_cohort_summary_escaping.py` each cover their own seam. What none of them covers is
+the assembled page: which fragment reached which slot of the template, and what the whole
+thing hashes to. That is this file. If a refactor makes it need editing, the refactor
+changed behaviour.
 
 What the fingerprint pins
 -------------------------
@@ -72,10 +86,14 @@ the oracle's blind spots rather than the ceiling.
   discovery half of that is pinned in `tests/unit/test_cohort_inputs.py` instead.
 * The order samples appear in - as far as *this fingerprint* goes. It is taken from
   `generate_cohort_summary_report`, which is handed frames directly, so the discovery
-  that decides the row order never runs. The order is now deterministic and is pinned at
-  its source in `test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted`
-  and, end to end through `aggregate_cohort`, by
-  `test_both_samples_reach_the_report_in_sorted_order` below.
+  that decides the row order never runs. For **directory** inputs the order is now
+  deterministic and is pinned at its source in
+  `test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted` and, end to
+  end through `aggregate_cohort`, by `test_both_samples_reach_the_report_in_sorted_order`
+  below. For **zip** inputs it is not: each archive extracts to a fresh
+  `tempfile.mkdtemp(prefix="cohort_zip_")` whose random component is part of the sort key,
+  so the order of two zips is not reproducible. That is characterised, not fixed, in
+  `test_cohort_inputs.py::test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today`.
 * Anything the pipeline writes *into* `pipeline_summary.json`. The oracle starts from a
   summary file, so a change in what `pipeline.py` records is invisible here.
 * Export column order. The fingerprint is taken from the HTML only; the CSV/TSV/JSON
@@ -142,8 +160,17 @@ pytestmark = pytest.mark.unit
 #:   `generate_cohort_summary_report`, which is handed frames the test built, so
 #:   `discover_sample_directories` does not run. See the exclusion list above.
 #:
-#: A fingerprint that is stable across two hash seeds is itself part of the evidence for
-#: the second fix: a report whose row order followed the hash seed could not have one.
+#: **What the two-seed re-derivation establishes, and what it does not.** It establishes
+#: that this constant does not itself depend on the process hash seed - worth knowing,
+#: because a fingerprint that moved with the seed would be useless as an instrument. It is
+#: **not** evidence for the ordering fix, and an earlier version of this comment claimed
+#: it was. The fingerprint calls `generate_cohort_summary_report` directly and never runs
+#: `discover_sample_directories`, which is the only code path the ordering fix touched, so
+#: it would have been stable across seeds before the fix as well - the two-seed result is
+#: consistent with the fix and with its absence alike, which is what makes it evidence for
+#: neither. The evidence for that fix is
+#: `test_cohort_inputs.py::test_processes_with_different_hash_seeds_discover_the_same_order`,
+#: which spawns five interpreters under five seeds, and it covers directory inputs only.
 EXPECTED_FINGERPRINT = "9889773ac381a6d0f33c2394c1f3d4f6a795cbc5bb38c5cbc9773f2e3a615645"
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -591,6 +618,11 @@ def test_both_samples_reach_the_report_in_sorted_order(tmp_path) -> None:
     it. It used to assert membership only, because the directories arrived in a `set`
     and the order was whatever the process's hash seed produced. Asserting the
     *positions* is what makes two runs of `vntyper cohort` comparable byte for byte.
+
+    **Scope: directory inputs.** The two samples here are directories under `tmp_path`,
+    where the sort is total and reproducible. It does not extend to zip inputs, whose
+    sort key carries the random `cohort_zip_*` extraction directory - see
+    `test_cohort_inputs.py::test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today`.
     """
     output_dir = tmp_path / "out"
     output_dir.mkdir()
