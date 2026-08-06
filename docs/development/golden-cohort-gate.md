@@ -76,7 +76,13 @@ The cohort is every BAM under `tests/data/`, run at each assembly it is provided
 the 7 multi-reference samples at all six assemblies (`hg19`, `hg38`, `GRCh37`, `GRCh38`,
 `hg19_ensembl`, `hg38_ensembl`) plus their original hg19 subsets, and the hg38 regression
 guard `example_40cf`. Five cases repeat without `--fast-mode` so the unmapped-read pipes
-are exercised, and three run `--extra-modules advntr`.
+are exercised, three run `--extra-modules advntr`, and — new, and not yet taken by any run
+— two repeat from a derived CRAM. See [The CRAM group](#the-cram-group-188) below.
+
+**The matrix is 60 cases as of this writing and was 58 for runs 1–5.** Every `x / 58`
+figure in the run sections below is that earlier matrix and is left as measured; the two
+CRAM cases are additional, so the next run's tables will be over 60 and will not be
+comparable cell-for-cell with these.
 
 Compared per case: the complete `kestrel_result.tsv` header and row set, keyed on
 `Motifs`/`POS`/`REF`/`ALT`/`Variant` — every column that is present, without asserting a
@@ -102,6 +108,53 @@ adVNTR selection is recoverable from this page; the non-fast one is a reconstruc
 export (`cohort_kestrel_{csv,tsv,json}`, `cohort_advntr_{csv,tsv,json}`), the rendered
 cohort tables, the category counts and totals, the set of cohort output files, and the
 pseudonymization table.
+
+### The CRAM group (#188)
+
+VNtyper accepts CRAM, and up to and including run 5 no gate run had ever given it one —
+so the CRAM branch of `process_bam_to_fastq` and the process-substitution write race
+`175011e` fixed in `build_cram_unmapped_filter_command` were attested by unit tests and one
+hand-run equivalence comparison, never by this gate.
+
+`make cram-fixtures` (`scripts/make_cram_fixtures.py`) closes that. It derives a CRAM beside
+every cohort BAM under `tests/data/cram/`, mirroring the source layout with `.bam` →
+`.cram`, and proves each one lossless: the decoded record stream digests identically to its
+source. The fixtures are derived rather than committed because `tests/data/` is
+git-ignored and ships as a Zenodo archive. They are written `no_ref=1` — the cohort's BAM
+headers carry no `M5` tags, so no reference can be resolved by digest, and
+`process_bam_to_fastq` passes an empty `cram_ref_option` unconditionally. **A `no_ref` CRAM
+exercises the container format, the CRAM decoder, `.crai` indexing and the unmapped-read
+scan. It does not exercise reference resolution, because it needs none.** The ordinary
+externally-referenced CRAM a diagnostic lab would send is a different fixture and remains
+uncovered.
+
+Two cases are declared, in `CRAM_CASE_IDS` in `scripts/golden_cohort/matrix.py`. Like the
+non-fast and adVNTR selections this is policy, not derivation — only the *fixture paths* are
+derived, mirrored from each base case's BAM path so they cannot disagree with what
+`make_cram_fixtures.py` wrote.
+
+| Case | Repeat of | Records | Unmapped pairs | Why this one |
+| --- | --- | --- | --- | --- |
+| `b178_hg19_cram` | `b178_hg19_subset` | 34,214 | 4,478 | A known positive (`D-C` insertion, `High_Precision*`, not flagged — run 1's table below). It is what shows a CRAM run still **calls**, not merely that it exits 0. |
+| `7a61_hg38_ensembl_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 622,690 | A heavy unmapped load, and so exposed to the write race `175011e` fixed — measured there at 199,797 of 200,000 unmapped reads present at the instant the shell returned. |
+
+Counts are from `tests/data/cram/manifest.json`. `7a61_hg38_ensembl_bwa` is **not** the
+single heaviest case in the cohort — `7a61_hg19_subset` carries 958,804 unmapped pairs and
+the six remapped `7a61` cases tie at 623,792 / 622,690. This pair is the one already proven
+end to end, and it also covers both layouts the fixture tree mirrors: one top-level subset
+BAM and one `remapped/<aligner>/<assembly>/` BAM.
+
+Both run **without `--fast-mode`, and that is the whole point.** `--fast-mode` skips the
+unmapped-read extraction entirely, and the CRAM-specific extraction lives inside that
+branch — so a fast-mode CRAM case would exercise the slice and the FASTQ conversion and
+none of the code the fixtures exist for.
+
+**A declared CRAM case whose fixture has not been derived is skipped and logged at error
+level, and the group then comes out short.** That is an ordinary drift mismatch: a strict
+build refuses it, and `--allow-matrix-drift` runs it knowingly as a non-attestation run.
+There is deliberately no "0 or 2 CRAM cases are both fine" rule — a run without them covers
+strictly less than this contract records, which is exactly what the `REDUCED` verdict is
+for.
 
 ### Verifying which code actually ran
 
@@ -484,8 +537,10 @@ multi-candidate selection test, not this gate.
 what the run shows is that the new raise does not fire on healthy input — which is what it
 is for, and is not the same as showing that it fires when it should.
 
-**#188 is not exercised.** The cohort has no CRAM input. Its evidence is a hand-run
-end-to-end CRAM comparison, which is not in CI.
+**#188 is not exercised.** The cohort had no CRAM input when run 4 was taken, and run 5's
+did not either. Its evidence is a hand-run end-to-end CRAM comparison, which is not in CI.
+The fixtures and the two CRAM cases arrived afterwards — see
+[The CRAM group](#the-cram-group-188) — and no run on this page has taken them.
 
 **The Kestrel allele-shape guard is not exercised, and this is counted rather than
 argued.** `102c46f` added `_assert_kestrel_allele_contract` in
@@ -551,7 +606,7 @@ it could return `IDENTICAL` over two runs that had both failed producing nothing
 | A case expected to exit zero must also have written its declared artefacts (`pipeline_summary.json`, both Kestrel tables, the coverage summary, the report; adVNTR stays optional; `cohort_empty` declares none, since it writes only its log by design). | **None.** All 59 zero-expected pipeline cases wrote all five on both sides; the three exporting cohort cases wrote all seven. |
 | `compare` refuses two sides that share a run root, a source tree, a commit or a marker expectation, that are mislabelled, or that recorded no case results. | **None.** Run 4's two sides are properly opposed. |
 | Each side records its `HEAD`, branch and working-tree state; `compare` can verify them. | **Not retroactive.** Run 4's sides have no `revision` key, and `compare` warns rather than refuses so existing run roots stay readable. |
-| An unfiltered matrix that deviates from the documented 50/5/3/3 contract is refused before launching, a zero-case matrix always, and a clean result over a reduced matrix reads `REDUCED` rather than `IDENTICAL`. | **None.** Run 4's `matrix.json` records zero mismatches and no filter. |
+| An unfiltered matrix that deviates from the documented per-group contract is refused before launching, a zero-case matrix always, and a clean result over a reduced matrix reads `REDUCED` rather than `IDENTICAL`. (The contract was 50 base / 5 non-fast / 3 adVNTR plus 3 probes when run 4 ran; it is now 50 / 5 / 3 / **2 CRAM** plus 3 probes.) | **None.** Run 4's `matrix.json` records zero mismatches and no filter, against the contract as it stood then. |
 | `md5sum` is kept for step result files with no direct comparator — `pipeline_info.json` (which carries the assembly guard's verdict), `output_R1.fastq.gz` and `cross_match_results.tsv` — and dropped only for the three the harness parses row by row. | **None.** Those three checksums are identical between the two sides on 59/59, 59/59 and 3/3 cases. (`kestrel_result.tsv`'s differs on 59 of 59, which is what the original justification was written for and why it stays dropped.) |
 | A changed `##` provenance banner now makes a table `differ` instead of being computed and discarded. | **None.** 0 provenance changes across all 180 compared tables. |
 
@@ -656,7 +711,9 @@ owner as **B8** in [CI/CD follow-ups](ci-followups.md).
 Five cases ran without `--fast-mode`, taking the unmapped and partially-mapped read path
 that carries the three newly `pipefail`-guarded pipes. All five produced identical output
 and exit 0 on both sides. No pipe stage was failing silently in this cohort. The CRAM
-process-substitution change is not exercised: the cohort has no CRAM input.
+process-substitution change is not exercised: no run up to and including run 5 had a CRAM
+input. (Two CRAM cases are now in the matrix — see [The CRAM group](#the-cram-group-188) —
+but this adjudication is over runs 1 and 2 and is left as it was measured.)
 
 ### D7 — region-string fallback (`5486c84`, not exercised)
 
@@ -668,9 +725,6 @@ triggered. Output identical, exit 0 both sides.
 
 Still true of every run, run 4 included:
 
-* CRAM input, and therefore the CRAM branch of `331ea95` and the whole of #188. `tests/data`
-  holds eight BAMs and no CRAM. #188's evidence is a hand-run end-to-end CRAM comparison,
-  which is not in CI.
 * FASTQ input (the shark case), which the assembly guard deliberately does not guard.
 * The `vntyper report` subcommand.
 * An adVNTR call with `RU == 7`, an adVNTR compound call containing `LEN`, and a BAM whose
@@ -692,6 +746,18 @@ Still true of every run, run 4 included:
 * **Which commit each side ran**, on runs 1–4. Harness `1.0.0` recorded a path; the SHAs
   above are the operator's record. Harness `1.1.0` records `HEAD` and the working-tree
   state per side and can be told to verify them.
+
+Still true of runs 1–5, and addressed in the matrix but **not yet by any run**:
+
+* CRAM input, and therefore the CRAM branch of `331ea95`, `175011e` and the whole of #188.
+  No run up to and including run 5 fed VNtyper a CRAM; `tests/data` held eight BAMs and no
+  CRAM when those runs were taken, and #188's evidence was a hand-run end-to-end CRAM
+  comparison that is not in CI. `make cram-fixtures` now derives the fixtures and the matrix
+  now declares two CRAM cases (see [The CRAM group](#the-cram-group-188)), so this moves to
+  the list below **when a run has actually taken them** — not before.
+* A CRAM whose reference is unavailable, which is the ordinary externally-referenced CRAM a
+  diagnostic lab sends. The derived fixtures are `no_ref=1` and need no reference, so they
+  cannot exercise that failure mode at all.
 
 No longer true, and the change is run 4's:
 
@@ -801,7 +867,15 @@ Sharing one reference tree is sound rather than expedient: `git diff 4fd638a..HE
 reference/` is empty, and `reference/**` is a base-image content-hash input that must be
 identical on both sides.
 
-**The CRAM path is still not in the cohort.** #188's fixtures now exist —
-`make cram-fixtures` derives a verified CRAM beside every cohort BAM — but no CRAM case is
-in the matrix yet, so `175011e` is attested by the measurements in its own commit message
-and by a BAM-versus-CRAM equivalence run, not by this gate.
+**Run 5 ran no CRAM case.** That is a fact about run 5 and does not change: its 65 runs per
+side are the 58-case BAM matrix plus 3 probes plus 4 cohort cases, and `175011e` is
+therefore attested by the measurements in its own commit message and by a BAM-versus-CRAM
+equivalence run, not by this run of this gate.
+
+What *has* changed since run 5 is the matrix, not run 5. #188's fixtures exist —
+`make cram-fixtures` derives a verified CRAM beside every cohort BAM — and the matrix now
+declares two CRAM cases, `b178_hg19_cram` and `7a61_hg38_ensembl_cram`, both non-fast, both
+counted by the drift check (see [The CRAM group](#the-cram-group-188)). **The next run will
+cover the CRAM path; run 5 did not.** Until that run is taken and written up here, nothing
+on this page attests the CRAM branch, and a reader should treat the two cases as declared
+rather than as measured.

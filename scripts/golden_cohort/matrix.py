@@ -3,13 +3,13 @@
 The gate page describes the matrix in prose: "the 7 multi-reference samples at all six
 assemblies plus their original hg19 subsets, and the hg38 regression guard
 ``example_40cf``", then five repeats without ``--fast-mode`` and three ``--extra-modules
-advntr`` runs. A hardcoded list of 58 ids reproduces that only until ``tests/data``
+advntr`` runs. A hardcoded list of ids reproduces that only until ``tests/data``
 changes, and then reproduces it wrongly and silently. So the 50 BAM-by-assembly cases are
-**derived** by walking the data directory, and the three selections that are policy rather
-than data - which cases repeat without fast mode, which run adVNTR, which are the
-deliberate-mismatch probes - are declared here by case id and **resolved** against the
-derived set. A policy naming a case the data does not contain is an error, not a silent
-drop.
+**derived** by walking the data directory, and the four selections that are policy rather
+than data - which cases repeat without fast mode, which run adVNTR, which repeat from a
+derived CRAM, which are the deliberate-mismatch probes - are declared here by case id and
+**resolved** against the derived set. A policy naming a case the data does not contain is
+an error, not a silent drop.
 
 What the page pins and what it does not
 ---------------------------------------
@@ -29,17 +29,45 @@ The individual ids are a reconstruction, not a recovery. They are declared here 
 choice is visible and can be overridden with ``--non-fast-cases`` rather than being
 buried in a lost script.
 
+The CRAM group
+--------------
+VNtyper accepts CRAM and, up to and including run 5, no gate run had ever fed it one - so
+the CRAM branch of ``process_bam_to_fastq`` and the write race ``175011e`` fixed in
+``build_cram_unmapped_filter_command`` were attested by unit tests and one hand-run
+equivalence comparison, never by this gate. ``make cram-fixtures``
+(``scripts/make_cram_fixtures.py``) now derives a verified CRAM beside every cohort BAM
+under ``tests/data/cram/``, mirroring the source layout with ``.bam`` -> ``.cram``, and
+:data:`CRAM_CASE_IDS` declares which of the derived base cases repeat from that CRAM.
+
+Two properties of these cases are load-bearing rather than incidental:
+
+* they run **without** ``--fast-mode``. ``fast_mode=True`` skips the unmapped-read
+  extraction entirely (``fastq_bam_processing.process_bam_to_fastq``, ``if not
+  fast_mode:``), and the CRAM-specific ``build_cram_unmapped_filter_command`` branch lives
+  inside it. A fast-mode CRAM case would exercise the slice and the FASTQ conversion and
+  none of the code the fixtures exist for.
+* a declared CRAM case whose fixture has not been derived is **skipped and logged**, never
+  silently dropped from the contract. The count then comes out short, which is an ordinary
+  :func:`check_matrix` mismatch and refuses the run unless ``--allow-matrix-drift`` is
+  passed. There is deliberately no "0 or 2 CRAM cases are both fine" rule: a run without
+  them is a reduced run and must not earn an attestation-grade verdict.
+
 What "derived" does and does not mean
 -------------------------------------
-Only the **base cases** are derived. The five non-fast ids, the three adVNTR ids and the
-three probes are hardcoded policy, resolved against the derived set. Anything that
-describes this matrix as "derived" without that qualification is overstating it, and the
-gate page has done exactly that.
+Only the **base cases** are derived. The five non-fast ids, the three adVNTR ids, the two
+CRAM ids and the three probes are hardcoded policy, resolved against the derived set. The
+CRAM *fixture paths* are derived from the base case's BAM path, so they cannot drift from
+what ``make_cram_fixtures.py`` wrote, but which cases are chosen is policy like the rest.
+Anything that describes this matrix as "derived" without that qualification is overstating
+it, and the gate page has done exactly that.
 
 Drift is fatal by default
 -------------------------
-:func:`check_matrix` compares the derivation against the 50/5/3/3 contract the gate page
-records. That check used to be advisory in every direction: ``build_matrix`` logged the
+:func:`check_matrix` compares the derivation against the per-group contract the gate page
+records - 50 base, 5 non-fast, 3 adVNTR, 2 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
+for runs 1-5, which is the matrix every result table on that page was measured over; the
+CRAM group is new and no run has taken it yet.) That check used to be advisory in every
+direction: ``build_matrix`` logged the
 deviations as warnings, ``cmd_matrix`` returned 0 regardless, and the comparison's verdict
 ignored them - so a silently reduced run earned the same ``IDENTICAL`` as a full one, and a
 ``--case`` filter matching nothing produced a zero-case matrix that every ``all()`` in the
@@ -52,8 +80,10 @@ Attributes:
     ASSEMBLIES: The six assemblies the cohort is provided at, in the page's order.
     NON_FAST_CASE_IDS: Which derived cases repeat without ``--fast-mode``.
     ADVNTR_CASE_IDS: Which derived cases repeat with ``--extra-modules advntr``.
+    CRAM_CASE_IDS: Which derived cases repeat from their derived CRAM fixture.
+    CRAM_FIXTURE_DIRNAME: The fixture root, relative to the data directory.
     PROBE_SPECS: The three deliberate-mismatch probes.
-    DOCUMENTED_ASSEMBLY_COUNTS: Run 2's per-assembly case counts, used as a self-check.
+    DOCUMENTED_ASSEMBLY_COUNTS: The per-assembly case counts, used as a self-check.
 """
 
 from __future__ import annotations
@@ -93,6 +123,33 @@ ADVNTR_CASE_IDS: tuple[str, ...] = (
     "dfc3_hg19_subset",
 )
 
+#: Which base cases repeat from their derived CRAM fixture. Policy, like the two selections
+#: above, and chosen to cover both a call and the write race:
+#:
+#: * ``b178_hg19_subset`` - a known positive (``D-C`` insertion, ``High_Precision*``, not
+#:   flagged, per the gate page's run-1 table), 34,214 records and 4,478 unmapped pairs. It
+#:   is the case that shows a CRAM run still *calls*, not merely that it exits 0.
+#: * ``7a61_hg38_ensembl_bwa`` - 985,731 records and 622,690 unmapped pairs, one of the
+#:   heaviest unmapped loads in the cohort, and so the most exposed to the write race
+#:   ``175011e`` fixed (measured there at 199,797 of 200,000 unmapped reads present when the
+#:   shell returned).
+#:
+#: It is **not** the single heaviest: ``7a61_hg19_subset`` carries 958,804 unmapped pairs,
+#: and the six remapped ``7a61`` cases tie at 623,792 / 622,690. This pair is kept because it
+#: is the pair already proven end to end, and because the two ids sit at the two different
+#: layouts the fixture tree mirrors - one top-level subset BAM and one
+#: ``remapped/<aligner>/<assembly>/`` BAM - so the path derivation below is exercised on
+#: both shapes rather than only one. Counts are from ``tests/data/cram/manifest.json``.
+CRAM_CASE_IDS: tuple[str, ...] = (
+    "b178_hg19_subset",
+    "7a61_hg38_ensembl_bwa",
+)
+
+#: Where ``scripts/make_cram_fixtures.py`` writes, relative to the data directory. It
+#: mirrors the source layout underneath, so a fixture path is derived from its BAM path
+#: rather than declared.
+CRAM_FIXTURE_DIRNAME = "cram"
+
 #: ``(probe_id, base_case_id, declared_assembly, expectation)``. Two deliberate
 #: mismatches, which the page records as exit 1 on both sides with only the failure point
 #: moving, and one naming probe (an NCBI-named BAM declared ``hg38``) which exits 0.
@@ -102,20 +159,26 @@ PROBE_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("probe_naming_ncbi_as_hg38", "dfc3_GRCh38_bwa", "hg38", "zero"),
 )
 
-#: Run 2's after-side assembly-guard verdict counts, which are also the per-assembly case
-#: counts. Used only as a self-check on the derivation; a mismatch is reported loudly and
-#: does not stop the run, because ``tests/data`` is allowed to grow.
+#: The per-assembly case counts, used as a self-check on the derivation.
+#:
+#: Runs 1-5 measured 20 hg19 / 9 hg38 / 8 GRCh38 / 7 GRCh37 / 7 hg19_ensembl /
+#: 7 hg38_ensembl, and run 2's after-side assembly-guard verdict counts are that same
+#: distribution. Adding the CRAM group moves two of them: ``b178_hg19_subset`` takes hg19
+#: from 20 to 21 and ``7a61_hg38_ensembl_bwa`` takes hg38_ensembl from 7 to 8. The gate
+#: page's ``x / 58`` result tables therefore describe the pre-CRAM matrix and are not
+#: restated here.
 DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
-    "hg19": 20,
+    "hg19": 21,
     "hg38": 9,
     "GRCh38": 8,
     "GRCh37": 7,
     "hg19_ensembl": 7,
-    "hg38_ensembl": 7,
+    "hg38_ensembl": 8,
 }
 
-#: The page's own totals, checked the same way.
-DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "total": 58, "probes": 3}
+#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; the two CRAM
+#: cases take it to 60.
+DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 2, "total": 60, "probes": 3}
 
 
 def _short(sample: str) -> str:
@@ -292,6 +355,110 @@ def apply_policies(
     return cases, log
 
 
+def cram_fixture_for(case: dict[str, Any], data_dir: Path, cram_root: Path) -> Path:
+    """Where ``make_cram_fixtures.py`` wrote the CRAM derived from this case's BAM.
+
+    The fixture tree mirrors the source layout with ``.bam`` replaced by ``.cram``, so this
+    reproduces ``derive_cram``'s ``(fixture_root / relative).with_suffix(".cram")`` rather
+    than declaring a second copy of the path that could disagree with it.
+
+    Args:
+        case: A derived base case, whose ``bam`` is an absolute path under ``data_dir``.
+        data_dir: The ``tests/data`` directory the case was derived from.
+        cram_root: The fixture root, normally ``data_dir / "cram"``.
+
+    Returns:
+        Path: The fixture path, which may or may not exist.
+
+    Raises:
+        ValueError: If the case's BAM is not under ``data_dir``, which would mean the case
+            did not come from this derivation and its fixture path cannot be computed.
+    """
+    source = Path(case["bam"])
+    try:
+        relative = source.relative_to(data_dir.resolve())
+    except ValueError:
+        msg = (
+            f"Cannot derive a CRAM fixture path for {case['case_id']}: its BAM {source} is not under "
+            f"the data directory {data_dir}. The fixture tree mirrors the data directory, so a BAM "
+            "from outside it has no mirrored position."
+        )
+        logger.error(msg)
+        raise ValueError(msg) from None
+    return (cram_root / relative).with_suffix(".cram")
+
+
+def build_cram_cases(
+    base_cases: list[dict[str, Any]],
+    *,
+    cram_ids: tuple[str, ...],
+    data_dir: Path,
+    cram_root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Repeat the declared base cases from their derived CRAM fixtures.
+
+    Each case carries ``alignment_kind="cram"`` and the fixture path under ``cram``, which
+    is what :func:`golden_cohort.runner.pipeline_argv` switches on to emit ``--cram``
+    instead of ``--bam``. The source BAM is kept as ``source_bam`` for provenance, and
+    ``bam`` is removed so that nothing can read it and quietly run the BAM instead.
+
+    Every CRAM case is non-fast on purpose: ``--fast-mode`` skips the unmapped-read
+    extraction, and the CRAM-specific extraction is the code under test.
+
+    A declared case whose fixture is missing is **skipped and logged at error level**. The
+    group then comes out short of :data:`DOCUMENTED_TOTALS`, which :func:`check_matrix`
+    reports as a mismatch and ``build_matrix`` refuses in strict mode - so "the fixtures
+    were never derived" fails the run rather than silently shrinking the matrix.
+
+    Args:
+        base_cases: The derived BAM-by-assembly cases.
+        cram_ids: Which base cases repeat from CRAM.
+        data_dir: The ``tests/data`` directory, used to mirror each BAM's relative path.
+        cram_root: The fixture root, normally ``data_dir / "cram"``.
+
+    Returns:
+        tuple[list[dict], list[str]]: The CRAM cases, and the derivation log lines.
+
+    Raises:
+        ValueError: If a declared id is not in the derived set, via :func:`_resolve`.
+    """
+    by_id = {case["case_id"]: case for case in base_cases}
+    cases: list[dict[str, Any]] = []
+    log: list[str] = []
+    missing: list[str] = []
+
+    for base in _resolve(cram_ids, by_id, "CRAM"):
+        fixture = cram_fixture_for(base, data_dir, cram_root)
+        if not fixture.is_file():
+            missing.append(base["case_id"])
+            log.append(f"skipped (no derived CRAM fixture at {fixture}): {base['case_id']}")
+            logger.error(
+                f"matrix: no CRAM fixture for {base['case_id']} at {fixture}. Run `make cram-fixtures` to "
+                "derive it. This run's CRAM group is short, which the matrix check reports as drift."
+            )
+            continue
+        case = dict(base)
+        case.pop("bam", None)
+        case.update(
+            {
+                "case_id": f"{_short(base['sample'])}_{base['assembly']}_cram",
+                "group": "cram",
+                "alignment_kind": "cram",
+                "cram": str(fixture),
+                "source_bam": base["bam"],
+                # The CRAM unmapped-read extraction only runs when fast mode is off.
+                "fast_mode": False,
+                "repeat_of": base["case_id"],
+            }
+        )
+        cases.append(case)
+
+    log.append(f"CRAM repeats: {len(cases)}/{len(cram_ids)} from {cram_root}")
+    if missing:
+        log.append(f"CRAM fixtures missing for: {', '.join(missing)}")
+    return cases, log
+
+
 def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build the three deliberate-mismatch probes from :data:`PROBE_SPECS`.
 
@@ -423,9 +590,11 @@ def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> d
     Returns:
         dict[str, Any]: ``counts``, ``documented``, ``mismatches`` and
         ``attestation_grade``. An empty ``mismatches`` means this run's matrix is the one
-        runs 1-3 measured; ``attestation_grade`` additionally requires that no case filter
-        narrowed it, and is what :func:`golden_cohort.compare._verdict` reads to decide
-        whether a clean result may be called ``IDENTICAL`` at all.
+        the gate page's contract describes; ``attestation_grade`` additionally requires that
+        no case filter narrowed it, and is what :func:`golden_cohort.compare._verdict` reads
+        to decide whether a clean result may be called ``IDENTICAL`` at all. It is
+        deliberately *not* the matrix runs 1-5 measured: those predate the CRAM group, so a
+        clean run of this matrix covers strictly more than they did.
     """
     by_assembly: dict[str, int] = {}
     by_group: dict[str, int] = {}
@@ -438,6 +607,9 @@ def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> d
         "base": by_group.get("base", 0),
         "nonfast": by_group.get("nonfast", 0),
         "advntr": by_group.get("advntr", 0),
+        # Counted like the rest rather than exempted: a run that derived no CRAM fixtures
+        # is a reduced run, and reporting 0 here is what makes it say so.
+        "cram": by_group.get("cram", 0),
         "total": len(cases),
         "probes": len(probes),
     }
@@ -472,6 +644,8 @@ def build_matrix(
     *,
     non_fast_ids: tuple[str, ...] = NON_FAST_CASE_IDS,
     advntr_ids: tuple[str, ...] = ADVNTR_CASE_IDS,
+    cram_ids: tuple[str, ...] = CRAM_CASE_IDS,
+    cram_root: Path | None = None,
     advntr_max_coverage: int = 300,
     case_filter: list[str] | None = None,
     include_probes: bool = True,
@@ -484,6 +658,9 @@ def build_matrix(
         data_dir: The ``tests/data`` directory.
         non_fast_ids: Override for :data:`NON_FAST_CASE_IDS`.
         advntr_ids: Override for :data:`ADVNTR_CASE_IDS`.
+        cram_ids: Override for :data:`CRAM_CASE_IDS`.
+        cram_root: Where ``make cram-fixtures`` wrote. Defaults to
+            ``data_dir / CRAM_FIXTURE_DIRNAME``.
         advntr_max_coverage: The ``--advntr-max-coverage`` value.
         case_filter: If given, keep only cases whose id contains one of these substrings.
             For smoke tests; the check against the page's counts becomes advisory when it
@@ -514,6 +691,17 @@ def build_matrix(
         advntr_max_coverage=advntr_max_coverage,
     )
     log.extend(policy_log)
+
+    resolved_cram_root = cram_root if cram_root is not None else data_dir / CRAM_FIXTURE_DIRNAME
+    cram_cases, cram_log = build_cram_cases(
+        base_cases,
+        cram_ids=cram_ids,
+        data_dir=data_dir,
+        cram_root=resolved_cram_root,
+    )
+    cases.extend(cram_cases)
+    log.extend(cram_log)
+
     probes = build_probes(base_cases) if include_probes else []
 
     if case_filter:
@@ -571,6 +759,8 @@ def build_matrix(
         "policies": {
             "non_fast_case_ids": list(non_fast_ids),
             "advntr_case_ids": list(advntr_ids),
+            "cram_case_ids": list(cram_ids),
+            "cram_root": str(resolved_cram_root),
             "advntr_max_coverage": advntr_max_coverage,
             "probe_specs": [list(spec) for spec in PROBE_SPECS] if include_probes else [],
         },

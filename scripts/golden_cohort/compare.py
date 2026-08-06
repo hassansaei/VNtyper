@@ -628,10 +628,18 @@ def render_text(result: dict[str, Any]) -> str:
     check = result.get("matrix_check") or {}
     if check:
         counts = check.get("counts", {})
+        # Build the policy breakdown from the counts mapping rather than naming the groups
+        # in a literal: the sentence used to read "base, non-fast and adVNTR" and stopped
+        # adding up the moment a `cram` group was declared. Anything derived stays named
+        # as derived; every other group is policy.
+        policy = ", ".join(
+            f"{counts[name]} {label}"
+            for name, label in (("nonfast", "non-fast"), ("advntr", "adVNTR"), ("cram", "CRAM"))
+            if counts.get(name)
+        )
         lines.append(
             f"Matrix: {counts.get('total')} cases ({counts.get('base')} base **derived from `tests/data`**, "
-            f"{counts.get('nonfast')} non-fast and {counts.get('advntr')} adVNTR **selected by declared policy**) "
-            f"plus {counts.get('probes')} probes, also policy."
+            f"{policy} **selected by declared policy**) plus {counts.get('probes')} probes, also policy."
         )
         if check.get("skipped"):
             lines.append("A case filter was in force, so this run is not attestation-grade.")

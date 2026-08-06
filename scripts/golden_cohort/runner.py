@@ -43,9 +43,22 @@ logger = logging.getLogger(__name__)
 #: Where the harness's own entry point lives, so a launched process can re-enter it.
 GATE_SCRIPT = Path(__file__).resolve().parents[1] / "golden_cohort_gate.py"
 
+#: How a case's ``alignment_kind`` maps to the flag that carries its input and the matrix
+#: key holding the path. ``vntyper pipeline`` registers ``--bam`` and ``--cram`` as separate
+#: options and ``handle_pipeline`` rejects both together, so this is a choice of one.
+ALIGNMENT_FLAGS: dict[str, tuple[str, str]] = {
+    "bam": ("--bam", "bam"),
+    "cram": ("--cram", "cram"),
+}
+
 
 def pipeline_argv(case: dict[str, Any], output_dir: Path, *, threads: int, advntr_threads: int) -> list[str]:
     """Build the ``vntyper pipeline`` argument list for one case.
+
+    The input flag follows the case's ``alignment_kind``, which defaults to ``bam`` so that
+    every case predating the CRAM group is unaffected. An unrecognised value is refused
+    rather than defaulted: silently running ``--bam`` for a case declared as something else
+    is exactly the kind of quiet reduction this harness exists to make impossible.
 
     Args:
         case: The case from the matrix.
@@ -55,11 +68,25 @@ def pipeline_argv(case: dict[str, Any], output_dir: Path, *, threads: int, advnt
 
     Returns:
         list[str]: The argument list, without the program name.
+
+    Raises:
+        ValueError: If the case declares an ``alignment_kind`` this harness cannot launch.
     """
+    alignment_kind = case.get("alignment_kind", "bam")
+    if alignment_kind not in ALIGNMENT_FLAGS:
+        msg = (
+            f"Case {case['case_id']} declares alignment_kind={alignment_kind!r}, which is not one of "
+            f"{sorted(ALIGNMENT_FLAGS)}. Refusing to guess: defaulting to --bam would run a different "
+            "input from the one the matrix declared and compare clean."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+    alignment_flag, alignment_key = ALIGNMENT_FLAGS[alignment_kind]
+
     argv = [
         "pipeline",
-        "--bam",
-        case["bam"],
+        alignment_flag,
+        case[alignment_key],
         "--reference-assembly",
         case["assembly"],
         "--output-dir",

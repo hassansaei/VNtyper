@@ -1,6 +1,6 @@
 """Unit tests for the golden-cohort gate's side runner and its command-line entry point.
 
-Two things are pinned here that no other test reaches:
+Three things are pinned here that no other test reaches:
 
 * what a side records about itself - its revision, how many cases it launched, and whether
   they did what the matrix declared. ``side.json`` used to record a *path* and a
@@ -8,7 +8,11 @@ Two things are pinned here that no other test reaches:
   side that launched none;
 * what ``compare`` refuses. The launcher proves each process ran the tree its caller named;
   nothing proved the caller named two different, oppositely-labelled trees, so "compared
-  against itself" was reachable by misconfiguration and returned exit 0.
+  against itself" was reachable by misconfiguration and returned exit 0;
+* which input flag each case is launched with. ``pipeline_argv`` hardcoded ``--bam``, so a
+  CRAM case added to the matrix would have been launched against a path that is not a BAM,
+  or - worse, once the case also carried a BAM - launched as a BAM and compared clean while
+  attesting nothing about the CRAM path.
 
 Nothing here launches a pipeline: ``_run_one`` and the git call are both replaced.
 """
@@ -144,6 +148,88 @@ def _ok_record(case_id):
         "expectation_met": True,
         "expectation_problems": [],
     }
+
+
+# --------------------------------------------------------------------------------------
+# which input flag a case is launched with
+# --------------------------------------------------------------------------------------
+
+
+def _argv(case, tmp_path: Path):
+    """Build one case's ``vntyper pipeline`` argument list.
+
+    Args:
+        case: The case from the matrix.
+        tmp_path: pytest's per-test directory, used as the output directory.
+
+    Returns:
+        list[str]: The argument list.
+    """
+    return runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8)
+
+
+@pytest.mark.parametrize("group", ["base", "nonfast", "advntr"])
+def test_a_non_cram_case_is_still_launched_with_bam(group: str, tmp_path: Path) -> None:
+    """Every case predating the CRAM group must be launched exactly as before.
+
+    ``alignment_kind`` is absent from all of them, so the default is what runs, and the
+    default has to be ``--bam`` or the whole existing matrix changes meaning.
+
+    Args:
+        group: The case group.
+        tmp_path: pytest's per-test directory.
+    """
+    argv = _argv(_case("a", group=group), tmp_path)
+    assert "--bam" in argv
+    assert "--cram" not in argv
+    assert argv[argv.index("--bam") + 1] == "/data/example_a.bam"
+
+
+def test_a_cram_case_is_launched_with_cram_and_the_fixture_path(tmp_path: Path) -> None:
+    """``pipeline_argv`` hardcoded ``--bam``, so a CRAM case could not have been run at all.
+
+    Args:
+        tmp_path: pytest's per-test directory.
+    """
+    case = _case(
+        "b178_hg19_cram",
+        group="cram",
+        alignment_kind="cram",
+        cram="/data/cram/example_b178_hg19_subset.cram",
+        source_bam="/data/example_b178_hg19_subset.bam",
+        fast_mode=False,
+    )
+    del case["bam"]
+    argv = _argv(case, tmp_path)
+    assert "--cram" in argv
+    assert "--bam" not in argv
+    assert argv[argv.index("--cram") + 1] == "/data/cram/example_b178_hg19_subset.cram"
+    assert "/data/example_b178_hg19_subset.bam" not in argv
+
+
+def test_a_cram_case_is_launched_without_fast_mode(tmp_path: Path) -> None:
+    """The CRAM unmapped-read extraction only runs when ``--fast-mode`` is off.
+
+    Args:
+        tmp_path: pytest's per-test directory.
+    """
+    case = _case("b178_hg19_cram", group="cram", alignment_kind="cram", cram="/data/x.cram", fast_mode=False)
+    del case["bam"]
+    assert "--fast-mode" not in _argv(case, tmp_path)
+
+
+def test_an_unrecognised_alignment_kind_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
+    """Falling back to ``--bam`` would launch a different input from the declared one.
+
+    Args:
+        tmp_path: pytest's per-test directory.
+
+    Raises:
+        AssertionError: If an unknown ``alignment_kind`` silently launches something.
+    """
+    case = _case("odd", alignment_kind="sam")
+    with pytest.raises(ValueError, match="alignment_kind='sam'"):
+        _argv(case, tmp_path)
 
 
 # --------------------------------------------------------------------------------------
