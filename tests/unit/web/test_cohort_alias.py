@@ -29,10 +29,12 @@ pytestmark = pytest.mark.unit
 from app.cohorts import (  # noqa: E402
     ALIAS_KEY_PREFIX,
     COHORT_KEY_PREFIX,
+    MAX_ALIAS_CHARS,
     alias_key,
     cohort_key,
     create_cohort_record,
     extend_cohort_retention,
+    resolve_cohort,
 )
 from app.utils import MAX_PASSPHRASE_BYTES  # noqa: E402
 
@@ -294,3 +296,86 @@ def test_a_finished_job_extends_its_cohorts_alias(fake_redis, monkeypatch: pytes
     assert fake_redis.ttl(alias_key(ALIAS)) > 60
     assert fake_redis.ttl(key) > 60
     assert fake_redis.ttl(f"{key}:jobs") > 60
+
+
+# ---------------------------------------------------------------------------
+# Identifiers and aliases are bounded before they become Redis keys
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cohort_id",
+    [
+        pytest.param("3b045376-23b4-48e6-b3aa-12c0773d8137:jobs", id="reaches_the_member_set"),
+        pytest.param("not-a-uuid", id="not_an_identifier"),
+        pytest.param("*", id="glob"),
+        pytest.param("x" * 5000, id="oversized"),
+    ],
+)
+def test_a_cohort_id_that_is_not_one_this_service_minted_names_no_cohort(fake_redis, cohort_id: str) -> None:
+    """An identifier is interpolated into a Redis key, so its shape is checked first.
+
+    `<uuid>:jobs` is the cohort's own member Set. Reading it as a hash raises
+    WRONGTYPE inside the client, which surfaces as a 500 -- the service reporting
+    itself broken over a value the caller chose. Every value that is not one of
+    the identifiers this service mints gets the one honest answer: it names no
+    cohort.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+        cohort_id: The malformed identifier under test.
+    """
+    fake_redis.sadd("cohort:3b045376-23b4-48e6-b3aa-12c0773d8137:jobs", "job-a")
+
+    with pytest.raises(LookupError, match="not found"):
+        resolve_cohort(fake_redis, cohort_id=cohort_id, alias=None, passphrase=PASSPHRASE)
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [
+        pytest.param("a" * (MAX_ALIAS_CHARS + 1), id="too_long"),
+        pytest.param("family\na", id="newline"),
+        pytest.param("family\x00a", id="null_byte"),
+    ],
+)
+def test_an_alias_outside_the_documented_policy_is_refused(fake_redis, alias: str) -> None:
+    """An alias becomes a Redis key too, so it is bounded on the way in.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+        alias: The alias under test.
+    """
+    with pytest.raises(ValueError, match="alias"):
+        create_cohort_record(fake_redis, alias=alias, passphrase=PASSPHRASE, retention_seconds=RETENTION)
+
+    assert fake_redis.keys(f"{ALIAS_KEY_PREFIX}*") == []
+    assert fake_redis.keys(f"{COHORT_KEY_PREFIX}*") == []
+
+
+def test_an_alias_at_the_limit_is_still_accepted(fake_redis) -> None:
+    """The bound is a ceiling, not an off-by-one that rejects the longest legal alias.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+    """
+    alias = "a" * MAX_ALIAS_CHARS
+
+    created = create_cohort_record(fake_redis, alias=alias, passphrase=PASSPHRASE, retention_seconds=RETENTION)
+
+    assert created["alias"] == alias
+    assert fake_redis.get(alias_key(alias)) == created["cohort_id"]
+
+
+def test_a_malformed_cohort_id_is_reported_as_not_found_rather_than_as_a_server_error(client) -> None:
+    """End to end: the caller gets a constrained answer, not a 500.
+
+    Args:
+        client: TestClient fixture from conftest.
+    """
+    response = client.get(
+        "/cohort-status/",
+        params={"cohort_id": "3b045376-23b4-48e6-b3aa-12c0773d8137:jobs", "passphrase": PASSPHRASE},
+    )
+
+    assert response.status_code == 404, response.text

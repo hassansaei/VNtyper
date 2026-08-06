@@ -42,3 +42,22 @@ def is_job_id(value: str | None) -> bool:
             control character or any other content the service never mints.
     """
     return bool(value) and bool(_JOB_ID_PATTERN.match(value or ""))
+
+
+def is_cohort_id(value: str | None) -> bool:
+    """Report whether a value has the form of a cohort identifier this service issued.
+
+    Cohort identifiers are minted by the same `uuid4()` call and used the same
+    way -- interpolated into a Redis key. A value that is not one cannot name a
+    cohort, but it can still name another key in the same database: the cohort's
+    own member Set is `cohort:<id>:jobs`, so `<id>:jobs` reads a Set as a hash
+    and the client raises WRONGTYPE, which the API can only report as its own
+    failure.
+
+    Args:
+        value: The candidate identifier, as supplied by a caller. Untrusted.
+
+    Returns:
+        bool: True only for the canonical 36-character UUID form.
+    """
+    return is_job_id(value)

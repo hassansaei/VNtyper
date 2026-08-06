@@ -30,10 +30,12 @@ stand-in.
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from .identifiers import is_cohort_id
 from .utils import hash_passphrase, verify_passphrase
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,16 @@ COHORT_KEY_PREFIX = "cohort:"
 # Each claimed alias gets one key, whose existence *is* the claim.
 ALIAS_KEY_PREFIX = "cohort-alias:"
 
+#: Longest alias the service will store. An alias is a label the caller chooses
+#: and it becomes part of a Redis key, so it is bounded on the way in. 64
+#: characters is well past any name a study would actually use.
+MAX_ALIAS_CHARS = 64
+
+#: Characters an alias may not contain. Control characters do not survive a round
+#: trip through logs, headers or a terminal intact, so two aliases differing only
+#: in one are indistinguishable wherever a human reads them.
+_ALIAS_FORBIDDEN = re.compile(r"[\x00-\x1f\x7f]")
+
 # The two cohort read routes are GETs, so their credential used to have nowhere
 # to travel but the query string -- part of the request line, and so written to
 # every server and proxy access log on the path, kept in browser history and
@@ -53,6 +65,11 @@ ALIAS_KEY_PREFIX = "cohort-alias:"
 # names below live here, beside ``preferred_passphrase``, so the rule and the
 # words that describe it to a client author cannot drift apart.
 COHORT_PASSPHRASE_HEADER = "X-Cohort-Passphrase"
+
+ALIAS_DESCRIPTION = (
+    f"Optional cohort alias: a label of at most {MAX_ALIAS_CHARS} characters, with no control characters. "
+    "It becomes part of the key the claim is stored under, so its shape is fixed."
+)
 
 PASSPHRASE_HEADER_DESCRIPTION = (
     "Passphrase protecting the cohort. Preferred over the `passphrase` query "
@@ -71,7 +88,8 @@ def cohort_key(cohort_id: str) -> str:
     """Build the Redis key holding a cohort's metadata.
 
     Args:
-        cohort_id: The cohort's identifier.
+        cohort_id: The cohort's identifier. Check it with
+            :func:`identifiers.is_cohort_id` first: this only interpolates.
 
     Returns:
         str: The key the cohort hash is stored under.
@@ -83,12 +101,43 @@ def alias_key(alias: str) -> str:
     """Build the Redis key that records ownership of an alias.
 
     Args:
-        alias: The alias being claimed or looked up.
+        alias: The alias being claimed or looked up. Check it with
+            :func:`checked_alias` first: this only interpolates.
 
     Returns:
         str: The key the claim is stored under.
     """
     return f"{ALIAS_KEY_PREFIX}{alias}"
+
+
+def checked_alias(alias: str | None) -> str | None:
+    """Apply the alias policy: at most :data:`MAX_ALIAS_CHARS`, no control characters.
+
+    An alias is free text a caller chooses, and it is interpolated into a Redis
+    key, so what it may contain is stated once, here, and applied wherever an
+    alias enters the service.
+
+    Args:
+        alias: The alias as supplied, already reduced by :func:`_clean`.
+
+    Returns:
+        str | None: The alias, unchanged, or None if there was none.
+
+    Raises:
+        ValueError: If the alias is longer than the policy allows or carries a
+            character it may not.
+    """
+    if alias is None:
+        return None
+    if len(alias) > MAX_ALIAS_CHARS:
+        msg = f"Cohort alias must be at most {MAX_ALIAS_CHARS} characters"
+        logger.error(msg)
+        raise ValueError(msg)
+    if _ALIAS_FORBIDDEN.search(alias):
+        msg = "Cohort alias must not contain control characters"
+        logger.error(msg)
+        raise ValueError(msg)
+    return alias
 
 
 def _clean(value: str | None) -> str | None:
@@ -198,7 +247,7 @@ def create_cohort_record(
         ValueError: If no passphrase was supplied, if it is longer than the
             hashing scheme accepts, or if the alias is already taken.
     """
-    alias = _clean(alias)
+    alias = checked_alias(_clean(alias))
     # Normalised to `str` here, exactly as `resolve_cohort` does, so that the value
     # handed to `hash_passphrase` below is the one the caller sent. Only the
     # *emptiness* test is made on the trimmed form: `resolve_cohort` verifies the
@@ -300,7 +349,7 @@ def resolve_cohort(
         LookupError: If no cohort exists for the identifier.
     """
     cohort_id = _clean(cohort_id)
-    alias = _clean(alias)
+    alias = checked_alias(_clean(alias))
     passphrase = passphrase or ""
 
     if cohort_id is None:
@@ -312,6 +361,15 @@ def resolve_cohort(
         msg = "Passphrase required for this cohort"
         logger.error(msg)
         raise PermissionError(msg)
+
+    # The identifier is about to become a Redis key, so its shape is checked
+    # before it is interpolated. A value that is not one of ours names no cohort,
+    # and gets the same answer as one that simply does not exist -- both because
+    # that is true and because distinguishing them would say which ids are real.
+    if not is_cohort_id(cohort_id):
+        msg = "Cohort ID not found"
+        logger.error(f"{msg}: {len(cohort_id)}-character value is not an identifier this service issues")
+        raise LookupError(msg)
 
     key = cohort_key(cohort_id)
     record = store.hgetall(key)

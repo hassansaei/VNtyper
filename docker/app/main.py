@@ -32,6 +32,7 @@ from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
 
 from .cohorts import (
+    ALIAS_DESCRIPTION,
     COHORT_PASSPHRASE_HEADER,
     PASSPHRASE_HEADER_DESCRIPTION,
     PASSPHRASE_QUERY_DESCRIPTION,
@@ -300,7 +301,7 @@ def get_versions():
 )
 def create_cohort(
     passphrase: str = Form(..., description=f"Passphrase protecting the cohort, at most {MAX_PASSPHRASE_BYTES} bytes"),
-    alias: str | None = Form(None, description="Optional cohort alias"),
+    alias: str | None = Form(None, description=ALIAS_DESCRIPTION),
 ):
     """
     **Description:**

@@ -43,6 +43,12 @@ RETENTION_SECONDS = 14 * 86400
 # Any passphrase works; bcrypt is deliberately slow, so the tests reuse one.
 GOOD_PASSPHRASE = "correct-horse-battery-staple"
 
+# A cohort record from before passphrases were mandatory. Written by hand rather
+# than through `create_cohort_record`, but under an identifier of the form the
+# service has always minted -- the routes check that shape before the record is
+# read, so a stand-in that ignored it would be testing an unreachable state.
+LEGACY_COHORT_ID = "1f6b4b64-1c46-4a3e-8f6d-6d0f0b4a1c23"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,7 +218,7 @@ def test_resolve_cohort_requires_the_identifier(fake_redis) -> None:
     Args:
         fake_redis: In-process Redis stand-in from conftest.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study")
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study")
 
     with pytest.raises(ValueError):
         resolve_cohort(fake_redis, cohort_id=None, alias="shared-study", passphrase=None)
@@ -282,13 +288,13 @@ def test_resolve_cohort_denies_a_record_with_no_stored_hash(fake_redis) -> None:
     Args:
         fake_redis: In-process Redis stand-in from conftest.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study")
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study")
 
     with pytest.raises(PermissionError):
-        resolve_cohort(fake_redis, cohort_id="cohort-1", alias=None, passphrase=GOOD_PASSPHRASE)
+        resolve_cohort(fake_redis, cohort_id=LEGACY_COHORT_ID, alias=None, passphrase=GOOD_PASSPHRASE)
 
     with pytest.raises(PermissionError):
-        resolve_cohort(fake_redis, cohort_id="cohort-1", alias="shared-study", passphrase="anything")
+        resolve_cohort(fake_redis, cohort_id=LEGACY_COHORT_ID, alias="shared-study", passphrase="anything")
 
 
 def test_resolve_cohort_rejects_a_mismatched_alias(fake_redis) -> None:
@@ -413,7 +419,7 @@ def test_cohort_status_denies_alias_only_access(client, fake_redis) -> None:
         client: TestClient fixture from conftest.
         fake_redis: The store backing the app's cohort client.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study", job_ids=["job-a"])
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study", job_ids=["job-a"])
 
     response = client.get("/cohort-status/", params={"alias": "shared-study"})
 
@@ -428,9 +434,9 @@ def test_cohort_status_denies_a_record_with_no_stored_hash(client, fake_redis) -
         client: TestClient fixture from conftest.
         fake_redis: The store backing the app's cohort client.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study", job_ids=["job-a"])
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study", job_ids=["job-a"])
 
-    response = client.get("/cohort-status/", params={"cohort_id": "cohort-1"})
+    response = client.get("/cohort-status/", params={"cohort_id": LEGACY_COHORT_ID})
 
     assert response.status_code == 401
     assert "job-a" not in response.text
@@ -516,7 +522,7 @@ def test_cohort_download_denies_alias_only_access(client, fake_redis, tmp_path: 
         fake_redis: The store backing the app's cohort client.
         tmp_path: The directory the fixture configured as the output tree.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study", job_ids=["job-a"])
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study", job_ids=["job-a"])
     _write_result_zip(tmp_path, "job-a")
 
     response = client.get("/cohort-download/", params={"alias": "shared-study"})
@@ -573,7 +579,7 @@ def test_cohort_analysis_denies_alias_only_access(client, web_app, fake_redis, t
         fake_redis: The store backing the app's cohort client.
         tmp_path: The directory the fixture configured as the output tree.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study", job_ids=["job-a"])
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study", job_ids=["job-a"])
     _write_result_zip(tmp_path, "job-a")
 
     response = client.post("/cohort-analysis/", data={"alias": "shared-study"})
@@ -632,7 +638,7 @@ def test_run_job_denies_alias_only_cohort_assignment(client, fake_redis) -> None
         client: TestClient fixture from conftest.
         fake_redis: The store backing the app's cohort client.
     """
-    _seed_unprotected_cohort(fake_redis, "cohort-1", "shared-study")
+    _seed_unprotected_cohort(fake_redis, LEGACY_COHORT_ID, "shared-study")
 
     response = client.post(
         "/run-job/",
