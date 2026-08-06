@@ -145,7 +145,15 @@ def vntyper_task(monkeypatch: pytest.MonkeyPatch, fake_redis):
         """
         commands.append(list(command))
         if command[:2] == ["samtools", "index"]:
-            Path(f"{command[2]}.bai").write_bytes(b"generated-index")
+            # The suffix mirrors real `samtools index`, which writes `.crai`
+            # beside a CRAM and `.bai` beside a BAM -- verified by conversion
+            # and indexing under #188. Do not collapse this back to one suffix:
+            # a stand-in that always writes `.bai` encodes the very defect #188
+            # fixed, and made the CRAM-without-an-index case below pass against
+            # a worker that was leaving the real index on the shared volume.
+            alignment = command[2]
+            suffix = ".crai" if alignment.lower().endswith(".cram") else ".bai"
+            Path(f"{alignment}{suffix}").write_bytes(b"generated-index")
 
     monkeypatch.setattr(tasks.subprocess, "run", _record)
 

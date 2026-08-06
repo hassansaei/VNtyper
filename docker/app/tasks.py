@@ -54,6 +54,105 @@ redis_usage_client = redis.Redis(
 )
 
 
+def is_cram(alignment_path: str) -> bool:
+    """Report whether a stored alignment is a CRAM.
+
+    Matched without regard to case: the upload allowlist in `uploads.py`
+    compiles its pattern with `re.IGNORECASE`, so `SAMPLE.CRAM` is a name the
+    endpoint stores and enqueues, and a case-sensitive test here would send
+    exactly those submissions back down the BAM path.
+
+    Args:
+        alignment_path: The stored alignment.
+
+    Returns:
+        bool: True for a CRAM, False for a BAM.
+    """
+    return str(alignment_path).lower().endswith(".cram")
+
+
+def resolve_index_path(alignment_path: str, index_path: str | None) -> str:
+    """Name the index this job will use.
+
+    `samtools index` writes `.crai` beside a CRAM and `.bai` beside a BAM, so
+    the fallback has to be chosen by format (#188). Naming `.bai` for a CRAM
+    named a file that is never created: the existence check never found the
+    index the worker had itself just built, and cleanup then removed nothing
+    while the real `.crai` stayed on the volume every job shares.
+
+    Args:
+        alignment_path: The stored alignment.
+        index_path: The index the submission carried, or None.
+
+    Returns:
+        str: The supplied index unchanged, or the conventional name beside the
+            alignment when the submission carried none.
+    """
+    if index_path:
+        return index_path
+    return f"{alignment_path}.crai" if is_cram(alignment_path) else f"{alignment_path}.bai"
+
+
+def build_vntyper_command(
+    alignment_path: str,
+    output_dir: str,
+    thread: int,
+    reference_assembly: str,
+    fast_mode: bool = False,
+    keep_intermediates: bool = False,
+    archive_results: bool = False,
+    advntr_mode: bool = False,
+) -> list[str]:
+    """Assemble the vntyper CLI invocation for one job.
+
+    Extracted from run_vntyper_job so the flag selection is testable without a
+    Celery worker. Behaviour is unchanged apart from the alignment flag (#188):
+    the endpoint has always accepted `.cram`, but the command hardcoded `--bam`,
+    so every accepted CRAM was handed to the CLI as a BAM and took the BAM code
+    path.
+
+    Args:
+        alignment_path: The stored alignment.
+        output_dir: The per-job output directory.
+        thread: Threads to give the pipeline.
+        reference_assembly: The assembly the alignment is against.
+        fast_mode: Whether to append ``--fast-mode``.
+        keep_intermediates: Whether to append ``--keep-intermediates``.
+        archive_results: Whether to append ``--archive-results``.
+        advntr_mode: Whether to include the adVNTR stage.
+
+    Returns:
+        list[str]: The argument vector to run.
+    """
+    command = [
+        "conda",
+        "run",
+        "-n",
+        "vntyper",
+        "vntyper",
+        "pipeline",
+        "--cram" if is_cram(alignment_path) else "--bam",
+        alignment_path,
+        "-o",
+        output_dir,
+        "--threads",
+        str(thread),
+        "--reference-assembly",
+        reference_assembly,
+    ]
+
+    if fast_mode:
+        command.append("--fast-mode")
+    if keep_intermediates:
+        command.append("--keep-intermediates")
+    if archive_results:
+        command.append("--archive-results")
+    if advntr_mode:
+        command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
+
+    return command
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def send_email_task(self, to_email: str, subject: str, content: str):
     """
@@ -102,7 +201,7 @@ def run_vntyper_job(
     # got as far as its first Redis call, and must remove exactly the index this
     # job used -- uploaded or generated -- rather than raise a NameError of its
     # own on the way.
-    index_path = index_path or f"{bam_path}.bai"
+    index_path = resolve_index_path(bam_path, index_path)
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
@@ -133,31 +232,16 @@ def run_vntyper_job(
                 raise
 
         # Build the base command for VNtyper
-        command = [
-            "conda",
-            "run",
-            "-n",
-            "vntyper",
-            "vntyper",
-            "pipeline",
-            "--bam",
-            bam_path,
-            "-o",
-            output_dir,
-            "--threads",
-            str(thread),
-            "--reference-assembly",
-            reference_assembly,
-        ]
-
-        if fast_mode:
-            command.append("--fast-mode")
-        if keep_intermediates:
-            command.append("--keep-intermediates")
-        if archive_results:
-            command.append("--archive-results")
-        if advntr_mode:
-            command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
+        command = build_vntyper_command(
+            alignment_path=bam_path,
+            output_dir=output_dir,
+            thread=thread,
+            reference_assembly=reference_assembly,
+            fast_mode=fast_mode,
+            keep_intermediates=keep_intermediates,
+            archive_results=archive_results,
+            advntr_mode=advntr_mode,
+        )
 
         # Run the VNtyper pipeline
         try:
