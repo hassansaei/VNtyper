@@ -10,8 +10,8 @@ The ONLY difference between local and Docker tests is the
 This architecture guarantees 100% test identity.
 """
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from tests.helpers import (
     assert_required_files,
@@ -161,7 +161,7 @@ def run_advntr_test_case(
 
 def run_fastq_test_case(
     test_case: dict,
-    runner: Callable[[Path, Optional[Path], str, Path, list[str]], int],
+    runner: Callable[[Path, Path | None, str, Path, list[str]], int],
     output_dir: Path,
 ) -> None:
     """

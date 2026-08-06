@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
@@ -137,13 +138,20 @@ def construct_kestrel_command(
     if not fastq_1 or not fastq_2:
         raise ValueError("FASTQ input files are missing or invalid.")
 
+    # `run_command` runs this as one string under bash (trap 9), so quoting can only
+    # happen here. Paths and the sample name are quoted -- the web service accepts
+    # filenames that reach this line, and a space alone splits one argument into two.
+    # `java_path` is left raw: config.json holds a command *prefix* there, which
+    # quoting would collapse into a single token bash looks for as one binary. The
+    # numeric and memory settings are operator-controlled config, not user input, and
+    # are interpolated as before.
     base_command = (
-        f"{java_path} -Xmx{java_memory} -jar {kestrel_path} -k {kmer_size} "
+        f"{java_path} -Xmx{java_memory} -jar {quote_path(kestrel_path)} -k {kmer_size} "
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
-        f"-r {reference_vntr} -o {vcf_out} "
-        f"-s{sample_name} {fastq_1} {fastq_2} "
-        f"--hapfmt sam -p {output_dir}/output.sam --logstderr --logstdout "
-        f"--loglevel {log_level.upper()} --temploc {output_dir}"
+        f"-r {quote_path(reference_vntr)} -o {quote_path(vcf_out)} "
+        f"-s{quote_path(sample_name)} {quote_path(fastq_1)} {quote_path(fastq_2)} "
+        f"--hapfmt sam -p {quote_path(f'{output_dir}/output.sam')} --logstderr --logstdout "
+        f"--loglevel {log_level.upper()} --temploc {quote_path(output_dir)}"
     )
     if additional_settings:
         base_command += " " + additional_settings
@@ -189,14 +197,14 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     # Convert SAM to BAM using samtools
     logger.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
     run_command(
-        f"samtools view -Sb {sam_file} > {bam_file}",
+        f"samtools view -Sb {quote_path(sam_file)} > {quote_path(bam_file)}",
         log_file=os.path.join(output_dir, "samtools_view.log"),
     )
 
     # Index the BAM file
     logger.info(f"Indexing BAM file: {bam_file}")
     run_command(
-        f"samtools index {bam_file}",
+        f"samtools index {quote_path(bam_file)}",
         log_file=os.path.join(output_dir, "samtools_index.log"),
     )
 
@@ -341,7 +349,7 @@ def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
     # Attempt compression using existing run_command infrastructure (DRY principle)
     log_file = os.path.join(output_dir, "bcftools_sort.log")
     success = run_command(
-        f"bcftools sort {input_vcf} -o {output_vcf_gz} -W -O z",
+        f"bcftools sort {quote_path(input_vcf)} -o {quote_path(output_vcf_gz)} -W -O z",
         log_file=log_file,
     )
 

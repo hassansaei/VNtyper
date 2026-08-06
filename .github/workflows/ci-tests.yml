@@ -37,6 +37,10 @@ jobs:
           filters: |
             python:
               - 'vntyper/**'
+              # The FastAPI + Celery web service. It is not part of the vntyper
+              # package, but ruff, mypy and the coverage floor all cover it, so a
+              # change here has to run the same gates.
+              - 'docker/app/**'
               - 'tests/**'
               - 'pyproject.toml'
               - 'pytest.ini'
@@ -48,7 +52,12 @@ jobs:
               # The image's interpreter and dependency pins are asserted against
               # pyproject by tests/unit/test_version_consistency.py.
               - 'conda/**'
-              - '.github/workflows/ci-tests.yml'
+              # Every workflow, not just this one: test_workflow_consistency.py globs
+              # the whole directory to check that docker-base.yml and docker-build.yml
+              # agree on the base image's hash inputs, so a PR touching only one of
+              # those must still run it. Filtering on ci-tests.yml alone meant the
+              # guard never ran on the PRs it exists to guard.
+              - '.github/workflows/**'
             docs:
               - 'docs/**'
               - 'mkdocs.yml'
@@ -131,7 +140,11 @@ jobs:
       # mypy genuinely needs the runtime deps installed to resolve imports.
       - run: uv pip install -e .[dev]
 
-      - run: make type-check
+      # type-check-all, not type-check: the latter is `mypy vntyper/ docker/app/` only,
+      # so every line under tests/ was outside CI's type gate. `type-check-all` adds a
+      # second, separate `mypy vntyper/ tests/` invocation - separate on purpose, see
+      # the comment on the target in the Makefile.
+      - run: make type-check-all
 
   test-unit:
     name: Unit Tests (Python ${{ matrix.python-version }})
@@ -148,7 +161,13 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
+      # fetch-depth: 0, not the default 1. The patch-coverage step below scores the diff
+      # against the MERGE BASE with origin/main, and a shallow clone has no merge base to
+      # find - `git merge-base` fails and the gate errors out instead of scoring. Full
+      # history costs a few seconds on a repo this size.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v9.0.0
         with:
@@ -175,6 +194,32 @@ jobs:
       # additionally fails the build if any unit test file is missing its `unit` marker.
       - name: Run unit tests with coverage floor
         run: make test-unit-cov
+
+      # Patch coverage: at least 80% of the lines THIS PR CHANGED must be covered.
+      #
+      # This is the step that makes AGENTS.md rule 1 ("touch a file, add tests for it")
+      # enforceable. The floor in the previous step is a whole-repo average over ~5000
+      # statements: a PR can add a hundred untested lines and move it by less than a
+      # point, so it has never once failed a PR for shipping untested code. This one
+      # scores the diff and nothing else.
+      #
+      # It reuses the coverage.xml the step above already wrote, so it costs one
+      # `diff-cover` invocation and no second test run.
+      #
+      # Conditions, both load-bearing:
+      #   * pull_request only - a push to main is being compared against itself, so
+      #     there is no diff to score.
+      #   * one interpreter only - the score is identical on all four, and running it
+      #     across the matrix would turn one failure into four identical ones.
+      #
+      # A PR that only deletes code, only touches docs, or changes no measured Python
+      # has no scoreable lines; diff-cover reports "No lines with coverage information"
+      # and exits 0. Verified, not assumed.
+      - name: Coverage of changed lines (patch coverage)
+        if: github.event_name == 'pull_request' && matrix.python-version == '3.12'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: make patch-coverage PATCH_COVERAGE_BASE="origin/$BASE_REF"
 
   docs:
     name: Docs build (strict)

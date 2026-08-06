@@ -48,9 +48,61 @@ dev = [
     "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
     "testcontainers>=4.0.0",  # Docker container testing
     "requests>=2.31.0",  # HTTP library for downloading test data
+    # Scores coverage of CHANGED lines only (`make patch-coverage`, gated at 80% in CI).
+    # Lower-bounded rather than pinned: the gate reads our own coverage.xml and the
+    # number it computes does not depend on the tool version.
+    "diff-cover>=9.0",
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "types-requests>=2.0.0",
+    # tests/unit/test_integration_tier_hygiene.py parses the workflow files rather
+    # than grepping them, so the tier that must run on a fresh clone needs a YAML
+    # parser. It arrives transitively today (igv-reports requires it); declared
+    # here so the unit tier does not depend on a runtime dependency's own tree.
+    "pyyaml>=6.0",
+    # docker/app (FastAPI + Celery web service) deps. None of these ship with the
+    # vntyper package; docker/app itself is installed from
+    # docker/requirements-web.txt, not from this project.
+    #
+    # Pinned, not lower-bounded, and pinned to exactly what
+    # docker/requirements-web.txt installs: the tests under tests/unit/web/ run
+    # against these, so a lower bound would let the tier resolve a newer framework
+    # than the image ever runs and pass against a stack nobody deploys.
+    # tests/unit/test_version_consistency.py fails the build when this list and
+    # requirements-web.txt disagree. requirements-web.txt is an input to the base
+    # image's content hash (AGENTS.md trap 10), so it is the fixed side: change
+    # versions there first, then mirror them here.
+    "fastapi[standard]==0.115.3",
+    "uvicorn[standard]==0.32.0",
+    "redis==5.2.0",
+    "celery==5.4.0",
+    "python-multipart==0.0.31",
+    # 0.2.0 removed the `FastAPILimiter` class docker/app imports
+    # (`from fastapi_limiter import FastAPILimiter`).
+    "fastapi-limiter==0.1.6",
+    "email_validator==2.2.0",
+    "passlib[bcrypt]==1.7.4",
+    "pydantic==2.10.0",
+    # The one deliberate exception to the mirror above: test-only, so the image
+    # has no reason to carry it and requirements-web.txt does not list it.
+    "fakeredis>=2.21",  # pure-Python Redis stand-in, unit-tier only
+]
+web = [
+    # Mirrors docker/requirements-web.txt exactly, pin for pin. That file is the
+    # source of truth for what the Docker image installs; this group exists so
+    # `pip install .[web]` can run docker/app outside the container against the
+    # same versions. The image itself still installs from requirements-web.txt
+    # directly, and tests/unit/test_version_consistency.py fails the build if the
+    # two ever drift apart.
+    "fastapi[standard]==0.115.3",
+    "uvicorn[standard]==0.32.0",
+    "redis==5.2.0",
+    "celery==5.4.0",
+    "python-multipart==0.0.31",
+    "fastapi-limiter==0.1.6",
+    "email_validator==2.2.0",
+    "passlib[bcrypt]==1.7.4",
+    "pydantic==2.10.0",
 ]
 docs = [
     "mkdocs>=1.6,<2",
@@ -82,6 +134,7 @@ version = {attr = "vntyper.version.__version__"}
     "kestrel_config.json",
     "install_references_config.json",
     "report_config.json",
+    "calibration.json",
 ]
 "vntyper" = [
     "config.json",
@@ -169,6 +222,25 @@ ignore = [
 fixable = ["ALL"]
 unfixable = []
 
+[tool.ruff.lint.flake8-bugbear]
+# B008 exists to catch a *mutable* default that is built once at def time and then
+# shared by every call. FastAPI's parameter markers are not that: `File(...)` and
+# `Form(...)` return immutable `FieldInfo` descriptors that FastAPI reads out of the
+# signature and replaces with the parsed request value, so the function body never
+# sees the marker object at all. Ruff already hardcodes `fastapi.Depends` and
+# `fastapi.Query` as immutable for this reason; `File`, `Form`, `Body`, `Header`,
+# `Cookie` and `Path` are the same kind of object and the omission is a gap in that
+# list, not a defect in `docker/app`. B008 stays on for every genuinely mutable
+# default in both `vntyper/` and `docker/app/`.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+]
+
 # Per-file ignores
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "E402"]  # Allow unused imports
@@ -186,12 +258,68 @@ unfixable = []
 python_version = "3.10"
 ignore_missing_imports = true
 
+# No `mypy_path` is needed for `mypy vntyper/ docker/app/`. `docker/app/__init__.py`
+# exists and `docker/__init__.py` does not, so mypy walks up exactly one level, roots
+# the package at `docker/` and names the modules `app.*` on its own - which is both
+# how the intra-package imports resolve and why the `app.*` override below matches.
+# Adding `mypy_path = "docker"` would additionally make `mypy tests/` resolve the
+# `from app import ...` lines in `tests/unit/web/`, which today degrade to `Any` under
+# `ignore_missing_imports`. That is worth doing, and it is still deliberately not done
+# here. Measured under `MYPYPATH=docker mypy vntyper/ tests/` (ruff/mypy as pinned in
+# `[project.optional-dependencies] dev`), it reports 23 errors in 4 files, and only one
+# of them was a defect in a test:
+#
+#   * 1 real finding, now fixed: `test_credentials_and_disclosure.py` passed
+#     `urlsplit(...).password` - a `str | None` - straight into `unquote()`. The test
+#     asserts the credential is present before decoding it.
+#   * 19 in hand-rolled ASGI doubles (`test_request_size_limit.py`,
+#     `test_upload_limits.py`). The doubles are structurally right but nominally
+#     narrower than the callables `RequestSizeLimitMiddleware` and
+#     `save_upload_bounded` declare (`dict` vs `MutableMapping`, a `read`-only object
+#     vs `BinaryIO`). The fix is on the *production* side - accept a `Protocol` or the
+#     ASGI aliases rather than a concrete class - not `# type: ignore` in the tests.
+#   * 3 from `create_cohort_record` returning `dict[str, str | None]`, so
+#     `created["cohort_id"]` types as `str | None` even though that key is always a
+#     `str`. A `TypedDict` in `docker/app/cohorts.py` fixes all three at the source.
+#
+# Both remaining groups are `docker/app` annotation work, so turning the path on now
+# would gate `tests/` on a backlog that belongs to another module - the exact shape of
+# problem the `app.*` override below exists to avoid. Turn it on once
+# `RequestSizeLimitMiddleware`/`save_upload_bounded` take protocols and
+# `create_cohort_record` returns a `TypedDict`; at that point this is a one-line change
+# with no fallout to silence.
+#
+# `tests/` is *not* unchecked in the meantime: `make type-check-all` runs
+# `mypy vntyper/ tests/` as a second, separate invocation (see the comment on that
+# target), and both `make check-all` and the `typecheck` job in `ci-tests.yml` go
+# through it.
+
+# Staged strictness for the web service.
+#
+# NOTE: the global section above deliberately enables neither `disallow_untyped_defs`
+# nor `disallow_incomplete_defs`, so both are already off everywhere and this section
+# changes nothing today. It is written out all the same: it is the anchor for the
+# decision, and it holds `docker/app` at today's level if the global settings are
+# tightened for `vntyper/` later. `docker/app` is a large, largely unannotated FastAPI
+# service - running mypy relaxed catches real type bugs now, while running it strict
+# produces a backlog that gets silenced with `# type: ignore` rather than fixed.
+# Tighten as annotations land.
+[[tool.mypy.overrides]]
+module = "app.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
 # ===========================
 # Coverage Configuration
 # ===========================
 [tool.coverage.run]
 # `source` must live here rather than on the CLI for relative_files to work.
-source = ["vntyper"]
+#
+# `docker/app` is the FastAPI + Celery web service. It is not an installed package, so
+# it is listed as a directory path rather than an importable name; coverage measures it
+# by file location either way, and `relative_files` keeps the reported paths anchored to
+# the repo root so the same data file reads identically in CI and locally.
+source = ["vntyper", "docker/app"]
 relative_files = true
 
 [tool.coverage.report]
@@ -201,7 +329,7 @@ show_missing = true
 # the exact line to change when the floor is out of date.
 #
 # NOTE: BOTH `coverage report --format=total` AND pytest-cov's terminal TOTAL column
-# ROUND to an integer - a true 25.68% displays as 26%. Setting this floor from either
+# ROUND to an integer - a true 34.98% displays as 35%. Setting this floor from either
 # of those numbers makes CI fail on the very run that produced it. Take the value
 # `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
 # figure and states the exact line to paste here.
@@ -210,7 +338,7 @@ show_missing = true
 # a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
 # six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
 # realistically be tested (see "Changing existing code" in AGENTS.md).
-fail_under = 25
+fail_under = 70
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

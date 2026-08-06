@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_data_utils import ensure_test_data_downloaded
+from tests.support.data_utils import ensure_test_data_downloaded
 
 # ============================================================================
 # Logging Configuration

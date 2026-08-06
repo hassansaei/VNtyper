@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
+from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
 from vntyper.scripts.cross_match import (
@@ -26,6 +27,11 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+
+# The declared-assembly guard. Its policy lives in its own module so that this
+# behaviour change - it rejects inputs that previously ran to completion - is a
+# single revertible commit (AGENTS.md rule 3: pipeline.py is over the size limit).
+from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
@@ -36,6 +42,17 @@ from vntyper.scripts.summary import (
     record_step,
     start_summary,
     write_summary,
+)
+
+# The five step names are matched by exact string comparison in generate_report.py,
+# cohort_summary.py and cross_match.py. A typo does not fail - it silently drops a
+# report section (AGENTS.md trap 5), so they are named, never spelled out.
+from vntyper.scripts.summary_steps import (
+    STEP_ADVNTR,
+    STEP_BAM_HEADER,
+    STEP_COVERAGE,
+    STEP_CROSS_MATCH,
+    STEP_KESTREL,
 )
 from vntyper.scripts.utils import (
     create_output_directories,
@@ -65,52 +82,6 @@ def write_bed_file(regions, bed_file_path):
             except ValueError as e:
                 logger.error(f"Invalid region format: {region}. Expected format 'chr:start-end'.")
                 raise ValueError(f"Invalid region format: {region}. Expected format 'chr:start-end'.") from e
-
-
-def _select_best_vcf_file(kestrel_dir):
-    """
-    Select the best available VCF file for IGV report generation.
-
-    This function follows the KISS (Keep It Simple, Stupid) principle by
-    implementing a straightforward preference: compressed VCF if available,
-    otherwise uncompressed VCF.
-
-    Args:
-        kestrel_dir (str): Path to the kestrel output directory.
-
-    Returns:
-        str or None: Path to the best available VCF file, or None if neither exists.
-            Returns compressed .vcf.gz if it exists (preferred),
-            otherwise uncompressed .vcf if it exists,
-            otherwise None.
-
-    Notes:
-        - This function has a single responsibility (SRP): file selection
-        - Logs informatively at different levels based on the outcome
-        - Defensive programming: handles all three cases (compressed, uncompressed, none)
-    """
-    # Prefer compressed VCF (optimal for IGV and file size)
-    vcf_gz = os.path.join(kestrel_dir, "output_indel.vcf.gz")
-    vcf = os.path.join(kestrel_dir, "output_indel.vcf")
-
-    if os.path.exists(vcf_gz):
-        logger.debug(f"Using compressed VCF for IGV report: {vcf_gz}")
-        return vcf_gz
-
-    if os.path.exists(vcf):
-        logger.info(
-            f"Using uncompressed VCF for IGV report: {vcf}. "
-            "Compressed VCF not available (bcftools may not be installed)."
-        )
-        return vcf
-
-    # Neither file exists - this is unusual and should be logged
-    logger.warning(
-        f"No VCF file found in {kestrel_dir}. "
-        "IGV report will be generated without VCF track. "
-        "Expected files: output_indel.vcf.gz or output_indel.vcf"
-    )
-    return None
 
 
 def run_pipeline(
@@ -253,7 +224,20 @@ def run_pipeline(
             validate_fastq_file(fastq2)
         else:
             logger.error("Incomplete FASTQ inputs provided.")
-            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")  # BED file logic
+            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")
+
+        # --- Declared-assembly guard ---
+        # Reconcile --reference-assembly against the header before any region is
+        # resolved: declaring the wrong build slices a region ~30 kb from the VNTR,
+        # which this pipeline reports as a confident negative rather than an error.
+        # BAM and CRAM share one path here; FASTQ has no header of its own and is
+        # deliberately not guarded (see pipeline_guards for why).
+        alignment_header = None
+        if input_type in ["BAM", "CRAM"]:
+            alignment_header = read_alignment_header(bam if input_type == "BAM" else cram, config)
+            enforce_declared_assembly(reference_assembly, alignment_header)
+
+        # BED file logic
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
@@ -309,12 +293,15 @@ def run_pipeline(
                 )
                 conversion_command = f"process_bam_to_fastq(in_bam={bam}, ...)"
                 header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                header = extract_bam_header(bam, config)
+                # Reuse the header the guard already read: one samtools invocation, not
+                # two. If the guard could not read it, re-read here so that a samtools
+                # failure still ends the run exactly as it did before the guard existed.
+                header = alignment_header if alignment_header is not None else extract_bam_header(bam, config)
                 parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]), config)
                 header_parse_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "BAM Header Parsing",
+                    STEP_BAM_HEADER,
                     str(Path(dirs["fastq_bam_processing"]) / "pipeline_info.json"),
                     "json",
                     "parse_header_pipeline_info(extracted header)",
@@ -496,7 +483,7 @@ def run_pipeline(
         cov_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,
-            "Coverage Calculation",
+            STEP_COVERAGE,
             str(Path(dirs["coverage"]) / "coverage_summary.tsv"),
             "tsv",
             "calculate_vntr_coverage(...)",
@@ -531,7 +518,7 @@ def run_pipeline(
         kestrel_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,
-            "Kestrel Genotyping",
+            STEP_KESTREL,
             os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
             "tsv",
             "run_kestrel(...)",
@@ -613,7 +600,7 @@ def run_pipeline(
                 advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "adVNTR Genotyping",
+                    STEP_ADVNTR,
                     os.path.join(dirs["advntr"], "output_adVNTR_result.tsv"),
                     "tsv",
                     "run_advntr(...), process_advntr_output(...)",
@@ -640,7 +627,7 @@ def run_pipeline(
                 cross_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(
                     summary,
-                    "Cross-Match Variant Comparison",
+                    STEP_CROSS_MATCH,
                     cross_match_output,
                     "tsv",
                     "cross_match_variants(kestrel_results, advntr_results)",
@@ -663,8 +650,7 @@ def run_pipeline(
         template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
 
         # Select best available VCF file (compressed preferred, uncompressed fallback)
-        # Uses modular helper following KISS principle and defensive programming
-        vcf_file = _select_best_vcf_file(dirs["kestrel"])
+        vcf_file = select_best_vcf_file(dirs["kestrel"])
         bam_out = os.path.join(dirs["kestrel"], "output.bam")
         bed_out = os.path.join(dirs["kestrel"], "output.bed")
         fasta_reference = config["reference_data"]["muc1_reference_vntr"]

@@ -31,25 +31,28 @@ Usage:
 """
 
 import argparse
+import csv
 import hashlib
 import logging
-import os
 import re
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Dict
-import csv
+
 import pandas as pd
 
-# Configure logging
+# Configure logging. This module is a standalone benchmarking entry point, not part of
+# the `vntyper` package, so it configures the root logger itself. Records are still
+# emitted through a module logger that propagates to it, per AGENTS.md.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+logger = logging.getLogger(__name__)
 
-def run_command(command: List[str], description: str, critical: bool = True) -> None:
+
+def run_command(command: list[str], description: str, critical: bool = True) -> None:
     """
     Run a shell command and handle errors.
 
@@ -58,12 +61,12 @@ def run_command(command: List[str], description: str, critical: bool = True) -> 
         description (str): Description of the command for logging.
         critical (bool): If True, exit on failure. Otherwise, log error.
     """
-    logging.info(f"Running: {description}")
-    logging.debug(f"Command: {' '.join(command)}")
+    logger.info(f"Running: {description}")
+    logger.debug(f"Command: {' '.join(command)}")
     try:
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to {description}. Error: {e}")
+        logger.error(f"Failed to {description}. Error: {e}")
         if critical:
             raise
 
@@ -80,7 +83,7 @@ def compute_md5(file_path: Path, chunk_size: int = 1_048_576) -> str:
         str: MD5 checksum.
     """
     hash_md5 = hashlib.md5()
-    logging.debug(f"Computing MD5 for {file_path}")
+    logger.debug(f"Computing MD5 for {file_path}")
     with file_path.open("rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             hash_md5.update(chunk)
@@ -109,7 +112,7 @@ def subset_bam(
         threads (int): Number of threads to use.
     """
     if fraction < 1.0:
-        logging.info(f"Subsampling BAM with fraction {fraction}")
+        logger.info(f"Subsampling BAM with fraction {fraction}")
         # Samtools view uses -s seed.fraction where seed is integer and fraction is float between 0-1
         # Combine seed and fraction into a single float: seed.fraction
         subsample_param = float(f"{seed}.{int(fraction * 1000):03d}")  # e.g., 42.100
@@ -128,7 +131,7 @@ def subset_bam(
         ]
         run_command(view_command, description=f"subsample BAM to fraction {fraction}")
     else:
-        logging.info(f"Subsetting BAM to region {region} without subsampling")
+        logger.info(f"Subsetting BAM to region {region} without subsampling")
         view_command = [
             samtools,
             "view",
@@ -198,7 +201,7 @@ def calculate_vntr_coverage(
         region,
         str(bam_file),
     ]
-    logging.info(f"Calculating VNTR coverage for {bam_file} in region {region}")
+    logger.info(f"Calculating VNTR coverage for {bam_file} in region {region}")
     with coverage_output.open("w") as fout:
         subprocess.run(depth_command, stdout=fout, check=True)
     # Calculate mean coverage
@@ -212,10 +215,8 @@ def calculate_vntr_coverage(
                     coverage_values.append(coverage)
                 except ValueError:
                     continue
-    mean_coverage = (
-        sum(coverage_values) / len(coverage_values) if coverage_values else 0
-    )
-    logging.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
+    mean_coverage = sum(coverage_values) / len(coverage_values) if coverage_values else 0
+    logger.info(f"Mean VNTR coverage: {mean_coverage:.2f}")
     return mean_coverage
 
 
@@ -228,7 +229,7 @@ def run_vntyper(
     keep_intermediates: bool,
     archive_results: bool,
     fast_mode: bool,
-    additional_options: Optional[str] = None,
+    additional_options: str | None = None,
 ) -> Path:
     """
     Run the vntyper command on a given BAM file.
@@ -275,13 +276,13 @@ def run_vntyper(
         # Split the additional_options string into individual arguments
         command.extend(additional_options.split())
 
-    logging.info(f"Executing vntyper for {bam_file.name}")
+    logger.info(f"Executing vntyper for {bam_file.name}")
     run_command(command, description=f"vntyper on {bam_file.name}")
 
     return output_subdir
 
 
-def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
+def summarize_vntr_results(vntyper_output_dir: Path) -> dict | None:
     """
     Summarize vntyper results from the output directory.
 
@@ -294,12 +295,12 @@ def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
     # Search for kestrel_result.tsv anywhere under vntyper_output_dir
     result_files = list(vntyper_output_dir.rglob("kestrel_result.tsv"))
     if not result_files:
-        logging.warning(f"No kestrel_result.tsv found in {vntyper_output_dir}")
+        logger.warning(f"No kestrel_result.tsv found in {vntyper_output_dir}")
         return None
 
     # Take the first match
     result_file = result_files[0]
-    logging.info(f"Parsing Kestrel results from {result_file}")
+    logger.info(f"Parsing Kestrel results from {result_file}")
 
     try:
         # Add comment='#' to skip lines starting with '#' or '##'
@@ -314,33 +315,27 @@ def summarize_vntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
         ]
         for col in required_columns:
             if col not in df.columns:
-                logging.error(f"Missing expected column '{col}' in {result_file}")
+                logger.error(f"Missing expected column '{col}' in {result_file}")
                 return None
 
         summary = {
             # Use the vntyper output directory name as a fallback
             "file_analyzed": vntyper_output_dir.name,
-            "Estimated_Depth_AlternateVariant": df[
-                "Estimated_Depth_AlternateVariant"
-            ].tolist(),
-            "Estimated_Depth_Variant_ActiveRegion": df[
-                "Estimated_Depth_Variant_ActiveRegion"
-            ].tolist(),
+            "Estimated_Depth_AlternateVariant": df["Estimated_Depth_AlternateVariant"].tolist(),
+            "Estimated_Depth_Variant_ActiveRegion": df["Estimated_Depth_Variant_ActiveRegion"].tolist(),
             "Depth_Score": df["Depth_Score"].tolist(),
             "Confidence": df["Confidence"].tolist(),
         }
         return summary
     except pd.errors.ParserError as e:
-        logging.error(f"Failed to parse vntyper results from {result_file}: {e}")
+        logger.error(f"Failed to parse vntyper results from {result_file}: {e}")
         return None
     except Exception as e:
-        logging.error(
-            f"Unexpected error while parsing vntyper results from {result_file}: {e}"
-        )
+        logger.error(f"Unexpected error while parsing vntyper results from {result_file}: {e}")
         return None
 
 
-def summarize_advntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
+def summarize_advntr_results(vntyper_output_dir: Path) -> dict | None:
     """
     Summarize adVNTR results from the vntyper output directory.
 
@@ -352,7 +347,7 @@ def summarize_advntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
     """
     advntr_file = vntyper_output_dir / "advntr" / "output_adVNTR.vcf"
     if not advntr_file.is_file():
-        logging.warning(f"adVNTR result file not found in {vntyper_output_dir}")
+        logger.warning(f"adVNTR result file not found in {vntyper_output_dir}")
         return None
     try:
         with advntr_file.open("r") as f:
@@ -361,7 +356,7 @@ def summarize_advntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
         if len(data_lines) == 1:
             fields = data_lines[0].split("\t")
             if fields[0].strip().lower() == "negative":
-                logging.debug("adVNTR result indicates a negative outcome.")
+                logger.debug("adVNTR result indicates a negative outcome.")
                 return {"advntr_result": "Negative"}
         header = None
         for line in lines:
@@ -379,11 +374,11 @@ def summarize_advntr_results(vntyper_output_dir: Path) -> Optional[Dict]:
         summary = {"advntr_result": df.to_dict(orient="records")}
         return summary
     except Exception as e:
-        logging.error(f"Error parsing adVNTR results: {e}")
+        logger.error(f"Error parsing adVNTR results: {e}")
         return None
 
 
-def parse_pipeline_log(vntyper_output_dir: Path) -> Optional[float]:
+def parse_pipeline_log(vntyper_output_dir: Path) -> float | None:
     """
     Parse the pipeline.log file to extract the analysis time in minutes.
 
@@ -395,35 +390,33 @@ def parse_pipeline_log(vntyper_output_dir: Path) -> Optional[float]:
     """
     pipeline_log = vntyper_output_dir / "pipeline.log"
     if not pipeline_log.is_file():
-        logging.warning(f"pipeline.log not found in {vntyper_output_dir}")
+        logger.warning(f"pipeline.log not found in {vntyper_output_dir}")
         return None
 
     try:
         with pipeline_log.open("r") as f:
             lines = f.readlines()
             if not lines:
-                logging.warning("pipeline.log is empty.")
+                logger.warning("pipeline.log is empty.")
                 return None
             last_line = lines[-1].strip()
-            logging.debug(f"Last line of pipeline.log: {last_line}")
+            logger.debug(f"Last line of pipeline.log: {last_line}")
             # Example line:
             # 2025-01-15 13:37:21,126 - root - INFO - Pipeline completed in 5.28 minutes.
             match = re.search(r"Pipeline completed in (\d+\.?\d*) minutes\.", last_line)
             if match:
                 analysis_time = float(match.group(1))
-                logging.info(f"Analysis time extracted: {analysis_time} minutes")
+                logger.info(f"Analysis time extracted: {analysis_time} minutes")
                 return analysis_time
             else:
-                logging.warning("Could not parse analysis time from pipeline.log.")
+                logger.warning("Could not parse analysis time from pipeline.log.")
                 return None
     except Exception as e:
-        logging.error(f"Error reading pipeline.log: {e}")
+        logger.error(f"Error reading pipeline.log: {e}")
         return None
 
 
-def calculate_required_fraction(
-    desired_coverage: int, current_coverage: float
-) -> float:
+def calculate_required_fraction(desired_coverage: int, current_coverage: float) -> float:
     """
     Calculate the fraction of reads to keep to achieve desired coverage.
 
@@ -435,13 +428,11 @@ def calculate_required_fraction(
         float: Fraction of reads to retain.
     """
     if current_coverage == 0:
-        logging.warning("Current coverage is 0. Cannot calculate required fraction.")
+        logger.warning("Current coverage is 0. Cannot calculate required fraction.")
         return 1.0
     fraction = desired_coverage / current_coverage
     fraction = min(max(fraction, 0.0), 1.0)  # Clamp between 0 and 1
-    logging.info(
-        f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}"
-    )
+    logger.info(f"Calculating fraction to achieve {desired_coverage}x coverage: {fraction:.4f}")
     return fraction
 
 
@@ -569,7 +560,7 @@ def main():
 
     # Validate input BAM
     if not args.input_bam.is_file():
-        logging.error(f"Input BAM file does not exist: {args.input_bam}")
+        logger.error(f"Input BAM file does not exist: {args.input_bam}")
         exit(1)
 
     # Create output directory if it doesn't exist
@@ -603,12 +594,9 @@ def main():
     # Step 3: Downsample by fractions
     for fraction in args.fractions:
         if not (0 < fraction <= 1):
-            logging.warning(f"Invalid fraction {fraction}. Skipping.")
+            logger.warning(f"Invalid fraction {fraction}. Skipping.")
             continue
-        output_bam = (
-            args.output_dir
-            / f"{args.input_bam.stem}_downsampled_{int(fraction*100)}p.bam"
-        )
+        output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{int(fraction * 100)}p.bam"
         subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
@@ -623,8 +611,8 @@ def main():
         md5_file = output_bam.with_suffix(".bam.md5")
         with md5_file.open("w") as f:
             f.write(f"{md5sum}  {output_bam.name}\n")
-        logging.info(f"Created downsampled BAM: {output_bam}")
-        logging.info(f"MD5 checksum: {md5sum}")
+        logger.info(f"Created downsampled BAM: {output_bam}")
+        logger.info(f"MD5 checksum: {md5sum}")
 
         # If vntyper is to be run, execute it
         if args.run_vntyper:
@@ -657,13 +645,9 @@ def main():
                         "file_analyzed": summary.get("file_analyzed", output_bam.name),
                         "method": "fraction",
                         "value": fraction,
-                        "confidence": ", ".join(
-                            map(str, summary.get("Confidence", []))
-                        ),
+                        "confidence": ", ".join(map(str, summary.get("Confidence", []))),
                         "Estimated_Depth_AlternateVariant": ", ".join(
-                            map(
-                                str, summary.get("Estimated_Depth_AlternateVariant", [])
-                            )
+                            map(str, summary.get("Estimated_Depth_AlternateVariant", []))
                         ),
                         "Estimated_Depth_Variant_ActiveRegion": ", ".join(
                             map(
@@ -671,17 +655,9 @@ def main():
                                 summary.get("Estimated_Depth_Variant_ActiveRegion", []),
                             )
                         ),
-                        "Depth_Score": ", ".join(
-                            map(str, summary.get("Depth_Score", []))
-                        ),
-                        "analysis_time_minutes": (
-                            analysis_time if analysis_time is not None else ""
-                        ),
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "Depth_Score": ", ".join(map(str, summary.get("Depth_Score", []))),
+                        "analysis_time_minutes": (analysis_time if analysis_time is not None else ""),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
             else:
@@ -695,22 +671,14 @@ def main():
                         "Estimated_Depth_Variant_ActiveRegion": "",
                         "Depth_Score": "",
                         "analysis_time_minutes": "",
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
 
     # Step 4: Downsample to absolute coverages
     for coverage in args.coverages:
-        fraction = calculate_required_fraction(
-            desired_coverage=coverage, current_coverage=current_coverage
-        )
-        output_bam = (
-            args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
-        )
+        fraction = calculate_required_fraction(desired_coverage=coverage, current_coverage=current_coverage)
+        output_bam = args.output_dir / f"{args.input_bam.stem}_downsampled_{coverage}x.bam"
         subset_bam(
             samtools=args.samtools,
             input_bam=subset_bam_path,
@@ -725,8 +693,8 @@ def main():
         md5_file = output_bam.with_suffix(".bam.md5")
         with md5_file.open("w") as f:
             f.write(f"{md5sum}  {output_bam.name}\n")
-        logging.info(f"Created downsampled BAM: {output_bam}")
-        logging.info(f"MD5 checksum: {md5sum}")
+        logger.info(f"Created downsampled BAM: {output_bam}")
+        logger.info(f"MD5 checksum: {md5sum}")
 
         # If vntyper is to be run, execute it
         if args.run_vntyper:
@@ -759,13 +727,9 @@ def main():
                         "file_analyzed": summary.get("file_analyzed", output_bam.name),
                         "method": "coverage",
                         "value": coverage,
-                        "confidence": ", ".join(
-                            map(str, summary.get("Confidence", []))
-                        ),
+                        "confidence": ", ".join(map(str, summary.get("Confidence", []))),
                         "Estimated_Depth_AlternateVariant": ", ".join(
-                            map(
-                                str, summary.get("Estimated_Depth_AlternateVariant", [])
-                            )
+                            map(str, summary.get("Estimated_Depth_AlternateVariant", []))
                         ),
                         "Estimated_Depth_Variant_ActiveRegion": ", ".join(
                             map(
@@ -773,17 +737,9 @@ def main():
                                 summary.get("Estimated_Depth_Variant_ActiveRegion", []),
                             )
                         ),
-                        "Depth_Score": ", ".join(
-                            map(str, summary.get("Depth_Score", []))
-                        ),
-                        "analysis_time_minutes": (
-                            analysis_time if analysis_time is not None else ""
-                        ),
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "Depth_Score": ", ".join(map(str, summary.get("Depth_Score", []))),
+                        "analysis_time_minutes": (analysis_time if analysis_time is not None else ""),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
             else:
@@ -797,18 +753,14 @@ def main():
                         "Estimated_Depth_Variant_ActiveRegion": "",
                         "Depth_Score": "",
                         "analysis_time_minutes": "",
-                        "advntr_result": (
-                            str(advntr_summary_dict.get("advntr_result"))
-                            if advntr_summary_dict
-                            else ""
-                        ),
+                        "advntr_result": (str(advntr_summary_dict.get("advntr_result")) if advntr_summary_dict else ""),
                     }
                 )
 
     # Step 5: Write summary table if vntyper was run
     if args.run_vntyper:
         summary_csv_path = args.summary_output
-        logging.info(f"Writing vntyper summary to {summary_csv_path}")
+        logger.info(f"Writing vntyper summary to {summary_csv_path}")
         with summary_csv_path.open("w", newline="") as csvfile:
             fieldnames = [
                 "file_analyzed",
@@ -825,7 +777,7 @@ def main():
             writer.writeheader()
             for row in vntyper_summary:
                 writer.writerow(row)
-        logging.info(f"Vntyper summary successfully written to {summary_csv_path}")
+        logger.info(f"Vntyper summary successfully written to {summary_csv_path}")
 
 
 if __name__ == "__main__":

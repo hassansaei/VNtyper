@@ -163,15 +163,13 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
 
         if missing_files:
             error_msg.append(f"\n\nMissing files ({len(missing_files)}):")
-            for f in missing_files[:10]:  # Show first 10
-                error_msg.append(f"  - {f}")
+            error_msg.extend(f"  - {f}" for f in missing_files[:10])  # Show first 10
             if len(missing_files) > 10:
                 error_msg.append(f"  ... and {len(missing_files) - 10} more")
 
         if mismatched_files:
             error_msg.append(f"\n\nFiles with MD5 mismatch ({len(mismatched_files)}):")
-            for f in mismatched_files[:10]:  # Show first 10
-                error_msg.append(f"  - {f}")
+            error_msg.extend(f"  - {f}" for f in mismatched_files[:10])  # Show first 10
             if len(mismatched_files) > 10:
                 error_msg.append(f"  ... and {len(mismatched_files) - 10} more")
 
@@ -240,9 +238,13 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
                     ratio = file_count / total_files
                     if ratio > 0.9 or (ratio > 0.8 and files_at_root < 5):
                         common_prefix = dominant_dir
-                        logger.info(f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})")
+                        logger.info(
+                            f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})"
+                        )
                     else:
-                        logger.info(f"Mixed archive structure detected (ratio: {ratio:.1%}, root files: {files_at_root})")
+                        logger.info(
+                            f"Mixed archive structure detected (ratio: {ratio:.1%}, root files: {files_at_root})"
+                        )
                         logger.info("Will extract all files normally (no prefix stripping)")
 
                 if common_prefix:
@@ -256,8 +258,7 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
 
                         # Remove common prefix from the path
                         member_path = member.filename
-                        if member_path.startswith(common_prefix):
-                            member_path = member_path[len(common_prefix) :]
+                        member_path = member_path.removeprefix(common_prefix)
 
                         # Skip files that don't have the prefix (e.g., README.md at root)
                         if not member_path or member_path == member.filename:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # tests/unit/test_flagging.py
 
 """
@@ -8,6 +7,7 @@ using vntyper/scripts/kestrel_config.json.
 """
 
 import json
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -235,3 +235,268 @@ class TestDuplicateFlagging:
         duplicates_config = {"enabled": False}
         result = add_flags(df, {}, duplicates_config=duplicates_config)
         assert all(result["Flag"] == "Not flagged")
+
+
+# --- Mutation-killing tests (Refs #179) ---
+#
+# Every test below was written against a surviving mutant recorded in
+# docs/development/mutation-testing.md, and each was confirmed to fail with the
+# mutation applied by hand and to pass with it reverted. The mutant it kills is named
+# in the docstring so the link survives a later edit.
+
+
+def _dup_config(sort_by=None, flag_name="Potential_Duplicate"):
+    """Build a duplicate_flagging config, omitting 'sort_by' entirely when None."""
+    config = {
+        "enabled": True,
+        "flag_name": flag_name,
+        "group_by": ["REF", "ALT"],
+    }
+    if sort_by is not None:
+        config["sort_by"] = sort_by
+    return config
+
+
+class TestEvaluateConditionErrorPath:
+    """flagging.py:89 - the non-NameError error path must fail closed, not open."""
+
+    def test_type_error_in_condition_returns_false(self):
+        """A condition raising TypeError evaluates to False, never True (kills 89).
+
+        The whole point of the except-Exception handler is that a malformed row
+        cannot invent a flag. A non-numeric Depth_Score makes `<` raise TypeError,
+        which is not a NameError and so reaches the second handler.
+        """
+        row = pd.Series({"Depth_Score": "n/a", "Motif": "2"})
+        assert evaluate_condition(row, "Depth_Score < 0.4") is False
+
+    def test_zero_division_in_condition_returns_false(self):
+        """Any other evaluation error also evaluates to False (kills 89)."""
+        row = pd.Series({"Depth_Score": 0.0, "Motif": "2"})
+        assert evaluate_condition(row, "1 / Depth_Score > 1") is False
+
+    def test_error_path_is_logged_at_error_level(self, caplog):
+        """The failing condition is reported at ERROR, not merely DEBUG (kills 89)."""
+        row = pd.Series({"Depth_Score": "n/a"})
+        with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
+            assert evaluate_condition(row, "Depth_Score < 0.4") is False
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert errors, "an unevaluatable condition must be logged at ERROR"
+
+    def test_a_broken_rule_cannot_invent_a_flag(self):
+        """End to end: a rule that cannot be evaluated leaves the row unflagged (kills 89)."""
+        df = pd.DataFrame({"Depth_Score": ["n/a"], "Motif": ["2"], "REF": ["C"], "ALT": ["CG"]})
+        result = add_flags(df, {"Low_Depth": "Depth_Score < 0.4"})
+        assert result.loc[0, "Flag"] == "Not flagged"
+
+
+class TestDuplicateSortSelection:
+    """flagging.py:154/157 - which columns and directions the duplicate sort uses."""
+
+    def test_configured_sort_by_is_used_instead_of_the_fallback(self):
+        """A supplied sort_by wins over the Depth_Score fallback (kills 154).
+
+        Position ascending and Depth_Score descending pick opposite primaries here,
+        so a mutant that takes the fallback branch when sort_by *is* present flags
+        the wrong row.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Position": [200, 100],
+                "Depth_Score": [0.9, 0.1],
+                "Motif": ["5", "5"],
+            }
+        )
+        result = add_flags(df, {}, duplicates_config=_dup_config(sort_by=[{"column": "Position", "ascending": True}]))
+        assert result.loc[1, "Flag"] == "Not flagged"
+        assert result.loc[0, "Flag"] == "Potential_Duplicate"
+
+    def test_missing_sort_by_falls_back_to_depth_score_descending(self):
+        """With no sort_by, the highest Depth_Score is the primary record (kills 157).
+
+        The fallback is `["Depth_Score"], [False]`; flipping that False to True would
+        keep the *weakest* call and flag the strongest one as the duplicate.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.2],
+                "Motif": ["5", "5"],
+            }
+        )
+        result = add_flags(df, {}, duplicates_config=_dup_config())
+        assert result.loc[0, "Flag"] == "Not flagged"
+        assert result.loc[1, "Flag"] == "Potential_Duplicate"
+
+    def test_empty_sort_by_list_also_falls_back(self):
+        """An explicit empty sort_by takes the same fallback as a missing one (kills 154/157)."""
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.2],
+                "Motif": ["5", "5"],
+            }
+        )
+        result = add_flags(df, {}, duplicates_config=_dup_config(sort_by=[]))
+        assert result.loc[0, "Flag"] == "Not flagged"
+        assert result.loc[1, "Flag"] == "Potential_Duplicate"
+
+    def test_priority_sort_actually_reorders_before_grouping(self):
+        """The primary is chosen after sorting, not by input order (kills 217).
+
+        The strongest call is the *second* row here, so a mutant that discards the
+        sort (inplace=False) keeps the first row and flags the strongest call.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.2, 0.8],
+                "Motif": ["5", "5"],
+            }
+        )
+        result = add_flags(
+            df, {}, duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}])
+        )
+        assert result.loc[1, "Flag"] == "Not flagged"
+        assert result.loc[0, "Flag"] == "Potential_Duplicate"
+
+
+class TestDuplicateSortColumnMustExist:
+    """Characterisation of a real trap in the shipped config - not an endorsement.
+
+    `kestrel_config.json` sets `duplicate_flagging.enabled = false`, and its `sort_by`
+    names the columns `Motifs` and `POS`. By the time flagging runs - step 6.5 of
+    `process_kmer_results`, immediately after `motif_correction_and_annotation` - the
+    `Motifs` column has been dropped: step 6 projects onto an explicit `keep_cols` list
+    that carries `Motif` and `POS` but not `Motifs`.
+
+    So flipping that toggle on would not silently mis-sort, it would raise `KeyError`
+    from `sort_values` on the first frame it saw. That is the *good* failure mode and
+    the opposite of AGENTS.md trap 3, where a config string naming a column that does
+    not exist merely logs a warning and turns the rule off. These tests pin both halves
+    so neither can drift unnoticed. Fixing the config name is a human's call - it
+    changes which rows get flagged - so nothing here changes it.
+    """
+
+    def test_unknown_sort_column_raises_rather_than_mis_sorting(self):
+        """A sort_by naming a column the frame lacks raises KeyError, loudly."""
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.5],
+                "Motif": ["5", "5"],
+            }
+        )
+        config = _dup_config(sort_by=[{"column": "Motifs", "ascending": True}])
+        with pytest.raises(KeyError):
+            add_flags(df, {}, duplicates_config=config)
+
+    def test_shipped_config_sort_columns_are_recorded(self, kestrel_config):
+        """Pin the shipped duplicate_flagging block, including the disabled toggle.
+
+        If someone enables duplicate flagging without renaming 'Motifs', the test above
+        says what happens; this one is what makes the pair fail together rather than
+        leaving a stale comment behind.
+        """
+        duplicates = kestrel_config["duplicate_flagging"]
+        assert duplicates["enabled"] is False
+        assert [item["column"] for item in duplicates["sort_by"]] == ["Depth_Score", "Motifs", "POS"]
+
+
+class TestDuplicateFlagCombination:
+    """flagging.py:244/250 - how an existing flag and a duplicate flag combine."""
+
+    def test_existing_flag_is_kept_and_extended_on_a_duplicate_row(self):
+        """A duplicate that already carries a flag keeps both (kills 244 and both 250s).
+
+        The '+' concatenation on line 250 is the only place the existing flag and the
+        duplicate flag are joined; replacing either '+' with '-' raises TypeError, and
+        inverting the '==' on line 244 drops the existing flag entirely.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.5],
+                "Motif": ["2", "2"],
+            }
+        )
+        result = add_flags(
+            df,
+            {"Low_Depth": "Depth_Score < 0.9"},
+            duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}]),
+        )
+        assert result.loc[0, "Flag"] == "Low_Depth"
+        assert result.loc[1, "Flag"] == "Low_Depth, Potential_Duplicate"
+
+    def test_unflagged_duplicate_gets_only_the_duplicate_flag(self):
+        """'Not flagged' is replaced, never appended to (kills 244).
+
+        Inverting the '==' produces the literal string 'Not flagged, Potential_Duplicate',
+        which reads as both flagged and unflagged at once.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.5],
+                "Motif": ["5", "5"],
+            }
+        )
+        result = add_flags(
+            df, {}, duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}])
+        )
+        assert result.loc[0, "Flag"] == "Not flagged"
+        assert result.loc[1, "Flag"] == "Potential_Duplicate"
+
+
+class TestDuplicateMarkingLeavesNoTrace:
+    """flagging.py:258/259 - the frame handed back is the caller's frame plus 'Flag'."""
+
+    def test_original_row_order_is_restored(self):
+        """Duplicate marking must not reorder the caller's rows (kills 258).
+
+        Sorting by Depth_Score descending permutes these three rows, so a mutant that
+        discards the restoring sort returns them in scoring order. That order reaches
+        kestrel_pre_result.tsv, where row order is the debugging aid.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C", "C"],
+                "ALT": ["CG", "CG", "CG"],
+                "Depth_Score": [0.2, 0.8, 0.5],
+                "Motif": ["5", "5", "5"],
+            }
+        )
+        result = add_flags(
+            df, {}, duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}])
+        )
+        assert list(result.index) == [0, 1, 2]
+        assert list(result["Depth_Score"]) == [0.2, 0.8, 0.5]
+
+    def test_internal_bookkeeping_columns_are_dropped(self):
+        """The three scratch columns never reach the caller (kills 259).
+
+        They would otherwise be written straight into the output TSV.
+        """
+        df = pd.DataFrame(
+            {
+                "REF": ["C", "C"],
+                "ALT": ["CG", "CG"],
+                "Depth_Score": [0.8, 0.5],
+                "Motif": ["5", "5"],
+            }
+        )
+        result = add_flags(
+            df, {}, duplicates_config=_dup_config(sort_by=[{"column": "Depth_Score", "ascending": False}])
+        )
+        assert "__original_index" not in result.columns
+        assert "__dup_indicator" not in result.columns
+        assert "__is_duplicate" not in result.columns
+        assert list(result.columns) == ["REF", "ALT", "Depth_Score", "Motif", "Flag"]

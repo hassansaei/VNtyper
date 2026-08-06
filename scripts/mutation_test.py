@@ -1,0 +1,1027 @@
+#!/usr/bin/env python3
+"""
+Advisory mutation scoring for VNtyper's pure-decision modules.
+
+Line coverage answers "did a test execute this line?". It does not answer "would a
+test have noticed if this line were wrong?" - and for this codebase the second
+question is the one that matters, because the characteristic failure here is not a
+crash but a silently wrong genotype call. ``confidence_assignment.py`` was the proof:
+100% line coverage and a 21% mutation score, i.e. four out of five deliberate defects
+in it went undetected by a fully green build.
+
+This harness makes that measurement reproducible. It:
+
+0. Refuses to start unless every target file is committed - it rewrites the live tree
+   and restores the text it read at the start, which is only the committed text if the
+   tree was clean. See ``mutation_guard``.
+1. Tokenizes each target module and generates one mutant per mutable token.
+2. Discards mutants that do not compile (e.g. ``*args`` -> ``/args``).
+3. Writes each mutant over the real file, runs the tests, and restores the original.
+4. Counts a mutant as **killed** if the tests fail, **survived** if they pass.
+
+A survivor is a defect the suite cannot see. The score is ``killed / total``.
+
+Scoping and accuracy
+--------------------
+Running all 1559 unit tests for every mutant would take hours, so each target declares
+the test files that exercise it and those run first with ``-x``. That alone would bias
+the score *downward* - a mutant killed only by some other file's test would be
+miscounted as a survivor - so any mutant that survives its scoped tests is **escalated
+to the full unit tier** before being recorded as a survivor. Killed mutants (the common
+case) stay fast; survivors are confirmed against everything.
+
+This is ADVISORY. It is not gated in CI and it must not be: equivalent mutants - those
+that change the source without changing behaviour, such as a bound that no input can
+reach - have not been hand-classified, so the true score is somewhat higher than the
+number printed here. Use it to find untested decisions, not as a pass/fail threshold.
+
+.. warning::
+
+   **The ``.pyc`` trap - read this before changing how mutants are written.**
+
+   Two mutation sweeps on this branch produced fictional results before this was found.
+   Most mutations here are byte-length preserving (``<`` -> ``>``, ``and`` -> ``or``),
+   and CPython validates a cached ``.pyc`` against the source's **(mtime, size)** pair,
+   where mtime has one-second granularity. A mutant written within the same second as
+   the file it replaces therefore has an identical (mtime, size) - so the interpreter
+   considers the stale ``.pyc`` valid, loads the **unmutated** bytecode, and the tests
+   pass. Every mutant "survives" and the score is garbage.
+
+   Two defences, both required and both applied below:
+     * ``PYTHONDONTWRITEBYTECODE=1`` plus ``python -B`` in the child, so no ``.pyc`` is
+       written during the run at all; and
+     * every ``__pycache__`` under the target tree is deleted before the sweep starts,
+       so no ``.pyc`` written by an earlier run can be picked up either.
+
+   Neither alone is sufficient: the env var stops new caches, the deletion stops old
+   ones. Do not remove either, and do not "optimise" the sweep by leaving caches in
+   place.
+
+Usage:
+    python scripts/mutation_test.py                       # all targets
+    python scripts/mutation_test.py --module scoring.py   # one target
+    python scripts/mutation_test.py --output report.txt   # also write to a file
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import tokenize
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning, writable_paths
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: Target module -> the unit test files that exercise it.
+#:
+#: These five are the pure-decision modules: they turn variants and motifs into the
+#: confidence, score and flag values that end up in the report. They are the modules
+#: where a wrong branch is invisible, which is exactly where mutation testing pays.
+#: The scoped files are a fast path only - see "Scoping and accuracy" above.
+#: Keep these lists WIDE. Every file that so much as imports the module belongs here,
+#: found with `grep -rln <module> tests/unit/`. A mutant that survives the scoped run is
+#: escalated to the full tier, which is correct but costs ~20s, so a missing entry does
+#: not corrupt the score - it just makes the sweep crawl.
+TARGETS: dict[str, tuple[str, ...]] = {
+    "vntyper/scripts/confidence_assignment.py": (
+        "tests/unit/test_confidence_assignment.py",
+        "tests/unit/test_confidence_boundaries.py",
+        "tests/unit/test_calibration_consistency.py",
+        "tests/unit/test_scoring.py",
+        "tests/unit/test_builders.py",
+    ),
+    "vntyper/scripts/scoring.py": (
+        "tests/unit/test_scoring.py",
+        "tests/unit/test_calibration_consistency.py",
+        "tests/unit/test_confidence_assignment.py",
+    ),
+    "vntyper/scripts/motif_processing.py": (
+        "tests/unit/test_motif_filtering_issue_136.py",
+        "tests/unit/test_generate_report.py",
+    ),
+    "vntyper/scripts/variant_parsing.py": ("tests/unit/test_variant_parsing.py",),
+    "vntyper/scripts/flagging.py": (
+        "tests/unit/test_flagging.py",
+        "tests/unit/test_advntr_flagging_rules.py",
+        "tests/unit/test_advntr_command.py",
+        "tests/unit/test_screening_summary.py",
+        "tests/unit/test_generate_report.py",
+    ),
+}
+
+#: Operator token substitutions. Each flips a decision without changing what the
+#: surrounding statement *is*, which is what makes an undetected one a real defect
+#: rather than a crash: `>=` -> `<` moves a threshold, it does not raise.
+OPERATOR_MUTATIONS: dict[str, str] = {
+    "<": ">=",
+    "<=": ">",
+    ">": "<=",
+    ">=": "<",
+    "==": "!=",
+    "!=": "==",
+    "+": "-",
+    "-": "+",
+    "*": "/",
+    "/": "*",
+    "+=": "-=",
+    "-=": "+=",
+}
+
+#: Keyword substitutions. `and`/`or` flips rule composition; `True`/`False` flips a
+#: literal outcome. Both are the shape of bug this codebase actually ships.
+#:
+#: `not` -> `` (deletion) is the highest-signal operator of the set for this codebase:
+#: it inverts a guard while leaving the statement's shape intact, which is precisely
+#: the "stages mark, they do not filter" logic in flagging.py and motif_processing.py.
+#: The empty replacement leaves a harmless double space (`if not x` -> `if  x`); the
+#: compile check below rejects the cases where it would not parse.
+KEYWORD_MUTATIONS: dict[str, str] = {
+    "and": "or",
+    "or": "and",
+    "True": "False",
+    "False": "True",
+    "not": "",
+    "in": "not in",
+    "break": "continue",
+    "continue": "break",
+}
+
+
+def mutate_number(literal: str) -> str | None:
+    """
+    Return a numeric literal one greater than the given one, or None if unparseable.
+
+    Off-by-one on a numeric literal is the classic threshold defect, and these five
+    modules are threshold logic. Underscored, hex and imaginary literals are skipped
+    rather than guessed at.
+
+    Args:
+        literal (str): The source text of a NUMBER token.
+
+    Returns:
+        str | None: The incremented literal, or None if it is not a plain int/float.
+    """
+    try:
+        if any(c in literal.lower() for c in "xob_j"):
+            return None
+        if "." in literal or "e" in literal.lower():
+            return repr(float(literal) + 1.0)
+        return str(int(literal) + 1)
+    except ValueError:
+        return None
+
+
+#: Survivors hand-classified as EQUIVALENT: the mutation changes the source without
+#: changing any behaviour a test could observe, so no test could ever kill it and it is
+#: not a gap in the suite.
+#:
+#: Keyed by ``(repo-relative path, line, original token, replacement)`` and valued with
+#: the reason. Keeping this as data rather than prose means a re-run re-applies the
+#: classification automatically instead of silently reverting to a raw score.
+#:
+#: Only add an entry you have reasoned through and can justify in one line. An
+#: unjustified entry here is worse than a low score: it is a real gap papered over.
+#: Line numbers are checked against the live sweep, so a stale entry is reported rather
+#: than silently ignored.
+EQUIVALENT_MUTANTS: dict[tuple[str, int, str, str], str] = {
+    # --- confidence_assignment.py -------------------------------------------------
+    # Every threshold this module reads is read as `<subdict>.get(<key>, <default>)`,
+    # and kestrel_config.json supplies ALL of these keys. The default operand is
+    # therefore dead with the shipped config, and changing it cannot move a call.
+    # Verified against vntyper/scripts/kestrel_config.json ["confidence_assignment"].
+    ("vntyper/scripts/confidence_assignment.py", 82, "0", "1"): (
+        "`.get()` default for `var_active_region_threshold`; the shipped config supplies 200"
+    ),
+    ("vntyper/scripts/confidence_assignment.py", 91, "0.2", "1.2"): (
+        "`.get()` default for `depth_score_thresholds.low`; the shipped config supplies 0.00469"
+    ),
+    ("vntyper/scripts/confidence_assignment.py", 92, "0.4", "1.4"): (
+        "`.get()` default for `depth_score_thresholds.high`; the shipped config supplies 0.00515"
+    ),
+    ("vntyper/scripts/confidence_assignment.py", 95, "5", "6"): (
+        "`.get()` default for `alt_depth_thresholds.low`; the shipped config supplies 20"
+    ),
+    ("vntyper/scripts/confidence_assignment.py", 96, "10", "11"): (
+        "`.get()` default for `alt_depth_thresholds.mid_low`; the shipped config supplies 21"
+    ),
+    ("vntyper/scripts/confidence_assignment.py", 97, "20", "21"): (
+        "`.get()` default for `alt_depth_thresholds.mid_high`; the shipped config supplies 100"
+    ),
+    # --- variant_parsing.py -------------------------------------------------------
+    ("vntyper/scripts/variant_parsing.py", 114, "0.0", "1.0"): (
+        "`.get()` default for `alt_filtering.gg_depth_score_threshold`; the shipped config supplies 0.00469"
+    ),
+    # --- motif_processing.py ------------------------------------------------------
+    ("vntyper/scripts/motif_processing.py", 315, "60", "61"): (
+        "`.get()` default for `motif_filtering.position_threshold`; the shipped config supplies 60"
+    ),
+    # --- flagging.py --------------------------------------------------------------
+    # NOTE the deliberately narrow scope here. The shipped config sets
+    # `duplicate_flagging.enabled = false`, so the whole duplicate-marking block is dead
+    # by default - but `enabled` is a SUPPORTED TOGGLE, so that code is reachable by
+    # configuration and its mutants are real gaps, not equivalents. Only the `.get()`
+    # default operand itself is classified here.
+    ("vntyper/scripts/flagging.py", 150, "False", "True"): (
+        "`.get()` default for `duplicate_flagging.enabled`; the shipped config supplies it explicitly"
+    ),
+    # `itertuples(index=True)` only prepends an `Index` field to the namedtuple; the loop
+    # body reads `row_tuple.Flag` by name and never touches position, so both forms yield
+    # the same value. Checked against the awkward cases too - a column literally named
+    # `Index`, duplicate `Flag` columns, a string index and a MultiIndex all resolve
+    # `.Flag` to the same column either way, because namedtuple's `rename=True` renames
+    # the colliding field and not `Flag`.
+    ("vntyper/scripts/flagging.py", 238, "False", "True"): (
+        "`itertuples(index=)` only adds an `Index` field; the loop reads `row_tuple.Flag` by name"
+    ),
+}
+
+
+@dataclass
+class Mutant:
+    """One candidate mutation of a single source file."""
+
+    path: str
+    line: int
+    original: str
+    replacement: str
+    source: str
+    #: Set once the mutant has been run.
+    killed: bool | None = None
+    killed_by: str = ""
+
+    def describe(self) -> str:
+        """Return a one-line human-readable identifier for this mutant."""
+        return f"{self.path}:{self.line}  {self.original!r} -> {self.replacement!r}"
+
+    @property
+    def key(self) -> tuple[str, int, str, str]:
+        """Return this mutant's key into :data:`EQUIVALENT_MUTANTS`."""
+        return (self.path, self.line, self.original, self.replacement)
+
+    @property
+    def equivalence_reason(self) -> str | None:
+        """Return why this mutant is equivalent, or None if it is a genuine gap."""
+        return EQUIVALENT_MUTANTS.get(self.key)
+
+
+@dataclass
+class ModuleResult:
+    """The outcome of a full sweep over one module."""
+
+    path: str
+    killed: int = 0
+    survived: int = 0
+    survivors: list[Mutant] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        """Total number of mutants actually run for this module."""
+        return self.killed + self.survived
+
+    @property
+    def score(self) -> float:
+        """Mutation score as a percentage, or 0.0 when no mutants ran."""
+        return 100.0 * self.killed / self.total if self.total else 0.0
+
+
+def generate_mutants(path: Path) -> list[Mutant]:
+    """
+    Generate every compilable single-token mutant of a source file.
+
+    Tokenizing rather than parsing is deliberate: ``ast`` does not attach source
+    positions to operator nodes (``ast.Lt`` and friends carry no ``col_offset``), so
+    an AST walk cannot say *where* to rewrite a ``<``. The token stream gives an exact
+    span for every token, and comments and strings arrive as their own token types so
+    they are skipped for free - a mutation inside a docstring would be a guaranteed
+    survivor and pure noise.
+
+    Args:
+        path (Path): The module to mutate.
+
+    Returns:
+        list[Mutant]: One mutant per mutable token whose mutated form still compiles.
+            Mutants that do not compile (``*args`` -> ``/args``) are dropped rather
+            than counted, since a syntax error is not a defect a test could miss.
+    """
+    source = path.read_text(encoding="utf-8")
+    lines = source.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute(row: int, col: int) -> int:
+        """Convert a 1-based (row, col) token position to a string offset."""
+        return line_starts[row - 1] + col
+
+    mutants: list[Mutant] = []
+    readline = io.StringIO(source).readline
+    for token in tokenize.generate_tokens(readline):
+        if token.type == tokenize.OP:
+            replacement = OPERATOR_MUTATIONS.get(token.string)
+        elif token.type == tokenize.NAME:
+            replacement = KEYWORD_MUTATIONS.get(token.string)
+        elif token.type == tokenize.NUMBER:
+            replacement = mutate_number(token.string)
+        else:
+            continue
+        if replacement is None:
+            continue
+
+        start = absolute(token.start[0], token.start[1])
+        end = absolute(token.end[0], token.end[1])
+        mutated = source[:start] + replacement + source[end:]
+
+        # A mutant that will not compile is not a defect any test could have caught.
+        try:
+            compile(mutated, str(path), "exec")
+        except SyntaxError:
+            continue
+
+        mutants.append(
+            Mutant(
+                path=str(path.relative_to(REPO_ROOT)),
+                line=token.start[0],
+                original=token.string,
+                replacement=replacement,
+                source=mutated,
+            )
+        )
+    return mutants
+
+
+def clear_bytecode_caches(root: Path) -> int:
+    """
+    Delete every ``__pycache__`` directory under ``root``.
+
+    Half of the defence described in the module-level ``.. warning::``. Setting
+    ``PYTHONDONTWRITEBYTECODE`` stops *new* caches being written; it does nothing about
+    a ``.pyc`` left behind by an earlier run, which CPython will happily load if its
+    recorded (mtime, size) still matches the source it is shadowing. Deleting them is
+    the only way to be sure the interpreter compiles the mutant in front of it.
+
+    Args:
+        root (Path): Directory to clean recursively.
+
+    Returns:
+        int: Number of cache directories removed.
+    """
+    removed = 0
+    for cache in root.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
+        removed += 1
+    return removed
+
+
+def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> bool:
+    """
+    Run pytest over the given paths and report whether the suite passed.
+
+    Args:
+        test_paths (tuple[str, ...]): Test files or directories to run.
+        timeout (int): Seconds before the run is abandoned.
+        parallel (bool): Distribute across cores with xdist. Used for the full-tier
+            escalation, which is the expensive path; the scoped runs are short enough
+            that xdist's worker startup would cost more than it saves.
+
+    Returns:
+        bool: True if every test passed. A timeout counts as a failure - a mutant that
+            sends the suite into an infinite loop has been detected, not missed.
+
+    Note:
+        ``-B`` and ``PYTHONDONTWRITEBYTECODE`` are the other half of the ``.pyc``
+        defence. ``-p no:cacheprovider`` keeps pytest from writing ``.pytest_cache``
+        entries that would make ``--lf`` behave differently between mutants, and
+        ``-o log_cli=false`` suppresses the live log pytest.ini turns on, which is pure
+        overhead when the output is captured and discarded.
+    """
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    command = [
+        sys.executable,
+        "-B",
+        "-m",
+        "pytest",
+        "-m",
+        "unit",
+        "-x",
+        "-q",
+        "--no-header",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        "log_cli=false",
+        "--timeout=120",
+    ]
+    if parallel:
+        # Only whether ANY test failed matters here, so xdist's non-deterministic
+        # interaction with -x is irrelevant - it still reports a non-zero exit.
+        command += ["-n", "4", "--dist", "loadfile"]
+    command += [*test_paths]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return completed.returncode == 0
+
+
+def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, verbose: bool) -> ModuleResult:
+    """
+    Run every mutant of one module and record which survived.
+
+    The original file is restored in a ``finally`` block, so an exception or a
+    ``KeyboardInterrupt`` mid-sweep cannot leave a mutated module on disk.
+
+    "Original" here means *the text on disk when this call started*, not the committed
+    text - the harness has no way to tell the two apart. ``main()`` therefore refuses to
+    begin unless every target is clean (see ``mutation_guard``), and that precondition is
+    what makes the restore, the score and the end-of-run check mean what they say.
+
+    Args:
+        path_str (str): Repo-relative path of the module to mutate.
+        scoped_tests (tuple[str, ...]): Test files that exercise this module.
+        timeout (int): Per-pytest-run timeout in seconds.
+        verbose (bool): Print each mutant's outcome as it is decided.
+
+    Returns:
+        ModuleResult: Kill/survive counts and the surviving mutants.
+    """
+    path = REPO_ROOT / path_str
+    original = path.read_text(encoding="utf-8")
+    mutants = generate_mutants(path)
+    result = ModuleResult(path=path_str)
+
+    # flush= throughout: a sweep is long enough that someone will watch the log, and an
+    # interrupted run should still show how far it got.
+    print(f"\n{path_str}: {len(mutants)} mutants", flush=True)
+    try:
+        for index, mutant in enumerate(mutants, start=1):
+            path.write_text(mutant.source, encoding="utf-8")
+            clear_bytecode_caches(REPO_ROOT / "vntyper")
+
+            if not run_tests(scoped_tests, timeout):
+                mutant.killed, mutant.killed_by = True, "scoped"
+            # Survived the scoped tests - confirm against the whole tier before
+            # believing it, so the score is not biased down by the scoping.
+            elif not run_tests(("tests/unit",), timeout, parallel=True):
+                mutant.killed, mutant.killed_by = True, "full tier"
+            else:
+                mutant.killed = False
+
+            if mutant.killed:
+                result.killed += 1
+            else:
+                result.survived += 1
+                result.survivors.append(mutant)
+
+            if verbose:
+                status = f"killed ({mutant.killed_by})" if mutant.killed else "SURVIVED"
+                print(f"  [{index}/{len(mutants)}] {mutant.describe()} -> {status}", flush=True)
+            else:
+                print(f"  [{index}/{len(mutants)}] {'.' if mutant.killed else 'S'}", end="", flush=True)
+    finally:
+        path.write_text(original, encoding="utf-8")
+        clear_bytecode_caches(REPO_ROOT / "vntyper")
+
+    if not verbose:
+        print()
+    print(f"  {result.killed}/{result.total} killed ({result.score:.1f}%)", flush=True)
+    return result
+
+
+def format_report(results: list[ModuleResult], elapsed: float) -> str:
+    """
+    Render the raw console report for a completed sweep.
+
+    This exact text is embedded verbatim in the committed Markdown page, so it is the
+    evidence artefact rather than a summary of one.
+
+    Args:
+        results (list[ModuleResult]): One entry per module swept.
+        elapsed (float): Wall-clock duration of the sweep in seconds.
+
+    Returns:
+        str: A plain-text report naming every surviving mutant.
+    """
+    killed = sum(r.killed for r in results)
+    total = sum(r.total for r in results)
+    score = 100.0 * killed / total if total else 0.0
+
+    out: list[str] = []
+    out.append("VNtyper mutation testing - advisory score")
+    out.append("=" * 60)
+    out.append("")
+    out.append("Command:  make mutation")
+    out.append(f"Total:    {total} mutants, {killed} killed, {total - killed} survived")
+    out.append(f"Score:    {score:.1f}%")
+    out.append(f"Duration: {elapsed / 60:.1f} min")
+    out.append("")
+    out.append("Per module")
+    out.append("-" * 60)
+    out.extend(f"{r.score:6.1f}%  {r.killed:3d}/{r.total:3d}  {r.path}" for r in sorted(results, key=lambda r: r.score))
+    out.append("")
+    out.append("Surviving mutants  [E] = hand-classified equivalent, [ ] = genuine gap")
+    out.append("-" * 60)
+    any_survivors = False
+    for r in sorted(results, key=lambda r: r.path):
+        if not r.survivors:
+            continue
+        any_survivors = True
+        out.append(f"{r.path}")
+        for mutant in r.survivors:
+            reason = mutant.equivalence_reason
+            marker = "E" if reason else " "
+            out.append(f"  [{marker}] line {mutant.line:4d}  {mutant.original!r} -> {mutant.replacement!r}")
+            if reason:
+                out.append(f"          equivalent: {reason}")
+        out.append("")
+    if not any_survivors:
+        out.append("None. Every mutant was killed.")
+        out.append("")
+
+    stale = stale_equivalence_keys(results)
+    if stale:
+        out.append("STALE EQUIVALENCE ENTRIES (no longer match a surviving mutant)")
+        out.append("-" * 60)
+        out.extend(f"    {key}" for key in stale)
+        out.append("")
+    return "\n".join(out)
+
+
+def all_survivors(results: list[ModuleResult]) -> list[Mutant]:
+    """Return every surviving mutant across all modules, ordered by path and line."""
+    survivors = [m for r in results for m in r.survivors]
+    return sorted(survivors, key=lambda m: (m.path, m.line))
+
+
+def stale_equivalence_keys(results: list[ModuleResult]) -> list[tuple[str, int, str, str]]:
+    """
+    Return equivalence entries that no longer correspond to a surviving mutant.
+
+    An entry goes stale when the module is edited and its line numbers shift, or when a
+    new test finally kills the mutant. Either way the entry is now excusing something
+    that is not there, so it is surfaced rather than silently ignored - a silent stale
+    entry is how a real gap ends up permanently classified away.
+
+    Args:
+        results (list[ModuleResult]): One entry per module swept.
+
+    Returns:
+        list[tuple[str, int, str, str]]: The keys with no matching survivor. Only
+            modules actually swept are considered, so a scoped ``--module`` run does
+            not report every other module's entries as stale.
+    """
+    swept_paths = {r.path for r in results}
+    live = {m.key for m in all_survivors(results)}
+    return sorted(key for key in EQUIVALENT_MUTANTS if key[0] in swept_paths and key not in live)
+
+
+def format_markdown(results: list[ModuleResult], elapsed: float) -> str:
+    """
+    Render the committed docs page, with the raw console output embedded verbatim.
+
+    Args:
+        results (list[ModuleResult]): One entry per module swept.
+        elapsed (float): Wall-clock duration of the sweep in seconds.
+
+    Returns:
+        str: A Markdown page suitable for ``docs/development/``.
+    """
+    killed = sum(r.killed for r in results)
+    total = sum(r.total for r in results)
+    score = 100.0 * killed / total if total else 0.0
+
+    survivors = all_survivors(results)
+    equivalent = [m for m in survivors if m.equivalence_reason]
+    genuine = [m for m in survivors if not m.equivalence_reason]
+    adjusted_total = total - len(equivalent)
+    adjusted = 100.0 * killed / adjusted_total if adjusted_total else 0.0
+
+    out: list[str] = []
+    out.append("# Mutation Testing")
+    out.append("")
+    out.append('!!! warning "Advisory only - nothing gates on this number"')
+    out.append("")
+    out.append("    This score is **not** a pass/fail threshold and CI does not bind against")
+    out.append("    it. Read it as a map of which decisions are untested, not as a grade.")
+    out.append("")
+    out.append("Line coverage answers *did a test execute this line?*. It does not answer")
+    out.append("*would a test have noticed if this line were wrong?* - and for VNtyper the")
+    out.append("second question is the one that matters, because the characteristic failure")
+    out.append("is a silently wrong genotype call rather than a crash.")
+    out.append("")
+    out.append("Mutation testing answers the second question directly: it introduces a")
+    out.append("deliberate defect, runs the tests, and records whether anything failed. A")
+    out.append("**surviving** mutant is a defect the suite cannot see.")
+    out.append("")
+    out.append("## Result")
+    out.append("")
+    out.append(f"**{killed} of {total} mutants killed - a raw mutation score of {score:.1f}%.**")
+    out.append("")
+    out.append(f"Of the {len(survivors)} survivors, {len(equivalent)} are hand-classified as")
+    out.append("*equivalent* (the mutation cannot change observable behaviour, so no test could")
+    out.append(f"ever kill it) and {len(genuine)} are genuine gaps. Excluding the equivalent")
+    out.append(f"mutants the score is **{adjusted:.1f}%** ({killed}/{adjusted_total}).")
+    out.append("")
+    out.append("Both numbers are given because neither alone is honest: the raw score")
+    out.append("understates the suite by counting unkillable mutants against it, and the")
+    out.append("adjusted score depends on classifications that are a human judgement call.")
+    out.append("Every classification is listed below with its reason so it can be checked.")
+    out.append("")
+    out.append("| Module | Killed | Total | Raw score |")
+    out.append("| --- | ---: | ---: | ---: |")
+    out.extend(
+        f"| `{r.path}` | {r.killed} | {r.total} | {r.score:.1f}% |" for r in sorted(results, key=lambda r: r.score)
+    )
+    out.append("")
+    out.append("## Surviving mutants")
+    out.append("")
+    out.append("### Genuine gaps")
+    out.append("")
+    if genuine:
+        out.append("Each of these is a change to the source that the **entire** unit tier does")
+        out.append("not notice. They are the actionable output of this exercise: a test that")
+        out.append("kills one is a test that would have caught a real defect of that shape.")
+        out.append("")
+        out.append("| Module | Line | Mutation |")
+        out.append("| --- | ---: | --- |")
+        out.extend(
+            f"| `{m.path}` | {m.line} | `{m.original}` &rarr; `{m.replacement or '(deleted)'}` |" for m in genuine
+        )
+    else:
+        out.append("None - every survivor is classified equivalent below.")
+    out.append("")
+    out.append("### Classified equivalent")
+    out.append("")
+    if equivalent:
+        out.append("These mutations cannot change behaviour that any test could legitimately")
+        out.append("observe, so they are **not** gaps in the suite. Each reason below is a claim")
+        out.append("you can check against the source; if one turns out to be wrong the entry")
+        out.append("should be deleted, not the score explained away.")
+        out.append("")
+        out.append("Most of them are `.get()` defaults on `kestrel_config.json` keys that the")
+        out.append("shipped config always supplies, which makes the default value dead code.")
+        out.append("Being precise about the scope of that claim: a `--config-path` omitting the")
+        out.append("key *would* reach the default, so these are unreachable **with the shipped")
+        out.append("configuration** rather than unreachable in principle. That is the right")
+        out.append("standard here - `AGENTS.md` trap 2 records that `--config-path` replaces the")
+        out.append("whole config rather than merging it, and that a partial config already fails")
+        out.append("with `KeyError` elsewhere in the pipeline, so a config missing these keys is")
+        out.append("not a supported input.")
+        out.append("")
+        out.append("| Module | Line | Mutation | Why it cannot be killed |")
+        out.append("| --- | ---: | --- | --- |")
+        out.extend(
+            f"| `{m.path}` | {m.line} | `{m.original}` &rarr; `{m.replacement or '(deleted)'}` "
+            f"| {m.equivalence_reason} |"
+            for m in equivalent
+        )
+    else:
+        out.append("None classified yet.")
+    out.append("")
+    out.append("## How this compares to the 43.5% baseline")
+    out.append("")
+    out.append("The experiment that motivated this work scored **43.5%** (27 of 62 mutants")
+    out.append("killed) across the eight highest-coverage modules. That harness was never")
+    out.append("committed, which is why this one exists.")
+    out.append("")
+    out.append('!!! note "The two totals are not directly comparable"')
+    out.append("")
+    out.append("    Different mutant population, different modules: 62 mutants over eight")
+    out.append(f"    modules then, {total} over five now, generated by a different operator set.")
+    out.append("    A higher or lower headline number would not by itself mean the suite has")
+    out.append("    improved or regressed. Only per-module figures on the same module carry")
+    out.append("    across, and even those only loosely.")
+    out.append("")
+    out.append("The one comparison that is meaningful is `confidence_assignment.py`, the")
+    out.append("module that motivated the whole effort: it had **100% line coverage and a 21%")
+    out.append("mutation score**, i.e. four of five deliberate defects in it went undetected by")
+    out.append("a fully green build.")
+    out.append("")
+    for r in results:
+        if "confidence_assignment" not in r.path:
+            continue
+        module_equivalent = [m for m in r.survivors if m.equivalence_reason]
+        module_adjusted_total = r.total - len(module_equivalent)
+        module_adjusted = 100.0 * r.killed / module_adjusted_total if module_adjusted_total else 0.0
+        out.append("| `confidence_assignment.py` | Then | Now |")
+        out.append("| --- | ---: | ---: |")
+        out.append("| Line coverage | 100% | 100% |")
+        out.append(f"| Mutation score | 21% | {r.score:.1f}% raw, {module_adjusted:.1f}% adjusted |")
+        out.append("")
+    out.append("## Reproducing this")
+    out.append("")
+    out.append("```bash")
+    out.append("make mutation")
+    out.append("```")
+    out.append("")
+    out.append("The harness is `scripts/mutation_test.py`. It mutates one token at a time,")
+    out.append("runs the module's own tests first and escalates anything that survives to")
+    out.append("the full unit tier before recording it as a survivor, so the score is not")
+    out.append("biased by the scoping.")
+    out.append("")
+    out.append('!!! danger "`PYTHONDONTWRITEBYTECODE=1` is load-bearing"')
+    out.append("")
+    out.append("    Most mutations here are byte-length preserving (`<` to `>`, `and` to")
+    out.append("    `or`), and CPython validates a cached `.pyc` against the source's")
+    out.append("    `(mtime, size)` pair with one-second mtime granularity. A mutant written")
+    out.append("    in the same second as the file it replaces is therefore")
+    out.append("    indistinguishable from it to the cache validator: the interpreter loads")
+    out.append("    the stale `.pyc`, runs the **unmutated** code, every mutant *survives*")
+    out.append("    and the score is fiction. Two sweeps produced exactly that before it was")
+    out.append("    found. The harness also deletes every `__pycache__` before it starts -")
+    out.append("    the environment variable stops new caches, the deletion stops old ones,")
+    out.append("    and both are required.")
+    out.append("")
+    out.append('!!! danger "Nothing may build or install from the tree while a sweep runs"')
+    out.append("")
+    out.append("    The harness rewrites `vntyper/scripts/*.py` **in place**, so for most of")
+    out.append("    a run the working tree holds a deliberately broken module. Anything")
+    out.append("    that snapshots source mid-sweep bakes that mutant into its artefact -")
+    out.append("    a docker build, `pip install`, `python -m build`, a tarball.")
+    out.append("")
+    out.append("    This has happened: an image built during a sweep crashed in the")
+    out.append("    container at `motif_processing.py` with a pandas `KeyError`, which")
+    out.append("    reads exactly like a production bug and cost a full diagnosis cycle")
+    out.append("    before it was traced back to the sweep. Rebuilding from a clean tree")
+    out.append("    passed.")
+    out.append("")
+    out.append("    The `finally` restore protects the **repository**, not any artefact")
+    out.append("    already produced from it. Run `git diff --quiet -- vntyper/`")
+    out.append("    immediately before and after any build, package or install step; if it")
+    out.append("    reports a difference you did not make, a sweep is running and the")
+    out.append("    artefact is void.")
+    out.append("")
+    out.append("## Related: branch coverage is measured but not enabled")
+    out.append("")
+    out.append("Mutation testing and branch coverage were investigated together, because both")
+    out.append("ask a sharper question than line coverage and they agreed on which modules are")
+    out.append("weakest. The branch-coverage half of that work is recorded here so it is not")
+    out.append("re-derived from scratch:")
+    out.append("")
+    out.append("`[tool.coverage.run]` does **not** set `branch = true`, so an `if` that is")
+    out.append("entered but never taken counts as fully covered. Enabling it was measured:")
+    out.append("")
+    out.append("| Measure | Value |")
+    out.append("| --- | ---: |")
+    out.append("| Line (statement) coverage | 66.82% |")
+    out.append("| **Branch-inclusive total** | **63.80%** |")
+    out.append("| Branch-only coverage | 53.40% |")
+    out.append("| Branch exits never taken | 685 of 1470 |")
+    out.append("")
+    out.append("Turning it on would take the reported total to 63.80% against a `fail_under`")
+    out.append("of **66**, so CI would fail on the enabling commit. **It was therefore not")
+    out.append("enabled, and the floor was not lowered** - the floor is a ratchet and lowering")
+    out.append("it to admit a new measurement would defeat its purpose.")
+    out.append("")
+    out.append("To enable it, the blended figure needs **144 more covered units** out of 6528")
+    out.append("(5058 statements + 1470 branch exits) to clear 66%. Two modules hold 275 of")
+    out.append("the 685 untaken exits between them:")
+    out.append("")
+    out.append("| Module | Untaken branch exits | Missing lines | LOC |")
+    out.append("| --- | ---: | ---: | ---: |")
+    out.append("| `cohort_summary.py` | 150 | 358 | 856 |")
+    out.append("| `install_references.py` | 125 | 321 | 901 |")
+    out.append("")
+    out.append("Both are on the oversized-file list in `AGENTS.md`, which is the same")
+    out.append("conclusion reached from the other direction: the branches are untested because")
+    out.append("the files fuse I/O with logic and cannot be called without a filesystem.")
+    out.append("Splitting them is the prerequisite, not writing more tests against them.")
+    out.append("")
+    out.append("## Raw output")
+    out.append("")
+    out.append("```text")
+    out.append(format_report(results, elapsed))
+    out.append("```")
+    out.append("")
+    return "\n".join(out)
+
+
+def results_to_dict(results: list[ModuleResult], elapsed: float) -> dict:
+    """
+    Serialise a completed sweep so the page can be re-rendered without re-measuring.
+
+    A sweep costs 15-30 minutes, but classifying a survivor as equivalent only changes
+    how the results are *presented*. Persisting them means adding a classification is a
+    second-long re-render rather than a reason to re-run the whole thing - and, more
+    importantly, the published page stays a rendering of a real measurement instead of
+    something hand-edited afterwards.
+
+    ``Mutant.source`` (the whole mutated file) is deliberately dropped: it is megabytes
+    and nothing in the report uses it.
+
+    Args:
+        results (list[ModuleResult]): One entry per module swept.
+        elapsed (float): Wall-clock duration of the sweep in seconds.
+
+    Returns:
+        dict: A JSON-serialisable representation of the sweep.
+    """
+    return {
+        "elapsed": elapsed,
+        "modules": [
+            {
+                "path": r.path,
+                "killed": r.killed,
+                "survived": r.survived,
+                "survivors": [
+                    {"line": m.line, "original": m.original, "replacement": m.replacement} for m in r.survivors
+                ],
+            }
+            for r in results
+        ],
+    }
+
+
+def results_from_dict(payload: dict) -> tuple[list[ModuleResult], float]:
+    """
+    Rebuild sweep results from :func:`results_to_dict` output.
+
+    Args:
+        payload (dict): A previously serialised sweep.
+
+    Returns:
+        tuple[list[ModuleResult], float]: The results and the original elapsed time.
+    """
+    results = [
+        ModuleResult(
+            path=module["path"],
+            killed=module["killed"],
+            survived=module["survived"],
+            survivors=[
+                Mutant(
+                    path=module["path"],
+                    line=s["line"],
+                    original=s["original"],
+                    replacement=s["replacement"],
+                    source="",
+                    killed=False,
+                )
+                for s in module["survivors"]
+            ],
+        )
+        for module in payload["modules"]
+    ]
+    return results, float(payload["elapsed"])
+
+
+def write_outputs(results: list[ModuleResult], elapsed: float, output: Path | None, results_json: Path | None) -> None:
+    """
+    Write the report and, optionally, the machine-readable results.
+
+    Args:
+        results (list[ModuleResult]): One entry per module swept.
+        elapsed (float): Wall-clock duration of the sweep in seconds.
+        output (Path | None): Report destination. ``.md`` renders the docs page, any
+            other suffix renders the plain-text report.
+        results_json (Path | None): Where to persist the raw results, if anywhere.
+    """
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        rendered = format_markdown(results, elapsed) if output.suffix == ".md" else format_report(results, elapsed)
+        output.write_text(rendered, encoding="utf-8")
+        print(f"Report written to {output}")
+    if results_json:
+        results_json.parent.mkdir(parents=True, exist_ok=True)
+        results_json.write_text(json.dumps(results_to_dict(results, elapsed), indent=2) + "\n", encoding="utf-8")
+        print(f"Raw results written to {results_json}")
+
+
+def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> str | None:
+    """
+    Decide whether this run may write anything at all.
+
+    Args:
+        targets (Iterable[str]): Repo-relative sources the run will mutate. Empty on the
+            ``--render-only`` path, which mutates nothing.
+        outputs (Sequence[Path | None]): Files the run will overwrite, ``None`` for the
+            ones it was not asked to write.
+
+    Returns:
+        str | None: The refusal to print, or ``None`` when the run may proceed. Both
+            refusals are returned rather than raised so the caller keeps its single exit
+            point, and both fail closed: a dirty file refuses, and so does an
+            indeterminate answer from git.
+    """
+    guarded = writable_paths(REPO_ROOT, targets, outputs)
+    try:
+        dirty = dirty_paths(REPO_ROOT, guarded)
+    except RuntimeError as exc:
+        return str(exc)
+    return format_dirty_tree_refusal(dirty) if dirty else None
+
+
+def main() -> int:
+    """
+    Run the mutation sweep and print the report.
+
+    Returns:
+        int: Always 0. This measurement is advisory and must never fail a build - see
+            the module docstring for why gating on it would be wrong.
+    """
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--module", help="Only mutate targets whose path contains this substring.")
+    parser.add_argument("--output", type=Path, help="Also write the report to this file.")
+    parser.add_argument("--timeout", type=int, default=600, help="Per-pytest-run timeout in seconds.")
+    parser.add_argument("--verbose", action="store_true", help="Print every mutant's outcome.")
+    parser.add_argument("--results-json", type=Path, help="Persist the raw results for later re-rendering.")
+    parser.add_argument(
+        "--render-only",
+        type=Path,
+        help="Re-render the report from a previous --results-json instead of sweeping. "
+        "Use after adding an EQUIVALENT_MUTANTS entry: the measurement is unchanged, "
+        "only its presentation.",
+    )
+    args = parser.parse_args()
+
+    # Re-render path: no mutation, no tests, no source rewritten - but `write_outputs()`
+    # still overwrites the docs page wholesale, so the preflight applies here too. It is
+    # narrower: only the outputs are at risk, because no target is touched.
+    if args.render_only:
+        refusal = _refuse_if_dirty([], [args.output])
+        if refusal is not None:
+            print(refusal, file=sys.stderr)
+            return 1
+        results, elapsed = results_from_dict(json.loads(args.render_only.read_text(encoding="utf-8")))
+        print(format_report(results, elapsed))
+        write_outputs(results, elapsed, args.output, None)
+        return 0
+
+    targets = {p: t for p, t in TARGETS.items() if not args.module or args.module in p}
+    if not targets:
+        print(f"No target matches {args.module!r}. Known targets:", file=sys.stderr)
+        for path_str in TARGETS:
+            print(f"  {path_str}", file=sys.stderr)
+        return 0
+
+    # Before a single byte is written; see `mutation_guard` for the three ways a sweep
+    # over uncommitted work goes wrong. Only the targets this run will actually rewrite
+    # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep -
+    # plus the files it will overwrite on the way out.
+    refusal = _refuse_if_dirty(targets, [args.output, args.results_json])
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 1
+
+    # SIGINT already unwinds through the `finally` in sweep_module() as a
+    # KeyboardInterrupt, but SIGTERM terminates the interpreter outright - which would
+    # leave a MUTATED MODULE ON DISK in a repo someone is about to commit from.
+    # Turning it into an exception makes both paths restore.
+    def _terminate(signum, _frame):
+        raise KeyboardInterrupt(f"terminated by signal {signum}")
+
+    signal.signal(signal.SIGTERM, _terminate)
+
+    # Before anything else. See the `.pyc` warning in the module docstring: a stale
+    # cache from an earlier sweep is enough on its own to make every mutant "survive".
+    removed = clear_bytecode_caches(REPO_ROOT / "vntyper")
+    print(f"Cleared {removed} __pycache__ directories before starting.")
+
+    start = time.monotonic()
+    results = [sweep_module(p, t, args.timeout, args.verbose) for p, t in targets.items()]
+    elapsed = time.monotonic() - start
+
+    print()
+    print(format_report(results, elapsed))
+    write_outputs(results, elapsed, args.output, args.results_json)
+
+    # This harness rewrites production source in place, so it ends by proving it put
+    # everything back. A restore that silently failed would otherwise be discovered by
+    # someone committing a mutant. The preflight above is what makes this check
+    # meaningful: the tree was clean when the sweep started, so anything dirty now came
+    # from the sweep rather than from the maintainer.
+    try:
+        unrestored = dirty_paths(REPO_ROOT, targets)
+    except RuntimeError as exc:
+        # git answered before the sweep and cannot now. The sources may hold a mutant and
+        # nothing here can prove otherwise, so say so rather than exit 0.
+        print(f"\n{exc}", file=sys.stderr)
+        return 1
+    if unrestored:
+        print(f"\n{format_unrestored_warning(unrestored)}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

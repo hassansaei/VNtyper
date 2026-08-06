@@ -196,7 +196,7 @@
         
         <!-- Basic coverage view (default) -->
         <div id="basicCoverageView">
-            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</p>
+            <p><strong>Mean Coverage:</strong> {{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon|safe }}</p>
         </div>
         
         <!-- Detailed coverage view (hidden by default) -->
@@ -211,7 +211,7 @@
                 <tbody>
                     <tr>
                         <td>Mean Coverage</td>
-                        <td>{{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon }}</td>
+                        <td>{{ mean_vntr_coverage }} {{ mean_vntr_coverage_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Median Coverage</td>
@@ -239,7 +239,7 @@
                     </tr>
                     <tr>
                         <td>Percentage Uncovered</td>
-                        <td>{{ percent_vntr_uncovered }}% {{ percent_vntr_uncovered_icon }}</td>
+                        <td>{{ percent_vntr_uncovered }}% {{ percent_vntr_uncovered_icon|safe }}</td>
                     </tr>
                 </tbody>
             </table>
@@ -267,35 +267,49 @@
                                 N/A
                             {% endif %}
                         </td>                    
-                        <td>{{ duplication_rate_icon }}</td>
+                        <td>{{ duplication_rate_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Q20 Rate (Cutoff: 80%)</td>
                         <td>{{ (q20_rate * 100)|round(2) if q20_rate is not none else 'N/A' }}%</td>
-                        <td>{{ q20_icon }}</td>
+                        <td>{{ q20_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Q30 Rate (Cutoff: 70%)</td>
                         <td>{{ (q30_rate * 100)|round(2) if q30_rate is not none else 'N/A' }}%</td>
-                        <td>{{ q30_icon }}</td>
+                        <td>{{ q30_icon|safe }}</td>
                     </tr>
                     <tr>
                         <td>Passed Filter Rate (Cutoff: 80%)</td>
                         <td>{{ (passed_filter_rate * 100)|round(2) if passed_filter_rate is not none else 'N/A' }}%</td>
-                        <td>{{ passed_filter_icon }}</td>
+                        <td>{{ passed_filter_icon|safe }}</td>
                     </tr>
                 </tbody>
             </table>
         {% endif %}
 
         <h2>Screening Summary</h2>
-        <p class="summary-box {% if 'negative' not in summary_text %}summary-positive{% endif %}">
+        {#
+          Emphasis comes from the computed screening state, never from the text.
+          The message is written by configuration and its wording is not evidence
+          of anything: a condition that searched it for a word would put a
+          positive style on whichever messages happened to contain that word,
+          "No variant detected by either genotyping method" among them.
+          `tests/unit/test_generate_report.py` pins this.
+        #}
+        <p class="summary-box {% if summary_is_positive %}summary-positive{% endif %}">
             {{ summary_text|safe }}
         </p>
 
         {% if cross_match_message and advntr_available %}
             <h2>Cross-Match Summary</h2>
-            <p class="summary-box {% if 'match' in cross_match_message|lower %}summary-positive{% endif %}">
+            {#
+              Same rule as the screening summary above, and the same defect: this
+              asked whether the sentence contained "match", and both fixed sentences
+              do - so "No matches were found" rendered in the positive style. The
+              state is computed in `build_cross_match_summary` and passed in.
+            #}
+            <p class="summary-box {% if cross_match_is_positive %}summary-positive{% endif %}">
                 {{ cross_match_message|safe }}
             </p>
         {% endif %}
@@ -454,7 +468,16 @@
         let igvBrowser;
 
         document.addEventListener("DOMContentLoaded", function () {
-            initIGV();
+            // No IGV report was generated for this sample: tableJson and
+            // sessionDictionary fall back to empty literals, and igv.createBrowser
+            // would throw on an undefined sessionURL and abort the rest of the
+            // script.
+            if (sessionDictionary && Object.keys(sessionDictionary).length > 0) {
+                initIGV();
+            } else {
+                document.getElementById("igvContainer").innerHTML =
+                    "<p><em>No IGV alignment visualization is available for this sample.</em></p>";
+            }
         });
 
         function initIGV() {

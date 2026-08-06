@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Unit tests for chromosome_utils.py
 
@@ -44,12 +43,20 @@ class TestDetectNamingConvention:
         """Test handling of empty contig list."""
         assert detect_naming_convention([]) == "unknown"
 
-    def test_mixed_naming(self):
-        """Test handling of mixed naming conventions."""
+    def test_a_bare_majority_of_ucsc_names_wins(self):
+        """3 of 5 clears the 50% threshold, so the convention is decided."""
+        contigs = ["chr1", "chr2", "chr3", "chrUn_KI270302v1", "HLA-A*01:01:01:01"]
+        assert detect_naming_convention(contigs) == "ucsc"
+
+    def test_a_minority_of_ucsc_names_decides_nothing(self):
+        """2 of 5 misses the threshold and no other convention reaches it either."""
+        contigs = ["chr1", "chr2", "chrUn_KI270302v1", "HLA-A*01:01:01:01", "phiX174"]
+        assert detect_naming_convention(contigs) == "unknown"
+
+    def test_mixed_naming_with_no_majority_is_unknown(self):
+        """Three conventions, one contig each: nothing reaches 50%."""
         contigs = ["chr1", "2", "NC_000003.11"]
-        # Should return unknown since no single convention dominates
-        result = detect_naming_convention(contigs)
-        assert result in ["unknown", "ucsc", "ensembl", "ncbi"]
+        assert detect_naming_convention(contigs) == "unknown"
 
 
 class TestValidateChromosomeName:
@@ -132,9 +139,83 @@ class TestBuildChromosomeName:
         with pytest.raises(ValueError, match="Invalid chromosome number"):
             _build_chromosome_name(26, "ucsc", "hg19", config)
 
+    @pytest.mark.parametrize(
+        "reference_assembly,expected",
+        [
+            # The real caller normalises to the build name before calling
+            # `_construct_ncbi_accession`, so this is the contract that matters.
+            ("GRCh37", "NC_000001.10"),
+            ("hg19", "NC_000001.10"),
+            ("GRCh38", "NC_000001.11"),
+            ("hg38", "NC_000001.11"),
+        ],
+    )
+    def test_ncbi_chr1_without_the_config_shortcut_uses_the_declared_build(self, reference_assembly, expected):
+        """No `known_chromosome_naming` in config: the accession must still be the declared build's."""
+        assert _build_chromosome_name(1, "ncbi", reference_assembly, {}) == expected
+
+    @pytest.mark.parametrize(
+        "reference_assembly,chromosome_number,expected",
+        [
+            ("GRCh37", 5, "NC_000005.9"),
+            ("hg19", 5, "NC_000005.9"),
+            ("GRCh38", 5, "NC_000005.10"),
+            ("hg38", 5, "NC_000005.10"),
+        ],
+    )
+    def test_ncbi_non_chr1_uses_the_declared_build(self, reference_assembly, chromosome_number, expected):
+        """The config shortcut only covers chr1; every other chromosome is constructed."""
+        config = {"bam_processing": {"known_chromosome_naming": {"GRCh37": {"ncbi": "NC_000001.10"}}}}
+        assert _build_chromosome_name(chromosome_number, "ncbi", reference_assembly, config) == expected
+
 
 class TestConstructNcbiAccession:
     """Test NCBI accession construction."""
+
+    # Real RefSeq accessions, written out independently of the version tables in
+    # `chromosome_utils`. Both spellings of each build must select the same table:
+    # `_build_chromosome_name` normalises to "GRCh37"/"GRCh38" before calling,
+    # while the docstring and the test builders use "hg19"/"hg38".
+    GRCH37_ACCESSIONS = {
+        1: "NC_000001.10",
+        2: "NC_000002.11",
+        5: "NC_000005.9",
+        7: "NC_000007.13",
+        22: "NC_000022.10",
+        23: "NC_000023.10",
+        24: "NC_000024.9",
+        25: "NC_012920.1",
+    }
+    GRCH38_ACCESSIONS = {
+        1: "NC_000001.11",
+        2: "NC_000002.12",
+        5: "NC_000005.10",
+        7: "NC_000007.14",
+        22: "NC_000022.11",
+        23: "NC_000023.11",
+        24: "NC_000024.10",
+        25: "NC_012920.1",
+    }
+
+    @pytest.mark.parametrize("assembly", ["hg19", "GRCh37"])
+    def test_both_spellings_of_grch37_select_the_grch37_table(self, assembly):
+        for chromosome_number, expected in self.GRCH37_ACCESSIONS.items():
+            assert _construct_ncbi_accession(chromosome_number, assembly) == expected, (
+                f"chromosome {chromosome_number} under assembly spelling {assembly!r}"
+            )
+
+    @pytest.mark.parametrize("assembly", ["hg38", "GRCh38"])
+    def test_both_spellings_of_grch38_select_the_grch38_table(self, assembly):
+        for chromosome_number, expected in self.GRCH38_ACCESSIONS.items():
+            assert _construct_ncbi_accession(chromosome_number, assembly) == expected, (
+                f"chromosome {chromosome_number} under assembly spelling {assembly!r}"
+            )
+
+    def test_the_two_builds_do_not_share_an_accession_except_the_mitochondrion(self):
+        """Guards the test above from passing because both tables happen to agree."""
+        differing = [n for n in self.GRCH37_ACCESSIONS if self.GRCH37_ACCESSIONS[n] != self.GRCH38_ACCESSIONS[n]]
+        assert len(differing) == len(self.GRCH37_ACCESSIONS) - 1
+        assert self.GRCH37_ACCESSIONS[25] == self.GRCH38_ACCESSIONS[25] == "NC_012920.1"
 
     def test_construct_grch37_chr1(self):
         """Test GRCh37 chr1 accession."""
@@ -198,6 +279,31 @@ class TestGetChromosomeNameFromBam:
         config = {}
         with pytest.raises(ValueError, match="not found in BAM"):
             get_chromosome_name_from_bam("test.bam", config, chromosome_number=1, reference_assembly="hg19")
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
+    def test_uppercase_contig_resolves_to_the_headers_own_spelling(self, mock_parse, mock_extract):
+        """The region string is handed to samtools, which matches contig names exactly.
+
+        A header spelling `CHR1` must come back as `CHR1`. Returning the
+        canonical `chr1` builds a region samtools cannot find, and an empty
+        region yields no reads and a confident negative.
+        """
+        mock_extract.return_value = "@SQ\tSN:CHR1\tLN:249250621\n"
+        mock_parse.return_value = [{"name": "CHR1", "length": 249250621}]
+
+        result = get_chromosome_name_from_bam("test.bam", {}, chromosome_number=1, reference_assembly="hg19")
+        assert result == "CHR1"
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
+    def test_exact_spelling_is_preferred_over_a_case_insensitive_match(self, mock_parse, mock_extract):
+        """With both spellings present the exact one wins, whatever the list order."""
+        mock_extract.return_value = "@SQ\tSN:CHR1\tLN:249250621\n@SQ\tSN:chr1\tLN:249250621\n"
+        mock_parse.return_value = [{"name": "CHR1", "length": 249250621}, {"name": "chr1", "length": 249250621}]
+
+        result = get_chromosome_name_from_bam("test.bam", {}, chromosome_number=1, reference_assembly="hg19")
+        assert result == "chr1"
 
     @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
     def test_bam_read_error(self, mock_extract):
@@ -294,6 +400,52 @@ class TestDetectAssemblyChr1Length:
         assert assembly in ["hg19", "GRCh37"], (
             f"Chr1 length check should detect hg19/GRCh37 with ENSEMBL naming despite alternates, got {assembly}"
         )
+
+    @pytest.mark.parametrize(
+        "name,length,expected",
+        [
+            ("NC_000001.10", 249250621, "GRCh37"),
+            ("NC_000001.11", 248956422, "GRCh38"),
+            ("nc_000001.10", 249250621, "GRCh37"),
+        ],
+    )
+    def test_ncbi_named_chr1_is_recognised(self, name, length, expected):
+        """An NCBI-named BAM must not be invisible to assembly detection.
+
+        `chromosome_utils` handles NCBI naming everywhere else; searching only
+        "chr1"/"1" here made every NCBI-named BAM undetectable, which in turn
+        makes assembly reconciliation abstain on exactly the inputs it exists
+        to check.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        assert detect_assembly_from_chr1_length([{"name": name, "length": length}]) == expected
+
+    def test_the_length_decides_not_the_accession_version(self):
+        """`.11` is the GRCh38 chr1 accession, but the length is the evidence."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        contigs = [{"name": "NC_000001.11", "length": 249250621}]
+        assert detect_assembly_from_chr1_length(contigs) == "GRCh37"
+
+    @pytest.mark.parametrize("name", ["NC_000012.11", "NC_012920.1", "NC_000021.8"])
+    def test_other_ncbi_accessions_are_not_mistaken_for_chr1(self, name):
+        """A chr1-length value on another accession must not be read as chr1."""
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        assert detect_assembly_from_chr1_length([{"name": name, "length": 249250621}]) is None
+
+    @pytest.mark.parametrize("length", ["not-a-number", "249250621", 249250621.0, []])
+    def test_a_non_integer_chr1_length_returns_none_instead_of_crashing(self, length):
+        """`parse_contigs_from_header` drops these, but the function is public.
+
+        The length went straight into a `,`-formatted f-string, so a string
+        length raised `ValueError: Cannot specify ',' with 's'` before any
+        comparison happened.
+        """
+        from vntyper.scripts.chromosome_utils import detect_assembly_from_chr1_length
+
+        assert detect_assembly_from_chr1_length([{"name": "chr1", "length": length}]) is None
 
     def test_case_insensitive_chr1_naming(self):
         """

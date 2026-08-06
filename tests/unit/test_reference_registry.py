@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 test_reference_registry.py
 
@@ -444,7 +443,7 @@ class TestDataStructures:
         for metadata in ASSEMBLY_METADATA.values():
             used_coord_systems.add(metadata["coordinate_system"])
 
-        for coord_system in COORDINATE_SYSTEMS.keys():
+        for coord_system in COORDINATE_SYSTEMS:
             assert coord_system in used_coord_systems, f"Coordinate system '{coord_system}' is unused"
 
     def test_all_reference_sources_referenced(self):
@@ -454,9 +453,8 @@ class TestDataStructures:
         for metadata in ASSEMBLY_METADATA.values():
             used_sources.add(metadata["reference_source"])
 
-        for source in REFERENCE_SOURCES.keys():
+        for source in REFERENCE_SOURCES:
             assert source in used_sources, f"Reference source '{source}' is unused"
-
 
     def test_coordinate_systems_have_required_fields(self):
         """Test that coordinate systems have all required fields."""

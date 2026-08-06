@@ -1,22 +1,25 @@
 import logging
 import os
-import shutil
 import subprocess
+import tempfile
+import zipfile
 from collections import Counter
-from typing import Optional, Union, List
-from uuid import uuid4
-from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import cast
+from uuid import uuid4
 
 import redis
 import redis.asyncio as aioredis
 from celery.result import AsyncResult
+from email_validator import EmailNotValidError, validate_email
 from fastapi import (
     APIRouter,
     Depends,
     FastAPI,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -26,12 +29,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-from email_validator import validate_email, EmailNotValidError
-from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
-from .config import settings
-from .tasks import run_vntyper_job, run_cohort_analysis_job
+from .cohorts import (
+    ALIAS_DESCRIPTION,
+    COHORT_PASSPHRASE_HEADER,
+    PASSPHRASE_HEADER_DESCRIPTION,
+    PASSPHRASE_QUERY_DESCRIPTION,
+    cohort_job_ids,
+    create_cohort_record,
+    preferred_passphrase,
+    resolve_cohort,
+)
+from .config import build_redis_url, get_redis_password, require_redis_password, settings
+from .identifiers import canonical_id
+from .job_workspace import job_workspace
+from .request_limits import RequestSizeLimitMiddleware
+from .scratch_response import ScratchFileResponse
+from .tasks import run_cohort_analysis_job, run_vntyper_job
+from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
+from .utils import MAX_PASSPHRASE_BYTES, client_host
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -49,14 +66,17 @@ class ReferenceAssembly(str, Enum):
 DEFAULT_INPUT_DIR = settings.DEFAULT_INPUT_DIR
 DEFAULT_OUTPUT_DIR = settings.DEFAULT_OUTPUT_DIR
 
+# Total bytes a single job submission may write into the input directory above.
+MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_BYTES
+
 # Redis configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
-# Redis Password Configuration
-# Set a default password if REDIS_PASSWORD is not provided
-DEFAULT_REDIS_PASSWORD = "defaultpassword"  # Change this to a secure default
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", DEFAULT_REDIS_PASSWORD)
+# Redis credential, from the single accessor in config.py so the API, the worker
+# and beat all resolve the same value. There is no fallback; startup_event()
+# calls require_redis_password() so a deployment that never set it stops there.
+REDIS_PASSWORD = get_redis_password()
 
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
@@ -87,27 +107,16 @@ redis_usage_client = redis.Redis(
     decode_responses=True,
 )
 
-# Rate limiting Redis URL
-RATE_LIMIT_REDIS_URL = (
-    f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{RATE_LIMITING_REDIS_DB}"
-)
-
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
 
-# Initialize password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def hash_passphrase(passphrase: str) -> str:
-    """Hash a passphrase using bcrypt."""
-    return pwd_context.hash(passphrase)
-
-
-def verify_passphrase(passphrase: str, hashed_passphrase: str) -> bool:
-    """Verify a passphrase against its hash."""
-    return pwd_context.verify(passphrase, hashed_passphrase)
-
+# Client-facing text for a job that failed. The task's own exception carries the
+# command line and the per-job container paths, which a job-status poller has no
+# use for; it is logged instead of returned.
+JOB_FAILURE_MESSAGE = (
+    "The job failed during processing. Quote the job ID when reporting it so the "
+    "failure can be looked up in the server logs."
+)
 
 app = FastAPI(
     title="VNtyper Online API",
@@ -143,6 +152,14 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# Bound the size of every request before it is read, not only the part of it
+# that reaches the job volume. MAX_UPLOAD_BYTES above governs what a submission
+# may write; the ceiling applied here is derived from it in request_limits and
+# governs what a submission may deliver. Registered first so that CORS, added
+# below, ends up outside it and a refused cross-origin upload still reads its
+# own status.
+app.add_middleware(RequestSizeLimitMiddleware)
+
 # CORS configuration for development
 # Only allow localhost origins when ENVIRONMENT is 'development' or 'local'
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
@@ -164,12 +181,19 @@ if ENVIRONMENT in ["development", "local"]:
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize rate limiting and cache the VNtyper tool version."""
+    """Initialize rate limiting and cache the VNtyper tool version.
+
+    Raises:
+        RuntimeError: If REDIS_PASSWORD is unset. Checked first, before anything
+            opens a connection, so a misconfigured deployment fails here rather
+            than coming up half-authenticated.
+    """
+    redis_password = require_redis_password()
+
     # Initialize Redis client for rate limiting
     try:
-        redis_rate_limit = aioredis.from_url(
-            RATE_LIMIT_REDIS_URL, encoding="utf8", decode_responses=True
-        )
+        rate_limit_redis_url = build_redis_url(REDIS_HOST, REDIS_PORT, RATE_LIMITING_REDIS_DB, redis_password)
+        redis_rate_limit = aioredis.from_url(rate_limit_redis_url, encoding="utf8", decode_responses=True)
         await FastAPILimiter.init(redis_rate_limit)
         logger.info("Rate limiting initialized successfully.")
     except Exception as e:
@@ -198,13 +222,42 @@ async def startup_event():
         TOOL_VERSION = "timeout retrieving tool version"
 
 
+def require_job_id(job_id: str, detail: str = "Job ID not found") -> str:
+    """Refuse a job identifier the service could not have issued.
+
+    The three routes that take an identifier from a caller use it directly, as a
+    Redis key and as part of a path, so the shape is checked once here before it
+    is used for anything. The answer for an unusable identifier is deliberately
+    the same as for one that names no job: telling the two apart would say which
+    identifiers exist, and reporting either as a server error would say the
+    service is broken when it is not.
+
+    Args:
+        job_id: The caller-supplied identifier. Untrusted.
+        detail: The message this route uses for "no such job", so the answer a
+            caller gets does not depend on why the lookup failed.
+
+    Returns:
+        str: The identifier in the canonical form the service issues, once it is
+            known to be usable. Callers must use this value rather than the one
+            they passed in - it is what the key and the path are built from.
+
+    Raises:
+        HTTPException: 404, if the value is not one of this service's
+            identifiers.
+    """
+    canonical = canonical_id(job_id)
+    if canonical is None:
+        logger.warning("Refused a job identifier that is not in the form this service issues")
+        raise HTTPException(status_code=404, detail=detail)
+    # The canonical form, not the form the caller typed: it becomes a Redis key and a
+    # path segment, and both are case-sensitive.
+    return canonical
+
+
 # Define separate RateLimiter dependencies
-simple_rate_limiter = RateLimiter(
-    times=settings.RATE_LIMIT_SIMPLE_TIMES, seconds=settings.RATE_LIMIT_SIMPLE_SECONDS
-)
-high_rate_limiter = RateLimiter(
-    times=settings.RATE_LIMIT_HIGH_TIMES, seconds=settings.RATE_LIMIT_HIGH_SECONDS
-)
+simple_rate_limiter = RateLimiter(times=settings.RATE_LIMIT_SIMPLE_TIMES, seconds=settings.RATE_LIMIT_SIMPLE_SECONDS)
+high_rate_limiter = RateLimiter(times=settings.RATE_LIMIT_HIGH_TIMES, seconds=settings.RATE_LIMIT_HIGH_SECONDS)
 
 # Initialize APIRouter without prefix
 router = APIRouter()
@@ -241,63 +294,51 @@ def get_versions():
     dependencies=[Depends(simple_rate_limiter)],
     summary="Create a new cohort",
     description=(
-        "Create a new cohort with an optional alias and passphrase.\n\n"
+        "Create a new cohort. A passphrase is required, and it is the only "
+        "credential that will open the cohort afterwards. It may be at most "
+        f"{MAX_PASSPHRASE_BYTES} bytes once UTF-8 encoded; a longer one is "
+        "refused rather than shortened, so the credential that is stored is "
+        "always the one that was chosen. An alias may be given as a label; "
+        "aliases are unique, and an alias never identifies a cohort on its "
+        "own.\n\n"
         f"**Rate Limit:** {settings.RATE_LIMIT_SIMPLE_TIMES} requests per {settings.RATE_LIMIT_SIMPLE_SECONDS} seconds."
     ),
 )
 def create_cohort(
-    alias: Optional[str] = Form(None, description="Optional cohort alias"),
-    passphrase: Optional[str] = Form(
-        None, description="Optional passphrase to protect the cohort"
-    ),
+    passphrase: str = Form(..., description=f"Passphrase protecting the cohort, at most {MAX_PASSPHRASE_BYTES} bytes"),
+    alias: str | None = Form(None, description=ALIAS_DESCRIPTION),
 ):
     """
     **Description:**
 
-    This endpoint allows users to create a new cohort for grouping jobs. An optional alias and passphrase can be provided to identify and secure the cohort.
+    This endpoint allows users to create a new cohort for grouping jobs. The passphrase is required: it is the only credential that will open the cohort for reading, downloading or analysis. An optional alias labels the cohort; aliases are unique across cohorts.
 
     **Parameters:**
 
-    - **alias**: A user-defined name for the cohort.
-    - **passphrase**: A passphrase to protect the cohort access.
+    - **passphrase**: The passphrase that will protect cohort access. Required, and at most `MAX_PASSPHRASE_BYTES` bytes once UTF-8 encoded. A longer passphrase is refused with an explicit message rather than silently shortened to a prefix of itself. A refused request leaves the requested alias free for another attempt.
+    - **alias**: An optional user-defined label for the cohort.
 
     **Returns:**
 
-    - **cohort_id**: A unique identifier for the created cohort.
+    - **cohort_id**: A unique identifier for the created cohort. Keep it: it is
+      required, together with the passphrase, for every later request.
     - **alias**: The alias provided for the cohort.
     """
-    # Generate a unique cohort identifier
-    cohort_id = str(uuid4())
-
-    # Hash the passphrase if provided
-    hashed_passphrase = hash_passphrase(passphrase) if passphrase else None
-
-    # Store cohort metadata in Redis hash
-    cohort_key = f"cohort:{cohort_id}"
-    redis_cohort_client.hset(
-        cohort_key,
-        mapping={
-            "alias": alias or "",
-            "hashed_passphrase": hashed_passphrase or "",
-            "created_at": datetime.utcnow().isoformat(),
-        },
-    )
-
-    # Set a TTL for the cohort based on retention policy
-    ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-    redis_cohort_client.expire(cohort_key, ttl_seconds)
-
-    return {"cohort_id": cohort_id, "alias": alias}
+    try:
+        return create_cohort_record(
+            redis_cohort_client,
+            alias=alias,
+            passphrase=passphrase,
+            retention_seconds=settings.COHORT_RETENTION_DAYS * 86400,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class RunJobResponse(BaseModel):
-    message: str = Field(
-        ..., description="Confirmation message indicating job submission."
-    )
+    message: str = Field(..., description="Confirmation message indicating job submission.")
     job_id: str = Field(..., description="Unique identifier for the submitted job.")
-    cohort_id: Optional[str] = Field(
-        None, description="Identifier of the associated cohort, if any."
-    )
+    cohort_id: str | None = Field(default=None, description="Identifier of the associated cohort, if any.")
 
 
 @router.post(
@@ -316,20 +357,19 @@ class RunJobResponse(BaseModel):
 async def run_vntyper(
     request: Request,
     bam_file: UploadFile = File(..., description="BAM file to process"),
-    bai_file: UploadFile = File(None, description="Optional BAI index file"),
+    # `UploadFile | None`, not `UploadFile`: the part is optional, so the framework
+    # hands this over as None whenever a submission omits it, which the body below
+    # has always had to handle.
+    bai_file: UploadFile | None = File(None, description="Optional BAI index file"),
     thread: int = Form(4),
     reference_assembly: ReferenceAssembly = Form(ReferenceAssembly.HG38),
     fast_mode: bool = Form(False),
     keep_intermediates: bool = Form(False),
     archive_results: bool = Form(False),
-    email: Optional[str] = Form(None, description="Optional email to receive results"),
-    cohort_id: Optional[str] = Form(
-        None, description="Optional cohort identifier to associate the job"
-    ),
-    alias: Optional[str] = Form(None, description="Optional cohort alias"),
-    passphrase: Optional[str] = Form(
-        None, description="Passphrase if required by the cohort"
-    ),
+    email: str | None = Form(None, description="Optional email to receive results"),
+    cohort_id: str | None = Form(None, description="Optional cohort identifier to associate the job"),
+    alias: str | None = Form(None, description="Optional cohort alias"),
+    passphrase: str | None = Form(None, description="Passphrase if required by the cohort"),
     # ----------------------------------------------------
     # ADDED: single option for advntr_mode (default False)
     # ----------------------------------------------------
@@ -359,34 +399,34 @@ async def run_vntyper(
     - **cohort_id**: Identifier of the associated cohort, if any.
     """
     logger.info("Received job submission")
-    # Ensure input and output directories exist
-    os.makedirs(DEFAULT_INPUT_DIR, exist_ok=True)
-    os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
 
-    # Generate a unique job ID
+    # Two bounds apply to a submission, and each has exactly one owner.
+    # `RequestSizeLimitMiddleware` bounds the whole request -- the declared
+    # length first, then the bytes as they arrive -- and answers before this
+    # function is ever called. `MAX_UPLOAD_BYTES` bounds what the submission
+    # writes to the volume, and is applied to the bytes actually copied, below.
+    # A request is always larger than the files inside it, by the multipart
+    # framing wrapped around them, so measuring the request against the
+    # file-sized bound here would refuse a file of exactly the permitted size.
+
+    # Generate a unique job ID. The two directories named after it are not
+    # created yet: everything that can refuse this submission is decided first,
+    # below, so a refusal costs the shared volume nothing at all.
     job_id = str(uuid4())
     job_input_dir = os.path.join(DEFAULT_INPUT_DIR, job_id)
     job_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, job_id)
 
-    os.makedirs(job_input_dir, exist_ok=True)
-    os.makedirs(job_output_dir, exist_ok=True)
-
-    # Save the uploaded BAM file
-    bam_path = os.path.join(job_input_dir, bam_file.filename)
-    with open(bam_path, "wb") as f:
-        shutil.copyfileobj(bam_file.file, f)
-    logger.info(f"Saved uploaded BAM file to {bam_path}")
-
-    # Save the uploaded BAI file if provided
-    if bai_file:
-        bai_path = os.path.join(job_input_dir, bai_file.filename)
-        with open(bai_path, "wb") as f:
-            shutil.copyfileobj(bai_file.file, f)
-        logger.info(f"Saved uploaded BAI file to {bai_path}")
-    else:
+    # 1. The client-supplied filenames must be acceptable. This resolves paths
+    #    only; it creates nothing.
+    try:
+        bam_path = safe_upload_path(job_input_dir, bam_file.filename)
         bai_path = None
+        if bai_file is not None and bai_file.filename:
+            bai_path = safe_upload_path(job_input_dir, bai_file.filename, INDEX_EXTENSIONS)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Validate the email if provided
+    # 2. Any email address supplied must be one results can actually be sent to.
     if email:
         try:
             valid = validate_email(email)
@@ -394,109 +434,115 @@ async def run_vntyper(
             logger.info(f"Validated email: {email}")
         except EmailNotValidError as e:
             logger.error(f"Invalid email address provided: {email} - {str(e)}")
-            raise HTTPException(
-                status_code=400, detail="Invalid email address provided."
-            )
+            raise HTTPException(status_code=400, detail="Invalid email address provided.") from e
 
-    # Cohort handling logic
+    # 3. Joining a cohort writes into it, so it is authorized on exactly the
+    #    same terms as reading one. Membership itself is recorded further down,
+    #    once the submission is known to have been stored.
     if cohort_id or alias:
-        if cohort_id:
-            cohort_key = f"cohort:{cohort_id}"
-            cohort_data = redis_cohort_client.hgetall(cohort_key)
-            if not cohort_data:
-                raise HTTPException(status_code=404, detail="Cohort ID not found")
-        else:
-            # Search for cohort by alias
-            cohort_key = None
-            cohort_data = None
-            for key in redis_cohort_client.scan_iter("cohort:*"):
-                data = redis_cohort_client.hgetall(key)
-                if data.get("alias") == alias:
-                    cohort_key = key
-                    cohort_data = data
-                    cohort_id = key.split(":", 1)[1]
-                    break
-            if not cohort_key:
-                raise HTTPException(status_code=404, detail="Cohort alias not found")
-        # If alias is provided, verify it matches the cohort's alias
-        if alias and cohort_data.get("alias") != alias:
-            logger.error(
-                f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Provided alias does not match the cohort's alias.",
-            )
-        logger.info(
-            f"Cohort identified: {cohort_id} with alias: {cohort_data.get('alias')}"
-        )
-        # Verify passphrase if required
-        if cohort_data.get("hashed_passphrase"):
-            if not passphrase:
-                raise HTTPException(
-                    status_code=401, detail="Passphrase required for this cohort"
-                )
-            if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
-                raise HTTPException(status_code=401, detail="Incorrect passphrase")
-        # Assign the job to the cohort immediately
-        redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
-        logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
+        cohort = authorized_cohort(cohort_id, alias, passphrase)
+        cohort_id = cohort["cohort_id"]
+        cohort_key: str | None = cohort["cohort_key"]
     else:
         cohort_key = None  # Job is not associated with any cohort
-        logger.info(
-            f"Job {job_id} submitted as a single job without cohort assignment."
-        )
+        logger.info(f"Job {job_id} submitted as a single job without cohort assignment.")
 
     # Extract client IP and User-Agent
-    client_ip = request.client.host
-    user_agent = request.headers.get(
-        "User-Agent", "unknown"
-    )  # ---------------------------------------------------------------------
-    # If advntr_mode is True, use vntyper_long_queue; else the default queue.
-    # ---------------------------------------------------------------------
-    if advntr_mode:
-        task = run_vntyper_job.apply_async(
-            kwargs={
-                "bam_path": bam_path,
-                "output_dir": job_output_dir,
-                "thread": thread,
-                "reference_assembly": reference_assembly.value,
-                "fast_mode": fast_mode,
-                "keep_intermediates": keep_intermediates,
-                "archive_results": archive_results,
-                "email": email,
-                "cohort_key": cohort_key,
-                "client_ip": client_ip,
-                "user_agent": user_agent,
-                "advntr_mode": True,
-            },
-            queue="vntyper_long_queue",
-        )
-        logger.info(
-            f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}"
-        )
-    else:
-        task = run_vntyper_job.delay(
-            bam_path=bam_path,
-            output_dir=job_output_dir,
-            thread=thread,
-            reference_assembly=reference_assembly.value,
-            fast_mode=fast_mode,
-            keep_intermediates=keep_intermediates,
-            archive_results=archive_results,
-            email=email,
-            cohort_key=cohort_key,
-            client_ip=client_ip,
-            user_agent=user_agent,
-            advntr_mode=False,
-        )
-        logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+    client_ip = client_host(request)
+    user_agent = request.headers.get("User-Agent", "unknown")
 
-    # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
-    redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
+    # Only now is anything written. `job_workspace` owns the two directories
+    # this submission needs and removes them again if the block below does not
+    # complete, so a submission that fails after its upload has landed leaves
+    # nothing on the volume either -- the caller never receives an identifier,
+    # so nothing afterwards could address the leftovers.
+    #
+    # That holds up to `workspace.commit()` below and not past it: once the
+    # broker has accepted the task the worker owns these directories, and a
+    # later failure here must not delete what it is reading.
+    with job_workspace(DEFAULT_INPUT_DIR, DEFAULT_OUTPUT_DIR, job_id) as workspace:
+        # Save the uploaded files, counting the bytes as they are written. One
+        # budget covers the whole submission, so the two parts together stay
+        # within the same ceiling.
+        try:
+            remaining = MAX_UPLOAD_BYTES - save_upload_bounded(bam_file.file, bam_path, MAX_UPLOAD_BYTES)
+            logger.info(f"Saved uploaded BAM file to {bam_path}")
 
-    # Add the task ID to a Redis list to track the queue
-    redis_client.rpush("vntyper_job_queue", task.id)
+            # `bai_path` is only ever set from `bai_file` above, so the second test cannot
+            # change the outcome; it is what lets the checker see the same thing.
+            if bai_path is not None and bai_file is not None:
+                save_upload_bounded(bai_file.file, bai_path, remaining)
+                logger.info(f"Saved uploaded BAI file to {bai_path}")
+        except ValueError as exc:
+            msg = f"Upload exceeds the maximum accepted size of {MAX_UPLOAD_BYTES} bytes"
+            raise HTTPException(status_code=413, detail=msg) from exc
+
+        # Membership is recorded before the enqueue because the task is handed
+        # the cohort key, but it is only *true* once the task exists: an enqueue
+        # that fails has to take the member with it, or the cohort keeps an
+        # identifier naming a job that was never created and whose directories
+        # are about to be reclaimed.
+        if cohort_key is not None:
+            redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
+            logger.info(f"Job {job_id} is associated with cohort {cohort_id}")
+
+        # ---------------------------------------------------------------------
+        # If advntr_mode is True, use vntyper_long_queue; else the default queue.
+        # ---------------------------------------------------------------------
+        try:
+            if advntr_mode:
+                task = run_vntyper_job.apply_async(
+                    kwargs={
+                        "bam_path": bam_path,
+                        "index_path": bai_path,
+                        "output_dir": job_output_dir,
+                        "thread": thread,
+                        "reference_assembly": reference_assembly.value,
+                        "fast_mode": fast_mode,
+                        "keep_intermediates": keep_intermediates,
+                        "archive_results": archive_results,
+                        "email": email,
+                        "cohort_key": cohort_key,
+                        "client_ip": client_ip,
+                        "user_agent": user_agent,
+                        "advntr_mode": True,
+                    },
+                    queue="vntyper_long_queue",
+                )
+                logger.info(f"Enqueued adVNTR job {job_id} in long queue with task ID {task.id}")
+            else:
+                task = run_vntyper_job.delay(
+                    bam_path=bam_path,
+                    index_path=bai_path,
+                    output_dir=job_output_dir,
+                    thread=thread,
+                    reference_assembly=reference_assembly.value,
+                    fast_mode=fast_mode,
+                    keep_intermediates=keep_intermediates,
+                    archive_results=archive_results,
+                    email=email,
+                    cohort_key=cohort_key,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                    advntr_mode=False,
+                )
+                logger.info(f"Enqueued job {job_id} with task ID {task.id}")
+        except BaseException:
+            if cohort_key is not None:
+                redis_cohort_client.srem(f"{cohort_key}:jobs", job_id)
+                logger.info(f"Job {job_id} was not enqueued; removed it from cohort {cohort_id} again")
+            raise
+
+        # The commit point: the task exists, so a worker owns the job's input
+        # directory from here on and the reclaim above no longer applies. The
+        # two writes below are bookkeeping about a job that is already running.
+        workspace.commit()
+
+        # Store the mapping between job_id and task.id in Redis with a TTL (e.g., 7 days)
+        redis_client.set(job_id, task.id, ex=604800)  # 7 days in seconds
+
+        # Add the task ID to a Redis list to track the queue
+        redis_client.rpush("vntyper_job_queue", task.id)
 
     return RunJobResponse(message="Job submitted", job_id=job_id, cohort_id=cohort_id)
 
@@ -504,7 +550,7 @@ async def run_vntyper(
 class JobStatusResponse(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job.")
     status: str = Field(..., description="Current status of the job.")
-    error: Optional[str] = Field(None, description="Error message if the job failed.")
+    error: str | None = Field(default=None, description="Error message if the job failed.")
 
 
 @router.get(
@@ -535,7 +581,9 @@ def get_job_status(job_id: str):
     - **status**: The current status of the job.
     - **error**: Error message if the job has failed.
     """
-    # Retrieve task ID from Redis using job_id
+    # Retrieve task ID from Redis using job_id, once it is one of ours. The returned
+    # value is the canonical form, which is what the key is built from.
+    job_id = require_job_id(job_id)
     task_id = redis_client.get(job_id)
     if not task_id:
         logger.warning(f"Job ID {job_id} not found in Redis")
@@ -554,9 +602,10 @@ def get_job_status(job_id: str):
     elif status == "SUCCESS":
         return JobStatusResponse(job_id=job_id, status="completed")
     elif status == "FAILURE":
-        return JobStatusResponse(
-            job_id=job_id, status="failed", error=str(task_result.info)
-        )
+        # Log the task's own exception, return a generic message: the detail is
+        # operator-facing, and this endpoint is unauthenticated.
+        logger.error(f"Job {job_id} (Task ID: {task_id}) failed: {type(task_result.info).__name__}: {task_result.info}")
+        return JobStatusResponse(job_id=job_id, status="failed", error=JOB_FAILURE_MESSAGE)
     else:
         return JobStatusResponse(job_id=job_id, status=status.lower())
 
@@ -593,7 +642,10 @@ def download_result(job_id: str):
 
     - **FileResponse**: A ZIP file containing the results of the job.
     """
-    logger.info(f"Received download request for job {job_id}")
+    logger.info("Received download request")
+    # The identifier becomes a filename below, so it is checked before it is
+    # joined onto anything.
+    job_id = require_job_id(job_id, detail="File not found")
     zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
     if os.path.exists(zip_path):
         logger.info(f"Serving zip file {zip_path}")
@@ -630,22 +682,14 @@ def health_check():
 
 
 class JobQueueResponse(BaseModel):
-    total_jobs_in_queue: int = Field(
-        ..., description="Total number of jobs in the queue."
-    )
+    total_jobs_in_queue: int = Field(..., description="Total number of jobs in the queue.")
 
 
 class JobQueuePositionResponse(BaseModel):
     job_id: str = Field(..., description="Unique identifier for the job.")
-    position_in_queue: Optional[int] = Field(
-        None, description="Position of the job in the queue."
-    )
-    total_jobs_in_queue: int = Field(
-        ..., description="Total number of jobs in the queue."
-    )
-    status: Optional[str] = Field(
-        None, description="Status message if job is not in the queue."
-    )
+    position_in_queue: int | None = Field(default=None, description="Position of the job in the queue.")
+    total_jobs_in_queue: int = Field(..., description="Total number of jobs in the queue.")
+    status: str | None = Field(default=None, description="Status message if job is not in the queue.")
 
 
 @router.get(
@@ -660,10 +704,10 @@ class JobQueuePositionResponse(BaseModel):
         "**Note:** This endpoint is rate-limited to prevent abuse.\n"
         f"**Rate Limit:** {settings.RATE_LIMIT_SIMPLE_TIMES} requests per {settings.RATE_LIMIT_SIMPLE_SECONDS} seconds."
     ),
-    response_model=Union[JobQueueResponse, JobQueuePositionResponse],
+    response_model=JobQueueResponse | JobQueuePositionResponse,
 )
 def get_job_queue(
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ):
     """
     **Description:**
@@ -684,13 +728,20 @@ def get_job_queue(
         - **total_jobs_in_queue**: Total number of jobs currently in the queue.
         - **status**: Status message if the job is not in the queue.
     """
+    if job_id:
+        job_id = require_job_id(job_id)
+
     try:
-        # Get the list of task IDs from the Redis list
-        task_ids = redis_client.lrange("vntyper_job_queue", 0, -1)
+        # Get the list of task IDs from the Redis list.
+        # redis-py declares the command return type as `Awaitable[list] | list` because
+        # the sync and async clients share one command mixin. `redis_client` is the sync
+        # `redis.Redis`, so the awaitable arm cannot occur; the cast says so once here
+        # instead of leaving the union to be re-checked at each use below.
+        task_ids = cast(list[str], redis_client.lrange("vntyper_job_queue", 0, -1))
         queue_length = len(task_ids)
     except Exception as e:
         logger.error(f"Error accessing the job queue: {e}")
-        raise HTTPException(status_code=500, detail="Error accessing the job queue")
+        raise HTTPException(status_code=500, detail="Error accessing the job queue") from e
 
     if job_id:
         try:
@@ -715,9 +766,15 @@ def get_job_queue(
                     total_jobs_in_queue=queue_length,
                     status="Job not in queue (might be processing or completed)",
                 )
+        except HTTPException:
+            # The "unknown job id" answer above is an HTTPException, and
+            # HTTPException is an Exception, so without this it would be caught
+            # below and reported as a server error. Let the handler's own
+            # deliberate status codes through untouched.
+            raise
         except Exception as e:
             logger.error(f"Error retrieving job position: {e}")
-            raise HTTPException(status_code=500, detail="Error retrieving job position")
+            raise HTTPException(status_code=500, detail="Error retrieving job position") from e
     else:
         # Return the total number of jobs in the queue
         return JobQueueResponse(total_jobs_in_queue=queue_length)
@@ -734,10 +791,11 @@ def get_job_queue(
     ),
 )
 def get_cohort_status(
-    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
-    alias: Optional[str] = Query(None, description="Cohort alias"),
-    passphrase: Optional[str] = Query(
-        None, description="Passphrase if required by the cohort"
+    cohort_id: str | None = Query(None, description="Cohort identifier (required)"),
+    alias: str | None = Query(None, description="Cohort alias, checked against the cohort"),
+    passphrase: str | None = Query(None, deprecated=True, description=PASSPHRASE_QUERY_DESCRIPTION),
+    header_passphrase: str | None = Header(
+        None, alias=COHORT_PASSPHRASE_HEADER, description=PASSPHRASE_HEADER_DESCRIPTION
     ),
 ):
     """
@@ -747,9 +805,10 @@ def get_cohort_status(
 
     **Parameters:**
 
-    - **cohort_id**: (Optional) The unique identifier of the cohort.
-    - **alias**: (Optional) The alias of the cohort.
-    - **passphrase**: (Optional) The passphrase for the cohort if required.
+    - **cohort_id**: The unique identifier of the cohort. Required.
+    - **alias**: (Optional) The alias of the cohort, checked against it.
+    - **passphrase**: The passphrase protecting the cohort. Required, and deprecated in this position: prefer the `X-Cohort-Passphrase` header, which is not written to access logs or browser history.
+    - **X-Cohort-Passphrase**: The passphrase protecting the cohort. Preferred, and used instead of the query parameter when both are supplied.
 
     **Returns:**
 
@@ -758,6 +817,7 @@ def get_cohort_status(
     - **jobs**: A list of job statuses within the cohort.
     """
     # Reuse the get_cohort_jobs function to retrieve job_ids
+    passphrase = preferred_passphrase(header_passphrase, passphrase)
     response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
     job_ids = response["job_ids"]
 
@@ -779,9 +839,7 @@ def get_cohort_status(
         else:
             task_result = AsyncResult(task_id)
             # Map the Celery status to standardized status
-            status = celery_status_mapping.get(
-                task_result.status, task_result.status.lower()
-            )
+            status = celery_status_mapping.get(task_result.status, task_result.status.lower())
         job_statuses.append({"job_id": job_id, "status": status})
 
     return {
@@ -839,6 +897,18 @@ def get_usage_statistics():
     )
 
 
+def _remove_temp_file(path: str) -> None:
+    """Delete a temporary file the service built for a single response.
+
+    Tolerates the file already being gone so that a repeated cleanup cannot turn
+    into an error raised after the response has been sent.
+
+    Args:
+        path: Filesystem path of the temporary file to remove.
+    """
+    Path(path).unlink(missing_ok=True)
+
+
 @router.get(
     "/cohort-download/",
     tags=["Cohort Management"],
@@ -851,10 +921,11 @@ def get_usage_statistics():
     ),
 )
 def cohort_download(
-    cohort_id: Optional[str] = Query(None, description="Cohort identifier"),
-    alias: Optional[str] = Query(None, description="Cohort alias"),
-    passphrase: Optional[str] = Query(
-        None, description="Passphrase if required by the cohort"
+    cohort_id: str | None = Query(None, description="Cohort identifier (required)"),
+    alias: str | None = Query(None, description="Cohort alias, checked against the cohort"),
+    passphrase: str | None = Query(None, deprecated=True, description=PASSPHRASE_QUERY_DESCRIPTION),
+    header_passphrase: str | None = Header(
+        None, alias=COHORT_PASSPHRASE_HEADER, description=PASSPHRASE_HEADER_DESCRIPTION
     ),
 ):
     """
@@ -865,37 +936,48 @@ def cohort_download(
 
     **Parameters:**
 
-    - **cohort_id**: (Optional) The unique identifier of the cohort.
-    - **alias**: (Optional) The alias of the cohort.
-    - **passphrase**: (Optional) The passphrase for the cohort if required.
+    - **cohort_id**: The unique identifier of the cohort. Required.
+    - **alias**: (Optional) The alias of the cohort, checked against it.
+    - **passphrase**: The passphrase protecting the cohort. Required, and deprecated in this position: prefer the `X-Cohort-Passphrase` header, which is not written to access logs or browser history.
+    - **X-Cohort-Passphrase**: The passphrase protecting the cohort. Preferred, and used instead of the query parameter when both are supplied.
 
     **Returns:**
 
     - **FileResponse**: A ZIP file containing all `.zip` results for the cohort.
     """
-    import tempfile
-    import zipfile
-
     # Retrieve job IDs for the given cohort
+    passphrase = preferred_passphrase(header_passphrase, passphrase)
     response = get_cohort_jobs(cohort_id=cohort_id, alias=alias, passphrase=passphrase)
     job_ids = response["job_ids"]
 
-    # Create a temporary ZIP file
+    # Create a temporary ZIP file. From the moment it exists it is this
+    # request's to clean up: the response below removes it once it ends, and a
+    # build that fails never produces a response, so that path reclaims the file
+    # itself. A member's own archive can age out between being seen and being
+    # read, which is enough to reach it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_zip:
-        with zipfile.ZipFile(temp_zip.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        final_zip_path = temp_zip.name
+
+    try:
+        with zipfile.ZipFile(final_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             # For each job, look for its existing .zip file in the output directory
             for job_id in job_ids:
                 job_zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
                 if os.path.exists(job_zip_path):
                     zf.write(job_zip_path, arcname=os.path.basename(job_zip_path))
-
-        final_zip_path = temp_zip.name  # We'll pass this to FileResponse
+    except BaseException:
+        _remove_temp_file(final_zip_path)
+        raise
 
     # Suggest a download filename
     download_name = f"cohort_{response['cohort_id']}.zip"
 
-    # Return the zipped file as a download
-    return FileResponse(
+    # Return the zipped file as a download. The archive is scratch space owned by
+    # this one response, and `ScratchFileResponse` removes it in a `finally`
+    # around the send: the caller receives the complete archive, and the file is
+    # gone afterwards whether the body was delivered or the connection dropped
+    # part-way through it.
+    return ScratchFileResponse(
         path=final_zip_path,
         media_type="application/zip",
         filename=download_name,
@@ -920,11 +1002,9 @@ def cohort_download(
 )
 def run_cohort_analysis(
     request: Request,
-    cohort_id: Optional[str] = Form(None, description="Cohort identifier"),
-    alias: Optional[str] = Form(None, description="Cohort alias"),
-    passphrase: Optional[str] = Form(
-        None, description="Passphrase if required by the cohort"
-    ),
+    cohort_id: str | None = Form(None, description="Cohort identifier (required)"),
+    alias: str | None = Form(None, description="Cohort alias, checked against the cohort"),
+    passphrase: str | None = Form(None, description="Passphrase protecting the cohort (required)"),
 ):
     """
     **Description:**
@@ -934,9 +1014,9 @@ def run_cohort_analysis(
 
     **Parameters:**
 
-    - **cohort_id**: (Optional) The unique identifier of the cohort.
-    - **alias**: (Optional) The alias of the cohort.
-    - **passphrase**: (Optional) The passphrase if required by the cohort.
+    - **cohort_id**: The unique identifier of the cohort. Required.
+    - **alias**: (Optional) The alias of the cohort, checked against it.
+    - **passphrase**: The passphrase protecting the cohort. Required.
 
     **Returns:**
     - **message**: Confirmation message.
@@ -949,20 +1029,16 @@ def run_cohort_analysis(
     cid = response["cohort_id"]
     job_ids = response["job_ids"]
     if not job_ids:
-        raise HTTPException(
-            status_code=400, detail="No jobs found in the specified cohort."
-        )
+        raise HTTPException(status_code=400, detail="No jobs found in the specified cohort.")
 
     # 2) Build the list of existing .zip result paths for these jobs
-    zip_paths: List[str] = []
+    zip_paths: list[str] = []
     for jid in job_ids:
         candidate_zip = os.path.join(DEFAULT_OUTPUT_DIR, f"{jid}.zip")
         if os.path.exists(candidate_zip):
             zip_paths.append(candidate_zip)
         else:
-            logger.warning(
-                f"Job {jid} missing .zip file. Skipping from cohort analysis."
-            )
+            logger.warning(f"Job {jid} missing .zip file. Skipping from cohort analysis.")
 
     if not zip_paths:
         raise HTTPException(
@@ -975,7 +1051,7 @@ def run_cohort_analysis(
     analysis_output_dir = os.path.join(DEFAULT_OUTPUT_DIR, analysis_job_id)
 
     # 4) Enqueue the new Celery task
-    client_ip = request.client.host
+    client_ip = client_host(request)
     user_agent = request.headers.get("User-Agent", "unknown")
     task = run_cohort_analysis_job.delay(
         cohort_id=cid,
@@ -984,9 +1060,7 @@ def run_cohort_analysis(
         user_ip=client_ip,
         user_agent=user_agent,
     )
-    logger.info(
-        f"Enqueued cohort analysis job: analysis_job_id={analysis_job_id}, task_id={task.id}"
-    )
+    logger.info(f"Enqueued cohort analysis job: analysis_job_id={analysis_job_id}, task_id={task.id}")
 
     # Store the mapping for job status checking
     redis_client.set(analysis_job_id, task.id, ex=604800)  # 7 days TTL
@@ -1009,7 +1083,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """
     if exc.status_code == 429:
         # Customize the error message for rate limit exceeded
-        logger.warning(f"Rate limit exceeded for IP: {request.client.host}")
+        logger.warning(f"Rate limit exceeded for IP: {client_host(request)}")
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": "Rate limit exceeded. Please try again later."},
@@ -1021,61 +1095,57 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-def get_cohort_jobs(
-    cohort_id: Optional[str], alias: Optional[str], passphrase: Optional[str]
-):
+def authorized_cohort(cohort_id: str | None, alias: str | None, passphrase: str | None):
+    """
+    Resolve a cohort and authorize the caller, as HTTP.
+
+    The rules live in `cohorts.resolve_cohort`, which signals with builtin
+    exceptions so it stays free of FastAPI. This is the only place that
+    vocabulary is translated into status codes, so every cohort route answers a
+    given failure the same way.
+
+    Args:
+        cohort_id: The cohort's identifier. Required.
+        alias: Optional label, cross-checked against the resolved cohort.
+        passphrase: The cohort's passphrase. Required.
+
+    Returns:
+        dict: The resolved `cohort_id`, `cohort_key` and `alias`.
+
+    Raises:
+        HTTPException: 400 for a malformed request, 401 for a refused one, 404
+            for a cohort that does not exist.
+    """
+    try:
+        return resolve_cohort(
+            redis_cohort_client,
+            cohort_id=cohort_id,
+            alias=alias,
+            passphrase=passphrase,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def get_cohort_jobs(cohort_id: str | None, alias: str | None, passphrase: str | None):
     """
     Helper function to retrieve job IDs associated with a cohort.
+
+    Args:
+        cohort_id: The cohort's identifier. Required.
+        alias: Optional label, cross-checked against the resolved cohort.
+        passphrase: The cohort's passphrase. Required.
+
+    Returns:
+        dict: The cohort's `cohort_id`, `alias` and member `job_ids`.
     """
-    # Retrieve the cohort using cohort_id or alias
-    cohort_key = None
-    cohort_data = None
-    if cohort_id:
-        cohort_key = f"cohort:{cohort_id}"
-        cohort_data = redis_cohort_client.hgetall(cohort_key)
-        if not cohort_data:
-            raise HTTPException(status_code=404, detail="Cohort ID not found")
-    elif alias:
-        # Search for cohort by alias
-        for key in redis_cohort_client.scan_iter("cohort:*"):
-            data = redis_cohort_client.hgetall(key)
-            if data.get("alias") == alias:
-                cohort_key = key
-                cohort_data = data
-                cohort_id = key.split(":", 1)[1]  # Extract cohort_id from key
-                break
-        if not cohort_key:
-            raise HTTPException(status_code=404, detail="Cohort alias not found")
-    else:
-        raise HTTPException(
-            status_code=400, detail="Cohort identifier or alias required"
-        )
-
-    # If cohort_id is provided and alias is also provided, verify alias matches
-    if cohort_id and alias:
-        if cohort_data.get("alias") != alias:
-            logger.error(
-                f"Provided alias '{alias}' does not match the cohort's alias '{cohort_data.get('alias')}'."
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Provided alias does not match the cohort's alias.",
-            )
-        logger.info(f"Alias '{alias}' verified for cohort '{cohort_id}'.")
-    # Verify passphrase if required
-    if cohort_data.get("hashed_passphrase"):
-        if not passphrase:
-            raise HTTPException(
-                status_code=401, detail="Passphrase required for this cohort"
-            )
-        if not verify_passphrase(passphrase, cohort_data["hashed_passphrase"]):
-            raise HTTPException(status_code=401, detail="Incorrect passphrase")
-
-    # Retrieve job IDs from the cohort's job set
-    job_ids = redis_cohort_client.smembers(f"{cohort_key}:jobs") or []
+    cohort = authorized_cohort(cohort_id, alias, passphrase)
     return {
-        "cohort_id": cohort_id,
-        "alias": cohort_data.get("alias", ""),
-        "job_ids": list(job_ids),
+        "cohort_id": cohort["cohort_id"],
+        "alias": cohort["alias"],
+        "job_ids": cohort_job_ids(redis_cohort_client, cohort["cohort_key"]),
     }
-# Test auto-reload at Thu Oct  2 08:10:18 CEST 2025

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # tests/unit/test_variant_parsing.py
 
 """
@@ -54,9 +53,9 @@ def test_filter_by_alt_values_missing_columns(kestrel_config_mock):
     with pytest.raises(KeyError) as exc_info:
         filter_by_alt_values_and_finalize(df, kestrel_config_mock)
 
-    assert "Missing required columns" in str(
-        exc_info.value
-    ), "Expected KeyError due to missing required 'Depth_Score' column."
+    assert "Missing required columns" in str(exc_info.value), (
+        "Expected KeyError due to missing required 'Depth_Score' column."
+    )
 
 
 def test_filter_by_alt_values_gg_filter_below_threshold(kestrel_config_mock):
@@ -73,8 +72,8 @@ def test_filter_by_alt_values_gg_filter_below_threshold(kestrel_config_mock):
             "ALT": ["GG", "GG", "XYZ"],
             "Depth_Score": [
                 0.019,  # Below threshold (0.02) for GG => should fail
-                0.02,   # At threshold for GG => should pass
-                0.5,    # Non-GG ALT => unaffected by GG filter
+                0.02,  # At threshold for GG => should pass
+                0.5,  # Non-GG ALT => unaffected by GG filter
             ],
         }
     )
@@ -89,16 +88,17 @@ def test_filter_by_alt_values_gg_filter_below_threshold(kestrel_config_mock):
     assert "alt_filter_pass" in out.columns, "Should have 'alt_filter_pass' column"
 
     # Assert - row 0: GG with Depth_Score=0.019 should fail (below threshold)
-    assert not out.loc[0, "alt_filter_pass"], \
+    assert not out.loc[0, "alt_filter_pass"], (
         "Row 0 (GG with Depth_Score=0.019) should have alt_filter_pass=False (below threshold)"
+    )
 
     # Assert - row 1: GG with Depth_Score=0.02 should pass (at threshold)
-    assert out.loc[1, "alt_filter_pass"], \
+    assert out.loc[1, "alt_filter_pass"], (
         "Row 1 (GG with Depth_Score=0.02) should have alt_filter_pass=True (meets threshold)"
+    )
 
     # Assert - row 2: XYZ should pass (not affected by GG-specific filter)
-    assert out.loc[2, "alt_filter_pass"], \
-        "Row 2 (XYZ) should have alt_filter_pass=True (non-GG ALT not affected)"
+    assert out.loc[2, "alt_filter_pass"], "Row 2 (XYZ) should have alt_filter_pass=True (non-GG ALT not affected)"
 
     # Assert - verify the count of passing rows
     pass_count = out["alt_filter_pass"].sum()
@@ -133,30 +133,23 @@ def test_filter_by_alt_values_exclude_alts(kestrel_config_mock):
 
     # Assert - check each row's filter status
     # Row 0: GG with good Depth_Score => should pass
-    assert out.loc[0, "alt_filter_pass"], \
-        "Row 0 (GG with Depth_Score=0.5) should have alt_filter_pass=True"
+    assert out.loc[0, "alt_filter_pass"], "Row 0 (GG with Depth_Score=0.5) should have alt_filter_pass=True"
 
     # Row 1: BAD_ALT is in exclude_alts => should fail
-    assert not out.loc[1, "alt_filter_pass"], \
-        "Row 1 (BAD_ALT) should have alt_filter_pass=False (in exclude_alts)"
+    assert not out.loc[1, "alt_filter_pass"], "Row 1 (BAD_ALT) should have alt_filter_pass=False (in exclude_alts)"
 
     # Row 2: OK_ALT is not in exclude_alts => should pass
-    assert out.loc[2, "alt_filter_pass"], \
-        "Row 2 (OK_ALT) should have alt_filter_pass=True (not in exclude_alts)"
+    assert out.loc[2, "alt_filter_pass"], "Row 2 (OK_ALT) should have alt_filter_pass=True (not in exclude_alts)"
 
     # Row 3: ZZZ is in exclude_alts => should fail
-    assert not out.loc[3, "alt_filter_pass"], \
-        "Row 3 (ZZZ) should have alt_filter_pass=False (in exclude_alts)"
+    assert not out.loc[3, "alt_filter_pass"], "Row 3 (ZZZ) should have alt_filter_pass=False (in exclude_alts)"
 
     # Row 4: ANOTHER is not in exclude_alts => should pass
-    assert out.loc[4, "alt_filter_pass"], \
-        "Row 4 (ANOTHER) should have alt_filter_pass=True (not in exclude_alts)"
+    assert out.loc[4, "alt_filter_pass"], "Row 4 (ANOTHER) should have alt_filter_pass=True (not in exclude_alts)"
 
     # Assert - verify the count: 3 should pass (GG, OK_ALT, ANOTHER)
     pass_count = out["alt_filter_pass"].sum()
-    assert (
-        pass_count == 3
-    ), "Should have exactly 3 rows with alt_filter_pass=True (GG, OK_ALT, ANOTHER)"
+    assert pass_count == 3, "Should have exactly 3 rows with alt_filter_pass=True (GG, OK_ALT, ANOTHER)"
 
     # Assert - verify that excluded ALTs are still in the DataFrame
     all_alts = out["ALT"].tolist()
@@ -199,14 +192,10 @@ def test_filter_by_alt_values_drop_left_right(kestrel_config_mock):
 
     # Assert - 'left' and 'right' columns are RETAINED for debugging
     # This is a change from the old behavior where they were dropped
-    assert (
-        "left" in out.columns and "right" in out.columns
-    ), "Intermediate columns 'left' and 'right' should be retained for debugging"
+    assert "left" in out.columns and "right" in out.columns, (
+        "Intermediate columns 'left' and 'right' should be retained for debugging"
+    )
 
     # Assert - verify the data in left/right columns is unchanged
-    assert all(
-        out["left"] == "some_left_data"
-    ), "'left' column data should be preserved"
-    assert all(
-        out["right"] == "some_right_data"
-    ), "'right' column data should be preserved"
+    assert all(out["left"] == "some_left_data"), "'left' column data should be preserved"
+    assert all(out["right"] == "some_right_data"), "'right' column data should be preserved"

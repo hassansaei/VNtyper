@@ -1,4 +1,29 @@
-# vntyper/scripts/generate_report.py
+"""
+generate_report.py
+
+Module Purpose:
+---------------
+Renders the per-sample HTML report from ``pipeline_summary.json``.
+
+What is left here is the I/O half: reading the summary and the fastp and log
+files, shelling out to ``create_report`` for the IGV panel, assembling the
+template context and writing the HTML. Everything that turns a value into a
+displayed string lives in :mod:`vntyper.scripts.report_formatting`, and the
+screening interpretation lives in :mod:`vntyper.scripts.screening_summary` --
+both extracted under AGENTS.md rule 3, which is what made either of them
+testable.
+
+Two things about this module are load-bearing and easy to break:
+
+* The five pipeline-summary step names are matched by exact string comparison.
+  A typo does not fail; it silently drops a report section (AGENTS.md trap 5),
+  so they come from :mod:`vntyper.scripts.summary_steps` and are never spelled
+  out here.
+* The coverage field names come from
+  :data:`vntyper.scripts.coverage_stats.COVERAGE_COLUMNS` (contract C1) by way
+  of ``report_formatting``. They are read with ``.get(name, 0)``, so a rename
+  makes the report state that an uncovered sample has full coverage.
+"""
 
 import json
 import logging
@@ -8,9 +33,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+from vntyper.scripts.output_paths import contained_output_path
+from vntyper.scripts.report_formatting import (
+    ADVNTR_DISPLAY_COLUMNS,
+    EMPTY_SESSION_DICTIONARY,
+    EMPTY_TABLE_JSON,
+    KESTREL_DISPLAY_COLUMNS,
+    MISSING_AS_OK,
+    confidence_html,
+    escape_frame_cells,
+    extract_igv_fragments,
+    js_object_literal,
+    parse_coverage_stats,
+    select_display_columns,
+    summarise_fastp,
+    threshold_icon,
+)
+from vntyper.scripts.screening_summary import build_screening_summary, load_report_config
+
+# These five names are matched by exact string comparison against what pipeline.py
+# records. A typo does not fail - it silently drops a report section (AGENTS.md
+# trap 5), so they are named, never spelled out.
+from vntyper.scripts.summary_steps import (
+    STEP_ADVNTR,
+    STEP_BAM_HEADER,
+    STEP_COVERAGE,
+    STEP_CROSS_MATCH,
+    STEP_KESTREL,
+    get_step,
+    get_step_data,
+    get_step_result,
+)
 
 logger = logging.getLogger(__name__)
+
+#: Shown when a coverage figure could not be computed.
+NOT_CALCULATED = "Not calculated"
 
 
 def load_pipeline_summary(summary_file_path):
@@ -115,37 +175,25 @@ def extract_igv_content(igv_report_html):
     Reads the generated IGV HTML report and extracts the IGV content,
     the tableJson variable, and the sessionDictionary variable from the script.
     Returns empty strings if not found or on error.
+
+    Args:
+        igv_report_html (str or Path): Path to the page ``create_report`` wrote.
+
+    Returns:
+        tuple[str, str, str]: The container markup, ``tableJson`` and
+        ``sessionDictionary``. All three are empty on any read failure.
     """
     logger.debug("extract_igv_content called with igv_report_html=%s", igv_report_html)
     try:
         with open(igv_report_html) as f:
             content = f.read()
-
-        igv_start = content.find('<div id="container"')
-        igv_end = content.find("</body>")
-
-        if igv_start == -1 or igv_end == -1:
-            logger.error("Failed to extract IGV content from report.")
-            return "", "", ""
-
-        igv_content = content[igv_start:igv_end].strip()
-
-        table_json_start = content.find("const tableJson = ") + len("const tableJson = ")
-        table_json_end = content.find("\n", table_json_start)
-        table_json = content[table_json_start:table_json_end].strip()
-
-        session_dict_start = content.find("const sessionDictionary = ") + len("const sessionDictionary = ")
-        session_dict_end = content.find("\n", session_dict_start)
-        session_dictionary = content[session_dict_start:session_dict_end].strip()
-
-        logger.info("Successfully extracted IGV content, tableJson, and sessionDictionary.")
-        return igv_content, table_json, session_dictionary
     except FileNotFoundError:
         logger.error("IGV report file not found: %s", igv_report_html)
         return "", "", ""
     except Exception as e:
-        logger.error("Unexpected error extracting IGV content: %s", e)
+        logger.error("Unexpected error reading IGV report: %s", e)
         return "", "", ""
+    return extract_igv_fragments(content)
 
 
 def load_fastp_output(fastp_file):
@@ -189,230 +237,87 @@ def load_pipeline_log(log_file):
         return "Failed to load pipeline log."
 
 
-def load_report_config():
-    """
-    Loads the report-specific configuration from 'report_config.json'
-    located in the same directory as this script.
+def build_kestrel_frames(kestrel_data):
+    """Build the display and matching Kestrel frames from summary rows.
 
-    Returns:
-        dict: The loaded report configuration dictionary.
-    """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(script_dir, "report_config.json")
-    try:
-        with open(config_path) as f:
-            report_config = json.load(f)
-        logger.info("Loaded report config from %s", config_path)
-        return report_config
-    except Exception as e:
-        logger.error("Failed to load report config: %s", e)
-        return {}
-
-
-def compute_algorithm_result(df, logic_config):
-    """
-    Computes the algorithm result (for Kestrel or adVNTR) based on the provided logic configuration.
-    Iterates over each rule in logic_config["rules"]. For each condition, compares the plain text value
-    from the DataFrame (using the column name) with the expected value.
-
-    Supported operators are: "==", "!=", "in", and "not in". If expected is a list, membership is checked.
-    Returns the rule's "result" if matched; otherwise returns logic_config["default"].
+    Two frames come out of one input because they are used for different things:
+    the screening summary matches on plain values, while the table shows
+    colour-coded HTML. Colour-coding the frame the summary reads would make every
+    ``Confidence`` comparison fail against a ``<span>``.
 
     Args:
-        df (pandas.DataFrame): DataFrame containing the results.
-        logic_config (dict): Configuration dictionary with rules.
+        kestrel_data (list[dict]): The ``Kestrel Genotyping`` step's rows.
 
     Returns:
-        str: The computed algorithm result.
+        tuple[pandas.DataFrame, pandas.DataFrame]: The frame to render, and the
+        unformatted frame to match on. Both are empty when there are no rows.
     """
-    if df.empty:
-        logger.debug("DataFrame is empty; returning default result.")
-        return logic_config.get("default", "none")
-    row = df.iloc[0]
-    logger.debug("Data row for evaluation: %s", row.to_dict())
-    logger.debug("Logic configuration: %s", logic_config)
-    for idx, rule in enumerate(logic_config.get("rules", [])):
-        logger.debug("Evaluating rule %s: %s", idx, rule)
-        conditions = rule.get("conditions", {})
-        rule_matches = True
-        for col, expected in conditions.items():
-            if col not in row:
-                logger.debug("Rule %s: Column '%s' not found; rule fails.", idx, col)
-                rule_matches = False
-                break
-            actual = str(row.get(col, "")).strip()
-            logger.debug(
-                "Rule %s, column '%s': actual='%s', expected='%s'",
-                idx,
-                col,
-                actual,
-                expected,
-            )
-            if isinstance(expected, dict):
-                op = expected.get("operator")
-                exp_val = expected.get("value")
-                if op == "==":
-                    if actual != str(exp_val).strip():
-                        logger.debug(
-                            "Rule %s: Condition '%s == %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                elif op == "!=":
-                    if actual == str(exp_val).strip():
-                        logger.debug(
-                            "Rule %s: Condition '%s != %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                elif op == "in":
-                    if not isinstance(exp_val, list):
-                        exp_val = [exp_val]
-                    if actual not in exp_val:
-                        logger.debug(
-                            "Rule %s: Condition '%s in %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                elif op == "not in":
-                    if not isinstance(exp_val, list):
-                        exp_val = [exp_val]
-                    if actual in exp_val:
-                        logger.debug(
-                            "Rule %s: Condition '%s not in %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            exp_val,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                else:
-                    logger.debug(
-                        "Rule %s: Unsupported operator '%s' for column '%s'.",
-                        idx,
-                        op,
-                        col,
-                    )
-                    rule_matches = False
-                    break
-            else:
-                if isinstance(expected, list):
-                    if actual not in expected:
-                        logger.debug(
-                            "Rule %s: Condition '%s in %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            expected,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-                else:
-                    if actual != str(expected):
-                        logger.debug(
-                            "Rule %s: Condition '%s == %s' not met (actual='%s').",
-                            idx,
-                            col,
-                            expected,
-                            actual,
-                        )
-                        rule_matches = False
-                        break
-        if rule_matches:
-            result = rule.get("result")
-            logger.debug("Rule %s PASSED; returning result: %s", idx, result)
-            return result
-        else:
-            logger.debug("Rule %s did not pass.", idx)
-    logger.debug("No rule matched; returning default result.")
-    return logic_config.get("default", "none")
+    if not kestrel_data:
+        logger.warning("No Kestrel data found in pipeline summary.")
+        return pd.DataFrame(), pd.DataFrame()
+
+    frame = select_display_columns(pd.DataFrame(kestrel_data), KESTREL_DISPLAY_COLUMNS)
+
+    if "Depth Score" in frame.columns:
+        try:
+            frame["Depth Score"] = pd.to_numeric(frame["Depth Score"], errors="coerce")
+        except Exception as e:
+            logger.warning("Could not convert 'Depth Score' to numeric: %s", e)
+        frame = frame.sort_values(by="Depth Score", ascending=False)
+
+    matching_frame = frame.copy()
+    if "Confidence" in frame.columns:
+        frame["Confidence"] = frame["Confidence"].apply(confidence_html)
+
+    # The table is rendered with escape=False so the colour-coded Confidence span
+    # survives, which means every other cell has to be escaped here. `Confidence`
+    # is excluded because `confidence_html` has already escaped its own value.
+    frame = escape_frame_cells(frame, html_columns=("Confidence",))
+
+    logger.debug("Kestrel data extracted from summary and formatted.")
+    return frame, matching_frame
 
 
-def build_screening_summary(
-    kestrel_df,
-    advntr_df,
-    advntr_available,
-    mean_vntr_coverage,
-    mean_vntr_cov_threshold,
-    report_config,
-):
-    """
-    Build the detailed screening summary text based on Kestrel and adVNTR data.
+def build_advntr_frame(advntr_data):
+    """Project the adVNTR rows onto the columns the report shows.
 
     Args:
-        kestrel_df (pd.DataFrame): Kestrel results DataFrame.
-        advntr_df (pd.DataFrame): adVNTR results DataFrame.
-        advntr_available (bool): Whether adVNTR results are available.
-        mean_vntr_coverage (float): Mean coverage over the VNTR region.
-        mean_vntr_cov_threshold (float): Coverage threshold for the VNTR region.
-        report_config (dict): Report configuration containing algorithm logic and summary rules.
+        advntr_data (list[dict]): The ``adVNTR Genotyping`` step's rows.
 
     Returns:
-        str: A detailed summary text describing the findings or negative result.
+        pandas.DataFrame: The frame to render, empty when there are no rows.
     """
-    summary_text = ""
-    try:
-        kestrel_logic = report_config.get("algorithm_logic", {}).get("kestrel", {})
-        computed_kestrel = compute_algorithm_result(kestrel_df, kestrel_logic)
-        logger.debug("Computed Kestrel result: %s", computed_kestrel)
+    if not advntr_data:
+        return pd.DataFrame()
+    frame = pd.DataFrame(advntr_data)
+    logger.debug("adVNTR data extracted from summary and formatted.")
+    return frame[[col for col in ADVNTR_DISPLAY_COLUMNS if col in frame.columns]]
 
-        advntr_logic = report_config.get("algorithm_logic", {}).get("advntr", {})
-        computed_advntr = compute_algorithm_result(advntr_df, advntr_logic) if advntr_available else "none"
-        logger.debug("Computed adVNTR result: %s", computed_advntr)
 
-        quality_metrics_pass = True
-        if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
-            quality_metrics_pass = False
-        logger.debug("Quality metrics pass: %s", quality_metrics_pass)
+def build_cross_match_summary(pipeline_summary):
+    """Summarise the cross-match step as a sentence *and* the state that sentence describes.
 
-        current_conditions = {
-            "kestrel_result": computed_kestrel,
-            "advntr_result": computed_advntr,
-            "quality_metrics_pass": quality_metrics_pass,
-        }
-        logger.debug("Unified screening conditions: %s", current_conditions)
+    The boolean is returned alongside the text rather than derived from it. The template
+    used to decide emphasis by asking whether the message contained ``"match"``, and both
+    fixed sentences do - so "No matches were found" rendered in the positive style. This
+    is the same rule that governs ``summary_is_positive`` (AGENTS.md trap 11): emphasis
+    comes from the computed state, never from searching the wording.
 
-        unified_rules = report_config.get("screening_summary_rules", [])
-        default_message = report_config.get(
-            "screening_summary_default",
-            "The screening was negative (no valid Kestrel or adVNTR data).",
-        )
+    Args:
+        pipeline_summary (dict): The parsed ``pipeline_summary.json``.
 
-        def condition_matches(current, rule_value):
-            if isinstance(rule_value, list):
-                return current in rule_value
-            return current == rule_value
-
-        for rule in unified_rules:
-            conditions = rule.get("conditions", {})
-            if all(condition_matches(current_conditions.get(key), conditions.get(key)) for key in conditions):
-                summary_text = rule.get("message", "")
-                logger.debug("Unified rule matched: %s", conditions)
-                break
-
-        if not summary_text:
-            summary_text = default_message
-            logger.debug("No unified rule matched; using default screening message.")
-
-    except Exception as ex:
-        logger.error("Exception in build_screening_summary: %s", ex)
-        summary_text = "No summary available."
-
-    logger.debug("Final screening summary: %s", summary_text)
-    return summary_text
+    Returns:
+        tuple[str, bool]: The sentence and whether it reports a match. ``("", False)``
+            when the cross-match step did not run - no section is rendered, and the flag
+            must not default to the emphasised state.
+    """
+    if get_step(pipeline_summary, STEP_CROSS_MATCH) is None:
+        return "", False
+    data = get_step_data(pipeline_summary, STEP_CROSS_MATCH)
+    is_positive = any(item.get("Match") == "Yes" for item in data)
+    if is_positive:
+        return "At least one match was found between Kestrel and adVNTR results.", True
+    return "No matches were found between Kestrel and adVNTR results.", False
 
 
 def generate_summary_report(
@@ -474,7 +379,7 @@ def generate_summary_report(
     report_config = load_report_config()
 
     # Resolve flanking region from main config if needed.
-    if flanking == 50 and config is not None:
+    if flanking == 50:
         flanking = config.get("default_values", {}).get("flanking", 50)
         logger.debug("Flanking region set to %s based on config.", flanking)
 
@@ -494,131 +399,23 @@ def generate_summary_report(
     input_files = pipeline_summary.get("input_files", {})
     pipeline_version = pipeline_summary.get("version", "unknown")
 
-    # Extract header info from BAM Header Parsing step (if available)
-    header_info = {}
-    for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "BAM Header Parsing":
-            header_info = step.get("parsed_result", {})
-            break
-
-    # Extract individual header elements robustly.
+    # Header info from the BAM Header Parsing step, whose parsed_result is a flat
+    # object rather than {"data": [...]}.
+    header_info = get_step_result(pipeline_summary, STEP_BAM_HEADER)
     header_warning = header_info.get("warning", "")
     alignment_pipeline = header_info.get("alignment_pipeline", "")
     assembly_text = header_info.get("assembly_text", "")
     assembly_contig = header_info.get("assembly_contig", "")
 
-    # Extract VNTR coverage statistics from the "Coverage Calculation" step.
-    mean_vntr_coverage = None
-    median_vntr_coverage = None
-    stdev_vntr_coverage = None
-    min_vntr_coverage = None
-    max_vntr_coverage = None
-    vntr_region_length = None
-    vntr_uncovered_bases = None
-    percent_vntr_uncovered = None
-    for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "Coverage Calculation":
-            coverage_info = step.get("parsed_result", {}).get("data", [])
-            if coverage_info and isinstance(coverage_info, list) and len(coverage_info) > 0:
-                try:
-                    coverage_data = coverage_info[0]  # Get the first coverage data entry
-                    mean_vntr_coverage = float(coverage_data.get("mean", 0))
-                    median_vntr_coverage = float(coverage_data.get("median", 0))
-                    stdev_vntr_coverage = float(coverage_data.get("stdev", 0))
-                    min_vntr_coverage = int(coverage_data.get("min", 0))
-                    max_vntr_coverage = int(coverage_data.get("max", 0))
-                    vntr_region_length = int(coverage_data.get("region_length", 0))
-                    vntr_uncovered_bases = int(coverage_data.get("uncovered_bases", 0))
-                    percent_vntr_uncovered = float(coverage_data.get("percent_uncovered", 0))
-                    logger.debug("All VNTR coverage statistics extracted successfully")
-                    logger.debug(f"Mean VNTR coverage: {mean_vntr_coverage}")
-                    logger.debug(f"Median VNTR coverage: {median_vntr_coverage}")
-                    logger.debug(f"StdDev VNTR coverage: {stdev_vntr_coverage}")
-                    logger.debug(f"Min VNTR coverage: {min_vntr_coverage}")
-                    logger.debug(f"Max VNTR coverage: {max_vntr_coverage}")
-                    logger.debug(f"VNTR region length: {vntr_region_length}")
-                    logger.debug(f"VNTR uncovered bases: {vntr_uncovered_bases}")
-                    logger.debug(f"Percent VNTR uncovered: {percent_vntr_uncovered}%")
-                except Exception as e:
-                    logger.error("Error parsing VNTR coverage statistics: %s", e)
-                    # Keep default None values for failed extractions
-            break
+    # VNTR coverage statistics, keyed by the frozen coverage schema (contract C1).
+    coverage = parse_coverage_stats(get_step_data(pipeline_summary, STEP_COVERAGE))
+    mean_vntr_coverage = coverage["mean"]
+    percent_vntr_uncovered = coverage["percent_uncovered"]
 
-    # Extract Kestrel and adVNTR data from the summary.
-    kestrel_data = []
-    advntr_data = []
-    advntr_available = False
-    for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "Kestrel Genotyping":
-            kestrel_data = step.get("parsed_result", {}).get("data", [])
-        elif step.get("step") == "adVNTR Genotyping":
-            advntr_data = step.get("parsed_result", {}).get("data", [])
-            advntr_available = True
+    kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
 
-    if kestrel_data:
-        kestrel_df = pd.DataFrame(kestrel_data)
-        columns_to_display = {
-            "Motifs": "Motif",
-            "Variant": "Variant",
-            "POS": "Position",
-            "REF": "REF",
-            "ALT": "ALT",
-            "Motif_sequence": "Motif Sequence",
-            "Estimated_Depth_AlternateVariant": "Depth (Variant)",
-            "Estimated_Depth_Variant_ActiveRegion": "Depth (Region)",
-            "Depth_Score": "Depth Score",
-            "Confidence": "Confidence",
-            "Flag": "Flag",
-        }
-        existing_cols = [col for col in columns_to_display if col in kestrel_df.columns]
-        kestrel_df = kestrel_df[existing_cols]
-        kestrel_df = kestrel_df.rename(columns={col: columns_to_display[col] for col in existing_cols})
-        # Sort the DataFrame by Depth Score in descending order if available.
-        if "Depth Score" in kestrel_df.columns:
-            try:
-                kestrel_df["Depth Score"] = pd.to_numeric(kestrel_df["Depth Score"], errors="coerce")
-            except Exception as e:
-                logger.warning("Could not convert 'Depth Score' to numeric: %s", e)
-            kestrel_df = kestrel_df.sort_values(by="Depth Score", ascending=False)
-        # Create a copy of the sorted dataframe (without HTML formatting) for matching.
-        kestrel_df_raw = kestrel_df.copy()
-        # Now apply color-coding to the Confidence column for display.
-        if "Confidence" in kestrel_df.columns:
-            kestrel_df["Confidence"] = kestrel_df["Confidence"].apply(
-                lambda x: (
-                    f'<span style="color:orange;font-weight:bold;">{x}</span>'
-                    if x == "Low_Precision"
-                    else (
-                        f'<span style="color:red;font-weight:bold;">{x}</span>'
-                        if x in ["High_Precision", "High_Precision*"]
-                        else x
-                    )
-                )
-            )
-        logger.debug("Kestrel data extracted from summary and formatted.")
-    else:
-        kestrel_df = pd.DataFrame()
-        kestrel_df_raw = pd.DataFrame()
-        logger.warning("No Kestrel data found in pipeline summary.")
-
-    if advntr_data:
-        advntr_df = pd.DataFrame(advntr_data)
-        advntr_columns = [
-            "VID",
-            "Variant",
-            "NumberOfSupportingReads",
-            "MeanCoverage",
-            "Pvalue",
-            "RU",
-            "POS",
-            "REF",
-            "ALT",
-            "Flag",
-        ]
-        advntr_df = advntr_df[[col for col in advntr_columns if col in advntr_df.columns]]
-        logger.debug("adVNTR data extracted from summary and formatted.")
-    else:
-        advntr_df = pd.DataFrame()
+    advntr_available = get_step(pipeline_summary, STEP_ADVNTR) is not None
+    advntr_df = build_advntr_frame(get_step_data(pipeline_summary, STEP_ADVNTR))
 
     pipeline_log_content = load_pipeline_log(log_file)
 
@@ -645,107 +442,18 @@ def generate_summary_report(
         logger.warning("IGV report file not found. Skipping IGV content.")
         igv_content, table_json, session_dictionary = "", "", ""
 
-    fastp_file = Path(output_dir) / "fastq_bam_processing/output.json"
-    fastp_data = load_fastp_output(fastp_file)
+    fastp = summarise_fastp(load_fastp_output(Path(output_dir) / "fastq_bam_processing/output.json"))
 
-    if mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold:
-        coverage_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
-        coverage_color = "red"
-        logger.debug("Mean VNTR coverage is below the threshold.")
-    else:
-        coverage_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
-        coverage_color = "green"
-        logger.debug("Mean VNTR coverage is above the threshold.")
-
-    # Check if percent_vntr_uncovered exceeds threshold
-    if percent_vntr_uncovered is not None and percent_vntr_uncovered > percent_vntr_uncovered_threshold:
-        uncovered_icon = '<span style="color:red;font-weight:bold;">&#9888;</span>'
-        uncovered_color = "red"
-        logger.debug(
-            f"Percent VNTR uncovered ({percent_vntr_uncovered}%) exceeds the threshold ({percent_vntr_uncovered_threshold}%)."
-        )
-    else:
-        uncovered_icon = '<span style="color:green;font-weight:bold;">&#10004;</span>'
-        uncovered_color = "green"
-        logger.debug(
-            f"Percent VNTR uncovered ({percent_vntr_uncovered}%) is below the threshold ({percent_vntr_uncovered_threshold}%)."
-        )
-
-    duplication_rate = None
-    q20_rate = None
-    q30_rate = None
-    passed_filter_rate = None
-    sequencing_str = ""
-    fastp_available = False
-    if fastp_data:
-        fastp_available = True
-        summary_fastp = fastp_data.get("summary", {})
-        duplication = fastp_data.get("duplication", {})
-        filtering_result = fastp_data.get("filtering_result", {})
-
-        duplication_rate = duplication.get("rate", None)
-        after_filtering = summary_fastp.get("after_filtering", {})
-        before_filtering = summary_fastp.get("before_filtering", {})
-
-        q20_rate = after_filtering.get("q20_rate", None)
-        q30_rate = after_filtering.get("q30_rate", None)
-
-        total_reads_before = before_filtering.get("total_reads", 1)
-        passed_filter_reads = filtering_result.get("passed_filter_reads", 0)
-        if total_reads_before > 0:
-            passed_filter_rate = passed_filter_reads / total_reads_before
-            logger.debug("Passed filter rate calculated: %.2f", passed_filter_rate)
-        else:
-            passed_filter_rate = None
-            logger.debug("Total reads before filtering is zero; passed filter rate set to None.")
-        sequencing_str = summary_fastp.get("sequencing", "")
-        logger.debug("Sequencing setup: %s", sequencing_str)
-
-    def warn_icon(value, cutoff, higher_better=True):
-        if value is None:
-            logger.debug("warn_icon called with value=None; returning empty strings.")
-            return "", ""
-        if higher_better:
-            if value < cutoff:
-                logger.debug(
-                    "Value %s is below the cutoff %s (higher_better=True).",
-                    value,
-                    cutoff,
-                )
-                return '<span style="color:red;font-weight:bold;">&#9888;</span>', "red"
-            else:
-                logger.debug(
-                    "Value %s is above or equal to the cutoff %s (higher_better=True).",
-                    value,
-                    cutoff,
-                )
-                return (
-                    '<span style="color:green;font-weight:bold;">&#10004;</span>',
-                    "green",
-                )
-        else:
-            if value > cutoff:
-                logger.debug(
-                    "Value %s is above the cutoff %s (higher_better=False).",
-                    value,
-                    cutoff,
-                )
-                return '<span style="color:red;font-weight:bold;">&#9888;</span>', "red"
-            else:
-                logger.debug(
-                    "Value %s is below or equal to the cutoff %s (higher_better=False).",
-                    value,
-                    cutoff,
-                )
-                return (
-                    '<span style="color:green;font-weight:bold;">&#10004;</span>',
-                    "green",
-                )
-
-    dup_icon, dup_color = warn_icon(duplication_rate, dup_rate_cutoff, higher_better=False)
-    q20_icon, q20_color = warn_icon(q20_rate, q20_rate_cutoff, higher_better=True)
-    q30_icon, q30_color = warn_icon(q30_rate, q30_rate_cutoff, higher_better=True)
-    pf_icon, pf_color = warn_icon(passed_filter_rate, passed_filter_rate_cutoff, higher_better=True)
+    coverage_icon, coverage_color = threshold_icon(
+        mean_vntr_coverage, mean_vntr_cov_threshold, higher_better=True, on_missing=MISSING_AS_OK
+    )
+    uncovered_icon, uncovered_color = threshold_icon(
+        percent_vntr_uncovered, percent_vntr_uncovered_threshold, higher_better=False, on_missing=MISSING_AS_OK
+    )
+    dup_icon, dup_color = threshold_icon(fastp.duplication_rate, dup_rate_cutoff, higher_better=False)
+    q20_icon, q20_color = threshold_icon(fastp.q20_rate, q20_rate_cutoff)
+    q30_icon, q30_color = threshold_icon(fastp.q30_rate, q30_rate_cutoff)
+    pf_icon, pf_color = threshold_icon(fastp.passed_filter_rate, passed_filter_rate_cutoff)
 
     kestrel_html = kestrel_df.to_html(
         table_id="kestrel_table",
@@ -755,32 +463,27 @@ def generate_summary_report(
     )
     logger.debug("Kestrel results converted to HTML.")
 
-    if advntr_available:
-        if not advntr_df.empty:
-            advntr_html = advntr_df.to_html(
-                classes="table table-bordered table-striped hover compact table-sm",
-                index=False,
-            )
-            logger.debug("adVNTR results converted to HTML.")
-        else:
-            advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
-            logger.debug("adVNTR was performed but no variants identified; adding negative message.")
-    else:
+    if not advntr_available:
         advntr_html = "<p>adVNTR genotyping was not performed.</p>"
         logger.debug("adVNTR was not performed; adding message to report.")
+    elif advntr_df.empty:
+        advntr_html = "<p>No pathogenic variants identified by adVNTR.</p>"
+        logger.debug("adVNTR was performed but no variants identified; adding negative message.")
+    else:
+        advntr_html = advntr_df.to_html(
+            classes="table table-bordered table-striped hover compact table-sm",
+            index=False,
+        )
+        logger.debug("adVNTR results converted to HTML.")
 
-    # Extract cross-match summary message from the pipeline summary if available.
-    cross_match_message = ""
-    for step in pipeline_summary.get("steps", []):
-        if step.get("step") == "Cross-Match Variant Comparison":
-            data = step.get("parsed_result", {}).get("data", [])
-            if any(item.get("Match") == "Yes" for item in data):
-                cross_match_message = "At least one match was found between Kestrel and adVNTR results."
-            else:
-                cross_match_message = "No matches were found between Kestrel and adVNTR results."
-            break
+    cross_match_message, cross_match_is_positive = build_cross_match_summary(pipeline_summary)
 
-    env = Environment(loader=FileSystemLoader(template_dir))
+    # Autoescaping is on: everything reaching the report from a sample - file
+    # names, BAM header fields, motif sequences, log lines - is attacker-influenced
+    # and the report is a file people forward. The fragments we build ourselves are
+    # marked `|safe` at their interpolation points in the template, and the two
+    # results tables and the Confidence spans are escaped before they get there.
+    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html"]))
     try:
         template = env.get_template("report_template.html")
         logger.debug("Jinja2 template 'report_template.html' loaded successfully.")
@@ -788,8 +491,9 @@ def generate_summary_report(
         logger.error("Failed to load Jinja2 template: %s", e)
         raise
 
-    # Use the sorted (and raw) kestrel dataframe for matching.
-    summary_text = build_screening_summary(
+    # Match on the sorted, unformatted frame: the displayed one has HTML in its
+    # Confidence cells and would match nothing.
+    screening = build_screening_summary(
         kestrel_df_raw,
         advntr_df,
         advntr_available,
@@ -797,7 +501,11 @@ def generate_summary_report(
         mean_vntr_cov_threshold,
         report_config,
     )
-    logger.debug("Summary text generated: %s", summary_text)
+    logger.debug("Summary text generated: %s", screening.text)
+
+    def shown(value):
+        """Render a coverage figure, or say it was not calculated."""
+        return value if value is not None else NOT_CALCULATED
 
     context = {
         "kestrel_highlight": kestrel_html,
@@ -805,8 +513,10 @@ def generate_summary_report(
         "advntr_available": advntr_available,
         "log_content": pipeline_log_content,
         "igv_content": igv_content,
-        "table_json": table_json,
-        "session_dictionary": session_dictionary,
+        # Interpolated straight into a <script> block, so they must parse even
+        # when there is no IGV report at all.
+        "table_json": js_object_literal(table_json, EMPTY_TABLE_JSON),
+        "session_dictionary": js_object_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
         "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "input_files": input_files,
         "pipeline_version": pipeline_version,
@@ -814,34 +524,36 @@ def generate_summary_report(
         "alignment_pipeline": alignment_pipeline,
         "assembly_text": assembly_text,
         "assembly_contig": assembly_contig,
-        "mean_vntr_coverage": (mean_vntr_coverage if mean_vntr_coverage is not None else "Not calculated"),
-        "median_vntr_coverage": (median_vntr_coverage if median_vntr_coverage is not None else "Not calculated"),
-        "stdev_vntr_coverage": (stdev_vntr_coverage if stdev_vntr_coverage is not None else "Not calculated"),
-        "min_vntr_coverage": (min_vntr_coverage if min_vntr_coverage is not None else "Not calculated"),
-        "max_vntr_coverage": (max_vntr_coverage if max_vntr_coverage is not None else "Not calculated"),
-        "vntr_region_length": (vntr_region_length if vntr_region_length is not None else "Not calculated"),
-        "vntr_uncovered_bases": (vntr_uncovered_bases if vntr_uncovered_bases is not None else "Not calculated"),
-        "percent_vntr_uncovered": (percent_vntr_uncovered if percent_vntr_uncovered is not None else "Not calculated"),
+        "mean_vntr_coverage": shown(coverage["mean"]),
+        "median_vntr_coverage": shown(coverage["median"]),
+        "stdev_vntr_coverage": shown(coverage["stdev"]),
+        "min_vntr_coverage": shown(coverage["min"]),
+        "max_vntr_coverage": shown(coverage["max"]),
+        "vntr_region_length": shown(coverage["region_length"]),
+        "vntr_uncovered_bases": shown(coverage["uncovered_bases"]),
+        "percent_vntr_uncovered": shown(coverage["percent_uncovered"]),
         "percent_vntr_uncovered_icon": uncovered_icon,
         "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,
         "mean_vntr_coverage_color": coverage_color,
-        "fastp_available": fastp_available,
-        "duplication_rate": duplication_rate,
+        "fastp_available": fastp.available,
+        "duplication_rate": fastp.duplication_rate,
         "duplication_rate_icon": dup_icon,
         "duplication_rate_color": dup_color,
-        "q20_rate": q20_rate,
+        "q20_rate": fastp.q20_rate,
         "q20_icon": q20_icon,
         "q20_color": q20_color,
-        "q30_rate": q30_rate,
+        "q30_rate": fastp.q30_rate,
         "q30_icon": q30_icon,
         "q30_color": q30_color,
-        "passed_filter_rate": passed_filter_rate,
+        "passed_filter_rate": fastp.passed_filter_rate,
         "passed_filter_icon": pf_icon,
         "passed_filter_color": pf_color,
-        "sequencing_str": sequencing_str,
-        "summary_text": summary_text,
-        "cross_match_message": cross_match_message,  # New variable for cross-match summary
+        "sequencing_str": fastp.sequencing,
+        "summary_text": screening.text,
+        "summary_is_positive": screening.is_positive,
+        "cross_match_message": cross_match_message,
+        "cross_match_is_positive": cross_match_is_positive,
     }
 
     try:
@@ -851,7 +563,8 @@ def generate_summary_report(
         logger.error("Failed to render the report template: %s", e)
         raise
 
-    report_file_path = Path(output_dir) / report_file
+    # `--report-file` is documented as a name; this is what makes that true.
+    report_file_path = contained_output_path(output_dir, report_file, "--report-file")
     try:
         with open(report_file_path, "w") as f:
             f.write(rendered_html)

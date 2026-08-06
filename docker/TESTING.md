@@ -86,7 +86,10 @@ tests/
 │   └── test_docker_pipeline.py # Docker test functions
 ├── helpers.py                   # Shared validation functions
 ├── parametrization.py           # Shared test case definitions
-├── test_orchestration.py        # Shared test orchestration
+├── support/
+│   ├── __init__.py
+│   ├── data_utils.py            # Shared test-data download and validation
+│   └── orchestration.py         # Shared test orchestration
 └── test_data_config.json        # Expected values and tolerances
 ```
 
@@ -115,7 +118,7 @@ tests/
    - Permissions set to 777 for container user write access
 
 4. **Shared Validation**
-   - Docker tests call `run_bam_test_case()` from `tests/test_orchestration.py`
+   - Docker tests call `run_bam_test_case()` from `tests/support/orchestration.py`
    - Uses same validation functions as local tests (`tests/helpers.py`)
    - Guarantees 100% test identity
 

@@ -41,6 +41,8 @@ Neither exists — use the commands above.
 | Fast tests (what CI runs) | `make test-unit` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
+| Coverage of changed lines | `make patch-coverage` |
+| Advisory mutation score | `make mutation` |
 | Integration tests (needs 1.1 GB data) | `make test-integration` |
 | Full gate incl. integration | `make check-full` |
 | Docs preview | `make docs-serve` |
@@ -81,17 +83,18 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 ## Code style
 
 - Ruff is the only formatter and linter. **Line length 120**, double quotes,
-  `target-version = "py39"`. Do not reformat to black's 88.
+  `target-version = "py310"`. Do not reformat to black's 88.
 - `[tool.ruff.lint]` uses an explicit `select`, deliberately **not** `extend-select`.
   Ruff's defaults shift between releases (0.16 turned on ~440 rules at once and took
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
-  It targets 3.10 because mypy 2.x dropped 3.9; ruff's `target-version` still guards
-  the 3.9 runtime floor.
-- Code must run on Python 3.9 (CI matrix: 3.9–3.12). Your local interpreter is newer,
-  so 3.10+ syntax can pass locally and break CI.
+  Its `python_version`, ruff's `target-version` and `requires-python` are pinned to the
+  same floor, and `tests/unit/test_version_consistency.py` fails the build if they drift.
+- **Code must run on Python 3.10** (`requires-python = ">=3.10"`, CI matrix 3.10–3.13).
+  Your local interpreter is newer, so 3.11+ syntax can pass locally and break CI.
+  PEP 604 (`X | None`) and PEP 585 (`list[str]`) are both available at this floor.
 - Google-style docstrings (`Args:` / `Returns:` / `Raises:`) on public functions.
 - Logging: every module declares `logger = logging.getLogger(__name__)` after its
   imports and calls `logger.info(...)`. Never call `logging.info(...)` on the root
@@ -124,12 +127,36 @@ network, no Docker, no reference data, and `pytestmark = pytest.mark.unit` after
 imports. If a change is only reachable through the integration tier, that is a signal the
 logic needs extracting — see rule 3.
 
-Two thresholds enforce this, and they are deliberately different:
+Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
 | **Hard floor** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+
+**The patch gate is what makes this rule enforceable.** The hard floor is an average over
+~5000 statements, so a PR can add a hundred untested lines and move it by less than a
+point — measured: three untested lines moved it 0.03. It has never once failed a PR for
+shipping untested code, and it cannot. `make patch-coverage` runs `diff-cover` over the
+lines your branch changed and fails below 80%, so an untested new function fails its own
+PR regardless of what the repo total is doing. It is also how the 80% target is reached:
+every PR lands at ≥80%, so the average climbs on its own.
+
+It scores against the **merge base**, so commits landing on `main` while your PR is open
+are never charged to you. A PR that only deletes code, only touches docs, or changes no
+measured Python has nothing to score and passes. The CI job checks out with
+`fetch-depth: 0` because finding a merge base needs real history.
+
+**A covered line is not a tested line.** Coverage records that a line *ran*, not that
+anything would have failed had it been wrong — and this codebase's characteristic bug is
+a silently wrong call, not a crash. `make mutation` measures the difference by breaking
+the code on purpose and checking whether the suite notices; `confidence_assignment.py`
+once scored 100% line coverage and 21% on that measure. It is **advisory and never
+gated** (equivalent mutants are not hand-classified), it runs on the weekly schedule, and
+the current score with every surviving mutant named is in
+`docs/development/mutation-testing.md`. When you add tests to clear the patch gate, write
+them to kill mutants — assert on the values, not just that the call returned.
 
 `make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
 coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
@@ -204,7 +231,7 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
   module. Both adVNTR tests carry `@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)`,
   overriding the global 600 s; that global timeout is right for everything else and CI
   hardware is several times slower than a workstation. The value and the reasoning
-  behind it live in `tests/test_orchestration.py` — the module both adVNTR tests already
+  behind it live in `tests/support/orchestration.py` — the module both adVNTR tests already
   share — so recalibrating for new runner hardware is a one-line change there.
 
 ## Git and PRs
@@ -218,7 +245,7 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
 - PRs are **not** squashed — every commit becomes permanent history. Keep them clean.
 - Copilot and Sourcery AI review PRs. The established pattern is a follow-up commit
   addressing their comments, not a force-push.
-- CI gates on PRs: `make lint`, `make type-check`, `make test-unit` across 3.9–3.12,
+- CI gates on PRs: `make lint`, `make type-check`, `make test-unit` across 3.10–3.13,
   plus a Docker image build and quick Docker tests. Formatting is *not* gated in CI —
   run `make format-check` yourself.
 
@@ -264,8 +291,17 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
     `make docker-build-base && make docker-build DOCKER_BASE_IMAGE=vntyper-base:local`.
     (This replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
-11. **`vntyper report` is currently broken** — `cli.py` passes arguments
-    `generate_summary_report()` does not accept. Do not copy that call site as an example.
+11. **The report's presentation logic lives outside `generate_report.py`.**
+    `screening_summary.py` owns the screening state and the `report_config.json` rule
+    table; `report_formatting.py` owns the icons, the column projections and the IGV
+    fragment splicing. Put new pure logic there, not back in `generate_report.py`.
+    Two rules that are easy to break: emphasis in the report comes from the computed
+    state (`summary_is_positive`), never from searching the message text, and the
+    Jinja2 environment autoescapes — anything you mark `|safe` must be a fragment
+    VNtyper built, not a value read from a sample. `tests/unit/test_generate_report.py`
+    enforces both. (`vntyper report` itself was broken until #179 — the handler passed
+    arguments `generate_summary_report()` does not accept — and now lives in
+    `cli_report.py` with its call contract pinned by a signature-binding spy.)
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
     `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
     if the pushed tag disagrees with `vntyper/version.py`.
@@ -288,11 +324,13 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
     installing. Keep that three-line block if you add a job; `make ci-local-uv`
     reproduces it locally, and it is the only local check that exercises the install
     layer at all.
-14. **`pyproject.toml` and the conda env disagree on numpy.** `pyproject.toml` pins
-    `numpy>=1.26.0,<2.0.0`; `conda/environment_vntyper.yml` installs `numpy=2.0.2`. The
-    Dockerfile therefore installs the package with `pip install --no-deps`, or pip
-    downgrades conda's numpy from PyPI and mixes provenance. Reconcile the two before
-    removing `--no-deps`.
+15. **The Dockerfile installs the package with `pip install --no-deps`, deliberately.**
+    Every runtime dependency is conda-managed by `conda/environment_vntyper.yml`; without
+    `--no-deps`, pip resolves the same requirements again from PyPI and lays a second
+    numpy over the conda-managed one, mixing provenance on a numerical stack. The two
+    files no longer *conflict* (`pyproject.toml` pins `numpy>=1.26.0`, the env installs
+    `numpy=2.0.2`, which satisfies it) — but they are still resolved by two different
+    solvers, so `--no-deps` stays.
 
 ## Never
 

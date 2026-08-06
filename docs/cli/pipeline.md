@@ -34,14 +34,14 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `-o, --output-dir` | path | `out` | Output directory for the results |
-| `-n, --output-name` | string | `processed` | Base name for the output files |
+| `-n, --output-name` | string | `output` | Base name for the output files. **Fixed at `output`**: any other value is rejected. The report generator, the `report` subcommand and the Kestrel stage each name their files from that literal and take no basename argument, so moving only the stages that accept one would leave the report reading files nothing wrote — which VNtyper reports as a negative genotype rather than an error. Use `--output-dir` to separate runs. |
 | `-s, --sample-name` | string | (from input filename) | Sample name for labeling results. If not provided, defaults to the input BAM or FASTQ filename stem |
 
 ## Reference & Region Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--reference-assembly` | choice | `hg19` | Reference assembly for BAM/CRAM alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl` |
+| `--reference-assembly` | choice | `hg19` | Reference assembly for BAM/CRAM alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl`. For BAM/CRAM input this is **checked against the alignment header** and a disagreement stops the run — see [Reference Assemblies](../user-guide/reference-assemblies.md#the-declared-assembly-check) |
 | `--custom-regions` | string | — | Custom regions for MUC1 analysis as comma-separated values (e.g., `chr1:1000-2000,chr2:3000-4000`) |
 | `--bed-file` | path | — | Path to a BED file specifying regions for MUC1 analysis |
 
@@ -60,7 +60,7 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--extra-modules` | string | `[]` | Optional extra modules to include (e.g., `advntr`, `shark`). Can be repeated multiple times |
+| `--extra-modules` | string | `[]` | Optional extra modules to include: `advntr`, `shark`. Can be repeated (`--extra-modules advntr --extra-modules shark`) or given as a comma-separated list (`--extra-modules advntr,shark`). Names are case-insensitive, and an unknown name is rejected rather than ignored |
 | `--advntr-max-coverage` | int | — | Max coverage (e.g., 300) for quick adVNTR mode. Only applies when `advntr` is in `--extra-modules` |
 
 The `shark` module is not supported in BAM/CRAM mode; use FASTQ mode or remove the shark flag.

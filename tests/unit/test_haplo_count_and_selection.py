@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 tests/unit/test_haplo_count_and_selection.py
 

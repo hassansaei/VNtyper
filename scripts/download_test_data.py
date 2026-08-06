@@ -110,7 +110,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
     """
     Extract zip archive with intelligent handling of nested directories.
 
-    This uses the SAME logic as tests/test_data_utils.py to ensure
+    This uses the SAME logic as tests/support/data_utils.py to ensure
     consistent extraction behavior.
 
     Args:
@@ -139,7 +139,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
         # List first few files for debugging
         logger.info("First 10 entries in archive:")
         for i, name in enumerate(all_files[:10]):
-            logger.info(f"  [{i+1}] {name}")
+            logger.info(f"  [{i + 1}] {name}")
         if len(all_files) > 10:
             logger.info(f"  ... and {len(all_files) - 10} more entries")
 
@@ -177,7 +177,9 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
             ratio = file_count / total_files
             if ratio > 0.9 or (ratio > 0.8 and files_at_root < 5):
                 common_prefix = dominant_dir
-                logger.info(f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})")
+                logger.info(
+                    f"Will strip '{common_prefix}' from extraction paths (ratio: {ratio:.1%}, root files: {files_at_root})"
+                )
             else:
                 logger.info(f"Mixed archive structure detected (ratio: {ratio:.1%}, root files: {files_at_root})")
                 logger.info("Will extract all files normally (no prefix stripping)")
@@ -195,8 +197,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                 member_path = member.filename
                 original_path = member_path  # Keep for logging
 
-                if member_path.startswith(common_prefix):
-                    member_path = member_path[len(common_prefix) :]
+                member_path = member_path.removeprefix(common_prefix)
 
                 # Skip files not in dominant directory
                 if not member_path or member_path == member.filename:
@@ -229,7 +230,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
 
                     # Log details for first few files
                     if extracted_count <= 3:
-                        logger.info(f"  ✓ Verified: {target_path.name} ({file_size / (1024*1024):.2f} MB)")
+                        logger.info(f"  ✓ Verified: {target_path.name} ({file_size / (1024 * 1024):.2f} MB)")
 
                 except Exception as e:
                     logger.error(f"Failed to extract {member.filename} to {target_path}: {e}")
@@ -331,7 +332,9 @@ Examples:
     )
     parser.add_argument("--force", action="store_true", help="Force re-download even if files exist")
     parser.add_argument("--verify-only", action="store_true", help="Only verify existing files, don't download")
-    parser.add_argument("--skip-md5", action="store_true", help="Skip MD5 checksum validation (only check file existence)")
+    parser.add_argument(
+        "--skip-md5", action="store_true", help="Skip MD5 checksum validation (only check file existence)"
+    )
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
     parser.add_argument("--verbose", action="store_true", help="Detailed output")
 

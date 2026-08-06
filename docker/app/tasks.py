@@ -1,18 +1,17 @@
 # docker/app/tasks.py
 
-from .celery_app import celery_app
-import subprocess
+import hashlib
 import os
 import shutil
-import logging
-from datetime import datetime, timedelta
-import redis
-import hashlib
-from typing import Optional, List  # Added List for typing in new task
+import subprocess
+from datetime import datetime, timedelta, timezone
 
+import redis
 from celery.utils.log import get_task_logger
 
-from .config import settings
+from .celery_app import celery_app
+from .cohorts import cohort_key, extend_cohort_retention
+from .config import get_redis_password, settings
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -21,8 +20,10 @@ logger = get_task_logger(__name__)
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
-# Retrieve Redis password from environment variables
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "qE3!#zjraRG*`X2g4%<x&J")
+# Redis credential, from the single accessor in config.py so the worker resolves
+# the same value as the API. There is no fallback; app/celery_app.py refuses to
+# start a worker when the variable is unset.
+REDIS_PASSWORD = get_redis_password()
 
 # Redis DBs
 REDIS_DB = int(os.getenv("REDIS_DB", 1))  # Job mappings
@@ -64,7 +65,7 @@ def send_email_task(self, to_email: str, subject: str, content: str):
         logger.info(f"Email sent to {to_email} with subject '{subject}'")
     except Exception as e:
         logger.error(f"Failed to send email to {to_email}: {e}")
-        raise self.retry(exc=e)
+        raise self.retry(exc=e) from e
 
 
 @celery_app.task(bind=True)
@@ -77,18 +78,31 @@ def run_vntyper_job(
     fast_mode: bool,
     keep_intermediates: bool,
     archive_results: bool,
-    email: Optional[str] = None,
-    cohort_key: Optional[str] = None,
-    client_ip: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    email: str | None = None,
+    cohort_key: str | None = None,
+    client_ip: str | None = None,
+    user_agent: str | None = None,
     advntr_mode: bool = False,
+    index_path: str | None = None,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
     Sends an email upon job completion or failure if email is provided.
+
+    `index_path` is where the submission's own index was stored, when it carried
+    one. The endpoint accepts several index names, so the worker is told which
+    one it got rather than guessing: guessing means rebuilding an index the job
+    was already given, under a different name, and leaving the supplied file on
+    the shared volume afterwards. With no index supplied it falls back to the
+    conventional name beside the alignment, which is also where `samtools index`
+    puts the one it builds.
     """
-    task_id = self.request.id
     job_id = os.path.basename(output_dir)
+    # Bound before the try block: the cleanup below runs whether or not the task
+    # got as far as its first Redis call, and must remove exactly the index this
+    # job used -- uploaded or generated -- rather than raise a NameError of its
+    # own on the way.
+    index_path = index_path or f"{bam_path}.bai"
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
@@ -99,24 +113,21 @@ def run_vntyper_job(
         # Store initial usage data
         usage_data = {
             "user_hash": user_hash,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "job_id": job_id,
             "status": "started",
         }
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
-        redis_usage_client.expire(
-            f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS
-        )
+        redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
-        # Ensure the BAM index (.bai) exists
-        bai_path = f"{bam_path}.bai"
-        if not os.path.exists(bai_path):
-            logger.info(f"BAI index not found for {bam_path}. Generating index.")
+        # Ensure the alignment has an index the pipeline can find
+        if not os.path.exists(index_path):
+            logger.info(f"Index not found for {bam_path}. Generating index.")
             try:
                 subprocess.run(["samtools", "index", bam_path], check=True)
-                logger.info(f"Successfully generated BAI index at {bai_path}")
+                logger.info(f"Successfully generated index at {index_path}")
             except subprocess.CalledProcessError as e:
-                logger.error(f"Error generating BAI index: {e}")
+                logger.error(f"Error generating index: {e}")
                 # Update usage data on failure
                 redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 raise
@@ -146,9 +157,7 @@ def run_vntyper_job(
         if archive_results:
             command.append("--archive-results")
         if advntr_mode:
-            command.extend(
-                ["--extra-modules", "advntr", "--advntr-max-coverage", "300"]
-            )
+            command.extend(["--extra-modules", "advntr", "--advntr-max-coverage", "300"])
 
         # Run the VNtyper pipeline
         try:
@@ -183,9 +192,7 @@ def run_vntyper_job(
             try:
                 shutil.make_archive(output_dir, "zip", output_dir)
                 shutil.rmtree(output_dir)
-                logger.info(
-                    f"Archived results to {output_dir}.zip and removed original directory"
-                )
+                logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
                 logger.error(f"Error archiving results: {e}")
                 # Update usage data on failure
@@ -239,24 +246,32 @@ def run_vntyper_job(
 
         # Extend cohort TTL if necessary
         if cohort_key:
-            ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-            redis_cohort_client.expire(cohort_key, ttl_seconds)
-            redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+            extend_cohort_retention(redis_cohort_client, cohort_key, settings.COHORT_RETENTION_DAYS * 86400)
 
-        # Delete input BAM and BAI files
-        try:
-            if os.path.exists(bam_path):
-                os.remove(bam_path)
-                logger.info(f"Deleted BAM file: {bam_path}")
-        except Exception as e:
-            logger.error(f"Error deleting BAM file {bam_path}: {e}")
+        # Delete the alignment and its index. Both are patient-derived and sit
+        # on the volume every job shares, so this is the only thing that ever
+        # removes them.
+        for path in (bam_path, index_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    logger.info(f"Deleted input file: {path}")
+            except Exception as e:
+                logger.error(f"Error deleting input file {path}: {e}")
 
+        # The per-job input directory holds nothing but this submission's own
+        # files, so it goes with them. Removing it only when it is empty means
+        # anything unexpected left in there is reported rather than deleted.
+        job_input_dir = os.path.dirname(bam_path)
         try:
-            if os.path.exists(bai_path):
-                os.remove(bai_path)
-                logger.info(f"Deleted BAI file: {bai_path}")
+            if os.path.isdir(job_input_dir):
+                if os.listdir(job_input_dir):
+                    logger.warning(f"Input directory {job_input_dir} still holds files and was left in place")
+                else:
+                    os.rmdir(job_input_dir)
+                    logger.info(f"Deleted empty input directory: {job_input_dir}")
         except Exception as e:
-            logger.error(f"Error deleting BAI file {bai_path}: {e}")
+            logger.error(f"Error deleting input directory {job_input_dir}: {e}")
 
 
 @celery_app.task
@@ -267,17 +282,19 @@ def delete_old_results():
     """
     max_age_days = settings.MAX_RESULT_AGE_DAYS
     output_dir = settings.DEFAULT_OUTPUT_DIR
-    cutoff_time = datetime.now() - timedelta(days=max_age_days)
+    # Both sides of the age comparison below are UTC-aware. They must stay that way
+    # together: mixing an aware datetime with a naive one raises TypeError, and the
+    # instants themselves are unchanged by the timezone, so the comparison result is
+    # the same as it was with the two naive local-time values.
+    cutoff_time = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
-    logger.info(
-        f"Running delete_old_results task. Deleting files older than {max_age_days} days."
-    )
+    logger.info(f"Running delete_old_results task. Deleting files older than {max_age_days} days.")
 
     for filename in os.listdir(output_dir):
         if filename.endswith(".zip"):
             file_path = os.path.join(output_dir, filename)
             if os.path.isfile(file_path):
-                file_creation_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                file_creation_time = datetime.fromtimestamp(os.path.getctime(file_path), tz=timezone.utc)
                 if file_creation_time < cutoff_time:
                     try:
                         os.remove(file_path)
@@ -302,9 +319,7 @@ def delete_old_results():
                         logger.error(f"Error deleting file {zip_path}: {e}")
                 # Remove job ID from Redis
                 redis_client.delete(job_id)
-                redis_client.delete(
-                    f"celery-task-meta-{job_id}"
-                )  # Remove Celery task meta
+                redis_client.delete(f"celery-task-meta-{job_id}")  # Remove Celery task meta
             # Remove cohort jobs set
             redis_cohort_client.delete(cohort_jobs_key)
             logger.info(f"Deleted expired cohort data: {key}")
@@ -319,10 +334,10 @@ def delete_old_results():
 def run_cohort_analysis_job(
     self,
     cohort_id: str,
-    zip_paths: List[str],
+    zip_paths: list[str],
     output_dir: str,
-    user_ip: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    user_ip: str | None = None,
+    user_agent: str | None = None,
 ):
     """
     Celery task to run a joint cohort analysis using 'vntyper cohort'.
@@ -336,6 +351,10 @@ def run_cohort_analysis_job(
     """
     task_id = self.request.id
     job_id = os.path.basename(output_dir)
+    # Bound before the try block: the cleanup below runs whether or not the task
+    # got as far as naming its scratch file, and must not mask the original
+    # failure with a NameError of its own.
+    input_file = None
     logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
     # Generate a unique hash for the user
@@ -345,7 +364,7 @@ def run_cohort_analysis_job(
     # Store initial usage data
     usage_data = {
         "user_hash": user_hash,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "job_id": job_id,
         "status": "started",
         "analysis_type": "cohort_analysis",
@@ -359,8 +378,7 @@ def run_cohort_analysis_job(
         os.makedirs(output_dir, exist_ok=True)
         input_file = os.path.join(output_dir, "cohort_input.txt")
         with open(input_file, "w") as f:
-            for zpath in zip_paths:
-                f.write(f"{zpath}\n")
+            f.writelines(f"{zpath}\n" for zpath in zip_paths)
 
         # 2) Run the "vntyper cohort" command
         command = [
@@ -402,27 +420,23 @@ def run_cohort_analysis_job(
 
         # Extend cohort TTL if necessary
         if cohort_id:
-            cohort_key = f"cohort:{cohort_id}"
-            ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-            redis_cohort_client.expire(cohort_key, ttl_seconds)
-            redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+            extend_cohort_retention(
+                redis_cohort_client,
+                cohort_key(cohort_id),
+                settings.COHORT_RETENTION_DAYS * 86400,
+            )
 
-        # Delete input ZIP listing file
+        # Delete the listing file this task wrote for itself. That file is the
+        # only thing here the task owns; the .zip paths it names are the
+        # members' own results, which /download/{job_id}/ serves and which a
+        # later analysis reads again, so they are left alone. Result archives
+        # are aged out centrally by delete_old_results().
         try:
-            if os.path.exists(input_file):
+            if input_file and os.path.exists(input_file):
                 os.remove(input_file)
                 logger.info(f"Deleted cohort input file: {input_file}")
         except Exception as e:
             logger.error(f"Error deleting cohort input file {input_file}: {e}")
-
-        # Delete individual .zip files if archive_results was used
-        for zpath in zip_paths:
-            try:
-                if os.path.exists(zpath):
-                    os.remove(zpath)
-                    logger.info(f"Deleted individual result file: {zpath}")
-            except Exception as e:
-                logger.error(f"Error deleting file {zpath}: {e}")
 
         # Optionally, delete the output directory if it's empty
         try:

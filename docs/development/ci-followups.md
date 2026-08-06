@@ -31,7 +31,7 @@ Ordered by expected value, not size.
 ### B1. Test-data fetching is all-or-nothing — HIGH
 
 `scripts/download_test_data.py` re-downloads the full **1120 MB** Zenodo archive when a
-single file is missing, and `tests/test_data_utils.py` calls `pytest.exit()` on failure,
+single file is missing, and `tests/support/data_utils.py` calls `pytest.exit()` on failure,
 killing the whole session including unit tests that need no data.
 
 Observed: two of 114 files were absent locally (the config had moved ahead of the local
@@ -89,11 +89,16 @@ order, or the next release fails:
 2. In the workflow: add `id-token: write` and the `environment:` block, replace the twine
    step with `pypa/gh-action-pypi-publish@release/v1`, delete the secret.
 
-### B5. `vntyper report` is broken — MEDIUM
+### B5. `vntyper report` is broken — RESOLVED (#179)
 
-`cli.py` passes arguments `generate_summary_report()` does not accept, so the subcommand
-raises. Recorded as trap 11 in `AGENTS.md` and untouched here. Needs its own fix plus the
-regression test that would have caught it.
+`cli.py` passed arguments `generate_summary_report()` does not accept, so the subcommand
+raised `TypeError` before doing any work. Fixed in #179: the handler moved to
+`vntyper/scripts/cli_report.py`, the three unaccepted keywords were dropped (the report
+generator reads all three out of `pipeline_summary.json` itself) and the required
+`log_file` is now passed. The regression test drives the real
+`cli.main(["report", ...])` into a spy that binds
+`inspect.signature(generate_summary_report)`, so a call the real function would reject
+fails in the same place.
 
 ### B6. Workflow linting is local-only — MEDIUM
 
@@ -124,6 +129,69 @@ The outcome is right; the job-status display is not explained. Most likely a
 reusable-workflow reporting artifact. Worth confirming once more on the next base-input
 change before trusting the `skipped` signal, since "base silently not rebuilt" would be a
 serious failure mode.
+
+### B8. adVNTR `Insertion_len` is derived by a rule nobody has ratified — HIGH, needs a domain decision
+
+**This one is not a code question. It decides which adVNTR genotypes get reported, so it
+is reserved for the domain owner and is deliberately left unchanged in #179.**
+
+`advntr_processing_del` and `advntr_processing_ins` in
+`vntyper/modules/advntr/advntr_genotyping.py` derive `Insertion_len` from the adVNTR
+`State` string like this:
+
+```python
+df1["Insertion_len"] = df1["Variant"].str.extract(r"(LEN.*)")[0]      # greedy, to end of string
+df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
+df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=1, expand=True)
+df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
+```
+
+`Insertion_len` then feeds `frame = abs(Insertion_len - Deletion_length)`, and the row
+survives only if `frame` is in the configured frameshift series. A compound call names
+several parts joined by `&`, so the extracted remainder is often not a number at all:
+
+| `State` | extracted remainder | `Insertion_len` | why |
+| --- | --- | --- | --- |
+| `I22_2_G_LEN1` | `1` | 1 | single part — a bare number |
+| `D8_2&D9_2&I9_2_A_LEN9` | `9` | 9 | the `LEN` is in the *last* part |
+| `I9_2_A_LEN2&D50_2` | `2&D50_2` | **0** | a further part follows the `LEN` |
+| `I9_2_A_LEN2&D50_2&D51_2` | `2&D50_2&D51_2` | **0** | as above |
+| `I9_2_A_LEN9&I50_2_A_LEN3` | `9&I50_2_A_LEN3` | **0** | two `LEN` tokens |
+
+So the effective rule is: *if any `&` part follows the `LEN` token, the inserted length is
+treated as zero.* That is almost certainly not what anyone intended. There are three
+candidate policies and they do not agree:
+
+| Policy | `I9_2_A_LEN2&D50_2` | `I9_2_A_LEN9&I50_2_A_LEN3` |
+| --- | --- | --- |
+| **NaN→0** (today) | 0 → ins filter drops the row | 0 → dropped |
+| **first LEN wins** | 2 → `frame` 1 → **row survives the insertion filter** | 9 → `frame` 9 → dropped |
+| **sum of LENs** | 2 → survives | 12 → `frame` 12 → dropped |
+
+The middle column is the reason this is filed rather than fixed. Through the
+empty-result branch, a sample whose only adVNTR call is `I9_2_A_LEN2&D50_2` reports the
+`Negative` placeholder under today's rule and a **positive adVNTR call** under
+"first LEN wins"; a sample whose only call is `I9_2_A_LEN2&D50_2&D51_2` moves the other
+way. That is a reported-genotype change either way round.
+
+`#179` briefly shipped "first LEN wins" as a side effect of a crash fix
+(`a7c3d9e`, reverted to crash-only in the follow-up commit) — which is how the question
+was found. Today's behaviour is pinned byte for byte, against measurements taken from the
+pre-fix commit, by
+`tests/unit/test_advntr_output_parsing.py::TestInsertionLenIsCharacterised`; changing the
+policy means changing that test deliberately, which is the point.
+
+**What is needed:** a decision from the domain owner on which of the three is correct for
+MUC1 VNTR compound calls, ideally checked against a cohort that actually contains one.
+No sample in `tests/data/` does — see the golden-cohort gate's "what this gate does not
+cover".
+
+Two smaller questions ride along with it, both currently invisible for the same reason:
+
+* `Deletion_length` is `State.str.count("D")` — a count of the letter `D` anywhere in the
+  string, not of deletion *parts*. It happens to agree for the shapes seen so far.
+* `Insertion_length` (plural, `str.count("I")`) is computed and never used by either
+  filter.
 
 ## C. Deliberately not doing
 

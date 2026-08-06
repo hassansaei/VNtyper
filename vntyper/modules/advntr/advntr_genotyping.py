@@ -8,9 +8,38 @@ import subprocess as sp
 import numpy as np
 import pandas as pd
 
+from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
+
+#: Matches greedily from the first ``LEN`` token to the end of an adVNTR ``State`` string.
+#:
+#: This is the historic expression and it is deliberately kept. Everything after the first
+#: ``LEN`` becomes ``Insertion_len``, so a single-part state leaves a bare number
+#: (``I22_2_G_LEN1`` -> ``"1"``) while any state with a further ``&`` part leaves a
+#: non-numeric remainder (``I9_2_A_LEN2&D50_2`` -> ``"2&D50_2"``) that
+#: ``pd.to_numeric(errors="coerce")`` turns into ``NaN`` and then **zero**. That zero
+#: decides which rows pass the frameshift filter and therefore which adVNTR genotypes are
+#: reported, so it is a clinical-output decision, not a parsing detail: it is pinned by
+#: ``tests/unit/test_advntr_output_parsing.py::TestInsertionLenIsCharacterised`` and may
+#: only change deliberately. Whether it *should* become the first part's length or the sum
+#: over all parts is filed for the domain owner, not decided here.
+GREEDY_INSERTION_LEN_PATTERN = r"(LEN.*)"
+
+#: ``str.split`` bound for the ``LEN`` split, and the whole of the compound-variant repair.
+#:
+#: A ``State`` naming two insertions -- ``I9_2_A_LEN9&I50_2_A_LEN3`` -- extracts to
+#: ``LEN9&I50_2_A_LEN3``, which contains *two* ``LEN`` tokens. An unbounded split would
+#: yield three fields for a two-column assignment and raise, and the broad handler in
+#: :func:`process_advntr_output` would then return without writing a file: one compound
+#: call would take every other variant in the sample with it.
+#:
+#: Splitting at most once makes that shape impossible while leaving every state that
+#: already produces two fields byte for byte unchanged -- the bound only ever fires on the
+#: compound input, and it gives that input the same treatment every other multi-part
+#: remainder gets: non-numeric, coerced to zero.
+INSERTION_LEN_SPLIT_LIMIT = 1
 
 
 # -------------------------------------------------------------------------
@@ -75,10 +104,19 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
             logger.critical(f"Could not create output directory {output}: {e}")
             return 1
 
+    # `run_command` runs this as one string under bash (trap 9), so quoting can only
+    # happen here. Paths, the sample-derived output name and the thread count are
+    # quoted; `advntr_path` and `additional_commands` are not, because both hold
+    # *command fragments* from config.json - `advntr` is "mamba run -n envadvntr advntr"
+    # (trap 6) and `additional_commands` is a flag list such as "-aln". Quoting either
+    # would collapse it into a single token bash then looks for as one binary or one
+    # argument. They are operator-controlled configuration, not user input.
     advntr_command = (
-        f"{advntr_path} genotype -fs -vid {vid} "
-        f"--alignment_file {sorted_bam} -o {output}/{output_name}_adVNTR{output_ext} "
-        f"-m {db_file} --working_directory {output} -t {threads} {additional_commands}"
+        f"{advntr_path} genotype -fs -vid {quote_path(vid)} "
+        f"--alignment_file {quote_path(sorted_bam)} "
+        f"-o {quote_path(f'{output}/{output_name}_adVNTR{output_ext}')} "
+        f"-m {quote_path(db_file)} --working_directory {quote_path(output)} "
+        f"-t {quote_path(threads)} {additional_commands}"
     )
 
     # Define log file for adVNTR output
@@ -122,10 +160,10 @@ def advntr_processing_del(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract(GREEDY_INSERTION_LEN_PATTERN)[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
-    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
+    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=INSERTION_LEN_SPLIT_LIMIT, expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
     df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
     df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)
@@ -161,10 +199,10 @@ def advntr_processing_ins(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract(GREEDY_INSERTION_LEN_PATTERN)[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
-    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
+    df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", n=INSERTION_LEN_SPLIT_LIMIT, expand=True)
     logger.debug("Split 'Insertion_len' column using 'LEN' as separator.")
     df1["Insertion_len"] = df1["Insertion_len"].astype(str).replace("^$", "0", regex=True)
     df1["Insertion_len"] = pd.to_numeric(df1["Insertion_len"], errors="coerce").fillna(0).astype(int)

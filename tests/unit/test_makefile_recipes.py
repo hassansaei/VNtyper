@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 tests/unit/test_makefile_recipes.py
 
@@ -138,16 +137,16 @@ def test_recipe_is_valid_shell_when_tool_is_absent(var: str) -> None:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            check=False,
         )
-        assert expanded.returncode == 0, (
-            f"`make --dry-run {target} {var}=` failed:\n{expanded.stderr}"
-        )
+        assert expanded.returncode == 0, f"`make --dry-run {target} {var}=` failed:\n{expanded.stderr}"
 
         checked = subprocess.run(
             ["sh", "-n"],
             input=expanded.stdout,
             capture_output=True,
             text=True,
+            check=False,
         )
         assert checked.returncode == 0, (
             f"Target `{target}` is not valid shell when {var} is empty "

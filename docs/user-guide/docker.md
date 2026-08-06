@@ -76,10 +76,28 @@ docker logs <container_id>
 
 ## API Server
 
-Start the FastAPI server for programmatic access:
+The API stores job state in Redis and hands work to a Celery worker, so it needs a
+Redis instance and the password for it. `REDIS_PASSWORD` is required and has no
+default: the API, the worker and Redis itself must all be given the same value, and
+the service refuses to start without it. Generate a fresh secret with
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
+The full stack (Redis, API, worker, beat) is easiest to bring up with Compose. Copy
+the environment template, set the password in it, and start:
+
+```bash
+cp docker/.env.example docker/.env
+$EDITOR docker/.env          # set REDIS_PASSWORD
+docker compose -f docker/docker-compose.yml up -d
+```
+
+`docker/.env.example` documents the remaining settings. To run the API container on
+its own against an existing Redis:
 
 ```bash
 docker run -d -p 8000:8000 \
+    -e REDIS_HOST=my-redis-host \
+    -e REDIS_PASSWORD="$REDIS_PASSWORD" \
     -v /path/to/input:/opt/vntyper/input \
     -v /path/to/output:/opt/vntyper/output \
     vntyper:latest

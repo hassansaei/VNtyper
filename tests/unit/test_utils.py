@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # tests/unit/test_utils.py
 
 """
@@ -6,7 +5,6 @@ Unit tests for utility functions.
 Includes testing for command execution and BAM file validation.
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -65,6 +63,4 @@ def test_validate_bam_file_nonexistent():
     """
     with pytest.raises(ValueError) as exc:
         validate_bam_file("nonexistent.bam")
-    assert "does not exist" in str(
-        exc.value
-    ), "Expected ValueError for nonexistent file."
+    assert "does not exist" in str(exc.value), "Expected ValueError for nonexistent file."

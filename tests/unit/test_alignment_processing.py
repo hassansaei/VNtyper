@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # tests/unit/test_alignment_processing.py
 
 """
@@ -32,9 +31,7 @@ def test_check_bwa_index_all_present(tmp_path, test_config, caplog):
     with caplog.at_level(logging.WARNING):
         result = check_bwa_index(ref_path)
 
-    assert (
-        result is True
-    ), "check_bwa_index should return True when all index files exist."
+    assert result is True, "check_bwa_index should return True when all index files exist."
     assert "Missing BWA index files" not in caplog.text
 
 
@@ -62,6 +59,5 @@ def test_align_and_sort_fastq_missing_tools(tmp_path, test_config):
         config=config_for_test,
     )
     assert result is None, (
-        "Expected None when tools are missing, because 'samtools'/'bwa' "
-        "are not configured in config_for_test['tools']."
+        "Expected None when tools are missing, because 'samtools'/'bwa' are not configured in config_for_test['tools']."
     )

@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 
+from vntyper.scripts.command_builders import quote_path
 from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
@@ -67,10 +68,16 @@ def run_shark_filter(
     filtered_fastq_1 = os.path.join(output_dir, f"{sample_name}_shark_R1.fastq")
     filtered_fastq_2 = os.path.join(output_dir, f"{sample_name}_shark_R2.fastq")
 
-    # Add the threads parameter to the command using the -t option
+    # `run_command` runs this as one string under bash (trap 9), so quoting can only
+    # happen here. Every operand is a path or a thread count and is quoted;
+    # `shark_path` is not, because config.json holds a command *prefix* there --
+    # "mamba run -n shark_env shark" (trap 6) -- which quoting would collapse into a
+    # single token bash looks for as one binary.
     command = (
-        f"{shark_path} -r {muc1_region_fasta} -1 {fastq_1} -2 {fastq_2} "
-        f"-o {filtered_fastq_1} -p {filtered_fastq_2} -t {threads}"
+        f"{shark_path} -r {quote_path(muc1_region_fasta)} "
+        f"-1 {quote_path(fastq_1)} -2 {quote_path(fastq_2)} "
+        f"-o {quote_path(filtered_fastq_1)} -p {quote_path(filtered_fastq_2)} "
+        f"-t {quote_path(threads)}"
     )
 
     log_file = Path(output_dir) / f"{sample_name}_shark.log"

@@ -24,8 +24,8 @@ vntyper [global-options] online
 | `--reference-assembly` | choice | `hg19` | Reference assembly used for alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl` |
 | `--threads` | int | `4` | Number of threads to use |
 | `--email` | string | — | Email address to receive notifications (optional) |
-| `--cohort-id` | string | — | Cohort ID to associate the job with (optional) |
-| `--passphrase` | string | — | Passphrase for the cohort, if required |
+| `--cohort-id` | string | — | Cohort ID to associate the job with (optional). The identifier the service returned when the cohort was created, not its alias |
+| `--passphrase` | string | — | Passphrase for the cohort. Required whenever `--cohort-id` is given; at most 72 bytes once UTF-8 encoded |
 | `--resume` | flag | off | Resume polling a previously submitted job if a `job_id` is found in the output directory |
 
 ## Workflow
@@ -39,6 +39,28 @@ The `online` command follows a submit-poll-download workflow:
 
 Use `--resume` to skip submission and resume polling a previously submitted job.
 
+## Exit codes and polling limits
+
+`vntyper online` exits **1** whenever the remote job does not complete — a failed job, a
+job in an unexpected terminal state, a submission that returns no job id, or a job that
+never reaches a terminal status within the polling window. Before VNtyper 2.0.6 all of
+those logged a message and exited **0**, so a wrapping `subprocess.run(..., check=True)`
+treated a failed genotyping run as a success.
+
+Polling is bounded. Two `api` keys in `config.json` control it:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `poll_interval_seconds` | `10` | Seconds between status checks |
+| `poll_timeout_seconds` | `14400` (4 h) | Total time to keep polling before giving up |
+
+Timing out is not the same as failing: the job may still be running on the server. Re-run
+the same command with `--resume` to pick the polling back up.
+
+The server returns a deliberately generic message for a failed job, because
+`/job-status/` is unauthenticated. Ask the instance operator for the job log if you need
+the detail.
+
 ## Examples
 
 Submit a BAM for online analysis:
@@ -51,7 +73,8 @@ Submit with email notifications and cohort association:
 
 ```bash
 vntyper online --bam sample.bam -o results/ \
-    --email user@example.com --cohort-id my_cohort --passphrase secret123
+    --email user@example.com \
+    --cohort-id 4f9c1a72-5e30-4b8d-9a61-7c2e0d5b83fa --passphrase secret123
 ```
 
 Resume polling a previously submitted job:

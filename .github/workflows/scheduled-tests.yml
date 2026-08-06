@@ -1,0 +1,290 @@
+name: Scheduled Tests
+
+# The two slow tiers, on a weekly timer.
+#
+# Everything these tiers touch lives outside this repository - the Zenodo test-data
+# archive, the UCSC/NCBI/ENSEMBL reference URLs, the conda channels, the published base
+# image - and none of it changes when a contributor opens a pull request. Rot in any of
+# them therefore surfaces as a red build on an unrelated change, days or weeks after the
+# fact, unless something goes looking for it on a schedule. This is that something.
+#
+# Coverage split, so it is clear what this adds:
+#   * The integration tier (`pytest -m integration`) runs NOWHERE else. ci-tests.yml
+#     gates on `-m unit` only, so until this workflow existed the sole end-to-end
+#     exercise of the pipeline was a maintainer running `make check-full` by hand.
+#   * The Docker tier does already have a nightly sweep in docker-build.yml, but that
+#     builds an image from the commit and is gated behind a paths filter. This job runs
+#     the same tier against the `:main` image that is actually published - the one users
+#     pull - so a bad publish or a base-image drift is caught even when no code changed.
+#
+# Nothing here is a required status check: a scheduled run has no pull request to block,
+# and a Zenodo outage must not be able to gate merges.
+on:
+  schedule:
+    # Mondays 05:00 UTC. Deliberately not 03:00 - docker-build.yml's nightly sweep runs
+    # then, and two full test-data downloads at once just contend for the same cache.
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  # No ref in the group: `schedule` only ever fires on the default branch, and a manual
+  # dispatch that overlaps a scheduled run would otherwise duplicate a ~40 min job.
+  # Never cancel in progress - a run this long is worth finishing.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  integration:
+    name: Integration tier (real pipeline, real data)
+    runs-on: ubuntu-24.04
+    # The pipeline itself is minutes; the cost is building the conda environment and
+    # bwa-indexing chr1.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # micromamba's shell hook needs a login shell to activate the environment.
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The pipeline shells out to bwa, samtools, fastp, bcftools and java. `pip install`
+      # alone does not give a working pipeline (AGENTS.md, Setup), so the environment has
+      # to come from the same recipe the Docker image uses.
+      - name: Create the vntyper conda environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: conda/environment_vntyper.yml
+          cache-environment: true
+
+      # --no-deps, for the same reason docker/Dockerfile uses it (AGENTS.md trap 15):
+      # every runtime dependency here is conda-managed, and letting pip re-resolve them
+      # from PyPI lays a second numpy over the conda-managed one. The test runner is then
+      # installed explicitly - it is not in the conda recipe, because the image does not
+      # run tests. testcontainers is needed even though no Docker test runs here: pytest
+      # imports tests/docker/conftest.py at collection time regardless of `-m`.
+      - name: Install VNtyper and the test runner
+        run: |
+          python -m pip install -e . --no-deps
+          python -m pip install pytest pytest-cov pytest-timeout pytest-xdist requests testcontainers
+
+      - name: Restore test data cache
+        id: cache-test-data
+        uses: actions/cache/restore@v6
+        with:
+          path: tests/data
+          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+          restore-keys: |
+            test-data-v3-
+
+      - name: Verify cached test data
+        id: verify
+        if: steps.cache-test-data.outputs.cache-hit == 'true'
+        run: |
+          if ! python scripts/download_test_data.py --verify-only; then
+            echo "⚠ Cache verification failed; will re-download."
+            rm -rf tests/data
+            echo "needs_download=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # This step is half the point of the workflow: it is the only place CI talks to
+      # Zenodo, so a dead record or a re-minted DOI fails here rather than in a PR.
+      - name: Download test data
+        if: steps.cache-test-data.outputs.cache-hit != 'true' || steps.verify.outputs.needs_download == 'true'
+        run: python scripts/download_test_data.py
+        timeout-minutes: 30
+
+      - name: Final test data verification
+        run: python scripts/download_test_data.py --verify-only
+
+      # The other half: the UCSC/NCBI/ENSEMBL download URLs in
+      # install_references_config.json. Only hg19 is installed - it is the only assembly
+      # the integration tier aligns against, because the BAM cases go BAM -> FASTQ ->
+      # Kestrel and never touch a genome index. Installing all six would add ~5 GB and
+      # five more bwa index builds for no extra assertion.
+      - name: Install reference data
+        run: vntyper install-references -d reference --references hg19 --threads 4
+        timeout-minutes: 45
+
+      # Data is already present and verified above, so a download here would mean the
+      # steps above silently failed. Fail fast instead.
+      - name: Run the integration tier
+        env:
+          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
+        run: make test-integration
+
+      - name: Upload the pytest log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-pytest-log
+          path: tests/pytest.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  docker:
+    name: Docker tier (published :main image)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Deliberately the published tag, not a fresh build. docker-build.yml already
+      # tests what the commit builds; nothing tests what was actually shipped.
+      - name: Pull the published image
+        run: |
+          set -euo pipefail
+          LOWER=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          docker pull "ghcr.io/${LOWER}:main"
+          docker tag "ghcr.io/${LOWER}:main" vntyper:test
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
+
+      - name: Restore test data cache
+        id: cache-test-data
+        uses: actions/cache/restore@v6
+        with:
+          path: tests/data
+          key: test-data-v3-${{ hashFiles('tests/test_data_config.json', 'scripts/download_test_data.py') }}
+          restore-keys: |
+            test-data-v3-
+
+      - name: Verify cached test data
+        id: verify
+        if: steps.cache-test-data.outputs.cache-hit == 'true'
+        run: |
+          if ! python scripts/download_test_data.py --verify-only; then
+            echo "⚠ Cache verification failed; will re-download."
+            rm -rf tests/data
+            echo "needs_download=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download test data
+        if: steps.cache-test-data.outputs.cache-hit != 'true' || steps.verify.outputs.needs_download == 'true'
+        run: python scripts/download_test_data.py
+        timeout-minutes: 30
+
+      - name: Final test data verification
+        run: python scripts/download_test_data.py --verify-only
+
+      # The full tier, adVNTR included. This is the slow one that PRs and pushes skip.
+      - name: Run the Docker tier
+        env:
+          VNTYPER_TEST_IMAGE: vntyper:test
+          VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
+        run: make test-docker
+
+  mutation:
+    name: Mutation score (advisory)
+    runs-on: ubuntu-24.04
+    # ~130 mutants, each its own pytest run, with survivors re-run against the full
+    # unit tier to confirm them.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
+
+      # REPORTED, NEVER GATED. `make mutation` always exits 0 by design: equivalent
+      # mutants have not been hand-classified, so the score understates the truth by an
+      # unknown margin and is not a threshold anything should bind against. It runs
+      # here, on the weekly timer, rather than on PRs - the same reasoning that keeps
+      # adVNTR off the merge path, and for the same reason: an hour of runner time for
+      # a number nobody blocks on.
+      - name: Run the mutation sweep
+        run: make mutation
+
+      # The score in the run summary, so a trend is visible without opening the log.
+      - name: Publish the score to the run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f docs/development/mutation-testing.md ]; then
+            sed -n '/^## Result/,/^## Reproducing/p' docs/development/mutation-testing.md \
+              | sed '/^## Reproducing/d' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The mutation sweep produced no report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The regenerated page, so a maintainer can diff it against the committed one and
+      # see which mutants started or stopped surviving.
+      - name: Upload the mutation report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: mutation-report
+          path: docs/development/mutation-testing.md
+          if-no-files-found: warn
+
+  scheduled-summary:
+    name: Scheduled test summary
+    # `mutation` is deliberately NOT a dependency. It reports a number nobody blocks on,
+    # so it must not be able to turn this run red - that is the whole point of keeping
+    # it advisory. Add it here only if the score ever becomes a gate.
+    needs: [integration, docker]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: always()
+    steps:
+      - name: Report which tiers failed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -qE '"result": *"(failure|cancelled)"'; then
+            echo "❌ A scheduled tier failed - an external dependency has most likely rotted."
+            exit 1
+          fi
+          echo "✅ Integration and Docker tiers passed"

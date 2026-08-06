@@ -3,7 +3,7 @@
 Benchmarking vntyper on simulated BAM files
 
 This script reads a CSV/TSV file containing (at least) two columns:
-  - one with the path to each BAM file, and 
+  - one with the path to each BAM file, and
   - one with the known mutation status ("positive" or "negative").
 
 For each sample, the script will:
@@ -50,33 +50,37 @@ import logging
 import math
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Dict
 
 import pandas as pd
 
 # -----------------------
 # Logging configuration
 # -----------------------
+# This module is a standalone benchmarking entry point, not part of the `vntyper`
+# package, so it configures the root logger itself. Records are still emitted
+# through a module logger that propagates to it, per AGENTS.md.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+logger = logging.getLogger(__name__)
+
 
 # -----------------------
 # Utility functions
 # -----------------------
-def run_command(command: List[str], description: str, critical: bool = True) -> None:
+def run_command(command: list[str], description: str, critical: bool = True) -> None:
     """
     Run a shell command and handle errors.
     """
-    logging.info(f"Running: {description}")
-    logging.debug(f"Command: {' '.join(command)}")
+    logger.info(f"Running: {description}")
+    logger.debug(f"Command: {' '.join(command)}")
     try:
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to {description}. Error: {e}")
+        logger.error(f"Failed to {description}. Error: {e}")
         if critical:
             raise
 
@@ -86,7 +90,7 @@ def compute_md5(file_path: Path, chunk_size: int = 1_048_576) -> str:
     Compute the MD5 checksum of a file.
     """
     hash_md5 = hashlib.md5()
-    logging.debug(f"Computing MD5 for {file_path}")
+    logger.debug(f"Computing MD5 for {file_path}")
     with file_path.open("rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             hash_md5.update(chunk)
@@ -105,7 +109,7 @@ def run_vntyper(
     keep_intermediates: bool,
     archive_results: bool,
     fast_mode: bool,
-    additional_options: Optional[str] = None,
+    additional_options: str | None = None,
 ) -> Path:
     """
     Run vntyper on the given BAM file.
@@ -150,13 +154,13 @@ def run_vntyper(
     if additional_options:
         command.extend(additional_options.split())
 
-    logging.info(f"Executing vntyper for {bam_file.name}")
+    logger.info(f"Executing vntyper for {bam_file.name}")
     run_command(command, description=f"vntyper run on {bam_file.name}")
 
     return sample_output
 
 
-def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
+def summarize_vntyper_results(vntyper_output_dir: Path) -> dict | None:
     """
     Parse vntyper results to extract key metrics from the 'kestrel_result.tsv' file.
     Expects the file to contain a column "Confidence" whose value is either
@@ -168,29 +172,29 @@ def summarize_vntyper_results(vntyper_output_dir: Path) -> Optional[Dict]:
     """
     result_files = list(vntyper_output_dir.rglob("kestrel_result.tsv"))
     if not result_files:
-        logging.warning(f"No kestrel_result.tsv found in {vntyper_output_dir}")
+        logger.warning(f"No kestrel_result.tsv found in {vntyper_output_dir}")
         return None
 
     result_file = result_files[0]
-    logging.info(f"Parsing Kestrel results from {result_file}")
+    logger.info(f"Parsing Kestrel results from {result_file}")
 
     try:
         df = pd.read_csv(result_file, sep="\t", comment="#")
         if "Confidence" not in df.columns:
-            logging.error(f"Missing expected column 'Confidence' in {result_file}")
+            logger.error(f"Missing expected column 'Confidence' in {result_file}")
             return None
 
         summary = {"Confidence": df["Confidence"].dropna().astype(str).tolist()}
         return summary
     except pd.errors.ParserError as e:
-        logging.error(f"Failed to parse {result_file}: {e}")
+        logger.error(f"Failed to parse {result_file}: {e}")
         return None
     except Exception as e:
-        logging.error(f"Unexpected error while parsing {result_file}: {e}")
+        logger.error(f"Unexpected error while parsing {result_file}: {e}")
         return None
 
 
-def determine_call(summary: Optional[Dict]) -> str:
+def determine_call(summary: dict | None) -> str:
     """
     Determine the predicted mutation status based on the vntyper summary.
 
@@ -351,25 +355,17 @@ def main():
             truth_status = row[args.status_col].strip().lower()
             sample_id = bam_path.stem
 
-            logging.info(
-                f"Processing sample {sample_id} with expected status '{truth_status}'"
-            )
+            logger.info(f"Processing sample {sample_id} with expected status '{truth_status}'")
 
             if not bam_path.is_file():
-                logging.error(f"BAM file not found: {bam_path}. Skipping sample.")
+                logger.error(f"BAM file not found: {bam_path}. Skipping sample.")
                 continue
 
             # Determine the expected vntyper output directory.
             vntyper_out_dir = args.output_dir / f"{bam_path.stem}_vntyper_output"
             # Check if results already exist (i.e. a kestrel_result.tsv file is present)
-            if (
-                not args.recompute
-                and vntyper_out_dir.exists()
-                and any(vntyper_out_dir.rglob("kestrel_result.tsv"))
-            ):
-                logging.info(
-                    f"vntyper output already exists for {bam_path.name}, skipping recomputation"
-                )
+            if not args.recompute and vntyper_out_dir.exists() and any(vntyper_out_dir.rglob("kestrel_result.tsv")):
+                logger.info(f"vntyper output already exists for {bam_path.name}, skipping recomputation")
             else:
                 try:
                     vntyper_out_dir = run_vntyper(
@@ -384,7 +380,7 @@ def main():
                         additional_options=args.vntyper_options,
                     )
                 except Exception as e:
-                    logging.error(f"vntyper run failed for {bam_path}: {e}")
+                    logger.error(f"vntyper run failed for {bam_path}: {e}")
                     predicted_status = "error"
                     summary = None
                 else:
@@ -422,20 +418,18 @@ def main():
             )
 
     total = tp + tn + fp + fn
-    logging.info("=== Confusion Matrix ===")
-    logging.info(f"True Positives:  {tp}")
-    logging.info(f"False Negatives: {fn}")
-    logging.info(f"False Positives: {fp}")
-    logging.info(f"True Negatives:  {tn}")
-    logging.info(f"Total evaluated: {total}")
+    logger.info("=== Confusion Matrix ===")
+    logger.info(f"True Positives:  {tp}")
+    logger.info(f"False Negatives: {fn}")
+    logger.info(f"False Positives: {fp}")
+    logger.info(f"True Negatives:  {tn}")
+    logger.info(f"Total evaluated: {total}")
 
     # Calculate test statistics.
     sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0  # Recall
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
     accuracy = (tp + tn) / total if total > 0 else 0
-    precision = (
-        tp / (tp + fp) if (tp + fp) > 0 else 0
-    )  # Positive Predictive Value (PPV)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0  # Positive Predictive Value (PPV)
     npv = tn / (tn + fn) if (tn + fn) > 0 else 0  # Negative Predictive Value (NPV)
 
     # Compute standard errors and 95% confidence intervals.
@@ -451,22 +445,14 @@ def main():
     npv_se, npv_lower, npv_upper = calc_ci(npv, npv_n)
     acc_se, acc_lower, acc_upper = calc_ci(accuracy, acc_n)
 
-    logging.info("=== Test Statistics ===")
-    logging.info(
+    logger.info("=== Test Statistics ===")
+    logger.info(
         f"Sensitivity (Recall): {sensitivity:.3f} (SE: {sens_se:.3f}, CI: [{sens_lower:.3f}, {sens_upper:.3f}])"
     )
-    logging.info(
-        f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])"
-    )
-    logging.info(
-        f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])"
-    )
-    logging.info(
-        f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])"
-    )
-    logging.info(
-        f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])"
-    )
+    logger.info(f"Specificity: {specificity:.3f} (SE: {spec_se:.3f}, CI: [{spec_lower:.3f}, {spec_upper:.3f}])")
+    logger.info(f"Precision (PPV): {precision:.3f} (SE: {prec_se:.3f}, CI: [{prec_lower:.3f}, {prec_upper:.3f}])")
+    logger.info(f"NPV: {npv:.3f} (SE: {npv_se:.3f}, CI: [{npv_lower:.3f}, {npv_upper:.3f}])")
+    logger.info(f"Accuracy: {accuracy:.3f} (SE: {acc_se:.3f}, CI: [{acc_lower:.3f}, {acc_upper:.3f}])")
 
     # Write detailed per-sample results to summary CSV.
     with args.summary_output.open("w", newline="") as csvfile:
@@ -481,7 +467,7 @@ def main():
         writer.writeheader()
         for rec in results:
             writer.writerow(rec)
-    logging.info(f"Per-sample benchmark summary written to {args.summary_output}")
+    logger.info(f"Per-sample benchmark summary written to {args.summary_output}")
 
     # Write the overall test statistics and confusion matrix with SE and CIs to the stats output file.
     with args.stats_output.open("w", newline="") as csvfile:
@@ -543,7 +529,7 @@ def main():
                 "Accuracy_CI_upper": f"{acc_upper:.3f}",
             }
         )
-    logging.info(f"Overall test statistics written to {args.stats_output}")
+    logger.info(f"Overall test statistics written to {args.stats_output}")
 
 
 if __name__ == "__main__":

@@ -61,22 +61,37 @@ The thresholds are defined in `kestrel_config.json`:
 | Level | Criteria | Clinical Interpretation |
 |-------|----------|------------------------|
 | **High_Precision*** | Alt depth >= 100 and Depth Score >= 0.00515 | Very high confidence call; strong supporting evidence |
-| **High_Precision** | Alt depth >= 21 and < 100, Depth Score >= 0.00515, Region depth > 200 | High confidence call suitable for clinical consideration |
-| **Low_Precision** | Alt depth <= 20, or Depth Score between 0.00469--0.00515, or Region depth <= 200 | Variant detected but with marginal evidence; requires independent validation |
+| **High_Precision** | Alt depth >= 21 and < 100, and Depth Score >= 0.00515 | High confidence call suitable for clinical consideration |
+| **Low_Precision** | Alt depth <= 20, or Depth Score between 0.00469--0.00515, or region depth <= 200 with no higher tier applying | Variant detected but with marginal evidence; requires independent validation |
 | **Negative** | Depth Score < 0.00469 | Signal below noise threshold; variant is likely an artifact |
+
+!!! warning "The region-depth threshold does not cap the confidence label"
+    A region depth at or below 200 demotes a variant to Low_Precision, but that
+    demotion is applied **before** the two High_Precision tiers and is overwritten by
+    either of them. A variant with an alt depth of 50 on a 150-read active region is
+    reported as High_Precision today, not Low_Precision — the same label it would
+    receive on a 5000-read active region.
+
+    Tier precedence is **unspecified**: nothing in the code states whether an earlier
+    demotion or a later promotion should win, and the conditions are simply applied in
+    source order. This table describes what the code does, not what it should do. The
+    behaviour is pinned by `tests/unit/test_confidence_boundaries.py`; see issue #179.
 
 !!! warning "Empirically derived thresholds"
     These thresholds were calibrated on a cohort of known-positive and known-negative samples as described in Saei et al. (2023). They are specific to the MUC1 VNTR assay and should not be applied to other genomic regions or variant types without re-calibration.
 
 ### Assignment Logic
 
-The confidence assignment follows a layered rule system where conditions are applied in sequence and later conditions can overwrite earlier assignments. All variants start as "Negative":
+The confidence assignment follows a layered rule system where conditions are applied in sequence and **later conditions overwrite earlier assignments**. All variants start as "Negative", and a variant whose Depth Score is below the low threshold (0.00469) stays Negative no matter which conditions match. The six conditions are applied in this order:
 
-1. Variants with Depth Score **below** the low threshold (0.00469) remain Negative regardless of other metrics
-2. Variants at exactly the low threshold or with region depth <= 200 are assigned Low_Precision
-3. Variants with alt depth >= 100 **and** Depth Score >= 0.00515 are upgraded to High_Precision*
-4. Variants with alt depth 21--100 **and** Depth Score >= 0.00515 are assigned High_Precision
-5. Remaining variants with Depth Score between the low and high thresholds receive Low_Precision
+1. Depth Score exactly at the low threshold, **or** region depth <= 200 -> Low_Precision
+2. Alt depth >= 100 **and** Depth Score >= 0.00515 -> High_Precision*
+3. Alt depth 21--99 **and** Depth Score between 0.00469 and 0.00515 inclusive -> Low_Precision
+4. Alt depth <= 20 -> Low_Precision
+5. Alt depth 21--99 **and** Depth Score >= 0.00515 -> High_Precision
+6. Depth Score strictly between 0.00469 and 0.00515 -> Low_Precision
+
+Because step 1 runs first, its region-depth demotion is overwritten by steps 2 and 5; and because step 3 is fully covered by steps 1, 5 and 6, it never changes an outcome. Both are properties of the ordering, not of any single rule.
 
 A boolean column `depth_confidence_pass` is set to `True` for all non-Negative variants, enabling downstream filtering.
 
