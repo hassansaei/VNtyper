@@ -319,6 +319,23 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     exclude_alts_combined = mf.get("exclude_alts_combined", [])
     exclude_motifs_combined = mf.get("exclude_motifs_combined", [])
 
+    # #186: with an empty allowlist the uniform branch treats *every* GG alt as
+    # disallowed and deletes it, including the canonical dupC representation at
+    # POS 67. @hassansaei: "with an empty allowlist it would delete every GG,
+    # including canonical dupC, which is exactly the high-risk failure mode we
+    # are avoiding." The shipped config sets the flag false, so this cannot
+    # fire in production; it exists so that flipping it fails loudly.
+    if use_uniform_filtering and not motifs_for_alt_gg:
+        msg = (
+            "use_uniform_filtering is enabled while motifs_for_alt_gg is empty. "
+            "The uniform branch applies motifs_for_alt_gg as an unconditional allowlist, "
+            "so an empty list deletes every GG alternate -- including the canonical dupC "
+            "call at POS 67. Populate motifs_for_alt_gg or leave use_uniform_filtering off. "
+            "See issue #186."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
     # =============== Original Logic ===============
     working_df = original_df.copy(deep=True)
 
