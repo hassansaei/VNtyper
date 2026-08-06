@@ -252,6 +252,34 @@ def escape_frame_cells(df: pd.DataFrame, html_columns: tuple[str, ...] = ()) -> 
     return escaped
 
 
+def escaped_table_html(df: pd.DataFrame, classes: str, html_columns: tuple[str, ...] = ()) -> str:
+    """Render a frame as an HTML table with every sample-derived cell escaped.
+
+    ``DataFrame.to_html(escape=False)`` is needed whenever *any* column holds markup
+    VNtyper built, and it disables escaping for the whole table - so the columns holding
+    a sample's own strings go out as HTML too. This pairs it with
+    :func:`escape_frame_cells`, which escapes everything except the columns named as
+    ours, so the exemption is stated per column instead of applying to all of them.
+
+    Args:
+        df: The frame to render. Not modified.
+        classes: The CSS classes for the ``<table>`` element.
+        html_columns: Columns already holding markup this codebase constructed.
+            Anything not named here is escaped.
+
+    Returns:
+        str: The table markup, or "" for an empty frame - ``to_html`` on one produces a
+            headerless table that renders as a stray empty box.
+    """
+    if df.empty:
+        return ""
+    return escape_frame_cells(df, html_columns=html_columns).to_html(
+        classes=classes,
+        index=False,
+        escape=False,
+    )
+
+
 def parse_coverage_stats(data: list[dict[str, Any]]) -> dict[str, Any]:
     """Coerce the first coverage row into the values the report renders.
 

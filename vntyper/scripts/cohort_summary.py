@@ -11,6 +11,7 @@ Note: This module no longer defines its own CLI parser as these are now defined 
 
 import base64
 import hashlib
+import html
 import json
 import logging
 import os
@@ -25,12 +26,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 # These names are matched by exact string comparison against what pipeline.py
 # records. A typo does not fail - it silently drops a section (AGENTS.md trap 5),
 # so they are named, never spelled out.
 from vntyper.scripts.output_paths import contained_output_path
+from vntyper.scripts.report_formatting import escaped_table_html
 from vntyper.scripts.summary_steps import (
     STEP_ADVNTR,
     STEP_BAM_HEADER,
@@ -41,6 +43,57 @@ from vntyper.scripts.summary_steps import (
 logger = logging.getLogger(__name__)
 
 matplotlib.use("Agg")
+
+#: CSS classes every table in the cohort report carries. Named once so the three tables
+#: cannot drift apart, and so the renderer call sites read as what they are.
+TABLE_CLASSES = "table table-bordered table-striped hover compact order-column table-sm"
+
+
+#: Colour applied to each recognised confidence label in the cohort's Kestrel table.
+_CONFIDENCE_COLOURS = {
+    "Low_Precision": "orange",
+    "High_Precision": "red",
+    "High_Precision*": "red",
+}
+
+
+def confidence_span(value):
+    """
+    Wrap a confidence label in its colour, escaping the label itself.
+
+    Args:
+        value: The ``Confidence`` cell. Any type; only ``str`` is styled.
+
+    Returns:
+        The cell as markup - a coloured ``<span>`` for a recognised label, the escaped
+        text for anything else, and non-strings unchanged so pandas keeps formatting
+        numbers and NA itself.
+    """
+    if not isinstance(value, str):
+        return value
+    text = html.escape(value, quote=True)
+    colour = _CONFIDENCE_COLOURS.get(value)
+    if colour is None:
+        return text
+    return f'<span style="color:{colour};font-weight:bold;">{text}</span>'
+
+
+def stats_table_html(additional_stats_df):
+    """
+    Render the per-sample statistics table for the cohort report.
+
+    Every value in it is read out of a sample's ``pipeline_summary.json`` - the sample
+    name (or its pseudonym, through the web service), the assembly, the VNtyper version,
+    the pipeline description - so none of it is markup this codebase built and none of it
+    is exempt from escaping.
+
+    Args:
+        additional_stats_df (pandas.DataFrame): One row per sample, ``Sample`` first.
+
+    Returns:
+        str: The table markup, or "" when there are no statistics to show.
+    """
+    return escaped_table_html(additional_stats_df, TABLE_CLASSES)
 
 
 def encode_image_to_base64(image_path):
@@ -551,17 +604,11 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
     # Create a separate copy for HTML formatting so that machine-readable outputs remain plain.
     kestrel_df_html = kestrel_df.copy()
     if "Confidence" in kestrel_df_html.columns:
-        kestrel_df_html["Confidence"] = kestrel_df_html["Confidence"].apply(
-            lambda x: (
-                f'<span style="color:orange;font-weight:bold;">{x}</span>'
-                if x == "Low_Precision"
-                else (
-                    f'<span style="color:red;font-weight:bold;">{x}</span>'
-                    if x in ["High_Precision", "High_Precision*"]
-                    else x
-                )
-            )
-        )
+        # This column is exempted from escaping below because the two branches here build
+        # a span. The exemption is for the span, not for whatever lands in the column - an
+        # unrecognised value falls through unstyled and is still a sample's own string -
+        # so every branch escapes the text it renders.
+        kestrel_df_html["Confidence"] = kestrel_df_html["Confidence"].apply(confidence_span)
 
     # Reorder Kestrel DataFrame columns: place Sample first then the remaining columns.
     desired_kestrel_cols = [
@@ -579,11 +626,10 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         "Flag",
     ]
     kestrel_columns = [col for col in desired_kestrel_cols if col in kestrel_df_html.columns]
-    kestrel_html = kestrel_df_html[kestrel_columns].to_html(
-        classes="table table-bordered table-striped hover compact order-column table-sm",
-        index=False,
-        escape=False,
-    )
+    # `Confidence` is the only cell in either table that holds markup this module built
+    # (the colour span above). Every other column is a sample's own string - the sample
+    # name most obviously, but the motif, the flag and the alleles too - so it is escaped.
+    kestrel_html = escaped_table_html(kestrel_df_html[kestrel_columns], TABLE_CLASSES, html_columns=("Confidence",))
 
     # Reorder advntr DataFrame columns: ensure Sample is first.
     desired_advntr_cols = [
@@ -600,14 +646,15 @@ def generate_cohort_summary_report(output_dir, kestrel_df, advntr_df, summary_fi
         "Flag",
     ]
     advntr_columns = [col for col in desired_advntr_cols if col in advntr_df.columns]
-    advntr_html = advntr_df[advntr_columns].to_html(
-        classes="table table-bordered table-striped hover compact order-column table-sm",
-        index=False,
-        escape=False,
-    )
+    # Nothing constructs markup for the adVNTR table, so it has no exemption at all.
+    advntr_html = escaped_table_html(advntr_df[advntr_columns], TABLE_CLASSES)
 
     template_dir = config.get("paths", {}).get("template_dir", "vntyper/templates")
-    env = Environment(loader=FileSystemLoader(template_dir))
+    # Autoescaping, to parity with the per-sample report (AGENTS.md trap 11): anything
+    # marked `|safe` in the template must be a fragment VNtyper built, never a value read
+    # from a sample. The four `|safe` uses are the two escaped tables above, the stats
+    # table, and Plotly's own figure HTML.
+    env = Environment(loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["html", "xml"]))
     try:
         template = env.get_template("cohort_summary_template.html")
     except Exception as e:
@@ -801,11 +848,7 @@ def aggregate_cohort(
         if "Sample" in additional_stats_df.columns:
             cols = ["Sample"] + [col for col in additional_stats_df.columns if col != "Sample"]
             additional_stats_df = additional_stats_df[cols]
-        additional_stats_html = additional_stats_df.to_html(
-            classes="table table-bordered table-striped hover compact order-column table-sm",
-            index=False,
-            escape=False,
-        )
+        additional_stats_html = stats_table_html(additional_stats_df)
     else:
         additional_stats_html = ""
 
