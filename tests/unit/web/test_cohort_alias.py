@@ -27,9 +27,12 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from app.cohorts import (  # noqa: E402
+    ALIAS_KEY_PREFIX,
     COHORT_KEY_PREFIX,
     alias_key,
+    cohort_key,
     create_cohort_record,
+    extend_cohort_retention,
 )
 from app.utils import MAX_PASSPHRASE_BYTES  # noqa: E402
 
@@ -122,3 +125,87 @@ def test_a_successful_creation_still_claims_the_alias(fake_redis) -> None:
     assert fake_redis.get(alias_key(ALIAS)) == created["cohort_id"]
     with pytest.raises(ValueError, match="already in use"):
         create_cohort_record(fake_redis, alias=ALIAS, passphrase=PASSPHRASE, retention_seconds=RETENTION)
+
+
+# ---------------------------------------------------------------------------
+# A live cohort does not outlive its alias
+# ---------------------------------------------------------------------------
+
+
+def test_retention_extends_the_alias_alongside_the_cohort(fake_redis) -> None:
+    """All three keys a cohort owns are pushed out together.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+    """
+    created = create_cohort_record(fake_redis, alias=ALIAS, passphrase=PASSPHRASE, retention_seconds=60)
+    key = cohort_key(created["cohort_id"])
+    fake_redis.sadd(f"{key}:jobs", "a-member")
+    fake_redis.expire(f"{key}:jobs", 60)
+
+    extend_cohort_retention(fake_redis, key, RETENTION)
+
+    assert fake_redis.ttl(key) > 60
+    assert fake_redis.ttl(f"{key}:jobs") > 60
+    assert fake_redis.ttl(alias_key(ALIAS)) > 60
+
+
+def test_retention_of_a_cohort_without_an_alias_is_not_an_error(fake_redis) -> None:
+    """An unlabelled cohort has no claim to extend and must not fail trying.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+    """
+    created = create_cohort_record(fake_redis, alias=None, passphrase=PASSPHRASE, retention_seconds=60)
+    key = cohort_key(created["cohort_id"])
+
+    extend_cohort_retention(fake_redis, key, RETENTION)
+
+    assert fake_redis.ttl(key) > 60
+    assert fake_redis.keys(f"{ALIAS_KEY_PREFIX}*") == []
+
+
+def test_a_finished_job_extends_its_cohorts_alias(fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The worker's own bookkeeping keeps the alias alive with the cohort.
+
+    Extending the cohort but not its alias is what lets a cohort outlive its own
+    name, so the worker is exercised here rather than only the helper it calls.
+
+    Args:
+        fake_redis: In-process Redis stand-in from conftest.
+        monkeypatch: Standard pytest fixture; restores every patch at teardown.
+        tmp_path: Scratch directory standing in for the job input directory.
+    """
+    from app import tasks
+
+    for attr in ("redis_client", "redis_cohort_client", "redis_usage_client"):
+        monkeypatch.setattr(tasks, attr, fake_redis)
+    monkeypatch.setattr(tasks.subprocess, "run", lambda *args, **kwargs: None)
+
+    created = create_cohort_record(fake_redis, alias=ALIAS, passphrase=PASSPHRASE, retention_seconds=60)
+    key = cohort_key(created["cohort_id"])
+    fake_redis.sadd(f"{key}:jobs", "a-member")
+    fake_redis.expire(f"{key}:jobs", 60)
+
+    bam_path = tmp_path / "sample.bam"
+    bam_path.write_bytes(b"alignment")
+    (tmp_path / "sample.bam.bai").write_bytes(b"index")
+
+    tasks.run_vntyper_job.push_request(id="task-1")
+    try:
+        tasks.run_vntyper_job.run(
+            bam_path=str(bam_path),
+            output_dir=str(tmp_path / "out"),
+            thread=1,
+            reference_assembly="hg38",
+            fast_mode=False,
+            keep_intermediates=False,
+            archive_results=False,
+            cohort_key=key,
+        )
+    finally:
+        tasks.run_vntyper_job.pop_request()
+
+    assert fake_redis.ttl(alias_key(ALIAS)) > 60
+    assert fake_redis.ttl(key) > 60
+    assert fake_redis.ttl(f"{key}:jobs") > 60

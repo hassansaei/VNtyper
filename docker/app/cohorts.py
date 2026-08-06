@@ -254,6 +254,32 @@ def resolve_cohort(
     return {"cohort_id": cohort_id, "cohort_key": key, "alias": stored_alias}
 
 
+def extend_cohort_retention(store: Any, key: str, retention_seconds: int) -> None:
+    """Push a cohort's whole record out by another retention period.
+
+    A cohort is three keys, not one: its metadata hash, its member set, and the
+    claim on its alias. They have to expire together. Extending only the first
+    two lets an actively used cohort outlive the claim on its own name, after
+    which a different cohort can take that name and the label stops identifying
+    what it labels.
+
+    The alias is read back from the record rather than passed in, so every
+    caller extends the same three keys without having to know which alias -- if
+    any -- the cohort holds.
+
+    Args:
+        store: Redis client for the cohort database.
+        key: The cohort's metadata key, as returned by `resolve_cohort`.
+        retention_seconds: The lifetime to give each of the three keys.
+    """
+    store.expire(key, retention_seconds)
+    store.expire(f"{key}:jobs", retention_seconds)
+
+    alias = store.hget(key, "alias")
+    if alias:
+        store.expire(alias_key(alias), retention_seconds)
+
+
 def cohort_job_ids(store: Any, key: str) -> list[str]:
     """List the jobs belonging to a cohort.
 

@@ -10,6 +10,7 @@ import redis
 from celery.utils.log import get_task_logger
 
 from .celery_app import celery_app
+from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
 from .utils import send_email
 
@@ -232,9 +233,7 @@ def run_vntyper_job(
 
         # Extend cohort TTL if necessary
         if cohort_key:
-            ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-            redis_cohort_client.expire(cohort_key, ttl_seconds)
-            redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+            extend_cohort_retention(redis_cohort_client, cohort_key, settings.COHORT_RETENTION_DAYS * 86400)
 
         # Delete input BAM and BAI files
         try:
@@ -398,10 +397,11 @@ def run_cohort_analysis_job(
 
         # Extend cohort TTL if necessary
         if cohort_id:
-            cohort_key = f"cohort:{cohort_id}"
-            ttl_seconds = settings.COHORT_RETENTION_DAYS * 86400
-            redis_cohort_client.expire(cohort_key, ttl_seconds)
-            redis_cohort_client.expire(f"{cohort_key}:jobs", ttl_seconds)
+            extend_cohort_retention(
+                redis_cohort_client,
+                cohort_key(cohort_id),
+                settings.COHORT_RETENTION_DAYS * 86400,
+            )
 
         # Delete the listing file this task wrote for itself. That file is the
         # only thing here the task owns; the .zip paths it names are the
