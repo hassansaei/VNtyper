@@ -17,10 +17,18 @@ The assertions are about the filesystem and the arguments handed over, not about
 status codes: an index that is accepted, stored and then never mentioned again
 produces exactly the same 200 as one that is used.
 
+Two further ways a patient-derived file survives that cleanup are pinned at the
+bottom of this module. The worker is not the only thing that writes an index
+into the job's input directory -- the pipeline builds one of its own under a
+name the client never sent -- and the cleanup block shares a `finally` with
+Redis bookkeeping that can fail before it is reached.
+
 `docker` is put on `sys.path` by `tests/unit/web/conftest.py`, which pytest
 imports before this module.
 """
 
+import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -113,6 +121,32 @@ def test_the_long_queue_submission_hands_over_the_index_too(client, web_app, tmp
 # ---------------------------------------------------------------------------
 
 
+def _index_the_way_the_pipeline_does(command: list[str]) -> None:
+    """Reproduce the index `vntyper pipeline` builds beside its input alignment.
+
+    Read off `vntyper/scripts/fastq_bam_processing.py`, not assumed: on the
+    non-fast BAM path it reconstructs the index name as `f"{in_bam}.bai"` and
+    runs `samtools index` whenever that exact path is missing. It never sees an
+    index the client uploaded as `sample.bai`, so a submission that carried one
+    still ends up with a second index beside its alignment -- inside the job's
+    own input directory, on the volume every job shares. A recorder that does
+    not reproduce that cannot tell whether cleanup accounts for it.
+
+    The CRAM branch of the same function extracts unmapped reads with
+    `samtools view` instead and writes no index beside its input, so nothing is
+    created here for `--cram`.
+
+    Args:
+        command: The argument vector the task asked for.
+    """
+    if "pipeline" not in command or "--bam" not in command or "--fast-mode" in command:
+        return
+    alignment = command[command.index("--bam") + 1]
+    generated = Path(f"{alignment}.bai")
+    if not generated.exists():
+        generated.write_bytes(b"pipeline-index")
+
+
 @pytest.fixture
 def vntyper_task(monkeypatch: pytest.MonkeyPatch, fake_redis):
     """Run `run_vntyper_job`'s body with Redis and every subprocess neutralised.
@@ -120,6 +154,11 @@ def vntyper_task(monkeypatch: pytest.MonkeyPatch, fake_redis):
     `subprocess.run` is replaced with a recorder that also does what `samtools
     index` would do, so "was an index built?" is an assertion about the commands
     the task issued rather than about a file that appeared by magic.
+
+    The stand-in for `vntyper pipeline` has a side effect too, for the same
+    reason: a recorder that only records makes the input directory look tidier
+    than the real thing ever leaves it, and the second index this module tests
+    for would never appear.
 
     Args:
         monkeypatch: Standard pytest fixture; restores every patch at teardown.
@@ -154,6 +193,8 @@ def vntyper_task(monkeypatch: pytest.MonkeyPatch, fake_redis):
             alignment = command[2]
             suffix = ".crai" if alignment.lower().endswith(".cram") else ".bai"
             Path(f"{alignment}{suffix}").write_bytes(b"generated-index")
+            return
+        _index_the_way_the_pipeline_does(command)
 
     monkeypatch.setattr(tasks.subprocess, "run", _record)
 
@@ -194,7 +235,7 @@ def _job_input(tmp_path: Path, alignment_name: str, index_name: str | None) -> t
     return alignment, index
 
 
-def _run(invoke, alignment: Path, tmp_path: Path, index: Path | None) -> None:
+def _run(invoke, alignment: Path, tmp_path: Path, index: Path | None, *, cohort_key: str | None = None) -> None:
     """Invoke the task for one alignment.
 
     Args:
@@ -202,6 +243,7 @@ def _run(invoke, alignment: Path, tmp_path: Path, index: Path | None) -> None:
         alignment: The stored alignment path.
         tmp_path: Scratch directory standing in for the job tree.
         index: The stored index path, or None.
+        cohort_key: The cohort the job belongs to, or None for a lone job.
     """
     invoke(
         bam_path=str(alignment),
@@ -211,6 +253,7 @@ def _run(invoke, alignment: Path, tmp_path: Path, index: Path | None) -> None:
         fast_mode=False,
         keep_intermediates=False,
         archive_results=False,
+        cohort_key=cohort_key,
         index_path=None if index is None else str(index),
     )
 
@@ -260,6 +303,10 @@ def test_the_job_input_directory_is_empty_afterwards(
 ) -> None:
     """No patient-derived file survives the job that was given it.
 
+    "No file" includes the index the pipeline builds for itself, which carries a
+    name the client never sent -- see `_index_the_way_the_pipeline_does` and the
+    dedicated test below.
+
     Args:
         vntyper_task: The task fixture above.
         tmp_path: Scratch directory standing in for the job tree.
@@ -291,3 +338,249 @@ def test_an_index_is_still_built_when_the_submission_carried_none(vntyper_task, 
     _run(invoke, alignment, tmp_path, None)
 
     assert ["samtools", "index", str(alignment)] in commands
+
+
+# ---------------------------------------------------------------------------
+# The index the pipeline builds for itself is cleaned up as well
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("alignment", "expected"),
+    [
+        (
+            "/data/input/job-1/sample.bam",
+            (
+                "/data/input/job-1/sample.bam.bai",
+                "/data/input/job-1/sample.bam.crai",
+                "/data/input/job-1/sample.bai",
+                "/data/input/job-1/sample.crai",
+            ),
+        ),
+        (
+            "/data/input/job-1/sample.cram",
+            (
+                "/data/input/job-1/sample.cram.bai",
+                "/data/input/job-1/sample.cram.crai",
+                "/data/input/job-1/sample.bai",
+                "/data/input/job-1/sample.crai",
+            ),
+        ),
+        # An extensionless name collapses `<alignment>` and `<stem>` onto the
+        # same two paths; cleanup must not then try to delete either twice.
+        (
+            "/data/input/job-1/sample",
+            ("/data/input/job-1/sample.bai", "/data/input/job-1/sample.crai"),
+        ),
+    ],
+)
+def test_the_derived_index_names_are_exactly_the_four_forms(alignment: str, expected: tuple[str, ...]) -> None:
+    """Both the `<alignment>.*` and the `<stem>.*` forms are named, and nothing else.
+
+    Args:
+        alignment: The stored alignment path.
+        expected: The paths cleanup is entitled to remove for it.
+    """
+    from app.tasks import derived_index_paths
+
+    assert derived_index_paths(alignment) == expected
+
+
+@pytest.mark.parametrize("alignment", ["/data/input/job-1/sample.bam", "/data/input/job-1/SAMPLE.CRAM"])
+def test_every_derived_index_name_stays_inside_the_jobs_own_directory(alignment: str) -> None:
+    """The containment property, asserted rather than assumed.
+
+    This is what makes widening the removal set safe: the names are built from
+    the alignment and joined back onto its own directory, so cleanup cannot
+    reach a sibling job's input directory however the alignment is named.
+
+    Args:
+        alignment: The stored alignment path.
+    """
+    from app.tasks import derived_index_paths
+
+    job_input_dir = "/data/input/job-1"
+    assert [str(Path(path).parent) for path in derived_index_paths(alignment)] == [job_input_dir] * 4
+
+
+def test_the_index_the_pipeline_builds_for_itself_is_removed_too(vntyper_task, tmp_path: Path) -> None:
+    """An uploaded `sample.bai` does not stop `sample.bam.bai` being created.
+
+    The endpoint and the worker both honour `sample.bai`, so the worker skips its
+    preflight `samtools index`. The pipeline does not honour it: on the non-fast
+    BAM path it reconstructs the name as `f"{in_bam}.bai"`, does not find it, and
+    indexes the alignment itself. The result is a second index beside the
+    submission, under a name neither the client nor the worker ever mentioned.
+
+    Cleanup used to remove only the alignment and the exact path the client sent,
+    then find the directory non-empty and deliberately leave it -- so
+    `input/<job-id>/sample.bam.bai` stayed on the shared volume for good.
+
+    Args:
+        vntyper_task: The task fixture above.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    invoke, _ = vntyper_task
+    alignment, index = _job_input(tmp_path, "sample.bam", "sample.bai")
+
+    _run(invoke, alignment, tmp_path, index)
+
+    assert not Path(f"{alignment}.bai").exists(), "the index the pipeline built was left on the shared volume"
+    assert not (tmp_path / "input" / "job-1").exists()
+
+
+def test_cleanup_leaves_a_file_that_is_not_a_derived_index_name(
+    vntyper_task, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Widening the removal set must not turn cleanup into a directory wipe.
+
+    Only the alignment, the index the submission carried, and the index names the
+    job's own tooling can deterministically produce for that alignment are
+    removed. Anything else in the directory is still reported and left where it
+    is -- the existing guarantee, which a glob over the job directory would have
+    quietly replaced.
+
+    Args:
+        vntyper_task: The task fixture above.
+        tmp_path: Scratch directory standing in for the job tree.
+        caplog: Captures the task's log record.
+    """
+    invoke, _ = vntyper_task
+    alignment, index = _job_input(tmp_path, "sample.bam", "sample.bai")
+    bystander = alignment.parent / "unrelated.bai.txt"
+    bystander.write_bytes(b"not this job's to delete")
+    caplog.set_level(logging.WARNING, logger="app.tasks")
+
+    _run(invoke, alignment, tmp_path, index)
+
+    assert bystander.read_bytes() == b"not this job's to delete"
+    assert f"Input directory {alignment.parent} still holds files and was left in place" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Nothing in the bookkeeping around cleanup can stop it happening
+# ---------------------------------------------------------------------------
+
+
+def _redis_is_down(*_args, **_kwargs):
+    """Stand in for a Redis that became unreachable as the task exits.
+
+    Raises:
+        ConnectionError: Always.
+    """
+    msg = "Error 111 connecting to redis:6379. Connection refused."
+    raise ConnectionError(msg)
+
+
+def test_a_redis_failure_on_the_way_out_still_clears_the_input_directory(
+    vntyper_task, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The queue-list write and the file removal share a `finally`; one must not veto the other.
+
+    `lrem` removing the task from `vntyper_job_queue` is display bookkeeping. The
+    removals after it are the only thing that ever takes patient-derived data off
+    the shared volume. Ordering them the other way round, unguarded, means a Redis
+    outage at exactly the wrong moment keeps an alignment on disk indefinitely.
+
+    Args:
+        vntyper_task: The task fixture above.
+        fake_redis: The in-process Redis the task's three clients share.
+        monkeypatch: Standard pytest fixture; restores the method at teardown.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    invoke, _ = vntyper_task
+    alignment, index = _job_input(tmp_path, "sample.bam", "sample.bam.bai")
+    monkeypatch.setattr(fake_redis, "lrem", _redis_is_down)
+
+    _run(invoke, alignment, tmp_path, index)
+
+    assert not alignment.exists(), "the alignment survived a Redis failure in the cleanup block"
+    assert not (tmp_path / "input" / "job-1").exists()
+
+
+def test_a_redis_failure_on_the_way_out_does_not_replace_the_pipeline_failure(
+    vntyper_task, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A job that failed must still report why, not what went wrong while tidying up.
+
+    An exception raised inside `finally` supersedes the one propagating through
+    it, so an unguarded bookkeeping call turns "the pipeline exited non-zero" into
+    "the connection to Redis was refused" in the recorded task result.
+
+    Args:
+        vntyper_task: The task fixture above.
+        fake_redis: The in-process Redis the task's three clients share.
+        monkeypatch: Standard pytest fixture; restores every patch at teardown.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks
+
+    invoke, _ = vntyper_task
+    alignment, index = _job_input(tmp_path, "sample.bam", "sample.bam.bai")
+
+    def _pipeline_exits_nonzero(command, *_args, **_kwargs):
+        """Fail the `vntyper pipeline` call the way a bad exit code does.
+
+        Args:
+            command: The argument vector the task asked for.
+            *_args: Ignored.
+            **_kwargs: Ignored.
+
+        Raises:
+            subprocess.CalledProcessError: Always.
+        """
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(tasks.subprocess, "run", _pipeline_exits_nonzero)
+    monkeypatch.setattr(fake_redis, "lrem", _redis_is_down)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run(invoke, alignment, tmp_path, index)
+
+    assert not alignment.exists()
+    assert not (tmp_path / "input" / "job-1").exists()
+
+
+def test_a_retention_failure_on_the_way_out_still_clears_the_input_directory(
+    vntyper_task, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Extending a cohort's TTL is the other unguarded call ahead of the removals.
+
+    It only runs for cohort jobs, so a cohort submission is the one that loses its
+    cleanup to it.
+
+    Args:
+        vntyper_task: The task fixture above.
+        monkeypatch: Standard pytest fixture; restores the patch at teardown.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks
+
+    invoke, _ = vntyper_task
+    alignment, index = _job_input(tmp_path, "sample.bam", "sample.bam.bai")
+    monkeypatch.setattr(tasks, "extend_cohort_retention", _redis_is_down)
+
+    _run(invoke, alignment, tmp_path, index, cohort_key="cohort:family-a")
+
+    assert not alignment.exists(), "the alignment survived a retention failure in the cleanup block"
+    assert not (tmp_path / "input" / "job-1").exists()
+
+
+def test_the_queue_entry_is_still_removed_when_nothing_goes_wrong(vntyper_task, fake_redis, tmp_path: Path) -> None:
+    """Guarding the bookkeeping must not amount to skipping it.
+
+    Without this, every test above would also pass against a worker that had
+    stopped writing to `vntyper_job_queue` at all.
+
+    Args:
+        vntyper_task: The task fixture above.
+        fake_redis: The in-process Redis the task's three clients share.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    invoke, _ = vntyper_task
+    alignment, index = _job_input(tmp_path, "sample.bam", "sample.bam.bai")
+    fake_redis.rpush("vntyper_job_queue", "task-1")
+
+    _run(invoke, alignment, tmp_path, index)
+
+    assert fake_redis.lrange("vntyper_job_queue", 0, -1) == []
