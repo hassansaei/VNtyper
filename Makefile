@@ -19,10 +19,10 @@ help:
 	@echo "  make install-dev      - Install package with development dependencies"
 	@echo ""
 	@echo "$(GREEN)Code Quality:$(RESET)"
-	@echo "  make lint             - Run Ruff linter (check for issues)"
+	@echo "  make lint             - Run Ruff linter over vntyper/ docker/app/ tests/ scripts/"
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
-	@echo "  make format           - Auto-format code with Ruff"
-	@echo "  make format-check     - Check code formatting without changes"
+	@echo "  make format           - Auto-format the same paths with Ruff"
+	@echo "  make format-check     - Check formatting and lint without changes"
 	@echo "  make type-check       - Run mypy type checker on vntyper/ and docker/app/"
 	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
@@ -80,29 +80,38 @@ install-dev:
 	pip install -e .[dev]
 	@echo "$(GREEN)✓ Development installation complete$(RESET)"
 
-# Linting targets
+# Linting and formatting targets
+#
+# RUFF_PATHS is the whole of the repository's first-party Python. Keep the four ruff
+# targets below reading from this one variable: they used to scope to
+# `vntyper/ docker/app/`, which left tests/ and scripts/ - thousands of lines, and the
+# code that decides whether everything else is correct - with no linter and no
+# formatter on them at all. The three checks that gate a PR (`check`, `check-all`,
+# `ci-local`) all reach ruff through these targets, so widening the variable widens
+# every gate at once.
+RUFF_PATHS := vntyper/ docker/app/ tests/ scripts/
+
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
-	ruff check vntyper/ docker/app/
+	ruff check $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 lint-stats:
 	@echo "$(BLUE)Running Ruff linter with statistics...$(RESET)"
-	ruff check vntyper/ docker/app/ --statistics
+	ruff check $(RUFF_PATHS) --statistics
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
-# Formatting targets
 format:
 	@echo "$(BLUE)Formatting code with Ruff...$(RESET)"
-	ruff format vntyper/ docker/app/
+	ruff format $(RUFF_PATHS)
 	@echo "$(BLUE)Applying auto-fixes...$(RESET)"
-	ruff check vntyper/ docker/app/ --fix
+	ruff check $(RUFF_PATHS) --fix
 	@echo "$(GREEN)✓ Formatting complete$(RESET)"
 
 format-check:
 	@echo "$(BLUE)Checking code formatting...$(RESET)"
-	ruff format vntyper/ docker/app/ --check
-	ruff check vntyper/ docker/app/
+	ruff format $(RUFF_PATHS) --check
+	ruff check $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
 # Type checking targets
@@ -116,13 +125,17 @@ type-check-tests:
 	mypy tests/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
-# Runs mypy twice rather than over one combined argument list. Passing docker/app/
+# This is the target CI's `typecheck` job runs, because `type-check` alone leaves
+# everything under tests/ outside the type gate.
+#
+# It runs mypy twice rather than over one combined argument list. Passing docker/app/
 # and tests/ to the same invocation puts the `app` package on mypy's search path for
 # the tests too, so the `from app import ...` lines in tests/unit/web/ stop resolving
-# to Any and a batch of unrelated findings in those tests' hand-rolled ASGI doubles
-# lands on this target. Keeping the two runs separate leaves each suite checked
-# against the same scope CI checks it against; wiring the web tests up to the real
-# types is worthwhile but is its own change.
+# to Any and a batch of findings in those tests' hand-rolled ASGI doubles lands on this
+# target. Keeping the two runs separate leaves each suite checked against the same
+# scope CI checks it against; wiring the web tests up to the real types is worthwhile
+# but is its own change, and `[tool.mypy]` in pyproject.toml records exactly what it
+# would cost and what has to happen first.
 type-check-all: type-check
 	@echo "$(BLUE)Running mypy type checker on tests...$(RESET)"
 	mypy vntyper/ tests/

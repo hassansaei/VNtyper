@@ -255,11 +255,35 @@ ignore_missing_imports = true
 # how the intra-package imports resolve and why the `app.*` override below matches.
 # Adding `mypy_path = "docker"` would additionally make `mypy tests/` resolve the
 # `from app import ...` lines in `tests/unit/web/`, which today degrade to `Any` under
-# `ignore_missing_imports`. That is worth doing, but it is not free: it surfaces a
-# batch of protocol-shape errors in the hand-rolled ASGI doubles in
-# `tests/unit/web/test_request_size_limit.py` and `test_upload_limits.py`, plus a real
-# `str | None` finding in `test_credentials_and_disclosure.py`. Those belong to the
-# tests, so they are left for a commit that owns them.
+# `ignore_missing_imports`. That is worth doing, and it is still deliberately not done
+# here. Measured under `MYPYPATH=docker mypy vntyper/ tests/` (ruff/mypy as pinned in
+# `[project.optional-dependencies] dev`), it reports 23 errors in 4 files, and only one
+# of them was a defect in a test:
+#
+#   * 1 real finding, now fixed: `test_credentials_and_disclosure.py` passed
+#     `urlsplit(...).password` - a `str | None` - straight into `unquote()`. The test
+#     asserts the credential is present before decoding it.
+#   * 19 in hand-rolled ASGI doubles (`test_request_size_limit.py`,
+#     `test_upload_limits.py`). The doubles are structurally right but nominally
+#     narrower than the callables `RequestSizeLimitMiddleware` and
+#     `save_upload_bounded` declare (`dict` vs `MutableMapping`, a `read`-only object
+#     vs `BinaryIO`). The fix is on the *production* side - accept a `Protocol` or the
+#     ASGI aliases rather than a concrete class - not `# type: ignore` in the tests.
+#   * 3 from `create_cohort_record` returning `dict[str, str | None]`, so
+#     `created["cohort_id"]` types as `str | None` even though that key is always a
+#     `str`. A `TypedDict` in `docker/app/cohorts.py` fixes all three at the source.
+#
+# Both remaining groups are `docker/app` annotation work, so turning the path on now
+# would gate `tests/` on a backlog that belongs to another module - the exact shape of
+# problem the `app.*` override below exists to avoid. Turn it on once
+# `RequestSizeLimitMiddleware`/`save_upload_bounded` take protocols and
+# `create_cohort_record` returns a `TypedDict`; at that point this is a one-line change
+# with no fallout to silence.
+#
+# `tests/` is *not* unchecked in the meantime: `make type-check-all` runs
+# `mypy vntyper/ tests/` as a second, separate invocation (see the comment on that
+# target), and both `make check-all` and the `typecheck` job in `ci-tests.yml` go
+# through it.
 
 # Staged strictness for the web service.
 #
