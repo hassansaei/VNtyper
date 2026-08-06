@@ -27,6 +27,11 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+
+# The declared-assembly guard. Its policy lives in its own module so that this
+# behaviour change - it rejects inputs that previously ran to completion - is a
+# single revertible commit (AGENTS.md rule 3: pipeline.py is over the size limit).
+from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
@@ -219,7 +224,20 @@ def run_pipeline(
             validate_fastq_file(fastq2)
         else:
             logger.error("Incomplete FASTQ inputs provided.")
-            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")  # BED file logic
+            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")
+
+        # --- Declared-assembly guard ---
+        # Reconcile --reference-assembly against the header before any region is
+        # resolved: declaring the wrong build slices a region ~30 kb from the VNTR,
+        # which this pipeline reports as a confident negative rather than an error.
+        # BAM and CRAM share one path here; FASTQ has no header of its own and is
+        # deliberately not guarded (see pipeline_guards for why).
+        alignment_header = None
+        if input_type in ["BAM", "CRAM"]:
+            alignment_header = read_alignment_header(bam if input_type == "BAM" else cram, config)
+            enforce_declared_assembly(reference_assembly, alignment_header)
+
+        # BED file logic
         if bed_file:
             bed_file_path = Path(bed_file)
             if not bed_file_path.exists():
@@ -275,7 +293,10 @@ def run_pipeline(
                 )
                 conversion_command = f"process_bam_to_fastq(in_bam={bam}, ...)"
                 header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                header = extract_bam_header(bam, config)
+                # Reuse the header the guard already read: one samtools invocation, not
+                # two. If the guard could not read it, re-read here so that a samtools
+                # failure still ends the run exactly as it did before the guard existed.
+                header = alignment_header if alignment_header is not None else extract_bam_header(bam, config)
                 parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]), config)
                 header_parse_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(

@@ -64,6 +64,7 @@ PIPELINE_STAGE_ATTRS = (
     "process_fastq",
     "align_and_sort_fastq",
     "extract_bam_header",
+    "read_alignment_header",
     "parse_header_pipeline_info",
     "calculate_vntr_coverage",
     "run_kestrel",
@@ -156,7 +157,6 @@ def run_pipeline_under_harness(
     extra_modules: list[str] | None = None,
     header: str = "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:249250621\n",
     header_error: BaseException | None = None,
-    contigs: list[dict] | None = None,
     expect_failure: bool = False,
     stage_side_effects: dict[str, Any] | None = None,
     **run_pipeline_kwargs: Any,
@@ -167,10 +167,10 @@ def run_pipeline_under_harness(
         output_dir: Directory the pipeline writes into; use ``tmp_path``.
         config: Configuration mapping. Defaults to :data:`MINIMAL_CONFIG`.
         extra_modules: ``--extra-modules`` list as ``run_pipeline`` receives it.
-        header: The SAM header text ``extract_bam_header`` returns.
-        header_error: If given, ``extract_bam_header`` raises this instead.
-        contigs: What ``parse_contigs_from_header`` returns. Defaults to the
-            chr1 record implied by ``header``.
+        header: The SAM header text the header reads return. Parsed for real by the
+            assembly guard, so it decides the guard's verdict.
+        header_error: If given, ``extract_bam_header`` raises this and the guard's
+            own read returns None, as it would in production.
         expect_failure: When True, a swallowed exception is recorded on the
             returned harness instead of being re-raised.
         stage_side_effects: Stage name -> ``side_effect`` to attach to that stage's
@@ -226,14 +226,15 @@ def run_pipeline_under_harness(
         stages["align_and_sort_fastq"].return_value = str(
             output_dir / "alignment_processing" / f"{basename}_sorted.bam"
         )
+        # The assembly guard's own samtools call. It is stubbed rather than the
+        # verdict, so ``reconcile_assembly`` and the contig parser run for real
+        # against the header text a test supplies.
         if header_error is not None:
             stages["extract_bam_header"].side_effect = header_error
+            stages["read_alignment_header"].return_value = None
         else:
             stages["extract_bam_header"].return_value = header
-        if "parse_contigs_from_header" in stages:
-            stages["parse_contigs_from_header"].return_value = (
-                [{"name": "chr1", "length": 249250621}] if contigs is None else contigs
-            )
+            stages["read_alignment_header"].return_value = header
         stages["calculate_vntr_coverage"].return_value = {"mean": 100.0}
         stages["load_advntr_config"].return_value = {"advntr_settings": {"output_format": "tsv"}}
         stages["extract_results_from_pipeline_summary"].return_value = ([{"a": 1}], [{"b": 2}])

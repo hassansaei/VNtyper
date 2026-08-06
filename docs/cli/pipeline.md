@@ -41,7 +41,7 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--reference-assembly` | choice | `hg19` | Reference assembly for BAM/CRAM alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl` |
+| `--reference-assembly` | choice | `hg19` | Reference assembly for BAM/CRAM alignment. Options: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ncbi`, `hg38_ncbi`, `hg19_ensembl`, `hg38_ensembl`. For BAM/CRAM input this is **checked against the alignment header** and a disagreement stops the run — see [Reference Assemblies](../user-guide/reference-assemblies.md#the-declared-assembly-check) |
 | `--custom-regions` | string | — | Custom regions for MUC1 analysis as comma-separated values (e.g., `chr1:1000-2000,chr2:3000-4000`) |
 | `--bed-file` | path | — | Path to a BED file specifying regions for MUC1 analysis |
 
