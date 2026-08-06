@@ -9,10 +9,15 @@ left the whole suite green, and five of its six threshold comparisons could be
 changed without a single test failing. Line coverage says the code ran; it says
 nothing about whether the *boundary* was pinned.
 
-Everything here is **characterisation**. It records what the code does today so
-that a future change to a threshold, a comparison operator or the order the
-conditions are applied in becomes visible. It is not a specification, and none
-of it should be read as a claim that the current behaviour is correct.
+The 54-cell boundary matrix below is **characterisation**: it records the
+threshold arithmetic so a changed comparison operator becomes visible, and
+makes no claim that any individual cutoff is right.
+
+The *ordering* is different. @hassansaei decided on #183 (2026-08-06) that
+2.x's last-wins sequential assignment is the intended behaviour and that
+1.3's absolute region-depth cap must not be restored. Tests that pin the
+order of the ``df.loc`` assignments are therefore **specification**, and
+changing that order requires a new decision on #183.
 
 What is pinned
 --------------
@@ -20,9 +25,13 @@ What is pinned
   (each probed at threshold-1, threshold and threshold+1) and the two
   depth-score thresholds (each probed just below, exactly at and just above).
   Every threshold is read from the shipped config through
-  ``tests.builders.kestrel_config``; none is hardcoded.
-* The region-depth tier interaction, whose precedence is **unspecified** -- see
-  ``test_region_depth_demotion_is_overwritten_by_a_later_high_precision_tier``.
+  ``tests.builders.kestrel_config``; none is hardcoded. This part is
+  characterisation -- Task 17/#184 (gated on the golden cohort) will change
+  one of these 54 cells.
+* The region-depth tier interaction -- see
+  ``test_region_depth_demotion_is_overwritten_by_a_later_high_precision_tier``
+  and ``test_a_low_region_depth_row_is_deliberately_not_capped_at_low_precision``.
+  Its *ordering* (last-wins) is specification, per #183.
 
 Notes for anyone editing this file
 ----------------------------------
@@ -253,18 +262,20 @@ def test_depth_score_below_the_low_threshold_is_always_negative():
 
 
 def test_region_depth_demotion_is_overwritten_by_a_later_high_precision_tier():
-    """Characterisation: a low region depth does **not** cap the confidence label.
+    """Specification: a low region depth does **not** cap the confidence label.
 
     ``cond1`` demotes a row whose ``Estimated_Depth_Variant_ActiveRegion`` is at or
     below ``var_active_region_threshold`` to Low_Precision, but it is applied
     *first*; ``cond2`` (High_Precision*) and ``cond5`` (High_Precision) are applied
     after it and overwrite the demotion outright.
 
-    **Tier precedence is unspecified.** Nothing in the code states whether an
-    earlier demotion or a later promotion should win, and the six conditions are
-    simply applied in source order. This test records the order that ships today.
-    It is characterisation, not specification: do not read it as a claim that a
-    High_Precision call on a 150-read active region is correct.
+    **Tier precedence is specified.** @hassansaei decided on #183 (2026-08-06)
+    that 2.x's last-wins sequential assignment -- the six conditions applied in
+    source order, later conditions overwriting earlier ones -- is the intended
+    behaviour going forward, and that 1.3's absolute region-depth cap must not
+    be restored. This test pins that order: do read it as a claim that a
+    High_Precision call on a 150-read active region is correct. Changing the
+    order requires a new decision on #183.
 
     ``docs/pipeline/scoring-and-confidence.md`` used to state that High_Precision
     requires a region depth above 200. The code is correct and the doc table was
@@ -319,3 +330,26 @@ def test_the_region_depth_clause_is_only_reachable_through_the_alt_threshold_gap
         "with the region clause off and every alt-depth condition missing, no condition assigns a label "
         "and the row keeps the default"
     )
+
+
+def test_a_low_region_depth_row_is_deliberately_not_capped_at_low_precision():
+    """alt=50 on a 150-read region reports High_Precision, and that is intended.
+
+    Specification, not characterisation. v1.3 made region depth an absolute
+    first-wins cap; 2.x applies the tiers as sequential ``df.loc`` assignments,
+    so ``cond1``'s demotion is overwritten by a later match. @hassansaei on
+    #183 decided this is the intended behaviour going forward and that the
+    1.3 cap must not be restored: the pattern is rare, and the cases where it
+    appears are already caught by the Depth_Score flagging rule.
+    """
+    df = pd.DataFrame(
+        {
+            "Estimated_Depth_AlternateVariant": [50],
+            "Estimated_Depth_Variant_ActiveRegion": [150],
+        }
+    )
+
+    out = calculate_depth_score_and_assign_confidence(df, kestrel_config())
+
+    assert out["Confidence"].iloc[0] == "High_Precision"
+    assert out["Estimated_Depth_Variant_ActiveRegion"].iloc[0] <= 200

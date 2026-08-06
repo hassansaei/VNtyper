@@ -82,10 +82,21 @@ The thresholds are defined in `kestrel_config.json`:
     reported as High_Precision today, not Low_Precision — the same label it would
     receive on a 5000-read active region.
 
-    Tier precedence is **unspecified**: nothing in the code states whether an earlier
-    demotion or a later promotion should win, and the conditions are simply applied in
-    source order. This table describes what the code does, not what it should do. The
-    behaviour is pinned by `tests/unit/test_confidence_boundaries.py`; see issue #179.
+    Tier precedence is **specified**: @hassansaei decided on
+    [#183](https://github.com/hassansaei/VNtyper/issues/183) (2026-08-06) that the
+    2.x last-wins sequential assignment shown above is the intended behaviour, and
+    that the 1.3 absolute region-depth <=200 cap must not be restored:
+
+    > "Keep the current 2.x last-wins logic — do not restore the absolute
+    > region-depth <=200 cap from 1.3. In practice it is very unlikely that a
+    > variant with region depth <200 is later promoted to High_Precision by a
+    > subsequent rule. Where that pattern can appear, it is mostly for early
+    > (beginning) and late conserved motifs; we already have a flagging rule
+    > when Depth_Score is far from ~0.5 (50%) [...] the intentional behaviour
+    > going forward is the 2.x sequential assignment as implemented today."
+
+    The behaviour is pinned by `tests/unit/test_confidence_boundaries.py`; see
+    issue #179.
 
 !!! warning "Empirically derived thresholds"
     These thresholds were calibrated on a cohort of known-positive and known-negative samples as described in Saei et al. (2023). They are specific to the MUC1 VNTR assay and should not be applied to other genomic regions or variant types without re-calibration.
