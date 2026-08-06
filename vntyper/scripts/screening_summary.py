@@ -183,7 +183,7 @@ def compute_algorithm_result(df: pd.DataFrame, logic_config: dict[str, Any]) -> 
     return default
 
 
-def _is_finding(result: str, default: str) -> bool:
+def is_finding(result: str, default: str) -> bool:
     """Whether one algorithm's state value represents a finding.
 
     Derived from the configured ``default`` rather than a hardcoded list, so a
@@ -201,7 +201,7 @@ def _is_finding(result: str, default: str) -> bool:
     return result not in (default, NOT_PERFORMED, "")
 
 
-def _rule_matches(current: dict[str, Any], conditions: dict[str, Any]) -> bool:
+def rule_matches(current: dict[str, Any], conditions: dict[str, Any]) -> bool:
     """Whether every condition of one screening rule holds.
 
     Args:
@@ -219,6 +219,23 @@ def _rule_matches(current: dict[str, Any], conditions: dict[str, Any]) -> bool:
         elif actual != rule_value:
             return False
     return True
+
+
+def find_screening_rule(report_config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the first configured screening rule covering ``state``.
+
+    Args:
+        report_config: The parsed ``report_config.json``.
+        state: ``kestrel_result``, ``advntr_result`` and ``quality_metrics_pass``.
+
+    Returns:
+        dict[str, Any] | None: The matching rule, or None when the state has no
+        message of its own and would fall back to ``screening_summary_default``.
+    """
+    for rule in report_config.get("screening_summary_rules", []):
+        if rule_matches(state, rule.get("conditions", {})):
+            return rule
+    return None
 
 
 def build_screening_summary(
@@ -242,8 +259,8 @@ def build_screening_summary(
     Returns:
         ScreeningSummary: The state and its message.
     """
-    default_message = report_config.get("screening_summary_default", FALLBACK_SUMMARY_MESSAGE)
     try:
+        default_message = report_config.get("screening_summary_default", FALLBACK_SUMMARY_MESSAGE)
         algorithm_logic = report_config.get("algorithm_logic", {})
         kestrel_logic = algorithm_logic.get("kestrel", {})
         advntr_logic = algorithm_logic.get("advntr", {})
@@ -261,12 +278,10 @@ def build_screening_summary(
         }
         logger.debug("Unified screening conditions: %s", current)
 
-        text = ""
-        for rule in report_config.get("screening_summary_rules", []):
-            if _rule_matches(current, rule.get("conditions", {})):
-                text = rule.get("message", "")
-                logger.debug("Unified rule matched: %s", rule.get("conditions"))
-                break
+        rule = find_screening_rule(report_config, current)
+        text = rule.get("message", "") if rule is not None else ""
+        if rule is not None:
+            logger.debug("Unified rule matched: %s", rule.get("conditions"))
 
         matched_rule = bool(text)
         if not matched_rule:
@@ -279,9 +294,9 @@ def build_screening_summary(
                 quality_metrics_pass,
             )
 
-        is_positive = _is_finding(
-            kestrel_result, kestrel_logic.get("default", FALLBACK_ALGORITHM_RESULT)
-        ) or _is_finding(advntr_result, advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT))
+        is_positive = is_finding(kestrel_result, kestrel_logic.get("default", FALLBACK_ALGORITHM_RESULT)) or is_finding(
+            advntr_result, advntr_logic.get("default", FALLBACK_ALGORITHM_RESULT)
+        )
     except Exception as ex:
         logger.error("Exception in build_screening_summary: %s", ex)
         return ScreeningSummary(
