@@ -3,38 +3,56 @@
 Before-versus-after comparison of genotyping output across the whole local test cohort,
 run to decide whether the deliberately behaviour-changing commits in #179 may ship.
 
-The gate has been run three times. **A verdict attests one candidate commit and nothing
+The gate has been run four times. **A verdict attests one candidate commit and nothing
 after it**, so read the run whose candidate matches the tree you are judging.
 
-| Run | Candidate ("after") | Verdict | Attests |
-| --- | --- | --- | --- |
-| 1 | `7344c62` | PASS | the branch as it stood at `7344c62`, and nothing after it |
-| 2 | `1792345` | PASS | the branch at `1792345`, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096`, and nothing after it |
-| 3 | `8537a61` | PASS | the branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
+| Run | Candidate ("after") | Baseline | Verdict | Attests |
+| --- | --- | --- | --- | --- |
+| 1 | `7344c62` | `2fcc6e3` | PASS | the branch as it stood at `7344c62`, and nothing after it |
+| 2 | `1792345` | `2fcc6e3` | PASS | the branch at `1792345`, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096`, and nothing after it |
+| 3 | `8537a61` | `2fcc6e3` | PASS | the branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
+| 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | the `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
 
-Run 3 is the attestation of record. It is the run to cite for a tree at `8537a61`; runs 1
-and 2 are kept because they are the measurements the adjudications below were written
-against, and because each one still attests its own candidate exactly.
+Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Run 4 measures a
+*different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
+`4fd638a`, the merge-base with `main` and the 2.0.6 release. Run 4 is therefore the
+attestation of record for that branch and says nothing about the others; runs 1–3 remain
+the measurements the adjudications below were written against, and each still attests its
+own candidate exactly.
 
-None of the three runs attests "the branch tip" as a standing property — a tip moves, a
-commit does not. Each run's candidate is named above and in its own result section; if the
-branch has commits after `8537a61`, this page does not cover them and says so rather than
-implying otherwise.
+None of the four runs attests "the branch tip" as a standing property — a tip moves, a
+commit does not. Each run's candidate is named above and in its own result section.
 
-**Verdict: PASS, all three runs.** Every genotype field, every `Confidence` label and every
+For run 4 that distinction happens to be inert, and this is measured rather than assumed.
+One commit sits after `ec67fff` on the branch, `685db2c` (`docs(agents)`), and
+
+```
+git diff --stat ec67fff..HEAD -- vntyper/ docker/ scripts/
+```
+
+is empty, so the branch tip is code-identical to the attested candidate. That covers
+`685db2c` and nothing committed after it.
+
+**Verdict: PASS, all four runs.** Every genotype field, every `Confidence` label and every
 `Flag` is byte-identical between baseline and candidate, on every sample and every
-assembly. The only differences are in how the HTML report *presents* an unchanged result,
-and each one is attributable to a named commit and is a correction of a documented
-reporting defect.
+assembly, in every run.
 
-| | Run 1 | Run 2 | Run 3 |
-| --- | --- | --- | --- |
-| Baseline ("before") | `2fcc6e3` — merge-base with `main` | `2fcc6e3` | `2fcc6e3` |
-| Candidate ("after") | `7344c62` | `1792345` | `8537a61` |
-| Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) | same 58, same matrix | same 58, same matrix |
-| Runs total | 116, plus 6 deliberate-mismatch probes | 116, plus 6 probes | 116, plus 6 probes |
-| Non-zero exits | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after |
-| Executed shell commands compared | no | no | **yes** — 480 per side |
+In runs 1–3 the only differences were in how the HTML report *presents* an unchanged
+result. That sentence does not describe run 4, and the difference is named rather than
+smoothed over: run 4 carries **two delta classes**, one in a version-probe command string
+and one in the cohort export files. Both are attributable to a named commit and neither
+touches a genotype — but neither is a report-presentation delta, so run 4's verdict is
+recorded as *PASS with two attributed deltas* rather than folded into the sentence above.
+
+| | Run 1 | Run 2 | Run 3 | Run 4 |
+| --- | --- | --- | --- | --- |
+| Baseline ("before") | `2fcc6e3` — merge-base with `main` | `2fcc6e3` | `2fcc6e3` | `4fd638a` — merge-base with `main`, the 2.0.6 release |
+| Candidate ("after") | `7344c62` | `1792345` | `8537a61` | `ec67fff` |
+| Cases per side | 58 (50 BAM x assembly, 5 non-fast-mode, 3 adVNTR) | same 58, same matrix | same 58, same matrix | the same 58, **derived from `tests/data` rather than hardcoded**, plus 4 cohort-mode cases |
+| Runs total | 116, plus 6 deliberate-mismatch probes | 116, plus 6 probes | 116, plus 6 probes | 130 (65 per side), probes and cohort cases included |
+| Non-zero exits | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after |
+| Executed shell commands compared | no | no | **yes** — 480 per side | **yes** — 18 per case per side |
+| Cohort mode covered | no | no | no | **yes** — 4 cases |
 
 ## Method
 
@@ -51,6 +69,13 @@ screening-summary sentence and its computed emphasis, the recorded pipeline step
 the exit code. Run 3 adds the executed shell command strings, recorded at the
 `subprocess` boundary.
 
+Run 4 derives that matrix from `tests/data` at run time rather than reproducing a
+hardcoded list, and adds four `vntyper cohort` cases — `cohort_multi`,
+`cohort_multi_pseudonymized`, `cohort_single` and `cohort_empty` — comparing each cohort
+export (`cohort_kestrel_{csv,tsv,json}`, `cohort_advntr_{csv,tsv,json}`), the rendered
+cohort tables, the category counts and totals, the set of cohort output files, and the
+pseudonymization table.
+
 ### Verifying which code actually ran
 
 This is the part that could have made the whole exercise worthless. The `vntyper` console
@@ -66,7 +91,10 @@ marker module `vntyper.scripts.pipeline_guards`, which exists only after `078a6c
 absent on the before side and present on the after side. Each run logs the resolved path
 as its first line. Every run of every gate has passed that check on its own side, with no
 run reaching the pipeline through the wrong package: run 1, all 58 logs per side; runs 2
-and 3, all 61 logs per side. The before-side worktree carries its own tracked
+and 3, all 61 logs per side; run 4, all 65 runs per side, zero aborts. Run 4's marker is
+`vntyper.scripts.cohort_rules` rather than `pipeline_guards` — that module does not exist
+at `4fd638a` and does at `ec67fff`, which is what the baseline moving to the 2.0.6 release
+requires. The before-side worktree carries its own tracked
 configuration (`vntyper/config.json` and the report/adVNTR configuration files of that
 commit), so the baseline configuration is in force as well as the baseline code.
 
@@ -118,7 +146,7 @@ Same baseline, same 58-case matrix, same comparison. Re-run because run 1's cand
 | Kestrel `Flag` | 0 / 58 |
 | Any other Kestrel column, including `Motifs` | 0 / 58 |
 | `kestrel_pre_result.tsv` | 0 / 58 |
-| adVNTR variant set, genotype fields, `Insertion_len`, `Flag` | 0 / 3 |
+| adVNTR variant set, genotype fields, `Flag` (**not** `Insertion_len` — corrected below) | 0 / 3 |
 | Coverage summary | 0 / 58 |
 | Recorded pipeline steps | 0 / 58 |
 | Screening summary **text** | 1 / 58 |
@@ -137,7 +165,9 @@ exactly, VID `25561` throughout:
 | `dfc3_hg19_advntr` | `2,2,2,2,2` | `1.5504014332800002e-18` | `Polymorphic_Call` |
 
 `dfc3` is the compound call `D17_2&D18_2&D19_2&D20_2&D21_2`, the input class `d144505`
-rewrote. Its row is identical on both sides in every column, `Insertion_len` included.
+rewrote. Its row is identical on both sides in every column of the adVNTR output schema.
+(This sentence originally read "in every column, `Insertion_len` included". That was
+wrong — `Insertion_len` is not a column of that file. See the correction below.)
 
 ### Run 2's proof of which code ran
 
@@ -216,7 +246,7 @@ empirically rather than by argument.
 | Kestrel `Flag` | 0 / 58 |
 | Any other Kestrel column, including `Motifs` | 0 / 58 |
 | `kestrel_pre_result.tsv` | 0 / 58 |
-| adVNTR variant set, genotype fields, `Insertion_len`, `Flag` | 0 / 3 |
+| adVNTR variant set, genotype fields, `Flag` (**not** `Insertion_len` — corrected below) | 0 / 3 |
 | Coverage summary | 0 / 58 |
 | Recorded pipeline steps | 0 / 58 |
 | **Quoted-site command strings** (quickcheck, SAM→BAM, index, bcftools sort) | **0 / 58** |
@@ -314,6 +344,143 @@ specified) and six cases concurrent; the baseline worktree lived under the run's
 scratch directory rather than beside run 2's; and the launcher additionally records
 executed commands, which is an observation, not a change to the run.
 
+## Result — run 4, candidate `ec67fff`
+
+New branch, new baseline. Run 4 compares `fix/issue-181-197-followups` at `ec67fff`
+against `4fd638a`, the merge-base with `main` and the 2.0.6 release. It is **the first run
+in this project's history to cover cohort mode at all** — runs 1–3 did not, and this
+page's own "What this gate does not cover" section said so.
+
+The matrix is derived from `tests/data` at run time rather than hardcoded: 58 cases
+(50 base, 5 non-fast, 3 adVNTR), plus the 3 probes, plus **4 cohort-mode cases** —
+`cohort_multi`, `cohort_multi_pseudonymized`, `cohort_single`, `cohort_empty`. 65 runs per
+side, 130 in total. Marker module `vntyper.scripts.cohort_rules`, absent at `4fd638a` and
+present at `ec67fff`: **all 65 runs on each side verified their package resolution before
+doing any work, and there were zero aborts.**
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `kestrel_result` | **0** | 59 |
+| `kestrel_pre_result` | **0** | 59 |
+| `advntr_result` | **0** | 3 |
+| `coverage_summary` | **0** | 59 |
+| `cross_match_summary` | **0** | 3 |
+| `exit_code` | **0** | 65 |
+| `pipeline_step_records` | **0** | 61 |
+| `cohort_category_counts` | **0** | 3 |
+| `cohort_category_totals` | **0** | 3 |
+| `cohort_tables` | **0** | 3 |
+| `cohort_output_files` | **0** | 4 |
+| `executed_commands` | 61 | 61 |
+| `cohort_kestrel_csv` / `_tsv` / `_json` | 3 each | 3 each |
+| `cohort_advntr_csv` / `_tsv` / `_json` | 3 each | 3 each |
+
+Four further artefacts the harness compares are omitted from the table only because they
+are also 0: `pipeline_steps` 0/61, `report_tables` 0/59, `screening_summary` 0/59 and
+`pseudonymization_table` 0/1. So the screening-summary sentence and emphasis — the source
+of every presentation delta in runs 1–3 — do not move at all in run 4.
+
+**Zero deltas on every genotype artefact.** Two delta classes, both intended, both
+attributable to a named commit.
+
+The harness's own verdict line reads `DELTAS`, not `PASS`. That is mechanical: it reports
+whether anything differed, and something did. The `PASS` on this page is the adjudication
+of those differences, made below and open to disagreement — the two are not the same claim
+and the raw result file should not be read as endorsing this one.
+
+### Run 4's delta 1 — the duplicate kestrel help flag (`2873ad3`)
+
+`executed_commands` differs on 61 of 61 cases, and the command **count is identical at 18
+per side**. Exactly one command changed:
+
+| | |
+| --- | --- |
+| Before | `java -jar vntyper/dependencies/kestrel/kestrel.jar -h -jar vntyper/dependencies/kestrel/kestrel.jar -h` |
+| After | `java -jar vntyper/dependencies/kestrel/kestrel.jar -h` |
+
+That is the `get_tool_versions` duplicate-help-flag fix in `2873ad3`. It is a version probe
+run once per invocation: it reads no sample data and feeds no genotype. That it appears on
+every case is a property of running once per invocation, not evidence of breadth of
+effect — and every genotype artefact in the table above is 0.
+
+### Run 4's delta 2 — leaked working columns in the cohort exports (`90f61fa`)
+
+`cohort_kestrel_{csv,tsv,json}` and `cohort_advntr_{csv,tsv,json}` each differ on 3 of 3
+cohort cases that write exports (`cohort_empty` writes none — see D12 in
+[CI/CD follow-ups](ci-followups.md)). That is the removal of the `__row_result` and
+`__unified` working columns, which were leaking out of the cohort summary's internals into
+every CSV, TSV and JSON export.
+
+The corroborating evidence that only the exports moved is in the same table: the rendered
+`cohort_tables` are **unchanged**, 0 of 3, as are `cohort_category_counts`,
+`cohort_category_totals` and `cohort_output_files`. A change that altered what the cohort
+*reports* — rather than which internal columns it spills into the export files — would have
+moved those as well.
+
+### What run 4 does not attest
+
+This page has over-claimed before — see the correction below — so run 4's limits are named
+here rather than left to inference. A PASS is only worth what its scope is.
+
+**This is ONE run at the branch tip, not one run per genotype-affecting commit.** The plan
+required a run per genotype-affecting commit, so that a failure could be attributed to a
+single commit rather than bisected for afterwards. That was traded for a single tip run
+plus bisect-on-failure: identical worst case, far cheaper expected case. The consequence
+must be stated, because the trade does not buy it back — **a single run cannot detect two
+changes producing offsetting deltas that cancel on the same field of the same sample.**
+The only mitigation is that the comparison is per-sample and per-field across 58 cases, so
+such a cancellation would have to be exact, on the same field, wherever both changes act.
+That makes it unlikely. It does not make it impossible, and this run does not exclude it.
+
+**The gate cannot attest #192 at all, and that too is measured rather than assumed.** The
+cohort's only compound adVNTR state is `example_dfc3`'s `D17_2&D18_2&D19_2&D20_2&D21_2`,
+which carries no `LEN` token — so `Insertion_len` is 0 under both the old and the new
+semantics, and `advntr_result` being 0/3 here is silence, not confirmation. The evidence
+for #192 is a differential sweep instead: 52,511 probes, 13,563 of 13,563 previously
+parsing inputs byte-identical, and all 38,943 differences oracle-predicted.
+
+**#184's PASS is weak evidence.** Exact float equality against `0.00515` requires an
+alternate depth that is an exact multiple of 103, so the cohort very likely contains no
+row on the boundary at all. The load-bearing evidence for #184 is its boundary table and a
+multi-candidate selection test, not this gate.
+
+**#185 is exercised only in the negative.** No cohort case is missing a gate column, so
+what the run shows is that the new raise does not fire on healthy input — which is what it
+is for, and is not the same as showing that it fires when it should.
+
+**#188 is not exercised.** The cohort has no CRAM input. Its evidence is a hand-run
+end-to-end CRAM comparison, which is not in CI.
+
+**Cohort sample ordering is normalised away and is therefore not attested by this gate.**
+The harness sorts cohort rows before comparing them, because the baseline discovers samples
+into a set and its order is not reproducible even between two runs of the same code. The
+candidate now sorts them deterministically (`90f61fa`), so the ordering fix is attested by
+unit tests and not by this run — a normalisation is a claim that a difference does not
+matter, and here it also means the fix to that difference is invisible. The harness's
+normalisation note still cites
+`tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today`, a
+characterisation test that `90f61fa` deleted when it made the order deterministic; that
+note needs updating to point at the replacement tests.
+
+## Correction — runs 2 and 3 overstated what the adVNTR comparison covered
+
+Runs 2 and 3 each recorded a table row reading "adVNTR variant set, genotype fields,
+`Insertion_len`, `Flag` — 0 / 3", and run 2's prose said `dfc3`'s row was "identical in
+every column, `Insertion_len` included".
+
+**`Insertion_len` is not a column of the adVNTR output.** `final_columns` in
+`vntyper/modules/advntr/advntr_genotyping.py` is `VID`, `Variant`,
+`NumberOfSupportingReads`, `MeanCoverage`, `Pvalue`, `RU`, `POS`, `REF`, `ALT`, `Flag`.
+`Insertion_len` is an intermediate used by the frameshift filter and is dropped before the
+file is written, so no comparison of `output_adVNTR_result.tsv` could have observed it.
+
+The row-set comparison those runs made remains valid and their 0/3 result stands — it is
+the `Insertion_len` claim specifically that was unsupported. The rows above have been
+narrowed and this correction recorded rather than the claim quietly rewritten, because the
+whole value of this page is that a reader can tell what was measured from what was
+asserted. It also matters downstream: the D5 follow-up below turns on `Insertion_len`
+changing for compound states, and this gate never had sight of that field.
+
 ## Adjudication of every difference
 
 The deltas below were adjudicated against run 1 and re-observed unchanged in run 2.
@@ -402,16 +569,37 @@ triggered. Output identical, exit 0 both sides.
 
 ## What this gate does not cover
 
-* CRAM input, and therefore the CRAM branch of `331ea95`.
+Still true of every run, run 4 included:
+
+* CRAM input, and therefore the CRAM branch of `331ea95` and the whole of #188. `tests/data`
+  holds eight BAMs and no CRAM. #188's evidence is a hand-run end-to-end CRAM comparison,
+  which is not in CI.
 * FASTQ input (the shark case), which the assembly guard deliberately does not guard.
+* The `vntyper report` subcommand.
 * An adVNTR call with `RU == 7`, an adVNTR compound call containing `LEN`, and a BAM whose
   header lacks the declared assembly's legacy contig. All three are covered by unit tests
-  only; no sample in `tests/data/` reaches them.
-* Cohort mode (`vntyper cohort`) and the report subcommand — and therefore `50d7968`,
-  which changes only the cohort report.
+  only; no sample in `tests/data/` reaches them. The `LEN` gap is why the gate cannot
+  attest #192.
 * Reference installation, and therefore the aligner `index_command` quoting site
   `2ae28c5` touches in `install_references.py`: the references are already installed, so
   no gate run builds an index.
 * A path containing a shell metacharacter. Run 3 shows `2ae28c5` changes no command in
   this cohort precisely because no cohort path needs quoting; the quoting itself is
   pinned by `tests/unit/test_shell_quoting.py`, not by this gate.
+* `Insertion_len`, on any run. It is not a column of `output_adVNTR_result.tsv` — see the
+  correction above.
+
+No longer true, and the change is run 4's:
+
+* Cohort mode (`vntyper cohort`) was uncovered in runs 1–3, which is why `50d7968`
+  produced no delta in run 3. Run 4 covers it with four cases. **Cohort *sample ordering*
+  remains uncovered** even in run 4, because the harness normalises it away before
+  comparing.
+
+Covered only in one direction, run 4:
+
+* #185's raise is exercised only negatively — no cohort case is missing a gate column.
+* #184's boundary is almost certainly not reached by any cohort row, so its 0/59 on
+  `kestrel_result` is weak evidence rather than confirmation.
+* No run detects two changes whose deltas cancel exactly on the same field of the same
+  sample. Run 4 is a single tip run, not one run per genotype-affecting commit.
