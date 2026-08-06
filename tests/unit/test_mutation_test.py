@@ -475,3 +475,139 @@ def test_every_declared_target_and_its_tests_exist() -> None:
         assert (mutation_test.REPO_ROOT / module).is_file(), module
         for test_path in test_paths:
             assert (mutation_test.REPO_ROOT / test_path).is_file(), test_path
+
+
+# ---------------------------------------------------------------------------
+# The clean-tree preflight
+# ---------------------------------------------------------------------------
+
+#: Commands whose effect is to throw the working tree away. None of them may appear in
+#: anything the harness prints: the one situation where a user reads these messages is
+#: the one where their own uncommitted work is on the line.
+DESTRUCTIVE_ADVICE = ("git checkout --", "git checkout -- ", "git restore", "git reset --hard", "git clean")
+
+
+def _fake_subprocess_run(git_outputs: list[str], calls: list[list[str]]):
+    """
+    Build a ``subprocess.run`` double that scripts ``git`` and fails every pytest run.
+
+    Args:
+        git_outputs (list[str]): ``git status --porcelain`` stdout, one entry per call.
+        calls (list[list[str]]): Mutated in place with every command issued.
+
+    Returns:
+        Callable: A drop-in replacement for ``subprocess.run``.
+    """
+    pending = list(git_outputs)
+
+    def fake_run(command, *_args, **_kwargs):
+        calls.append(list(command))
+        if command[0] == "git":
+            return subprocess.CompletedProcess(command, 0, stdout=pending.pop(0), stderr="")
+        # A non-zero pytest exit means "mutant killed", so sweeps finish immediately.
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    return fake_run
+
+
+def _prepare_main(tmp_path, monkeypatch, git_outputs: list[str], argv: list[str] | None = None) -> list[list[str]]:
+    """Point ``main()`` at ``tmp_path``, script ``git``, and neutralise signal setup."""
+    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "TARGETS", {"sample.py": ("tests/unit/x.py",)})
+    monkeypatch.setattr(mutation_test.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(sys, "argv", argv or ["mutation_test.py"])
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", _fake_subprocess_run(git_outputs, calls))
+    return calls
+
+
+def test_a_dirty_target_file_stops_the_sweep_before_anything_is_rewritten(tmp_path, monkeypatch, capsys) -> None:
+    """
+    The harness restores the text it read at the start, not the committed text.
+
+    So a sweep begun on a modified target measures *uncommitted* code and publishes it
+    as the committed baseline, and then reports the maintainer's own edit as a failed
+    restoration. Refusing up front is the only honest outcome.
+    """
+    original = "def f(a):\n    return a >= 1  # uncommitted work\n"
+    _write_module(tmp_path, original)
+    _prepare_main(tmp_path, monkeypatch, [" M sample.py\n"])
+    swept: list[str] = []
+    monkeypatch.setattr(mutation_test, "sweep_module", lambda path_str, *_a, **_k: swept.append(path_str))
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0, "a sweep that never ran must not report success"
+    assert swept == [], "the sweep must not rewrite a file that holds uncommitted work"
+    assert (tmp_path / "sample.py").read_text(encoding="utf-8") == original
+    assert "sample.py" in capsys.readouterr().err, "the message must name the dirty file"
+
+
+def test_the_preflight_refusal_never_tells_the_user_to_discard_their_work(tmp_path, monkeypatch, capsys) -> None:
+    """``git checkout --`` on a file the user just edited destroys the edit, silently."""
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(tmp_path, monkeypatch, [" M sample.py\n"])
+    monkeypatch.setattr(
+        mutation_test,
+        "sweep_module",
+        lambda path_str, *_a, **_k: mutation_test.ModuleResult(path=path_str, killed=1),
+    )
+
+    mutation_test.main()
+
+    err = capsys.readouterr().err
+    for advice in DESTRUCTIVE_ADVICE:
+        assert advice not in err, f"the refusal must not recommend {advice!r}"
+
+
+def test_the_unrestored_file_error_never_tells_the_user_to_discard_their_work(tmp_path, monkeypatch, capsys) -> None:
+    """
+    The end-of-run check fires on any diff, and cannot tell a mutant from a real edit.
+
+    It runs after a clean preflight here - the genuine "restore failed" case - and even
+    then it must not name a command that throws work away.
+    """
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(tmp_path, monkeypatch, ["", " M sample.py\n"])
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "sample.py" in err
+    for advice in DESTRUCTIVE_ADVICE:
+        assert advice not in err, f"the restore failure must not recommend {advice!r}"
+
+
+def test_a_clean_target_tree_is_swept_normally(tmp_path, monkeypatch) -> None:
+    """The preflight must gate on uncommitted work only - a clean tree runs as before."""
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(tmp_path, monkeypatch, ["", ""])
+
+    exit_code = mutation_test.main()
+
+    assert exit_code == 0
+
+
+def test_the_preflight_checks_only_the_targets_the_run_will_rewrite(tmp_path, monkeypatch) -> None:
+    """
+    ``--module`` narrows the sweep, so it must narrow the guard too.
+
+    Blocking on a file this run will never touch would make the harness unusable in any
+    working tree with an edit in flight.
+    """
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    calls = _prepare_main(
+        tmp_path,
+        monkeypatch,
+        ["", ""],
+        argv=["mutation_test.py", "--module", "sample.py"],
+    )
+    monkeypatch.setattr(mutation_test, "TARGETS", {"sample.py": ("tests/unit/x.py",), "other.py": ("tests/unit/y.py",)})
+
+    mutation_test.main()
+
+    git_calls = [c for c in calls if c[0] == "git"]
+    assert git_calls, "the preflight must consult git before mutating anything"
+    assert "sample.py" in git_calls[0]
+    assert "other.py" not in git_calls[0], "an unselected target must not gate the run"

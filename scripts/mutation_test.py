@@ -11,6 +11,9 @@ in it went undetected by a fully green build.
 
 This harness makes that measurement reproducible. It:
 
+0. Refuses to start unless every target file is committed - it rewrites the live tree
+   and restores the text it read at the start, which is only the committed text if the
+   tree was clean. See ``mutation_guard``.
 1. Tokenizes each target module and generates one mutant per mutable token.
 2. Discards mutants that do not compile (e.g. ``*args`` -> ``/args``).
 3. Writes each mutant over the real file, runs the tests, and restores the original.
@@ -74,6 +77,8 @@ import time
 import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -445,6 +450,11 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
 
     The original file is restored in a ``finally`` block, so an exception or a
     ``KeyboardInterrupt`` mid-sweep cannot leave a mutated module on disk.
+
+    "Original" here means *the text on disk when this call started*, not the committed
+    text - the harness has no way to tell the two apart. ``main()`` therefore refuses to
+    begin unless every target is clean (see ``mutation_guard``), and that precondition is
+    what makes the restore, the score and the end-of-run check mean what they say.
 
     Args:
         path_str (str): Repo-relative path of the module to mutate.
@@ -933,6 +943,14 @@ def main() -> int:
             print(f"  {path_str}", file=sys.stderr)
         return 0
 
+    # Before a single byte is written; see `mutation_guard` for the three ways a sweep
+    # over uncommitted work goes wrong. Only the targets this run will actually rewrite
+    # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep.
+    dirty = dirty_paths(REPO_ROOT, targets)
+    if dirty:
+        print(format_dirty_tree_refusal(dirty), file=sys.stderr)
+        return 1
+
     # SIGINT already unwinds through the `finally` in sweep_module() as a
     # KeyboardInterrupt, but SIGTERM terminates the interpreter outright - which would
     # leave a MUTATED MODULE ON DISK in a repo someone is about to commit from.
@@ -957,17 +975,12 @@ def main() -> int:
 
     # This harness rewrites production source in place, so it ends by proving it put
     # everything back. A restore that silently failed would otherwise be discovered by
-    # someone committing a mutant.
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain", "--", *TARGETS],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-    if dirty:
-        print("\nERROR: a mutated file was not restored. Run `git checkout --` on:", file=sys.stderr)
-        print(dirty, file=sys.stderr)
+    # someone committing a mutant. The preflight above is what makes this check
+    # meaningful: the tree was clean when the sweep started, so anything dirty now came
+    # from the sweep rather than from the maintainer.
+    unrestored = dirty_paths(REPO_ROOT, targets)
+    if unrestored:
+        print(f"\n{format_unrestored_warning(unrestored)}", file=sys.stderr)
         return 1
     return 0
 
