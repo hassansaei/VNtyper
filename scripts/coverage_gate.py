@@ -14,7 +14,7 @@ above the floor, this script prints the exact edit to raise it, so the floor fol
 coverage upward instead of sitting at whatever it was set to years ago.
 
 Usage:
-    python scripts/coverage_gate.py [--target 80] [--ratchet-margin 1.0]
+    python scripts/coverage_gate.py [--target 80] [--ratchet-margin 0.25]
 
 Run it after a coverage run, i.e. once a .coverage data file exists.
 
@@ -40,14 +40,20 @@ def read_floor() -> float:
     """Read the hard floor from ``[tool.coverage.report] fail_under``.
 
     Returns:
-        float: The configured floor, or 0.0 if it cannot be found.
+        float: The configured floor.
+
+    Raises:
+        SystemExit: If the floor cannot be read. A gate that cannot find its
+            threshold must fail rather than silently pass everything.
     """
     try:
         text = PYPROJECT.read_text(encoding="utf-8")
-    except OSError:
-        return 0.0
+    except OSError as exc:
+        raise SystemExit(f"Could not read {PYPROJECT}: {exc}. Coverage gate cannot run.") from exc
     match = re.search(r"^fail_under\s*=\s*([0-9.]+)", text, re.MULTILINE)
-    return float(match.group(1)) if match else 0.0
+    if match is None:
+        raise SystemExit(f"No `fail_under` found in {PYPROJECT} [tool.coverage.report]. Coverage gate cannot run.")
+    return float(match.group(1))
 
 
 def read_total() -> float | None:
@@ -131,7 +137,7 @@ def main() -> int:
     parser.add_argument(
         "--ratchet-margin",
         type=float,
-        default=1.0,
+        default=0.25,
         help="Suggest raising the floor once coverage exceeds it by this many points.",
     )
     args = parser.parse_args()
@@ -159,10 +165,14 @@ def main() -> int:
         return 1
 
     # The ratchet: lock in gains so the floor tracks reality and the target stays live.
-    if total >= floor + args.ratchet_margin:
+    # `suggested > floor` matters as much as the margin: the floor is an integer, so at
+    # 36.81% against a floor of 36 there is nothing to lock in, and printing
+    # `set fail_under = 36` when it is already 36 trains readers to ignore the notice.
+    suggested = int(total)
+    if total >= floor + args.ratchet_margin and suggested > floor:
         emit(
             f"Coverage {total:.2f}% now exceeds the floor of {floor:.0f}%. "
-            f"Raise it: set `fail_under = {int(total)}` in pyproject.toml "
+            f"Raise it: set `fail_under = {suggested}` in pyproject.toml "
             "[tool.coverage.report].",
             gh_command="notice",
         )
