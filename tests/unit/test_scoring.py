@@ -230,6 +230,12 @@ def test_extract_frameshifts_mixed():
 # visible. None of it is a specification, and none of it should be read as a
 # claim that the current behaviour is correct.
 # ---------------------------------------------------------------------------
+# Note: ONE test in this file is specification rather than characterisation --
+# test_a_one_bp_deletion_is_not_a_valid_frameshift_by_design, which records the
+# +1-frame decision @hassansaei gave on #181 (2026-08-06). It says so in its own
+# docstring. Every other test here, including the 3n+1 / 3n+2 parametrised cases
+# below, remains characterisation exactly as this banner says: they assert the
+# current arithmetic without claiming any cutoff or rule is correct.
 
 
 def test_the_sample_field_splits_into_alt_depth_then_region_depth():
@@ -411,3 +417,25 @@ def test_the_insertion_arm_accepts_3n_plus_1_only(inserted_bases, expected_valid
     assert row["direction"] == 1
     assert bool(row["is_frameshift"]) is (inserted_bases % 3 != 0)
     assert bool(row["is_valid_frameshift"]) is expected_valid
+
+
+def test_a_one_bp_deletion_is_not_a_valid_frameshift_by_design():
+    """A deletion of 1 bp is ``frameshift_amount == 1`` and is deliberately rejected.
+
+    Specification, not characterisation. @hassansaei on #181: insertions of
+    3n+1 and deletions of 3n+2 are both Delta = +1 mod 3, the pathogenic
+    ADTKD-MUC1 reading frame that produces the toxic MUC1-fs neo-protein.
+    The opposite pair shifts into a frame not established as pathogenic in
+    patients. Rejecting a (3n+1)-bp deletion is therefore correct, not a
+    lost call. Changing this rule requires a new decision on #181.
+    """
+    df = pd.DataFrame(
+        {
+            "direction": [-1, -1, 1, 1],
+            "frameshift_amount": [1, 2, 1, 2],
+        }
+    )
+
+    out = extract_frameshifts(df)
+
+    assert out["is_valid_frameshift"].tolist() == [False, True, True, False]

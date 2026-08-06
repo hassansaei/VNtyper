@@ -20,6 +20,16 @@ A variant is classified as a **frameshift** when `(len(ALT) - len(REF)) % 3 != 0
 
     These specific patterns correspond to the known pathogenic mutation signatures in the MUC1 VNTR. Variants matching these patterns are marked as `is_valid_frameshift = True`.
 
+!!! note "Why insertions and deletions use different remainders ([#181](https://github.com/hassansaei/VNtyper/issues/181))"
+    An insertion of 3n+1 bases and a deletion of 3n+2 bases are frame-equivalent: both
+    shift the reading frame by Delta = +1 (mod 3). That is the pathogenic ADTKD-MUC1
+    reading frame, the one that produces the toxic MUC1-fs neo-protein (classically
+    exemplified by dupC). The opposite pair -- an insertion of 3n+2 bases or a deletion
+    of 3n+1 bases -- shifts into the other frame, which has not been established as
+    pathogenic in patients and is treated as unknown / not clinically identified for
+    ADTKD-MUC1. Rejecting a (3n+1)-bp deletion is therefore a considered, MUC1-specific
+    choice, not accidental asymmetry -- and not a lost call.
+
 ### Haplo Count
 
 After frame scoring, a **haplo_count** is computed for each variant: the number of times the exact same variant (POS, REF, ALT) appears across different haplotype calls from Kestrel. A higher haplo_count indicates more supporting evidence and is used as a tie-breaker during variant selection.
