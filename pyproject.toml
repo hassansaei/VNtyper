@@ -156,6 +156,27 @@ indent-width = 4
 # Target Python 3.10 (minimum supported version; 3.9 is EOL since 2025-10-31)
 target-version = "py310"
 
+# Pin which files ruff discovers, for the same reason `[tool.ruff.lint]` below pins
+# `select` instead of using `extend-select`: ruff's defaults move between releases, and a
+# widened default silently changes what the gate means without a line of code changing.
+#
+# Ruff 0.16 began formatting Python fenced inside Markdown. Nothing asked it to, and the
+# result was a repository where `make format-check` passed while `ruff format --check .`
+# reported four files - `docs/development/ci-followups.md`, `reference/README.md`,
+# `reference/generate_vntr_reference.py` and a `specs/` design document. That is a trap
+# for anyone who runs the obvious command instead of the Makefile target, and it cannot be
+# resolved by reformatting: `reference/` is a base-image content-hash input (see `exclude`
+# below), and rewriting a committed `specs/` document to satisfy a formatter is churn.
+#
+# What this line gives up, stated rather than hidden: the 7 Markdown files under
+# `RUFF_PATHS` that 0.16 had started formatting are no longer formatted. That is the
+# intended scope - the Makefile calls `RUFF_PATHS` "the whole of the repository's
+# first-party Python", and prose here is gated by `mkdocs build --strict`, not by ruff.
+# The 157 first-party `.py` files are unaffected. Widening this to prose is a deliberate
+# change to this line and to `RUFF_PATHS` together, not something to inherit from a
+# release note.
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+
 # Exclude common directories
 exclude = [
     ".git",
@@ -166,6 +187,13 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    # `reference/` is a base-image content-hash input: `docker-base.yml` rebuilds on any
+    # change under it, and `docker/Dockerfile` then fails on a missing tag until the new
+    # base publishes (AGENTS.md trap 10). Reformatting `generate_vntr_reference.py` would
+    # turn the image build red for a whitespace change, so the formatter does not own that
+    # tree. It is not in `RUFF_PATHS` either, so this only makes the two agree. Unparks
+    # with the next base rebuild, alongside #193.
+    "reference",
 ]
 
 [tool.ruff.lint]
