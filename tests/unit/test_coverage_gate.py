@@ -16,7 +16,7 @@ import coverage_gate  # noqa: E402
 # bound and still leave this test green, which is exactly the regression the gate exists
 # to prevent. When you legitimately raise the floor (use the number `make test-unit-cov`
 # prints, never the rounded TOTAL column), raise this literal in the same commit.
-CURRENT_COVERAGE_FLOOR = 67.0
+CURRENT_COVERAGE_FLOOR = 70.0
 
 
 def test_read_floor_returns_the_configured_value() -> None:
