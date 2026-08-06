@@ -587,8 +587,12 @@ def test_the_template_environment_autoescapes(positive_summary, monkeypatch) -> 
 
     assert captured, "generate_summary_report built no Jinja2 environment; this test would be vacuous"
     env = captured[0]
-    assert env.autoescape, "autoescaping is off; every |safe fragment is now the only thing escaped"
-    assert env.autoescape("report_template.html") is True, "an .html template must be autoescaped"
+    # `select_autoescape` returns a per-template-name policy; jinja2 types the attribute
+    # as `bool`, so widen it before asking whether it is the callable form.
+    policy: object = env.autoescape
+    assert policy, "autoescaping is off; every |safe fragment is now the only thing escaped"
+    assert callable(policy), "autoescape is not a select_autoescape policy"
+    assert policy("report_template.html") is True, "an .html template must be autoescaped"
     assert env.from_string("{{ v }}").render(v=PAYLOAD) == ESCAPED
 
 
