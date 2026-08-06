@@ -4,6 +4,7 @@ Unit tests for region_utils.py
 Tests region string construction and chromosome name caching functionality.
 """
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -213,6 +214,142 @@ class TestGetRegionStringWithFallback:
 
         with pytest.raises(ValueError, match="Neither new nor legacy format"):
             get_region_string_with_fallback("test.bam", "hg19", "bam_region", config)
+
+
+class TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain:
+    """
+    The legacy fallback used to return a region string matching nothing at all.
+
+    ``get_region_string`` raises ``ValueError`` whenever it cannot find the
+    chromosome in the BAM header, and the fallback swallowed that and returned
+    ``config["bam_processing"]["bam_region_<assembly>"]`` instead. Those legacy
+    keys are UCSC-named for the ``hg19``/``hg38`` spellings, so on an NCBI-named
+    BAM the pipeline sliced ``chr1:155158000-155163000`` from a file whose only
+    chromosome 1 is ``NC_000001.11``. samtools returns zero records for a contig
+    it does not have and exits 0. The slice is empty, Kestrel sees no reads, and
+    the report states a confident negative.
+
+    Whether it happens turns on the *spelling* of ``--reference-assembly``, which
+    is why it went unnoticed: ``GRCh38`` picks the key holding an NCBI accession
+    and works, while ``hg38`` picks the UCSC one and silently does not.
+
+    The fallback itself is load-bearing and stays: on an hg38 BAM carrying ~170
+    alternate contigs, fewer than half the names match the UCSC pattern, so
+    ``detect_naming_convention`` returns ``"unknown"``, the dynamic path raises,
+    and the legacy ``chr1:...`` string is correct. The fix is only to refuse a
+    fallback region whose contig is demonstrably absent.
+    """
+
+    NCBI_HEADER = "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:NC_000001.11\tLN:248956422\n@SQ\tSN:NC_000002.12\tLN:242193529\n"
+    UCSC_HEADER = "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:248956422\n@SQ\tSN:chr1_KI270706v1_random\tLN:175055\n"
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.region_utils.get_region_string")
+    def test_a_ucsc_fallback_region_on_an_ncbi_bam_is_refused(self, mock_get_region, mock_header):
+        """
+        The silent false negative, made loud.
+
+        Before the guard this returned ``"chr1:155184000-155194000"`` and the
+        pipeline went on to slice nothing out of an NCBI-named BAM.
+        """
+        mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
+        mock_header.return_value = self.NCBI_HEADER
+
+        config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
+
+        with pytest.raises(ValueError, match="chr1"):
+            get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config)
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.region_utils.get_region_string")
+    def test_a_fallback_region_the_bam_does_contain_is_returned_unchanged(self, mock_get_region, mock_header):
+        """
+        The hg38-with-alternate-contigs case, which the fallback exists to rescue.
+
+        ``chr1`` is genuinely in this header; the dynamic path failed only because
+        the alternate contigs outvoted the primary ones in convention detection.
+        Behaviour here must be exactly what it was.
+        """
+        mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
+        mock_header.return_value = self.UCSC_HEADER
+
+        config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
+
+        result = get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config)
+
+        assert result == "chr1:155184000-155194000"
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.region_utils.get_region_string")
+    def test_the_match_is_case_insensitive(self, mock_get_region, mock_header):
+        """``get_chromosome_name_from_bam`` matches case-insensitively; so must this."""
+        mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
+        mock_header.return_value = "@SQ\tSN:CHR1\tLN:248956422\n"
+
+        config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
+
+        assert get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config) == (
+            "chr1:155184000-155194000"
+        )
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.region_utils.get_region_string")
+    def test_an_unreadable_header_keeps_the_previous_behaviour(self, mock_get_region, mock_header):
+        """
+        When the header cannot be read there is nothing to check against.
+
+        Refusing here would turn a working run into a failure on the strength of
+        no evidence at all, so the legacy region is returned exactly as before and
+        the inability to verify is logged.
+        """
+        mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
+        mock_header.side_effect = OSError("samtools not found")
+
+        config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
+
+        result = get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config)
+
+        assert result == "chr1:155184000-155194000"
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.region_utils.get_region_string")
+    def test_a_header_with_no_contigs_keeps_the_previous_behaviour(self, mock_get_region, mock_header):
+        """An empty contig list is absence of evidence, not evidence of absence."""
+        mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
+        mock_header.return_value = "@HD\tVN:1.6\n"
+
+        config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
+
+        assert get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config) == (
+            "chr1:155184000-155194000"
+        )
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.region_utils.get_region_string")
+    def test_the_refusal_names_the_contig_and_what_the_bam_actually_has(self, mock_get_region, mock_header, caplog):
+        """
+        The error must be actionable, because the fix is a CLI flag away.
+
+        Re-running with ``--reference-assembly GRCh38`` selects the legacy key
+        holding the NCBI accession and the same BAM works.
+        """
+        mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
+        mock_header.return_value = self.NCBI_HEADER
+
+        config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
+
+        with (
+            caplog.at_level(logging.INFO, logger="vntyper.scripts.region_utils"),
+            pytest.raises(ValueError) as excinfo,
+        ):
+            get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config)
+
+        message = str(excinfo.value)
+        assert "chr1" in message
+        assert "NC_000001.11" in message, "the message must show what the BAM does contain"
+        assert [r for r in caplog.records if r.levelno == logging.ERROR], (
+            "refusing to slice must be logged at ERROR, not swallowed"
+        )
 
 
 class TestCacheManagement:

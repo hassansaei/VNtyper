@@ -193,7 +193,8 @@ def get_region_string_with_fallback(bam_file: str, reference_assembly: str, regi
         str: Region string
 
     Raises:
-        ValueError: If region cannot be resolved by either method
+        ValueError: If region cannot be resolved by either method, or if the
+            legacy region names a contig the BAM demonstrably does not contain.
     """
     try:
         # Normalize region_type to include "_coords" suffix
@@ -218,8 +219,89 @@ def get_region_string_with_fallback(bam_file: str, reference_assembly: str, regi
                 f"Neither new nor legacy format available."
             ) from e
 
+        _reject_region_absent_from_bam(bam_file=bam_file, region=region, region_key=region_key, config=config)
+
         logger.info(f"Using legacy region format: {region_key} = {region}")
         return region
+
+
+def _bam_contig_names(bam_file: str, config: dict) -> list[str]:
+    """
+    Read the contig names out of a BAM/CRAM header.
+
+    Args:
+        bam_file (str): Path to the BAM/CRAM file.
+        config (dict): Main configuration dictionary, for the samtools path.
+
+    Returns:
+        list[str]: Contig names, or an empty list if the header could not be read
+        or carried no ``@SQ`` lines. An empty list means "could not determine",
+        not "the file has no contigs" - callers must not treat it as evidence.
+    """
+    # Imported here rather than at module scope: fastq_bam_processing imports this
+    # module, so a top-level import would be circular.
+    from vntyper.scripts.fastq_bam_processing import (
+        extract_bam_header,
+        parse_contigs_from_header,
+    )
+
+    try:
+        header = extract_bam_header(bam_file, config)
+    except Exception as e:
+        logger.warning(f"Could not read the header of {bam_file} to verify the fallback region: {e}")
+        return []
+
+    return [contig["name"] for contig in parse_contigs_from_header(header)]
+
+
+def _reject_region_absent_from_bam(bam_file: str, region: str, region_key: str, config: dict) -> None:
+    """
+    Refuse a legacy fallback region whose contig is not in the BAM header.
+
+    The legacy keys in ``config.json`` are per-spelling, not per-naming-convention:
+    ``bam_region_hg38`` is UCSC-named while ``bam_region_GRCh38`` carries an NCBI
+    accession. Falling back to the former on an NCBI- or Ensembl-named BAM produces
+    a region string that matches nothing. ``samtools view`` returns zero records for
+    a contig it does not have **and exits 0**, so the slice is empty, Kestrel sees
+    no reads and the report states a confident negative. This turns that into a
+    failure.
+
+    Args:
+        bam_file (str): Path to the BAM/CRAM file.
+        region (str): The legacy region string about to be returned.
+        region_key (str): The config key it came from, for the error message.
+        config (dict): Main configuration dictionary.
+
+    Raises:
+        ValueError: If the header could be read, listed contigs, and none of them
+            matches the region's contig (case-insensitively).
+
+    Note:
+        Silence is the default when the header cannot be read or lists no contigs.
+        Refusing on no evidence would break working runs; this only fires when the
+        BAM has positively told us the contig is not there.
+    """
+    contig = region.split(":")[0]
+    contig_names = _bam_contig_names(bam_file, config)
+
+    if not contig_names:
+        logger.warning(
+            f"Cannot verify that '{contig}' exists in {bam_file}; using legacy region '{region}' unverified."
+        )
+        return
+
+    if contig.lower() in {name.lower() for name in contig_names}:
+        return
+
+    message = (
+        f"Legacy fallback region '{region}' (config key '{region_key}') names contig '{contig}', "
+        f"which is not in {bam_file}. Available contigs: {', '.join(contig_names[:10])}. "
+        f"Slicing this region would return zero reads and produce a false negative. "
+        f"Re-run with a --reference-assembly spelling matching the BAM's chromosome naming "
+        f"(e.g. 'GRCh38' rather than 'hg38' for NCBI accessions)."
+    )
+    logger.error(message)
+    raise ValueError(message)
 
 
 def clear_chromosome_cache():
