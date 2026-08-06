@@ -12,6 +12,22 @@ from vntyper.scripts.utils import load_config, run_command
 
 logger = logging.getLogger(__name__)
 
+#: Matches the *first* ``LEN<digits>`` token in an adVNTR ``State`` string.
+#:
+#: A compound call names several parts joined by ``&`` -- for example
+#: ``I9_2_A_LEN9&I50_2_A_LEN3``. The original expression here was the greedy
+#: ``"(LEN.*)"``, which matched ``LEN9&I50_2_A_LEN3``; splitting *that* on ``LEN``
+#: yields three fields for a two-column assignment and raises ``ValueError``. The broad
+#: handler in :func:`process_advntr_output` swallowed it and returned without writing a
+#: file, so one compound call silently discarded every other variant in the sample.
+#:
+#: Anchoring on the digits keeps the historic single-part behaviour byte for byte
+#: (``I22_2_G_LEN1`` still yields ``1``) while making the multi-part case parse. Note
+#: that ``Insertion_len`` remains the *first* part's length rather than the sum over all
+#: parts; changing that would change which rows pass the frameshift filter, so it is
+#: pinned by a characterisation test and left for a deliberate decision.
+FIRST_INSERTION_LEN_PATTERN = r"(LEN\d+)"
+
 
 # -------------------------------------------------------------------------
 def load_advntr_config(config_path=None):
@@ -122,7 +138,7 @@ def advntr_processing_del(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract(FIRST_INSERTION_LEN_PATTERN)[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
     df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
@@ -161,7 +177,7 @@ def advntr_processing_ins(df):
     df1["Deletion_length"] = df1["Variant"].str.count("D")
     df1["Insertion_length"] = df1["Variant"].str.count("I")
     logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].str.extract("(LEN.*)")[0]
+    df1["Insertion_len"] = df1["Variant"].str.extract(FIRST_INSERTION_LEN_PATTERN)[0]
     logger.debug("Extracted 'Insertion_len' values from 'Variant' (as Series).")
     df1["Insertion_len"] = df1["Insertion_len"].fillna("LEN")
     df1[["I", "Insertion_len"]] = df1["Insertion_len"].str.split("LEN", expand=True)
