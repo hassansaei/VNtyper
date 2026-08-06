@@ -369,16 +369,24 @@ show_missing = true
 # `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
 # figure and states the exact line to paste here.
 #
-# 74 is BRANCH-INCLUSIVE. `branch = true` above was enabled in #196 and this floor was
-# raised from 70 to the 74.22% that same run measured; it was never lowered to admit the
-# new measurement. Statement-only coverage of the same suite is 76.60%, so the two are
-# not interchangeable and deleting `branch = true` would RAISE the reported total past
-# this floor while covering strictly less. tests/unit/test_coverage_gate.py pins both.
+# 79 is BRANCH-INCLUSIVE. `branch = true` above was enabled in #196, which raised this
+# floor from 70 to the 74.22% that run measured; splitting cohort_summary.py into five
+# focused modules (Task 22 of the #181-#197 follow-ups) took the same suite to 79.02%
+# and the floor moved with it. It has never been lowered to admit a measurement.
+# Statement-only coverage of the same suite is 80.77%, so the two are not
+# interchangeable and deleting `branch = true` would RAISE the reported total past this
+# floor while covering strictly less. tests/unit/test_coverage_gate.py pins both.
 #
 # The TARGET is 80% (COVERAGE_TARGET in the Makefile). Falling short of the target is
-# a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
-# six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
-# realistically be tested (see "Changing existing code" in AGENTS.md).
+# a warning, not a failure - see scripts/coverage_gate.py.
+#
+# Four modules remain over the 650-LOC limit: docker/app/main.py (1151),
+# install_references.py (901), kestrel_genotyping.py (843) and pipeline.py (721). Size
+# alone is not what holds the total down - as measured at this floor raise, main.py is
+# at 88.8% and pipeline.py at 68.5%. The gap is concentrated in the two that are both
+# oversized and untested, install_references.py at 26.0% and kestrel_genotyping.py at
+# 41.9% (see "Changing existing code" in AGENTS.md). Those percentages are a snapshot
+# taken when this floor was set, not a live claim.
 fail_under = 79
 exclude_also = [
     "if TYPE_CHECKING:",

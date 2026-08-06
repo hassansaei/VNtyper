@@ -21,6 +21,7 @@ Extracted from ``cohort_summary.py`` in Task 22 of the #181-#197 follow-ups.
 """
 
 import logging
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -46,7 +47,7 @@ def parse_output_formats(additional_formats: str) -> list[str]:
 
 def write_cohort_frame(
     frame: pd.DataFrame,
-    output_dir,
+    output_dir: str | os.PathLike[str],
     stem: str,
     label: str,
     formats: list[str],
@@ -64,7 +65,6 @@ def write_cohort_frame(
         formats: The formats to write, as :func:`parse_output_formats` returns them.
     """
     if frame.empty:
-        logger.debug(f"No {label} rows to export; skipping the machine-readable outputs.")
         return
     if "csv" in formats:
         csv_path = Path(output_dir) / f"{stem}.csv"
@@ -80,7 +80,7 @@ def write_cohort_frame(
         logger.info(f"Cohort {label} JSON written to: {json_path}")
 
 
-def write_pseudonymization_table(output_dir, sample_mapping: dict[str, str]) -> None:
+def write_pseudonymization_table(output_dir: str | os.PathLike[str], sample_mapping: dict[str, str]) -> None:
     """Write the pseudonym-to-original mapping as a two-column TSV.
 
     This runs after the report is already on disk, so a failure is logged rather than

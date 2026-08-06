@@ -57,14 +57,22 @@ STEP_NAME_MODULES = (
 #: `cohort_summary.py` is absent because its four matches moved wholesale into
 #: `cohort_inputs.py` when the file was split (Task 22 of the #181-#197 follow-ups),
 #: taking the count with them. Every module that matches a step name is still required
-#: to reference the constants; a module that matches none is not listed here rather
-#: than being listed with a zero, because a zero is a passing assertion about nothing.
+#: to reference the constants; a module that matches none is declared in
+#: `MODULES_MATCHING_NO_STEP_NAME` below rather than being listed here with a zero,
+#: because a zero is a passing assertion about nothing.
 MINIMUM_CONSTANT_REFERENCES = {
     "pipeline.py": 5,
     "generate_report.py": 5,
     "cohort_inputs.py": 4,
     "cross_match.py": 2,
 }
+
+#: Modules that are scanned for bare literals but match no step name themselves, so they
+#: have no minimum. Declaring them explicitly is what keeps the split above honest:
+#: `test_every_scanned_module_is_classified` fails if a module is added to
+#: `STEP_NAME_MODULES` without appearing in exactly one of the two, which is the
+#: `KeyError` the old single-list parametrisation used to raise.
+MODULES_MATCHING_NO_STEP_NAME = frozenset({"cohort_summary.py"})
 
 # One producer call site builds its name from an f-string, guarded by
 # `if input_type in ["BAM", "CRAM"]`. Expand it so the tests reason about the names
@@ -269,6 +277,25 @@ def test_no_bare_step_name_literal_survives(module: str) -> None:
         + ", ".join(f"line {line}: {value!r}" for line, value in hits)
         + ". Use the summary_steps.STEP_* constants instead."
     )
+
+
+def test_every_scanned_module_is_classified() -> None:
+    """Guard the split: a scanned module must be required to reference constants, or
+    declared as matching no step name. Never neither.
+
+    The two lists below used to be one, and the test that consumes the minimums used to
+    raise `KeyError` for a module it had no entry for. Splitting them to avoid asserting
+    a meaningless zero also removed that failure, so a module added to the scan list
+    would silently get no minimum at all. This restores it.
+    """
+    classified = set(MINIMUM_CONSTANT_REFERENCES) | MODULES_MATCHING_NO_STEP_NAME
+
+    assert classified == set(STEP_NAME_MODULES), (
+        f"these scanned modules are unclassified: {sorted(set(STEP_NAME_MODULES) - classified)}; "
+        f"these are classified but not scanned: {sorted(classified - set(STEP_NAME_MODULES))}. "
+        "Add each to MINIMUM_CONSTANT_REFERENCES or to MODULES_MATCHING_NO_STEP_NAME."
+    )
+    assert not (set(MINIMUM_CONSTANT_REFERENCES) & MODULES_MATCHING_NO_STEP_NAME)
 
 
 @pytest.mark.parametrize("module", sorted(MINIMUM_CONSTANT_REFERENCES))

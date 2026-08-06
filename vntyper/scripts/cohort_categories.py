@@ -110,7 +110,6 @@ def sample_categories(
         )
         frame["__unified"] = frame["__row_result"].apply(unify)
         return frame.groupby("Sample")["__unified"].apply(list).apply(aggregate_sample_category)
-    logger.debug("No sample-level categories to compute: frame is empty or has no Sample column.")
     return pd.Series(dtype=str)
 
 

@@ -29,6 +29,7 @@ Extracted from ``cohort_summary.py`` in Task 22 of the #181-#197 follow-ups.
 import hashlib
 import json
 import logging
+import os
 import shutil
 import tempfile
 import zipfile
@@ -217,7 +218,9 @@ def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[di
     return kestrel_data, advntr_data, additional_stats
 
 
-def load_pipeline_summary_for_sample(sample_dir) -> tuple[list[dict], list[dict], dict[str, Any]]:
+def load_pipeline_summary_for_sample(
+    sample_dir: str | os.PathLike[str],
+) -> tuple[list[dict], list[dict], dict[str, Any]]:
     """
     Load the pipeline_summary.json from a sample directory and extract Kestrel,
     adVNTR data and additional statistics (runtime, coverage, version, assembly, pipeline).
