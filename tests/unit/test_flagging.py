@@ -373,13 +373,72 @@ def test_duplicate_ordering_uses_depth_score_only_and_no_motif_column(kestrel_co
     """#197: Motif is not a duplicate sort key; Depth_Score descending is.
 
     Specification. @hassansaei: "Fall back to the 1.3 Depth_Score-only rule
-    [...] Do not use Motifs or Motif as a sort key." The previous config named
-    the plural `Motifs`, which does not exist at step 6.5 and raised KeyError.
+    [...] Do not use Motifs or Motif as a sort key."
+
+    This is a **policy** change -- which record wins when two calls share a REF/ALT --
+    not a repair for a broken column reference. An earlier revision of this docstring
+    claimed the retired three-key `sort_by` named a column that "does not exist at step
+    6.5 and raised KeyError". It did exist:
+    `test_the_frame_flagging_sees_still_carries_the_motifs_column` below measures the
+    frame `add_flags` is actually handed and finds `Motifs`, `POS` and `Depth_Score` all
+    present, so the retired shape would have sorted, not raised. The reason to drop
+    `Motifs` from the key is that motif identity is not a duplicate-priority criterion,
+    which is what @hassansaei decided; it is not that the column had disappeared.
     """
     sort_by = kestrel_config["duplicate_flagging"]["sort_by"]
 
     assert sort_by == [{"column": "Depth_Score", "ascending": False}]
     assert all(entry["column"] not in ("Motif", "Motifs") for entry in sort_by)
+
+
+def test_the_frame_flagging_sees_still_carries_the_motifs_column(kestrel_config):
+    """`Motifs` survives step 6 and is present when `add_flags` runs at step 6.5.
+
+    The claim two docstrings in this module used to make -- that
+    `motif_correction_and_annotation` drops `Motifs` -- is false, and this measures it
+    rather than reasoning about it. The narrowing to `keep_cols` is applied to the
+    *working* frames (`motif_left` / `motif_right`), not to what the function returns:
+    it deep-copies its input into `original_df`, does the motif work on the narrow
+    frames, copies the annotations back by index, and returns `original_df` at the
+    original width. `process_kmer_results` then hands exactly that frame to `add_flags`.
+
+    Asserted for `POS` and `Depth_Score` too, because the retired three-key `sort_by`
+    named all three; every one of them is present.
+    """
+    from vntyper.scripts.motif_processing import motif_correction_and_annotation
+
+    df = pd.DataFrame(
+        {
+            "Motifs": ["5-9", "5-9"],
+            "Variant": ["v1", "v2"],
+            "POS": [10, 70],
+            "REF": ["C", "C"],
+            "ALT": ["CG", "CG"],
+            "Motif_sequence": ["ACGT", "ACGT"],
+            "Depth_Score": [0.8, 0.5],
+            "Confidence": ["High_Precision", "High_Precision"],
+            "Estimated_Depth_AlternateVariant": [10, 10],
+            "Estimated_Depth_Variant_ActiveRegion": [100, 100],
+            "is_frameshift": [True, True],
+            "is_valid_frameshift": [True, True],
+        }
+    )
+    merged_motifs = pd.DataFrame({"Motif": ["9", "5"], "Motif_sequence": ["ACGT", "ACGT"]})
+
+    annotated = motif_correction_and_annotation(df, merged_motifs, kestrel_config)
+
+    assert {"Motifs", "POS", "Depth_Score"} <= set(annotated.columns)
+    assert len(annotated) == len(df), "step 6 marks rows, it does not drop them"
+
+    # And the retired three-key sort_by therefore sorts this frame rather than raising.
+    stale_sort_by = [
+        {"column": "Depth_Score", "ascending": False},
+        {"column": "Motifs", "ascending": True},
+        {"column": "POS", "ascending": True},
+    ]
+    flagged = add_flags(annotated, {}, duplicates_config=_dup_config(sort_by=stale_sort_by))
+
+    assert "Flag" in flagged.columns
 
 
 def test_duplicate_flagging_stays_disabled_in_the_shipped_config(kestrel_config):
@@ -425,25 +484,29 @@ def test_the_flagged_row_is_deterministic_when_depth_scores_tie():
 
 
 class TestDuplicateSortColumnMustExist:
-    """Characterisation of a real trap: a sort column absent from the frame raises.
+    """A sort column absent from the frame raises, loudly. A property of `add_flags`.
 
-    Before #197, `kestrel_config.json` shipped `duplicate_flagging.sort_by` naming the
-    columns `Motifs` and `POS`. By the time flagging runs - step 6.5 of
-    `process_kmer_results`, immediately after `motif_correction_and_annotation` - the
-    `Motifs` column has been dropped: step 6 projects onto an explicit `keep_cols` list
-    that carries `Motif` and `POS` but not `Motifs`.
+    `sort_values` raises `KeyError` for a column the frame does not carry, so a
+    `duplicate_flagging.sort_by` naming one fails fast rather than silently mis-sorting.
+    That is the *good* failure mode and the opposite of AGENTS.md trap 3, where a config
+    string naming a missing column merely logs a warning and turns the rule off.
 
-    So flipping that toggle on with that stale `sort_by` would not silently mis-sort,
-    it would raise `KeyError` from `sort_values` on the first frame it saw. That is the
-    *good* failure mode and the opposite of AGENTS.md trap 3, where a config string
-    naming a column that does not exist merely logs a warning and turns the rule off.
+    **The frames below omit `Motifs` deliberately, and that is a synthetic condition, not
+    a reproduction of production.** An earlier revision of this docstring justified them
+    by claiming step 6 had dropped `Motifs` before flagging runs, so that the pre-#197
+    three-key `sort_by` (`Depth_Score`, `Motifs`, `POS`) would have raised on the first
+    real frame it saw. That is false, and
+    `test_the_frame_flagging_sees_still_carries_the_motifs_column` above measures it:
+    `motif_correction_and_annotation` returns its input frame at the original width, so
+    `Motifs`, `POS` and `Depth_Score` are all present at step 6.5 and the retired shape
+    would have sorted normally.
 
     #197 (@hassansaei) replaced that three-key `sort_by` with a single `Depth_Score`
-    descending key - see `test_duplicate_ordering_uses_depth_score_only_and_no_motif_column`
-    below - so the shipped config no longer has this shape. These tests reconstruct the
-    retired three-key form explicitly via `_dup_config` instead of reading it off
-    `kestrel_config.json`, so the trap stays documented for any future `sort_by` that
-    reintroduces a since-dropped column name.
+    descending key because motif identity is not a duplicate-priority criterion - an
+    authorised policy change, not a repair. The shipped config no longer has the
+    three-key shape, so these tests reconstruct it via `_dup_config` rather than reading
+    it off `kestrel_config.json`; what they document is the `add_flags` behaviour that
+    would catch any *future* `sort_by` naming a column its frame really does lack.
     """
 
     def test_unknown_sort_column_raises_rather_than_mis_sorting(self):
@@ -460,13 +523,14 @@ class TestDuplicateSortColumnMustExist:
         with pytest.raises(KeyError):
             add_flags(df, {}, duplicates_config=config)
 
-    def test_retired_three_key_sort_by_would_still_raise(self):
-        """The pre-#197 sort_by shape (Depth_Score, Motifs, POS) still raises KeyError.
+    def test_retired_three_key_sort_by_raises_on_a_frame_that_lacks_motifs(self):
+        """The pre-#197 sort_by shape (Depth_Score, Motifs, POS) raises on THIS frame.
 
-        #197 removed this exact three-key shape from the shipped config (it is no
-        longer readable from `kestrel_config.json`), so it is reconstructed here
-        explicitly to show the trap it documents is a property of the code, not of
-        whatever the config currently happens to ship.
+        The frame is built without `Motifs` on purpose. A production frame at step 6.5
+        carries it (see `test_the_frame_flagging_sees_still_carries_the_motifs_column`),
+        so this is not a reproduction of a bug the shipped config had - it pins that
+        `add_flags` fails fast rather than mis-sorting, using the retired shape only
+        because it is the multi-key example already at hand.
         """
         df = pd.DataFrame(
             {

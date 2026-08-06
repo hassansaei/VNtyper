@@ -29,11 +29,11 @@ logger = logging.getLogger(__name__)
 #: that became **zero**. ``I9_2_A_LEN9&I50_2_A_LEN3`` gave 0, not 9. No input ever
 #: behaved as "first-LEN-wins".
 #:
-#: ``Insertion_len`` feeds ``frame = abs(Insertion_len - Deletion_length)``, and 0 is in
-#: neither ``ins_frame`` (3n+1) nor ``del_frame`` (3n+2), so a collapsed pure-insertion
-#: compound was dropped in silence. Summation makes those calls visible; it also drops a
-#: net-in-frame compound such as ``I9_2_A_LEN2&D50_2&D51_2`` that the zero had been
-#: keeping. Both directions are pinned by
+#: ``Insertion_len`` feeds ``Net_indel_length = Insertion_len - Deletion_length``, and a
+#: net change of 0 is not the pathogenic frame, so a collapsed pure-insertion compound was
+#: dropped in silence. Summation makes those calls visible; it also drops a net-in-frame
+#: compound such as ``I9_2_A_LEN2&D50_2&D51_2`` that the zero had been keeping. Both
+#: directions are pinned by
 #: ``tests/unit/test_advntr_output_parsing.py::TestSummedInsertionLength``.
 LEN_TOKEN_PATTERN = re.compile(r"LEN(\d+)")
 
@@ -158,20 +158,64 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     return 0
 
 
-def advntr_processing_del(df):
-    """
-    Process adVNTR deletions by calculating deletion length, computing the frameshift,
-    and filtering variants based on valid frameshift patterns.
+#: Offset of the insertion arm's accepted-magnitude series: a **net gain** of ``3n+1``
+#: bases. See :func:`accepted_frame_magnitudes`.
+INSERTION_FRAME_OFFSET = 1
+
+#: Offset of the deletion arm's accepted-magnitude series: a **net loss** of ``3n+2``
+#: bases. See :func:`accepted_frame_magnitudes`.
+DELETION_FRAME_OFFSET = 2
+
+
+def accepted_frame_magnitudes(offset: int) -> np.ndarray:
+    """The ``|Net_indel_length|`` values one arm of the pathogenic-frame filter accepts.
+
+    The series is built from the two settings ``advntr_config.json`` exposes, read from
+    the module-level ``advntr_settings`` global at call time (trap 1 in AGENTS.md: the
+    filter reads the *derived* global, so a test must patch that one):
+
+    * ``frameshift_multiplier`` (default 3) -- the codon width;
+    * ``max_frameshift`` (default 100) -- how many terms of the series are accepted, so
+      the largest accepted magnitude is ``(max_frameshift - 1) * multiplier + offset``.
 
     Args:
-        df (pd.DataFrame): DataFrame containing adVNTR variant data.
+        offset (int): :data:`INSERTION_FRAME_OFFSET` for the insertion arm,
+            :data:`DELETION_FRAME_OFFSET` for the deletion arm.
 
     Returns:
-        pd.DataFrame: Filtered DataFrame containing only those deletions that pass the frameshift filter.
+        np.ndarray: The accepted magnitudes as strings, matching the ``str`` dtype of the
+            ``frame`` column they are tested against.
     """
-    logger.debug("Starting deletion processing.")
+    max_frameshift = advntr_settings.get("max_frameshift", 100)
+    frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
+    return (np.arange(max_frameshift) * frameshift_multiplier + offset).astype(str)
+
+
+def derive_indel_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename adVNTR's raw columns and derive the indel lengths the filter decides on.
+
+    Shared by :func:`advntr_processing_del` and :func:`advntr_processing_ins` so the two
+    arms cannot derive the decision quantity differently. Adds:
+
+    * ``Deletion_length`` -- ``Variant.str.count("D")``, the number of ``D`` events;
+    * ``Insertion_length`` -- ``Variant.str.count("I")``, the number of ``I`` events
+      (derived for debuggability; nothing reads it);
+    * ``Insertion_len`` -- inserted bases, the sum over every ``LEN`` token (#192);
+    * ``Net_indel_length`` -- the **signed** net change,
+      ``Insertion_len - Deletion_length``. This is the quantity the pathogenic-frame
+      decision is made on;
+    * ``frame`` -- ``|Net_indel_length|`` as a string, the magnitude tested against
+      :func:`accepted_frame_magnitudes`. It deliberately does **not** carry the sign; the
+      sign is tested separately, by each arm, on ``Net_indel_length``.
+
+    Args:
+        df (pd.DataFrame): A raw adVNTR frame carrying a ``State`` column.
+
+    Returns:
+        pd.DataFrame: A copy with the columns above added and ``State``/``Pvalue\\n``
+            renamed. No rows are dropped.
+    """
     df1 = df.copy()
-    logger.debug("Copied input DataFrame for deletion processing.")
     df1.rename(columns={"State": "Variant", "Pvalue\n": "Pvalue"}, inplace=True)
     logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
     df1["Deletion_length"] = df1["Variant"].str.count("D")
@@ -181,57 +225,107 @@ def advntr_processing_del(df):
     logger.debug("Summed every 'LEN' token in 'Variant' into 'Insertion_len' (#192).")
     df1["Deletion_length"] = df1["Deletion_length"].astype(int)
     logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
-    df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
-    logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
-    # Pathogenic-frame filter (#182, decided 2026-08-06). Deletions must be
-    # 3n+2 and insertions 3n+1: both are Delta = +1 mod 3, the ADTKD-MUC1
-    # frame that yields the toxic MUC1-fs product. This is the SAME rule
-    # Kestrel applies in scoring.extract_frameshifts (#181); the two are
-    # asserted to agree by tests/unit/test_frameshift_convention_parity.py.
-    max_frameshift = advntr_settings.get("max_frameshift", 100)
-    frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
-    del_frame = (np.arange(max_frameshift) * frameshift_multiplier + 2).astype(str)
-    logger.debug(f"Valid deletion frames (first 5): {del_frame[:5].tolist()}")
-    df1 = df1[(df1["Deletion_length"] >= 1) & df1["frame"].isin(del_frame)]
+    df1["Net_indel_length"] = df1["Insertion_len"] - df1["Deletion_length"]
+    df1["frame"] = df1["Net_indel_length"].abs().astype(str)
+    logger.debug(f"Computed net indel lengths; sample: {df1['Net_indel_length'].head().tolist()}")
+    return df1
+
+
+# ---------------------------------------------------------------------------
+# The pathogenic-frame filter (#182, decided 2026-08-06)
+# ---------------------------------------------------------------------------
+#
+# The decision quantity is the SIGNED net change in bases,
+#
+#     Delta = Net_indel_length = Insertion_len - Deletion_length,
+#
+# and the pathogenic ADTKD-MUC1 condition is Delta = +1 (mod 3) -- the frame that yields
+# the toxic MUC1-fs neo-protein, classically exemplified by dupC. Written out:
+#
+#     a net INSERTION of 3n+1 bases   ->  Delta = +1 (mod 3)   PATHOGENIC FRAME
+#     a net DELETION  of 3n+2 bases   ->  Delta = -(3n+2) = +1 (mod 3)   PATHOGENIC FRAME
+#     a net INSERTION of 3n+2 bases   ->  Delta = +2 (mod 3)   frameshift, other frame
+#     a net DELETION  of 3n+1 bases   ->  Delta = +2 (mod 3)   frameshift, other frame
+#     a net change of 3n bases        ->  Delta =  0 (mod 3)   in frame, not a frameshift
+#
+# So VNtyper does NOT filter on "changes the reading frame at all" -- it filters on
+# "enters the pathogenic +1 frame", which is the narrower of the two. Rows in the other
+# frame are genuine frameshifts and are dropped on purpose; that frame has not been
+# established as pathogenic in ADTKD-MUC1 patients. @hassansaei on #182: "keep the same
+# 3n+1 / 3n+2 rule for adVNTR as for Kestrel (#181). This is intentional shared
+# convention, not something to relax independently."
+#
+# THE SIGN IS LOAD-BEARING AND USED TO BE DISCARDED. Both arms previously tested
+# abs(Insertion_len - Deletion_length) against their series and guarded only on
+# "has at least one deleted base" / "has at least one inserted base". A *mixed* state
+# satisfies both guards, so either arm could admit it on the magnitude alone and the
+# opposite, non-pathogenic frame was accepted -- e.g. I9_2_A_LEN3&D50_2 (3 inserted,
+# 1 deleted, Delta = +2) was reported via the DELETION arm because |+2| = 2 is in the
+# 3n+2 series. Each arm therefore now tests the sign of Net_indel_length as well, which
+# is what makes the pair equivalent to the single signed rule Delta % 3 == 1. The sign
+# test also subsumes the old presence guards: Delta < 0 implies Deletion_length >= 1 and
+# Delta > 0 implies Insertion_len >= 1.
+#
+# This is the SAME rule Kestrel applies in scoring.extract_frameshifts (#181), which
+# derives its own signed delta from the REF/ALT lengths -- direction = sign(Delta),
+# frameshift_amount = |Delta| % 3 -- and was already correct for mixed indels. The two
+# are asserted to agree, on pure AND mixed states, by
+# tests/unit/test_frameshift_convention_parity.py.
+#
+# CARRIED OVER UNCHANGED, and not established here: Deletion_length is
+# Variant.str.count("D") -- a count of the letter D anywhere in the State string -- used
+# above as a count of deleted *bases*. The two coincide only if every D in a State is one
+# deletion part removing exactly one base. That is the existing behaviour on both sides of
+# this change: the sign repair neither depends on it nor ratifies it. It is filed as an
+# open question against #192 (docs/development/ci-followups.md, section B8).
+
+
+def advntr_processing_del(df):
+    """
+    Keep the adVNTR calls whose **net** change is a deletion in the pathogenic frame.
+
+    A row survives when ``Net_indel_length < 0`` (more bases deleted than inserted) and
+    ``|Net_indel_length|`` is one of the ``3n+2`` magnitudes
+    :func:`accepted_frame_magnitudes` yields, i.e. ``Net_indel_length % 3 == 1``. See the
+    block comment above for why the sign test is not optional.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing adVNTR variant data.
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame containing only those net deletions that enter
+            the pathogenic frame.
+    """
+    logger.debug("Starting deletion processing.")
+    df1 = derive_indel_columns(df)
+    del_frame = accepted_frame_magnitudes(DELETION_FRAME_OFFSET)
+    logger.debug(f"Accepted net-deletion magnitudes (first 5): {del_frame[:5].tolist()}")
+    df1 = df1[(df1["Net_indel_length"] < 0) & df1["frame"].isin(del_frame)]
     logger.debug(f"Filtered DataFrame shape after deletion processing: {df1.shape}")
     return df1
 
 
 def advntr_processing_ins(df):
     """
-    Process adVNTR insertions by calculating insertion length, computing the frameshift,
-    and filtering variants based on valid frameshift patterns.
+    Keep the adVNTR calls whose **net** change is an insertion in the pathogenic frame.
+
+    A row survives when ``Net_indel_length > 0`` (more bases inserted than deleted) and
+    ``Net_indel_length`` is one of the ``3n+1`` magnitudes
+    :func:`accepted_frame_magnitudes` yields, i.e. ``Net_indel_length % 3 == 1``. See the
+    block comment above for why the sign test is not optional.
 
     Args:
         df (pd.DataFrame): DataFrame containing adVNTR variant data.
 
     Returns:
-        pd.DataFrame: Filtered DataFrame containing only those insertions that pass the frameshift filter.
+        pd.DataFrame: Filtered DataFrame containing only those net insertions that enter
+            the pathogenic frame.
     """
     logger.debug("Starting insertion processing.")
-    df1 = df.copy()
-    logger.debug("Copied input DataFrame for insertion processing.")
-    df1.rename(columns={"State": "Variant", "Pvalue\n": "Pvalue"}, inplace=True)
-    logger.debug("Renamed columns: 'State' -> 'Variant', 'Pvalue\\n' -> 'Pvalue'.")
-    df1["Deletion_length"] = df1["Variant"].str.count("D")
-    df1["Insertion_length"] = df1["Variant"].str.count("I")
-    logger.debug("Calculated 'Deletion_length' and 'Insertion_length'.")
-    df1["Insertion_len"] = df1["Variant"].map(sum_insertion_lengths).astype(int)
-    logger.debug("Summed every 'LEN' token in 'Variant' into 'Insertion_len' (#192).")
-    df1["Deletion_length"] = df1["Deletion_length"].astype(int)
-    logger.debug("Converted 'Insertion_len' and 'Deletion_length' to integers.")
-    df1["frame"] = abs(df1["Insertion_len"] - df1["Deletion_length"]).astype(str)
-    logger.debug(f"Computed frameshift values; sample: {df1['frame'].head().tolist()}")
-    # Pathogenic-frame filter (#182, decided 2026-08-06). Deletions must be
-    # 3n+2 and insertions 3n+1: both are Delta = +1 mod 3, the ADTKD-MUC1
-    # frame that yields the toxic MUC1-fs product. This is the SAME rule
-    # Kestrel applies in scoring.extract_frameshifts (#181); the two are
-    # asserted to agree by tests/unit/test_frameshift_convention_parity.py.
-    max_frameshift = advntr_settings.get("max_frameshift", 100)
-    frameshift_multiplier = advntr_settings.get("frameshift_multiplier", 3)
-    ins_frame = (np.arange(max_frameshift) * frameshift_multiplier + 1).astype(str)
-    logger.debug(f"Valid insertion frames (first 5): {ins_frame[:5].tolist()}")
-    df1 = df1[(df1["Insertion_len"] >= 1) & df1["frame"].isin(ins_frame)]
+    df1 = derive_indel_columns(df)
+    ins_frame = accepted_frame_magnitudes(INSERTION_FRAME_OFFSET)
+    logger.debug(f"Accepted net-insertion magnitudes (first 5): {ins_frame[:5].tolist()}")
+    df1 = df1[(df1["Net_indel_length"] > 0) & df1["frame"].isin(ins_frame)]
     logger.debug(f"Filtered DataFrame shape after insertion processing: {df1.shape}")
     return df1
 

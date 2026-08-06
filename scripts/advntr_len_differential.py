@@ -4,12 +4,28 @@ Differential sweep for #192 -- summing every ``LEN`` token in an adVNTR ``State`
 
 Why this script exists
 ----------------------
-#192 changes ``Insertion_len``, which feeds ``frame = abs(Insertion_len -
-Deletion_length)``, which is the value the #182 pathogenic-frameshift filter tests. It
-therefore changes **reported genotypes**, and the golden-cohort gate cannot see it: the
-only compound state in the cohort is ``example_dfc3``'s ``D17_2&D18_2&D19_2&D20_2&D21_2``,
-which carries no ``LEN`` token at all, so ``Insertion_len`` is 0 under both semantics and a
-cohort PASS is not evidence for this change. This sweep is the evidence.
+#192 changes ``Insertion_len``, which feeds
+``Net_indel_length = Insertion_len - Deletion_length``, which is the value the #182
+pathogenic-frame filter tests. It therefore changes **reported genotypes**, and the
+golden-cohort gate cannot see it: the only compound state in the cohort is
+``example_dfc3``'s ``D17_2&D18_2&D19_2&D20_2&D21_2``, which carries no ``LEN`` token at
+all, so ``Insertion_len`` is 0 under both semantics and a cohort PASS is not evidence for
+this change. This sweep is the evidence.
+
+The filter it models
+--------------------
+A row is reported exactly when its **signed** net change satisfies
+``Net_indel_length % 3 == 1``: a net insertion of ``3n+1`` bases (kept by
+``advntr_processing_ins``) or a net deletion of ``3n+2`` bases (kept by
+``advntr_processing_del``). ``frame`` is ``|Net_indel_length|``, the magnitude the two
+configurable series are matched against; each arm tests the sign separately.
+
+Both arms previously tested ``frame`` alone, guarded only by "names at least one
+deletion" / "names at least one insertion" -- guards a **mixed** state satisfies on both
+sides, so a mixed state could be reported by the arm whose series its magnitude landed
+in, whatever the direction of the change actually was. :func:`absolute_frame_survival`
+keeps that retired model so the sweep can report exactly which state shapes the sign
+repair moves; see the ``sign_fix_delta`` section of the result.
 
 What it compares
 ----------------
@@ -21,6 +37,11 @@ For every generated ``State`` string it computes, on both sides:
 * the keep/drop outcome of each half of the filter, and whether the state is **reported**
   at all (``process_advntr_output`` concatenates the two halves, so either one keeping the
   row is enough).
+
+Both sides are evaluated through the **corrected** filter, so ``reporting_delta`` is
+"what #192's ``Insertion_len`` change does, measured under the signed #182 rule".
+The separate ``sign_fix_delta`` isolates the other axis: same (summed) ``Insertion_len``,
+retired absolute-value filter versus the signed one.
 
 The new side's model of the filter is cross-checked against the real
 ``advntr_processing_ins`` / ``advntr_processing_del`` before anything is reported, so the
@@ -56,10 +77,11 @@ Usage:
     python scripts/advntr_len_differential.py [--out /tmp/advntr-len-diff.json]
 
 Exit codes:
-    0: every difference is predicted by the oracle and the three unchanged classes are
-       byte-identical.
+    0: every difference is predicted by the oracle, the three unchanged classes are
+       byte-identical, and the sign repair moves no pure state.
     1: a regression -- a difference the oracle does not predict, a predicted difference
-       that did not occur, or a mismatch between the sweep's filter model and production.
+       that did not occur, a pure state whose verdict the sign repair changes, or a
+       mismatch between the sweep's filter model and production.
 """
 
 from __future__ import annotations
@@ -214,7 +236,7 @@ def historic_insertion_len(states: pd.Series) -> pd.Series:
 
 
 def frame_series(insertion_len: pd.Series, deletion_length: pd.Series) -> pd.Series:
-    """``frame = abs(Insertion_len - Deletion_length)``, carried as a string as production does."""
+    """``frame = abs(Net_indel_length)``, carried as a string as production does."""
     return (insertion_len - deletion_length).abs().astype(str)
 
 
@@ -234,8 +256,34 @@ def accepted_frames() -> tuple[set[str], set[str]]:
 def survival(insertion_len: pd.Series, deletion_length: pd.Series) -> tuple[pd.Series, pd.Series]:
     """Which rows each half of the filter keeps, modelling ``advntr_processing_{ins,del}``.
 
+    The signed rule: the insertion arm takes a **net** gain whose magnitude is in the
+    ``3n+1`` series, the deletion arm a **net** loss whose magnitude is in the ``3n+2``
+    series. Their union is exactly ``Net_indel_length % 3 == 1``, and they are disjoint.
+
     Args:
         insertion_len (pd.Series): summed (or historic) inserted length.
+        deletion_length (pd.Series): ``Variant.str.count("D")``.
+
+    Returns:
+        tuple[pd.Series, pd.Series]: boolean ``(kept_by_ins, kept_by_del)``.
+    """
+    ins_frame, del_frame = accepted_frames()
+    net = insertion_len - deletion_length
+    frame = frame_series(insertion_len, deletion_length)
+    kept_ins = (net > 0) & frame.isin(ins_frame)
+    kept_del = (net < 0) & frame.isin(del_frame)
+    return kept_ins, kept_del
+
+
+def absolute_frame_survival(insertion_len: pd.Series, deletion_length: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """The **retired** filter: ``abs(Net_indel_length)`` against the series, presence guards only.
+
+    Kept as a literal replica of the code before the sign repair, so the set of state
+    shapes whose verdict the repair changes can be enumerated rather than argued. It is
+    not a model of anything production still does.
+
+    Args:
+        insertion_len (pd.Series): summed inserted length.
         deletion_length (pd.Series): ``Variant.str.count("D")``.
 
     Returns:
@@ -395,6 +443,18 @@ def sweep(max_examples: int = 200) -> dict[str, Any]:
     reported_after = new_ins | new_del
     unchanged_mask = classes.isin(UNCHANGED_CLASSES)
 
+    # The other axis: same (summed) Insertion_len, retired absolute-value filter versus the
+    # signed one. This is the set of state shapes the sign repair moves, and the reason a
+    # golden-cohort gate is needed at all.
+    abs_ins, abs_del = absolute_frame_survival(new_len, deletion_length)
+    reported_abs = abs_ins | abs_del
+    net = new_len - deletion_length
+    # A "pure" state changes in one direction only, so its sign is never in doubt and the
+    # repair must not move it. Zero inserted bases OR zero deleted events is pure; the
+    # empty state (neither) is pure by both counts and in frame under either model.
+    pure = (new_len == 0) | (deletion_length == 0)
+    sign_fix_moved = reported_abs != reported_after
+
     return {
         "probes": len(states),
         "differing": int(differs.sum()),
@@ -423,6 +483,14 @@ def sweep(max_examples: int = 200) -> dict[str, Any]:
             "gained": sorted(variants[~reported_before & reported_after]),
             "lost": sorted(variants[reported_before & ~reported_after]),
         },
+        "sign_fix_delta": {
+            "probes": len(states),
+            "moved": int(sign_fix_moved.sum()),
+            "lost": sorted(variants[reported_abs & ~reported_after]),
+            "gained": sorted(variants[~reported_abs & reported_after]),
+            "pure_states_moved": sorted(variants[pure & sign_fix_moved]),
+            "residue_of_lost": dict(Counter(int(value) % 3 for value in net[reported_abs & ~reported_after])),
+        },
         "model_problems": model_problems,
         "differences": records,
     }
@@ -450,6 +518,19 @@ def print_summary(result: dict[str, Any]) -> None:
         print(f"  GAIN  {state}")
     if len(gained) > 10:
         print(f"  ... and {len(gained) - 10} further gained states")
+    sign_fix = result["sign_fix_delta"]
+    print(f"\nsign-fix delta             : {sign_fix['moved']} states move verdict")
+    print(f"  no longer reported         : {len(sign_fix['lost'])}")
+    print(f"  newly reported             : {len(sign_fix['gained'])}")
+    print(f"  net residue of the lost    : {sign_fix['residue_of_lost']}")
+    # Truncated: under a regression this list can run to tens of thousands of states, and
+    # the full set is always in the JSON written by --out.
+    pure_moved = sign_fix["pure_states_moved"]
+    print(f"  pure states moved          : {len(pure_moved)}{'' if not pure_moved else ' -- ' + str(pure_moved[:5])}")
+    for state in sign_fix["lost"][:10]:
+        print(f"  SIGN-LOST  {state}")
+    if len(sign_fix["lost"]) > 10:
+        print(f"  ... and {len(sign_fix['lost']) - 10} further states no longer reported")
     print("\noracle:")
     print(f"  predicted to differ        : {result['oracle']['predicted']}")
     print(f"  differed, not predicted    : {result['oracle']['differed_but_not_predicted']}")
@@ -488,6 +569,16 @@ def main(argv: list[str] | None = None) -> int:
         + [f"unchanged class differed: {state!r}" for state in result["unchanged_classes"]["violations"]]
         + [f"differed but not predicted: {state!r}" for state in result["oracle"]["differed_but_not_predicted"]]
         + [f"predicted but identical: {state!r}" for state in result["oracle"]["predicted_but_identical"]]
+        # The sign repair is a claim about mixed states only. A pure state changing verdict
+        # would mean it altered the pure-state rule, which is not authorised.
+        + [f"sign fix moved a pure state: {state!r}" for state in result["sign_fix_delta"]["pure_states_moved"]]
+        # Every state the sign repair stops reporting must be one whose net change is not
+        # the pathogenic frame. A residue of 1 in this bucket would mean a real call lost.
+        + [
+            f"sign fix dropped a pathogenic-frame state (residue {residue})"
+            for residue in result["sign_fix_delta"]["residue_of_lost"]
+            if residue == 1
+        ]
     )
     if failures:
         print("\nREGRESSION -- the sweep did not match its oracle:")
@@ -495,7 +586,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {failure}")
         return 1
 
-    print("\nOK -- every difference is predicted by the oracle; the unchanged classes are identical.")
+    print(
+        "\nOK -- every difference is predicted by the oracle; the unchanged classes are "
+        "identical; the sign fix moves only mixed states, all outside the pathogenic frame."
+    )
     return 0
 
 

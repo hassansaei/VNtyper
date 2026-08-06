@@ -379,9 +379,9 @@ class TestSummedInsertionLength:
     ``I9_2_A_LEN9&I50_2_A_LEN3`` gave 0, not 9. The precise historic rule was: the value
     collapses to zero exactly when material follows the first ``LEN``; a compound whose
     only ``LEN`` is terminal parsed correctly. Where it collapsed, a pure-insertion
-    compound got ``frame == 0``, and 0 is in neither ``ins_frame`` (3n+1) nor ``del_frame``
-    (3n+2) -- so those states were dropped in silence. That is a worse defect than the
-    issue describes.
+    compound got ``Net_indel_length == 0``, which is in frame and therefore not the
+    pathogenic ``Delta % 3 == 1`` -- so those states were dropped in silence. That is a
+    worse defect than the issue describes.
     """
 
     @pytest.mark.parametrize(
@@ -433,17 +433,19 @@ class TestSummedInsertionLength:
     def test_a_compound_insertion_summation_admits_was_dropped_before(self):
         """The insertion path: summation can only ADD rows there, never remove them.
 
-        ``frame = abs(Insertion_len - Deletion_length)``; ``Deletion_length`` is
-        ``count("D") == 0`` here; the #182 insertion filter keeps 3n+1::
+        ``Net_indel_length = Insertion_len - Deletion_length``; ``Deletion_length`` is
+        ``count("D") == 0`` here; the #182 filter keeps ``Net_indel_length % 3 == 1``,
+        which for a pure insertion means a length of 3n+1::
 
             I9_2_A_LEN9&I50_2_A_LEN1
-              before:    Insertion_len = 0,  frame = 0,  0 in neither series -> DROPPED
-              summation: Insertion_len = 10, frame = 10, 10 % 3 == 1         -> KEPT
+              before:    Insertion_len = 0,  Delta = 0,  in frame     -> DROPPED
+              summation: Insertion_len = 10, Delta = +10, 10 % 3 == 1 -> KEPT
 
-        Every state whose value collapsed was 0, and 0 satisfies neither ``Insertion_len
-        >= 1`` nor either frame series, so no collapsed state survived at all. On the
-        insertion side summation is therefore monotone-additive: it makes real pathogenic
-        compound calls visible and cannot lose one.
+        Every state whose value collapsed had ``Insertion_len == 0``, hence
+        ``Delta == -Deletion_length``, which for a pure insertion is 0 -- in frame, so no
+        collapsed pure-insertion state survived at all. On the insertion side summation is
+        therefore monotone-additive: it makes real pathogenic compound calls visible and
+        cannot lose one.
         """
         kept = advntr.advntr_processing_ins(state_frame("I9_2_A_LEN9&I50_2_A_LEN1"))
 
@@ -456,10 +458,12 @@ class TestSummedInsertionLength:
 
         ``I9_2_A_LEN3&D50_2&D51_2`` (``Deletion_length = count("D") = 2``)::
 
-            before:    Insertion_len = 0, frame = |0-2| = 2, 2 in del_frame -> kept by del
-            summation: Insertion_len = 3, frame = |3-2| = 1, 1 in ins_frame -> kept by ins
+            before:    Insertion_len = 0, Delta = 0-2 = -2, a 3n+2 net deletion -> kept by del
+            summation: Insertion_len = 3, Delta = 3-2 = +1, a 3n+1 net insertion -> kept by ins
 
-        The row moves from the deletion half to the insertion half. Because
+        Both are ``Delta % 3 == 1``, so both are the pathogenic frame; only the sign of
+        the net change moves. The row moves from the deletion half to the insertion half.
+        Because
         ``process_advntr_output`` concatenates the two halves, the reported output is
         unchanged; only which filter accounts for the row changes, and that is not a
         column of ``output_adVNTR_result.tsv``.
@@ -477,8 +481,8 @@ class TestSummedInsertionLength:
 
         ``I9_2_A_LEN2&D50_2&D51_2`` -- 2 inserted bases against 2 deleted bases::
 
-            before:    Insertion_len = 0, frame = |0-2| = 2, 2 in del_frame -> REPORTED
-            summation: Insertion_len = 2, frame = |2-2| = 0, 0 in neither   -> DROPPED
+            before:    Insertion_len = 0, Delta = 0-2 = -2, -2 % 3 == 1 -> REPORTED
+            summation: Insertion_len = 2, Delta = 2-2 =  0,  0 % 3 == 0 -> DROPPED
 
         This is a reported adVNTR call disappearing, so it is pinned here and called out
         in the commit message and the PR body. @hassansaei's decision on #192 authorises
@@ -493,42 +497,61 @@ class TestInsertionLenAndFrameAfterFiltering:
     """
     The whole table each filter produces for a state: derivation, frame, and survival.
 
-    Three rules meet here and they do not have the same standing, so the table is not a
-    blanket endorsement of any row:
+    Two rules meet here, both decided, so the table is a specification rather than a
+    characterisation:
 
     * the ``Insertion_len`` **derivation** is specified by #192 (see
       :class:`TestSummedInsertionLength`);
-    * the ``frame`` **membership rule** (3n+1 insertions, 3n+2 deletions) is specified by
-      #182;
-    * the interaction between the two ``>= 1`` guards -- why a pure 1 bp deletion reaches
-      neither filter -- is a live defect and stays **characterised**, in
-      ``tests/unit/test_advntr_frameshift_filter.py``.
+    * the **pathogenic-frame rule** is specified by #182: a row survives exactly when its
+      *signed* net change ``Net_indel_length = Insertion_len - Deletion_length`` satisfies
+      ``Net_indel_length % 3 == 1``. The deletion arm serves the negative half of that
+      (a net loss of 3n+2 bases) and the insertion arm the positive half (a net gain of
+      3n+1 bases).
 
-    Every expectation below was re-measured against the real functions at this commit.
+    ``frame`` is ``|Net_indel_length|`` -- the magnitude only. It is what the configurable
+    ``3n+1``/``3n+2`` series are matched against, and each arm tests the sign separately.
+    An earlier revision of this class recorded the ``>= 1`` presence guards as a "live
+    defect" left characterised; those guards are gone, replaced by the sign test, and the
+    row this table used to pin as reported through the wrong arm
+    (``D49_2&I49_2_A_LEN12``) is corrected below.
+
+    Every expectation was re-measured against the real functions at this commit.
     """
 
     #: ``(state, function, surviving Insertion_len values, surviving frame values)``.
     MEASURED_BEHAVIOUR = [
         # A single-part insertion. Unchanged by #192: one terminal LEN always parsed.
-        ("I22_2_G_LEN1", "ins", [1], ["1"]),
+        ("I22_2_G_LEN1", "ins", [1], ["1"]),  # Delta = +1
         ("I22_2_G_LEN1", "del", [], []),
         # A compound whose only LEN sits in the last part. Also unchanged by #192.
-        ("D8_2&D9_2&I9_2_A_LEN9", "ins", [9], ["7"]),
-        ("D2_2&I2_2_C_LEN5", "ins", [5], ["4"]),
-        ("D49_2&I49_2_A_LEN12", "del", [12], ["11"]),
+        ("D8_2&D9_2&I9_2_A_LEN9", "ins", [9], ["7"]),  # 9 - 2 = +7, 7 % 3 == 1
+        ("D2_2&I2_2_C_LEN5", "ins", [5], ["4"]),  # 5 - 1 = +4, 4 % 3 == 1
+        # 12 inserted against 1 deleted -> Delta = +11, and 11 % 3 == 2, so this is a
+        # frameshift in the frame VNtyper does not report. It used to be reported by the
+        # DELETION arm, on the magnitude |+11| = 11 being in the 3n+2 series while the arm
+        # guarded only on Deletion_length >= 1 -- a net insertion reported as a deletion
+        # call. Both arms now drop it. (This state is a real one: it is named in
+        # advntr_config.json's Polymorphic_Call list.)
+        ("D49_2&I49_2_A_LEN12", "del", [], []),
+        ("D49_2&I49_2_A_LEN12", "ins", [], []),
         # No LEN token at all -- 0 before and after.
-        ("D58_2&D59_2", "del", [0], ["2"]),
+        ("D58_2&D59_2", "del", [0], ["2"]),  # Delta = -2, -2 % 3 == 1
         ("D8_2", "ins", [], []),
         ("NOT_A_VARIANT", "ins", [], []),
         ("NOT_A_VARIANT", "del", [], []),
         # #192 changed these. Before, material after the first LEN collapsed the value to
         # zero; now the LEN tokens are summed, so the net length decides.
-        ("I9_2_A_LEN2&D50_2", "ins", [2], ["1"]),  # was [] -- 2 inserted, 1 deleted, net +1
-        ("I9_2_A_LEN2&D50_2", "del", [], []),  # unchanged: frame 1 is not 3n+2
-        ("I9_2_A_LEN2&D50_2&D51_2", "ins", [], []),  # unchanged: net 0 is not 3n+1
-        ("I9_2_A_LEN2&D50_2&D51_2", "del", [], []),  # was [0]/["2"] -- net 0 is in frame
-        ("I9_2_A_LEN9&I50_2_A_LEN3", "ins", [], []),  # 12 inserted, in frame
-        ("I9_2_A_LEN1&I50_2_A_LEN3", "ins", [4], ["4"]),  # 4 inserted, a frameshift
+        ("I9_2_A_LEN2&D50_2", "ins", [2], ["1"]),  # was [] -- 2 inserted, 1 deleted, Delta = +1
+        ("I9_2_A_LEN2&D50_2", "del", [], []),  # unchanged: a net insertion is never a deletion call
+        ("I9_2_A_LEN2&D50_2&D51_2", "ins", [], []),  # unchanged: Delta = 0 is in frame
+        ("I9_2_A_LEN2&D50_2&D51_2", "del", [], []),  # was [0]/["2"] -- Delta = 0 is in frame
+        ("I9_2_A_LEN9&I50_2_A_LEN3", "ins", [], []),  # Delta = +12, in frame
+        ("I9_2_A_LEN1&I50_2_A_LEN3", "ins", [4], ["4"]),  # Delta = +4, the pathogenic frame
+        # Mixed states in the non-pathogenic frame, both signs. Neither arm may take them.
+        ("I9_2_A_LEN3&D50_2", "del", [], []),  # Delta = +2; the branch-introduced case
+        ("I9_2_A_LEN3&D50_2", "ins", [], []),
+        ("D8_2&D9_2&I9_2_A_LEN1", "ins", [], []),  # Delta = -1
+        ("D8_2&D9_2&I9_2_A_LEN1", "del", [], []),
     ]
 
     @pytest.mark.parametrize(("state", "which", "lengths", "frames"), MEASURED_BEHAVIOUR)
@@ -539,6 +562,45 @@ class TestInsertionLenAndFrameAfterFiltering:
 
         assert list(out["Insertion_len"]) == lengths, f"{state} ({which}) Insertion_len"
         assert list(out["frame"]) == frames, f"{state} ({which}) frame"
+
+    @pytest.mark.parametrize(
+        ("state", "delta"),
+        [
+            # Net insertions reported by the deletion arm on |Delta| alone.
+            ("I9_2_A_LEN3&D50_2", 2),
+            ("D49_2&I49_2_A_LEN12", 11),
+            # A net deletion reported by the insertion arm on |Delta| alone.
+            ("D8_2&D9_2&I9_2_A_LEN1", -1),
+        ],
+    )
+    def test_a_mixed_state_in_the_other_frame_reaches_the_result_file_from_neither_arm(self, tmp_path, state, delta):
+        """End to end: the corrected verdict is what ``output_adVNTR_result.tsv`` shows.
+
+        Every state here has ``Delta % 3 == 2`` -- a genuine frameshift, but not the
+        pathogenic +1 frame -- and each used to be admitted by the arm whose *magnitude*
+        series ``|Delta|`` happened to land in, because that arm's only other guard was a
+        presence check a mixed state satisfies on both sides. The filter unit tests assert
+        the arms; this asserts the file a clinician's report is built from.
+        """
+        assert delta % 3 == 2, "these states are the non-pathogenic frame"
+        source = write_advntr_output(tmp_path, ADVNTR_HEADER + f"25561\t{state}\t11\t153.98\t0.0001\n")
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        assert_is_negative_placeholder(read_result(tmp_path))
+
+    def test_a_mixed_state_in_the_pathogenic_frame_still_reaches_the_result_file(self, tmp_path):
+        """The control for the test above: ``Delta = +1`` from a compound state is reported.
+
+        ``I9_2_A_LEN3&D50_2&D51_2`` -- 3 inserted against 2 deleted. Without this, the
+        test above would also pass against a filter that had simply stopped reporting
+        mixed states altogether.
+        """
+        source = write_advntr_output(tmp_path, ADVNTR_HEADER + "25561\tI9_2_A_LEN3&D50_2&D51_2\t11\t153.98\t0.0001\n")
+
+        advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+        assert list(read_result(tmp_path)["Variant"]) == ["I9_2_A_LEN3&D50_2&D51_2"]
 
 
 # ---------------------------------------------------------------------------
