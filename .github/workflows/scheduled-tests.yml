@@ -205,8 +205,74 @@ jobs:
           VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
         run: make test-docker
 
+  mutation:
+    name: Mutation score (advisory)
+    runs-on: ubuntu-24.04
+    # ~130 mutants, each its own pytest run, with survivors re-run against the full
+    # unit tier to confirm them.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      # Do NOT use `uv pip install --system`: ubuntu-24.04's interpreter is PEP 668
+      # "externally managed" and uv refuses it outright. setup-uv already creates and
+      # activates a venv when given `python-version`, so normally this only has to put
+      # it on PATH for later `make`/`pytest` steps. The fallback covers the case where
+      # setup-uv did not create one.
+      - name: Ensure the uv environment is on PATH
+        run: |
+          set -euo pipefail
+          if [ -z "${VIRTUAL_ENV:-}" ]; then
+            uv venv
+            VIRTUAL_ENV="$PWD/.venv"
+            echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> "$GITHUB_ENV"
+          fi
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
+      - run: uv pip install -e .[dev]
+
+      # REPORTED, NEVER GATED. `make mutation` always exits 0 by design: equivalent
+      # mutants have not been hand-classified, so the score understates the truth by an
+      # unknown margin and is not a threshold anything should bind against. It runs
+      # here, on the weekly timer, rather than on PRs - the same reasoning that keeps
+      # adVNTR off the merge path, and for the same reason: an hour of runner time for
+      # a number nobody blocks on.
+      - name: Run the mutation sweep
+        run: make mutation
+
+      # The score in the run summary, so a trend is visible without opening the log.
+      - name: Publish the score to the run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f docs/development/mutation-testing.md ]; then
+            sed -n '/^## Result/,/^## Reproducing/p' docs/development/mutation-testing.md \
+              | sed '/^## Reproducing/d' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The mutation sweep produced no report." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The regenerated page, so a maintainer can diff it against the committed one and
+      # see which mutants started or stopped surviving.
+      - name: Upload the mutation report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: mutation-report
+          path: docs/development/mutation-testing.md
+          if-no-files-found: warn
+
   scheduled-summary:
     name: Scheduled test summary
+    # `mutation` is deliberately NOT a dependency. It reports a number nobody blocks on,
+    # so it must not be able to turn this run red - that is the whole point of keeping
+    # it advisory. Add it here only if the score ever becomes a gate.
     needs: [integration, docker]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

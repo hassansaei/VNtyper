@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -34,6 +34,7 @@ help:
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
 	@echo "  make patch-coverage          - Coverage of changed lines only (CI gate)"
+	@echo "  make mutation                - Advisory mutation score (not gated)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
 	@echo "  make test-integration-parallel - Run integration tests in parallel"
 	@echo "  make test-advntr             - Run adVNTR test only"
@@ -237,6 +238,46 @@ patch-coverage:
 		--compare-branch=$(PATCH_COVERAGE_BASE) \
 		--fail-under=$(PATCH_COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Patch coverage >= $(PATCH_COVERAGE_TARGET)%$(RESET)"
+
+# Advisory mutation score over the five pure-decision modules.
+#
+# ADVISORY. Nothing gates on it and nothing should: equivalent mutants have not been
+# hand-classified, so the printed score understates the truth by an unknown margin.
+# It answers the question coverage cannot - "would a test have NOTICED if this line
+# were wrong?" - which is the question that matters for a tool whose failure mode is a
+# silently wrong genotype rather than a crash. confidence_assignment.py once had 100%
+# line coverage and a 21% mutation score.
+#
+# PYTHONDONTWRITEBYTECODE=1 IS LOAD-BEARING. DO NOT REMOVE IT.
+#
+# Mutations here are mostly byte-length preserving (`<` -> `>`, `and` -> `or`) and
+# CPython validates a cached .pyc against the source's (mtime, size) pair, with mtime
+# at one-second granularity. A mutant written in the same second as the file it
+# replaces is therefore indistinguishable from it to the cache validator: the
+# interpreter loads the stale .pyc and runs the UNMUTATED code, every mutant "survives"
+# and the score is fiction. Two sweeps on this branch were exactly that before it was
+# found. scripts/mutation_test.py additionally deletes every __pycache__ before it
+# starts - the env var stops new caches, the deletion stops old ones, and both are
+# needed. The full explanation is in that file's module docstring.
+#
+# Takes ~15-30 min: every mutant is a separate pytest run. Use --module to scope it.
+mutation:
+	@echo "$(BLUE)Running advisory mutation testing (not a gate)...$(RESET)"
+	PYTHONDONTWRITEBYTECODE=1 python scripts/mutation_test.py \
+		--output docs/development/mutation-testing.md \
+		--results-json docs/development/mutation-results.json
+	@echo "$(GREEN)✓ Mutation run complete (advisory - nothing gates on this)$(RESET)"
+
+# Re-render the page from the last sweep's saved results. Use this after adding an
+# EQUIVALENT_MUTANTS entry to scripts/mutation_test.py: classifying a survivor changes
+# how the measurement is PRESENTED, not the measurement, so re-running the 15-30 min
+# sweep to pick it up would be waste. Seconds instead.
+mutation-render:
+	@echo "$(BLUE)Re-rendering the mutation page from saved results...$(RESET)"
+	python scripts/mutation_test.py \
+		--render-only docs/development/mutation-results.json \
+		--output docs/development/mutation-testing.md
+	@echo "$(GREEN)✓ Mutation page re-rendered$(RESET)"
 
 test-integration:
 	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"

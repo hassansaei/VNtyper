@@ -42,6 +42,7 @@ Neither exists — use the commands above.
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
 | Coverage of changed lines | `make patch-coverage` |
+| Advisory mutation score | `make mutation` |
 | Integration tests (needs 1.1 GB data) | `make test-integration` |
 | Full gate incl. integration | `make check-full` |
 | Docs preview | `make docs-serve` |
@@ -146,6 +147,16 @@ It scores against the **merge base**, so commits landing on `main` while your PR
 are never charged to you. A PR that only deletes code, only touches docs, or changes no
 measured Python has nothing to score and passes. The CI job checks out with
 `fetch-depth: 0` because finding a merge base needs real history.
+
+**A covered line is not a tested line.** Coverage records that a line *ran*, not that
+anything would have failed had it been wrong — and this codebase's characteristic bug is
+a silently wrong call, not a crash. `make mutation` measures the difference by breaking
+the code on purpose and checking whether the suite notices; `confidence_assignment.py`
+once scored 100% line coverage and 21% on that measure. It is **advisory and never
+gated** (equivalent mutants are not hand-classified), it runs on the weekly schedule, and
+the current score with every surviving mutant named is in
+`docs/development/mutation-testing.md`. When you add tests to clear the patch gate, write
+them to kill mutants — assert on the values, not just that the call returned.
 
 `make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
 coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
