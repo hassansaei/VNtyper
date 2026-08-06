@@ -44,6 +44,28 @@ COHORT_KEY_PREFIX = "cohort:"
 # Each claimed alias gets one key, whose existence *is* the claim.
 ALIAS_KEY_PREFIX = "cohort-alias:"
 
+# The two cohort read routes are GETs, so their credential used to have nowhere
+# to travel but the query string -- part of the request line, and so written to
+# every server and proxy access log on the path, kept in browser history and
+# sent on in ``Referer`` headers. This header carries it instead. The query
+# parameter still works and is documented as deprecated rather than removed:
+# the web UI and the ``vntyper online`` CLI subcommand both use it. The three
+# names below live here, beside ``preferred_passphrase``, so the rule and the
+# words that describe it to a client author cannot drift apart.
+COHORT_PASSPHRASE_HEADER = "X-Cohort-Passphrase"
+
+PASSPHRASE_HEADER_DESCRIPTION = (
+    "Passphrase protecting the cohort. Preferred over the `passphrase` query "
+    "parameter, and used instead of it when both are supplied."
+)
+
+PASSPHRASE_QUERY_DESCRIPTION = (
+    "Passphrase protecting the cohort. Deprecated: a query string is recorded "
+    f"in access logs and browser history, so send the `{COHORT_PASSPHRASE_HEADER}` "
+    "request header instead. Still accepted, and still required if the header is "
+    "not sent."
+)
+
 
 def cohort_key(cohort_id: str) -> str:
     """Build the Redis key holding a cohort's metadata.

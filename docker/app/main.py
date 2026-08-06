@@ -32,7 +32,15 @@ from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from .cohorts import cohort_job_ids, create_cohort_record, preferred_passphrase, resolve_cohort
+from .cohorts import (
+    COHORT_PASSPHRASE_HEADER,
+    PASSPHRASE_HEADER_DESCRIPTION,
+    PASSPHRASE_QUERY_DESCRIPTION,
+    cohort_job_ids,
+    create_cohort_record,
+    preferred_passphrase,
+    resolve_cohort,
+)
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
 from .identifiers import is_job_id
 from .job_workspace import job_workspace
@@ -644,27 +652,6 @@ def health_check():
     - **status**: A message indicating the health status of the API.
     """
     return {"status": "ok"}
-
-
-# The two cohort read routes are GETs, so their credential used to have nowhere
-# to travel but the query string -- which is part of the request line, and so is
-# written to server and proxy access logs, kept in browser history and sent on
-# in `Referer` headers. The header below carries it instead. The query parameter
-# still works and is documented as deprecated rather than removed: the web UI
-# and the `vntyper online` CLI subcommand both use it.
-COHORT_PASSPHRASE_HEADER = "X-Cohort-Passphrase"
-
-PASSPHRASE_HEADER_DESCRIPTION = (
-    "Passphrase protecting the cohort. Preferred over the `passphrase` query "
-    "parameter, and used instead of it when both are supplied."
-)
-
-PASSPHRASE_QUERY_DESCRIPTION = (
-    "Passphrase protecting the cohort. Deprecated: a query string is recorded "
-    f"in access logs and browser history, so send the `{COHORT_PASSPHRASE_HEADER}` "
-    "request header instead. Still accepted, and still required if the header is "
-    "not sent."
-)
 
 
 class JobQueueResponse(BaseModel):
