@@ -16,17 +16,31 @@ def run_command(command, log_file, critical=False, cwd=None):
     """
     Helper function to run a shell command and log its output.
 
+    The command is executed by bash via ``shell=True`` with
+    ``executable="/bin/bash"``. That is deliberate and load-bearing: the CRAM
+    unmapped-read path builds a command using bash process substitution, which no
+    ``shell=False`` argv list can express. Callers are responsible for quoting the
+    values they interpolate into ``command``.
+
+    stdout and stderr are merged and streamed to ``log_file`` as the child runs. A
+    non-zero exit status is logged at ERROR either way, so a failure is visible at the
+    default log level; ``critical`` only decides whether it also aborts the pipeline.
+
     Args:
-        command (str): The command to run.
+        command (str): The command to run, as a single shell string.
         log_file (str): The path to the log file where stdout and stderr will be logged.
         critical (bool): If True, the pipeline will stop if the command fails.
         cwd (str, optional): The working directory to execute the command in.
             If None, the subprocess will inherit the current working directory.
             Setting this explicitly is important for tools like Java that need to
-            determine the working directory during initialization.
+            determine the working directory during initialization, and because every
+            tool and reference path in ``config.json`` is relative to it.
 
     Returns:
-        bool: True if the command succeeded, False otherwise.
+        bool: True if the command succeeded, False if it failed and ``critical`` is False.
+
+    Raises:
+        RuntimeError: If the command exits non-zero and ``critical`` is True.
     """
     logger.debug(f"Running command: {command}")
     if cwd is not None:
@@ -48,7 +62,10 @@ def run_command(command, log_file, critical=False, cwd=None):
         process.wait()
 
         if process.returncode != 0:
-            logger.debug(f"Command failed: {command}")
+            # ERROR, not DEBUG: a non-critical failure returns False and the pipeline
+            # carries on, so this line is the only signal the stage did not work. At
+            # the default INFO level a DEBUG log here produced no output at all.
+            logger.error(f"Command failed: {command}")
             if critical:
                 raise RuntimeError(f"Critical command failed: {command}")
             return False
