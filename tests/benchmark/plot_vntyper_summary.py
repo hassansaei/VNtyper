@@ -11,8 +11,11 @@ import argparse
 import ast
 import logging
 import os
-import pandas as pd
+
 import matplotlib.pyplot as plt
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args():
@@ -125,10 +128,7 @@ def build_long_form(df, metrics, module_label, value_column="value", color_func=
     """
     long_rows = []
     for _, row in df.iterrows():
-        if color_func is not None:
-            color_str = color_func(row)
-        else:
-            color_str = confidence_to_color(row.get("confidence", ""))
+        color_str = color_func(row) if color_func is not None else confidence_to_color(row.get("confidence", ""))
         try:
             y_val = float(row.get(value_column, float("nan")))
         except (ValueError, TypeError):
@@ -179,6 +179,8 @@ def build_long_form(df, metrics, module_label, value_column="value", color_func=
 def main():
     args = parse_args()
 
+    # Standalone plotting entry point, not part of the `vntyper` package, so it
+    # configures the root logger itself; `logger` above propagates into it.
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -189,10 +191,10 @@ def main():
     try:
         df = pd.read_csv(args.input_csv)
     except Exception as ex:
-        logging.error(f"Could not read CSV {args.input_csv}: {ex}")
+        logger.error(f"Could not read CSV {args.input_csv}: {ex}")
         return
     if df.empty:
-        logging.warning(f"{args.input_csv} is empty, no plot to generate.")
+        logger.warning(f"{args.input_csv} is empty, no plot to generate.")
         return
 
     # 2) For rows with negative confidence, fill NaNs for selected metrics with 0.0.
@@ -216,7 +218,10 @@ def main():
         df["advntr_NumberOfSupportingReads"],
         df["advntr_MeanCoverage"],
         df["advntr_Pvalue"],
-    ) = zip(*df.apply(lambda row: parse_advntr_result(row.get("advntr_result", "")), axis=1))
+    ) = zip(
+        *df.apply(lambda row: parse_advntr_result(row.get("advntr_result", "")), axis=1),
+        strict=True,
+    )
     # 5) Compute a new column "advntr_call" for advntr results.
     df["advntr_call"] = df.apply(get_advntr_call, axis=1)
 
@@ -243,7 +248,7 @@ def main():
     )
 
     if vntyper_long.empty and advntr_long.empty:
-        logging.warning("No numeric data found to plot. Exiting.")
+        logger.warning("No numeric data found to plot. Exiting.")
         return
 
     def plot_module(long_df, module_label):
@@ -364,18 +369,18 @@ def main():
         base, ext = os.path.splitext(args.output_png)
         output_file = f"{base}_{module_label.replace(' ', '_')}{ext}"
         plt.savefig(output_file, dpi=300)
-        logging.info(f"Plot saved to {output_file}")
+        logger.info(f"Plot saved to {output_file}")
         plt.close(fig)
 
     if not vntyper_long.empty:
         plot_module(vntyper_long, "vntyper kestrel")
     else:
-        logging.info("No vntyper kestrel data available to plot.")
+        logger.info("No vntyper kestrel data available to plot.")
 
     if not advntr_long.empty:
         plot_module(advntr_long, "advntr")
     else:
-        logging.info("No advntr data available to plot.")
+        logger.info("No advntr data available to plot.")
 
 
 if __name__ == "__main__":

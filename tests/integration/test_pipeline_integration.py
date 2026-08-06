@@ -220,8 +220,7 @@ def download_file(url: str, dest_path: Path):
     resp.raise_for_status()
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(dest_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=65536):
-            f.write(chunk)
+        f.writelines(resp.iter_content(chunk_size=65536))
 
 
 #
@@ -275,7 +274,7 @@ def test_fastq_input(tmp_path, test_config, ensure_test_data, fastq_case):
 
     logger.info("Command to execute: %s", " ".join(command))
     # 3) Execute the CLI command
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
 
     # Log output for debugging
     logger.info("Return code: %d", result.returncode)
@@ -352,7 +351,7 @@ def test_bam_input_with_kestrel_checks(tmp_path, test_config, ensure_test_data, 
     ] + cli_options
 
     logger.info("Command to execute: %s", " ".join(command))
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
 
     # Log outputs
     logger.info("Return code: %d", result.returncode)
@@ -574,7 +573,7 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
         command.extend(extra_cli_options)
 
         logger.info("Command to execute: %s", " ".join(command))
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
 
         logger.info("Return code: %d", result.returncode)
         logger.info("STDOUT:\n%s", result.stdout)

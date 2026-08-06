@@ -17,7 +17,7 @@ class TestGRChSupport:
     def setup_method(self):
         """Load config for each test."""
         config_path = Path("vntyper/config.json")
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             self.config = json.load(f)
 
     def test_detect_grch37_from_contigs(self):

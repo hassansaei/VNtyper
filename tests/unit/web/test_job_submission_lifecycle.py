@@ -101,6 +101,9 @@ def test_workspace_removes_everything_it_created_when_the_body_raises(tmp_path: 
     Args:
         tmp_path: Scratch directory standing in for the volume.
     """
+    # noqa: SIM117 - kept nested on purpose. The point of the test is that the
+    # workspace's teardown runs *while* the exception propagates, so pytest.raises has
+    # to visibly wrap the whole `with job_workspace(...)` block, teardown included.
     with pytest.raises(RuntimeError, match="refused"):  # noqa: SIM117
         with job_workspace(str(tmp_path / "input"), str(tmp_path / "output"), "job-1") as (job_input, _):
             (Path(job_input) / BAM_NAME).write_bytes(BAM_BYTES)

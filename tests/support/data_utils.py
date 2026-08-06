@@ -163,15 +163,13 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
 
         if missing_files:
             error_msg.append(f"\n\nMissing files ({len(missing_files)}):")
-            for f in missing_files[:10]:  # Show first 10
-                error_msg.append(f"  - {f}")
+            error_msg.extend(f"  - {f}" for f in missing_files[:10])  # Show first 10
             if len(missing_files) > 10:
                 error_msg.append(f"  ... and {len(missing_files) - 10} more")
 
         if mismatched_files:
             error_msg.append(f"\n\nFiles with MD5 mismatch ({len(mismatched_files)}):")
-            for f in mismatched_files[:10]:  # Show first 10
-                error_msg.append(f"  - {f}")
+            error_msg.extend(f"  - {f}" for f in mismatched_files[:10])  # Show first 10
             if len(mismatched_files) > 10:
                 error_msg.append(f"  ... and {len(mismatched_files) - 10} more")
 
@@ -260,8 +258,7 @@ def ensure_test_data_downloaded(test_config: dict) -> None:
 
                         # Remove common prefix from the path
                         member_path = member.filename
-                        if member_path.startswith(common_prefix):
-                            member_path = member_path[len(common_prefix) :]
+                        member_path = member_path.removeprefix(common_prefix)
 
                         # Skip files that don't have the prefix (e.g., README.md at root)
                         if not member_path or member_path == member.filename:

@@ -14,14 +14,14 @@ Following principles:
 import csv
 import math
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 # ============================================================================
 # Parsing Utilities
 # ============================================================================
 
 
-def parse_int_allow_none(value: str) -> Optional[int]:
+def parse_int_allow_none(value: str) -> int | None:
     """
     Parse string to int, return None if value is None/null/empty.
 
@@ -45,7 +45,7 @@ def parse_int_allow_none(value: str) -> Optional[int]:
         return None
 
 
-def parse_float_allow_none(value: str) -> Optional[float]:
+def parse_float_allow_none(value: str) -> float | None:
     """
     Parse string to float, return None if value is None/null/empty.
 
@@ -111,8 +111,8 @@ def assert_required_files(output_dir: Path, required_files: list) -> None:
 
 
 def assert_value_with_tolerance(
-    actual: Union[int, float, None],
-    expected: Union[int, float, str, dict[str, Any]],
+    actual: int | float | None,
+    expected: int | float | str | dict[str, Any],
     field_name: str,
     default_tolerance_pct: float = 5.0,
 ) -> None:
@@ -172,7 +172,7 @@ def assert_value_with_tolerance(
 
 def assert_log10_tolerance(
     actual: float,
-    expected: Union[float, dict[str, Any]],
+    expected: float | dict[str, Any],
     field_name: str,
     default_log10_tol: float = 2.0,
 ) -> None:

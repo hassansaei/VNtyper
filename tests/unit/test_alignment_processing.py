@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # tests/unit/test_alignment_processing.py
 
 """

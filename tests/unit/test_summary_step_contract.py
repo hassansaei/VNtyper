@@ -49,7 +49,7 @@ def _recorded_step_names() -> set[str]:
 
 
 def test_step_names_are_exactly_the_five_matched_literals() -> None:
-    assert summary_steps.STEP_NAMES == frozenset(
+    expected = frozenset(
         {
             "BAM Header Parsing",
             "Coverage Calculation",
@@ -58,6 +58,7 @@ def test_step_names_are_exactly_the_five_matched_literals() -> None:
             "Cross-Match Variant Comparison",
         }
     )
+    assert expected == summary_steps.STEP_NAMES
 
 
 def test_get_step_data_returns_rows_for_a_present_step() -> None:

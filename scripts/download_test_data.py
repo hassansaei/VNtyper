@@ -197,8 +197,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
                 member_path = member.filename
                 original_path = member_path  # Keep for logging
 
-                if member_path.startswith(common_prefix):
-                    member_path = member_path[len(common_prefix) :]
+                member_path = member_path.removeprefix(common_prefix)
 
                 # Skip files not in dominant directory
                 if not member_path or member_path == member.filename:
