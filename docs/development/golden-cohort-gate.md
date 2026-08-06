@@ -140,6 +140,16 @@ to an identical 10-column row on both sides. The crashing input class (a compoun
 containing `LEN`) does not occur in this cohort, so the fix is confirmed
 non-regressive here but not exercised on the defect itself.
 
+**Follow-up.** This gate could not see it, but `a7c3d9e` was *not* byte-identical off the
+cohort: replacing the greedy `(LEN.*)` with a bounded `(LEN\d+)` changed `Insertion_len`
+for compound states whose `LEN` is followed by a further `&` part, and therefore changed
+which rows survive the frameshift filter — a reported-genotype change for inputs that
+never crashed. Restored to crash-only in a later commit on this branch by keeping the
+greedy pattern and bounding the *split* instead; a differential sweep of 2380 probes
+against `a7c3d9e^` shows 572/572 previously non-crashing inputs identical. The underlying
+"what should `Insertion_len` be for a compound call" question is filed for the domain
+owner as **B8** in [CI/CD follow-ups](ci-followups.md).
+
 ### D6 — pipefail and CRAM samtools (`331ea95`, no effect)
 
 Five cases ran without `--fast-mode`, taking the unmapped and partially-mapped read path
