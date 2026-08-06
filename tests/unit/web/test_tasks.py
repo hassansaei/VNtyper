@@ -103,21 +103,21 @@ def _job_kwargs(tmp_path: Path, bam_path: Path, job_id: str = "job-1", **overrid
     Returns:
         dict: Keyword arguments ready to hand to `run_vntyper_job.run(...)`.
     """
-    kwargs = dict(
-        bam_path=str(bam_path),
-        output_dir=str(tmp_path / "output" / job_id),
-        thread=1,
-        reference_assembly="hg38",
-        fast_mode=False,
-        keep_intermediates=False,
-        archive_results=False,
-        email=None,
-        cohort_key=None,
-        client_ip="127.0.0.1",
-        user_agent="pytest",
-        advntr_mode=False,
-        index_path=None,
-    )
+    kwargs = {
+        "bam_path": str(bam_path),
+        "output_dir": str(tmp_path / "output" / job_id),
+        "thread": 1,
+        "reference_assembly": "hg38",
+        "fast_mode": False,
+        "keep_intermediates": False,
+        "archive_results": False,
+        "email": None,
+        "cohort_key": None,
+        "client_ip": "127.0.0.1",
+        "user_agent": "pytest",
+        "advntr_mode": False,
+        "index_path": None,
+    }
     kwargs.update(overrides)
     return kwargs
 
@@ -172,8 +172,13 @@ def _invoke_cohort_job(tasks, **kwargs) -> None:
         tasks.run_cohort_analysis_job.pop_request()
 
 
-def _subprocess_stub(monkeypatch: pytest.MonkeyPatch, tasks, *, index_error: Exception | None = None,
-                      pipeline_error: Exception | None = None) -> list:
+def _subprocess_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    tasks,
+    *,
+    index_error: Exception | None = None,
+    pipeline_error: Exception | None = None,
+) -> list:
     """Replace `tasks.subprocess.run` with a recorder that can be told to fail.
 
     Standing in for `samtools index`, it also writes the `.bai` file that
@@ -211,7 +216,9 @@ def _subprocess_stub(monkeypatch: pytest.MonkeyPatch, tasks, *, index_error: Exc
 # ---------------------------------------------------------------------------
 
 
-def test_send_email_task_sends_and_logs_on_success(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_send_email_task_sends_and_logs_on_success(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A successful send calls `send_email` with the given fields and logs it.
 
     Args:
@@ -323,7 +330,7 @@ def test_index_generation_failure_stops_the_job_before_the_pipeline_runs(
 
     assert commands == [["samtools", "index", str(bam_path)]], "the pipeline must not run after the index step fails"
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
-    no_email_task.delay.assert_not_called(), "only a pipeline failure emails; an index failure is not a pipeline run"
+    assert no_email_task.delay.call_count == 0, "only a pipeline failure emails; an index failure is not a pipeline run"
 
 
 def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
@@ -776,6 +783,7 @@ def test_cleanup_logs_but_does_not_raise_when_removing_the_input_directory_fails
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))  # must not raise
 
+    assert job_input_dir.exists(), "the removal genuinely failed; the directory is still there"
     assert f"Error deleting input directory {job_input_dir}: directory busy" in caplog.text
 
 
@@ -966,4 +974,5 @@ def test_cohort_analysis_logs_but_does_not_raise_when_removing_the_empty_output_
 
     _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
 
+    assert output_dir.exists(), "the removal genuinely failed; the directory is still there"
     assert f"Error deleting directory {output_dir}: directory busy" in caplog.text
