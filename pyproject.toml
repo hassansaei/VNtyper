@@ -385,13 +385,20 @@ show_missing = true
 # The TARGET is 80% (COVERAGE_TARGET in the Makefile). Falling short of the target is
 # a warning, not a failure - see scripts/coverage_gate.py.
 #
-# Four modules remain over the 650-LOC limit: docker/app/main.py (1151),
-# install_references.py (901), kestrel_genotyping.py (843) and pipeline.py (721). Size
-# alone is not what holds the total down - as measured at this floor raise, main.py is
-# at 88.8% and pipeline.py at 68.5%. The gap is concentrated in the two that are both
-# oversized and untested, install_references.py at 26.0% and kestrel_genotyping.py at
-# 41.9% (see "Changing existing code" in AGENTS.md). Those percentages are a snapshot
-# taken when this floor was set, not a live claim.
+# Four modules remain over the 650-LOC limit, measured at ec67fff:
+# docker/app/main.py (1151, 88.77%), install_references.py (901, 26.04%),
+# kestrel_genotyping.py (877, 51.67%) and pipeline.py (721, 68.48%).
+#
+# Size alone does not predict coverage, and this comment previously implied it did.
+# main.py is the largest file in the repository and one of the best covered; only
+# install_references.py still fits the old "oversized therefore untested" rule. What
+# predicts coverage here is coupling to I/O -- a function that cannot be called without
+# a filesystem does not get a unit test, whatever its file's length. See "Changing
+# existing code" in AGENTS.md, which carries the same table and the same argument.
+#
+# These percentages are a snapshot taken at the commit named above, not a live claim.
+# An earlier revision of this comment quoted kestrel_genotyping.py at 843 LOC / 41.9%,
+# figures already one commit stale when they were written.
 fail_under = 80
 exclude_also = [
     "if TYPE_CHECKING:",

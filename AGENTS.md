@@ -68,16 +68,29 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 
 ## Layout
 
-- `vntyper/cli.py` — argparse CLI; subcommands `pipeline`, `report`, `cohort`,
-  `install-references`, `online`. Sole place logging is configured.
+- `vntyper/cli.py` — argparse entry point; subcommands `pipeline`, `report`, `cohort`,
+  `install-references`, `online`. Sole place logging is configured. The parser lives in
+  `cli_parser.py`, the subcommand bodies in `cli_handlers.py`, and `report` in
+  `cli_report.py`.
 - `vntyper/scripts/pipeline.py` — `run_pipeline()`, orchestrates every stage.
 - `vntyper/scripts/` — stage modules: `fastq_bam_processing`, `alignment_processing`,
   `kestrel_genotyping`, `variant_parsing`, `scoring`, `confidence_assignment`,
   `motif_processing`, `flagging`, `summary`, `cross_match`, `generate_report`,
   `cohort_summary`, `reference_registry`, `region_utils`, `chromosome_utils`.
+- Pure-logic modules extracted from the two largest stage files. They hold the decisions;
+  the file they came from keeps the I/O:
+  - `motif_decisions.py` — the motif half/exclusion/GG-allowlist rules, split out of
+    `motif_processing.py` (#195).
+  - `cohort_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
+    `cohort_exports.py` — the rule table, per-row categorisation, display tables, sample
+    discovery and export writers, split out of `cohort_summary.py`.
+  All six are fully annotated and at or near 100% branch coverage. Put new pure logic
+  there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
-  package and is not covered by `make lint` / `make type-check`.
+  package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
+  `mypy vntyper/ docker/app/` (#194). `scripts/` is linted and formatted but is still in
+  no mypy target — see trap 16.
 - `vntyper/dependencies/kestrel/` — vendored JARs, never hand-edit.
 
 ## Code style
@@ -131,9 +144,22 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 80** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+
+**The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
+by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
+number strictly harder to move than the statement-only figure the older floors were set
+against. Measured on the same suite: **80.24% branch-inclusive, 80.77% statement-only**.
+So deleting `branch = true` *raises* the reported total while covering strictly less —
+the ratchet cannot catch that regression, because the number moves the wrong way, and
+`tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing
+that can.
+
+The floor and the target now read the same number, and that is deliberate rather than a
+merge accident: they measure the same figure for different purposes, so the target stays
+a warning and keeps its headroom above the gate. Do not collapse them.
 
 **The patch gate is what makes this rule enforceable.** The hard floor is an average over
 ~5000 statements, so a PR can add a hundred untested lines and move it by less than a
@@ -153,10 +179,20 @@ anything would have failed had it been wrong — and this codebase's characteris
 a silently wrong call, not a crash. `make mutation` measures the difference by breaking
 the code on purpose and checking whether the suite notices; `confidence_assignment.py`
 once scored 100% line coverage and 21% on that measure. It is **advisory and never
-gated** (equivalent mutants are not hand-classified), it runs on the weekly schedule, and
-the current score with every surviving mutant named is in
-`docs/development/mutation-testing.md`. When you add tests to clear the patch gate, write
-them to kill mutants — assert on the values, not just that the call returned.
+gated**, it runs on the weekly schedule, and the current score with every surviving
+mutant named is in `docs/development/mutation-testing.md`. That page *does* hand-classify
+the equivalent mutants — `[E]` marks one, with the reason beside it, and the headline
+score is quoted both including and excluding them. Read the reason before you write a
+test to kill an `[E]`: it cannot be killed, and the honest response is usually to delete
+the code that makes it equivalent (the six `.get()` calibration defaults in
+`confidence_assignment.py` were removed for exactly that reason in #184).
+
+That page is **machine-generated** by `scripts/mutation_test.py`. Editing the Markdown
+directly is silently reverted by the next `make mutation-render`; change the generator and
+prove the round trip leaves the committed file byte-identical.
+
+When you add tests to clear the patch gate, write them to kill mutants — assert on the
+values, not just that the call returned.
 
 `make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
 coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
@@ -168,25 +204,50 @@ round to an integer, so a true 25.68% displays as `26%`; setting the floor from 
 CI fail on the very run that produced the number. The gate prints the precise figure and
 the exact line to paste.
 
-**2. Keep files under ~650 LOC.** This is a real constraint here, not style preference.
-Measured on this repo, the correlation is total:
+**2. Keep files under ~650 LOC.** This is a real constraint here, but the reason is not
+the line count. **Snapshot, 2026-08-06**, `wc -l` and the branch-inclusive unit-tier
+figure at the tip of the `#181–#197` follow-up branch. Re-measure before quoting it — the
+table that used to sit here has been wrong twice, once on the numbers and once on the
+conclusion drawn from them:
 
-| File | LOC | Unit coverage |
+| File | LOC | Unit coverage (branch-inclusive) |
 | --- | --- | --- |
-| `cohort_summary.py` | 856 | 0% |
-| `cli.py` | 700 | 0% |
-| `generate_report.py` | 861 | 4% |
-| `pipeline.py` | 735 | 10% |
-| `install_references.py` | 901 | 24% |
-| `kestrel_genotyping.py` | 835 | 28% |
-| `region_utils.py` | 246 | 98% |
-| `scoring.py` | 176 | 100% |
-| `confidence_assignment.py` | 190 | 100% |
+| `docker/app/main.py` | 1151 | 88.8% |
+| `install_references.py` | 901 | 26.0% |
+| `kestrel_genotyping.py` | 877 | 51.7% |
+| `pipeline.py` | 721 | 68.5% |
+| `fastq_bam_processing.py` | 612 | 60.7% |
+| `generate_report.py` | 574 | 64.8% |
+| `motif_processing.py` | 534 | 86.3% |
+| `docker/app/tasks.py` | 531 | 98.5% |
+| `cohort_summary.py` | 456 | 84.2% |
+| `region_utils.py` | 334 | 98.0% |
+| `confidence_assignment.py` | 194 | 100% |
+| `cli.py` | 173 | 85.9% |
+| `scoring.py` | 166 | 100% |
 
-Every module over 650 lines is under 30% covered; every well-covered module is under 650.
-Oversized files here are oversized because they fuse I/O, orchestration and pure logic
-into functions that cannot be called without a filesystem — which is exactly what makes
-them untestable. Splitting them is how the coverage gets written.
+**The old claim that "every module over 650 lines is under 30% covered" is false, and so
+is its converse.** `docker/app/main.py` is the largest file in the repository at 1151
+lines and is 88.8% covered; `pipeline.py` is 721 lines at 68.5%; `kestrel_genotyping.py`
+is 877 lines at 51.7%. Only `install_references.py` still fits the old rule.
+
+What the numbers actually say is that **coupling to I/O predicts coverage and size does
+not.** `main.py` is large but is a stack of thin FastAPI route handlers, every one
+callable through `TestClient` with nothing else running — so it is large *and* testable.
+`install_references.py` is the same size and downloads, unpacks and checksums files, so
+its logic cannot be reached without a network and a filesystem, and it sits at 26% for
+that reason rather than for its length. `docker/app/tasks.py` is 531 lines of Celery task
+at 98.5%; `cohort_summary.py` was 911 lines at 38% and is 456 at 84.2% — not because 456
+is under some threshold, but because the split moved the decisions into
+`cohort_rules`/`cohort_categories`/`cohort_tables`/`cohort_inputs`/`cohort_exports`, all
+at 100%, and left the matplotlib and Jinja2 calls behind.
+
+So keep the ~650 line guideline, but keep it for the right reason: **a file grows past
+650 lines here by fusing I/O, orchestration and pure logic into functions that cannot be
+called without a filesystem.** Size is the symptom you can measure cheaply; fusion is the
+cause. A large file that is already decoupled does not need splitting, and a 300-line
+file that shells out in the middle of its only public function is still untestable.
+Splitting is how the coverage gets written — see rule 3 for which part to split.
 
 **3. Refactor the part you touch.** When you edit inside a file over the limit, extract
 the region you are working on into a focused module rather than growing the file further.
@@ -195,9 +256,12 @@ I/O behind — the pure part is the part that gets a test. `scoring.py`,
 `confidence_assignment.py` and `region_utils.py` are the shape to copy. Do not attempt a
 whole-file rewrite as a side quest: split out the region under change, test it, move on.
 
-Known offenders, worst first: `docker/app/main.py` (1081), `install_references.py` (901),
-`generate_report.py` (861), `cohort_summary.py` (856), `kestrel_genotyping.py` (835),
-`pipeline.py` (735), `cli.py` (700), `tests/integration/test_pipeline_integration.py` (667).
+Still over the limit, worst first (2026-08-06): `docker/app/main.py` (1151),
+`install_references.py` (901), `kestrel_genotyping.py` (877), `pipeline.py` (721). The
+first two are the ones worth splitting next, and only one of them is a coverage problem.
+`generate_report.py` (574), `cohort_summary.py` (456), `cli.py` (173) and
+`tests/integration/test_pipeline_integration.py` (243) have all come back under the
+limit.
 
 ## Testing
 
@@ -245,7 +309,7 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
 - PRs are **not** squashed — every commit becomes permanent history. Keep them clean.
 - Copilot and Sourcery AI review PRs. The established pattern is a follow-up commit
   addressing their comments, not a force-push.
-- CI gates on PRs: `make lint`, `make type-check`, `make test-unit` across 3.10–3.13,
+- CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` across 3.10–3.13,
   plus a Docker image build and quick Docker tests. Formatting is *not* gated in CI —
   run `make format-check` yourself.
 
@@ -331,6 +395,15 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
     files no longer *conflict* (`pyproject.toml` pins `numpy>=1.26.0`, the env installs
     `numpy=2.0.2`, which satisfies it) — but they are still resolved by two different
     solvers, so `--no-deps` stays.
+16. **`scripts/` is linted and formatted but is not type-checked.** `RUFF_PATHS` covers
+    `vntyper/ docker/app/ tests/ scripts/`, but `make type-check-all` runs
+    `mypy vntyper/ docker/app/` and then `mypy vntyper/ tests/` — `scripts/` appears in
+    neither, so nothing under it is type-checked by any gate. That is now ~3200 lines
+    including the golden-cohort harness, the coverage gate and the mutation runner.
+    Adding `scripts/` to the first mypy invocation is a one-line change and currently
+    surfaces exactly one pre-existing error
+    (`scripts/download_test_data.py:147: Need type annotation for "dir_counts"`);
+    fix that first, then widen the target.
 
 ## Never
 
