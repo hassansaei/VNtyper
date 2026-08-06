@@ -81,7 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--extra-modules",
         action="append",
         default=[],
-        help="Optional extra modules to include (e.g., advntr, shark). Can be repeated multiple times.",
+        help=(
+            "Optional extra modules to include: advntr, shark. Can be repeated, or given as a "
+            "comma-separated list ('--extra-modules advntr,shark'). Unknown names are rejected."
+        ),
     )
     parser_pipeline.add_argument("--fastq1", type=str, help="Path to the first FASTQ file.")
     parser_pipeline.add_argument("--fastq2", type=str, help="Path to the second FASTQ file.")

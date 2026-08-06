@@ -15,6 +15,7 @@ negative genotype. These tests drive the real handler with ``run_pipeline`` stub
 assert on what it was asked to do.
 """
 
+import ast
 import inspect
 import logging
 from pathlib import Path
@@ -22,7 +23,7 @@ from unittest import mock
 
 import pytest
 
-from vntyper.scripts import cli_handlers
+from vntyper.scripts import cli_handlers, pipeline
 from vntyper.scripts.artifact_names import PIPELINE_BASENAME
 from vntyper.scripts.cli_parser import build_parser
 from vntyper.scripts.pipeline import run_pipeline
@@ -119,6 +120,160 @@ def test_a_configured_output_name_the_pipeline_cannot_honour_is_refused(tmp_path
     config = {**MINIMAL_CONFIG, "default_values": {**MINIMAL_CONFIG["default_values"], "output_name": "processed"}}
     with pytest.raises(ValueError, match="processed"):
         _run_handler(["pipeline", "-o", str(tmp_path), "--bam", "in.bam"], config=config)
+
+
+def _extra_modules_passed(argv: list[str]) -> list[str]:
+    """Run the handler and return the ``extra_modules`` ``run_pipeline`` received.
+
+    Args:
+        argv: Arguments after ``vntyper``, starting with ``pipeline``.
+
+    Returns:
+        list[str]: The forwarded module list.
+    """
+    stub = _run_handler(argv)
+    assert stub.call_count == 1, "the handler never reached run_pipeline"
+    return stub.call_args.kwargs["extra_modules"]
+
+
+# --------------------------------------------------------------------------------------
+# --extra-modules (defect D3)
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        pytest.param([], [], id="none"),
+        pytest.param(["--extra-modules", "advntr"], ["advntr"], id="single"),
+        pytest.param(["--extra-modules", "advntr,shark"], ["advntr", "shark"], id="comma_separated"),
+        pytest.param(
+            ["--extra-modules", "advntr", "--extra-modules", "shark"],
+            ["advntr", "shark"],
+            id="repeated_flag",
+        ),
+        pytest.param(["--extra-modules", " advntr , shark "], ["advntr", "shark"], id="padded"),
+        pytest.param(["--extra-modules", "advntr,,shark,"], ["advntr", "shark"], id="empty_fields"),
+        pytest.param(["--extra-modules", "AdVNTR,SHARK"], ["advntr", "shark"], id="mixed_case"),
+        pytest.param(
+            ["--extra-modules", "advntr,shark", "--extra-modules", "advntr"],
+            ["advntr", "shark"],
+            id="duplicates_collapsed",
+        ),
+        pytest.param(["--extra-modules", "shark,advntr"], ["shark", "advntr"], id="order_preserved"),
+    ],
+)
+def test_extra_modules_are_normalised(flags: list[str], expected: list[str], tmp_path: Path) -> None:
+    """``--extra-modules advntr,shark`` used to match neither name.
+
+    Membership was tested by exact string against the raw ``append`` list, so a
+    comma-separated value produced a silent Kestrel-only run with exit code 0.
+
+    Args:
+        flags: The ``--extra-modules`` arguments under test.
+        expected: The list ``run_pipeline`` must receive.
+        tmp_path: Pytest temporary directory.
+    """
+    argv = ["pipeline", "-o", str(tmp_path), "--fastq1", "r1.fq", "--fastq2", "r2.fq", *flags]
+    assert _extra_modules_passed(argv) == expected
+
+
+@pytest.mark.parametrize("name", ["advtnr", "sharkk", "kestrel", "adVNTR2"])
+def test_an_unknown_extra_module_is_refused(name: str, tmp_path: Path, caplog) -> None:
+    """A typo used to disable the module silently; now it names what it knows.
+
+    Args:
+        name: The misspelled module name.
+        tmp_path: Pytest temporary directory.
+        caplog: Pytest log capture.
+    """
+    argv = ["pipeline", "-o", str(tmp_path), "--fastq1", "r1.fq", "--fastq2", "r2.fq", "--extra-modules", name]
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError) as excinfo:
+        _run_handler(argv)
+
+    assert name in str(excinfo.value)
+    for known in cli_handlers.KNOWN_EXTRA_MODULES:
+        assert known in str(excinfo.value), "the error must name the modules that do exist"
+    assert any(record.levelno >= logging.ERROR and name in record.message for record in caplog.records)
+
+
+def test_an_unknown_module_beside_a_known_one_is_still_refused(tmp_path: Path) -> None:
+    """One good name must not excuse a bad one in the same comma list.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    argv = [
+        "pipeline",
+        "-o",
+        str(tmp_path),
+        "--fastq1",
+        "r1.fq",
+        "--fastq2",
+        "r2.fq",
+        "--extra-modules",
+        "advntr,shrak",
+    ]
+    with pytest.raises(ValueError, match="shrak"):
+        _run_handler(argv)
+
+
+def test_advntr_module_args_survive_the_comma_form(tmp_path: Path) -> None:
+    """The adVNTR module arguments hang off the same membership test.
+
+    ``--advntr-max-coverage`` was silently ignored whenever ``--extra-modules`` was
+    comma-separated, because ``"advntr" in ["advntr,shark"]`` is False.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    argv = [
+        "pipeline",
+        "-o",
+        str(tmp_path),
+        "--fastq1",
+        "r1.fq",
+        "--fastq2",
+        "r2.fq",
+        "--extra-modules",
+        "advntr,shark",
+        "--advntr-max-coverage",
+        "300",
+    ]
+    stub = _run_handler(argv)
+    assert stub.call_args.kwargs["module_args"]["advntr"]["max_coverage"] == 300
+
+
+def test_shark_with_bam_input_is_rejected_in_the_comma_form(tmp_path: Path) -> None:
+    """SHARK is FASTQ-only (#62), and the comma form used to slip past that guard.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    argv = ["pipeline", "-o", str(tmp_path), "--bam", "in.bam", "--extra-modules", "advntr,shark"]
+    with pytest.raises(SystemExit) as excinfo:
+        _run_handler(argv)
+    assert excinfo.value.code == 1
+
+
+def test_the_known_modules_are_the_ones_the_pipeline_tests_for() -> None:
+    """The CLI's whitelist and ``pipeline.py``'s membership tests must agree.
+
+    A module the CLI accepts but the pipeline never looks for is a silent no-op;
+    one the pipeline looks for but the CLI rejects is unreachable.
+    """
+    tree = ast.parse(inspect.getsource(pipeline))
+    tested = {
+        node.left.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Constant)
+        and isinstance(node.left.value, str)
+        and any(isinstance(op, ast.In) for op in node.ops)
+        and any(isinstance(cmp, ast.Name) and cmp.id == "extra_modules" for cmp in node.comparators)
+    }
+    assert tested, "found no `'x' in extra_modules` tests in pipeline.py; this test would be vacuous"
+    assert tested == set(cli_handlers.KNOWN_EXTRA_MODULES)
 
 
 def test_run_pipeline_still_takes_no_output_name_parameter() -> None:

@@ -35,6 +35,64 @@ from vntyper.scripts.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 
+#: The optional stages ``--extra-modules`` can name. ``pipeline.py`` tests membership
+#: against exactly these two strings (``"advntr" in extra_modules``,
+#: ``"shark" in extra_modules``), so a name outside this set is a silent no-op rather
+#: than an error - which is what makes validating here worth doing.
+#: ``tests/unit/test_cli_handlers.py`` asserts the two lists stay in step.
+KNOWN_EXTRA_MODULES: tuple[str, ...] = ("advntr", "shark")
+
+
+def normalise_extra_modules(values: list[Any] | None) -> list[str]:
+    """Turn every accepted spelling of ``--extra-modules`` into the pipeline's own.
+
+    ``--extra-modules`` is an ``append`` action, so repeating it yields
+    ``["advntr", "shark"]`` - but the documented comma form yields the single string
+    ``"advntr,shark"``, and ``pipeline.py`` tests membership by exact string. That
+    made ``--extra-modules advntr,shark`` match *neither* module and produce a
+    Kestrel-only run with exit code 0 and a report that reads as a plain negative.
+    The same held for a typo: nothing validated the names.
+
+    Splits on commas, trims, drops empties, lower-cases and de-duplicates while
+    preserving first-seen order.
+
+    Args:
+        values: ``args.extra_modules`` - a list of strings, or of lists of strings
+            if a caller built it programmatically. None is treated as empty.
+
+    Returns:
+        list[str]: The normalised module names, in the order first named.
+
+    Raises:
+        ValueError: If any name is not in :data:`KNOWN_EXTRA_MODULES`.
+    """
+    modules: list[str] = []
+    as_written: dict[str, str] = {}
+    for value in values or []:
+        for item in value if isinstance(value, list) else [value]:
+            for part in str(item).split(","):
+                written = part.strip()
+                if not written:
+                    continue
+                name = written.lower()
+                as_written.setdefault(name, written)
+                if name not in modules:
+                    modules.append(name)
+
+    unknown = [as_written[name] for name in modules if name not in KNOWN_EXTRA_MODULES]
+    if unknown:
+        msg = (
+            f"Unknown --extra-modules value(s): {', '.join(sorted(unknown))}. "
+            f"Available modules: {', '.join(KNOWN_EXTRA_MODULES)}. "
+            "An unrecognised name used to be accepted and then ignored, producing a Kestrel-only run "
+            "that reports as a negative genotype."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    logger.debug(f"extra_modules normalised to {modules}")
+    return modules
+
 
 def get_conf(config: dict[str, Any], key: str, fallback: Any) -> Any:
     """Read a CLI default out of ``config["default_values"]``.
@@ -147,12 +205,7 @@ def handle_pipeline(
         args.archive_format = get_conf(config, "archive_format", "zip")
         logger.debug(f"archive_format set to {args.archive_format}")
 
-    import itertools
-
-    flattened_modules = list(
-        itertools.chain.from_iterable(m if isinstance(m, list) else [m] for m in args.extra_modules)
-    )
-    logger.debug(f"extra_modules flattened to {flattened_modules}")
+    flattened_modules = normalise_extra_modules(args.extra_modules)
 
     # Validate single input type
     input_types = sum(

@@ -567,6 +567,8 @@ def test_advntr_input(tmp_path, test_config, ensure_test_data, advntr_case):
 
         # Add extra modules
         if extra_modules:
+            # The comma form relies on cli_handlers.normalise_extra_modules: before
+            # #179 "advntr,shark" matched neither module and ran Kestrel only.
             command.extend(["--extra-modules", ",".join(extra_modules)])
 
         # Add remaining CLI options (e.g. --fast-mode, --advntr-max-coverage)

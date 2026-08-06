@@ -60,7 +60,7 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--extra-modules` | string | `[]` | Optional extra modules to include (e.g., `advntr`, `shark`). Can be repeated multiple times |
+| `--extra-modules` | string | `[]` | Optional extra modules to include: `advntr`, `shark`. Can be repeated (`--extra-modules advntr --extra-modules shark`) or given as a comma-separated list (`--extra-modules advntr,shark`). Names are case-insensitive, and an unknown name is rejected rather than ignored |
 | `--advntr-max-coverage` | int | — | Max coverage (e.g., 300) for quick adVNTR mode. Only applies when `advntr` is in `--extra-modules` |
 
 The `shark` module is not supported in BAM/CRAM mode; use FASTQ mode or remove the shark flag.

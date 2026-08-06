@@ -251,6 +251,8 @@ def run_vntyper_pipeline(
     ]
 
     if extra_modules:
+        # The comma form relies on cli_handlers.normalise_extra_modules: before #179
+        # "advntr,shark" matched neither module and produced a silent Kestrel-only run.
         vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
 
     # Add remaining CLI options (e.g. --fast-mode, --advntr-max-coverage)
@@ -337,6 +339,8 @@ def run_vntyper_fastq_pipeline(
         vntyper_args.extend(["--fastq2", f"/opt/vntyper/input/{fastq2.name}"])
 
     if extra_modules:
+        # The comma form relies on cli_handlers.normalise_extra_modules: before #179
+        # "advntr,shark" matched neither module and produced a silent Kestrel-only run.
         vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
 
     # Execute via conda run since we bypassed the entrypoint
