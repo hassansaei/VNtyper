@@ -35,7 +35,7 @@ from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
 from .tasks import run_cohort_analysis_job, run_vntyper_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
-from .utils import client_host
+from .utils import MAX_PASSPHRASE_BYTES, client_host
 from .version import API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -249,14 +249,17 @@ def get_versions():
     summary="Create a new cohort",
     description=(
         "Create a new cohort. A passphrase is required, and it is the only "
-        "credential that will open the cohort afterwards. An alias may be given "
-        "as a label; aliases are unique, and an alias never identifies a cohort "
-        "on its own.\n\n"
+        "credential that will open the cohort afterwards. It may be at most "
+        f"{MAX_PASSPHRASE_BYTES} bytes once UTF-8 encoded; a longer one is "
+        "refused rather than shortened, so the credential that is stored is "
+        "always the one that was chosen. An alias may be given as a label; "
+        "aliases are unique, and an alias never identifies a cohort on its "
+        "own.\n\n"
         f"**Rate Limit:** {settings.RATE_LIMIT_SIMPLE_TIMES} requests per {settings.RATE_LIMIT_SIMPLE_SECONDS} seconds."
     ),
 )
 def create_cohort(
-    passphrase: str = Form(..., description="Passphrase protecting the cohort"),
+    passphrase: str = Form(..., description=f"Passphrase protecting the cohort, at most {MAX_PASSPHRASE_BYTES} bytes"),
     alias: str | None = Form(None, description="Optional cohort alias"),
 ):
     """
@@ -266,7 +269,7 @@ def create_cohort(
 
     **Parameters:**
 
-    - **passphrase**: The passphrase that will protect cohort access. Required.
+    - **passphrase**: The passphrase that will protect cohort access. Required, and at most `MAX_PASSPHRASE_BYTES` bytes once UTF-8 encoded. A longer passphrase is refused with an explicit message rather than silently shortened to a prefix of itself. A refused request leaves the requested alias free for another attempt.
     - **alias**: An optional user-defined label for the cohort.
 
     **Returns:**

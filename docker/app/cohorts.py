@@ -97,20 +97,28 @@ def create_cohort_record(
     atomic in Redis: it either creates the key or reports that another cohort
     already holds it. A separate "is this alias free?" read followed by a write
     would let two simultaneous creations both pass the read and both believe
-    they had won the alias. The claim is made before the cohort hash is written,
-    so a refused alias leaves nothing behind.
+    they had won the alias.
+
+    A claim lasts a whole retention period, so it is only ever taken on behalf
+    of a cohort that is going to exist. Everything the request can be refused
+    for -- an absent passphrase, one the hashing scheme cannot store -- is
+    decided *before* the claim, and the claim is released again if writing the
+    record after it fails. Between those two, an alias is out of circulation
+    only while it names something.
 
     Args:
         store: Redis client for the cohort database.
         alias: Optional human-chosen label for the cohort.
-        passphrase: The credential that will guard the cohort. Required.
+        passphrase: The credential that will guard the cohort. Required, and
+            bounded by ``utils.MAX_PASSPHRASE_BYTES`` once encoded.
         retention_seconds: Lifetime of the cohort record and its alias claim.
 
     Returns:
         dict[str, str | None]: The new ``cohort_id`` and the ``alias`` it holds.
 
     Raises:
-        ValueError: If no passphrase was supplied, or the alias is already taken.
+        ValueError: If no passphrase was supplied, if it is longer than the
+            hashing scheme accepts, or if the alias is already taken.
     """
     alias = _clean(alias)
     # Normalised to `str` here, exactly as `resolve_cohort` does, so that the value
@@ -124,23 +132,37 @@ def create_cohort_record(
         logger.error(msg)
         raise ValueError(msg)
 
+    # Hashing is what can still refuse this passphrase -- it states and applies
+    # the scheme's own input bound -- so it happens here, before anything is
+    # written, rather than after the alias has been taken.
+    hashed_passphrase = hash_passphrase(passphrase)
+
     cohort_id = str(uuid4())
 
-    if alias is not None and not store.set(alias_key(alias), cohort_id, nx=True, ex=retention_seconds):
-        msg = "Cohort alias is already in use"
-        logger.error(msg)
-        raise ValueError(msg)
+    claimed_alias = None
+    if alias is not None:
+        if not store.set(alias_key(alias), cohort_id, nx=True, ex=retention_seconds):
+            msg = "Cohort alias is already in use"
+            logger.error(msg)
+            raise ValueError(msg)
+        claimed_alias = alias
 
     key = cohort_key(cohort_id)
-    store.hset(
-        key,
-        mapping={
-            "alias": alias or "",
-            "hashed_passphrase": hash_passphrase(passphrase),
-            "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        },
-    )
-    store.expire(key, retention_seconds)
+    try:
+        store.hset(
+            key,
+            mapping={
+                "alias": alias or "",
+                "hashed_passphrase": hashed_passphrase,
+                "created_at": datetime.now(tz=timezone.utc).isoformat(),
+            },
+        )
+        store.expire(key, retention_seconds)
+    except Exception:
+        if claimed_alias is not None:
+            store.delete(alias_key(claimed_alias))
+            logger.error(f"Released the claim on alias {claimed_alias}: its cohort record was not written")
+        raise
 
     logger.info(f"Created cohort {cohort_id}")
     return {"cohort_id": cohort_id, "alias": alias}
