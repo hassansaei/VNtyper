@@ -438,6 +438,7 @@ async def run_vntyper(
             task = run_vntyper_job.apply_async(
                 kwargs={
                     "bam_path": bam_path,
+                    "index_path": bai_path,
                     "output_dir": job_output_dir,
                     "thread": thread,
                     "reference_assembly": reference_assembly.value,
@@ -456,6 +457,7 @@ async def run_vntyper(
         else:
             task = run_vntyper_job.delay(
                 bam_path=bam_path,
+                index_path=bai_path,
                 output_dir=job_output_dir,
                 thread=thread,
                 reference_assembly=reference_assembly.value,

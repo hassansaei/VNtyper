@@ -83,12 +83,26 @@ def run_vntyper_job(
     client_ip: str | None = None,
     user_agent: str | None = None,
     advntr_mode: bool = False,
+    index_path: str | None = None,
 ):
     """
     Celery task to run VNtyper pipeline with parameters.
     Sends an email upon job completion or failure if email is provided.
+
+    `index_path` is where the submission's own index was stored, when it carried
+    one. The endpoint accepts several index names, so the worker is told which
+    one it got rather than guessing: guessing means rebuilding an index the job
+    was already given, under a different name, and leaving the supplied file on
+    the shared volume afterwards. With no index supplied it falls back to the
+    conventional name beside the alignment, which is also where `samtools index`
+    puts the one it builds.
     """
     job_id = os.path.basename(output_dir)
+    # Bound before the try block: the cleanup below runs whether or not the task
+    # got as far as its first Redis call, and must remove exactly the index this
+    # job used -- uploaded or generated -- rather than raise a NameError of its
+    # own on the way.
+    index_path = index_path or f"{bam_path}.bai"
     try:
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
@@ -106,15 +120,14 @@ def run_vntyper_job(
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
-        # Ensure the BAM index (.bai) exists
-        bai_path = f"{bam_path}.bai"
-        if not os.path.exists(bai_path):
-            logger.info(f"BAI index not found for {bam_path}. Generating index.")
+        # Ensure the alignment has an index the pipeline can find
+        if not os.path.exists(index_path):
+            logger.info(f"Index not found for {bam_path}. Generating index.")
             try:
                 subprocess.run(["samtools", "index", bam_path], check=True)
-                logger.info(f"Successfully generated BAI index at {bai_path}")
+                logger.info(f"Successfully generated index at {index_path}")
             except subprocess.CalledProcessError as e:
-                logger.error(f"Error generating BAI index: {e}")
+                logger.error(f"Error generating index: {e}")
                 # Update usage data on failure
                 redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 raise
@@ -235,20 +248,30 @@ def run_vntyper_job(
         if cohort_key:
             extend_cohort_retention(redis_cohort_client, cohort_key, settings.COHORT_RETENTION_DAYS * 86400)
 
-        # Delete input BAM and BAI files
-        try:
-            if os.path.exists(bam_path):
-                os.remove(bam_path)
-                logger.info(f"Deleted BAM file: {bam_path}")
-        except Exception as e:
-            logger.error(f"Error deleting BAM file {bam_path}: {e}")
+        # Delete the alignment and its index. Both are patient-derived and sit
+        # on the volume every job shares, so this is the only thing that ever
+        # removes them.
+        for path in (bam_path, index_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    logger.info(f"Deleted input file: {path}")
+            except Exception as e:
+                logger.error(f"Error deleting input file {path}: {e}")
 
+        # The per-job input directory holds nothing but this submission's own
+        # files, so it goes with them. Removing it only when it is empty means
+        # anything unexpected left in there is reported rather than deleted.
+        job_input_dir = os.path.dirname(bam_path)
         try:
-            if os.path.exists(bai_path):
-                os.remove(bai_path)
-                logger.info(f"Deleted BAI file: {bai_path}")
+            if os.path.isdir(job_input_dir):
+                if os.listdir(job_input_dir):
+                    logger.warning(f"Input directory {job_input_dir} still holds files and was left in place")
+                else:
+                    os.rmdir(job_input_dir)
+                    logger.info(f"Deleted empty input directory: {job_input_dir}")
         except Exception as e:
-            logger.error(f"Error deleting BAI file {bai_path}: {e}")
+            logger.error(f"Error deleting input directory {job_input_dir}: {e}")
 
 
 @celery_app.task
