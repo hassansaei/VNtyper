@@ -418,11 +418,17 @@
                         originalText = $flagCell.text().trim();
                         $flagCell.attr('data-original', originalText);
                     }
-                    if (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "") {
-                        $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:green;font-size:16px;">&#10003;</span>');
-                    } else {
-                        $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:red;font-size:16px;">&#10006;</span>');
-                    }
+                    // #207: the title is a sample-derived value. .attr() takes a value and
+                    // .text() takes a text node, so neither goes through an HTML parse --
+                    // which is what undid the server's escaping when this was built by
+                    // concatenating into a markup string and calling .html().
+                    var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
+                    var $mark = $('<span>')
+                        .attr('data-toggle', 'tooltip')
+                        .attr('title', originalText)
+                        .css({ 'color': isClean ? 'green' : 'red', 'font-size': '16px' })
+                        .text(isClean ? '✓' : '✖');
+                    $flagCell.empty().append($mark);
                 }
             });
             $('[data-toggle="tooltip"]').tooltip({container: 'body'});
@@ -509,10 +515,20 @@
             table.appendChild(thead);
             const headerRow = thead.insertRow(0);
             const headers = tableJson.headers;
+            // #216: tableJson is igv-reports' variant table, built from VNtyper's
+            // own BED and VCF -- its values (e.g. the motif record name) are
+            // sample-derived, so they are written as text, never parsed as markup.
+            // This is not a display regression: VNtyper's BED is three columns
+            // (kestrel_genotyping.py generate_bed_file), so igv-reports' has_name is
+            // false and the one column igv-reports pre-escapes for HTML (the Name
+            // column, bedtable.py) is never emitted here. If a future BED gains a
+            // name column, its HTML entities would render literally under
+            // textContent -- that is a display quirk to fix then, not a reason to
+            // reintroduce innerHTML now.
             for (let j = 1; j < headers.length; j++) {
                 const cell = document.createElement("th");
                 headerRow.appendChild(cell);
-                cell.innerHTML = headers[j];
+                cell.textContent = headers[j];
             }
 
             const tbody = document.createElement('tbody');
@@ -543,7 +559,7 @@
                 for (let j = 1; j < headers.length; j++) {
                     const cell = document.createElement("td");
                     row.appendChild(cell);
-                    cell.innerHTML = rowData[j];
+                    cell.textContent = rowData[j];
                 }
             }
         }

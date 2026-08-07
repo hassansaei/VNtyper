@@ -149,12 +149,17 @@
             originalText = $flagCell.text().trim();
             $flagCell.attr('data-original', originalText);
           }
-          // Determine symbol and styling.
-          if (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "") {
-            $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:green;font-size:16px;">&#10003;</span>');
-          } else {
-            $flagCell.html('<span data-toggle="tooltip" title="' + originalText + '" style="color:red;font-size:16px;">&#10006;</span>');
-          }
+          // #207: the title is a sample-derived value. .attr() takes a value and
+          // .text() takes a text node, so neither goes through an HTML parse --
+          // which is what undid the server's escaping when this was built by
+          // concatenating into a markup string and calling .html().
+          var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
+          var $mark = $('<span>')
+              .attr('data-toggle', 'tooltip')
+              .attr('title', originalText)
+              .css({ 'color': isClean ? 'green' : 'red', 'font-size': '16px' })
+              .text(isClean ? '✓' : '✖');
+          $flagCell.empty().append($mark);
         }
       });
       // Initialize Bootstrap tooltips.
