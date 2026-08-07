@@ -689,12 +689,23 @@ B, C, D are independent of A and of each other. The only file two lanes both tou
 
 ### Docs and changelog
 
-* `docs/about/changelog.md` — one entry per issue under a new version heading.
-* `AGENTS.md` — trap 4 ("stages mark, they do not filter") gains the sixth gate column;
-  the pinned-test list gains nothing (the traps section does not enumerate them).
-* `docs/development/golden-cohort-gate.md` — a new run row and a result section
-  attributing every delta.
-* No new page, so no `mkdocs.yml` `nav:` edit is needed. Verified before claiming.
+Enumerated by grepping `docs/` and `README.md` for every identifier this spec changes,
+rather than by recall. **Seven files, four of them user-facing pages the first draft of
+this spec missed.**
+
+| File | Why |
+| --- | --- |
+| `docs/about/changelog.md` | one entry per issue under a new version heading |
+| `docs/pipeline/input-processing.md:47` | describes what `samtools depth` computes. Must state the region-based definition and the `-a` flag (#171). |
+| `docs/pipeline/reports.md:41-42` | tabulates `Percent VNTR uncovered \| samtools depth \| <= 50%` **as though it were an enforced threshold**. It is not one today — that is precisely #172. The row becomes true when #172 lands; until then the page is wrong, and that is worth saying in the changelog entry rather than quietly correcting. |
+| `docs/pipeline/flagging.md:16, 76-80` | documents `False_Positive_4bp_Insertion` and how to add a rule. Must document that artifact-declared flags now exclude the row, and how `artifact_flags` relates to `flagging_rules` (#174). |
+| `docs/user-guide/configuration.md:44-45, 87-88` | documents both thresholds and the `flagging_rules` block. Gains `artifact_flags` and the widened QC rule. |
+| `docs/development/golden-cohort-gate.md` | a new run row and a result section attributing every delta |
+| `AGENTS.md` | trap 4 ("stages mark, they do not filter") gains the sixth gate column |
+
+No new page, so no `mkdocs.yml` `nav:` edit is needed — verified, not assumed
+(`flagging.md` and `configuration.md` are already registered at `mkdocs.yml:125` and
+`:107`). `mkdocs build --strict` still runs as part of `make ci-local`.
 
 ### Version
 
