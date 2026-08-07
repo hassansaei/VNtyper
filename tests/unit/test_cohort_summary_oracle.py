@@ -843,7 +843,14 @@ def test_a_cohort_with_no_valid_input_writes_nothing_at_all(tmp_path, caplog) ->
 
 def test_pseudonymised_samples_reach_the_report_under_their_pseudonyms(tmp_path) -> None:
     """The sample name is the one value in the report a caller fully controls, and
-    through the web service it is the pseudonym recorded against an uploaded job."""
+    through the web service it is the pseudonym recorded against an uploaded job.
+
+    The literal moved with #206: the pseudonym was `anon_` plus five hex characters of
+    MD5 (`anon_65622`) and is now twelve of SHA-256. It is recorded rather than
+    recomputed with `pseudonymized_sample_name` - a test that re-derives the value with
+    the code under test asserts nothing about it. Reproduce with
+    `python -c "import hashlib; print(hashlib.sha256(b'sample_one').hexdigest()[:12])"`.
+    """
     output_dir = tmp_path / "out"
     output_dir.mkdir()
 
@@ -859,8 +866,8 @@ def test_pseudonymised_samples_reach_the_report_under_their_pseudonyms(tmp_path)
     table = (output_dir / "pseudonymization_table.tsv").read_text(encoding="utf-8")
 
     assert ">sample_one</td>" not in html
-    assert ">anon_65622</td>" in html
-    assert "anon_65622\tsample_one" in table
+    assert ">anon_c788e939395d</td>" in html
+    assert "anon_c788e939395d\tsample_one" in table
 
 
 def test_the_pseudonymization_table_is_not_written_when_nothing_was_pseudonymised(tmp_path) -> None:

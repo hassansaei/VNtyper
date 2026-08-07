@@ -14,8 +14,9 @@ other subcommand. Keeping it here means that fix touched no other handler.
 
 The handler's job is to fill in what the CLI left unset and then make one call.
 Everything it fills in comes from one of three places, in order: an explicit
-command-line value, a standard path underneath ``--input-dir``, or
-``config["default_values"]``. It deliberately does **not** compute anything the
+command-line value, a standard path underneath the effective run directory (see
+:func:`resolve_bam_file`, :func:`resolve_bed_file` and :func:`resolve_vcf_file`),
+or ``config["default_values"]``. It deliberately does **not** compute anything the
 report generator can read for itself -- the input file list, the pipeline version
 and the VNTR coverage all live in ``pipeline_summary.json`` and are read there.
 
@@ -28,6 +29,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from vntyper.scripts.artifact_names import select_best_vcf_file
 from vntyper.scripts.cli_handlers import get_conf
 from vntyper.scripts.generate_report import generate_summary_report
 
@@ -60,6 +62,114 @@ def resolve_log_file(output_dir: str, log_file_str: str | None, explicit: bool) 
             logger.debug(f"log_file set to {candidate} (found in the output directory)")
             return str(candidate)
     return log_file_str
+
+
+def _effective_run_dir(output_dir: str, input_dir: Path | None) -> Path:
+    """The run directory whose ``kestrel/`` subdirectory the IGV inputs live under.
+
+    ``--input-dir`` wins when given; otherwise ``--output-dir``. This is the
+    directory :func:`resolve_bam_file`, :func:`resolve_bed_file` and
+    :func:`resolve_vcf_file` all search under, so the fallback to
+    ``--output-dir`` lives in exactly one place.
+
+    Args:
+        output_dir: The ``--output-dir`` value.
+        input_dir: The ``--input-dir`` value, or None.
+
+    Returns:
+        Path: The directory to search under ``kestrel/``.
+    """
+    return input_dir if input_dir is not None else Path(output_dir)
+
+
+def resolve_bam_file(output_dir: str, input_dir: Path | None, explicit: Path | None) -> Path | None:
+    """Choose the BAM the report's IGV panel should show.
+
+    Resolution order: an explicit ``--bam-file`` wins; otherwise the standard
+    ``kestrel/output.bam`` under the effective run directory (see
+    :func:`_effective_run_dir`) -- ``--input-dir`` if given, else
+    ``--output-dir``.
+
+    Widened from ``--input-dir``-only discovery (#167, REVIEW.md finding 1):
+    ``generate_report.py`` only runs IGV generation when ``bed_file`` is both
+    set and exists, so without the ``--output-dir`` fallback,
+    ``vntyper report -o <run>`` -- the invocation ``--output-dir``'s own help
+    text describes ("Directory containing pipeline results") -- resolved no
+    BED at all and skipped IGV generation entirely, regardless of what the VCF
+    resolved to. ``--output-dir`` is already the basis :func:`resolve_log_file`
+    reads ``pipeline.log`` from, so this makes the handler consistent rather
+    than introducing a new convention.
+
+    Args:
+        output_dir: The ``--output-dir`` value.
+        input_dir: The ``--input-dir`` value, or None.
+        explicit: The ``--bam-file`` value, or None.
+
+    Returns:
+        Path | None: Path to the BAM, or None when there is none.
+    """
+    if explicit is not None:
+        return explicit
+    candidate = _effective_run_dir(output_dir, input_dir) / "kestrel" / "output.bam"
+    if candidate.exists():
+        logger.debug(f"bam_file set to {candidate} (found under the run directory)")
+        return candidate
+    return None
+
+
+def resolve_bed_file(output_dir: str, input_dir: Path | None, explicit: Path | None) -> Path | None:
+    """Choose the BED the report's IGV panel should show.
+
+    Same resolution order and rationale as :func:`resolve_bam_file`.
+
+    Args:
+        output_dir: The ``--output-dir`` value.
+        input_dir: The ``--input-dir`` value, or None.
+        explicit: The ``--bed-file`` value, or None.
+
+    Returns:
+        Path | None: Path to the BED, or None when there is none.
+    """
+    if explicit is not None:
+        return explicit
+    candidate = _effective_run_dir(output_dir, input_dir) / "kestrel" / "output.bed"
+    if candidate.exists():
+        logger.debug(f"bed_file set to {candidate} (found under the run directory)")
+        return candidate
+    return None
+
+
+def resolve_vcf_file(output_dir: str, input_dir: Path | None, explicit: Path | None) -> str | None:
+    """Choose the VCF the report's IGV panel should show.
+
+    ``handle_report`` used to pass ``vcf_file=None`` unconditionally, so a
+    regenerated report never had a variant track even though the run being
+    re-reported had written the VCF (#167).
+    :func:`~vntyper.scripts.artifact_names.select_best_vcf_file` is the
+    resolver ``pipeline.py`` already uses -- it prefers the compressed VCF and
+    returns None rather than raising when neither exists, because bcftools is
+    optional. It is reused here rather than reimplemented.
+
+    An explicit ``--vcf-file`` wins and is passed through even when it does
+    not exist: the user named it, and ``run_igv_report`` warns and skips the
+    track.
+
+    Same effective-run-directory resolution as :func:`resolve_bam_file` and
+    :func:`resolve_bed_file` -- see :func:`_effective_run_dir`.
+
+    Args:
+        output_dir: The ``--output-dir`` value.
+        input_dir: The ``--input-dir`` value, or None.
+        explicit: The ``--vcf-file`` value, or None.
+
+    Returns:
+        str | None: Path to the VCF, or None when there is none.
+    """
+    if explicit is not None:
+        logger.debug(f"vcf_file set to {explicit} (given on the command line)")
+        return str(explicit)
+    kestrel_dir = _effective_run_dir(output_dir, input_dir) / "kestrel"
+    return select_best_vcf_file(kestrel_dir)
 
 
 def handle_report(
@@ -98,21 +208,15 @@ def handle_report(
             args.reference_fasta = Path(ref_fasta)
             logger.debug(f"reference_fasta set to {args.reference_fasta}")
 
-    # If user didn't specify --bam-file, we attempt to find a standard location
-    # e.g. <input-dir>/kestrel/output.bam
-    # (only if --input-dir was provided)
-    if args.bam_file is None and args.input_dir:
-        candidate_bam = args.input_dir / "kestrel" / "output.bam"
-        if candidate_bam.exists():
-            args.bam_file = candidate_bam
-            logger.debug(f"bam_file set to {args.bam_file}")
-
-    # Same approach for bed-file (standard name is "output.bed" in "kestrel")
-    if args.bed_file is None and args.input_dir:
-        candidate_bed = args.input_dir / "kestrel" / "output.bed"
-        if candidate_bed.exists():
-            args.bed_file = candidate_bed
-            logger.debug(f"bed_file set to {args.bed_file}")
+    # BAM, BED and VCF for the IGV panel are resolved from one effective run
+    # directory (`--input-dir` if given, else `--output-dir`), in the same
+    # precedence for each: the explicit flag first, then that directory's
+    # standard `kestrel/output.*` layout. See resolve_bam_file/resolve_bed_file/
+    # resolve_vcf_file's docstrings for why `--output-dir` is consulted at all
+    # (#167, REVIEW.md finding 1) -- without it, `vntyper report -o <run>` with
+    # no `--input-dir` resolved no BED and therefore generated no IGV panel.
+    args.bam_file = resolve_bam_file(args.output_dir, args.input_dir, args.bam_file)
+    args.bed_file = resolve_bed_file(args.output_dir, args.input_dir, args.bed_file)
 
     # The pipeline log to embed. `--log-file` wins; otherwise prefer the finished
     # run's own log inside the output directory.
@@ -124,7 +228,11 @@ def handle_report(
     # absent: the generator reads all three out of `pipeline_summary.json`, so
     # passing them here would have been a second, divergent source for the same
     # facts even if the signature had accepted them. `log_file` is required and is
-    # what makes the Pipeline Log section of the report render.
+    # what makes the Pipeline Log section of the report render. `vcf_file` is
+    # resolved the same way as bam/bed above, reusing the `select_best_vcf_file`
+    # resolver `pipeline.py` already uses (#167); a missing VCF stays a warning,
+    # never an error, because bcftools is optional. `getattr` guards a direct
+    # `handle_report()` call whose namespace predates `--vcf-file`.
     generate_summary_report(
         output_dir=Path(args.output_dir),
         template_dir=config.get("paths", {}).get("template_dir", "vntyper/templates"),
@@ -134,6 +242,6 @@ def handle_report(
         bam_file=args.bam_file,
         fasta_file=args.reference_fasta,
         flanking=args.flanking,
-        vcf_file=None,
+        vcf_file=resolve_vcf_file(args.output_dir, args.input_dir, getattr(args, "vcf_file", None)),
         config=config,
     )

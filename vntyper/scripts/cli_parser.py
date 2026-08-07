@@ -201,6 +201,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser_report.add_argument("--bed-file", type=Path, help="Path to the BED file for IGV reports.")
     parser_report.add_argument("--bam-file", type=Path, help="Path to the BAM file for IGV reports.")
     parser_report.add_argument(
+        "--vcf-file",
+        type=Path,
+        default=None,
+        help="Path to the VCF file for the IGV variant track. Discovered under the run directory when omitted.",
+    )
+    parser_report.add_argument(
         "--reference-fasta",
         type=Path,
         help="Path to the reference FASTA file for IGV reports.",

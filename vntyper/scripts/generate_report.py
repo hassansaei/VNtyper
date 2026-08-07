@@ -46,7 +46,7 @@ from vntyper.scripts.report_formatting import (
     confidence_html,
     escape_frame_cells,
     extract_igv_fragments,
-    js_object_literal,
+    js_json_literal,
     parse_coverage_stats,
     select_display_columns,
     summarise_fastp,
@@ -584,8 +584,8 @@ def generate_summary_report(
         "igv_content": igv_content,
         # Interpolated straight into a <script> block, so they must parse even
         # when there is no IGV report at all.
-        "table_json": js_object_literal(table_json, EMPTY_TABLE_JSON),
-        "session_dictionary": js_object_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
+        "table_json": js_json_literal(table_json, EMPTY_TABLE_JSON),
+        "session_dictionary": js_json_literal(session_dictionary, EMPTY_SESSION_DICTIONARY),
         "report_date": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "input_files": input_files,
         "pipeline_version": pipeline_version,

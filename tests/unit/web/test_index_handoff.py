@@ -18,10 +18,16 @@ status codes: an index that is accepted, stored and then never mentioned again
 produces exactly the same 200 as one that is used.
 
 Two further ways a patient-derived file survives that cleanup are pinned at the
-bottom of this module. The worker is not the only thing that writes an index
-into the job's input directory -- the pipeline builds one of its own under a
-name the client never sent -- and the cleanup block shares a `finally` with
-Redis bookkeeping that can fail before it is reached.
+bottom of this module. The index the worker builds for itself carries a name the
+client never sent, so cleanup has to derive that name rather than only remove
+what it was handed; and the cleanup block shares a `finally` with Redis
+bookkeeping that can fail before it is reached.
+
+The pipeline used to be a third way: it reconstructed `f"{in_bam}.bai"`, missed
+an uploaded `sample.bai`, and built a second index beside the alignment. Since
+#210 it resolves both names htslib resolves and builds any index it needs in the
+run's output directory, so it no longer writes into the input tree at all --
+pinned below as an absence.
 
 `docker` is put on `sys.path` by `tests/unit/web/conftest.py`, which pytest
 imports before this module.
@@ -122,29 +128,40 @@ def test_the_long_queue_submission_hands_over_the_index_too(client, web_app, tmp
 
 
 def _index_the_way_the_pipeline_does(command: list[str]) -> None:
-    """Reproduce the index `vntyper pipeline` builds beside its input alignment.
+    """Reproduce the index `vntyper pipeline` builds for a non-fast BAM run.
 
-    Read off `vntyper/scripts/fastq_bam_processing.py`, not assumed: on the
-    non-fast BAM path it reconstructs the index name as `f"{in_bam}.bai"` and
-    runs `samtools index` whenever that exact path is missing. It never sees an
-    index the client uploaded as `sample.bai`, so a submission that carried one
-    still ends up with a second index beside its alignment -- inside the job's
-    own input directory, on the volume every job shares. A recorder that does
-    not reproduce that cannot tell whether cleanup accounts for it.
+    Read off `vntyper/scripts/fastq_bam_processing.py`, not assumed, and it calls
+    the pipeline's own `resolve_bam_index` -- now in
+    `vntyper/scripts/alignment_index.py` -- rather than restating its rules: on the
+    non-fast BAM path the pipeline looks for `<file>.bai` and then `<stem>.bai`,
+    the two names htslib itself resolves, and indexes only when neither exists.
+
+    Until #210 it reconstructed `f"{in_bam}.bai"` alone and wrote the index it
+    built beside the alignment. Both halves of that were wrong for a job: it
+    never saw an index the client had uploaded as `sample.bai`, so it built a
+    second one, and it built it inside the job's own input directory on the
+    volume every job shares. The index now goes into the run's output directory,
+    which is what this stand-in reproduces -- a recorder that still wrote beside
+    the alignment would keep the tests below passing while describing behaviour
+    that no longer exists.
 
     The CRAM branch of the same function extracts unmapped reads with
-    `samtools view` instead and writes no index beside its input, so nothing is
-    created here for `--cram`.
+    `samtools view` instead and builds no index at all, so nothing is created
+    here for `--cram`.
 
     Args:
         command: The argument vector the task asked for.
     """
+    from vntyper.scripts.alignment_index import resolve_bam_index
+
     if "pipeline" not in command or "--bam" not in command or "--fast-mode" in command:
         return
     alignment = command[command.index("--bam") + 1]
-    generated = Path(f"{alignment}.bai")
-    if not generated.exists():
-        generated.write_bytes(b"pipeline-index")
+    if resolve_bam_index(alignment) is not None:
+        return
+    output_dir = Path(command[command.index("-o") + 1])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "output_input.bam.bai").write_bytes(b"pipeline-index")
 
 
 @pytest.fixture
@@ -303,9 +320,11 @@ def test_the_job_input_directory_is_empty_afterwards(
 ) -> None:
     """No patient-derived file survives the job that was given it.
 
-    "No file" includes the index the pipeline builds for itself, which carries a
-    name the client never sent -- see `_index_the_way_the_pipeline_does` and the
-    dedicated test below.
+    "No file" includes the index the worker builds for itself when the submission
+    carried none, which lands under a name the client never sent -- see the
+    dedicated test below. The pipeline stand-in
+    (`_index_the_way_the_pipeline_does`) writes into the output directory, as the
+    pipeline now does, so nothing it produces is in scope for this assertion.
 
     Args:
         vntyper_task: The task fixture above.
@@ -403,18 +422,20 @@ def test_every_derived_index_name_stays_inside_the_jobs_own_directory(alignment:
     assert [str(Path(path).parent) for path in derived_index_paths(alignment)] == [job_input_dir] * 4
 
 
-def test_the_index_the_pipeline_builds_for_itself_is_removed_too(vntyper_task, tmp_path: Path) -> None:
-    """An uploaded `sample.bai` does not stop `sample.bam.bai` being created.
+def test_the_pipeline_no_longer_builds_an_index_beside_the_submission(vntyper_task, tmp_path: Path) -> None:
+    """An uploaded `sample.bai` is now honoured by the pipeline as well (#210).
 
-    The endpoint and the worker both honour `sample.bai`, so the worker skips its
-    preflight `samtools index`. The pipeline does not honour it: on the non-fast
-    BAM path it reconstructs the name as `f"{in_bam}.bai"`, does not find it, and
-    indexes the alignment itself. The result is a second index beside the
-    submission, under a name neither the client nor the worker ever mentioned.
+    The endpoint and the worker both accept `sample.bai`, so the worker skips its
+    preflight `samtools index`. The pipeline used not to accept it: it
+    reconstructed the name as `f"{in_bam}.bai"`, did not find it, and indexed the
+    alignment itself -- leaving a second index beside the submission under a name
+    neither the client nor the worker ever mentioned, on the volume every job
+    shares. It now resolves both names htslib resolves, and when it does have to
+    build one it builds it in the run's output directory.
 
-    Cleanup used to remove only the alignment and the exact path the client sent,
-    then find the directory non-empty and deliberately leave it -- so
-    `input/<job-id>/sample.bam.bai` stayed on the shared volume for good.
+    So there is nothing here for cleanup to find, which is the point: this test
+    pins the *absence*, and the removal of an index that does exist under a name
+    the client never sent is pinned by the test below.
 
     Args:
         vntyper_task: The task fixture above.
@@ -425,7 +446,34 @@ def test_the_index_the_pipeline_builds_for_itself_is_removed_too(vntyper_task, t
 
     _run(invoke, alignment, tmp_path, index)
 
-    assert not Path(f"{alignment}.bai").exists(), "the index the pipeline built was left on the shared volume"
+    assert not Path(f"{alignment}.bai").exists(), "the pipeline built an index beside the patient's alignment"
+    assert not (tmp_path / "output" / "job-1" / "output_input.bam.bai").exists(), (
+        "the uploaded sample.bai was ignored and a redundant index was built anyway"
+    )
+    assert not (tmp_path / "input" / "job-1").exists()
+
+
+def test_an_index_under_a_name_the_client_never_sent_is_still_removed(vntyper_task, tmp_path: Path) -> None:
+    """Cleanup's reach over derived index names has to keep working.
+
+    With no index uploaded, the worker builds `sample.bam.bai` itself before
+    starting the pipeline -- a name the client never sent. Cleanup used to remove
+    only the alignment and the exact path the client sent, then find the
+    directory non-empty and deliberately leave it, so that file stayed on the
+    shared volume for good. It is the derived-name removal (`derived_index_paths`)
+    that closes it, and this is that removal observed end to end.
+
+    Args:
+        vntyper_task: The task fixture above.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    invoke, commands = vntyper_task
+    alignment, _ = _job_input(tmp_path, "sample.bam", None)
+
+    _run(invoke, alignment, tmp_path, None)
+
+    assert ["samtools", "index", str(alignment)] in commands, "the worker never built the index this test is about"
+    assert not Path(f"{alignment}.bai").exists(), "the index the worker built was left on the shared volume"
     assert not (tmp_path / "input" / "job-1").exists()
 
 

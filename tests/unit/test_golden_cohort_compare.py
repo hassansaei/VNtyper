@@ -193,43 +193,74 @@ def test_a_row_change_still_differs_independently_of_the_banner() -> None:
 def test_the_cohort_order_justification_cites_only_tests_that_exist() -> None:
     """It cited ``test_discovery_returns_an_unordered_set_today``, which is not in the repo.
 
-    That test was replaced by ``test_the_discovered_directories_come_back_sorted`` when the
-    determinism fix landed. A justification citing a test that does not exist reads as
-    verified and is not; this reads the real test file and checks every name the note
-    mentions is defined in it.
+    That test was replaced when the determinism fix landed. A justification citing a test
+    that does not exist reads as verified and is not; this reads the real test files and
+    checks every name the note mentions is defined in one of them.
+
+    Two files rather than one since #205: the directory-input evidence is in
+    ``test_cohort_inputs.py`` and the ZIP evidence - which is what reason 2 of the note
+    now turns on - is in ``test_cohort_zip_identity.py``. The whole cohort-identity suite
+    is read rather than the two files that happen to be cited today, so splitting a module
+    again moves a citation without breaking this guard; ``test_cohort_identity.py`` was
+    1,210 lines and became four modules, and the citation it carried moved with the test.
     """
-    source = (REPO_ROOT / "tests" / "unit" / "test_cohort_inputs.py").read_text(encoding="utf-8")
+    sources = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "tests" / "unit").glob("test_cohort_*.py"))
+    )
     why = compare.COHORT_ORDER_WHY
     cited = [token.strip(".,;()") for token in why.split() if token.startswith("::") or "test_" in token]
     names = {token.split("::")[-1] for token in cited if "test_" in token}
     names = {name for name in names if name.startswith("test_")}
     assert names, "the justification must cite at least one test"
     for name in names:
-        assert f"def {name}(" in source, (
-            f"{name} is cited by the normalisation note but is not in test_cohort_inputs.py"
+        assert f"def {name}(" in sources, (
+            f"{name} is cited by the normalisation note but is in neither cohort test file"
         )
 
 
-def test_the_cohort_order_justification_does_not_claim_discovery_is_unordered_today() -> None:
-    """``discover_sample_directories`` ends ``return sorted(processed_dirs), temp_dirs``.
+def test_the_cohort_order_justification_quotes_the_sort_key_discovery_actually_uses() -> None:
+    """The note has to name the key discovery sorts on, and #205 changed that key.
 
-    The old note said discovery "returns a set, so order is not reproducible", which is
-    false for fixed input directories on any tree carrying the determinism fix.
+    It used to grep for ``return sorted(processed_dirs), temp_dirs``, which is gone: the
+    de-duplicating ``set`` became a mapping keyed on the sample directory and the sort
+    moved onto ``DiscoveredSample.sort_key``. The claim being defended is unchanged -
+    discovery is ordered, so the note must not say it is unordered - and what changed is
+    which line of source establishes it.
+
+    It moved a second time when identity qualification landed: the sorted list is now bound
+    and handed to ``qualify_colliding_identities`` on the way out, so the ``sorted(...)``
+    call and the ``return`` are two statements rather than one. The sort **expression** is
+    what carries the claim, so that is what is grepped for, and the return is asserted
+    separately - qualification rewrites identities and never touches ``sort_key``, so the
+    order the note describes survives it. Matching the whole old line would have failed
+    here for a change that cannot affect ordering at all.
     """
     source = (REPO_ROOT / "vntyper" / "scripts" / "cohort_inputs.py").read_text(encoding="utf-8")
-    assert "return sorted(processed_dirs), temp_dirs" in source
-    assert "does return sorted() today" in compare.COHORT_ORDER_WHY
+    assert "sorted(processed_dirs.values(), key=lambda sample: sample.sort_key)" in source
+    assert "return qualify_colliding_identities(ordered), temp_dirs" in source
+    assert (
+        "returns sorted() on an effective-path key of the parts of the input path followed by the path "
+        "relative to that input's root today" in compare.COHORT_ORDER_WHY
+    )
 
 
-def test_the_cohort_order_justification_keeps_the_zip_reason(tmp_path: Path) -> None:
-    """ZIP inputs extract to ``tempfile.mkdtemp(prefix="cohort_zip_")``, which is in the sort key.
+def test_the_cohort_order_justification_bounds_the_zip_reason_to_baselines_before_the_fix() -> None:
+    """Reason 2 was "ZIP inputs, on any version", and #205 made that false.
 
-    Args:
-        tmp_path: pytest's per-test directory, unused but kept for symmetry.
+    Extraction still goes to ``tempfile.mkdtemp(prefix="cohort_zip_")`` - the temporary
+    directory did not go away, only its place in the sort key did - so the reason survives
+    for a baseline predating the fix and must be stated with that boundary. A stale
+    justification here is not cosmetic: it is the recorded reason this gate does not
+    compare cohort order at all, so leaving it would keep normalising away a difference
+    that no longer exists.
     """
     source = (REPO_ROOT / "vntyper" / "scripts" / "cohort_inputs.py").read_text(encoding="utf-8")
+    why = compare.COHORT_ORDER_WHY
     assert 'tempfile.mkdtemp(prefix="cohort_zip_")' in source
-    assert "ZIP input extracts to a randomly-named tempdir" in compare.COHORT_ORDER_WHY
+    assert "a baseline predating #205 sorts ZIP samples on their extracted path" in why
+    assert "version-bounded" in why
+    assert "Neither reason describes the current tree" in why
+    assert "on any version" not in why
 
 
 def test_the_gate_states_that_it_does_not_attest_the_ordering_fix() -> None:

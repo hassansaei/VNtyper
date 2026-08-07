@@ -92,6 +92,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
         "output_dir": (("-o", "--output-dir"), "_StoreAction", "str", None, True, None, None),
         "reference_fasta": (("--reference-fasta",), "_StoreAction", "Path", None, False, None, None),
         "report_file": (("--report-file",), "_StoreAction", "str", None, False, None, None),
+        "vcf_file": (("--vcf-file",), "_StoreAction", "Path", None, False, None, None),
     },
     "cohort": {
         "input_dirs": (("-i", "--input-dirs"), "_StoreAction", None, None, False, None, "+"),

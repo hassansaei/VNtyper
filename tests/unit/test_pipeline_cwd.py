@@ -160,3 +160,66 @@ def test_a_cram_input_validates_with_the_working_directory(tmp_path: Path, monke
     harness = run_pipeline_under_harness(tmp_path / "out", bam=None, cram=str(cram))
 
     assert _cwd_of(harness, "validate_bam_file") == expected
+
+
+# ---------------------------------------------------------------------------
+# The quickcheck log destination (#201, #162)
+#
+# ``cwd`` is not the only path this call site has to get right. The quickcheck
+# log used to be derived from the *input* alignment, and ``run_command`` opens
+# its log before it spawns anything, so a read-only input mount failed every BAM
+# and CRAM run before quickcheck even executed. The pipeline now names its own
+# output directory, and both branches have to -- the BAM one being fixed and the
+# CRAM one left alone would still fail every CRAM run.
+# ---------------------------------------------------------------------------
+
+
+def _log_dir_of(harness) -> Path:
+    """Return the ``log_dir`` ``validate_bam_file`` was called with.
+
+    Args:
+        harness: The harness returned by ``run_pipeline_under_harness``.
+
+    Returns:
+        Path: The recorded ``log_dir`` argument.
+
+    Raises:
+        AssertionError: If the call carried no ``log_dir``.
+    """
+    kwargs = harness.kwargs("validate_bam_file")
+    assert "log_dir" in kwargs, "validate_bam_file() was called without log_dir=; the log lands beside the input (#201)"
+    return Path(kwargs["log_dir"])
+
+
+def test_a_bam_input_validates_with_the_log_dir_set_to_the_output_directory(tmp_path: Path) -> None:
+    """The BAM branch names the run's output directory as the log destination.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    bam = tmp_path / "in" / "sample.bam"
+    bam.parent.mkdir()
+    bam.touch()
+
+    harness = run_pipeline_under_harness(out, bam=str(bam))
+
+    assert _log_dir_of(harness) == out
+    assert _log_dir_of(harness) != bam.parent
+
+
+def test_a_cram_input_validates_with_the_log_dir_set_to_the_output_directory(tmp_path: Path) -> None:
+    """The CRAM branch is a second call site and gets the same argument.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    cram = tmp_path / "in" / "sample.cram"
+    cram.parent.mkdir()
+    cram.touch()
+
+    harness = run_pipeline_under_harness(out, bam=None, cram=str(cram))
+
+    assert _log_dir_of(harness) == out
+    assert _log_dir_of(harness) != cram.parent

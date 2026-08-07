@@ -77,14 +77,24 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   `kestrel_genotyping`, `variant_parsing`, `scoring`, `confidence_assignment`,
   `motif_processing`, `flagging`, `summary`, `cross_match`, `generate_report`,
   `cohort_summary`, `reference_registry`, `region_utils`, `chromosome_utils`.
-- Pure-logic modules extracted from the two largest stage files. They hold the decisions;
-  the file they came from keeps the I/O:
+- Pure-logic modules extracted from the stage files that grew past the limit. They hold
+  the decisions; the file they came from keeps the I/O:
   - `motif_decisions.py` — the motif half/exclusion/GG-allowlist rules, split out of
     `motif_processing.py` (#195).
   - `cohort_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
     `cohort_exports.py` — the rule table, per-row categorisation, display tables, sample
     discovery and export writers, split out of `cohort_summary.py`.
-  All six are fully annotated and at or near 100% branch coverage. Put new pure logic
+  - `cohort_pseudonyms.py` — the pseudonym digest and the validation of the algorithm and
+    width it is configured with, split out of `cohort_inputs.py`. Discovery keeps
+    `DiscoveredSample`, `discover_sample_directories` and `duplicate_identity`: an
+    identity collision is upstream of any digest, so no width fixes it.
+  - `alignment_index.py` — resolving an *existing* **BAI** under either name it can carry
+    (`<file>.bai`, then `<stem>.bai`), split out of `fastq_bam_processing.py`, which keeps
+    every `run_command`/samtools call including the one that builds a missing index. It is
+    **not** htslib's resolution order — htslib tries CSI first, and a CSI is ignored here
+    on purpose, because the only consumer of the path is the BAI-only offset extractor in
+    `extract_unmapped_from_offset.py`. Widening it is a change to that reader first.
+  All eight are fully annotated and at or near 100% branch coverage. Put new pure logic
   there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`

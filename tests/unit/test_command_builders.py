@@ -224,6 +224,50 @@ def test_the_index_command_is_pinned():
     assert command == "samtools index /out/output_sliced.bam"
 
 
+def test_the_index_command_takes_an_output_path():
+    """#210/#162: the index must be buildable somewhere other than beside the input.
+
+    ``-o`` requires samtools >= 1.15; ``conda/environment_vntyper.yml`` pins 1.20.
+    """
+    command = build_samtools_index_command(
+        samtools_path=SAMTOOLS, bam_file="/in/sample.bam", output_bai="/out/sample.bam.bai"
+    )
+
+    assert command == "samtools index -o /out/sample.bam.bai /in/sample.bam"
+
+
+def test_the_index_command_without_an_output_path_is_unchanged():
+    """The default stays byte-identical, so the two callers indexing a BAM they
+    produced in the output directory need no change at all."""
+    command = build_samtools_index_command(samtools_path=SAMTOOLS, bam_file="/in/sample.bam")
+
+    assert command == "samtools index /in/sample.bam"
+
+
+def test_the_index_output_path_is_quoted():
+    """The destination is as caller-supplied as the input, so it is quoted too."""
+    command = build_samtools_index_command(
+        samtools_path=SAMTOOLS, bam_file="/in/sample.bam", output_bai="/out/has space.bai"
+    )
+
+    assert shlex.split(command) == ["samtools", "index", "-o", "/out/has space.bai", "/in/sample.bam"]
+
+
+def test_the_index_output_path_is_the_operand_after_minus_o():
+    """The operand order is load-bearing and easy to invert silently.
+
+    ``samtools index -o A B`` writes the index for **B** into **A**. Swapping them
+    is not a syntax error -- samtools would try to index the destination -- so the
+    positions are pinned rather than only the token set.
+    """
+    tokens = shlex.split(
+        build_samtools_index_command(samtools_path=SAMTOOLS, bam_file="/in/sample.bam", output_bai="/out/sample.bai")
+    )
+
+    assert tokens[tokens.index("-o") + 1] == "/out/sample.bai"
+    assert tokens[-1] == "/in/sample.bam"
+
+
 def test_the_merge_command_is_pinned():
     command = build_samtools_merge_command(
         samtools_path=SAMTOOLS,

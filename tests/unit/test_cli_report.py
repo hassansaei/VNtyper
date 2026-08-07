@@ -189,3 +189,168 @@ def test_handle_report_is_callable_directly(tmp_path, bound_calls) -> None:
 
     assert len(bound_calls) == 1
     assert bound_calls[0].arguments["log_file"] is None
+
+
+# ---------------------------------------------------------------------------
+# The IGV panel resolves BAM, BED and VCF from one effective run directory (#167)
+# ---------------------------------------------------------------------------
+#
+# SPECIFICATION (REVIEW.md finding 1, HIGH -- supersedes the plan's original
+# "resolve only the VCF" text): resolving only the VCF is not enough.
+# `generate_report.py` only runs IGV generation `if bed_file and
+# os.path.exists(bed_file)`, and before this fix `--bam-file`/`--bed-file`
+# were discovered ONLY when `--input-dir` was given. So `vntyper report -o
+# <run>` (no `--input-dir`) resolved no BED at all, skipped IGV generation
+# entirely, and a newly-resolved VCF would have changed nothing for that
+# invocation -- exactly the case `--output-dir`'s own help text describes
+# ("Directory containing pipeline results"). BAM, BED and VCF are now
+# resolved from one effective run directory, in the same precedence for each:
+# the explicit flag, then `--input-dir`, then `--output-dir`. This mirrors
+# `resolve_log_file`, which already reads `<output-dir>/pipeline.log` on
+# exactly that basis.
+
+
+def _kestrel_run(run_dir: Path, vcf_name: str = "output_indel.vcf.gz") -> tuple[Path, Path, Path]:
+    """Lay out a standard ``kestrel/`` directory with a BAM, a BED and a VCF."""
+    kestrel = run_dir / "kestrel"
+    kestrel.mkdir(parents=True, exist_ok=True)
+    bam = kestrel / "output.bam"
+    bam.write_bytes(b"")
+    bed = kestrel / "output.bed"
+    bed.write_text("chr1\t1\t2\n", encoding="utf-8")
+    vcf = kestrel / vcf_name
+    vcf.write_bytes(b"")
+    return bam, bed, vcf
+
+
+def _kestrel_vcf(run_dir: Path, name: str = "output_indel.vcf.gz") -> Path:
+    kestrel = run_dir / "kestrel"
+    kestrel.mkdir(parents=True, exist_ok=True)
+    vcf = kestrel / name
+    vcf.write_bytes(b"")
+    return vcf
+
+
+def test_the_vcf_is_discovered_under_the_output_dir(tmp_path, bound_calls) -> None:
+    vcf = _kestrel_vcf(tmp_path)
+    cli.main(["report", "-o", str(tmp_path)])
+    assert bound_calls[0].arguments["vcf_file"] == str(vcf)
+
+
+def test_the_vcf_is_discovered_under_the_input_dir_when_one_is_given(tmp_path, bound_calls) -> None:
+    run = tmp_path / "run"
+    vcf = _kestrel_vcf(run)
+    cli.main(["report", "-o", str(tmp_path / "out"), "--input-dir", str(run)])
+    assert bound_calls[0].arguments["vcf_file"] == str(vcf)
+
+
+def test_the_compressed_vcf_wins_over_the_uncompressed_one(tmp_path, bound_calls) -> None:
+    """``select_best_vcf_file``'s existing preference, reached from the report path."""
+    _kestrel_vcf(tmp_path, "output_indel.vcf")
+    gz = _kestrel_vcf(tmp_path, "output_indel.vcf.gz")
+    cli.main(["report", "-o", str(tmp_path)])
+    assert bound_calls[0].arguments["vcf_file"] == str(gz)
+
+
+def test_an_explicit_vcf_file_beats_the_discovered_one(tmp_path, bound_calls) -> None:
+    _kestrel_vcf(tmp_path)
+    explicit = tmp_path / "mine.vcf.gz"
+    explicit.write_bytes(b"")
+    cli.main(["report", "-o", str(tmp_path), "--vcf-file", str(explicit)])
+    assert bound_calls[0].arguments["vcf_file"] == str(explicit)
+
+
+def test_no_vcf_anywhere_stays_none_and_does_not_raise(tmp_path, bound_calls) -> None:
+    """bcftools is optional; a missing VCF is a warning, never an error."""
+    cli.main(["report", "-o", str(tmp_path)])
+    assert bound_calls[0].arguments["vcf_file"] is None
+
+
+def test_an_explicit_vcf_file_that_does_not_exist_is_still_passed_through(tmp_path, bound_calls) -> None:
+    """The user asked for it by name; ``run_igv_report`` warns and skips the track."""
+    cli.main(["report", "-o", str(tmp_path), "--vcf-file", str(tmp_path / "absent.vcf.gz")])
+    assert bound_calls[0].arguments["vcf_file"] == str(tmp_path / "absent.vcf.gz")
+
+
+def test_the_bam_and_bed_are_discovered_under_the_output_dir_alone(tmp_path, bound_calls) -> None:
+    """The redesign's core claim: ``-o`` alone (no ``--input-dir``) now resolves the panel."""
+    bam, bed, _ = _kestrel_run(tmp_path)
+    cli.main(["report", "-o", str(tmp_path)])
+    bound = bound_calls[0]
+    assert bound.arguments["bam_file"] == bam
+    assert bound.arguments["bed_file"] == bed
+
+
+def test_the_input_dir_wins_over_the_output_dir_for_bam_and_bed(tmp_path, bound_calls) -> None:
+    run = tmp_path / "run"
+    bam, bed, _ = _kestrel_run(run)
+    # A decoy kestrel/ directly under --output-dir, which must lose to --input-dir.
+    _kestrel_run(tmp_path, vcf_name="output_indel.vcf")
+    cli.main(["report", "-o", str(tmp_path), "--input-dir", str(run)])
+    bound = bound_calls[0]
+    assert bound.arguments["bam_file"] == bam
+    assert bound.arguments["bed_file"] == bed
+
+
+def test_the_input_dir_wins_over_the_output_dir_for_the_vcf(tmp_path, bound_calls) -> None:
+    run = tmp_path / "run"
+    vcf = _kestrel_vcf(run)
+    _kestrel_vcf(tmp_path, "output_indel.vcf")  # a decoy under --output-dir, must lose
+    cli.main(["report", "-o", str(tmp_path), "--input-dir", str(run)])
+    assert bound_calls[0].arguments["vcf_file"] == str(vcf)
+
+
+def test_explicit_bam_and_bed_win_over_output_dir_discovery(tmp_path, bound_calls) -> None:
+    _kestrel_run(tmp_path)
+    chosen_bam = tmp_path / "chosen.bam"
+    chosen_bam.write_bytes(b"")
+    chosen_bed = tmp_path / "chosen.bed"
+    chosen_bed.write_text("", encoding="utf-8")
+    cli.main(
+        [
+            "report",
+            "-o",
+            str(tmp_path),
+            "--bam-file",
+            str(chosen_bam),
+            "--bed-file",
+            str(chosen_bed),
+        ]
+    )
+    bound = bound_calls[0]
+    assert bound.arguments["bam_file"] == chosen_bam
+    assert bound.arguments["bed_file"] == chosen_bed
+
+
+def test_nothing_anywhere_leaves_bam_bed_and_vcf_none_without_raising(tmp_path, bound_calls) -> None:
+    """``-o`` alone, no kestrel directory anywhere: the handler must not raise."""
+    cli.main(["report", "-o", str(tmp_path)])
+    bound = bound_calls[0]
+    assert bound.arguments["bam_file"] is None
+    assert bound.arguments["bed_file"] is None
+    assert bound.arguments["vcf_file"] is None
+
+
+def test_vntyper_report_reaches_run_igv_report_with_all_three_tracks(tmp_path, monkeypatch) -> None:
+    """The review's specific instruction: prove the panel, not just the argument.
+
+    Unlike the ``bound_calls``-based tests above, which replace
+    ``generate_summary_report`` entirely, this drives the real generator so the
+    assertion lands on the actual call into ``run_igv_report`` -- the function
+    that decides whether the IGV panel is built at all, and the one
+    ``generate_report.py:492`` gates on ``bed_file`` alone.
+    """
+    from vntyper.scripts import generate_report
+
+    bam, bed, vcf = _kestrel_run(tmp_path)
+
+    calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(generate_report, "run_igv_report", lambda *a, **k: calls.append((a, k)))
+
+    cli.main(["report", "-o", str(tmp_path)])
+
+    assert len(calls) == 1, "run_igv_report must be invoked once the bed file is resolved"
+    call_args, call_kwargs = calls[0]
+    assert call_args[0] == bed
+    assert call_args[1] == bam
+    assert call_kwargs["vcf_file"] == str(vcf)

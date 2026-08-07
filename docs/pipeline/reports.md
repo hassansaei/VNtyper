@@ -81,7 +81,9 @@ The cohort summary module (`cohort_summary.py`) aggregates results from multiple
 
 ### Pseudonymization
 
-The cohort report supports sample pseudonymization by hashing sample identifiers, allowing sharing of aggregated results without exposing patient identifiers. Each sample name is replaced with a prefix (default `sample_`) followed by the first 5 characters of its MD5 hash.
+The cohort report supports sample pseudonymization by hashing sample identifiers, allowing sharing of aggregated results without exposing patient identifiers. Each sample name is replaced with a prefix (default `sample_`) followed by the first 12 hex characters of its SHA-256 digest. Both the algorithm and the width are configurable under `cohort.pseudonym` in `config.json`.
+
+The mapping is injective by construction: if two samples would share a reported name, the run raises an error naming both rather than merging their genotypes into one row. See [Cohort Analysis](../user-guide/cohort-analysis.md#pseudonymization) for the configuration block and what to do about a collision.
 
 ### Report Configuration
 

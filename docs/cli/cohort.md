@@ -28,10 +28,20 @@ One of `-i/--input-dirs` or `--input-file` is required.
 
 ## Pseudonymization
 
-The `--pseudonymize-samples` flag supports two modes:
+The `--pseudonymize-samples` flag supports two modes. In both, the pseudonym is the prefix followed by the first 12 hex characters of the SHA-256 digest of the original sample name, so it is stable across runs and machines:
 
-- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, producing names like `sample_a3f8c`, `sample_1b2d0` (prefix + first 5 characters of the MD5 hash of the original sample name).
-- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, producing names like `patient_a3f8c`, `patient_1b2d0`.
+- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, so `sample1` and `sample2` are reported as `sample_e85130791f31` and `sample_5a9392784e07`.
+- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, giving `patient_e85130791f31` and `patient_5a9392784e07` for the same two samples.
+
+The digest algorithm and the number of characters kept are read from `cohort.pseudonym` in `config.json` (`{"algorithm": "sha256", "digest_characters": 12}`), so `--config-path` can change either -- bearing in mind that a supplied config replaces the shipped one rather than merging into it. An algorithm that is not available in the running interpreter's `hashlib` is refused by name.
+
+## Sample identity
+
+A sample's identity is a namespace and a value. The value is the sample's own name -- its directory name, or the stem of the input file that a zipped run recorded. The namespace is the name of the input it was reached through: the archive stem for `job_a.zip`, the directory name for `-i /data/run1`. The input's *name* is used rather than its path, so `-i /data/run1` and `-i ./run1` are the same namespace and a pseudonym survives the cohort being relocated.
+
+Uniqueness is a property of the pair, not of the value alone. When two or more discovered samples share a value -- two web jobs that both uploaded `sample.bam`, for instance -- those samples are reported as `namespace/value` (`job_a/sample` and `job_b/sample`) and the cohort completes. Samples whose value is already unique are left exactly as they are, so a collision elsewhere in the cohort never moves their identity or their pseudonym.
+
+The run stops only on ambiguity qualification cannot reduce: two inputs sharing a name (two archives both called `job.zip`, or two directory inputs both called `sample`), which qualify to one identity twice; and a digest collision between two identities that are already distinct, whose fix is a wider `cohort.pseudonym.digest_characters`. Both raise an error naming the two samples and the inputs they came from, instead of silently reporting two patients as one.
 
 ## Examples
 

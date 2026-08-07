@@ -489,7 +489,12 @@ def test_a_report_without_igv_still_declares_valid_javascript(positive_summary) 
 
 
 def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monkeypatch) -> None:
-    """The other side of the same fix: a real IGV page still reaches the HTML."""
+    """The other side of the same fix: a real IGV page still reaches the HTML.
+
+    #216: the fragments are re-serialised through ``js_json_literal`` rather than
+    passed through verbatim, so what lands in the page is ``json.dumps``' compact,
+    key-sorted output -- not the extracted text's own spacing.
+    """
     from vntyper.scripts import generate_report
 
     monkeypatch.setattr(
@@ -504,8 +509,8 @@ def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monke
     (positive_summary / "igv_report.html").write_text("ignored", encoding="utf-8")
 
     html = render(positive_summary, bed_file=str(bed))
-    assert 'const tableJson = {"headers": ["a"], "rows": []};' in html
-    assert 'const sessionDictionary = {"0": "blob:x"};' in html
+    assert 'const tableJson = {"headers":["a"],"rows":[]};' in html
+    assert 'const sessionDictionary = {"0":"blob:x"};' in html
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +592,26 @@ def test_a_kestrel_cell_is_escaped(tmp_path) -> None:
     write_summary(
         tmp_path,
         tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Motif_sequence": PAYLOAD}]),
+    )
+    html = render(tmp_path)
+    assert PAYLOAD not in html
+    assert ESCAPED in html
+
+
+def test_a_malicious_flag_in_a_stored_summary_is_server_escaped(tmp_path) -> None:
+    """#207's real trust boundary: the stored artefact, not the rule engine.
+
+    On a normal pipeline run `Flag` is safe by construction -- `flagging.py` sets
+    it from the *keys* of `flagging_rules`, config-declared identifiers, never
+    from a DataFrame value. The untrusted path is the one #207 names: `Flag`
+    values come from a `pipeline_summary.json` that ``vntyper report`` and
+    ``vntyper cohort`` both consume as a supplied artefact -- a client-uploaded
+    ZIP, or an output directory received from elsewhere -- so a hand-edited or
+    otherwise adversarial summary is the thing this test plants.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_KESTREL, [{**KESTREL_ROW, "Flag": PAYLOAD}]),
     )
     html = render(tmp_path)
     assert PAYLOAD not in html

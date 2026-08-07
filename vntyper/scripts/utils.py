@@ -8,6 +8,7 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 from vntyper.scripts.command_builders import quote_path
 
@@ -304,7 +305,7 @@ def load_config(config_path=None):
             sys.exit(1)
 
 
-def validate_bam_file(file_path, cwd=None):
+def validate_bam_file(file_path, cwd=None, log_dir=None):
     """
     Validates the alignment file (BAM or CRAM) for existence, correct extension, and
     integrity using samtools quickcheck.
@@ -331,6 +332,14 @@ def validate_bam_file(file_path, cwd=None):
         file_path (str): Path to the BAM or CRAM file.
         cwd (str, optional): Working directory to use when running samtools.
             Important for environments where the working directory may become invalid.
+        log_dir (str, optional): Directory to write the ``samtools quickcheck`` log
+            into. Defaults to None, which writes it beside the input alignment --
+            today's behaviour, kept so this stays a contained change. The pipeline
+            passes its output directory, because the log is an artefact of the run
+            and the input directory is routinely mounted read-only (#162, #201).
+            ``run_command`` opens the log before it runs anything, so deriving this
+            path from the input made a read-only mount raise ``PermissionError``
+            before quickcheck ever executed.
 
     Raises:
         ValueError: If any validation check fails.
@@ -359,7 +368,10 @@ def validate_bam_file(file_path, cwd=None):
     # to -- and the exception callers see is the ValueError every other check here (and
     # `validate_fastq_file`) raises for unusable input.
     command = f"samtools quickcheck -v {quote_path(file_path)}"
-    log_file = f"{file_path}.quickcheck.log"
+    if log_dir is None:
+        log_file = f"{file_path}.quickcheck.log"
+    else:
+        log_file = str(Path(log_dir) / f"{Path(file_path).name}.quickcheck.log")
     success = run_command(command, log_file, critical=False, cwd=cwd)
     if not success:
         logger.error(f"Alignment file failed quickcheck: {file_path}")

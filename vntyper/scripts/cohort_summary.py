@@ -41,7 +41,11 @@ from vntyper.scripts.cohort_exports import (
 from vntyper.scripts.cohort_inputs import (
     cleanup_temp_dirs,
     discover_sample_directories,
+    duplicate_identity,
     load_pipeline_summary_for_sample,
+)
+from vntyper.scripts.cohort_pseudonyms import (
+    pseudonym_settings,
     pseudonymized_sample_name,
 )
 from vntyper.scripts.cohort_tables import (
@@ -353,8 +357,9 @@ def aggregate_cohort(
     ---------------------
     pseudonymize_samples : bool or str, optional
         If a value is provided, pseudonymize sample names using the given value as the prefix.
-        The pseudonym will be the prefix concatenated with the first 5 characters of the MD5 hash
-        of the original sample name.
+        The pseudonym is the prefix followed by the leading hex characters of the digest of
+        the original sample name; the digest and its width are read from
+        ``config["cohort"]["pseudonym"]`` and default to 12 characters of SHA-256.
 
     Parameters
     ----------
@@ -374,78 +379,162 @@ def aggregate_cohort(
     -------
     None
         Writes the cohort summary report to the specified output directory.
+
+    Raises
+    ------
+    ValueError
+        If two discovered samples would be reported under one name and nothing in the
+        inputs separates them - either because their inputs share a name as well as their
+        local values, so ``qualify_colliding_identities`` cannot tell them apart, or
+        because two distinct identities share a pseudonym. A cohort that silently merges
+        two patients' genotypes is worse than one that refuses to run (#206). Two samples
+        that merely share a local value are *not* an error: they are qualified by the name
+        of the input each came through and both are reported.
     """
     additional_stats_list = []
 
-    # Identify valid directories/zip files (no changes here)
+    # Identify valid directories/zip files
     processed_dirs, temp_dirs = discover_sample_directories(input_paths)
-
-    if not processed_dirs:
-        logger.error("No valid input directories or zip files found for cohort aggregation.")
-        return
 
     # If pseudonymization is requested, build a mapping from original to pseudonym names.
     sample_mapping = {}
 
     kestrel_list = []
     advntr_list = []
-    for sample_dir in processed_dirs:
-        original_sample = Path(sample_dir).name
-        if pseudonymize_samples:
-            pseudonym = pseudonymized_sample_name(pseudonymize_samples, original_sample)
-            sample_mapping[pseudonym] = original_sample
+    # The `try` opens here, immediately after discovery, and not at the sample loop: every
+    # zip input has already been extracted into a `tempfile.mkdtemp` directory by this
+    # point, so anything raising between the two leaks one directory per archive. That was
+    # not hypothetical - reading the digest settings below used to raise `AttributeError`
+    # on a config carrying `"cohort": null`, from outside the old `try`.
+    try:
+        if not processed_dirs:
+            logger.error("No valid input directories or zip files found for cohort aggregation.")
+            return
+
+        # The digest and its width are configuration, not code, and `--config-path`
+        # replaces the whole config rather than merging it (AGENTS.md trap 2) - so the
+        # read has to survive a hand-written document, null levels included. It lives in
+        # cohort_pseudonyms with the defaults it falls back to.
+        pseudonym_algorithm, pseudonym_length = pseudonym_settings(config)
+
+        # The reported sample must identify exactly one patient, and that has to hold
+        # before any digest is taken: two discovered samples can share a name, so their
+        # identities are already equal and no digest width separates them.
+        # sample_categories() groups on the reported sample, so an undetected pair is
+        # counted as one (#206).
+        #
+        # Discovery has already qualified every *shared* name with the namespace of the
+        # input it came through, so what survives to here is the residue: two samples whose
+        # namespace and whose local value are both equal - two archives with one stem, or
+        # two directory inputs with one name. Nothing the caller supplied distinguishes
+        # them, so there is no name to qualify with and the run stops.
+        collision = duplicate_identity(processed_dirs)
+        if collision is not None:
+            first, second = collision
+            # The sample directory of a zip input is an extraction directory, which tells
+            # the operator nothing, so each one is named together with the input it came
+            # from - and the inputs are exactly what has to change.
+            msg = (
+                f"Duplicate cohort sample identity {first.identity!r}: "
+                f"{first.directory} (from {first.origin}) and "
+                f"{second.directory} (from {second.origin}) would be reported as one sample. "
+                "Their inputs share a name, so qualifying by it cannot separate them. "
+                "Rename one input, or give the two runs distinct recorded input files."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        for sample in processed_dirs:
+            sample_dir = sample.directory
+            original_sample = sample.identity
+            if pseudonymize_samples:
+                pseudonym = pseudonymized_sample_name(
+                    pseudonymize_samples,
+                    original_sample,
+                    algorithm=pseudonym_algorithm,
+                    length=pseudonym_length,
+                )
+                existing = sample_mapping.get(pseudonym)
+                if existing is not None:
+                    # #206: sample_mapping is keyed on the pseudonym, so this used to
+                    # overwrite silently - two patients' rows became one row, and
+                    # sample_categories() counted one result where there were two. The
+                    # identities are already known to be distinct, so a repeat here is a
+                    # digest collision rather than the same sample seen twice.
+                    #
+                    # This guard aborts where the name guard above now qualifies, and the
+                    # asymmetry is the point rather than an inconsistency. A *digest*
+                    # collision is between two samples that already have perfectly good
+                    # distinct names: nothing about them is ambiguous, the report could
+                    # name them today, and the fault is entirely in how many characters of
+                    # the digest were configured - so qualifying them would be gratuitous
+                    # and widening the digest is the fix. A *name* collision is the
+                    # opposite: the names themselves are ambiguous, so there is nothing to
+                    # widen and qualification is the only way to proceed at all. Different
+                    # situations, different answers.
+                    msg = (
+                        f"Pseudonym collision: {original_sample!r} and {existing!r} both map to {pseudonym!r}. "
+                        "Widen cohort.pseudonym.digest_characters in the configuration and re-run."
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
+                sample_mapping[pseudonym] = original_sample
+            else:
+                pseudonym = original_sample
+
+            logger.info(f"Processing sample directory: {sample_dir} as {pseudonym}")
+            k_data, a_data, add_stats = load_pipeline_summary_for_sample(sample_dir)
+            if k_data:
+                for entry in k_data:
+                    entry["Sample"] = pseudonym
+                kestrel_list.extend(k_data)
+            else:
+                logger.warning(f"No Kestrel data found in pipeline summary for sample {original_sample}.")
+            if a_data:
+                for entry in a_data:
+                    entry["Sample"] = pseudonym
+                advntr_list.extend(a_data)
+            else:
+                logger.warning(f"No adVNTR data found in pipeline summary for sample {original_sample}.")
+            if add_stats:
+                add_stats["Sample"] = pseudonym
+                additional_stats_list.append(add_stats)
+
+        if kestrel_list:
+            kestrel_df = pd.DataFrame(kestrel_list)
         else:
-            pseudonym = original_sample
-
-        logger.info(f"Processing sample directory: {sample_dir} as {pseudonym}")
-        k_data, a_data, add_stats = load_pipeline_summary_for_sample(sample_dir)
-        if k_data:
-            for entry in k_data:
-                entry["Sample"] = pseudonym
-            kestrel_list.extend(k_data)
+            logger.warning("No Kestrel data found in any sample.")
+            kestrel_df = pd.DataFrame()
+        if advntr_list:
+            advntr_df = pd.DataFrame(advntr_list)
         else:
-            logger.warning(f"No Kestrel data found in pipeline summary for sample {original_sample}.")
-        if a_data:
-            for entry in a_data:
-                entry["Sample"] = pseudonym
-            advntr_list.extend(a_data)
+            logger.warning("No adVNTR data found in any sample.")
+            advntr_df = pd.DataFrame()
+
+        # Create additional statistics DataFrame and HTML table if any stats were gathered.
+        # The frame is hoisted so the HTML table and the export below are one value: a CSV
+        # that could disagree with the rendered table would be worse than no CSV.
+        if additional_stats_list:
+            additional_stats_df = additional_stats_frame(additional_stats_list)
+            additional_stats_html = stats_table_html(additional_stats_df)
         else:
-            logger.warning(f"No adVNTR data found in pipeline summary for sample {original_sample}.")
-        if add_stats:
-            add_stats["Sample"] = pseudonym
-            additional_stats_list.append(add_stats)
+            additional_stats_df = pd.DataFrame()
+            additional_stats_html = ""
 
-    if kestrel_list:
-        kestrel_df = pd.DataFrame(kestrel_list)
-    else:
-        logger.warning("No Kestrel data found in any sample.")
-        kestrel_df = pd.DataFrame()
-    if advntr_list:
-        advntr_df = pd.DataFrame(advntr_list)
-    else:
-        logger.warning("No adVNTR data found in any sample.")
-        advntr_df = pd.DataFrame()
-
-    # Create additional statistics DataFrame and HTML table if any stats were gathered.
-    # The frame is hoisted so the HTML table and the export below are one value: a CSV
-    # that could disagree with the rendered table would be worse than no CSV.
-    if additional_stats_list:
-        additional_stats_df = additional_stats_frame(additional_stats_list)
-        additional_stats_html = stats_table_html(additional_stats_df)
-    else:
-        additional_stats_df = pd.DataFrame()
-        additional_stats_html = ""
-
-    generate_cohort_summary_report(
-        output_dir=output_dir,
-        kestrel_df=kestrel_df,
-        advntr_df=advntr_df,
-        summary_file=summary_file,
-        config=config,
-        additional_stats_html=additional_stats_html,
-    )
-
-    cleanup_temp_dirs(temp_dirs)
+        generate_cohort_summary_report(
+            output_dir=output_dir,
+            kestrel_df=kestrel_df,
+            advntr_df=advntr_df,
+            summary_file=summary_file,
+            config=config,
+            additional_stats_html=additional_stats_html,
+        )
+    finally:
+        # In a `finally` because everything above - the config read, the two identity
+        # guards, the per-sample loop and the render - can raise, and an aborted cohort
+        # must not leave its extracted archives behind. The `return` on an empty discovery
+        # runs it too.
+        cleanup_temp_dirs(temp_dirs)
 
     # Generate additional machine-readable cohort summaries if requested. The render
     # above leaves both frames as they were, so what goes out here is what was read out

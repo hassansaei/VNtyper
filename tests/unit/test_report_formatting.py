@@ -12,6 +12,9 @@ by running the whole pipeline:
   in every negative sample's report.
 """
 
+import json
+import logging
+
 import pandas as pd
 import pytest
 
@@ -99,8 +102,6 @@ def test_parse_coverage_stats_yields_none_for_no_rows() -> None:
 
 
 def test_parse_coverage_stats_survives_an_unreadable_value(caplog) -> None:
-    import logging
-
     row: dict[str, object] = dict.fromkeys(COVERAGE_COLUMNS, 1)
     row["stdev"] = "not-a-number"
     with caplog.at_level(logging.ERROR, logger="vntyper.scripts.report_formatting"):
@@ -318,3 +319,103 @@ def test_confidence_html_escapes_inside_the_span_too() -> None:
 def test_escape_html_escapes_quotes() -> None:
     """Quotes matter: these values land inside attributes in the IGV tooltips."""
     assert rf.escape_html('a"b') == "a&quot;b"
+
+
+# ---------------------------------------------------------------------------
+# js_json_literal (#216)
+# ---------------------------------------------------------------------------
+#
+# SPECIFICATION: `report_template.html` interpolates these two fragments straight
+# into a <script> block with `|safe`. They are lifted verbatim out of another
+# tool's HTML by `extract_line_after`, and the only guard they used to get was
+# `js_object_literal`, which checked that the fragment was non-empty. That is a
+# *syntax* guard against `const tableJson = ;`, not a safety guard: a `</script>`
+# anywhere in the fragment closes the block early and everything after it is
+# parsed as HTML. The fragment is sample-derived -- it is the igv-reports variant
+# table, built from VNtyper's own BED and VCF, whose REF, ALT and Motif_sequence
+# values come from the sample's reads.
+#
+# `js_object_literal` has no test at all on `main` -- that is how #216 survived --
+# so there is no prior test here to delete; this whole section is new.
+
+
+def test_a_well_formed_fragment_round_trips_as_json() -> None:
+    result = rf.js_json_literal('{"headers": ["a"], "rows": [[1]]}', rf.EMPTY_TABLE_JSON)
+    assert json.loads(result) == {"headers": ["a"], "rows": [[1]]}
+
+
+def test_the_trailing_statement_terminator_is_stripped() -> None:
+    """Defensive against a *future* igv-reports version, not a correction of
+    today's: verified against the installed igv-reports 1.16.0 that
+    `extract_line_after` returns the bare literal with no `;` at all."""
+    result = rf.js_json_literal('{"a": 1};', rf.EMPTY_TABLE_JSON)
+    assert json.loads(result) == {"a": 1}
+
+
+def test_a_script_close_in_a_string_value_cannot_terminate_the_block() -> None:
+    """The `</script>` case, which is now covered by the blanket `<` escape.
+
+    This used to assert the literal `<\\/script>` that a `</`-only replacement
+    produced. Escaping every `<` as `\\u003c` subsumes that case, so what is
+    asserted is the property rather than the particular escape: no literal `<`
+    reaches the block, and the data survives the round trip unchanged.
+    """
+    fragment = json.dumps({"rows": [["</script><img src=x onerror=alert(1)>"]]})
+    result = rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON)
+    assert "<" not in result
+    # It is still the same data once the browser parses it.
+    assert json.loads(result)["rows"][0][0] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_the_double_escaped_script_state_cannot_be_entered() -> None:
+    """Escaping only `</` is not enough: `<!--<script>` is the other way out.
+
+    An HTML5 tokenizer that meets `<!--` followed by `<script` inside a script
+    element enters the *double-escaped* state, in which the real `</script>` no
+    longer ends the element -- so the rest of the document is swallowed as script
+    text and the report renders as a blank page below the IGV panel. No `</`
+    appears anywhere in that sequence, so the previous escape let it through
+    verbatim. Every literal `<` is escaped now, which closes both routes at once.
+    """
+    fragment = json.dumps({"rows": [["<!--<script>", "a<b"]]})
+    result = rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON)
+    assert "<" not in result
+    assert "\\u003c" in result
+    # `<` is a JSON string escape, so the browser still sees the original text.
+    assert json.loads(result)["rows"][0] == ["<!--<script>", "a<b"]
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029"])
+def test_javascript_line_terminators_do_not_appear_literally(separator: str) -> None:
+    """U+2028 and U+2029 end a line in JavaScript but are legal inside a JSON
+    string. `ensure_ascii=True` (the `json.dumps` default, kept explicit) is what
+    keeps them out -- there is no `.replace()` for either in the implementation.
+    This pins the *property* of the result, which is worth pinning even though
+    the mechanism enforcing it is a stdlib default rather than code of ours."""
+    result = rf.js_json_literal(json.dumps({"a": separator}), rf.EMPTY_TABLE_JSON)
+    assert separator not in result
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    ["", "   ", "not json at all", "{unquoted: 1}", "{'single': 'quotes'}", "{"],
+)
+def test_a_fragment_that_is_not_json_falls_back(fragment: str) -> None:
+    assert rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON) == rf.EMPTY_TABLE_JSON
+
+
+def test_the_fallback_is_returned_verbatim_for_the_session_dictionary() -> None:
+    assert rf.js_json_literal("", rf.EMPTY_SESSION_DICTIONARY) == rf.EMPTY_SESSION_DICTIONARY
+
+
+def test_the_output_is_deterministic_for_the_same_input() -> None:
+    """Two runs over the same IGV page must emit byte-identical script (exit criterion E2)."""
+    fragment = '{"b": 2, "a": 1}'
+    assert rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON) == rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON)
+    assert rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON) == '{"a":1,"b":2}'
+
+
+def test_a_malformed_fragment_is_logged_at_warning(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        rf.js_json_literal("not json", rf.EMPTY_TABLE_JSON)
+    assert any("could not be parsed as JSON" in r.getMessage() for r in caplog.records)
