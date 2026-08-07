@@ -113,7 +113,11 @@ class TestTheEndToEndOracle:
         assert "original_index" not in out.columns
 
     def test_only_passing_rows_carry_motif_motif_fasta_and_pos_fasta(self):
-        """A failing row keeps its input columns and gets NA annotations, not garbage."""
+        """A failing row keeps its input columns and gets NA annotations, not garbage.
+
+        ``POS_fasta`` equals ``POS`` for every passing row, including the ones at 67 that
+        sit above ``position_threshold``: it is a verbatim copy, not a rebase (#203).
+        """
         out = motif_correction_and_annotation(_kestrel_frame(), _merged_motifs(), _shipped_config())
 
         assert out["Motif"].tolist()[:2] == ["2", "X"]
@@ -137,11 +141,24 @@ class TestTheEndToEndOracle:
         assert out.loc[0, "Motifs"] == "1-2" and out.loc[0, "Motif"] == "2", "POS 54 takes the right half"
         assert out.loc[1, "Motifs"] == "X-3" and out.loc[1, "Motif"] == "X", "POS 67 takes the left half"
 
-    def test_the_original_pos_column_is_never_rebased_only_pos_fasta_is_derived(self):
-        """The threshold subtraction happens on the working frame, not the returned one."""
+    def test_pos_and_pos_fasta_are_both_the_vcf_position_in_the_pair_record(self):
+        """#203: ``Motif_fasta`` names a 120 bp *pair* record, so ``POS`` is already right.
+
+        Every record of ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is two
+        60 bp motifs concatenated and named ``<left>-<right>``; ``1-2`` is a record ID,
+        ``2`` is not. ``Motif_fasta`` is a verbatim copy of the VCF ``#CHROM``, i.e. the
+        pair name, so the coordinate beside it in ``output.bed`` lives in the 120 bp
+        record's space and the raw ``POS`` is the correct value. Subtracting
+        ``position_threshold`` would make every row at or above 60 wrong by exactly 60 bp.
+
+        ``Motif`` - the half-motif name - is what is repeat-unit-relative, and nothing
+        writes a coordinate beside it.
+        """
         out = motif_correction_and_annotation(_kestrel_frame(), _merged_motifs(), _shipped_config())
 
         assert out["POS"].tolist() == [54, 67, 67, 67, 68, 55]
+        assert out.loc[1, "POS_fasta"] == 67, "not 7: no rebase, by design"
+        assert out.loc[0, "POS_fasta"] == 54
 
     def test_the_position_threshold_boundary_decides_which_half_of_the_id_is_the_motif(self):
         """POS == 60 exactly is a RIGHT motif, so it takes the half before the dash.
