@@ -190,7 +190,6 @@ def run_vntyper_pipeline(
     # activate the conda environment and run vntyper
     # Convert bam_file to absolute Path if it's a string or relative path
     bam_file_path = Path(bam_file).resolve()
-    bam_name = bam_file_path.name
 
     # Calculate relative path from tests/data/ to support subdirectories
     project_root = Path(__file__).parent.parent.parent
@@ -231,17 +230,21 @@ def run_vntyper_pipeline(
             )
             return _exit_code(mkdir_result)
 
-    # VNtyper writes log files next to input BAM, but input is read-only.
-    # Copy BAM to output directory first (inside container).
-    # This also works around the read-only filesystem issue.
-    workdir_bam_path = f"{container_output_path}/input_{bam_name}"
+    # The BAM is read straight out of the read-only input mount. It used to be
+    # copied into the output directory first, because VNtyper derived two writes
+    # from the input path -- the `samtools quickcheck` log (#201) and, on the
+    # non-fast BAM path, a `.bai` (#210) -- and both failed on a read-only mount.
+    # Nothing in the `vntyper` package writes into the input tree any more
+    # (#162), so the copy is gone: with it in place this tier ran against a
+    # writable copy and could not have proved that.
+    input_bam_path = f"/opt/vntyper/input/{bam_relative_path}"
 
     # Build vntyper command arguments
     # Use correct paths as per Docker README documentation
     vntyper_args = [
         "pipeline",
         "--bam",
-        workdir_bam_path,  # Use copied BAM in writable location
+        input_bam_path,  # Read directly from the read-only input mount
         "--reference-assembly",  # Full parameter name to avoid ambiguity
         reference,
         "--output-dir",  # Use --output-dir instead of --output
@@ -259,19 +262,10 @@ def run_vntyper_pipeline(
     if extra_cli_options:
         vntyper_args.extend(extra_cli_options)
 
-    # Copy BAM file and its index to writable location first (input is read-only)
-    # VNtyper needs to write log files next to the BAM and samtools needs the index
-    # Use relative path to support subdirectories like remapped/bwa/GRCh37/
-    copy_cmd = [
-        "/bin/bash",
-        "-c",
-        f"cp /opt/vntyper/input/{bam_relative_path} {workdir_bam_path} && "
-        f"if [ -f /opt/vntyper/input/{bam_relative_path}.bai ]; then cp /opt/vntyper/input/{bam_relative_path}.bai {workdir_bam_path}.bai; fi",
-    ]
-    copy_result = container.exec(copy_cmd)
-    if copy_result.exit_code != 0:
-        print(f"Failed to copy BAM file: {copy_result.output.decode() if copy_result.output else 'No output'}")
-        return _exit_code(copy_result)
+    # No copy step: the alignment and any index beside it are read in place. An
+    # index the fixture data already carries as `<bam>.bai` or `<stem>.bai` is
+    # resolved and reused; when there is none, the pipeline builds one into its
+    # own output directory rather than beside the input.
 
     # Execute via conda run since we bypassed the entrypoint
     # Use --no-capture-output to stream stdout/stderr properly

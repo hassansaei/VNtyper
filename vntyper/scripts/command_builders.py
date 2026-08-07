@@ -212,18 +212,28 @@ def build_samtools_slice_command(
     )
 
 
-def build_samtools_index_command(*, samtools_path: str, bam_file: str | Path) -> str:
+def build_samtools_index_command(
+    *, samtools_path: str, bam_file: str | Path, output_bai: str | Path | None = None
+) -> str:
     """
     Build the ``samtools index`` command for a BAM file.
 
     Args:
         samtools_path (str): samtools invocation from config.
         bam_file (str | Path): The BAM to index.
+        output_bai (str | Path, optional): Where to write the index. Defaults to
+            None, which lets samtools write ``<bam_file>.bai`` beside the input --
+            correct for a BAM the pipeline itself produced in its output
+            directory, wrong for the user's input alignment, whose directory is
+            routinely read-only (#162, #210). ``-o`` requires samtools >= 1.15;
+            ``conda/environment_vntyper.yml`` pins 1.20.
 
     Returns:
         str: The complete index command.
     """
-    return f"{samtools_path} index {quote_path(bam_file)}"
+    if output_bai is None:
+        return f"{samtools_path} index {quote_path(bam_file)}"
+    return f"{samtools_path} index -o {quote_path(output_bai)} {quote_path(bam_file)}"
 
 
 def build_cram_unmapped_filter_command(

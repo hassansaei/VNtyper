@@ -1,0 +1,252 @@
+"""No code in the ``vntyper`` package writes into the input directory (#162, #201, #210).
+
+SPECIFICATION: the input directory holds patient-derived data and is routinely
+mounted read-only to protect it, which is what #162 reports. Two production
+writes in the ``vntyper`` package derived an output path from an input path:
+
+1. ``validate_bam_file`` wrote ``<input>.quickcheck.log`` beside the alignment
+   (#201). On the web service that is the per-job directory on the shared upload
+   volume, so ``run_vntyper_job``'s cleanup found a non-empty directory and its
+   ``os.rmdir`` never ran -- one leaked directory and inode per job, forever, and
+   a "still holds files" warning that fired on 100% of jobs and therefore could
+   no longer report a genuinely unexpected leftover.
+2. ``process_bam_to_fastq`` ran ``samtools index <in_bam>`` for non-fast BAM runs
+   whenever ``<in_bam>.bai`` was missing -- including when a usable ``<stem>.bai``
+   was already there, which is a name the upload endpoint and the worker both
+   deliberately accept (#210).
+
+Both are crashes, not annoyances: ``run_command`` opens its log file before it
+runs anything, so on a read-only mount write (1) is an unhandled
+``PermissionError`` raised before quickcheck even executes.
+
+**Scope.** The invariant pinned here is about the ``vntyper`` package, not about
+every VNtyper process. ``docker/app/tasks.py`` deliberately runs
+``samtools index`` beside the upload before starting the pipeline and
+deliberately removes that index in cleanup (#199); the upload volume is writable
+by design, so that is not a violation and is not tested here. The read-only-input
+guarantee is a guarantee about ``vntyper pipeline``.
+"""
+
+import contextlib
+import os
+import shlex
+import stat
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+from vntyper.scripts.utils import run_command, validate_bam_file
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def readonly_dir(tmp_path: Path) -> Iterator[Path]:
+    """A directory that cannot be written to, restored on teardown.
+
+    Skipped when the test runs as root, for whom the mode bits are advisory.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+
+    Yields:
+        Path: The read-only directory, holding one stub alignment.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the write bit, so this fixture cannot deny anything")
+    d = tmp_path / "input"
+    d.mkdir()
+    (d / "sample.bam").write_bytes(b"BAM\x01")
+    d.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    yield d
+    d.chmod(stat.S_IRWXU)
+
+
+def test_run_command_raises_when_its_log_file_is_not_writable(readonly_dir: Path) -> None:
+    """The mechanism: the log is opened before the child process starts.
+
+    This is a **characterisation test**. It passes before the fix as well as
+    after it, because ``run_command`` is not what changes -- what changes is the
+    path the pipeline hands it. It is here so that the failures of the tests
+    below are unambiguous: they are about *where* VNtyper decided to write, not
+    about how ``run_command`` behaves when it cannot.
+
+    Args:
+        readonly_dir: The read-only input directory fixture.
+    """
+    with pytest.raises(PermissionError):
+        run_command("true", str(readonly_dir / "sample.bam.quickcheck.log"))
+
+
+def test_validate_bam_file_writes_its_log_under_log_dir(readonly_dir: Path, tmp_path: Path) -> None:
+    """The whole point: a read-only input mount must survive a run.
+
+    ``samtools quickcheck`` is really invoked, through ``run_command``. A 4-byte
+    stub is not a real BAM, so quickcheck fails and ``validate_bam_file`` raises
+    ``ValueError`` -- and on a machine with no samtools at all the command fails
+    the same way. Either way the log file has already been created, which is what
+    this asserts; whether the alignment is valid is a different test's business.
+
+    Args:
+        readonly_dir: The read-only input directory fixture.
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    out.mkdir()
+
+    with contextlib.suppress(ValueError):
+        validate_bam_file(str(readonly_dir / "sample.bam"), log_dir=str(out))
+
+    assert (out / "sample.bam.quickcheck.log").exists()
+    assert list(readonly_dir.iterdir()) == [readonly_dir / "sample.bam"]
+
+
+def test_validate_bam_file_still_logs_beside_the_input_without_log_dir(tmp_path: Path) -> None:
+    """The default is unchanged, deliberately -- this stays a contained change.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"BAM\x01")
+
+    with contextlib.suppress(ValueError):
+        validate_bam_file(str(bam))
+
+    assert (tmp_path / "sample.bam.quickcheck.log").exists()
+
+
+def test_an_alternate_index_name_is_found_and_no_second_index_is_built(tmp_path: Path) -> None:
+    """#210: the upload path accepts ``sample.bai``; htslib resolves it, so must we.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
+
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"BAM\x01")
+    alternate = tmp_path / "sample.bai"
+    alternate.write_bytes(b"BAI\x01")
+
+    assert resolve_bam_index(bam) == str(alternate)
+
+
+def test_the_conventional_index_name_wins_over_the_alternate(tmp_path: Path) -> None:
+    """htslib tries ``<file>.bai`` first.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
+
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"BAM\x01")
+    (tmp_path / "sample.bam.bai").write_bytes(b"BAI\x01")
+    (tmp_path / "sample.bai").write_bytes(b"BAI\x01")
+
+    assert resolve_bam_index(bam) == str(tmp_path / "sample.bam.bai")
+
+
+def test_no_index_at_all_resolves_to_none(tmp_path: Path) -> None:
+    """Nothing to reuse is reported as such, so the caller builds one.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
+
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"BAM\x01")
+
+    assert resolve_bam_index(bam) is None
+
+
+def _index_destinations(command: str) -> list[tuple[str, str]]:
+    """Return ``(indexed_file, written_index)`` for every ``samtools index`` in a command.
+
+    The naive assertion -- "no index command mentions the input directory" --
+    fails after the fix as well as before it, because a correct
+    ``samtools index -o <out> <in>`` must name the input as its operand. So the
+    command is re-parsed with ``shlex.split`` and each ``index`` is resolved to
+    the one path samtools actually writes: the argument immediately after ``-o``
+    when there is one, and ``<operand>.bai`` when there is not.
+
+    Args:
+        command: A shell command, possibly several joined with ``&&``.
+
+    Returns:
+        list[tuple[str, str]]: The file being indexed and the index written for it.
+    """
+    destinations: list[tuple[str, str]] = []
+    for segment in command.split("&&"):
+        tokens = shlex.split(segment)
+        if "index" not in tokens:
+            continue
+        operand = tokens[-1]
+        if "-o" in tokens:
+            written = tokens[tokens.index("-o") + 1]
+            operand = tokens[tokens.index("-o") + 2]
+        else:
+            written = f"{operand}.bai"
+        destinations.append((operand, written))
+    return destinations
+
+
+def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tmp_path: Path) -> None:
+    """#162/#210, end to end through the real stage.
+
+    Every ``samtools index`` the non-fast BAM path emits is resolved to the path
+    it writes, and every one of them must land in the run's output directory --
+    including the one for the *input* alignment, which used to be written beside
+    it.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    from unittest.mock import patch
+
+    from vntyper.scripts import fastq_bam_processing
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    in_bam = input_dir / "sample.bam"
+    in_bam.write_bytes(b"BAM\x01")
+
+    issued: list[str] = []
+
+    def _record(command, log_file, critical=False, cwd=None):
+        issued.append(command)
+        Path(log_file).write_text("")
+        return True
+
+    with (
+        patch.object(fastq_bam_processing, "run_command", _record),
+        patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value="chr1:1-2"),
+        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset"),
+        patch.object(fastq_bam_processing.os, "replace"),
+    ):
+        fastq_bam_processing.process_bam_to_fastq(
+            in_bam=str(in_bam),
+            output=str(output_dir),
+            output_name="output",
+            threads=4,
+            config={"tools": {"samtools": "samtools"}},
+            fast_mode=False,
+            file_format="bam",
+        )
+
+    indexed = [pair for command in issued for pair in _index_destinations(command)]
+    assert indexed, "the non-fast BAM path emitted no index command at all; this test would pass vacuously"
+
+    for operand, written in indexed:
+        assert Path(written).parent == output_dir, (
+            f"indexing {operand} wrote {written}, which is outside the run's output directory"
+        )
+
+    assert any(operand == str(in_bam) for operand, _ in indexed), (
+        "the input alignment was never indexed; #210's branch was not exercised"
+    )

@@ -33,6 +33,27 @@ from vntyper.scripts.utils import run_command
 logger = logging.getLogger(__name__)
 
 
+def resolve_bam_index(in_bam: str | Path) -> str | None:
+    """Find an existing BAM index the way htslib itself does.
+
+    htslib tries ``<file>.bai`` and then ``<stem>.bai``. The pipeline used to
+    reconstruct only the first, so given the ``sample.bai`` that the upload
+    endpoint and the worker both deliberately accept it found nothing and built a
+    second index beside the input that nothing else knew about (#210).
+
+    Args:
+        in_bam (str | Path): The alignment whose index is wanted.
+
+    Returns:
+        str | None: The existing index, or None when there is none.
+    """
+    bam = Path(in_bam)
+    for candidate in (Path(f"{bam}.bai"), bam.with_suffix(".bai")):
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     """
     Process FASTQ files using fastp for quality control.
@@ -158,11 +179,16 @@ def process_bam_to_fastq(
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
         if file_format.lower() == "bam":
-            # Use the offset-based extraction
-            bam_bai = f"{in_bam}.bai"
-            if not Path(bam_bai).exists():
-                # Index if not present
-                index_cmd = build_samtools_index_command(samtools_path=samtools_path, bam_file=in_bam)
+            # Use the offset-based extraction. The index is resolved htslib's way
+            # and, when one has to be built, it is built into the *output*
+            # directory: the input directory holds patient data and is routinely
+            # mounted read-only (#162, #210).
+            bam_bai = resolve_bam_index(in_bam)
+            if bam_bai is None:
+                bam_bai = str(Path(output) / f"{output_name}_input.bam.bai")
+                index_cmd = build_samtools_index_command(
+                    samtools_path=samtools_path, bam_file=in_bam, output_bai=bam_bai
+                )
                 log_file_index = Path(output) / f"{output_name}_unmapped_index.log"
                 logger.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
                 success = run_command(str(index_cmd), str(log_file_index), critical=True)
@@ -172,7 +198,7 @@ def process_bam_to_fastq(
             logger.info("Extracting unmapped reads using offset calculation...")
             extract_unmapped_reads_from_offset(
                 bam_file=str(in_bam),
-                bai_file=str(bam_bai),
+                bai_file=bam_bai,
                 output_bam=str(unmapped_bam),
             )
         else:
@@ -218,6 +244,9 @@ def process_bam_to_fastq(
         final_bam = final_bam_renamed
         logger.info(f"Renamed merged BAM file to {final_bam}")
 
+        # No output_bai here, deliberately: final_bam is the merged BAM this stage
+        # just wrote inside `output`, so samtools' default destination beside it is
+        # already inside the output directory (#162).
         command_index = build_samtools_index_command(samtools_path=samtools_path, bam_file=final_bam)
         log_file_index = Path(output) / f"{output_name}_index.log"
         logger.info(f"Re-indexing BAM file with command: {command_index}")

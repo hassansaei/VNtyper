@@ -125,6 +125,12 @@ def align_and_sort_fastq(
     logger.info("BWA alignment and Samtools sorting completed successfully.")
 
     logger.info(f"Indexing sorted BAM file: {sorted_bam_out}")
+    # No output_bai here, deliberately: sorted_bam_out is the BAM this function just
+    # wrote inside output_dir, so samtools' default destination beside it is already
+    # inside the run's output directory. `output_bai` exists for the one caller that
+    # indexes the user's *input* alignment, whose directory is routinely mounted
+    # read-only (#162, #210); it is keyword-only and optional, so this call is
+    # unchanged.
     samtools_index_command = build_samtools_index_command(samtools_path=str(samtools_path), bam_file=sorted_bam_out)
     log_file_index = output_dir / f"{output_name}_index.log"
 
