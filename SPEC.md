@@ -147,6 +147,24 @@ because `(S/c) · (c/T) = S/T`. This is asserted directly as a unit test — it 
 fixture, and it is the identity the issue offers for reconciling historical output.
 Guarded on `region_length > 0`, per the audit note.
 
+### Both claims confirmed empirically on a shipped test BAM
+
+```
+$ B=tests/data/example_40cf_hg38_subset.bam; R=chr1:155188000-155192500   # span 4501
+$ samtools depth    -r $R $B | wc -l                          # 4047   (covered only)
+$ samtools depth -a -r $R $B | wc -l                          # 4501   (the whole region)
+$ samtools depth -a -r $R $B | awk '$3==0' | wc -l            #  454   (zero-depth rows)
+$ samtools depth    -r $R $B | awk '{s+=$3;n++}END{print s/n}'  # 164.5325  old mean
+$ samtools depth -a -r $R $B | awk '{s+=$3;n++}END{print s/n}'  # 147.9367  new mean
+```
+
+* The subtraction trap is real: `region_length − len(values)` is `4501 − 4047 = 454`
+  today and would be `4501 − 4501 = 0` after `-a`. The zero-count is 454 — exactly the
+  same number, which is why counting zeros is the correct replacement and not merely a
+  different one.
+* The identity holds exactly: `164.5325 · (1 − 454/4501) = 147.9366`.
+* This one sample's reported mean falls by 10.1%.
+
 ### Artefact delta
 
 * `<prefix>_summary.tsv` — `mean`, `median`, `stdev`, `min` change for every sample with
@@ -160,6 +178,12 @@ Guarded on `region_length > 0`, per the audit note.
   `fraction = max_coverage / current_coverage`. The corrected mean is **≤** the old mean,
   so fewer samples cross `--advntr-max-coverage 300`, and those that do are downsampled
   *less*. adVNTR then genotypes a different read set.
+
+  The audit names the golden-cohort gate (`scripts/golden_cohort_gate.py:131`) as the
+  configuration that passes 300. It is not the only one: **`docker/app/tasks.py:215`
+  passes `--advntr-max-coverage 300` too**, so the deployed web service runs in the
+  genotype-affecting configuration as well. The CLI default remains `None`, which is
+  unaffected.
 
 ### Tests to add
 
@@ -307,8 +331,10 @@ Same pure function, same inputs, so the two can only agree.
 
 * `<prefix>_summary.tsv` — one new trailing column, `coverage_qc`, `PASS` or `FAIL`.
 * Cohort statistics table and cohort exports — new `cov_coverage_qc` column.
-* HTML report — a new QC line; `screening_summary` text changes for any sample that
-  passed on mean and fails on uncovered fraction.
+* HTML report — a new `Coverage QC` row appended to the coverage table
+  (`vntyper/templates/report_template.html:211-244`, after `Percentage Uncovered`);
+  `screening_summary` text changes for any sample that passed on mean and fails on
+  uncovered fraction.
 
 ### Tests to add
 
@@ -326,14 +352,27 @@ Same pure function, same inputs, so the two can only agree.
 
 ### Tests that must change
 
+The audit named three of these. Enumerated against the code, there are **six files and
+ten `build_screening_summary` call sites**, not three:
+
 | File:line | Change |
 | --- | --- |
-| `test_screening_summary.py:383` | 6-arg call → `CoverageQC` argument |
-| `test_screening_summary.py:388` | same; the "unmeasured passes" pin is preserved in meaning |
-| `test_screening_summary.py:379` (`advntr_never_ran`) | same signature change |
+| `test_screening_summary.py:329, 351, 357, 364, 371, 378, 384, 392, 404, 417` | **ten** call sites take the current 6-argument signature, not the two the audit lists. All become `CoverageQC` calls. `:392`'s "an unmeasured sample passes" pin is preserved in meaning, not deleted. `:404`/`:417` drive the exception path with an `Exploding()` config and must keep doing so. |
 | `test_fastq_bam_command_wiring.py:378` | exact TSV bytes gain a ninth field (also changed by #171) |
-| `tests/helpers.py::validate_coverage_output` | reads eight columns → nine |
-| `test_coverage_stats.py` `COVERAGE_COLUMNS` assertions | ninth column |
+| **`tests/helpers.py:405`** | carries its **own** copy of `COVERAGE_COLUMNS`, and `test_helpers.py:83` asserts it equals production's tuple. It must gain `coverage_qc` or the integration tier's validator fails. Missed by the audit. |
+| `tests/unit/test_helpers.py:112` | parametrises a dropped-column test over that tuple — gains a ninth case automatically |
+| `tests/unit/test_coverage_stats.py:60` | asserts `COVERAGE_COLUMNS == (...)` as an exact literal tuple |
+| `tests/unit/test_report_formatting.py:71, 87, 96, 102` | `set(COVERAGE_FIELD_TYPES) == set(COVERAGE_COLUMNS)` and three round-trip assertions |
+
+`validate_coverage_output` only coerces `mean`, `median` and `percent_uncovered` to
+float (`tests/helpers.py:452-460`), so a **string** ninth column passes through it
+untouched. Checked, because a `float("PASS")` would have failed the whole integration
+tier.
+
+Two further consumers were checked and need no change: `tests/support/pipeline_harness.py:238`
+mocks `calculate_vntr_coverage` to `{"mean": 100.0}` and never touches the schema, and
+`tests/benchmark/benchamrk_downsample.py:172` carries a private copy of the function that
+no gate runs.
 
 ### Predicted golden-cohort diff
 
@@ -385,6 +424,10 @@ def add_artifact_gate(df: pd.DataFrame, artifact_flags: Sequence[str]) -> pd.Dat
   frame is empty. So the gate contract can never raise for a missing `flag_filter_pass`.
 * `Flag` is a comma-joined string, so membership is tested per element after splitting on
   `", "`, not by substring — a flag named `X` must not match a flag named `XY`.
+* `Flag` is coerced with `.fillna("")` before splitting. `add_flags` always writes a
+  string (`flagging.py:145`), but the column is also written by `mark_potential_duplicates`
+  and can be reindexed by upstream merges, so a NaN must degrade to "no artifact" rather
+  than raising inside the gate.
 * Called in `process_kmer_results` step 6.5, **unconditionally**, after the existing
   conditional `add_flags` block. Placing it outside that `if` is what guarantees presence.
 * `filter_cols` gains `"flag_filter_pass"` → six gates.
