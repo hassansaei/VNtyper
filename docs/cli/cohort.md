@@ -28,10 +28,14 @@ One of `-i/--input-dirs` or `--input-file` is required.
 
 ## Pseudonymization
 
-The `--pseudonymize-samples` flag supports two modes:
+The `--pseudonymize-samples` flag supports two modes. In both, the pseudonym is the prefix followed by the first 12 hex characters of the SHA-256 digest of the original sample name, so it is stable across runs and machines:
 
-- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, producing names like `sample_a3f8c`, `sample_1b2d0` (prefix + first 5 characters of the MD5 hash of the original sample name).
-- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, producing names like `patient_a3f8c`, `patient_1b2d0`.
+- **Default basename:** `--pseudonymize-samples` (no value) uses `sample_` as the prefix, so `sample1` and `sample2` are reported as `sample_e85130791f31` and `sample_5a9392784e07`.
+- **Custom basename:** `--pseudonymize-samples patient_` uses the provided prefix, giving `patient_e85130791f31` and `patient_5a9392784e07` for the same two samples.
+
+The digest algorithm and the number of characters kept are read from `cohort.pseudonym` in `config.json` (`{"algorithm": "sha256", "digest_characters": 12}`), so `--config-path` can change either -- bearing in mind that a supplied config replaces the shipped one rather than merging into it. An algorithm that is not available in the running interpreter's `hashlib` is refused by name.
+
+The pseudonym map is one-to-one or the run stops: two input directories that share a basename, or two sample names that collide on the digest, raise an error naming both instead of silently reporting the two patients as one sample.
 
 ## Examples
 

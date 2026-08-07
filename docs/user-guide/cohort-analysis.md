@@ -49,12 +49,27 @@ vntyper cohort -i results/sample1/ results/sample2/ -o cohort_output/ \
     --pseudonymize-samples
 ```
 
-This uses the default prefix `sample_` followed by the first 5 characters of an MD5 hash of the original name. Specify a custom prefix:
+This uses the default prefix `sample_` followed by the first 12 hex characters of a SHA-256 digest of the original name. Specify a custom prefix:
 
 ```bash
 vntyper cohort -i results/* -o cohort_output/ \
     --pseudonymize-samples "patient_"
 ```
+
+The digest and its width are configuration, not code. They live under `cohort.pseudonym` in `vntyper/config.json`:
+
+```json
+"cohort": {
+  "pseudonym": {
+    "algorithm": "sha256",
+    "digest_characters": 12
+  }
+}
+```
+
+Override them with `--config-path`, remembering that a config file **replaces** the shipped one rather than merging into it. An algorithm your Python's `hashlib` does not offer is refused by name rather than silently substituted.
+
+The mapping is required to be one-to-one: if two samples would be reported under the same name -- because two input directories share a basename, or because two names collide on the digest -- the run stops with an error naming both, rather than merging two patients' genotypes into one row. At 12 hex characters a digest collision is a tripwire rather than a practical risk (about 1.8e-9 for a 1,000-sample cohort); a shared directory basename is the case you are likely to meet, and the fix is to give the two runs distinct directory names.
 
 A `pseudonymization_table.tsv` mapping pseudonyms to original names is saved in the output directory.
 
