@@ -722,6 +722,66 @@ def test_validate_bam_file_raises_valueerror_when_the_real_quickcheck_fails(tmp_
     assert _logged(caplog.records, f"Alignment file failed quickcheck: {bam_file}")
 
 
+def test_validate_bam_file_passes_the_log_dir_through_to_run_command(tmp_path):
+    """#201: the log is an artefact of the run and belongs with the run's output.
+
+    ``run_command`` opens its log file before it spawns anything, so deriving
+    that path from the input alignment made a read-only input mount an unhandled
+    ``PermissionError`` raised before quickcheck ever ran.
+    """
+    bam_file = tmp_path / "in" / "sample.bam"
+    bam_file.parent.mkdir()
+    bam_file.write_text("dummy")
+    out = tmp_path / "out"
+    out.mkdir()
+
+    with patch("vntyper.scripts.utils.run_command", return_value=True) as mocked_run_command:
+        validate_bam_file(str(bam_file), log_dir=str(out))
+
+    log_file = mocked_run_command.call_args[0][1]
+    assert log_file == str(out / "sample.bam.quickcheck.log")
+    assert str(bam_file.parent) not in log_file
+
+
+def test_validate_bam_file_without_a_log_dir_still_logs_beside_the_input(tmp_path):
+    """``log_dir=None`` keeps today's behaviour, deliberately.
+
+    That default is the issue author's explicit recommendation -- it keeps #201 a
+    contained change rather than a breaking one -- so it is pinned rather than
+    left to drift. ``pipeline.py`` is what opts in, at both of its call sites.
+    """
+    bam_file = tmp_path / "in" / "sample.bam"
+    bam_file.parent.mkdir()
+    bam_file.write_text("dummy")
+
+    with patch("vntyper.scripts.utils.run_command", return_value=True) as mocked_run_command:
+        validate_bam_file(str(bam_file))
+
+    assert mocked_run_command.call_args[0][1] == f"{bam_file}.quickcheck.log"
+
+
+def test_validate_bam_file_names_the_log_after_the_alignment_not_its_path(tmp_path):
+    """Two runs of two same-named alignments must not overwrite one log.
+
+    The log is named for the alignment's *basename* inside ``log_dir``, so
+    ``a/sample.bam`` and ``b/sample.bam`` validated into different output
+    directories keep separate logs -- and neither reaches back into its own
+    input tree.
+    """
+    out = tmp_path / "out"
+    out.mkdir()
+    logs = []
+    for source in ("a", "b"):
+        bam_file = tmp_path / source / "sample.bam"
+        bam_file.parent.mkdir()
+        bam_file.write_text("dummy")
+        with patch("vntyper.scripts.utils.run_command", return_value=True) as mocked_run_command:
+            validate_bam_file(str(bam_file), log_dir=str(out))
+        logs.append(mocked_run_command.call_args[0][1])
+
+    assert logs == [str(out / "sample.bam.quickcheck.log")] * 2
+
+
 # ---------------------------------------------------------------------------
 # validate_fastq_file
 # ---------------------------------------------------------------------------

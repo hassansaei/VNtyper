@@ -215,10 +215,16 @@ def run_pipeline(
             )
 
         # Validate input files
+        # log_dir is the run's own output directory, created above by
+        # create_output_directories(): the quickcheck log is an artefact of the run,
+        # and the input directory holds patient data that is routinely mounted
+        # read-only. run_command opens its log before it spawns anything, so a log
+        # path derived from the input used to fail every BAM and CRAM run on such a
+        # mount before quickcheck even executed (#162, #201).
         if input_type == "BAM":
-            validate_bam_file(bam, cwd=project_root)
+            validate_bam_file(bam, cwd=project_root, log_dir=output_dir)
         elif input_type == "CRAM":
-            validate_bam_file(cram, cwd=project_root)
+            validate_bam_file(cram, cwd=project_root, log_dir=output_dir)
         elif input_type == "FASTQ":
             validate_fastq_file(fastq1)
             validate_fastq_file(fastq2)

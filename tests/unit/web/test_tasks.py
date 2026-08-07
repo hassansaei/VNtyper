@@ -26,13 +26,16 @@ rather than requiring the state to be read back out of a store.
 imports before this module, so `app.tasks` is importable here.
 """
 
+import inspect
 import logging
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+
+from vntyper.scripts.utils import validate_bam_file
 
 pytestmark = pytest.mark.unit
 
@@ -205,6 +208,68 @@ def _subprocess_stub(
             return None
         if pipeline_error is not None:
             raise pipeline_error
+        return None
+
+    monkeypatch.setattr(tasks.subprocess, "run", _run)
+    return commands
+
+
+def _quickcheck_the_way_the_pipeline_does(command: list[str]) -> None:
+    """Reproduce the pipeline's own startup write, by running the code that makes it.
+
+    A stand-in that only records commands makes the input directory look tidier
+    than any real run ever leaves it, so it cannot tell a fixed worker from an
+    unfixed one. This one calls the production `validate_bam_file` -- the
+    function that decides where the `samtools quickcheck` log goes -- with
+    `run_command` replaced so nothing is executed and the log is simply created
+    where that decision points.
+
+    The `inspect.signature` check is what makes the test discriminate: before
+    #201 the function had no `log_dir` parameter at all, so the shim omits it,
+    the log lands beside the input alignment exactly as it did in production, and
+    the cleanup assertions below fail. It does *not* prove that `pipeline.py`
+    passes `log_dir` -- that is a separate call site, pinned by
+    `tests/unit/test_pipeline_cwd.py`; what it proves is what the worker's
+    cleanup sees when it does.
+
+    Args:
+        command: The argument vector the task asked for.
+    """
+    if "pipeline" not in command:
+        return
+    flag = "--cram" if "--cram" in command else "--bam"
+    alignment = command[command.index(flag) + 1]
+    output_dir = command[command.index("-o") + 1]
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    kwargs = {"log_dir": output_dir} if "log_dir" in inspect.signature(validate_bam_file).parameters else {}
+
+    def _create_the_log(_command, log_file, critical=False, cwd=None):
+        Path(log_file).write_text("quickcheck output\n")
+        return True
+
+    with patch("vntyper.scripts.utils.run_command", _create_the_log):
+        validate_bam_file(alignment, **kwargs)
+
+
+def _subprocess_stub_that_runs_the_pipelines_own_startup(monkeypatch: pytest.MonkeyPatch, tasks) -> list:
+    """`_subprocess_stub`, plus the one production write the pipeline makes at startup.
+
+    Args:
+        monkeypatch: Standard pytest fixture; restores the patch at teardown.
+        tasks: The imported `app.tasks` module.
+
+    Returns:
+        list: The argument vector of every command issued, in order.
+    """
+    commands: list[list[str]] = []
+
+    def _run(command, *args, **kwargs):
+        commands.append(list(command))
+        if command[:2] == ["samtools", "index"]:
+            Path(f"{command[2]}.bai").write_bytes(b"generated-index")
+            return None
+        _quickcheck_the_way_the_pipeline_does(list(command))
         return None
 
     monkeypatch.setattr(tasks.subprocess, "run", _run)
@@ -476,6 +541,86 @@ def test_a_successful_job_is_marked_completed_and_cleans_up_its_inputs(
     assert not bam_path.exists()
     assert not (tmp_path / "input" / "job-1").exists()
     redis_mocks.queue.lrem.assert_called_once_with("vntyper_job_queue", 0, "task-1")
+
+
+def test_a_clean_job_removes_its_input_directory_and_fires_no_leftover_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#201: the `os.rmdir` at the end of cleanup is reachable again.
+
+    The pipeline used to write `<alignment>.quickcheck.log` into the job's input
+    directory, so cleanup always found that directory non-empty: the `os.rmdir`
+    never ran in production, one directory and inode leaked per job, and the
+    "still holds files" warning fired on 100% of jobs -- which is exactly when a
+    warning stops being able to report a genuinely unexpected leftover.
+
+    The subprocess stand-in here runs the pipeline's own startup validation
+    rather than merely recording the command, so this test fails against the
+    unfixed code instead of passing vacuously.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked `send_email_task`.
+        tmp_path: Scratch directory standing in for the job tree.
+        caplog: Captures the task's log record.
+    """
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub_that_runs_the_pipelines_own_startup(monkeypatch, tasks)
+    caplog.set_level(logging.WARNING, logger="app.tasks")
+
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    job_input_dir = tmp_path / "input" / "job-1"
+    assert not job_input_dir.exists(), (
+        f"the input directory was left behind, holding {sorted(p.name for p in job_input_dir.iterdir())}"
+    )
+    assert "still holds files" not in caplog.text
+    redis_mocks.usage.hset.assert_any_call("usage:job-1", "status", "completed")
+    # Non-vacuity: the stand-in really did run the pipeline's validation, and the
+    # log it produced is still there to diagnose a corrupt upload with -- it is
+    # kept rather than deleted, deliberately.
+    assert (tmp_path / "output" / "job-1" / "sample.bam.quickcheck.log").exists()
+
+
+def test_the_leftover_warning_still_fires_for_something_the_job_did_not_create(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The guard must keep working -- it must only stop firing on the normal path.
+
+    Same realistic stand-in as the test above, plus one file the job has no claim
+    to. Without this, "no warning on a clean job" would also be satisfied by
+    deleting the guard.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked `send_email_task`.
+        tmp_path: Scratch directory standing in for the job tree.
+        caplog: Captures the task's log record.
+    """
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    bystander = bam_path.parent / "someone_elses.txt"
+    bystander.write_bytes(b"not this job's to delete")
+    _subprocess_stub_that_runs_the_pipelines_own_startup(monkeypatch, tasks)
+    caplog.set_level(logging.WARNING, logger="app.tasks")
+
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    assert bystander.read_bytes() == b"not this job's to delete"
+    assert f"Input directory {bam_path.parent} still holds files and was left in place" in caplog.text
 
 
 def test_a_successful_job_with_email_sends_a_completion_notice(
