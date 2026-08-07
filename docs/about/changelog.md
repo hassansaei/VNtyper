@@ -2,7 +2,96 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## 2.0.6 (Current)
+## 2.0.7 (Current)
+
+Follow-ups to #179: closes #181–#188, #192 and #194–#197, fixes the defects found while
+doing so, commits the golden-cohort gate for the first time, and raises the coverage
+floor from 70 to 80 on a strictly harder measurement.
+
+**Branch coverage is now on.** `branch = true` means an `if` that is entered but never
+taken no longer counts as covered — the failure mode this codebase actually has. The
+floor moved with each measurement (70 → 74 → 79 → 80) and was never lowered to admit a
+run. Statement-only coverage of the same suite is 80.77%, so the two numbers are not
+interchangeable: deleting `branch = true` would *raise* the reported total while covering
+strictly less.
+
+### Reported-output changes
+
+Every one of these is a fix to a rule that was already meant to hold. They are listed
+separately because each can change what a report says.
+
+- **adVNTR compound states are judged on the signed net indel, not its magnitude**
+  (#182). `abs(Insertion_len - Deletion_length)` discarded the direction of the change,
+  and a mixed state satisfies both presence guards, so either arm could admit it —
+  `I9_2_A_LEN3&D50_2` (Δ = +2, the non-pathogenic frame) was reported through the
+  deletion arm. Both arms now test the sign, which makes the pair equivalent to the
+  single signed rule Δ ≡ +1 (mod 3) that Kestrel already applied.
+- **A compound state's inserted length is the sum over its `LEN` tokens** (#192).
+  `I9_2_A_LEN9&I50_2_A_LEN3` is 12. The previous parser coerced any multi-part remainder
+  to **zero**, so a pure-insertion compound collapsed to a net change of 0 and was
+  dropped in silence.
+- **The Depth_Score mid-band is a closed interval** (#184). A score of exactly
+  `high_threshold` is `Low_Precision`, not `High_Precision`.
+- **A malformed motif ID drops its own row, not the sample** (#179 W8). The check was an
+  aggregate `.max()` over the whole column, so one row with two dashes suppressed every
+  call in the sample — a Negative report and exit 0 — while a row with no dash rode
+  through unnoticed whenever a sibling row had exactly one.
+- **`Potential_Duplicate` sorts on `Depth_Score` alone, stably** (#197).
+- **The adVNTR "positive flagged" report rule is guarded on `VID`** (#188/D10), matching
+  the "positive" rule beside it; it could previously fire on a Negative call.
+- **Indels are classified by length difference** (D2), so a multi-base-REF insertion is
+  no longer routed into the deletion file.
+
+### Fail-closed, where a silent wrong answer was possible
+
+Each of these used to log and continue. A run that would previously have produced a
+quietly wrong report now aborts.
+
+- `cross_match` raises when a `match_logic` rule cannot be evaluated — "no match" was
+  indistinguishable from genuine discordance.
+- `filter_final_dataframe` raises when a required gate column is missing from a non-empty
+  frame; a missing gate is not a permit (#185).
+- `confidence_assignment` requires its calibration keys instead of defaulting them. The
+  old defaults were not neutral: `high` fell back to 0.4 where the shipped config sets
+  0.00515, a factor of 78.
+- `filter_vcf` asserts the pinned Kestrel 1.0.1 allele contract, so a jar swap is loud.
+- `extract_unmapped_from_offset` raises on a truncated or non-BAI index instead of
+  scanning from offset 0.
+- `validate_bam_file` honours its documented `ValueError` — the branch that raises it was
+  unreachable.
+- `motif_processing` refuses `use_uniform_filtering` with an empty GG allowlist, which
+  would delete every GG alternate including canonical dupC (#186). Cannot fire on the
+  shipped config.
+
+### Web service and CRAM
+
+- **An accepted CRAM is now run as a CRAM** (#188). The endpoint has always accepted
+  `.cram`, but the worker hardcoded `--bam`, and the index fallback named a `.bai` that
+  is never written beside a CRAM — so the existence check never found the index the
+  worker had just built, and cleanup left the real `.crai` on the shared volume.
+- **Patient files come off the shared volume first.** The cleanup block used to open with
+  two unguarded Redis calls, so a broker that became unreachable as the task exited left
+  the alignment and its index behind — and replaced the pipeline's own exception with a
+  connection error.
+- **CRAM unmapped-read extraction waits for its writer.** The `tee >(...)` process
+  substitution let the shell return while samtools was still flushing: measured on a
+  600k-read CRAM, `samtools merge` ran against 199,797 of 200,000 reads and accepted the
+  short file with a warning.
+- Alignment extensions are matched case-insensitively across all three layers, so the
+  `SAMPLE.CRAM` the upload allowlist accepts is no longer rejected by the validator.
+  FASTQ stays case-sensitive on purpose — fastp reads `reads.FASTQ.GZ` as text and
+  reports 0 reads with exit status 0.
+
+### Evidence
+
+Gated by golden-cohort **run 5** (`4fd638a` → `9816f86`), and no pipeline source changed
+after the gated commit. The harness itself is committed for the first time, with
+cohort-mode and CRAM cases; see `docs/development/golden-cohort-gate.md`. The branch was
+additionally put through an adversarial read-only review, which found the signed-frame
+merge blocker above — introduced by the #192 fix that made it reachable — before it could
+ship.
+
+## 2.0.6
 
 **Unit coverage went from 25.68% to 70.57%, across 1,744 tests.** The number was not the
 point: a mutation experiment had shown it overstated protection badly —
