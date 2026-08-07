@@ -278,6 +278,15 @@ def handle_pipeline(
         if args.bam:
             sample_name_val = Path(args.bam).stem
             logger.debug(f"sample_name set from BAM file: {sample_name_val}")
+        elif args.cram:
+            # CRAM is derived from here for the same reason BAM is, and the arm is
+            # not optional (#188). The web worker used to hand every accepted
+            # alignment to --bam, so a CRAM reached this branch as a BAM and got
+            # its stem; now that it arrives as --cram, without this arm every CRAM
+            # run with no explicit --sample-name would fall through to the literal
+            # "sample" below -- in the report and in the output filenames.
+            sample_name_val = Path(args.cram).stem
+            logger.debug(f"sample_name set from CRAM file: {sample_name_val}")
         elif args.fastq1:
             sample_name_val = Path(args.fastq1).stem
             logger.debug(f"sample_name set from FASTQ1 file: {sample_name_val}")

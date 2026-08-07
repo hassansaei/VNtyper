@@ -95,7 +95,15 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
     Returns:
         dict: A dictionary with keys:
             "matches" - list of individual comparison records,
-            "overall_match" - "Yes" if at least one combination matched, else "No".
+            "overall_match" - the STRING "Yes" if at least one combination matched,
+            else "No". Never a boolean; downstream code matches on the string.
+
+    Raises:
+        ValueError: If the configured match logic cannot be evaluated. This is
+            deliberately fail-closed: reporting "no match" for a rule that errored
+            is indistinguishable from a genuine discordance, which is how a
+            misconfigured rule stays invisible (AGENTS.md trap 3). The message
+            names the rule and the columns that were available.
     """
     if config is not None:
         match_logic = config.get("cross_match", {}).get("match_logic", DEFAULT_MATCH_LOGIC)
@@ -135,9 +143,32 @@ def cross_match_variants(kestrel_records, advntr_records, config=None):
             try:
                 # Evaluate the matching condition in a restricted namespace.
                 match = bool(eval(match_logic, {"__builtins__": {}}, result))
+            except (NameError, SyntaxError) as e:
+                # Structural: a name no record carries, or an expression that does not
+                # parse. Both are properties of the rule string and the fixed key set of
+                # `result` above, so they fail identically for EVERY record pair - a
+                # configuration defect, never a data anomaly. Reporting "no match" here
+                # is indistinguishable from genuine discordance (AGENTS.md trap 3), so
+                # fail loudly instead. The message names the rule and the columns that
+                # did exist so the wrong column name is visible without reading this file.
+                msg = (
+                    f"Invalid cross_match match_logic {match_logic!r}: {type(e).__name__}: {e}. "
+                    f"Available columns: {', '.join(sorted(result))}"
+                )
+                logger.error(msg)
+                raise ValueError(msg) from e
             except Exception as e:
-                logger.error(f"Error evaluating match logic: {e}")
-                match = False
+                # Value-dependent: the rule parses and every name exists, but the values
+                # in this pair do not support the operation (e.g. `.lower()` on a numeric
+                # POS). A separate handler because the useful diagnostic is the record
+                # itself, not the column list - but it raises for the same reason: a pair
+                # that could not be compared is not evidence that the calls disagree.
+                msg = (
+                    f"Could not evaluate cross_match match_logic {match_logic!r} against a record pair: "
+                    f"{type(e).__name__}: {e}. Available columns: {', '.join(sorted(result))}. Record: {result}"
+                )
+                logger.error(msg)
+                raise ValueError(msg) from e
             result["Match"] = "Yes" if match else "No"
             if match:
                 overall = True

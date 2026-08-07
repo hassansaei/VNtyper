@@ -78,9 +78,22 @@ This is the typical scenario:
 ### Limitations
 
 - **FASTQ input only** -- SHARK cannot process BAM/CRAM files. For aligned input, the pipeline uses samtools region extraction instead.
-- **hg19 reference only** -- SHARK currently uses a hardcoded hg19 MUC1 region reference regardless of the `--reference-assembly` setting.
+- **`--reference-assembly` does not affect SHARK** -- see [Reference assembly is not used](#reference-assembly-is-not-used) below.
 - SHARK filtering runs **before** fastp QC, so filtered reads still undergo quality control downstream.
 - After SHARK filtering, the pipeline still performs BWA alignment and full postprocessing on the filtered reads.
+
+### Reference assembly is not used
+
+SHARK filters reads by matching k-mers against a single MUC1 region FASTA (the
+`muc1_region_fasta` set in `shark_config.json`); it does not select a genomic region by
+coordinate the way BAM-based extraction does. Because of that, the `--reference-assembly`
+value has nothing to select between and does not change which reads SHARK keeps.
+
+Per the decision on [#187](https://github.com/hassansaei/VNtyper/issues/187), VNtyper
+keeps a single hg19-based MUC1 region FASTA rather than building and maintaining a second
+one for hg38: `reference_assembly` is kept on `run_shark_filter` for API compatibility
+only and is otherwise inert. Passing anything other than `hg19`/`GRCh37` logs a warning
+noting that the value does not select a region for SHARK.
 
 ### Execution
 

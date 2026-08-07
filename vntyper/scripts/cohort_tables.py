@@ -1,0 +1,198 @@
+"""
+vntyper/scripts/cohort_tables.py
+
+Module Purpose:
+---------------
+Build the three HTML tables of the cohort report: the Kestrel results, the adVNTR
+results, and the per-sample statistics.
+
+Each one is a column selection, an optional piece of markup this codebase constructs,
+and an escaping decision. The escaping decision is the reason this module exists as a
+module: the cohort report is what the web service hands back for a whole cohort to open
+in a browser, and every cell of every table is a value read out of a sample's own
+``pipeline_summary.json`` - the sample name (or its pseudonym), the motif, the flag, the
+assembly, the version. None of that is markup VNtyper built, so none of it may reach the
+page as markup (#190).
+
+Exactly one cell in the three tables is markup VNtyper built: the ``Confidence`` colour
+span :func:`confidence_span` produces. It is named as an ``html_columns`` exemption at
+the one call site that needs it rather than by turning escaping off for a whole table,
+which is what ``to_html(escape=False)`` used to do here.
+
+Extracted from ``cohort_summary.py`` in Task 22 of the #181-#197 follow-ups.
+``tests/unit/test_cohort_tables.py`` covers the seam and
+``tests/unit/test_cohort_summary_escaping.py`` covers the rendered page.
+"""
+
+import html
+import logging
+from typing import Any
+
+import pandas as pd
+
+from vntyper.scripts.report_formatting import escaped_table_html
+
+logger = logging.getLogger(__name__)
+
+#: CSS classes every table in the cohort report carries. Named once so the three tables
+#: cannot drift apart, and so the renderer call sites read as what they are.
+TABLE_CLASSES = "table table-bordered table-striped hover compact order-column table-sm"
+
+#: Kestrel result columns, in display order. ``Sample`` first; columns absent from the
+#: frame are skipped, because a negative run's results carry neither ``Flag`` nor the
+#: depth columns. Columns present in the frame but absent from this list - the working
+#: columns the sample-level reduction writes, most of all - are dropped.
+KESTREL_DISPLAY_COLUMNS: tuple[str, ...] = (
+    "Sample",
+    "Motif",
+    "Variant",
+    "POS",
+    "REF",
+    "ALT",
+    "Motif_sequence",
+    "Estimated_Depth_AlternateVariant",
+    "Estimated_Depth_Variant_ActiveRegion",
+    "Depth_Score",
+    "Confidence",
+    "Flag",
+)
+
+#: adVNTR result columns, in display order.
+ADVNTR_DISPLAY_COLUMNS: tuple[str, ...] = (
+    "Sample",
+    "VID",
+    "Variant",
+    "NumberOfSupportingReads",
+    "MeanCoverage",
+    "Pvalue",
+    "RU",
+    "POS",
+    "REF",
+    "ALT",
+    "Flag",
+)
+
+#: The one escaping exemption in the whole cohort report: the column
+#: :func:`confidence_span` rewrites into a span. It is stated as a column name rather
+#: than as a table-wide `escape=False`, so widening it is a visible edit.
+KESTREL_HTML_COLUMNS: tuple[str, ...] = ("Confidence",)
+
+#: Colour applied to each recognised confidence label in the cohort's Kestrel table.
+_CONFIDENCE_COLOURS = {
+    "Low_Precision": "orange",
+    "High_Precision": "red",
+    "High_Precision*": "red",
+}
+
+
+def confidence_span(value: Any) -> Any:
+    """
+    Wrap a confidence label in its colour, escaping the label itself.
+
+    Args:
+        value: The ``Confidence`` cell. Any type; only ``str`` is styled.
+
+    Returns:
+        The cell as markup - a coloured ``<span>`` for a recognised label, the escaped
+        text for anything else, and non-strings unchanged so pandas keeps formatting
+        numbers and NA itself.
+    """
+    if not isinstance(value, str):
+        return value
+    text = html.escape(value, quote=True)
+    colour = _CONFIDENCE_COLOURS.get(value)
+    if colour is None:
+        return text
+    return f'<span style="color:{colour};font-weight:bold;">{text}</span>'
+
+
+def kestrel_table_html(kestrel_df: pd.DataFrame) -> str:
+    """Render the cohort's Kestrel results table.
+
+    The ``Confidence`` column is rewritten into a colour span on a **copy**, so the
+    frame the caller goes on to export as CSV/TSV/JSON stays plain text. That column is
+    then the table's single escaping exemption: the exemption is for the span, not for
+    whatever lands in the column - an unrecognised value falls through unstyled and is
+    still a sample's own string - so :func:`confidence_span` escapes the text it renders
+    in every branch.
+
+    Every other column is a sample's own string - the sample name most obviously, but
+    the motif, the flag and the alleles too - so it is escaped.
+
+    Args:
+        kestrel_df (pandas.DataFrame): The aggregated Kestrel rows. Not modified.
+
+    Returns:
+        str: The table markup, or "" when there are no results.
+    """
+    # Create a separate copy for HTML formatting so that machine-readable outputs remain plain.
+    kestrel_df_html = kestrel_df.copy()
+    if "Confidence" in kestrel_df_html.columns:
+        kestrel_df_html["Confidence"] = kestrel_df_html["Confidence"].apply(confidence_span)
+
+    # Reorder Kestrel DataFrame columns: place Sample first then the remaining columns.
+    kestrel_columns = [col for col in KESTREL_DISPLAY_COLUMNS if col in kestrel_df_html.columns]
+    return escaped_table_html(kestrel_df_html[kestrel_columns], TABLE_CLASSES, html_columns=KESTREL_HTML_COLUMNS)
+
+
+def advntr_table_html(advntr_df: pd.DataFrame) -> str:
+    """Render the cohort's adVNTR results table.
+
+    Nothing constructs markup for this table, so it has no exemption at all.
+
+    Args:
+        advntr_df (pandas.DataFrame): The aggregated adVNTR rows. Not modified.
+
+    Returns:
+        str: The table markup, or "" when there are no results.
+    """
+    # Reorder advntr DataFrame columns: ensure Sample is first.
+    advntr_columns = [col for col in ADVNTR_DISPLAY_COLUMNS if col in advntr_df.columns]
+    return escaped_table_html(advntr_df[advntr_columns], TABLE_CLASSES)
+
+
+def stats_table_html(additional_stats_df: pd.DataFrame) -> str:
+    """
+    Render the per-sample statistics table for the cohort report.
+
+    Every value in it is read out of a sample's ``pipeline_summary.json`` - the sample
+    name (or its pseudonym, through the web service), the assembly, the VNtyper version,
+    the pipeline description - so none of it is markup this codebase built and none of it
+    is exempt from escaping.
+
+    Args:
+        additional_stats_df (pandas.DataFrame): One row per sample, ``Sample`` first.
+
+    Returns:
+        str: The table markup, or "" when there are no statistics to show.
+    """
+    return escaped_table_html(additional_stats_df, TABLE_CLASSES)
+
+
+def additional_stats_frame(additional_stats_list: list[dict[str, Any]]) -> pd.DataFrame:
+    """Assemble the per-sample statistics rows into the frame the table renders.
+
+    The ``coverage`` value each sample contributes is a nested mapping, which is spread
+    into one ``cov_``-prefixed column per metric. A sample whose pipeline ran no
+    ``Coverage Calculation`` step contributes an empty mapping and gets NA in those
+    columns rather than removing them for the whole cohort.
+
+    Args:
+        additional_stats_list: One mapping per sample, as
+            :func:`~vntyper.scripts.cohort_inputs.load_pipeline_summary_for_sample`
+            returns it, each already carrying its ``Sample`` key.
+
+    Returns:
+        pd.DataFrame: One row per sample, ``Sample`` first.
+    """
+    additional_stats_df = pd.DataFrame(additional_stats_list)
+    # For coverage, flatten the dict (if available)
+    if "coverage" in additional_stats_df.columns:
+        coverage_df = additional_stats_df["coverage"].apply(pd.Series)
+        coverage_df = coverage_df.add_prefix("cov_")
+        additional_stats_df = pd.concat([additional_stats_df.drop(columns=["coverage"]), coverage_df], axis=1)
+    # Reorder columns to place "Sample" first if it exists
+    if "Sample" in additional_stats_df.columns:
+        cols = ["Sample"] + [col for col in additional_stats_df.columns if col != "Sample"]
+        additional_stats_df = additional_stats_df[cols]
+    return additional_stats_df

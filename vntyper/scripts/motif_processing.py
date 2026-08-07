@@ -30,6 +30,14 @@ import logging
 import pandas as pd
 from Bio import SeqIO
 
+from vntyper.scripts.motif_decisions import (
+    apply_combined_exclusions,
+    apply_gg_alt_rule,
+    apply_right_motif_exclusions,
+    has_gg_alternate,
+    split_left_right,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,15 +65,54 @@ def load_muc1_reference(reference_file):
     return pd.DataFrame({"Motifs": identifiers, "Motif_sequence": sequences})
 
 
+#: VCF metadata columns dropped before the motif merge. Both preprocessors drop
+#: exactly this set, so a change here changes both -- which is the point: the two
+#: bodies were duplicated and could drift.
+VCF_METADATA_COLUMNS = ["ID", "QUAL", "FILTER", "INFO", "FORMAT"]
+
+
+def _preprocess_vcf_frame(df, muc1_ref, variant_label):
+    """
+    Shared body of ``preprocessing_insertion`` and ``preprocessing_deletion``.
+
+    The two functions differed only in the ``Variant`` string literal. Keeping one
+    body means a fix to the column plumbing cannot land on one path and miss the
+    other.
+
+    Steps:
+      - Rename '#CHROM' → 'Motifs' (the merge key)
+      - Drop the VCF metadata columns
+      - Rename the last remaining column → 'Sample'
+      - Left-merge with ``muc1_ref`` to attach 'Motif_sequence'
+      - Stamp the 'Variant' column
+
+    Note:
+        ``drop`` is called with ``columns=`` and no ``axis=``. pandas ignores
+        ``axis`` entirely when ``columns=`` is supplied (see ``NDFrame.drop``), so
+        the ``axis=1`` this replaced was inert - it could be mutated to any value
+        without changing the result, which made it an unkillable mutant rather
+        than a tested behaviour.
+
+    Args:
+        df (pd.DataFrame): Variants from a filtered VCF, sample column last.
+        muc1_ref (pd.DataFrame): MUC1 reference DataFrame with 'Motifs' & 'Motif_sequence'.
+        variant_label (str): Value written to every row of the 'Variant' column.
+
+    Returns:
+        pd.DataFrame: Merged frame carrying 'Motifs', 'Sample' and 'Variant'.
+    """
+    df.rename(columns={"#CHROM": "Motifs"}, inplace=True)
+    df.drop(columns=VCF_METADATA_COLUMNS, inplace=True)
+    last_column_name = df.columns[-1]
+    df.rename(columns={last_column_name: "Sample"}, inplace=True)
+    df = pd.merge(df, muc1_ref, on="Motifs", how="left")
+    df["Variant"] = variant_label
+    return df
+
+
 def preprocessing_insertion(df, muc1_ref):
     """
     Preprocess insertion variants by merging them with the MUC1 reference motifs.
-
-    Steps:
-      - Rename '#CHROM' → 'Motifs'
-      - Drop unused columns (ID, QUAL, FILTER, INFO, FORMAT)
-      - Rename last column → 'Sample'
-      - Merge with 'muc1_ref' to link motif IDs
 
     Args:
         df (pd.DataFrame): Insertion variants from a filtered VCF.
@@ -74,25 +121,12 @@ def preprocessing_insertion(df, muc1_ref):
     Returns:
         pd.DataFrame: Updated with columns for 'Variant' = 'Insertion'.
     """
-    df.rename(columns={"#CHROM": "Motifs"}, inplace=True)
-    columns_to_drop = ["ID", "QUAL", "FILTER", "INFO", "FORMAT"]
-    df.drop(columns=columns_to_drop, axis=1, inplace=True)
-    last_column_name = df.columns[-1]
-    df.rename(columns={last_column_name: "Sample"}, inplace=True)
-    df = pd.merge(df, muc1_ref, on="Motifs", how="left")
-    df["Variant"] = "Insertion"
-    return df
+    return _preprocess_vcf_frame(df, muc1_ref, "Insertion")
 
 
 def preprocessing_deletion(df, muc1_ref):
     """
     Preprocess deletion variants by merging them with the MUC1 reference motifs.
-
-    Steps:
-      - Rename '#CHROM' → 'Motifs'
-      - Drop unused columns
-      - Merge with MUC1 reference
-      - Mark 'Variant' = 'Deletion'
 
     Args:
         df (pd.DataFrame): Deletion variants from a filtered VCF.
@@ -101,14 +135,7 @@ def preprocessing_deletion(df, muc1_ref):
     Returns:
         pd.DataFrame: Updated with columns for 'Variant' = 'Deletion'.
     """
-    df.rename(columns={"#CHROM": "Motifs"}, inplace=True)
-    columns_to_drop = ["ID", "QUAL", "FILTER", "INFO", "FORMAT"]
-    df.drop(columns=columns_to_drop, axis=1, inplace=True)
-    last_column_name = df.columns[-1]
-    df.rename(columns={last_column_name: "Sample"}, inplace=True)
-    df = pd.merge(df, muc1_ref, on="Motifs", how="left")
-    df["Variant"] = "Deletion"
-    return df
+    return _preprocess_vcf_frame(df, muc1_ref, "Deletion")
 
 
 def load_additional_motifs(config):
@@ -319,6 +346,23 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
     exclude_alts_combined = mf.get("exclude_alts_combined", [])
     exclude_motifs_combined = mf.get("exclude_motifs_combined", [])
 
+    # #186: with an empty allowlist the uniform branch treats *every* GG alt as
+    # disallowed and deletes it, including the canonical dupC representation at
+    # POS 67. @hassansaei: "with an empty allowlist it would delete every GG,
+    # including canonical dupC, which is exactly the high-risk failure mode we
+    # are avoiding." The shipped config sets the flag false, so this cannot
+    # fire in production; it exists so that flipping it fails loudly.
+    if use_uniform_filtering and not motifs_for_alt_gg:
+        msg = (
+            "use_uniform_filtering is enabled while motifs_for_alt_gg is empty. "
+            "The uniform branch applies motifs_for_alt_gg as an unconditional allowlist, "
+            "so an empty list deletes every GG alternate -- including the canonical dupC "
+            "call at POS 67. Populate motifs_for_alt_gg or leave use_uniform_filtering off. "
+            "See issue #186."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
     # =============== Original Logic ===============
     working_df = original_df.copy(deep=True)
 
@@ -329,16 +373,45 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         logger.error("Missing 'Motifs' column. Old code returns empty.")
         combined_df = pd.DataFrame(columns=working_df.columns)
 
-    if "Motifs" not in working_df.columns or working_df["Motifs"].str.count("-").max() != 1:
+    # A motif ID must be two half-motif names joined by exactly one dash for
+    # split_left_right to make sense of it. Rows that are not are dropped from the
+    # working set here, PER ROW.
+    #
+    # This was defect W8 of the #179 audit. The check used to be an aggregate:
+    #
+    #     working_df["Motifs"].str.count("-").max() != 1
+    #
+    # `.max()` reduces the whole column, so the verdict for every row was decided by
+    # whichever row had the most dashes, and it was wrong in both directions. One row
+    # with two dashes drove the maximum to 2 and suppressed the ENTIRE sample - the
+    # report says Negative and the pipeline exits 0, so a single malformed motif ID
+    # silently deletes a positive call. In the other direction a row with no dash at
+    # all rode through unnoticed whenever a sibling row had exactly one, because the
+    # maximum was still 1; it was split into Motif=<the whole ID>, merged to nothing,
+    # and reported as a passing call against a motif that is not in the reference.
+    #
+    # A dropped row is NOT removed from the returned frame: it is simply absent from
+    # combined_df, so the pass_mask below marks it motif_filter_pass=False with NA
+    # annotations - identical to the disposition of every other row this stage
+    # rejects. This stage marks, it does not filter; filter_final_dataframe in
+    # kestrel_genotyping.py is what drops rows, and it requires the gate column on
+    # every input row.
+    if "Motifs" in working_df.columns:
+        splittable = working_df["Motifs"].str.count("-") == 1
+        if not splittable.all():
+            malformed = working_df.loc[~splittable, "Motifs"].tolist()
+            logger.warning(
+                f"Dropping {len(malformed)} of {len(working_df)} row(s) whose 'Motifs' value cannot be split "
+                f"into a left-right motif pair (expected exactly one dash): {malformed}. "
+                f"These rows fail motif filtering; the remaining rows are unaffected."
+            )
+        working_df = working_df[splittable].copy()
+
+    if "Motifs" not in working_df.columns or working_df.empty:
         logger.error("Cannot split 'Motifs' into left-right. Old code returns empty.")
         combined_df = pd.DataFrame(columns=working_df.columns)
     else:
-        working_df[["Motif_left", "Motif_right"]] = working_df["Motifs"].str.split("-", expand=True)
-        working_df["POS"] = pd.to_numeric(working_df["POS"], errors="coerce").fillna(-1).astype(int)
-
-        # Left vs. Right
-        motif_left = working_df[working_df["POS"] < position_threshold].copy()
-        motif_right = working_df[working_df["POS"] >= position_threshold].copy()
+        motif_left, motif_right = split_left_right(working_df, position_threshold)
 
         # Merge + filter left
         if not motif_left.empty:
@@ -404,17 +477,15 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
             else:
                 # IMPROVED LEGACY: Hassan's refactored GG logic (PR #140)
                 # Better than old logic but still has limitations vs uniform filtering
-                if motif_right["ALT"].str.contains(r"\b" + alt_for_motif_right_gg + r"\b").any():
-                    motif_right = motif_right[~motif_right["Motif"].isin(exclude_motifs_right)]
+                if has_gg_alternate(motif_right, alt_for_motif_right_gg):
+                    motif_right = apply_right_motif_exclusions(motif_right, exclude_motifs_right)
                     # Apply frameshift-aware sorting and deduplication (DRY: uses shared helper)
                     motif_right = _prioritize_frameshift_and_dedupe(motif_right)
-                    if motif_right["Motif"].isin(motifs_for_alt_gg).any():
-                        motif_right = motif_right[motif_right["Motif"].isin(motifs_for_alt_gg)]
+                    motif_right = apply_gg_alt_rule(motif_right, motifs_for_alt_gg)
 
         # Combine
         combined_df = pd.concat([motif_right, motif_left], axis=0, ignore_index=True)
-        combined_df = combined_df[~combined_df["ALT"].isin(exclude_alts_combined)]
-        combined_df = combined_df[~combined_df["Motif"].isin(exclude_motifs_combined)]
+        combined_df = apply_combined_exclusions(combined_df, exclude_alts_combined, exclude_motifs_combined)
 
         # Adjust POS => create POS_fasta
         combined_df["POS"] = pd.to_numeric(combined_df["POS"], errors="coerce").fillna(-1).astype(int)

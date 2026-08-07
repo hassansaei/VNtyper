@@ -26,7 +26,7 @@ Feature ideas are welcome. Open a [new issue](https://github.com/hassansaei/VNty
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher (`requires-python = ">=3.10"`; CI runs 3.10, 3.11, 3.12 and 3.13)
 - Git
 - Make (for running project workflows)
 
@@ -63,7 +63,13 @@ VNtyper 2 uses **Ruff** for linting and formatting, and **mypy** for static type
 | `make format`        | Auto-format code and apply lint fixes       |
 | `make format-check`  | Check formatting without modifying files    |
 | `make lint`          | Run the Ruff linter                        |
-| `make type-check`    | Run mypy on `vntyper/`                     |
+| `make type-check`    | Run mypy on `vntyper/` **and** `docker/app/` |
+| `make type-check-all`| `make type-check`, then mypy on `vntyper/` and `tests/` --- this is what CI's typecheck job runs |
+
+Ruff's formatter and linter both run over `vntyper/`, `docker/app/`, `tests/`, `scripts/`
+and `docs/` (the `RUFF_PATHS` variable in the `Makefile`). That set is deliberately equal
+to what a bare `ruff format --check .` discovers, so the Makefile target and the obvious
+command can never disagree. Nothing under `scripts/` is type-checked by any gate.
 
 !!! tip "Run all checks at once"
     Use `make all` to run formatting, linting, type checking, and tests in a single command.

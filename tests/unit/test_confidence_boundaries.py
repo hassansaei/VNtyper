@@ -9,10 +9,15 @@ left the whole suite green, and five of its six threshold comparisons could be
 changed without a single test failing. Line coverage says the code ran; it says
 nothing about whether the *boundary* was pinned.
 
-Everything here is **characterisation**. It records what the code does today so
-that a future change to a threshold, a comparison operator or the order the
-conditions are applied in becomes visible. It is not a specification, and none
-of it should be read as a claim that the current behaviour is correct.
+The 54-cell boundary matrix below is **characterisation**: it records the
+threshold arithmetic so a changed comparison operator becomes visible, and
+makes no claim that any individual cutoff is right.
+
+The *ordering* is different. @hassansaei decided on #183 (2026-08-06) that
+2.x's last-wins sequential assignment is the intended behaviour and that
+1.3's absolute region-depth cap must not be restored. Tests that pin the
+order of the ``df.loc`` assignments are therefore **specification**, and
+changing that order requires a new decision on #183.
 
 What is pinned
 --------------
@@ -20,9 +25,19 @@ What is pinned
   (each probed at threshold-1, threshold and threshold+1) and the two
   depth-score thresholds (each probed just below, exactly at and just above).
   Every threshold is read from the shipped config through
-  ``tests.builders.kestrel_config``; none is hardcoded.
-* The region-depth tier interaction, whose precedence is **unspecified** -- see
-  ``test_region_depth_demotion_is_overwritten_by_a_later_high_precision_tier``.
+  ``tests.builders.kestrel_config``; none is hardcoded. This part is
+  characterisation. #184 rewrote five of its cells -- see the comment above
+  ``_EXPECTED_MATRIX`` -- but the matrix as a whole still makes no claim that
+  any individual cutoff is right.
+* The closed mid-band ``[0.00469, 0.00515]``, which #184 decided must be
+  Low_Precision at every alternate depth. That part **is** specification: the
+  tests under the "#184" banner at the foot of this file each quote
+  @hassansaei and cite the issue. The rest of the matrix is not covered by
+  that decision.
+* The region-depth tier interaction -- see
+  ``test_region_depth_demotion_is_overwritten_by_a_later_high_precision_tier``
+  and ``test_a_low_region_depth_row_is_deliberately_not_capped_at_low_precision``.
+  Its *ordering* (last-wins) is specification, per #183.
 
 Notes for anyone editing this file
 ----------------------------------
@@ -36,15 +51,18 @@ Notes for anyone editing this file
 """
 
 import math
+from fractions import Fraction
 
 import pandas as pd
 import pytest
 
-from tests.builders import kestrel_config
+from tests.builders import kestrel_config, kestrel_stage_frame
 from vntyper.scripts.confidence_assignment import (
     NEGATIVE_LABEL,
     calculate_depth_score_and_assign_confidence,
 )
+from vntyper.scripts.kestrel_genotyping import select_single_best_variant
+from vntyper.scripts.scoring import split_depth_and_calculate_frame_score
 
 pytestmark = pytest.mark.unit
 
@@ -98,13 +116,22 @@ _S = _HIGH_STAR_LABEL
 # The snapshot. Rows are Depth_Score probes, columns are alt-depth probes, both
 # in the declaration order above. This is what the code emits today.
 #
+# The `high` row was rewritten by #184: the mid-band demotion now covers the CLOSED
+# interval [low, high] and is applied last, so `Depth_Score == high` exactly is
+# Low_Precision at every alt depth. Five cells moved -- alt_low+1, mid_low, mid_low+1,
+# mid_high and mid_high+1. The sixth, mid_high-1, is the one cell in the row whose
+# constructed region depth cannot land exactly on the threshold (see below): it sits
+# one ULP ABOVE `high`, outside the closed band, so it is still promoted. That is not
+# an inconsistency -- it is the tightest evidence in this file that the band's upper
+# edge is exactly at `high` and not one step past it.
+#
 #                  alt_low-1  alt_low  alt_low+1  mid_low-1  mid_low  mid_low+1  mid_high-1  mid_high  mid_high+1
 _EXPECTED_MATRIX = {
     "low-eps": (_N, _N, _N, _N, _N, _N, _N, _N, _N),
     "low": (_L, _L, _L, _L, _L, _L, _L, _L, _L),
     "low+eps": (_L, _L, _L, _L, _L, _L, _L, _L, _L),
     "high-eps": (_L, _L, _L, _L, _L, _L, _L, _L, _L),
-    "high": (_L, _L, _H, _L, _H, _H, _H, _S, _S),
+    "high": (_L, _L, _L, _L, _L, _L, _H, _L, _L),
     "high+eps": (_L, _L, _H, _L, _H, _H, _H, _S, _S),
 }
 
@@ -113,9 +140,8 @@ _EXPECTED_MATRIX = {
 # 53 of the 54 cells. The exception is alt=99 at Depth_Score == high: no double `r`
 # satisfies `99 / r == 0.00515`, because one ULP of `r` near 19223 is wider than the
 # pre-image interval of the target. That cell lands one ULP above `high`, which is
-# on the same side of every comparison the function makes there, so its expected
-# label is unchanged. The row assertion below is written as `>= high` for that
-# reason and only for that reason.
+# on the same side of every comparison the function makes there. The row assertion
+# below is written as `>= high` for that reason and only for that reason.
 _CELLS_THAT_CANNOT_LAND_EXACTLY_ON_THE_THRESHOLD = {("mid_high-1", "high")}
 
 
@@ -253,18 +279,20 @@ def test_depth_score_below_the_low_threshold_is_always_negative():
 
 
 def test_region_depth_demotion_is_overwritten_by_a_later_high_precision_tier():
-    """Characterisation: a low region depth does **not** cap the confidence label.
+    """Specification: a low region depth does **not** cap the confidence label.
 
     ``cond1`` demotes a row whose ``Estimated_Depth_Variant_ActiveRegion`` is at or
     below ``var_active_region_threshold`` to Low_Precision, but it is applied
     *first*; ``cond2`` (High_Precision*) and ``cond5`` (High_Precision) are applied
     after it and overwrite the demotion outright.
 
-    **Tier precedence is unspecified.** Nothing in the code states whether an
-    earlier demotion or a later promotion should win, and the six conditions are
-    simply applied in source order. This test records the order that ships today.
-    It is characterisation, not specification: do not read it as a claim that a
-    High_Precision call on a 150-read active region is correct.
+    **Tier precedence is specified.** @hassansaei decided on #183 (2026-08-06)
+    that 2.x's last-wins sequential assignment -- the six conditions applied in
+    source order, later conditions overwriting earlier ones -- is the intended
+    behaviour going forward, and that 1.3's absolute region-depth cap must not
+    be restored. This test pins that order: do read it as a claim that a
+    High_Precision call on a 150-read active region is correct. Changing the
+    order requires a new decision on #183.
 
     ``docs/pipeline/scoring-and-confidence.md`` used to state that High_Precision
     requires a region depth above 200. The code is correct and the doc table was
@@ -319,3 +347,261 @@ def test_the_region_depth_clause_is_only_reachable_through_the_alt_threshold_gap
         "with the region clause off and every alt-depth condition missing, no condition assigns a label "
         "and the row keeps the default"
     )
+
+
+def test_a_low_region_depth_row_is_deliberately_not_capped_at_low_precision():
+    """alt=50 on a 150-read region reports High_Precision, and that is intended.
+
+    Specification, not characterisation. v1.3 made region depth an absolute
+    first-wins cap; 2.x applies the tiers as sequential ``df.loc`` assignments,
+    so ``cond1``'s demotion is overwritten by a later match. @hassansaei on
+    #183 decided this is the intended behaviour going forward and that the
+    1.3 cap must not be restored: the pattern is rare, and the cases where it
+    appears are already caught by the Depth_Score flagging rule.
+    """
+    df = pd.DataFrame(
+        {
+            "Estimated_Depth_AlternateVariant": [50],
+            "Estimated_Depth_Variant_ActiveRegion": [150],
+        }
+    )
+
+    out = calculate_depth_score_and_assign_confidence(df, kestrel_config())
+
+    assert out["Confidence"].iloc[0] == "High_Precision"
+    assert out["Estimated_Depth_Variant_ActiveRegion"].iloc[0] <= 200
+
+
+# ---------------------------------------------------------------------------
+# #184: the mid-band Depth_Score demotion takes precedence over the High tiers.
+# ---------------------------------------------------------------------------
+
+#: Every integer ``(alt, region)`` pair, up to alt=1030, whose float quotient is
+#: *exactly* the shipped ``high`` threshold. ``0.00515 == 103 / 20000`` in IEEE 754
+#: (the division is exact for this pair), so ``alt`` is always a multiple of 103 and
+#: therefore always >= 103 > ``alt_mid_high`` (100). ``cond5``'s ``[21, 100)`` window
+#: is arithmetically unreachable here; only ``cond2`` can fire, so the only label the
+#: #184 change moves on integer depths is ``High_Precision*``.
+#:
+#: Enumerated exhaustively, not guessed: for each alt in 1..12000 the only region
+#: depths that can quotient to within one ULP of the threshold are floor(alt/high)-1,
+#: floor(alt/high) and floor(alt/high)+1, and the search over all three found 116
+#: pairs, every one of them with alt a multiple of 103. The first ten are listed.
+EXACT_HIGH_THRESHOLD_PAIRS = [
+    (103, 20000),
+    (206, 40000),
+    (309, 60000),
+    (412, 80000),
+    (515, 100000),
+    (618, 120000),
+    (721, 140000),
+    (824, 160000),
+    (927, 180000),
+    (1030, 200000),
+]
+
+
+def test_the_enumerated_boundary_pairs_all_land_exactly_on_the_high_threshold():
+    """The table above is only evidence if every pair in it really hits the boundary.
+
+    A pair whose quotient lands one ULP off would still produce *a* label, and the
+    parametrised tests below would then be pinning a neighbouring cell while
+    claiming to pin the boundary.
+    """
+    for alt, region in EXACT_HIGH_THRESHOLD_PAIRS:
+        assert alt / region == _HIGH, f"({alt}, {region}) gives {alt / region!r}, not {_HIGH!r}"
+        assert region > _REGION_THRESHOLD, f"({alt}, {region}) would also trip cond1's region clause"
+
+
+@pytest.mark.parametrize(("alt", "region"), EXACT_HIGH_THRESHOLD_PAIRS)
+def test_the_top_of_the_mid_band_is_low_precision(alt, region):
+    """``Depth_Score == 0.00515`` exactly must be Low_Precision (#184).
+
+    **Specification.** @hassansaei on #184: "Any variant with Depth_Score between
+    0.00469 and 0.00515 (inclusive) must be Low_Precision, even when alternate
+    depth is >= 21 (or higher). That mid-range Depth_Score demotion from 1.3 is
+    still the desired behaviour."
+
+    ``cond6`` already demoted the OPEN interval at every alt depth because it was
+    applied last, so this boundary was the only divergence from his intent. Before
+    this change ``cond2`` promoted these rows to ``High_Precision*``.
+
+    Args:
+        alt: ``Estimated_Depth_AlternateVariant`` from :data:`EXACT_HIGH_THRESHOLD_PAIRS`.
+        region: The matching ``Estimated_Depth_Variant_ActiveRegion``.
+    """
+    assert alt / region == _HIGH, "this pair does not reach the boundary in IEEE 754"
+
+    row = _assign(alt, region)
+
+    assert row["Depth_Score"] == _HIGH
+    assert row["Confidence"] == _LOW_LABEL
+    assert row["depth_confidence_pass"]
+
+
+def test_the_bottom_of_the_mid_band_is_low_precision():
+    """``Depth_Score == 0.00469`` exactly must be Low_Precision (#184).
+
+    **Specification**, same quote as above -- the band is inclusive at *both*
+    ends. ``cond1``'s ``Depth_Score == low_threshold`` clause already handled this
+    end and nothing overwrote it, so this test pins existing behaviour rather than
+    changing it. It is here because the new mid-band rule now also covers this
+    point: if the rule were ever written with ``inclusive="right"`` the label would
+    not move today (``cond1`` still fires) but would move the moment ``cond1``
+    changed, and this is what would notice.
+    """
+    assert _LOW == 469 / 100000, "this pair does not reach the low threshold in IEEE 754"
+
+    row = _assign(469, 100000)
+
+    assert row["Depth_Score"] == _LOW
+    assert row["Confidence"] == _LOW_LABEL
+
+
+def test_one_ulp_above_the_mid_band_is_still_promoted():
+    """The change must not swallow the High tiers -- only the top boundary moves.
+
+    ``5151 / 1000000`` is the smallest ratio above the threshold that a plausible
+    integer depth pair produces, and it is still above ``math.nextafter(high, 1)``
+    -- the smallest representable step up from the threshold. That makes this the
+    tightest available proof that the mid-band's ``inclusive="both"`` upper edge
+    does not extend past the threshold itself.
+    """
+    alt, region = 5151, 1000000
+    assert alt / region > math.nextafter(_HIGH, 1)
+
+    row = _assign(alt, region)
+
+    assert row["Confidence"] == _HIGH_STAR_LABEL
+
+
+@pytest.mark.parametrize(("alt", "region"), EXACT_HIGH_THRESHOLD_PAIRS)
+def test_no_row_at_the_boundary_falls_through_to_negative(alt, region):
+    """Guards the trap in the second implementation suggested on #184.
+
+    Changing ``cond2``/``cond5`` to ``> high`` *alone* would leave these rows
+    matching no condition at all, so they would keep ``NEGATIVE_LABEL`` -- turning
+    a reported call into a non-call, which is strictly worse than the bug being
+    fixed. The chosen implementation (mid-band applied last, inclusive at both
+    ends) cannot do that, and this test is what holds it to that.
+
+    Args:
+        alt: ``Estimated_Depth_AlternateVariant`` from :data:`EXACT_HIGH_THRESHOLD_PAIRS`.
+        region: The matching ``Estimated_Depth_Variant_ActiveRegion``.
+    """
+    row = _assign(alt, region)
+
+    assert row["Confidence"] != NEGATIVE_LABEL
+    assert row["depth_confidence_pass"]
+
+
+def test_a_boundary_demotion_changes_which_variant_is_reported():
+    """The label is not the only thing that moves -- selection ranks on it.
+
+    ``select_single_best_variant`` sorts by ``Confidence`` first
+    (``kestrel_genotyping.py:758``, priority map at :723), so demoting a boundary
+    row from ``High_Precision*`` to ``Low_Precision`` hands the reported genotype
+    to a different candidate whenever a sample carries several. This is the part of
+    #184's blast radius that is not visible in the label alone, and it is why the
+    change is gated on the golden cohort rather than treated as cosmetic.
+
+    Before the change the boundary row won on confidence priority 3 against the
+    other candidate's 2; after it, it loses with priority 1 and POS 68 is reported
+    instead of POS 67.
+    """
+    frame = kestrel_stage_frame("final", rows=2)
+    # Row 0 (POS 67): exactly at the boundary -- High_Precision* before, Low_Precision after.
+    frame.loc[0, "Estimated_Depth_AlternateVariant"] = 103
+    frame.loc[0, "Estimated_Depth_Variant_ActiveRegion"] = 20000
+    # Row 1 (POS 68): alt inside cond5's window with a score well above the boundary,
+    # so it is High_Precision both before and after and is unaffected by the change.
+    frame.loc[1, "Estimated_Depth_AlternateVariant"] = 50
+    frame.loc[1, "Estimated_Depth_Variant_ActiveRegion"] = 1000
+
+    scored = calculate_depth_score_and_assign_confidence(frame, kestrel_config())
+    assert scored.loc[0, "Depth_Score"] == _HIGH
+    assert scored.loc[0, "Confidence"] == _LOW_LABEL
+    assert scored.loc[1, "Confidence"] == _HIGH_LABEL
+
+    best = select_single_best_variant(scored)
+
+    assert len(best) == 1
+    assert best["Confidence"].iloc[0] == _HIGH_LABEL
+    assert best["POS"].iloc[0] == 68, "the boundary row must no longer win selection"
+    assert best.index[0] == 1
+
+
+def test_cond5_is_unreachable_at_the_boundary_on_integer_depths():
+    """Records why only ``High_Precision*`` can move, and proves it arithmetically.
+
+    ``0.00515 == 103 / 20000`` in lowest terms, so any integer pair whose *exact*
+    ratio is the threshold has alt as a multiple of 103. The smallest is 103, which
+    is already above ``alt_mid_high`` (100), so ``cond5``'s ``[21, 100)`` window can
+    never contain a boundary row.
+
+    The exhaustive half of the claim is checked directly against IEEE 754 rather
+    than against exact rationals, because the production comparison is a float
+    division: for every integer alt at or below ``alt_mid_high`` the only region
+    depths whose quotient could round onto the threshold are within one of
+    ``alt / high``, and none of them does.
+
+    If this ever fails, the config thresholds changed and the #184 blast-radius
+    analysis must be redone from scratch.
+    """
+    assert Fraction(_HIGH).limit_denominator(10**6) == Fraction(103, 20000)
+    assert Fraction(_HIGH).limit_denominator(10**6).numerator > _ALT_MID_HIGH
+
+    for alt in range(1, _ALT_MID_HIGH + 1):
+        approx = math.floor(alt / _HIGH)
+        for region in (approx - 1, approx, approx + 1):
+            if region > 0:
+                assert alt / region != _HIGH, (
+                    f"alt={alt}, region={region} reaches the boundary inside cond5's window; "
+                    "the #184 blast radius is wider than High_Precision* and must be re-derived"
+                )
+
+
+def test_a_fractional_region_depth_reaches_the_boundary_inside_cond5s_window():
+    """Characterisation of the scope limit on the #184 blast-radius argument.
+
+    ``calculate_depth_score_and_assign_confidence`` coerces its depth columns with
+    ``pd.to_numeric(...).fillna(0)`` and never casts to ``int``, so a fractional
+    depth is accepted. With one, ``Depth_Score == high`` *is* reachable at alt
+    depths 21-99, where ``cond5`` used to promote to plain ``High_Precision`` --
+    a case the "only High_Precision* moves" argument does not cover.
+
+    Nothing in this module enforces integrality; it is a property of the input,
+    pinned one layer up by
+    :func:`test_production_depths_arrive_as_whole_numbers`. This test exists so
+    the limitation is recorded in the suite rather than only in a commit message.
+    """
+    alt = _ALT_MID_LOW  # 21, the bottom of cond5's window
+    region = alt / _HIGH
+    assert region != int(region), "this test is only meaningful with a fractional region depth"
+
+    row = _assign(alt, region)
+
+    assert row["Depth_Score"] == _HIGH
+    assert row["Confidence"] == _LOW_LABEL
+
+
+def test_production_depths_arrive_as_whole_numbers():
+    """The 103/20000 blast-radius argument depends on this and nothing enforces it.
+
+    Both depth columns are produced by splitting Kestrel's ``Sample`` field
+    (``Del:<alt>:<region>``), which carries read counts, so they are integral in
+    practice. ``confidence_assignment.py`` itself never casts to ``int``, so if a
+    fractional depth ever reached it, ``Depth_Score`` could hit 0.00515 at alt
+    depths 21-99 and plain ``High_Precision`` would move as well -- see
+    :func:`test_a_fractional_region_depth_reaches_the_boundary_inside_cond5s_window`.
+
+    This pins the property at the boundary where it is actually established: the
+    production split, run over the repository's shared notion of a raw Kestrel
+    frame.
+    """
+    frame = split_depth_and_calculate_frame_score(kestrel_stage_frame("raw", rows=3))
+
+    for column in ("Estimated_Depth_AlternateVariant", "Estimated_Depth_Variant_ActiveRegion"):
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+        assert not values.empty, f"{column} produced no usable depths"
+        assert (values == values.astype(int)).all(), f"{column} carries a fractional depth"

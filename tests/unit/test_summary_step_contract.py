@@ -1,9 +1,13 @@
 """The pipeline-summary step-name contract (AGENTS.md trap 5).
 
 Five step names are matched by exact string comparison across `pipeline.py`
-(the producer) and `generate_report.py`, `cohort_summary.py` and
+(the producer) and `generate_report.py`, `cohort_inputs.py` and
 `cross_match.py` (the consumers). A typo in any one of them does not fail --
 it silently drops a section from the report.
+
+The cohort's four matches lived in `cohort_summary.py` until that file was split;
+they are now in `cohort_inputs.py`, and `cohort_summary.py` remains under the
+bare-literal scan so a reintroduced literal there is still caught.
 
 `summary_steps.py` is the single source of truth for those names. These tests
 enforce three things:
@@ -34,18 +38,41 @@ from vntyper.scripts import summary_steps  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO_ROOT / "vntyper" / "scripts"
 
-#: The producer plus every consumer that matches a step name.
-STEP_NAME_MODULES = ("pipeline.py", "generate_report.py", "cohort_summary.py", "cross_match.py")
+#: The producer plus every module on the consuming side. `cohort_summary.py` stays on
+#: this list although it no longer matches a name itself: it is the module a step-name
+#: literal would most plausibly be reintroduced into, and the scan below is what says
+#: it has none.
+STEP_NAME_MODULES = (
+    "pipeline.py",
+    "generate_report.py",
+    "cohort_summary.py",
+    "cohort_inputs.py",
+    "cross_match.py",
+)
 
 #: How many distinct `STEP_*` constants each module must reference. These are the
 #: counts of bare literals the modules carried before adoption; dropping below one
 #: means a site was deleted rather than converted.
+#:
+#: `cohort_summary.py` is absent because its four matches moved wholesale into
+#: `cohort_inputs.py` when the file was split (Task 22 of the #181-#197 follow-ups),
+#: taking the count with them. Every module that matches a step name is still required
+#: to reference the constants; a module that matches none is declared in
+#: `MODULES_MATCHING_NO_STEP_NAME` below rather than being listed here with a zero,
+#: because a zero is a passing assertion about nothing.
 MINIMUM_CONSTANT_REFERENCES = {
     "pipeline.py": 5,
     "generate_report.py": 5,
-    "cohort_summary.py": 4,
+    "cohort_inputs.py": 4,
     "cross_match.py": 2,
 }
+
+#: Modules that are scanned for bare literals but match no step name themselves, so they
+#: have no minimum. Declaring them explicitly is what keeps the split above honest:
+#: `test_every_scanned_module_is_classified` fails if a module is added to
+#: `STEP_NAME_MODULES` without appearing in exactly one of the two, which is the
+#: `KeyError` the old single-list parametrisation used to raise.
+MODULES_MATCHING_NO_STEP_NAME = frozenset({"cohort_summary.py"})
 
 # One producer call site builds its name from an f-string, guarded by
 # `if input_type in ["BAM", "CRAM"]`. Expand it so the tests reason about the names
@@ -252,7 +279,26 @@ def test_no_bare_step_name_literal_survives(module: str) -> None:
     )
 
 
-@pytest.mark.parametrize("module", STEP_NAME_MODULES)
+def test_every_scanned_module_is_classified() -> None:
+    """Guard the split: a scanned module must be required to reference constants, or
+    declared as matching no step name. Never neither.
+
+    The two lists below used to be one, and the test that consumes the minimums used to
+    raise `KeyError` for a module it had no entry for. Splitting them to avoid asserting
+    a meaningless zero also removed that failure, so a module added to the scan list
+    would silently get no minimum at all. This restores it.
+    """
+    classified = set(MINIMUM_CONSTANT_REFERENCES) | MODULES_MATCHING_NO_STEP_NAME
+
+    assert classified == set(STEP_NAME_MODULES), (
+        f"these scanned modules are unclassified: {sorted(set(STEP_NAME_MODULES) - classified)}; "
+        f"these are classified but not scanned: {sorted(classified - set(STEP_NAME_MODULES))}. "
+        "Add each to MINIMUM_CONSTANT_REFERENCES or to MODULES_MATCHING_NO_STEP_NAME."
+    )
+    assert not (set(MINIMUM_CONSTANT_REFERENCES) & MODULES_MATCHING_NO_STEP_NAME)
+
+
+@pytest.mark.parametrize("module", sorted(MINIMUM_CONSTANT_REFERENCES))
 def test_each_module_actually_references_the_constants(module: str) -> None:
     """Deleting a site also removes its literal; this catches that."""
     referenced = _step_constant_references(_parse(module))

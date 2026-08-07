@@ -7,10 +7,12 @@ report), ``select_single_best_variant`` (which picks the one row that becomes
 the genotype) and ``construct_kestrel_command`` (the exact command line the
 vendored, version-pinned JAR is invoked with).
 
-Everything here is **characterisation**. It records what the code does today so
-a change becomes visible. Where the recorded behaviour looks dangerous the
-docstring says so and stops there; changing which variants survive needs a
-golden-cohort diff, not a unit test.
+Everything here is **characterisation** -- it records what the code does today so
+a change becomes visible -- *except* the gate-absence tests marked "#185
+specification", each of which quotes the decision it encodes in its own
+docstring. Where recorded behaviour merely looks dangerous the docstring says so
+and stops there; changing which variants survive needs a golden-cohort diff, not
+a unit test.
 
 The builders are used only to supply the columns a stage requires. Every value
 under test is written out here -- ``tests.builders.kestrel_stage_frame``
@@ -20,11 +22,15 @@ builder-computed value would be circular.
 """
 
 import logging
+from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 import pytest
 
 from tests.builders import kestrel_config, kestrel_stage_frame
+from tests.support.pipeline_harness import run_pipeline_under_harness
+from vntyper.scripts import kestrel_genotyping
 from vntyper.scripts.kestrel_genotyping import (
     construct_kestrel_command,
     filter_final_dataframe,
@@ -115,58 +121,173 @@ def test_a_gate_that_is_present_and_false_drops_the_row(gate, tmp_path):
 
 
 @pytest.mark.parametrize("gate", GATE_COLUMNS)
-def test_a_gate_that_is_absent_is_ignored_and_the_row_survives(gate, tmp_path, caplog):
-    """State 3 of 3 per gate: absent -- and the gate **fails open**.
+def test_a_gate_that_is_absent_from_a_non_empty_frame_raises(gate, tmp_path, caplog):
+    """State 3 of 3 per gate: absent -- and the gate **fails closed** (#185 specification).
 
-    ``filter_final_dataframe`` skips a gate column that is not in the frame. A
-    stage that crashes, returns early, or is reordered out of the chain therefore
-    does not block anything: its gate silently stops existing and every row sails
-    past it.
+    @hassansaei on #185: "Prefer fail loud: a missing required gate column should
+    raise (abort the run), not be skipped. [...] The current 2.x behaviour [...]
+    can silently permit variants that should have been filtered. That is not
+    acceptable for this pipeline. So: do not keep fail-open."
 
-    That is dangerous. The five gates are the entire safety net between a raw
-    Kestrel call and a reported genotype, and four of the five encode a
-    *pathogenicity* judgement (frameshift validity, depth confidence, ALT
-    filtering, motif filtering). Losing one to an upstream failure turns a missing
-    check into a permissive one, which is the wrong direction for a diagnostic.
-
-    This test pins the fail-open behaviour rather than fixing it: making the gate
-    fail closed changes which variants reach the report and needs a golden-cohort
-    diff first.
+    The five gates are the entire safety net between a raw Kestrel call and a
+    reported genotype, and four of the five encode a *pathogenicity* judgement
+    (frameshift validity, depth confidence, ALT filtering, motif filtering). The
+    stages mark rather than filter (AGENTS.md trap 4), so a stage that stops
+    emitting its column does not remove a check -- it converts that check into a
+    permit. Every gate is parametrised here so none is left unguarded.
 
     Args:
         gate: The boolean column removed from the frame.
         tmp_path: Destination for ``kestrel_pre_result.tsv``.
-        caplog: Captures the skip message.
+        caplog: Captures the error message.
     """
     frame = _passing_frame().drop(columns=[gate])
     assert gate not in frame.columns
 
-    with caplog.at_level(logging.INFO, logger="vntyper.scripts.kestrel_genotyping"):
-        out = filter_final_dataframe(frame, str(tmp_path))
+    with (
+        caplog.at_level(logging.ERROR, logger="vntyper.scripts.kestrel_genotyping"),
+        pytest.raises(ValueError, match=gate) as raised,
+    ):
+        filter_final_dataframe(frame, str(tmp_path))
 
-    assert len(out) == 1, f"a missing {gate!r} is ignored rather than treated as a failure"
-    skipped = [
-        record
+    assert "issue #185" in str(raised.value)
+    # Repo convention: logger.error(msg) immediately before raise ValueError(msg).
+    errors = [
+        record.getMessage()
         for record in caplog.records
-        if record.levelno >= logging.INFO and record.getMessage() == f"Filter column '{gate}' not found; skipping."
+        if record.levelno >= logging.ERROR and record.name == "vntyper.scripts.kestrel_genotyping"
     ]
-    assert skipped, (
-        f"the skip is announced at INFO, not merely at DEBUG; got {[r.getMessage() for r in caplog.records]}"
-    )
+    assert str(raised.value) in errors, f"the raise must be preceded by the same message at ERROR; got {errors}"
 
 
-def test_every_gate_missing_at_once_still_lets_everything_through(tmp_path):
-    """The fail-open behaviour compounds: with no gates at all, nothing is filtered.
+def test_every_gate_missing_at_once_raises_on_the_first_one(tmp_path):
+    """The compounded case: an upstream stage that returns its input unchanged.
 
-    Stated separately from the per-gate cases because this is the shape the failure
-    actually takes in production -- an upstream stage that returns its input
-    unchanged drops several gates at once, not one.
+    #185 specification. Stated separately from the per-gate cases because this is
+    the shape the failure actually takes in production -- a stage that returns its
+    input untouched drops several gates at once, not one. The report names the
+    first gate in source order, so the message points at the earliest stage that
+    could be responsible.
     """
     frame = _passing_frame(rows=3).drop(columns=list(GATE_COLUMNS))
 
-    out = filter_final_dataframe(frame, str(tmp_path))
+    with pytest.raises(ValueError, match=GATE_COLUMNS[0]):
+        filter_final_dataframe(frame, str(tmp_path))
 
-    assert len(out) == 1, "three ungated rows collapse to one only because of best-variant selection"
+
+def test_an_empty_frame_is_the_documented_empty_result_path(tmp_path):
+    """#185 specification: the carve-out for empty frames is explicit, not silent.
+
+    @hassansaei: "If a softer path is ever needed for empty early-return frames,
+    that should be an explicit, documented empty-result path -- not silent
+    omission of safety gates on a non-empty candidate table."
+
+    An empty frame carries no candidate variant, so there is nothing for a missing
+    gate to permit. Structurally this is unreachable in production -- every stage
+    in ``process_kmer_results`` ahead of the single call site ends in
+    ``if df.empty: return df`` -- but the contract is stated here rather than left
+    to that structure.
+    """
+    out = filter_final_dataframe(pd.DataFrame(), str(tmp_path))
+
+    assert out.empty
+
+
+def test_the_pre_result_tsv_is_still_written_before_the_raise(tmp_path):
+    """``kestrel_pre_result.tsv`` is the debuggability artefact (AGENTS.md trap 4).
+
+    #185 specification. It must be on disk before the raise, or the aborted run
+    loses the evidence of what the frame held and which gates it still carried --
+    which is exactly what a person diagnosing the abort needs.
+    """
+    frame = _passing_frame(rows=2).drop(columns=["alt_filter_pass"])
+
+    with pytest.raises(ValueError, match="alt_filter_pass"):
+        filter_final_dataframe(frame, str(tmp_path))
+
+    pre_result = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
+    assert len(pre_result) == 2, "the pre-filter file must carry every input row"
+    assert "alt_filter_pass" not in pre_result.columns, "and record that the gate was genuinely absent"
+    assert sorted(pre_result["POS"]) == sorted(frame["POS"])
+
+
+def _merged_motifs() -> pd.DataFrame:
+    """Return the motif annotation table ``motif_correction_and_annotation`` merges on.
+
+    Returns:
+        pd.DataFrame: Both halves of the builder's ``X-5`` motif pair.
+    """
+    return pd.DataFrame({"Motif": ["X", "5"], "Motif_sequence": ["SEQ1", "SEQ2"]})
+
+
+def _run_kmer_results_with_a_stage_that_loses(gate: str, output_dir: str) -> pd.DataFrame:
+    """Drive the real ``process_kmer_results`` with one stage no longer emitting ``gate``.
+
+    Nothing is stubbed except that single omission, so the frame reaching
+    ``filter_final_dataframe`` is one the real stages built.
+
+    Args:
+        gate: The column ``motif_correction_and_annotation`` is made to drop.
+        output_dir: Where the Kestrel artefacts are written.
+
+    Returns:
+        pd.DataFrame: Whatever ``process_kmer_results`` returns, if it returns.
+    """
+    real = kestrel_genotyping.motif_correction_and_annotation
+
+    def dropping(df, merged_motifs, config):
+        return real(df, merged_motifs, config).drop(columns=[gate], errors="ignore")
+
+    with mock.patch.object(kestrel_genotyping, "motif_correction_and_annotation", dropping):
+        return kestrel_genotyping.process_kmer_results(
+            kestrel_stage_frame("raw", rows=2), _merged_motifs(), output_dir, kestrel_config()
+        )
+
+
+def test_the_only_caller_does_not_swallow_the_raise(tmp_path):
+    """#185 specification: ``process_kmer_results`` lets the abort through.
+
+    ``filter_final_dataframe`` has exactly one caller. A raise that the caller
+    turned into an empty result would be *worse* than the fail-open it replaces:
+    the run would report nothing rather than reporting unfiltered variants, and
+    would still look successful. This drives the real stage chain from a raw frame
+    with one stage made to stop emitting its column -- the production failure the
+    decision describes -- and requires the ValueError to reach the caller's caller.
+    """
+    with pytest.raises(ValueError, match="motif_filter_pass"):
+        _run_kmer_results_with_a_stage_that_loses("motif_filter_pass", str(tmp_path))
+
+
+def test_a_missing_gate_column_aborts_the_run_rather_than_reporting_nothing(tmp_path, caplog):
+    """#185 specification: the abort survives the pipeline's stage boundary.
+
+    ``run_pipeline`` wraps its whole body in ``except Exception`` (``pipeline.py``'s
+    outer handler). If that turned the raise into a quiet no-result the pipeline
+    would still exit 0 with an empty genotype, which is the failure mode the
+    decision exists to prevent. The real ``run_pipeline`` runs here with the
+    Kestrel stage replaced by the real Kestrel postprocessing over a frame that
+    lost a gate; the run must end at exit code 1 with the reason in the log.
+    """
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.kestrel_genotyping")
+
+    def kestrel_stage(**kwargs):
+        _run_kmer_results_with_a_stage_that_loses("motif_filter_pass", str(Path(kwargs["output_dir"])))
+
+    harness = run_pipeline_under_harness(
+        tmp_path / "out",
+        expect_failure=True,
+        stage_side_effects={"run_kestrel": kestrel_stage},
+    )
+
+    assert isinstance(harness.error, SystemExit), f"the run did not exit; it returned {harness.error!r}"
+    assert harness.error.code == 1, "a missing gate must abort the run, not finish it with no result"
+    reported = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and record.name == "vntyper.scripts.kestrel_genotyping"
+    ]
+    assert any("issue #185" in message for message in reported), f"the reason never reached the log; got {reported}"
+    assert any("motif_filter_pass" in message for message in reported)
 
 
 def test_the_pre_result_tsv_keeps_every_input_row_including_the_rejected_ones(tmp_path):

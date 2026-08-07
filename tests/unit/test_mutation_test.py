@@ -174,11 +174,15 @@ def test_clear_bytecode_caches_removes_every_pycache(tmp_path) -> None:
 
 def test_the_test_subprocess_disables_bytecode_writing(monkeypatch) -> None:
     """
-    The other half of the defence, pinned so it cannot be dropped in a refactor.
+    One half of the defence, pinned so it cannot be dropped in a refactor.
 
-    Without both ``-B`` and ``PYTHONDONTWRITEBYTECODE=1`` a byte-length-preserving
-    mutant written in the same second as the file it replaces is invisible to the cache
-    validator, the interpreter runs the unmutated bytecode, and every mutant "survives".
+    ``-B`` and ``PYTHONDONTWRITEBYTECODE=1`` each independently stop the child writing
+    bytecode; both are set so the defence does not depend on how the harness was
+    invoked, and neither may quietly disappear.
+
+    This is a flag-presence assertion and that is all it is: it stayed green while the
+    real invariant was broken (see the test below, which was written after inducing
+    exactly that). Keep both.
     """
     captured: dict = {}
 
@@ -193,6 +197,51 @@ def test_the_test_subprocess_disables_bytecode_writing(monkeypatch) -> None:
 
     assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "-B" in captured["command"]
+
+
+def test_no_bytecode_cache_survives_into_any_mutants_test_run(tmp_path, monkeypatch) -> None:
+    """
+    The invariant itself: **no child may load bytecode built from a different revision**.
+
+    The two flag assertions above cannot see this. Removing the ``clear_bytecode_caches``
+    call from ``sweep_module``'s loop leaves ``-B`` and ``PYTHONDONTWRITEBYTECODE=1``
+    exactly where they were, so the whole file stayed green (45 passed) with the
+    invariant broken - a ``.pyc`` written before the sweep, or by any child that ignored
+    the flags, would then be loaded for a *later* mutant that happens to share its
+    (mtime, size). This asserts the property instead of the mechanism: whenever the
+    harness hands a mutant to pytest, there is no ``__pycache__`` anywhere under the
+    tree it mutates.
+
+    The double re-creates the cache on every call, which is what makes this test about
+    clearing *between* mutants rather than once at the start.
+    """
+    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    cache = tmp_path / "vntyper" / "scripts" / "__pycache__"
+
+    def _plant_stale_cache() -> None:
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "sample.cpython-312.pyc").write_bytes(b"bytecode for some other revision")
+
+    _plant_stale_cache()
+    caches_visible_to_each_run: list[list[Path]] = []
+
+    def fake_run_tests(_paths, _timeout, parallel=False):
+        caches_visible_to_each_run.append(sorted(tmp_path.rglob("__pycache__")))
+        _plant_stale_cache()
+        return False  # killed, so the sweep moves straight on to the next mutant
+
+    monkeypatch.setattr(mutation_test, "run_tests", fake_run_tests)
+    _write_module(tmp_path, "def f(a):\n    return a >= 1 and a\n")
+
+    result = mutation_test.sweep_module("sample.py", ("tests",), timeout=5, verbose=False)
+
+    assert result.total > 1, "this module must yield several mutants or the test proves nothing"
+    assert len(caches_visible_to_each_run) == result.total
+    assert caches_visible_to_each_run == [[] for _ in range(result.total)], (
+        "a mutant's tests ran with a __pycache__ on disk; the interpreter may have loaded "
+        f"bytecode for a different revision of the module. Saw: {caches_visible_to_each_run}"
+    )
+    assert not list(tmp_path.rglob("__pycache__")), "the finally-restore must clear the cache too"
 
 
 def test_a_timed_out_test_run_counts_as_a_kill(monkeypatch) -> None:
@@ -397,20 +446,52 @@ def test_every_committed_equivalence_entry_targets_a_real_module() -> None:
         assert path in mutation_test.TARGETS, path
 
 
-def test_the_page_records_that_branch_coverage_is_measured_but_not_enabled() -> None:
+def test_the_page_records_that_branch_coverage_is_now_enabled() -> None:
     """
-    Branch coverage was measured at 63.80% against a floor of 66 and left disabled.
+    Branch coverage was enabled in #196 at 74.22% and the floor was raised 70 -> 74.
 
     That is a real finding with a real decision attached, and the next person to reach
-    for `branch = true` needs to find it rather than re-derive it.
+    for `branch = true` needs to find it rather than re-derive it. These are the CURRENT
+    figures; the superseded ones are asserted separately below.
     """
     result = mutation_test.ModuleResult(path="vntyper/scripts/scoring.py", killed=4, survived=0)
 
     page = mutation_test.format_markdown([result], elapsed=1.0)
 
-    assert "63.80%" in page
-    assert "not" in page and "lowered" in page
-    assert "144 more covered units" in page
+    # Pin the table ROWS, not the bare figures. Each number also appears in the prose
+    # below the table, so `assert "74.22%" in page` stays green when the headline table
+    # alone drifts - verified by inducing exactly that and watching it pass.
+    assert "| **Branch-inclusive total** | **74.22%** |" in page, "the total the floor was set from"
+    assert "| Line (statement) coverage | 76.60% |" in page, "statement-only, which is HIGHER than the total"
+    assert "| Branch exits never taken | 512 of 1506 |" in page
+    assert "was not weakened to fit the floor" in page, (
+        "the page must say the floor was raised to meet the measurement, not the reverse - "
+        "that direction is the whole point of the ratchet"
+    )
+
+
+def test_the_page_keeps_the_superseded_branch_coverage_claim_as_a_correction() -> None:
+    """
+    The old 63.80%/floor-66 finding stays on the page, labelled as superseded, not deleted.
+
+    The page once concluded that splitting `cohort_summary.py` and `install_references.py`
+    was "the prerequisite" for enabling branch coverage. That turned out to be wrong -
+    #196 enabled it with both files still unsplit, by testing five small modules instead.
+
+    Silently dropping a falsified claim is the failure mode this assertion guards: a
+    document that quietly rewrites its own history stops being worth trusting, so the
+    convention here is to record the correction. 63.80% and 66.82% are HISTORICAL figures
+    and must remain readable as such; the current ones are asserted above.
+    """
+    result = mutation_test.ModuleResult(path="vntyper/scripts/scoring.py", killed=4, survived=0)
+
+    page = mutation_test.format_markdown([result], elapsed=1.0)
+
+    assert "### Correction:" in page, "the superseded claim must be marked as corrected, not deleted"
+    assert "63.80%" in page, "the historical branch-inclusive total"
+    assert "66.82%" in page, "the historical line-coverage total"
+    assert "Splitting them is the prerequisite" in page, "the old conclusion must be quoted before it is refuted"
+    assert "It was not a prerequisite" in page, "and it must actually be refuted"
 
 
 def test_the_page_warns_against_building_from_the_tree_during_a_sweep() -> None:
@@ -511,12 +592,37 @@ def _fake_subprocess_run(git_outputs: list[str], calls: list[list[str]]):
     return fake_run
 
 
-def _prepare_main(tmp_path, monkeypatch, git_outputs: list[str], argv: list[str] | None = None) -> list[list[str]]:
-    """Point ``main()`` at ``tmp_path``, script ``git``, and neutralise signal setup."""
+def _prepare_main(
+    tmp_path,
+    monkeypatch,
+    git_outputs: list[str],
+    argv: list[str] | None = None,
+    stub_baseline: bool = True,
+) -> list[list[str]]:
+    """
+    Point ``main()`` at ``tmp_path``, script ``git``, and neutralise signal setup.
+
+    Args:
+        tmp_path: The throwaway repo root.
+        monkeypatch: pytest's monkeypatch fixture.
+        git_outputs (list[str]): ``git status --porcelain`` stdout, one per call.
+        argv (list[str] | None): ``sys.argv`` for this run.
+        stub_baseline (bool): Force the green-baseline preflight to pass. Every pytest
+            run in this file's double exits non-zero (that is how a mutant is "killed"),
+            which a live preflight correctly reads as a red baseline and refuses on. The
+            tests about the *git* preflight would then stop at the baseline and pass for
+            the wrong reason, so it is stubbed out by default and left live only in the
+            tests that are specifically about it.
+
+    Returns:
+        list[list[str]]: Mutated in place with every command issued.
+    """
     monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(mutation_test, "TARGETS", {"sample.py": ("tests/unit/x.py",)})
     monkeypatch.setattr(mutation_test.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(sys, "argv", argv or ["mutation_test.py"])
+    if stub_baseline:
+        monkeypatch.setattr(mutation_test, "baseline_refusal", lambda *_a, **_k: None)
     calls: list[list[str]] = []
     monkeypatch.setattr(subprocess, "run", _fake_subprocess_run(git_outputs, calls))
     return calls
@@ -728,3 +834,211 @@ def _raise_missing_git(command, *_args, **_kwargs):
     if command[0] == "git":
         raise FileNotFoundError("git")
     return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+
+# ---------------------------------------------------------------------------
+# The green-baseline preflight
+# ---------------------------------------------------------------------------
+#
+# The measurement reads one bit - pytest's return code - and cannot tell "this mutant
+# broke a test" from "this checkout was already broken". Every way of being broken
+# (an unrelated failure, a collection error, a missing dependency, a timeout) returns
+# non-zero and was therefore recorded as a KILL, so a sufficiently broken environment
+# scored 100%, exited 0, and overwrote the committed evidence page with the fiction.
+
+#: One real target and its scoped tests, for the preflight tests that do not go through
+#: ``main()``. Real paths so a typo in either would be caught by
+#: ``test_every_declared_target_and_its_tests_exist``.
+_ONE_TARGET: dict[str, tuple[str, ...]] = {"vntyper/scripts/scoring.py": ("tests/unit/test_scoring.py",)}
+
+
+def test_the_pytest_output_is_kept_rather_than_discarded(monkeypatch) -> None:
+    """
+    A refusal that says "the baseline is red" without saying how is unactionable.
+
+    The harness used to throw both streams away, which is a large part of why a broken
+    environment could look like a perfect score for two whole sweeps.
+    """
+
+    def fake_run(command, **_kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout="1 failed, 0 passed", stderr="ImportError: pandas")
+
+    monkeypatch.setattr(mutation_test.subprocess, "run", fake_run)
+
+    run = mutation_test.run_pytest(("tests/unit",), timeout=5)
+
+    assert run.passed is False
+    assert "1 failed, 0 passed" in run.output
+    assert "ImportError: pandas" in run.output
+
+
+def test_a_timed_out_run_reports_the_timeout_rather_than_an_empty_string(monkeypatch) -> None:
+    """A silent empty refusal reads as "no idea", which is the least useful outcome."""
+
+    def fake_run(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(mutation_test.subprocess, "run", fake_run)
+
+    run = mutation_test.run_pytest(("tests/unit",), timeout=7)
+
+    assert run.passed is False
+    assert "7" in run.output and "timeout" in run.output.lower()
+
+
+def test_the_baseline_runs_the_same_invocations_the_sweep_judges_mutants_by(monkeypatch) -> None:
+    """
+    Checking something *else* would not establish that the sweep's own checks are sound.
+
+    Both of the sweep's invocations are verified, because they fail independently and
+    the second is the more dangerous: a broken parallel full-tier run turns every
+    genuine survivor into a phantom "killed (full tier)".
+    """
+    seen: list[tuple[tuple[str, ...], bool]] = []
+
+    def fake_run_pytest(paths, _timeout, parallel=False):
+        seen.append((paths, parallel))
+        return mutation_test.TestRun(passed=True, output="")
+
+    monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
+
+    refusal = mutation_test.baseline_refusal(_ONE_TARGET, timeout=60)
+
+    assert refusal is None
+    assert (("tests/unit/test_scoring.py",), False) in seen, "the scoped kill check, serial"
+    assert (("tests/unit",), True) in seen, "the survivor escalation, parallel"
+
+
+def test_the_baseline_refusal_quotes_the_failure_and_names_what_it_ran(monkeypatch) -> None:
+    """The next action is to fix the failing test, so the refusal has to show it."""
+
+    def fake_run_pytest(_paths, _timeout, parallel=False):
+        return mutation_test.TestRun(passed=False, output="E   ModuleNotFoundError: No module named 'pysam'")
+
+    monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
+
+    refusal = mutation_test.baseline_refusal(_ONE_TARGET, timeout=60)
+
+    assert refusal is not None
+    assert "ModuleNotFoundError" in refusal
+    assert "tests/unit/test_scoring.py" in refusal
+    assert "vntyper/scripts/scoring.py" in refusal
+    assert "UNMUTATED" in refusal
+
+
+def test_a_red_baseline_aborts_before_anything_is_mutated_or_written(tmp_path, monkeypatch, capsys) -> None:
+    """
+    The defect this preflight exists for, end to end.
+
+    Every pytest run in this file's subprocess double exits non-zero - which is exactly
+    what a broken checkout looks like to the harness. Without the preflight ``main()``
+    swept the module, scored every mutant as killed, printed a perfect result, wrote it
+    over ``docs/development/mutation-testing.md`` and returned 0.
+    """
+    original = "def f(a):\n    return a >= 1 and a\n"
+    _write_module(tmp_path, original)
+    report = tmp_path / "docs/development/mutation-testing.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("# the previous, real measurement\n", encoding="utf-8")
+    _prepare_main(
+        tmp_path,
+        monkeypatch,
+        ["", ""],
+        argv=["mutation_test.py", "--output", str(report)],
+        stub_baseline=False,
+    )
+    swept: list[str] = []
+    monkeypatch.setattr(mutation_test, "sweep_module", lambda path_str, *_a, **_k: swept.append(path_str))
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0, "a run that produced no usable measurement must not report success"
+    assert swept == [], "nothing may be mutated once the baseline is known to be red"
+    assert (tmp_path / "sample.py").read_text(encoding="utf-8") == original
+    assert report.read_text(encoding="utf-8") == "# the previous, real measurement\n", (
+        "the committed evidence page must survive a refused run"
+    )
+    err = capsys.readouterr().err
+    assert "REFUSING TO SWEEP" in err
+    assert "sample.py" in err
+
+
+def test_the_baseline_is_narrowed_by_module_exactly_as_the_sweep_is(tmp_path, monkeypatch) -> None:
+    """``--module`` must not make the preflight run tests for targets nobody selected."""
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(
+        tmp_path,
+        monkeypatch,
+        ["", ""],
+        argv=["mutation_test.py", "--module", "sample.py"],
+        stub_baseline=False,
+    )
+    monkeypatch.setattr(
+        mutation_test,
+        "TARGETS",
+        {"sample.py": ("tests/unit/x.py",), "other.py": ("tests/unit/y.py",)},
+    )
+    checked: list[tuple[str, ...]] = []
+
+    def fake_run_pytest(paths, _timeout, parallel=False):
+        checked.append(paths)
+        return mutation_test.TestRun(passed=True, output="")
+
+    monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
+    monkeypatch.setattr(
+        mutation_test,
+        "sweep_module",
+        lambda path_str, *_a, **_k: mutation_test.ModuleResult(path=path_str, killed=1),
+    )
+
+    mutation_test.main()
+
+    assert ("tests/unit/x.py",) in checked
+    assert ("tests/unit/y.py",) not in checked, "an unselected target's tests must not gate the run"
+
+
+def test_a_green_baseline_lets_the_sweep_run(tmp_path, monkeypatch) -> None:
+    """The gate must bind on a red baseline only - a healthy tree sweeps as before."""
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(tmp_path, monkeypatch, ["", ""], stub_baseline=False)
+    monkeypatch.setattr(
+        mutation_test,
+        "run_pytest",
+        lambda *_a, **_k: mutation_test.TestRun(passed=True, output=""),
+    )
+    swept: list[str] = []
+
+    def record_sweep(path_str, *_args, **_kwargs):
+        swept.append(path_str)
+        return mutation_test.ModuleResult(path=path_str, killed=1)
+
+    monkeypatch.setattr(mutation_test, "sweep_module", record_sweep)
+
+    exit_code = mutation_test.main()
+
+    assert exit_code == 0
+    assert swept == ["sample.py"]
+
+
+def test_the_baseline_runs_only_after_the_dirty_tree_refusal(tmp_path, monkeypatch) -> None:
+    """
+    Ordering, because the cheap refusal must not be paid for with a slow one.
+
+    A dirty tree is decided by one ``git status`` call; the baseline costs a full unit
+    tier. Running them the other way round would make every refused run slow, and would
+    run tests against a tree the harness has already decided it will not sweep.
+    """
+    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
+    _prepare_main(tmp_path, monkeypatch, [" M sample.py\n"], stub_baseline=False)
+    baseline_calls: list[tuple[str, ...]] = []
+
+    def fake_run_pytest(paths, _timeout, parallel=False):
+        baseline_calls.append(paths)
+        return mutation_test.TestRun(passed=True, output="")
+
+    monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
+
+    exit_code = mutation_test.main()
+
+    assert exit_code != 0
+    assert baseline_calls == [], "the dirty-tree refusal must fire before any test is run"

@@ -156,6 +156,34 @@ indent-width = 4
 # Target Python 3.10 (minimum supported version; 3.9 is EOL since 2025-10-31)
 target-version = "py310"
 
+# Pin which files ruff discovers, for the same reason `[tool.ruff.lint]` below pins
+# `select` instead of using `extend-select`: ruff's defaults move between releases, and a
+# widened default silently changes what the gate means without a line of code changing.
+#
+# Ruff 0.16 began formatting Python fenced inside Markdown. Nothing asked it to, and the
+# result was a repository where `make format-check` passed while `ruff format --check .`
+# reported four files - `docs/development/ci-followups.md`, `reference/README.md`,
+# `reference/generate_vntr_reference.py` and a `specs/` design document. That is a trap
+# for anyone who runs the obvious command instead of the Makefile target, and it cannot be
+# resolved by reformatting: `reference/` is a base-image content-hash input (see `exclude`
+# below), and rewriting a committed `specs/` document to satisfy a formatter is churn.
+#
+# What this line gives up, stated rather than hidden: the Markdown files under
+# `RUFF_PATHS` are no longer formatted, though 0.16 had started doing it. Measure the
+# scope by re-running the check with `*.md` appended to this list and subtracting the
+# `.py`-only total - it was 45 Markdown files against 184 `.py` files when `docs/` was
+# added to `RUFF_PATHS`, and both figures move with every merge. Prose here is gated by
+# `mkdocs build --strict`, not by ruff. No `.py` file is affected either way. Widening
+# this to prose is a deliberate change to this line and to `RUFF_PATHS` together, not
+# something to inherit from a release note.
+#
+# `RUFF_PATHS` is `vntyper/ docker/app/ tests/ scripts/ docs/`, chosen so that it and a
+# bare `.` discover the identical set of files. Keep them equal - a target that passes
+# while the bare command reports a finding is the trap this `include` line was added to
+# remove, and it had reopened via `docs/hooks.py`. The Makefile comment above
+# `RUFF_PATHS` gives the one-line command that checks it.
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+
 # Exclude common directories
 exclude = [
     ".git",
@@ -166,6 +194,13 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
+    # `reference/` is a base-image content-hash input: `docker-base.yml` rebuilds on any
+    # change under it, and `docker/Dockerfile` then fails on a missing tag until the new
+    # base publishes (AGENTS.md trap 10). Reformatting `generate_vntr_reference.py` would
+    # turn the image build red for a whitespace change, so the formatter does not own that
+    # tree. It is not in `RUFF_PATHS` either, so this only makes the two agree. Unparks
+    # with the next base rebuild, alongside #193.
+    "reference",
 ]
 
 [tool.ruff.lint]
@@ -258,41 +293,42 @@ extend-immutable-calls = [
 python_version = "3.10"
 ignore_missing_imports = true
 
-# No `mypy_path` is needed for `mypy vntyper/ docker/app/`. `docker/app/__init__.py`
+# `mypy vntyper/ docker/app/` needs no search path of its own: `docker/app/__init__.py`
 # exists and `docker/__init__.py` does not, so mypy walks up exactly one level, roots
-# the package at `docker/` and names the modules `app.*` on its own - which is both
-# how the intra-package imports resolve and why the `app.*` override below matches.
-# Adding `mypy_path = "docker"` would additionally make `mypy tests/` resolve the
-# `from app import ...` lines in `tests/unit/web/`, which today degrade to `Any` under
-# `ignore_missing_imports`. That is worth doing, and it is still deliberately not done
-# here. Measured under `MYPYPATH=docker mypy vntyper/ tests/` (ruff/mypy as pinned in
-# `[project.optional-dependencies] dev`), it reports 23 errors in 4 files, and only one
-# of them was a defect in a test:
+# the package at `docker/` and names the modules `app.*` on its own - which is both how
+# the intra-package imports resolve and why the `app.*` override below matches.
 #
-#   * 1 real finding, now fixed: `test_credentials_and_disclosure.py` passed
-#     `urlsplit(...).password` - a `str | None` - straight into `unquote()`. The test
-#     asserts the credential is present before decoding it.
-#   * 19 in hand-rolled ASGI doubles (`test_request_size_limit.py`,
-#     `test_upload_limits.py`). The doubles are structurally right but nominally
-#     narrower than the callables `RequestSizeLimitMiddleware` and
-#     `save_upload_bounded` declare (`dict` vs `MutableMapping`, a `read`-only object
-#     vs `BinaryIO`). The fix is on the *production* side - accept a `Protocol` or the
-#     ASGI aliases rather than a concrete class - not `# type: ignore` in the tests.
-#   * 3 from `create_cohort_record` returning `dict[str, str | None]`, so
-#     `created["cohort_id"]` types as `str | None` even though that key is always a
-#     `str`. A `TypedDict` in `docker/app/cohorts.py` fixes all three at the source.
+# `mypy_path` is set for the *other* invocation. `make type-check-all` also runs
+# `mypy vntyper/ tests/`, where the `from app import ...` lines in `tests/unit/web/`
+# have no such anchor: without this they resolve to `Any` under
+# `ignore_missing_imports`, and a whole suite is type-checked against a web service
+# whose every symbol is untyped. With it, those tests are checked against the real
+# signatures (#194).
 #
-# Both remaining groups are `docker/app` annotation work, so turning the path on now
-# would gate `tests/` on a backlog that belongs to another module - the exact shape of
-# problem the `app.*` override below exists to avoid. Turn it on once
-# `RequestSizeLimitMiddleware`/`save_upload_bounded` take protocols and
-# `create_cohort_record` returns a `TypedDict`; at that point this is a one-line change
-# with no fallout to silence.
+# Turning it on cost 23 errors in 3 files, all of them fixed at the source rather than
+# silenced. None was a behavioural defect; each was a stand-in nominally narrower than
+# the callable it stands in for, which a contravariant parameter refuses:
 #
-# `tests/` is *not* unchecked in the meantime: `make type-check-all` runs
-# `mypy vntyper/ tests/` as a second, separate invocation (see the comment on that
-# target), and both `make check-all` and the `typecheck` job in `ci-tests.yml` go
-# through it.
+#   * 17 in `test_request_size_limit.py`, whose hand-rolled ASGI doubles were annotated
+#     `dict[str, Any]` where `request_limits` and Starlette both publish
+#     `MutableMapping[str, Any]`. Fixed by widening the doubles to the contract they
+#     stand in for. `request_limits` itself is unchanged: narrowing its aliases to the
+#     `dict` the ASGI specification names would make the middleware unusable through
+#     `Starlette.add_middleware`.
+#   * 1 in `test_upload_limits.py`, whose `RecordingSource` implements `read` and
+#     nothing else. Fixed on the production side, where the over-broad declaration was:
+#     `save_upload_bounded` now takes a `uploads.ByteSource` protocol naming the one
+#     method it calls, rather than the whole of `BinaryIO`.
+#   * 4 from `create_cohort_record` returning `dict[str, str | None]`, so
+#     `created["cohort_id"]` typed as `str | None` even though that key is always a
+#     `str`. `cohorts.CohortRecord`, a `TypedDict`, fixes all four at the source.
+#   * 1 real finding in a test, fixed earlier under the same investigation:
+#     `test_credentials_and_disclosure.py` passed `urlsplit(...).password` - a
+#     `str | None` - straight into `unquote()`.
+#
+# The two invocations stay separate even so, because each suite is then checked against
+# the same scope CI checks it against; see the comment on the `type-check-all` target.
+mypy_path = "docker"
 
 # Staged strictness for the web service.
 #
@@ -322,6 +358,12 @@ disallow_incomplete_defs = false
 source = ["vntyper", "docker/app"]
 relative_files = true
 
+# Branch coverage. An `if` that is entered but never taken is not "covered" for
+# a codebase whose failure mode is silently taking the wrong branch. Enabled in
+# #196 once the branch-inclusive total cleared the floor; the floor below is the
+# branch-inclusive figure and was never lowered to admit this measurement.
+branch = true
+
 [tool.coverage.report]
 show_missing = true
 # HARD FLOOR - CI fails below this. It is a RATCHET: raise it whenever measured
@@ -334,11 +376,37 @@ show_missing = true
 # `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
 # figure and states the exact line to paste here.
 #
+# 80 is BRANCH-INCLUSIVE. `branch = true` above was enabled in #196, which raised this
+# floor from 70 to the 74.22% that run measured; splitting cohort_summary.py into five
+# focused modules (Task 22 of the #181-#197 follow-ups) took the same suite to 79.02%,
+# and the fixes and tests of the gated phase took it to 80.24%. The floor moved with
+# each. It has never been lowered to admit a measurement.
+#
+# 80.24% also MEETS the project target below for the first time. The target stays a
+# warning rather than becoming the floor: they measure the same number for different
+# purposes, and collapsing them would leave no headroom above the gate.
+# Statement-only coverage of the same suite is 80.77%, so the two are not
+# interchangeable and deleting `branch = true` would RAISE the reported total past this
+# floor while covering strictly less. tests/unit/test_coverage_gate.py pins both.
+#
 # The TARGET is 80% (COVERAGE_TARGET in the Makefile). Falling short of the target is
-# a warning, not a failure - see scripts/coverage_gate.py. The gap is deliberate: the
-# six modules over 650 LOC sit at 0-28% coverage and have to be split before they can
-# realistically be tested (see "Changing existing code" in AGENTS.md).
-fail_under = 70
+# a warning, not a failure - see scripts/coverage_gate.py.
+#
+# Four modules remain over the 650-LOC limit, measured at ec67fff:
+# docker/app/main.py (1151, 88.77%), install_references.py (901, 26.04%),
+# kestrel_genotyping.py (877, 51.67%) and pipeline.py (721, 68.48%).
+#
+# Size alone does not predict coverage, and this comment previously implied it did.
+# main.py is the largest file in the repository and one of the best covered; only
+# install_references.py still fits the old "oversized therefore untested" rule. What
+# predicts coverage here is coupling to I/O -- a function that cannot be called without
+# a filesystem does not get a unit test, whatever its file's length. See "Changing
+# existing code" in AGENTS.md, which carries the same table and the same argument.
+#
+# These percentages are a snapshot taken at the commit named above, not a live claim.
+# An earlier revision of this comment quoted kestrel_genotyping.py at 843 LOC / 41.9%,
+# figures already one commit stale when they were written.
+fail_under = 80
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

@@ -5,9 +5,16 @@ Shell command construction for the external tools the BAM/CRAM/FASTQ path drives
 
 Every command in this module is handed to :func:`vntyper.scripts.utils.run_command`,
 which runs it as a **single string** under ``/bin/bash`` with ``shell=True``. That
-is deliberate and load-bearing (trap 9): the CRAM unmapped-read branch uses bash
-process substitution, which no ``shell=False`` argv list can express. The
-consequence is that quoting can only happen here, at construction time.
+is deliberate and load-bearing (trap 9): every command here is shell syntax - pipes,
+``&&``, output redirection - which no ``shell=False`` argv list can express, and the
+``set -o pipefail`` prefix below is a non-POSIX ``set`` option, so pinning
+``/bin/bash`` is what makes it available regardless of which shell the host installs
+as ``/bin/sh``. The consequence is that quoting can only happen here, at construction
+time.
+
+Trap 9 used to be justified by bash **process substitution** specifically, in the CRAM
+unmapped-read branch. That substitution is gone - see
+:func:`build_cram_unmapped_filter_command` - but the requirement survives it.
 
 Two rules follow, and they pull in opposite directions:
 
@@ -23,15 +30,18 @@ Two rules follow, and they pull in opposite directions:
   operator-controlled configuration, not user input.
 
 The strings produced here are byte-identical to the ones the pipeline produced
-before this module existed, apart from three deliberate fixes:
+before this module existed, apart from four deliberate fixes:
 
 1. ``shlex.quote`` around interpolated paths (a no-op for paths that need no
    quoting, which is every path in the test suite and most real ones).
-2. The CRAM process substitution now calls the **configured** samtools instead of
-   a bare ``samtools`` - under ``mamba run`` those are different binaries.
+2. The CRAM unmapped-read extractor now calls the **configured** samtools instead
+   of a bare ``samtools`` - under ``mamba run`` those are different binaries.
 3. Multi-stage pipes are prefixed with ``set -o pipefail``. Without it a pipeline
    reports only its last stage's exit status, so a ``samtools sort`` that died
    half-way still exited 0 and the next stage genotyped a truncated FASTQ.
+4. The CRAM unmapped-read extractor writes through a plain pipe rather than a
+   ``tee >(...)`` process substitution, so the shell waits for the writer instead
+   of returning while it is still flushing.
 
 Functions:
     build_fastp_command: FASTQ quality control
@@ -234,9 +244,9 @@ def build_cram_unmapped_filter_command(
 
     Args:
         samtools_path (str): samtools invocation from config. This is used for
-            **both** the outer command and the process substitution - the inner
-            call used to be a bare ``samtools``, which under ``mamba run``
-            resolves against a different PATH.
+            **both** stages of the pipeline - the writing stage used to be a bare
+            ``samtools``, which under ``mamba run`` resolves against a different
+            PATH.
         in_bam (str | Path): The input CRAM.
         unmapped_bam (str | Path): Where the unmapped reads are written.
         threads (int): Thread count for both samtools invocations.
@@ -245,21 +255,35 @@ def build_cram_unmapped_filter_command(
     Returns:
         str: The complete command, prefixed with ``set -o pipefail``.
 
-    Warning:
-        bash does **not** wait for a ``>(...)`` process substitution to finish, and
-        a trailing ``wait`` does not change that. The shell returns as soon as
-        ``tee`` exits, so the caller can start merging ``unmapped_bam`` while
-        samtools is still writing it. ``pipefail`` does not help either: a failing
-        substitution surfaces only as ``tee`` taking SIGPIPE. The only real fix is
-        to drop the substitution for a plain pipe - ``tee``'s own stdout goes to
-        ``/dev/null``, so it has exactly one consumer - but that is a data-flow
-        change that needs a real CRAM input to validate, so it is not made here.
+    Note:
+        The writing samtools is a **pipeline stage**, not a ``tee >(...)`` process
+        substitution, and that is the whole point of this builder's shape.
+
+        bash does not wait for a process substitution and a trailing ``wait`` does
+        not change that: the shell returns as soon as ``tee`` exits, while the
+        substituted samtools is still flushing ``unmapped_bam``.
+        :func:`~vntyper.scripts.fastq_bam_processing.process_bam_to_fastq` runs
+        ``samtools merge`` against that file on the very next line, so it merged a
+        BAM that was still being written - measured on a 600k-read CRAM, 199 797 of
+        200 000 unmapped reads were present at the instant the shell returned, and
+        ``samtools merge`` accepted the short file with only a ``W::bam_hdr_read``
+        warning. Those are exactly the reads this stage exists to recover for
+        Kestrel, so the pipeline reported success on an under-called sample.
+        ``pipefail`` could not catch it either: a substitution that consumes its
+        whole input and *then* fails is invisible, because ``tee`` never sees EPIPE
+        and exits 0.
+
+        A plain pipe fixes both halves at once. ``tee``'s own stdout went to
+        ``/dev/null``, so the substitution was the pipeline's only consumer and
+        ``tee`` was pure overhead; making the writer a real stage means bash waits
+        for it before the shell returns, and ``pipefail`` becomes meaningful because
+        the writer's exit status is now part of the pipeline's. The bytes reaching
+        the writer are unchanged - SAM text on stdin either way.
     """
     return (
         f"{PIPEFAIL_PREFIX}"
-        f"{samtools_path} view {cram_ref_option} -@ {quote_path(threads)} -h {quote_path(in_bam)} | tee "
-        f" >({samtools_path} view -b -f 12 -@ {quote_path(threads)} - -o {quote_path(unmapped_bam)}) "
-        f"> /dev/null"
+        f"{samtools_path} view {cram_ref_option} -@ {quote_path(threads)} -h {quote_path(in_bam)} | "
+        f"{samtools_path} view -b -f 12 -@ {quote_path(threads)} - -o {quote_path(unmapped_bam)}"
     )
 
 

@@ -47,7 +47,11 @@ def run_shark_filter(
         config (dict): The shark_config dictionary (contains muc1_region_fasta).
         main_config (dict): The main configuration dictionary (contains tool paths).
         sample_name (str): Sample name.
-        reference_assembly (str): Reference assembly (hg19 or hg38).
+        reference_assembly (str): Accepted for API compatibility and **ignored**.
+            SHARK matches k-mers against a single MUC1 region FASTA and does not
+            select a region by coordinate, so the assembly does not change what
+            it retains. Passing anything other than hg19/GRCh37 logs a warning.
+            See issue #187.
         threads (int): Number of threads to use for SHARK.
 
     Returns:
@@ -57,6 +61,14 @@ def run_shark_filter(
         ValueError: If muc1_region_fasta not defined in shark_config.json.
         RuntimeError: If SHARK filtering fails.
     """
+    if reference_assembly and reference_assembly.lower() not in ("hg19", "grch37"):
+        logger.warning(
+            f"reference_assembly={reference_assembly!r} does not select a region for SHARK. "
+            "SHARK is sequence-based, not coordinate-based: it filters against the single "
+            "MUC1 region FASTA regardless of assembly. The parameter is retained for API "
+            "compatibility only. See issue #187."
+        )
+
     # shark_path should come from the main config since it contains the tool paths.
     shark_path = main_config.get("tools", {}).get("shark", "shark")
 

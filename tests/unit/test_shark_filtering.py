@@ -178,18 +178,28 @@ class TestFailureHandling:
 
 class TestReferenceAssemblyIsAccceptedAndIgnored:
     """
-    **Characterisation of a live defect. These tests pin the wrong behaviour on purpose.**
+    **Specification (#187), not a live defect.**
+
+    @hassansaei on #187: "SHARK is sequence-based, not coordinate-based; keep one MUC1
+    region FASTA; document that assembly does not change SHARK; optionally warn or
+    ignore reference_assembly there instead of building a second FASTA unless
+    GRCh37/GRCh38 sequences at MUC1 VNTR differ enough to matter, like the number of
+    motif could impact the number of reads being retained by the SHARK model."
 
     ``run_shark_filter`` takes a ``reference_assembly`` argument and ``pipeline.py`` passes
-    the run's actual assembly into it -- but the function never reads it. The region FASTA
-    comes solely from ``shark_config.json``, which declares a single hg19 file. An hg38
-    FASTQ is therefore pre-filtered against an hg19 MUC1 region.
+    the run's actual assembly into it, but the function does not use it to select a
+    region: the region FASTA comes solely from ``shark_config.json``, which declares a
+    single MUC1 region file. That is intentional, not a bug -- SHARK matches k-mers
+    against sequence, not coordinates, so there is nothing for the assembly to select.
+    Per the decision above, no hg38 region FASTA is added. The parameter's docstring now
+    reads:
 
-    This is not fixed here because fixing it changes which reads survive filtering, and the
-    surviving reads *are* the input to Kestrel genotyping -- so a fix can change a reported
-    genotype. It also cannot be done in this module alone: no hg38 region FASTA exists in
-    the configuration or the reference set, so a real fix needs a new reference artefact and
-    a download path. Written up for a human decision.
+        reference_assembly (str): Accepted for API compatibility and **ignored**.
+        SHARK matches k-mers against a single MUC1 region FASTA and does not select a
+        region by coordinate, so the assembly does not change what it retains. Passing
+        anything other than hg19/GRCh37 logs a warning. See issue #187.
+
+    See :class:`TestNonHg19AssemblyLogsAWarning` for that warning.
     """
 
     def test_hg38_produces_a_byte_identical_command_to_hg19(self, tmp_path, captured_command):
@@ -203,12 +213,17 @@ class TestReferenceAssemblyIsAccceptedAndIgnored:
 
         assert "muc1_region_hg19.fa" in captured_command[0]["command"]
 
-    def test_even_a_nonsense_assembly_is_accepted_silently(self, tmp_path, captured_command, caplog):
+    def test_even_a_nonsense_assembly_is_accepted_and_warned_about(self, tmp_path, captured_command, caplog):
+        """Specification (#187): a nonsense value is still accepted -- the run proceeds
+        regardless -- but no longer passes silently. Any value other than hg19/GRCh37
+        now logs a warning naming it.
+        """
         with caplog.at_level(logging.WARNING, logger=shark.logger.name):
             filter_with(tmp_path, reference_assembly="not-an-assembly")
 
         assert captured_command, "the run proceeds regardless"
-        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], "and says nothing about it"
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("reference_assembly" in m and "not-an-assembly" in m for m in messages), "and now says so"
 
     def test_the_shipped_config_offers_only_an_hg19_region(self):
         """There is no hg38 alternative to select, so this cannot be fixed in-module."""
@@ -216,6 +231,53 @@ class TestReferenceAssemblyIsAccceptedAndIgnored:
 
         assert [key for key in settings if "fasta" in key] == ["muc1_region_fasta"]
         assert "hg38" not in str(settings)
+
+
+class TestNonHg19AssemblyLogsAWarning:
+    """
+    Specification (#187). A non-hg19/GRCh37 ``reference_assembly`` does not change which
+    region SHARK filters against -- there is only ever the one MUC1 region FASTA -- but
+    it now logs a warning naming the value, so a caller who passes hg38 finds out the
+    parameter did nothing instead of silently getting hg19-filtered reads (see
+    :class:`TestReferenceAssemblyIsAccceptedAndIgnored`).
+    """
+
+    @pytest.mark.parametrize("assembly", ["hg38", "GRCh38", "hg38_ensembl"])
+    def test_a_non_hg19_assembly_is_warned_about(self, assembly, tmp_path, captured_command, caplog):
+        with caplog.at_level(logging.WARNING, logger=shark.logger.name):
+            filter_with(tmp_path, reference_assembly=assembly)
+
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("reference_assembly" in m and assembly in m for m in messages)
+
+    @pytest.mark.parametrize("assembly", ["hg19", "GRCh37", "grch37"])
+    def test_hg19_and_grch37_do_not_warn(self, assembly, tmp_path, captured_command, caplog):
+        """The warning marks a mismatch, not every call: hg19 and GRCh37 (any case) are silent."""
+        with caplog.at_level(logging.WARNING, logger=shark.logger.name):
+            filter_with(tmp_path, reference_assembly=assembly)
+
+        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not [m for m in messages if "reference_assembly" in m]
+
+    def test_the_region_fasta_operand_is_byte_identical_at_hg19_and_hg38(self, tmp_path, captured_command):
+        """The substantive claim: assembly does not select a region.
+
+        A warning alone would not prove the parameter is inert; capturing the command
+        SHARK is actually given at hg19 and at hg38 and comparing the ``-r`` operand
+        does. (``TestReferenceAssemblyIsAccceptedAndIgnored`` already pins the whole
+        command as identical; this asserts the specific operand SHARK reads the region
+        from, so the claim holds even if unrelated parts of the command ever diverge.)
+        """
+        filter_with(tmp_path, reference_assembly="hg19")
+        filter_with(tmp_path, reference_assembly="hg38")
+
+        def region_operand(command):
+            words = shlex.split(command)
+            return words[words.index("-r") + 1]
+
+        hg19_operand = region_operand(captured_command[0]["command"])
+        hg38_operand = region_operand(captured_command[1]["command"])
+        assert hg19_operand == hg38_operand
 
 
 class TestShellInterpolationIsQuoted:

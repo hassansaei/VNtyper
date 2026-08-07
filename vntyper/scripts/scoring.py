@@ -126,6 +126,15 @@ def extract_frameshifts(df: pd.DataFrame) -> pd.DataFrame:
       - For insertion frameshifts: direction > 0 & frameshift_amount == 1
       - For deletion frameshifts: direction < 0 & frameshift_amount == 2
 
+    Why the asymmetry (issue #181):
+      An insertion of 3n+1 bases and a deletion of 3n+2 bases are frame-
+      equivalent -- both shift the reading frame by Delta = +1 (mod 3). That
+      is the pathogenic ADTKD-MUC1 frame, which produces the toxic MUC1-fs
+      neo-protein (classically exemplified by dupC). The opposite pair
+      (insertion 3n+2 / deletion 3n+1) shifts into the other frame, which has
+      not been established as pathogenic in patients. Rejecting a (3n+1)-bp
+      deletion is therefore intentional, not a lost call.
+
     (Refactored) We do NOT remove non-matching rows here. Instead, we add a
     boolean column 'is_valid_frameshift' to indicate whether a row meets one
     of the frameshift patterns.

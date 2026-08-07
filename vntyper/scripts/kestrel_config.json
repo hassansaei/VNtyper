@@ -50,9 +50,7 @@
     "flag_name": "Potential_Duplicate",
     "group_by": ["REF", "ALT"],
     "sort_by": [
-      { "column": "Depth_Score", "ascending": false },
-      { "column": "Motifs", "ascending": true },
-      { "column": "POS", "ascending": true }
+      { "column": "Depth_Score", "ascending": false }
     ]
   }
 }

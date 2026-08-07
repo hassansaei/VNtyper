@@ -777,24 +777,35 @@ def select_single_best_variant(df: pd.DataFrame) -> pd.DataFrame:
 def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     """
     Final step: filter the DataFrame based on the boolean columns introduced
-    by earlier steps (e.g., 'is_frameshift', 'is_valid_frameshift',
+    by earlier steps ('is_frameshift', 'is_valid_frameshift',
     'depth_confidence_pass', 'alt_filter_pass', 'motif_filter_pass').
 
-    We keep rows where *all existing* filter columns are True.
-    If a filter column does not exist in the DataFrame, we ignore it.
+    We keep rows where *all* filter columns are True. Every column is required:
+    the earlier stages mark rather than filter, so a column missing from a
+    non-empty frame would turn its safety gate into a permit. That is an error
+    (issue #185), not something to skip.
+
+    An empty frame is the one documented exception: it carries no candidate
+    variant, so there is nothing for a missing gate to permit, and it is
+    returned unchanged.
 
     Additionally, this function logs how many rows pass or fail each filter
     and writes the unfiltered DataFrame to 'kestrel_pre_result.tsv' directly
-    in the 'output_dir'. The final filtered DataFrame is returned in memory.
+    in the 'output_dir' -- before any raise, so an aborted run keeps its
+    evidence. The final filtered DataFrame is returned in memory.
 
     Args:
-        df (pd.DataFrame): The postprocessed DataFrame, with various
+        df (pd.DataFrame): The postprocessed DataFrame, with all five
             boolean filter columns.
         output_dir (str): Path to the main output directory.
 
     Returns:
         pd.DataFrame: A copy of `df` containing only rows that pass
-            all available filter columns.
+            all filter columns, or `df` itself when it is empty.
+
+    Raises:
+        ValueError: If a required filter column is missing from a non-empty
+            DataFrame.
     """
     logger.info("Starting final filter of DataFrame with %d rows...", len(df))
 
@@ -803,7 +814,16 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     df.to_csv(pre_result_path, sep="\t", index=False)
     logger.info("Wrote pre-filter DataFrame to %s", pre_result_path)
 
-    # Columns we will require to be True if they exist
+    # #185: the explicit, documented empty-result path. An empty frame holds no
+    # candidate variant, so no gate can be silently turned into a permit here.
+    # In production this is unreachable -- process_kmer_results guards every stage
+    # ahead of the single call site with `if df.empty: return df` -- but stating it
+    # keeps the carve-out explicit rather than resting on that structure.
+    if df.empty:
+        logger.info("Empty DataFrame reached the final filter; returning it unchanged.")
+        return df
+
+    # Columns every non-empty frame is required to carry
     filter_cols = [
         "is_frameshift",
         "is_valid_frameshift",
@@ -826,7 +846,21 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
                 after_count,
             )
         else:
-            logger.info("Filter column '%s' not found; skipping.", col)
+            # #185: a missing gate is an error, not a permit. @hassansaei:
+            # "a missing required gate column should raise (abort the run), not
+            # be skipped [...] That is not acceptable for this pipeline."
+            # Reachability: this function's only caller is process_kmer_results,
+            # behind six `if df.empty: return df` guards, so any frame arriving
+            # here is non-empty and has traversed every stage that adds a gate
+            # column. An empty frame short-circuits above -- that is the explicit
+            # empty-result path his decision carves out.
+            msg = (
+                f"Required filter column '{col}' is missing from a non-empty Kestrel result frame. "
+                "An upstream stage stopped emitting it, so its safety gate would silently become a "
+                "permit. Aborting rather than reporting unfiltered variants. See issue #185."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
 
     filtered_df = df[final_mask].copy()
     logger.info("Final DataFrame has %d rows after all filters.", len(filtered_df))

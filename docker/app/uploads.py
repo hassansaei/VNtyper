@@ -39,7 +39,7 @@ import re
 from collections.abc import Sequence
 from contextlib import suppress
 from functools import cache
-from typing import BinaryIO
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,33 @@ _SAFE_STEM = r"[A-Za-z0-9][A-Za-z0-9._+-]*"
 SAFE_NAME_DESCRIPTION = (
     "Use a plain filename of ASCII letters, digits, dot, dash, underscore or plus, starting with a letter or a digit"
 )
+
+
+class ByteSource(Protocol):
+    """A stream `save_upload_bounded` can copy from.
+
+    Stated as the one operation the copy performs, rather than as `BinaryIO`.
+    `BinaryIO` additionally demands `seek`, `tell`, `write`, `fileno`, `closed`,
+    iteration and the context-manager methods -- none of which is used here, and
+    all of which a perfectly serviceable stand-in may lack. Starlette's
+    `UploadFile.file` satisfies this, and so does any file object, `io.BytesIO`,
+    or a wrapper that counts what was asked of it.
+
+    `size` is required rather than defaulted: this module always says how much it
+    wants, and asking for no less than it uses keeps the protocol satisfied by
+    sources whose `read` takes a mandatory argument.
+    """
+
+    def read(self, size: int, /) -> bytes:
+        """Return up to `size` bytes from the stream.
+
+        Args:
+            size: The number of bytes requested.
+
+        Returns:
+            bytes: Up to `size` bytes, empty once the stream is exhausted.
+        """
+        ...  # pragma: no cover - structural declaration, never executed
 
 
 @cache
@@ -154,7 +181,7 @@ def safe_upload_path(
 
 
 def save_upload_bounded(
-    source: BinaryIO,
+    source: ByteSource,
     destination: str,
     max_bytes: int,
     chunk_size: int = UPLOAD_CHUNK_SIZE,

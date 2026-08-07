@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 # ASGI's own vocabulary, spelled out so the signatures below read as protocol
 # rather than as `dict`/`Callable` soup. Starlette exports equivalents, but they
 # are typing-only aliases and this module does not otherwise need Starlette.
+#
+# `MutableMapping`, matching what Starlette publishes, and not the `dict` the
+# specification names. A parameter is contravariant, so narrowing these to `dict`
+# would make this class unusable as an ASGI application: `add_middleware` refuses
+# a middleware whose `send` cannot take whatever the server built. Anything
+# written against these aliases has to be spelled at the same width.
 Message = MutableMapping[str, Any]
 Scope = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[Message]]

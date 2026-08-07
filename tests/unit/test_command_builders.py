@@ -257,9 +257,9 @@ def test_the_depth_command_is_pinned():
 # ---------------------------------------------------------------------------
 
 
-def test_the_cram_filter_runs_the_configured_samtools_inside_the_process_substitution():
+def test_the_cram_filter_runs_the_configured_samtools_in_both_pipeline_stages():
     """
-    The inner ``>(...)`` must use the **same** samtools as the outer command.
+    The writing stage must use the **same** samtools as the reading stage.
 
     It used to call a bare ``samtools``. Everywhere else in the pipeline the
     binary comes from ``config["tools"]["samtools"]``, and under
@@ -276,8 +276,8 @@ def test_the_cram_filter_runs_the_configured_samtools_inside_the_process_substit
         threads=4,
     )
 
-    inner = command.split(">(", 1)[1]
-    assert inner.startswith(configured), f"the process substitution must call {configured}, got: {inner[:80]!r}"
+    writer = command.split("|", 1)[1].strip()
+    assert writer.startswith(configured), f"the writing stage must call {configured}, got: {writer[:80]!r}"
 
     bare_calls = [
         part for part in command.split() if part == "samtools"
@@ -295,21 +295,25 @@ def test_the_cram_filter_command_is_pinned():
     )
 
     assert command == (
-        "set -o pipefail; samtools view  -@ 4 -h /data/sample.cram | tee "
-        " >(samtools view -b -f 12 -@ 4 - -o /out/output_unmapped.bam) "
-        "> /dev/null"
+        "set -o pipefail; samtools view  -@ 4 -h /data/sample.cram | "
+        "samtools view -b -f 12 -@ 4 - -o /out/output_unmapped.bam"
     )
 
 
-def test_the_cram_filter_keeps_the_process_substitution():
+def test_the_cram_filter_uses_no_process_substitution():
     """
-    Trap 9 depends on this branch staying a bash-ism.
+    The writer must be a pipeline stage, not a ``>(...)``, or the shell will not wait.
 
-    ``run_command`` uses ``shell=True`` with ``executable="/bin/bash"`` precisely
-    because this command cannot be expressed as an argv list. Rewriting it into a
-    plain pipe is a real option - it is the only way to make the shell wait for
-    the inner process - but it is a data-flow change that needs a CRAM input to
-    validate, so it is deliberately not made here.
+    bash does not wait for a process substitution to finish, so the old form let
+    ``run_command`` return while samtools was still writing ``unmapped.bam`` - and
+    ``process_bam_to_fastq`` then merged the partial file. Measured on a synthetic
+    600k-read CRAM: 199,797 of 200,000 unmapped reads were still missing when the
+    shell returned, and ``samtools merge`` accepted the truncated file with exit 0.
+    A silently under-called sample, with no pipeline error.
+
+    ``tee``'s stdout went to ``/dev/null``, so it had exactly one consumer and was
+    never needed. A plain pipe puts the writer in the pipeline, so the shell waits
+    for it and ``pipefail`` finally means something for this command.
     """
     command = build_cram_unmapped_filter_command(
         samtools_path=SAMTOOLS,
@@ -318,7 +322,28 @@ def test_the_cram_filter_keeps_the_process_substitution():
         threads=4,
     )
 
-    assert ">(" in command, "process substitution is what makes bash mandatory (trap 9)"
+    assert ">(" not in command, "a process substitution is not waited for; the merge would race it"
+    assert " tee " not in command, "tee had a single consumer and is what forced the substitution"
+
+
+def test_the_cram_filter_still_requires_bash():
+    """
+    Trap 9 survives the pipe rewrite, for a different reason than before.
+
+    ``run_command`` uses ``shell=True`` with ``executable="/bin/bash"``. That was
+    justified by the process substitution; with the substitution gone, the reason
+    is ``set -o pipefail``, which is not POSIX and is what makes a failure in the
+    reading stage fail the whole command instead of being masked by the writer's
+    exit status.
+    """
+    command = build_cram_unmapped_filter_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/data/sample.cram",
+        unmapped_bam="/out/output_unmapped.bam",
+        threads=4,
+    )
+
+    assert command.startswith("set -o pipefail; "), "pipefail is why this still cannot run under plain sh"
 
 
 # ---------------------------------------------------------------------------

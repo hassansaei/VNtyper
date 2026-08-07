@@ -68,16 +68,29 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 
 ## Layout
 
-- `vntyper/cli.py` — argparse CLI; subcommands `pipeline`, `report`, `cohort`,
-  `install-references`, `online`. Sole place logging is configured.
+- `vntyper/cli.py` — argparse entry point; subcommands `pipeline`, `report`, `cohort`,
+  `install-references`, `online`. Sole place logging is configured. The parser lives in
+  `cli_parser.py`, the subcommand bodies in `cli_handlers.py`, and `report` in
+  `cli_report.py`.
 - `vntyper/scripts/pipeline.py` — `run_pipeline()`, orchestrates every stage.
 - `vntyper/scripts/` — stage modules: `fastq_bam_processing`, `alignment_processing`,
   `kestrel_genotyping`, `variant_parsing`, `scoring`, `confidence_assignment`,
   `motif_processing`, `flagging`, `summary`, `cross_match`, `generate_report`,
   `cohort_summary`, `reference_registry`, `region_utils`, `chromosome_utils`.
+- Pure-logic modules extracted from the two largest stage files. They hold the decisions;
+  the file they came from keeps the I/O:
+  - `motif_decisions.py` — the motif half/exclusion/GG-allowlist rules, split out of
+    `motif_processing.py` (#195).
+  - `cohort_rules.py`, `cohort_categories.py`, `cohort_tables.py`, `cohort_inputs.py`,
+    `cohort_exports.py` — the rule table, per-row categorisation, display tables, sample
+    discovery and export writers, split out of `cohort_summary.py`.
+  All six are fully annotated and at or near 100% branch coverage. Put new pure logic
+  there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
-  package and is not covered by `make lint` / `make type-check`.
+  package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
+  `mypy vntyper/ docker/app/` (#194). `scripts/` is linted and formatted but is still in
+  no mypy target — see trap 16.
 - `vntyper/dependencies/kestrel/` — vendored JARs, never hand-edit.
 
 ## Code style
@@ -102,9 +115,20 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   `utils.py` configures the root logger once, and module loggers propagate to it.
   f-strings in log calls are the established style here.
 - Errors: no custom exception classes. The convention is `logger.error(msg)` followed
-  by `raise ValueError(msg)` / `RuntimeError(msg)` with the same message. Only exit
-  codes 0 and 1 are used. `except Exception` at stage and process boundaries is
-  intentional, not an oversight.
+  by `raise ValueError(msg)` / `RuntimeError(msg)` with the same message.
+  `except Exception` at stage and process boundaries is intentional, not an oversight.
+- Exit codes: **the code that ran to a conclusion uses 0 and 1** — every `sys.exit()` in
+  `cli.py` and `cli_handlers.py` is one of those two. **Argument and usage errors exit
+  with argparse's 2**, and there are two ways to get there: an unknown subcommand or a
+  bad option, rejected by `parse_args()` (`vntyper fastq` → `invalid choice`, exit 2);
+  and `parser.error(...)` in `handle_pipeline()` for conflicting or missing inputs
+  (`--bam` together with `--cram`, or FASTQ without both mates), which also exits 2.
+  Both were verified by running them. So: do not claim the CLI only ever exits 0 or 1 —
+  claim that *completed application outcomes* are 0/1 and that argparse owns 2.
+  (`parser.error()` never returns, so the `sys.exit(1)` lines immediately after the two
+  calls in `cli_handlers.py` are unreachable. Leave them or remove them deliberately;
+  do not "fix" the exit code by routing usage errors through them without deciding that
+  the contract should change.)
 - Type hints are partial. Newer modules (`reference_registry`, `region_utils`,
   `scoring`, `flagging`) are fully annotated — match that when editing them.
 
@@ -131,9 +155,22 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 80** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+
+**The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
+by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
+number strictly harder to move than the statement-only figure the older floors were set
+against. Measured on the same suite: **80.24% branch-inclusive, 80.77% statement-only**.
+So deleting `branch = true` *raises* the reported total while covering strictly less —
+the ratchet cannot catch that regression, because the number moves the wrong way, and
+`tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing
+that can.
+
+The floor and the target now read the same number, and that is deliberate rather than a
+merge accident: they measure the same figure for different purposes, so the target stays
+a warning and keeps its headroom above the gate. Do not collapse them.
 
 **The patch gate is what makes this rule enforceable.** The hard floor is an average over
 ~5000 statements, so a PR can add a hundred untested lines and move it by less than a
@@ -153,10 +190,20 @@ anything would have failed had it been wrong — and this codebase's characteris
 a silently wrong call, not a crash. `make mutation` measures the difference by breaking
 the code on purpose and checking whether the suite notices; `confidence_assignment.py`
 once scored 100% line coverage and 21% on that measure. It is **advisory and never
-gated** (equivalent mutants are not hand-classified), it runs on the weekly schedule, and
-the current score with every surviving mutant named is in
-`docs/development/mutation-testing.md`. When you add tests to clear the patch gate, write
-them to kill mutants — assert on the values, not just that the call returned.
+gated**, it runs on the weekly schedule, and the current score with every surviving
+mutant named is in `docs/development/mutation-testing.md`. That page *does* hand-classify
+the equivalent mutants — `[E]` marks one, with the reason beside it, and the headline
+score is quoted both including and excluding them. Read the reason before you write a
+test to kill an `[E]`: it cannot be killed, and the honest response is usually to delete
+the code that makes it equivalent (the six `.get()` calibration defaults in
+`confidence_assignment.py` were removed for exactly that reason in #184).
+
+That page is **machine-generated** by `scripts/mutation_test.py`. Editing the Markdown
+directly is silently reverted by the next `make mutation-render`; change the generator and
+prove the round trip leaves the committed file byte-identical.
+
+When you add tests to clear the patch gate, write them to kill mutants — assert on the
+values, not just that the call returned.
 
 `make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
 coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
@@ -168,25 +215,50 @@ round to an integer, so a true 25.68% displays as `26%`; setting the floor from 
 CI fail on the very run that produced the number. The gate prints the precise figure and
 the exact line to paste.
 
-**2. Keep files under ~650 LOC.** This is a real constraint here, not style preference.
-Measured on this repo, the correlation is total:
+**2. Keep files under ~650 LOC.** This is a real constraint here, but the reason is not
+the line count. **Snapshot, 2026-08-06**, `wc -l` and the branch-inclusive unit-tier
+figure at the tip of the `#181–#197` follow-up branch. Re-measure before quoting it — the
+table that used to sit here has been wrong twice, once on the numbers and once on the
+conclusion drawn from them:
 
-| File | LOC | Unit coverage |
+| File | LOC | Unit coverage (branch-inclusive) |
 | --- | --- | --- |
-| `cohort_summary.py` | 856 | 0% |
-| `cli.py` | 700 | 0% |
-| `generate_report.py` | 861 | 4% |
-| `pipeline.py` | 735 | 10% |
-| `install_references.py` | 901 | 24% |
-| `kestrel_genotyping.py` | 835 | 28% |
-| `region_utils.py` | 246 | 98% |
-| `scoring.py` | 176 | 100% |
-| `confidence_assignment.py` | 190 | 100% |
+| `docker/app/main.py` | 1151 | 88.8% |
+| `install_references.py` | 901 | 26.0% |
+| `kestrel_genotyping.py` | 877 | 51.7% |
+| `pipeline.py` | 721 | 68.5% |
+| `fastq_bam_processing.py` | 612 | 60.7% |
+| `generate_report.py` | 574 | 64.8% |
+| `motif_processing.py` | 534 | 86.3% |
+| `docker/app/tasks.py` | 531 | 98.5% |
+| `cohort_summary.py` | 456 | 84.2% |
+| `region_utils.py` | 334 | 98.0% |
+| `confidence_assignment.py` | 194 | 100% |
+| `cli.py` | 173 | 85.9% |
+| `scoring.py` | 166 | 100% |
 
-Every module over 650 lines is under 30% covered; every well-covered module is under 650.
-Oversized files here are oversized because they fuse I/O, orchestration and pure logic
-into functions that cannot be called without a filesystem — which is exactly what makes
-them untestable. Splitting them is how the coverage gets written.
+**The old claim that "every module over 650 lines is under 30% covered" is false, and so
+is its converse.** `docker/app/main.py` is the largest file in the repository at 1151
+lines and is 88.8% covered; `pipeline.py` is 721 lines at 68.5%; `kestrel_genotyping.py`
+is 877 lines at 51.7%. Only `install_references.py` still fits the old rule.
+
+What the numbers actually say is that **coupling to I/O predicts coverage and size does
+not.** `main.py` is large but is a stack of thin FastAPI route handlers, every one
+callable through `TestClient` with nothing else running — so it is large *and* testable.
+`install_references.py` is the same size and downloads, unpacks and checksums files, so
+its logic cannot be reached without a network and a filesystem, and it sits at 26% for
+that reason rather than for its length. `docker/app/tasks.py` is 531 lines of Celery task
+at 98.5%; `cohort_summary.py` was 911 lines at 38% and is 456 at 84.2% — not because 456
+is under some threshold, but because the split moved the decisions into
+`cohort_rules`/`cohort_categories`/`cohort_tables`/`cohort_inputs`/`cohort_exports`, all
+at 100%, and left the matplotlib and Jinja2 calls behind.
+
+So keep the ~650 line guideline, but keep it for the right reason: **a file grows past
+650 lines here by fusing I/O, orchestration and pure logic into functions that cannot be
+called without a filesystem.** Size is the symptom you can measure cheaply; fusion is the
+cause. A large file that is already decoupled does not need splitting, and a 300-line
+file that shells out in the middle of its only public function is still untestable.
+Splitting is how the coverage gets written — see rule 3 for which part to split.
 
 **3. Refactor the part you touch.** When you edit inside a file over the limit, extract
 the region you are working on into a focused module rather than growing the file further.
@@ -195,9 +267,12 @@ I/O behind — the pure part is the part that gets a test. `scoring.py`,
 `confidence_assignment.py` and `region_utils.py` are the shape to copy. Do not attempt a
 whole-file rewrite as a side quest: split out the region under change, test it, move on.
 
-Known offenders, worst first: `docker/app/main.py` (1081), `install_references.py` (901),
-`generate_report.py` (861), `cohort_summary.py` (856), `kestrel_genotyping.py` (835),
-`pipeline.py` (735), `cli.py` (700), `tests/integration/test_pipeline_integration.py` (667).
+Still over the limit, worst first (2026-08-06): `docker/app/main.py` (1151),
+`install_references.py` (901), `kestrel_genotyping.py` (877), `pipeline.py` (721). The
+first two are the ones worth splitting next, and only one of them is a coverage problem.
+`generate_report.py` (574), `cohort_summary.py` (456), `cli.py` (173) and
+`tests/integration/test_pipeline_integration.py` (243) have all come back under the
+limit.
 
 ## Testing
 
@@ -216,10 +291,19 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
   `--strict-markers` additionally turns a *misspelled* marker into an error.
 - Unit tests must stay pure: `tmp_path` + `unittest.mock`, no network, no reference data.
-- Integration and docker tests pull a ~1.1 GB Zenodo archive and MD5 all 114 files; one
-  missing file triggers a full re-download. There are **no** `pytest.skip` guards
-  anywhere — missing data calls `pytest.exit()` and kills the whole session, unit tests
-  included. Set `VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1` to fail fast instead of downloading.
+- Integration and docker tests pull a ~1.1 GB Zenodo archive and MD5 all 114
+  `file_resources` entries; one missing file triggers a full re-download.
+  **The test-data bootstrap has no skip fallback**: `tests/conftest.py` and
+  `tests/support/data_utils.py` call `pytest.exit(..., returncode=1)` on missing config,
+  a missing Kestrel JAR or a failed download, which ends the whole session — unit tests
+  included — rather than skipping the tier that needs the data. Set
+  `VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1` to fail fast instead of downloading.
+  (Skips do exist elsewhere and are fine: `tests/docker/test_image_structure.py` carries
+  a module-level `pytest.mark.skipif` on the Docker daemon plus a `pytest.skip` when the
+  image is not present locally, and `test_version_consistency.py`,
+  `test_workflow_consistency.py` and `test_integration_tier_hygiene.py` skip on files
+  that are absent from a partial checkout. The old blanket claim that there are no
+  `pytest.skip` guards *anywhere* was simply false — do not restore it.)
 - Correct marker composition is `-m "docker and not slow"`; repeated `-m` flags override
   rather than combine.
 - The Docker tier runs at three depths, chosen by how much signal each buys for its
@@ -245,7 +329,7 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
 - PRs are **not** squashed — every commit becomes permanent history. Keep them clean.
 - Copilot and Sourcery AI review PRs. The established pattern is a follow-up commit
   addressing their comments, not a force-push.
-- CI gates on PRs: `make lint`, `make type-check`, `make test-unit` across 3.10–3.13,
+- CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` across 3.10–3.13,
   plus a Docker image build and quick Docker tests. Formatting is *not* gated in CI —
   run `make format-check` yourself.
 
@@ -257,10 +341,19 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
    argument. `--config-path` cannot override them; tests must patch the module global.
 2. **`--config-path` replaces the whole config, it does not merge.** Missing keys raise
    `KeyError` deep in the pipeline (`config["tools"]["java_path"]`, no `.get`).
-3. **Rule strings are `eval()`d against DataFrame column names.** `flagging.py` and
-   `cross_match.py` evaluate expressions from `kestrel_config.json`,
-   `advntr_config.json` and `config.json`. Renaming a column silently turns flags off —
-   a `NameError` only logs a warning. Grep the JSON configs before renaming any column.
+3. **Rule strings are `eval()`d against DataFrame column names, and the two modules that
+   do it now behave differently.** Grep the JSON configs before renaming any column.
+   - `flagging.py` (`evaluate_condition`) evaluates the flag conditions that
+     `kestrel_genotyping.py` and `advntr_genotyping.py` read out of
+     `kestrel_config.json` and `advntr_config.json`. It still **fails open**: a
+     `NameError` logs `logger.warning(...)` and returns `False`, and any other exception
+     logs `logger.error(...)` and returns `False`. So renaming a column silently turns a
+     flag off, and the run still exits 0. This is the trap.
+   - `cross_match.py` (`match_variants`) evaluates `config["cross_match"]["match_logic"]`
+     from `config.json`. It **no longer fails open** — commit `5ee1e4a` made it
+     `logger.error(msg)` then `raise ValueError(msg)`, on `NameError`/`SyntaxError` and on
+     every other exception alike, because "no match" and "could not be evaluated" are
+     indistinguishable in the report. A bad rule there now stops the run.
 4. **Stages mark, they do not filter.** Kestrel stages append boolean columns
    (`is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass`,
    `motif_filter_pass`); `filter_final_dataframe()` ANDs them at the end. Preserve that
@@ -284,12 +377,24 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
     is rebuilt only by `docker-base.yml` when `conda/**`, `requirements-web.txt`,
     `install_references*` or `dependencies/advntr/**` change. `docker/Dockerfile` holds
     only the application and builds on top in ~3 min. Both workflows compute the same
-    `hashFiles()` tag, so changing a base input without publishing a new base makes the
-    app build **fail loudly** with a missing tag rather than silently using a stale base.
-    To change a base input: merge to `main` (or run `docker-base.yml` via
-    `workflow_dispatch`) so the base publishes first. Locally:
+    `hashFiles()` tag, so a base input can never be changed and then silently built
+    against a stale base. What happens when the tag is missing depends on **who is
+    running the workflow**, and the two paths are very different:
+    - **Same-repository run** (push, or a PR from a branch in this repo): the
+      `base-status` job records `missing=true`, the `build-base` job calls the reusable
+      `./.github/workflows/docker-base.yml` and publishes the base, and `build-and-test`
+      waits on it. No manual step, no failure — just a slow run.
+    - **Fork PR**: a fork's `GITHUB_TOKEN` is read-only and cannot push to GHCR, so
+      `base-status` fails the run with an explicit error. That is the only case where
+      "a maintainer must run `docker-base.yml` via `workflow_dispatch`, or merge the base
+      change first" applies.
+
+    Locally, neither path exists — build the base yourself:
     `make docker-build-base && make docker-build DOCKER_BASE_IMAGE=vntyper-base:local`.
-    (This replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
+    `make ci-local-docker` refuses to run against the published `:latest` base when you
+    have edited a base input, for the same reason.
+
+    (The split replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
@@ -331,6 +436,21 @@ Known offenders, worst first: `docker/app/main.py` (1081), `install_references.p
     files no longer *conflict* (`pyproject.toml` pins `numpy>=1.26.0`, the env installs
     `numpy=2.0.2`, which satisfies it) — but they are still resolved by two different
     solvers, so `--no-deps` stays.
+16. **`scripts/` is linted and formatted but is not type-checked.** `RUFF_PATHS` covers
+    `vntyper/ docker/app/ tests/ scripts/ docs/`, but `make type-check-all` runs
+    `mypy vntyper/ docker/app/` and then `mypy vntyper/ tests/` — `scripts/` appears in
+    neither, so nothing under it is type-checked by any gate. That is now **over 5,000
+    lines** — re-measure with `find scripts -name '*.py' | xargs wc -l`; it read 5,048
+    across 13 files when this was written, and it is still growing. Roughly 3,200 of
+    those arrived on this branch (`git diff --numstat origin/main...HEAD -- scripts/`:
+    3,212 added, 45 removed) — the golden-cohort harness, the adVNTR `LEN` differential
+    and the mutation runner's growth; the coverage gate, the test-data downloader and
+    `mutation_guard.py` predate it. The figure quoted here has been wrong before, which
+    is why the command is given rather than just the number.
+    Adding `scripts/` to the first mypy invocation is a one-line
+    change and still surfaces exactly one pre-existing error
+    (`scripts/download_test_data.py:147: Need type annotation for "dir_counts"`);
+    fix that first, then widen the target.
 
 ## Never
 
