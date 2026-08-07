@@ -354,10 +354,27 @@ limit.
      `logger.error(msg)` then `raise ValueError(msg)`, on `NameError`/`SyntaxError` and on
      every other exception alike, because "no match" and "could not be evaluated" are
      indistinguishable in the report. A bad rule there now stops the run.
-4. **Stages mark, they do not filter.** Kestrel stages append boolean columns
+4. **Stages mark, they do not filter.** Kestrel stages append **six** boolean columns
    (`is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass`,
-   `motif_filter_pass`); `filter_final_dataframe()` ANDs them at the end. Preserve that
-   contract — dropping rows early breaks `kestrel_pre_result.tsv` debuggability.
+   `motif_filter_pass`, `flag_filter_pass`); `filter_final_dataframe()` ANDs them at the
+   end. Preserve that contract — dropping rows early breaks `kestrel_pre_result.tsv`
+   debuggability.
+
+   `flag_filter_pass` arrived with #174 and behaves differently from the other five in one
+   way worth knowing: it is written **unconditionally** in step 6.5, outside the `if
+   flagging_rules or duplicates_config` block that guards `add_flags`. That is deliberate.
+   The gate contract raises on a missing required column, and a run with no flagging rules
+   configured legitimately produces no `Flag` column at all — so a conditional gate would
+   turn a config choice into an aborted run. It reads its artifact list from
+   `kestrel_config.json`'s `artifact_flags`; **no flag name is written inline in Python**,
+   and emptying that list restores the pre-#174 behaviour with no code change.
+
+   **Two tripwires fire on any change to the gate list, and they are not in the same
+   file.** `tests/unit/test_kestrel_filtering.py` reads `kestrel_genotyping.py` as *source
+   text* and asserts the exact count; `tests/builders.py`'s `STAGE_COLUMNS["flagged"]` and
+   `["final"]` feed `kestrel_stage_frame()` to the real `filter_final_dataframe`, so a gate
+   missing from those tuples raises `ValueError` rather than failing an assertion. Change
+   both, deliberately, in the same commit.
 5. **Summary step names are string literals.** `"Kestrel Genotyping"`,
    `"adVNTR Genotyping"`, `"Coverage Calculation"`, `"BAM Header Parsing"`,
    `"Cross-Match Variant Comparison"` are matched exactly by `generate_report.py`,
