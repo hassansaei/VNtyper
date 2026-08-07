@@ -782,10 +782,11 @@ No new page, so no `mkdocs.yml` `nav:` edit is needed — verified, not assumed
 ### Version
 
 `vntyper/version.py`, `CITATION.cff` and `docs/about/changelog.md` must agree
-(AGENTS.md trap 12). A minor bump to `2.1.0` is proposed: #171, #172 and #174 change
-reported values and the QC verdict, which is more than a patch. **No `v*.*.*` tag is
-pushed** — tagging publishes to PyPI irreversibly (AGENTS.md "Never", and the user's
-standing instruction).
+(AGENTS.md trap 12). **Patch bump, `2.0.7` → `2.0.8`.** These are bug fixes; the project
+is not doing minor bumps yet (@berntpopp, 2026-08-07: *"version stays fix only! we don't
+do minor bumps yet"*). That the fixes move reported numbers does not make them features.
+**No `v*.*.*` tag is pushed** — tagging publishes to PyPI irreversibly (AGENTS.md
+"Never", and the user's standing instruction).
 
 ### Definition of done
 

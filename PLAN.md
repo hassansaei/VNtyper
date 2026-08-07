@@ -1676,14 +1676,17 @@ git commit -am "test(benchmark): align the downsample benchmark with the #171 ar
 
 - [ ] **Step 1: Bump the version in both places**
 
-`vntyper/version.py` and `CITATION.cff` to `2.1.0` — #171, #172 and #174 change reported
-values and the QC verdict, which is more than a patch.
+`vntyper/version.py` and `CITATION.cff` from `2.0.7` to **`2.0.8`**.
 `tests/unit/test_version_consistency.py` fails the build if they disagree.
 **Do not create or push a `v*.*.*` tag.**
 
+**Patch, not minor.** These are bug fixes, and this project is not doing minor bumps yet
+(@berntpopp, 2026-08-07: *"version stays fix only! we don't do minor bumps yet"*). That
+the fixes move reported numbers does not make them features.
+
 - [ ] **Step 2: Write the changelog**
 
-`docs/about/changelog.md`, one entry per issue under a `2.1.0` heading. State plainly that
+`docs/about/changelog.md`, one entry per issue under a `2.0.8` heading. State plainly that
 coverage numbers change, that #171's region harmonisation is *not* included, and that
 `docs/pipeline/reports.md` previously documented a threshold that was not enforced.
 
