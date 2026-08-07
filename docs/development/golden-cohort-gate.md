@@ -27,6 +27,7 @@ the harness change, so only the "after" side can prove its revision.
 | 3 | `8537a61` | `2fcc6e3` | PASS | the branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
 | 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | the `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
 | 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
+| 6 | `b27ff9c` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `b27ff9c` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -57,7 +58,9 @@ pipeline imports.)
 
 **The genotype verdict is PASS in every run.** Every genotype field, every `Confidence`
 label and every `Flag` is byte-identical between baseline and candidate, on every sample
-and every assembly, in all five runs.
+and every assembly, in all **six** runs. Run 6 states this as a measurement rather than a
+reading: across its whole matrix, exactly two columns were added and the only column whose
+cells changed was one of them, with **no genotype field touched anywhere**.
 
 Runs 4 and 5 are not *only* that, and the difference is named rather than smoothed over.
 In runs 1–3 the only differences were in how the HTML report *presents* an unchanged
@@ -88,13 +91,18 @@ The cohort is every BAM under `tests/data/`, run at each assembly it is provided
 the 7 multi-reference samples at all six assemblies (`hg19`, `hg38`, `GRCh37`, `GRCh38`,
 `hg19_ensembl`, `hg38_ensembl`) plus their original hg19 subsets, and the hg38 regression
 guard `example_40cf`. Five cases repeat without `--fast-mode` so the unmapped-read pipes
-are exercised, three run `--extra-modules advntr`, and — new, and not yet taken by any run
-— two repeat from a derived CRAM. See [The CRAM group](#the-cram-group-188) below.
+are exercised, three run `--extra-modules advntr`, and two repeat from a derived CRAM. See
+[The CRAM group](#the-cram-group-188) below. **Run 6 is the first to take the CRAM group**;
+runs 1–5 predate the fixtures.
 
-**The matrix is 60 cases as of this writing and was 58 for runs 1–5.** Every `x / 58`
-figure in the run sections below is that earlier matrix and is left as measured; the two
-CRAM cases are additional, so the next run's tables will be over 60 and will not be
-comparable cell-for-cell with these.
+**The matrix is 60 cases and was 58 for runs 1–5.** Every `x / 58` figure in the run
+sections below is that earlier matrix and is left as measured; run 6's tables are over 60
+and are not comparable cell-for-cell with them.
+
+The CRAM fixtures are **derived, not committed** (`scripts/make_cram_fixtures.py`), so a
+fresh clone has 58 cases until they are generated. The harness refuses to launch over the
+reduced matrix rather than running it silently — run 6 hit exactly that and generated the
+50 fixtures instead of passing `--allow-matrix-drift`.
 
 Compared per case: the complete `kestrel_result.tsv` header and row set, keyed on
 `Motifs`/`POS`/`REF`/`ALT`/`Variant` — every column that is present, without asserting a
@@ -892,3 +900,109 @@ counted by the drift check (see [The CRAM group](#the-cram-group-188)). **The ne
 cover the CRAM path; run 5 did not.** Until that run is taken and written up here, nothing
 on this page attests the CRAM branch, and a reader should treat the two cases as declared
 rather than as measured.
+
+## Run 6 — `cb593b6` → `b27ff9c`, milestone 2
+
+Harness `1.2.0`. Both sides clean, package resolution verified on every run, marker
+`vntyper.scripts.coverage_qc` expected absent on `before` and present on `after`.
+
+**The first run over the full 60-case matrix.** The harness refused the first launch —
+`tests/data` derived 58 cases against the 60 the contract records, because the CRAM
+fixtures were absent. Rather than pass `--allow-matrix-drift`, the fixtures were generated
+(`scripts/make_cram_fixtures.py`, 50 derived and verified lossless) and the run relaunched.
+The refusal is the harness working: *"a reduced run earns the same IDENTICAL verdict as a
+full one, which is how a shrinking gate stays invisible."*
+
+| Compared | Cases with a delta | Cases compared |
+| --- | --- | --- |
+| `coverage_summary` | 61 | 61 |
+| `kestrel_pre_result` | 61 | 61 |
+| `report_tables` | 61 | 61 |
+| `executed_commands` | 61 | 63 |
+| `kestrel_result` | 50 | 61 |
+| `cohort_kestrel_{csv,tsv,json}` | 3 | 3 |
+| `cohort_stats_{csv,tsv,json}` | 3 | 3 |
+| `cohort_tables` | 3 | 3 |
+| `cohort_output_files` | 3 | 4 |
+| **`advntr_result`** | **0** | 3 |
+| **`screening_summary`** | **0** | 61 |
+| **`exit_code`** | **0** | 67 |
+| **`pipeline_step_records`** | **0** | 63 |
+| `cross_match_summary`, `cohort_advntr_*`, `cohort_category_*`, `pseudonymization_table`, `pipeline_steps` | 0 | — |
+
+### The verdict, measured rather than argued
+
+Across every case and every artefact, exactly **two** columns were added — `flag_filter_pass`
+(117 occurrences) and `coverage_qc` (61) — and the **only** column whose cells changed was
+`flag_filter_pass`, the new one:
+
+```
+=== columns ADDED across the whole run ===       === columns whose CELLS changed ===
+   117x  flag_filter_pass                          46063x  flag_filter_pass
+    61x  coverage_qc
+
+=== cells changed on a column that was NOT newly added ===
+  NONE - every changed cell is in a column this PR adds
+
+=== any genotype field touched? ===
+  NONE
+```
+
+`coverage_summary` is compared without a key, so its value changes surface as a row
+removed plus a row added rather than as `cells_changed`. One case, in full:
+
+```
+BEFORE: mean 164.53  median 117.00  min 1  stdev 174.66  uncovered 454  pct 10.09
+AFTER : mean 147.94  median 107.00  min 0  stdev 172.87  uncovered 454  pct 10.09  coverage_qc PASS
+```
+
+`uncovered_bases` and `percent_uncovered` are **unchanged**, which is the point: the new
+zero-count reproduces the old subtraction exactly, so #171 corrects the four statistics that
+were wrong without disturbing the one that was right. `min` moves 1 → 0, the true minimum of
+a region with 454 uncovered bases.
+
+**The closed-form identity `mean_new == mean_old · (1 − pct_old/100)` holds on 61 of 61
+cases.** That is a complete independent check of #171 over the whole cohort, and it is the
+identity #171 itself proposed for reconciling historical output.
+
+### Attribution
+
+| Delta | Attributed to |
+| --- | --- |
+| `coverage_summary` values (4 fields) + `coverage_qc` column | #171, #172 |
+| `executed_commands` (`-a` on the depth command) | #171 |
+| `kestrel_result` / `kestrel_pre_result` `columns_added: flag_filter_pass` | #174 |
+| `report_tables` (new Coverage QC row) | #172 |
+| `cohort_kestrel_*` gaining `flag_filter_pass` | #174 — `cohort_exports.py:14`, "nothing here strips columns" |
+| `cohort_stats_*`, `cohort_output_files` | #172, the new export |
+| `cohort_tables` (`cov_coverage_qc`, and the `2.0.7 → 2.0.8` version string) | #172 and the release. The normaliser is anchored to `VNtyper Version: ` and does not touch the bare version the statistics table carries. **Not** normalised away: attributing a difference is honest, teaching the gate to stop seeing it is not. |
+
+`kestrel_result` is 50 of 61 rather than 61 of 61 because a negative call writes the
+10-column sentinel, which carries no gate columns at all; only the 50 frames that reach the
+final filter gain one.
+
+### What this run does NOT attest
+
+Three things, stated because a clean row above invites the opposite reading.
+
+1. **It does not show #171 is genotype-neutral.** The mechanism is real — the corrected mean
+   feeds `downsample_bam_if_needed` at `--advntr-max-coverage 300`, which both the gate and
+   `docker/app/tasks.py:215` use. `advntr_result` shows 0 deltas because all three configured
+   adVNTR cases are **fully covered**, so the corrected mean equals the old one exactly:
+
+   ```
+   a5c1_hg19  covered=1501/1501 zeros=0  old=1258.7215  new=1258.7215  IDENTICAL
+   b178_hg19  covered=1501/1501 zeros=0  old= 878.2065  new= 878.2065  IDENTICAL
+   dfc3_hg19  covered=1501/1501 zeros=0  old=2889.0286  new=2889.0286  IDENTICAL
+   ```
+
+   That is a property of `tests/data`, not of the change. The audit cohort behind #171 found
+   1585 of 8215 samples with an inflated mean; none is in the local data.
+
+2. **It does not exercise #174's exclusion.** Every positive call in this cohort is
+   unflagged, so no artifact row was ever removed — `kestrel_result` shows a column addition
+   and no row removals. The exclusion is covered by unit tests, not by this run.
+
+3. **It does not see `output.bed`.** No BED artefact is collected, and the report reader
+   extracts summary boxes and literal tables rather than the IGV payload. #203's coordinate
+   fix is attested by `tests/unit/test_generate_bed_file.py` alone.
