@@ -499,9 +499,12 @@ true and stays as-is.
 
 ### Tests that must change
 
+The audit names one tripwire. There are **two**, and the second fails harder.
+
 | File:line | Change |
 | --- | --- |
-| `test_kestrel_filtering.py:72` | reads `kestrel_genotyping.py` **as source text** and asserts exactly 5 gate columns. Changed **once**, to 6, with `GATE_COLUMNS` extended. The audit notes this tripwire is shared with #173; #173 is not in this milestone, so it is changed here and #173 will find it already correct. |
+| `test_kestrel_filtering.py:44` (`GATE_COLUMNS`) and `:72` | `:72` reads `kestrel_genotyping.py` **as source text** and asserts exactly 5 entries in `filter_cols`; `:44` is the tuple it compares against, and `_passing_frame` sets every one of them True. Changed **once**, to 6. The audit notes this tripwire is shared with #173; #173 is not in this milestone, so it is changed here and #173 will find it already correct. |
+| **`tests/builders.py:33` `STAGE_COLUMNS["flagged"]` and `["final"]`** | Missed by the audit, and the more disruptive of the two. `tests/unit/test_builders.py:290` (`test_the_final_stage_frame_feeds_the_real_final_filter`) passes `kestrel_stage_frame("final")` to the **real** `filter_final_dataframe`, so without `flag_filter_pass` in that tuple the new gate raises `ValueError` and the test fails. `kestrel_stage_frame` is used across at least four test files, so this is the shared fixture, not a local one. Both tuples gain `flag_filter_pass`, and `kestrel_row` gains a default of `True`. |
 | `test_haplo_count_and_selection.py:368` (`test_all_flagged_selects_best`) | tests `select_single_best_variant` directly, which still deprioritises rather than excludes. Survives unchanged; a docstring note records that exclusion now happens upstream at the gate. |
 | `test_haplo_count_and_selection.py:427` (`test_issue_145_scenario`) | survives; extended with an artifact-flagged competitor to pin the new interaction, per the audit. |
 
