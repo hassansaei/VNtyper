@@ -81,6 +81,7 @@ def test_parse_coverage_stats_reads_every_column() -> None:
         "region_length": "1000",
         "uncovered_bases": "20",
         "percent_uncovered": "2.0",
+        "coverage_qc": "PASS",
     }
     stats = rf.parse_coverage_stats([row])
 
@@ -88,6 +89,7 @@ def test_parse_coverage_stats_reads_every_column() -> None:
     assert stats["mean"] == pytest.approx(123.45)
     assert stats["min"] == 3 and isinstance(stats["min"], int)
     assert stats["percent_uncovered"] == pytest.approx(2.0)
+    assert stats["coverage_qc"] == "PASS", "#172's verdict is read back as a string, not coerced"
 
 
 def test_parse_coverage_stats_yields_none_for_no_rows() -> None:

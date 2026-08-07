@@ -30,6 +30,7 @@ import pytest
 
 from vntyper.scripts.coverage_stats import (
     COVERAGE_COLUMNS,
+    COVERAGE_METRIC_COLUMNS,
     format_coverage_summary,
     parse_region_length,
     read_depth_values,
@@ -71,7 +72,13 @@ def test_the_coverage_columns_are_the_frozen_lowercase_schema():
         "region_length",
         "uncovered_bases",
         "percent_uncovered",
+        "coverage_qc",
     )
+
+
+def test_the_tsv_schema_is_the_metrics_plus_the_verdict():
+    """The split is the point: `summarise_coverage` measures, the caller judges."""
+    assert COVERAGE_COLUMNS == COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
 
 
 def test_the_tsv_header_and_row_are_the_exact_region_wide_bytes():
@@ -90,13 +97,31 @@ def test_the_tsv_header_and_row_are_the_exact_region_wide_bytes():
     * ``min``    = 0, because 1498 positions of the region carry no reads
     * ``percent_uncovered`` = 1498 / 1501 * 100 = 99.80013... -> ``99.80``,
       numerically identical to before: the metric that was already right stays right.
+
+    ``coverage_qc`` is the caller's verdict, written verbatim - it is not in
+    ``_TWO_DECIMAL_COLUMNS``. This sample is below the shipped mean threshold of 100
+    *and* above the uncovered threshold of 50, so ``FAIL`` is what
+    ``calculate_vntr_coverage`` would merge in (#172).
+    """
+    stats = summarise_coverage([10, 20, 30], total_region_length=1501)
+    stats["coverage_qc"] = "FAIL"
+
+    assert format_coverage_summary(stats) == (
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
+        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\tFAIL\n"
+    )
+
+
+def test_formatting_a_summary_with_no_verdict_raises_rather_than_writing_eight_columns():
+    """The contract that keeps a caller from writing a summary with no verdict in it.
+
+    ``summarise_coverage`` deliberately does not produce ``coverage_qc``; if a caller
+    forgets to merge it, the TSV must not silently lose its ninth column (#172).
     """
     stats = summarise_coverage([10, 20, 30], total_region_length=1501)
 
-    assert format_coverage_summary(stats) == (
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\n"
-    )
+    with pytest.raises(KeyError, match="coverage_qc"):
+        format_coverage_summary(stats)
 
 
 def test_the_returned_dictionary_keeps_the_pre_extraction_types():
@@ -131,11 +156,16 @@ def test_the_returned_dictionary_keeps_the_pre_extraction_types():
     assert isinstance(stats["uncovered_bases"], int)
 
 
-def test_every_frozen_column_is_present_in_the_returned_dictionary():
-    """The dict keys and the TSV columns are the same set, so they cannot drift."""
+def test_every_measured_column_is_present_in_the_returned_dictionary():
+    """The dict keys and the measured columns are the same set, so they cannot drift.
+
+    Compared against :data:`COVERAGE_METRIC_COLUMNS` rather than the full TSV schema
+    since #172: ``coverage_qc`` is a verdict, and ``summarise_coverage`` holds no
+    thresholds, so it cannot produce one. ``calculate_vntr_coverage`` fills it in.
+    """
     stats = summarise_coverage([5], total_region_length=10)
 
-    assert set(stats) == set(COVERAGE_COLUMNS)
+    assert set(stats) == set(COVERAGE_METRIC_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
@@ -348,13 +378,15 @@ def test_end_to_end_over_a_synthetic_depth_file(tmp_path):
     * ``percent_uncovered`` = 8 / 20 * 100 = 40.0, unchanged.
 
     Before #171 this read ``6.50 6.50 3.61 1 12 20 8 40.00`` - the mean, median and
-    stdev of the twelve positions that had reads.
+    stdev of the twelve positions that had reads. The ninth field is #172's verdict:
+    ``FAIL`` on the mean alone here, since 40% uncovered is inside the shipped 50%.
     """
     path = _write_depth(tmp_path, [("chr1", 100 + i, i + 1) for i in range(12)])
 
     values = read_depth_values(path)
     length = parse_region_length("chr1:100-119")
     stats = summarise_coverage(values, total_region_length=length)
+    stats["coverage_qc"] = "FAIL"
 
     assert length == 20
     assert stats["mean"] == pytest.approx(3.9)
@@ -364,6 +396,6 @@ def test_end_to_end_over_a_synthetic_depth_file(tmp_path):
     assert stats["uncovered_bases"] == 8
     assert stats["percent_uncovered"] == pytest.approx(40.0)
     assert format_coverage_summary(stats) == (
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-        "3.90\t2.50\t4.27\t0\t12\t20\t8\t40.00\n"
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
+        "3.90\t2.50\t4.27\t0\t12\t20\t8\t40.00\tFAIL\n"
     )

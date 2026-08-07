@@ -77,9 +77,12 @@ def _production_coverage_header() -> list[str]:
 
 
 def test_the_helper_columns_are_the_ones_production_writes() -> None:
-    """Derived from the production writer, so the two cannot drift apart."""
+    """Derived from the production writer, so the two cannot drift apart.
+
+    Nine since #172, which appended the ``coverage_qc`` verdict to the schema.
+    """
     header = _production_coverage_header()
-    assert len(header) == 8, f"the header scan produced {header}; it has drifted"
+    assert len(header) == 9, f"the header scan produced {header}; it has drifted"
     assert list(COVERAGE_COLUMNS) == header
 
 
@@ -87,7 +90,7 @@ def test_coverage_output_returns_the_real_values(tmp_path) -> None:
     _write_tsv(
         tmp_path / "coverage" / "coverage_summary.tsv",
         list(COVERAGE_COLUMNS),
-        ["153.99", "150.00", "12.30", "7", "301", "5000", "12", "0.24"],
+        ["153.99", "150.00", "12.30", "7", "301", "5000", "12", "0.24", "PASS"],
     )
 
     metrics = validate_coverage_output(tmp_path)

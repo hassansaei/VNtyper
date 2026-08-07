@@ -123,6 +123,9 @@ COVERAGE_FIELD_TYPES: dict[str, type] = {
     "region_length": int,
     "uncovered_bases": int,
     "percent_uncovered": float,
+    # The QC verdict is a label, not a measurement: `str` keeps "PASS"/"FAIL" intact
+    # and keeps it out of the two-decimal rendering the numeric fields get (#172).
+    "coverage_qc": str,
 }
 
 #: Markers delimiting the three fragments spliced out of the IGV report page.

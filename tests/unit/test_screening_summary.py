@@ -31,6 +31,7 @@ import pandas as pd
 import pytest
 
 from vntyper.scripts import screening_summary as ss
+from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 
 pytestmark = pytest.mark.unit
 
@@ -292,6 +293,16 @@ def test_every_rule_has_a_non_empty_message(report_config) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _passing():
+    """A coverage verdict that clears both shipped thresholds.
+
+    The quality axis takes a :class:`~vntyper.scripts.coverage_qc.CoverageQC` since
+    #172, not a mean and a threshold, so the tests below that are about something
+    other than coverage say so by handing it a verdict that passes.
+    """
+    return evaluate_coverage_qc(250.0, 0.0, 100, 50.0)
+
+
 KESTREL_FRAMES = {
     "High_Precision": [{"Confidence": "High_Precision", "Flag": "Not flagged"}],
     "High_Precision_flagged": [{"Confidence": "High_Precision", "Flag": "Duplicate"}],
@@ -330,8 +341,7 @@ def test_every_state_reached_through_the_real_frames_gets_a_rule(
         pd.DataFrame(KESTREL_FRAMES[kestrel_state]),
         pd.DataFrame(ADVNTR_FRAMES[advntr_state]) if advntr_available else pd.DataFrame(),
         advntr_available,
-        coverage,
-        100,
+        evaluate_coverage_qc(coverage, 0.0, 100, 50.0),
         report_config,
     )
 
@@ -348,40 +358,42 @@ def test_every_state_reached_through_the_real_frames_gets_a_rule(
 def test_a_kestrel_negative_advntr_negative_sample_is_not_a_finding(report_config) -> None:
     """The case defect W3 got backwards: "No variant detected by either
     genotyping method" was styled as a positive finding."""
-    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), True, 250.0, 100, report_config)
+    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), True, _passing(), report_config)
     assert summary.is_positive is False
 
 
 @pytest.mark.parametrize("kestrel_state", ["High_Precision", "High_Precision_flagged", "Low_Precision_flagged"])
 def test_a_kestrel_finding_is_positive(kestrel_state, report_config) -> None:
     summary = ss.build_screening_summary(
-        pd.DataFrame(KESTREL_FRAMES[kestrel_state]), pd.DataFrame(), False, 250.0, 100, report_config
+        pd.DataFrame(KESTREL_FRAMES[kestrel_state]), pd.DataFrame(), False, _passing(), report_config
     )
     assert summary.is_positive is True
 
 
 def test_an_advntr_only_finding_is_positive(report_config) -> None:
     summary = ss.build_screening_summary(
-        pd.DataFrame(), pd.DataFrame(ADVNTR_FRAMES["positive"]), True, 250.0, 100, report_config
+        pd.DataFrame(), pd.DataFrame(ADVNTR_FRAMES["positive"]), True, _passing(), report_config
     )
     assert summary.is_positive is True
 
 
 def test_a_flagged_advntr_only_finding_is_positive(report_config) -> None:
     summary = ss.build_screening_summary(
-        pd.DataFrame(), pd.DataFrame(ADVNTR_FRAMES["positive flagged"]), True, 250.0, 100, report_config
+        pd.DataFrame(), pd.DataFrame(ADVNTR_FRAMES["positive flagged"]), True, _passing(), report_config
     )
     assert summary.is_positive is True
 
 
 def test_an_advntr_that_never_ran_is_not_a_finding(report_config) -> None:
-    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, 250.0, 100, report_config)
+    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, _passing(), report_config)
     assert summary.advntr_result == ss.NOT_PERFORMED
     assert summary.is_positive is False
 
 
 def test_coverage_below_the_threshold_fails_the_quality_gate(report_config) -> None:
-    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, 99.0, 100, report_config)
+    summary = ss.build_screening_summary(
+        pd.DataFrame(), pd.DataFrame(), False, evaluate_coverage_qc(99.0, 0.0, 100, 50.0), report_config
+    )
     assert summary.quality_metrics_pass is False
 
 
@@ -389,8 +401,33 @@ def test_coverage_that_was_never_measured_passes_the_quality_gate(report_config)
     """Pinned rather than endorsed: an unmeasured sample is reported as passing
     the coverage gate. Changing that changes a displayed interpretation for
     every run with no Coverage Calculation step, so it is left alone here."""
-    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, None, 100, report_config)
+    summary = ss.build_screening_summary(
+        pd.DataFrame(), pd.DataFrame(), False, evaluate_coverage_qc(None, None, 100, 50.0), report_config
+    )
     assert summary.quality_metrics_pass is True
+
+
+def test_a_patchy_sample_fails_the_screening_quality_axis(report_config) -> None:
+    """#172: acceptable mean, half the VNTR uncovered. Before this change it passed."""
+    qc = evaluate_coverage_qc(250.0, 80.0, 100, 50.0)
+    summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, qc, report_config)
+
+    assert summary.quality_metrics_pass is False
+
+
+def test_widening_the_quality_axis_cannot_change_positivity(report_config) -> None:
+    """`is_positive` derives from the two algorithm axes only, never from quality.
+
+    Stated as a test because it is the one way #172 could have become
+    genotype-affecting, and it is not.
+    """
+    failing = evaluate_coverage_qc(1.0, 99.0, 100, 50.0)
+    passing = evaluate_coverage_qc(250.0, 1.0, 100, 50.0)
+
+    assert (
+        ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, failing, report_config).is_positive
+        is ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, passing, report_config).is_positive
+    )
 
 
 def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
@@ -401,7 +438,9 @@ def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
             raise RuntimeError("boom")
 
     with caplog.at_level(logging.ERROR, logger="vntyper.scripts.screening_summary"):
-        summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, None, 100, Exploding())
+        summary = ss.build_screening_summary(
+            pd.DataFrame(), pd.DataFrame(), False, evaluate_coverage_qc(None, None, 100, 50.0), Exploding()
+        )
 
     assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
     assert summary.is_positive is False
@@ -415,7 +454,7 @@ def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_confi
     stripped = {**report_config, "screening_summary_rules": []}
     with caplog.at_level(logging.WARNING, logger="vntyper.scripts.screening_summary"):
         summary = ss.build_screening_summary(
-            pd.DataFrame(KESTREL_FRAMES["High_Precision"]), pd.DataFrame(), False, 250.0, 100, stripped
+            pd.DataFrame(KESTREL_FRAMES["High_Precision"]), pd.DataFrame(), False, _passing(), stripped
         )
 
     assert summary.matched_rule is False

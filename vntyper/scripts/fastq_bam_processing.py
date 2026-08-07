@@ -17,6 +17,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_merge_command,
     build_samtools_slice_command,
 )
+from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.coverage_stats import (
     format_coverage_summary,
     parse_region_length,
@@ -297,11 +298,19 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
             Defaults to "<output_name>_summary.tsv" in output_dir.
 
     Returns:
-        dict: A dictionary containing mean, median, standard deviation, min, max coverage, and
-            percentage of VNTR region with zero coverage.
+        dict: Exactly the keys in :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`
+            - the region-wide statistics from
+            :func:`~vntyper.scripts.coverage_stats.summarise_coverage` plus the
+            ``coverage_qc`` verdict this function merges in.
 
     Raises:
         RuntimeError: If coverage calculation fails.
+
+    Note:
+        The QC verdict is evaluated on the **published** figures - ``mean`` and
+        ``percent_uncovered`` rounded to the two decimal places the TSV carries - so the
+        emitted column can never contradict the report, which re-reads those rounded
+        strings and recomputes the same verdict (#172).
     """
     samtools_path = config["tools"]["samtools"]
     coverage_output = Path(output_dir) / f"{output_name}_vntr_coverage.txt"
@@ -327,6 +336,23 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         coverage_values = read_depth_values(coverage_output)
         stats = summarise_coverage(coverage_values, total_region_length)
 
+        thresholds = config.get("thresholds", {})
+        # `.get` with the shipped defaults rather than `[...]`: `--config-path` replaces
+        # the whole config instead of merging (AGENTS.md trap 2), so a caller-supplied
+        # config legitimately lacks these keys and a KeyError here would abort a run over
+        # a display threshold.
+        #
+        # The `round` calls are the point: the verdict is evaluated on the same figures
+        # `format_coverage_summary` is about to write, so the emitted column and the
+        # report's recomputed screening axis cannot disagree at a boundary (#172).
+        qc = evaluate_coverage_qc(
+            round(stats["mean"], 2),
+            round(stats["percent_uncovered"], 2),
+            thresholds.get("mean_vntr_coverage", 100),
+            thresholds.get("percent_vntr_uncovered", 50.0),
+        )
+        stats["coverage_qc"] = qc.status
+
         logger.info(f"Mean VNTR coverage: {stats['mean']:.2f}")
         logger.info(f"Median VNTR coverage: {stats['median']:.2f}")
         logger.info(f"Standard deviation: {stats['stdev']:.2f}")
@@ -335,6 +361,7 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         logger.info(f"VNTR region total length: {stats['region_length']} bp")
         logger.info(f"VNTR region uncovered bases: {stats['uncovered_bases']} bp")
         logger.info(f"Percentage of VNTR region with zero coverage: {stats['percent_uncovered']:.2f}%")
+        logger.info(f"Coverage QC: {stats['coverage_qc']}")
 
         if summary_filename is None:
             summary_filename = Path(output_dir) / f"{output_name}_summary.tsv"

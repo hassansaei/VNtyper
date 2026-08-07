@@ -11,11 +11,16 @@ can be tested without samtools, a BAM file or a subprocess. The I/O half - runni
 **The output schema is a frozen contract.** ``generate_report.py`` reads
 ``region_length``, ``uncovered_bases`` and ``percent_uncovered`` out of the TSV by
 exact, lowercase key and defaults each to ``0`` when the key is absent, and
-``tests/helpers.validate_coverage_output`` reads all eight. Renaming a column
+``tests/helpers.validate_coverage_output`` reads all nine. Renaming a column
 therefore raises nothing anywhere - it makes the HTML report state that a sample
 with no coverage at all has 0 bp uncovered. :data:`COVERAGE_COLUMNS` is the single
-declaration of that schema and both the TSV writer and the returned dict derive
-from it.
+declaration of that schema, and the TSV writer derives from it.
+
+The schema is split in two because a measurement and a verdict are different things.
+:data:`COVERAGE_METRIC_COLUMNS` is what :func:`summarise_coverage` returns;
+:data:`COVERAGE_COLUMNS` is that plus ``coverage_qc``, the sample-level QC verdict
+``fastq_bam_processing.calculate_vntr_coverage`` merges in from
+:func:`~vntyper.scripts.coverage_qc.evaluate_coverage_qc` (#172).
 
 One definition is worth stating explicitly because the opposite was true until #171:
 every statistic here is over the **region**, not over the covered positions. ``mean``,
@@ -46,12 +51,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-#: The coverage summary schema, in the order the TSV writes it.
-#:
-#: Frozen contract (wave-2 C1). ``generate_report.py`` looks these up with
-#: ``.get(name, 0)``, so a rename is silent: the report loses coverage rather than
-#: failing. Changing this tuple changes the report's input format.
-COVERAGE_COLUMNS: tuple[str, ...] = (
+#: The eight measured statistics. Exactly what :func:`summarise_coverage` returns.
+COVERAGE_METRIC_COLUMNS: tuple[str, ...] = (
     "mean",
     "median",
     "stdev",
@@ -61,6 +62,19 @@ COVERAGE_COLUMNS: tuple[str, ...] = (
     "uncovered_bases",
     "percent_uncovered",
 )
+
+#: The coverage summary schema, in the order the TSV writes it: the measurements plus
+#: the QC verdict.
+#:
+#: Frozen contract (wave-2 C1). ``generate_report.py`` looks these up with
+#: ``.get(name, 0)``, so a rename is silent: the report loses coverage rather than
+#: failing. Changing this tuple changes the report's input format.
+#:
+#: The verdict is not a measurement and :func:`summarise_coverage` cannot produce it -
+#: it has no thresholds - so ``calculate_vntr_coverage`` fills it in before writing.
+#: :func:`format_coverage_summary` still raises ``KeyError`` when it is absent, which is
+#: the contract that keeps a caller from writing a summary with no verdict in it (#172).
+COVERAGE_COLUMNS: tuple[str, ...] = COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
 
 #: Columns rendered with two decimal places; the rest are written as-is.
 _TWO_DECIMAL_COLUMNS = frozenset({"mean", "median", "stdev", "percent_uncovered"})
@@ -147,7 +161,8 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
             parsed.
 
     Returns:
-        dict: Exactly the keys in :data:`COVERAGE_COLUMNS`. Value types are
+        dict: Exactly the keys in :data:`COVERAGE_METRIC_COLUMNS` - the measurements,
+        without ``coverage_qc``, which is the caller's verdict. Value types are
         preserved from the pre-extraction implementation and are deliberately
         mixed: ``median`` is an ``int`` for an odd-length integer sample and a
         ``float`` for an even-length one, ``stdev`` is the integer ``0`` for a

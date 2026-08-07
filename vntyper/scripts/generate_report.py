@@ -35,6 +35,7 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.output_paths import contained_output_path
 from vntyper.scripts.report_formatting import (
     ADVNTR_DISPLAY_COLUMNS,
@@ -412,6 +413,17 @@ def generate_summary_report(
     mean_vntr_coverage = coverage["mean"]
     percent_vntr_uncovered = coverage["percent_uncovered"]
 
+    # The coverage QC verdict, recomputed rather than read out of the stored
+    # `coverage_qc` column, so `vntyper report` still works against a
+    # pipeline_summary.json written before #172. Both sides evaluate the *published*
+    # two-decimal figures - these were serialised with `:.2f` - so they cannot disagree.
+    coverage_qc = evaluate_coverage_qc(
+        mean_vntr_coverage,
+        percent_vntr_uncovered,
+        mean_vntr_cov_threshold,
+        percent_vntr_uncovered_threshold,
+    )
+
     kestrel_df, kestrel_df_raw = build_kestrel_frames(get_step_data(pipeline_summary, STEP_KESTREL))
 
     advntr_available = get_step(pipeline_summary, STEP_ADVNTR) is not None
@@ -497,8 +509,7 @@ def generate_summary_report(
         kestrel_df_raw,
         advntr_df,
         advntr_available,
-        mean_vntr_coverage,
-        mean_vntr_cov_threshold,
+        coverage_qc,
         report_config,
     )
     logger.debug("Summary text generated: %s", screening.text)
@@ -532,6 +543,7 @@ def generate_summary_report(
         "vntr_region_length": shown(coverage["region_length"]),
         "vntr_uncovered_bases": shown(coverage["uncovered_bases"]),
         "percent_vntr_uncovered": shown(coverage["percent_uncovered"]),
+        "coverage_qc": coverage_qc.status,
         "percent_vntr_uncovered_icon": uncovered_icon,
         "percent_vntr_uncovered_color": uncovered_color,
         "mean_vntr_coverage_icon": coverage_icon,

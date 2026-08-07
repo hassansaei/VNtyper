@@ -391,6 +391,11 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
     ``60 / 1501 = 0.0399733...`` (``0.04``), ``median`` is one of the restored zeros,
     ``stdev`` is ``sqrt((1400 - 1501 * mean**2) / 1500) = 0.965263...`` (``0.97``) and
     ``min`` is ``0``. It read ``20.00 20.00 10.00 10 30 1501 1498 99.80`` before.
+
+    The ninth field is #172's verdict. ``CONFIG`` above declares no ``thresholds``
+    block at all - which is legitimate, because ``--config-path`` replaces the config
+    rather than merging it - so the shipped defaults of 100 and 50.0 apply, and a mean
+    of 0.04 with 99.80% uncovered fails both.
     """
     depth_file = tmp_path / "cov_vntr_coverage.txt"
 
@@ -411,14 +416,15 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
         )
 
     assert (tmp_path / "cov_summary.tsv").read_text() == (
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\n"
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
+        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\tFAIL\n"
     )
     assert stats["mean"] == pytest.approx(60 / 1501)
     assert stats["min"] == 0
     assert stats["region_length"] == 1501
     assert stats["uncovered_bases"] == 1498
     assert stats["percent_uncovered"] == pytest.approx(99.80013324450367)
+    assert stats["coverage_qc"] == "FAIL"
 
 
 def test_an_empty_depth_file_aborts_the_coverage_stage(tmp_path):

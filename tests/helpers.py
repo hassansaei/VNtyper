@@ -402,6 +402,10 @@ def validate_advntr_output(output_dir: Path, expected: dict[str, Any]) -> None:
 #: `0.0`, and the only caller - which asserts `mean_cov >= 0` - could not fail.
 #: tests/unit/test_helpers.py derives this list from the production writer, so the
 #: two cannot drift apart.
+#:
+#: The ninth column, `coverage_qc`, is #172's PASS/FAIL verdict. It is a string, and
+#: `validate_coverage_output` floats only `mean`, `median` and `percent_uncovered`, so
+#: it is checked for presence and otherwise passes through untouched.
 COVERAGE_COLUMNS = (
     "mean",
     "median",
@@ -411,6 +415,7 @@ COVERAGE_COLUMNS = (
     "region_length",
     "uncovered_bases",
     "percent_uncovered",
+    "coverage_qc",
 )
 
 
