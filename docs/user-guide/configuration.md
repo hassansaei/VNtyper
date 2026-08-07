@@ -61,6 +61,14 @@ Controls tool paths, reference data, processing parameters, and quality threshol
 | `thresholds` | Quality thresholds for coverage and read quality metrics |
 | `api` | Base URL for the online mode API (`https://vntyper.org/api`) |
 
+#### Coverage thresholds
+
+`mean_vntr_coverage` and `percent_vntr_uncovered` both decide the report's coverage QC verdict, and through it the `quality_metrics_pass` axis of the screening summary. The mean fails strictly *below* its threshold; the uncovered fraction fails strictly *above* its own, so a sample at exactly 100x and exactly 50.0% uncovered passes both. A metric that was never measured -- a run with no Coverage Calculation step -- does not fail the gate.
+
+The verdict is evaluated on the figures the report displays, which are rounded to two decimal places, so no report prints `FAIL` beside a mean of `100.00` and a threshold of 100.
+
+Since VNtyper 2.0.8 both keys are enforced. Before it, `percent_vntr_uncovered` had a threshold, was computed on every run and drove only a color-coded icon.
+
 ## Kestrel Configuration (kestrel_config.json)
 
 Controls Kestrel execution and the entire postprocessing pipeline (scoring, confidence, motif filtering, flagging).
