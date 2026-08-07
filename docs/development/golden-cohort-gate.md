@@ -3,20 +3,22 @@
 Before-versus-after comparison of genotyping output across the whole local test cohort,
 run to decide whether the deliberately behaviour-changing commits in #179 may ship.
 
-The gate has been run four times. **A verdict is intended to attest one candidate commit
-and nothing after it**, so read the run whose candidate matches the tree you are judging.
+Every run the gate has taken is registered in the table below. **A verdict is intended to
+attest one candidate commit and nothing after it**, so read the run whose candidate
+matches the tree you are judging.
 
-**How the candidate commit is known, and by whom.** For all four runs it is the operator's
+**How the candidate commit is known, and by whom.** For runs 1–4 it is the operator's
 record, not the instrument's: the harness that produced them (version `1.0.0`) never ran
 `git rev-parse`, never looked at whether the working tree was clean, and never accepted an
 expected SHA. Each side's `side.json` recorded a *path*, and a path is a different commit
-ten minutes later. So the SHAs in the table below are asserted, and nothing in the run
-artefacts can confirm or contradict them. From harness `1.1.0` that changes: every side
-records its `HEAD`, its branch and whether `vntyper/`, `docker/` or `scripts/` had
-uncommitted changes when it ran, `compare` refuses a recorded revision that disagrees with
-`--expect-before-sha` / `--expect-after-sha`, and `--require-clean` refuses a side that ran
-over uncommitted edits. **The next run's candidate commit will be a recorded fact; these
-four are not.**
+ten minutes later. So those four candidate SHAs are asserted, and nothing in the run
+artefacts can confirm or contradict them. From harness `1.1.0` that changes, and run 5 is
+the first to have it: every side records its `HEAD`, its branch and whether `vntyper/`,
+`docker/` or `scripts/` had uncommitted changes when it ran, `compare` refuses a recorded
+revision that disagrees with `--expect-before-sha` / `--expect-after-sha`, and
+`--require-clean` refuses a side that ran over uncommitted edits. **Run 5's candidate is a
+recorded fact; runs 1–4's are not.** Run 5's *baseline* still is not — `4fd638a` predates
+the harness change, so only the "after" side can prove its revision.
 
 | Run | Candidate ("after") | Baseline | Verdict | Attests |
 | --- | --- | --- | --- | --- |
@@ -24,41 +26,46 @@ four are not.**
 | 2 | `1792345` | `2fcc6e3` | PASS | the branch at `1792345`, including `d144505`, `c51052c`, `b4059ce`, `7e58eb8`, `2c92096`, and nothing after it |
 | 3 | `8537a61` | `2fcc6e3` | PASS | the branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
 | 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | the `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
+| 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
 
-Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Run 4 measures a
+Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
-`4fd638a`, the merge-base with `main` and the 2.0.6 release. Run 4 is therefore the
-attestation of record for that branch and says nothing about the others; runs 1–3 remain
-the measurements the adjudications below were written against, and each still attests its
-own candidate exactly.
+`4fd638a`, the merge-base with `main` and the 2.0.6 release. **Run 5 supersedes run 4 as
+the attestation of record for that branch**: run 4's candidate `ec67fff` is no longer
+code-identical to the tip, because the Phase-5 fixes and the commits answering the
+adversarial review landed after it. Runs 1–3 remain the measurements the adjudications
+below were written against, and each still attests its own candidate exactly.
 
-None of the four runs attests "the branch tip" as a standing property — a tip moves, a
-commit does not. Each run's candidate is named above and in its own result section.
-
-For run 4 that distinction happens to be inert, and this is measured rather than assumed.
-**Two** commits sit after `ec67fff` on the branch — `685db2c` (`docs(agents)`) and
-`9b5486e` (`docs(gate)`, this page's run-4 section) — and
+No run attests "the branch tip" as a standing property — a tip moves, a commit does not.
+Each run's candidate is named above and in its own result section. Whether a given tip is
+covered by a given run is a question to answer with a command rather than with prose:
 
 ```
-git diff --stat ec67fff..HEAD -- vntyper/ docker/ scripts/
+git diff --stat <candidate>..HEAD -- vntyper/ docker/
 ```
 
-is empty, so the branch tip is code-identical to the attested candidate. That covers both
-of them and nothing committed after them. (This paragraph named only `685db2c` until
-`9b5486e` landed, which is the hazard of counting commits in prose: the sentence was true
-when written and false one commit later. The `git diff --stat` above is the part that does
-not go stale, because it names the candidate and `HEAD` rather than an enumeration.)
+If that is empty, the tip runs the code the run measured; if it is not, read what it
+names before trusting the run. Against run 5's candidate at the 2.0.7 release commit it
+names `vntyper/version.py` and nothing else — a version string the pipeline reports but
+does not branch on.
 
-**Verdict: PASS, all four runs.** Every genotype field, every `Confidence` label and every
-`Flag` is byte-identical between baseline and candidate, on every sample and every
-assembly, in every run.
+(An earlier revision of this section asserted the *result* of exactly that command for
+run 4 — "empty", plus a count of the commits after `ec67fff` — and both went stale within
+the day. The command does not go stale; its transcribed output does. `scripts/` is left
+out deliberately: it holds the gate harness and the mutation tooling, neither of which the
+pipeline imports.)
 
+**The genotype verdict is PASS in every run.** Every genotype field, every `Confidence`
+label and every `Flag` is byte-identical between baseline and candidate, on every sample
+and every assembly, in all five runs.
+
+Runs 4 and 5 are not *only* that, and the difference is named rather than smoothed over.
 In runs 1–3 the only differences were in how the HTML report *presents* an unchanged
-result. That sentence does not describe run 4, and the difference is named rather than
-smoothed over: run 4 carries **two delta classes**, one in a version-probe command string
-and one in the cohort export files. Both are attributable to a named commit and neither
-touches a genotype — but neither is a report-presentation delta, so run 4's verdict is
-recorded as *PASS with two attributed deltas* rather than folded into the sentence above.
+result. Run 4 carries **two delta classes**, one in a version-probe command string and one
+in the cohort export files; run 5 carries two of its own, again a version-probe command
+string and a set of leaked working columns. Each is attributable to a named commit and
+none touches a genotype — but none is a report-presentation delta either, so those two
+runs are recorded with their deltas rather than folded into the sentence above.
 
 | | Run 1 | Run 2 | Run 3 | Run 4 |
 | --- | --- | --- | --- | --- |
@@ -69,6 +76,11 @@ recorded as *PASS with two attributed deltas* rather than folded into the senten
 | Non-zero exits | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after | 0 before, 0 after |
 | Executed shell commands compared | no | no | **yes** — 480 per side | **yes** — 1,111 per side across 61 cases |
 | Cohort mode covered | no | no | no | **yes** — 4 cases |
+
+This side-by-side stops at run 4 on purpose. Run 5 shares run 4's baseline, matrix and
+case count, and differs in the two things that are worth stating rather than tabulating —
+its candidate is recorded by the instrument instead of asserted by the operator, and its
+deltas are a different pair. The "Run 5" section below has them.
 
 ## Method
 
@@ -596,9 +608,10 @@ candidate. Both are corrected in `scripts/golden_cohort/compare.py`
 
 ## The instrument itself — harness `1.0.0` versus `1.1.0`
 
-All four runs above were produced by harness `1.0.0`. A review of that harness found that
-it could return `IDENTICAL` over two runs that had both failed producing nothing, and
-`1.1.0` is the response. What changed, and what each change would have done to run 4:
+Runs 1–4 were produced by harness `1.0.0`. A review of that harness found that it could
+return `IDENTICAL` over two runs that had both failed producing nothing, and `1.1.0` is
+the response — the version run 5 was taken with. What changed, and what each change would
+have done to run 4:
 
 | Change | Effect on run 4, measured against its raw artefacts |
 | --- | --- |
