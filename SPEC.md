@@ -214,8 +214,15 @@ $ samtools depth -a -r $R $B | awk '{s+=$3;n++}END{print s/n}'  # 147.9367  new 
 ### Predicted golden-cohort diff
 
 * `coverage_summary` — **delta on every case with any uncovered base.** Four columns move.
-* `executed_commands` — delta on every case: the depth command gains `-a`.
-* `pipeline_step_records` — delta: the `Coverage Calculation` command string and md5sum.
+* `executed_commands` — delta on every case: the depth command gains `-a`. This is
+  `commands.jsonl`, the shell commands the run actually executed
+  (`scripts/golden_cohort/artifacts.py:252-259`).
+* `pipeline_step_records` — **no delta.** Checked, because the obvious prediction is
+  wrong twice over: the `Coverage Calculation` record's `command` is the literal string
+  `"calculate_vntr_coverage(...)"` (`pipeline.py:489`), not the depth command, so `-a`
+  never reaches it; and `coverage_summary.tsv` is in `DIRECTLY_COMPARED_RESULT_FILES`
+  (`scripts/golden_cohort/normalise.py:30-36`), so `strip_step_record` drops its `md5sum`
+  before comparison. The same holds for `kestrel_result.tsv` under #174.
 * `advntr_result` — **possible genotype delta** on cases whose old mean exceeded 300 and
   whose new mean does not, or whose downsampling fraction changes. This is the diff the
   audit warned is not presentational. Each such case must be attributed by name, with the
@@ -381,6 +388,11 @@ no gate runs.
   fraction. Expected to be rare in the 58-case matrix, which uses subset BAMs over the
   VNTR; if it fires, the case must be named with both metrics quoted.
 * `cohort_kestrel_*` — unchanged. `cohort_tables` — new `cov_coverage_qc` column.
+* **`is_positive` cannot move.** `screening_summary.py:297-299` derives it as
+  `is_finding(kestrel_result, …) or is_finding(advntr_result, …)` — the quality axis is
+  not an operand. So widening the QC rule changes the sentence and the report's QC row,
+  never whether a sample reads as a finding. Stated because it is the one way this issue
+  could have become genotype-affecting, and it is not.
 
 ---
 
@@ -480,6 +492,8 @@ true and stays as-is.
 * `kestrel_result` — delta only on cases whose selected variant is a 4 bp insertion
   artifact. Each must be named.
 * `screening_summary`, `report_tables`, `cohort_*` — follow from the above.
+* `pipeline_step_records` — **no delta**, for the reason given under #171:
+  `kestrel_result.tsv` is directly compared, so its `md5sum` is stripped.
 
 ---
 
