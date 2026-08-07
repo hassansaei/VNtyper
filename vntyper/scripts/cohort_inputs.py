@@ -42,7 +42,6 @@ The four step names this module matches are compared by exact string against wha
 Extracted from ``cohort_summary.py`` in Task 22 of the #181-#197 follow-ups.
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -75,18 +74,6 @@ IDENTITY_INPUT_KEYS = ("bam", "cram", "fastq1")
 #: Stripped before ``Path.stem`` takes the last suffix, so ``patient_R1.fastq.gz``
 #: identifies ``patient_R1`` rather than ``patient_R1.fastq``.
 COMPRESSION_SUFFIXES = (".gz", ".bgz")
-
-#: Digest used to build a cohort pseudonym. Overridable through
-#: ``config["cohort"]["pseudonym"]``; declared here so a config that omits the key - which
-#: ``--config-path`` produces, because it replaces rather than merges (AGENTS.md trap 2) -
-#: does not raise.
-DEFAULT_PSEUDONYM_ALGORITHM = "sha256"
-
-#: Hex characters of the digest a pseudonym carries. Twelve is 48 bits: the birthday
-#: probability of at least one collision, ``1 - exp(-n(n-1)/2**49)``, is 1.78e-9 at 1,000
-#: samples and 1.78e-7 at 10,000. The previous value was five characters of MD5 - 20 bits,
-#: which collides with probability ~37.9% at 1,000 samples (#206).
-DEFAULT_PSEUDONYM_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -336,64 +323,6 @@ def cleanup_temp_dirs(temp_dirs: list[str]) -> None:
             logger.debug(f"Cleaned up temporary directory: {temp_dir}")
         except Exception as e:
             logger.error(f"Failed to remove temporary directory {temp_dir}: {e}")
-
-
-def pseudonymized_sample_name(
-    prefix: Any,
-    original_sample: str,
-    *,
-    algorithm: str = DEFAULT_PSEUDONYM_ALGORITHM,
-    length: int = DEFAULT_PSEUDONYM_LENGTH,
-) -> str:
-    """Build the pseudonym a sample is reported under.
-
-    The pseudonym is the caller's prefix followed by the first ``length`` hex digits of
-    the digest of the original name, so it is stable across runs and the pseudonymization
-    table written beside the report stays meaningful.
-
-    MD5 at five characters was the original scheme and is gone for two reasons: 20 bits
-    collides at realistic cohort sizes (#206), and ``hashlib.md5()`` raises on a
-    FIPS-enabled build unless it is called with ``usedforsecurity=False``.
-
-    Args:
-        prefix: The value ``--pseudonymize-samples`` supplied. Interpolated rather than
-            concatenated, so a non-string does not raise.
-        original_sample: The sample's identity.
-        algorithm: A ``hashlib`` algorithm name.
-        length: How many hex characters of the digest to keep.
-
-    Returns:
-        str: The pseudonym.
-
-    Raises:
-        ValueError: If ``algorithm`` is not available in this interpreter's ``hashlib``,
-            if it needs a digest length of its own (the SHAKE family), or if ``length`` is
-            not a positive integer no wider than the digest. Both settings come out of a
-            JSON configuration, so both are checked; an unknown algorithm is refused by
-            name rather than silently falling back, because a silent fallback changes every
-            pseudonym in the report without saying so.
-    """
-    if algorithm not in hashlib.algorithms_available:
-        msg = f"Unknown pseudonym digest algorithm: {algorithm}"
-        logger.error(msg)
-        raise ValueError(msg)
-    if isinstance(length, bool) or not isinstance(length, int) or length < 1:
-        msg = f"Pseudonym digest length must be a positive integer, got {length!r}"
-        logger.error(msg)
-        raise ValueError(msg)
-    try:
-        digest = hashlib.new(algorithm, original_sample.encode()).hexdigest()
-    except TypeError as e:
-        # shake_128 and shake_256 are in algorithms_available but take their output length
-        # as an argument, so hexdigest() raises rather than returning a digest.
-        msg = f"Pseudonym digest algorithm {algorithm} does not produce a fixed-length digest: {e}"
-        logger.error(msg)
-        raise ValueError(msg) from e
-    if length > len(digest):
-        msg = f"Pseudonym digest length {length} exceeds the {len(digest)} hex characters {algorithm} produces"
-        logger.error(msg)
-        raise ValueError(msg)
-    return f"{prefix}{digest[:length]}"
 
 
 def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[dict], dict[str, Any]]:

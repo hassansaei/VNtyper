@@ -8,6 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from vntyper.scripts.alignment_index import resolve_bam_index
 from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
     build_cram_unmapped_filter_command,
@@ -31,27 +32,6 @@ from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.utils import run_command
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_bam_index(in_bam: str | Path) -> str | None:
-    """Find an existing BAM index the way htslib itself does.
-
-    htslib tries ``<file>.bai`` and then ``<stem>.bai``. The pipeline used to
-    reconstruct only the first, so given the ``sample.bai`` that the upload
-    endpoint and the worker both deliberately accept it found nothing and built a
-    second index beside the input that nothing else knew about (#210).
-
-    Args:
-        in_bam (str | Path): The alignment whose index is wanted.
-
-    Returns:
-        str | None: The existing index, or None when there is none.
-    """
-    bam = Path(in_bam)
-    for candidate in (Path(f"{bam}.bai"), bam.with_suffix(".bai")):
-        if candidate.exists():
-            return str(candidate)
-    return None
 
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):

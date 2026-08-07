@@ -131,7 +131,8 @@ def _index_the_way_the_pipeline_does(command: list[str]) -> None:
     """Reproduce the index `vntyper pipeline` builds for a non-fast BAM run.
 
     Read off `vntyper/scripts/fastq_bam_processing.py`, not assumed, and it calls
-    that module's own `resolve_bam_index` rather than restating its rules: on the
+    the pipeline's own `resolve_bam_index` -- now in
+    `vntyper/scripts/alignment_index.py` -- rather than restating its rules: on the
     non-fast BAM path the pipeline looks for `<file>.bai` and then `<stem>.bai`,
     the two names htslib itself resolves, and indexes only when neither exists.
 
@@ -151,7 +152,7 @@ def _index_the_way_the_pipeline_does(command: list[str]) -> None:
     Args:
         command: The argument vector the task asked for.
     """
-    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
+    from vntyper.scripts.alignment_index import resolve_bam_index
 
     if "pipeline" not in command or "--bam" not in command or "--fast-mode" in command:
         return

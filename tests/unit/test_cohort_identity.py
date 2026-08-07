@@ -48,10 +48,12 @@ import pytest
 from vntyper.cli import load_config
 from vntyper.scripts import cohort_summary
 from vntyper.scripts.cohort_inputs import (
-    DEFAULT_PSEUDONYM_ALGORITHM,
-    DEFAULT_PSEUDONYM_LENGTH,
     cleanup_temp_dirs,
     discover_sample_directories,
+)
+from vntyper.scripts.cohort_pseudonyms import (
+    DEFAULT_PSEUDONYM_ALGORITHM,
+    DEFAULT_PSEUDONYM_LENGTH,
     pseudonymized_sample_name,
 )
 

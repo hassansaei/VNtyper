@@ -19,6 +19,11 @@ Both are crashes, not annoyances: ``run_command`` opens its log file before it
 runs anything, so on a read-only mount write (1) is an unhandled
 ``PermissionError`` raised before quickcheck even executes.
 
+The rule deciding *which* index counts as already present lives in
+``vntyper/scripts/alignment_index.py`` and is pinned by
+``tests/unit/test_alignment_index.py``. What is tested here is the invariant it
+serves, end to end through the real stage.
+
 **Scope.** The invariant pinned here is about the ``vntyper`` package, not about
 every VNtyper process. ``docker/app/tasks.py`` deliberately runs
 ``samtools index`` beside the upload before starting the pipeline and
@@ -115,52 +120,6 @@ def test_validate_bam_file_still_logs_beside_the_input_without_log_dir(tmp_path:
         validate_bam_file(str(bam))
 
     assert (tmp_path / "sample.bam.quickcheck.log").exists()
-
-
-def test_an_alternate_index_name_is_found_and_no_second_index_is_built(tmp_path: Path) -> None:
-    """#210: the upload path accepts ``sample.bai``; htslib resolves it, so must we.
-
-    Args:
-        tmp_path: Pytest temporary directory.
-    """
-    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
-
-    bam = tmp_path / "sample.bam"
-    bam.write_bytes(b"BAM\x01")
-    alternate = tmp_path / "sample.bai"
-    alternate.write_bytes(b"BAI\x01")
-
-    assert resolve_bam_index(bam) == str(alternate)
-
-
-def test_the_conventional_index_name_wins_over_the_alternate(tmp_path: Path) -> None:
-    """htslib tries ``<file>.bai`` first.
-
-    Args:
-        tmp_path: Pytest temporary directory.
-    """
-    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
-
-    bam = tmp_path / "sample.bam"
-    bam.write_bytes(b"BAM\x01")
-    (tmp_path / "sample.bam.bai").write_bytes(b"BAI\x01")
-    (tmp_path / "sample.bai").write_bytes(b"BAI\x01")
-
-    assert resolve_bam_index(bam) == str(tmp_path / "sample.bam.bai")
-
-
-def test_no_index_at_all_resolves_to_none(tmp_path: Path) -> None:
-    """Nothing to reuse is reported as such, so the caller builds one.
-
-    Args:
-        tmp_path: Pytest temporary directory.
-    """
-    from vntyper.scripts.fastq_bam_processing import resolve_bam_index
-
-    bam = tmp_path / "sample.bam"
-    bam.write_bytes(b"BAM\x01")
-
-    assert resolve_bam_index(bam) is None
 
 
 def _index_destinations(command: str) -> list[tuple[str, str]]:

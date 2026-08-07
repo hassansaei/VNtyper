@@ -39,12 +39,14 @@ from vntyper.scripts.cohort_exports import (
     write_pseudonymization_table,
 )
 from vntyper.scripts.cohort_inputs import (
-    DEFAULT_PSEUDONYM_ALGORITHM,
-    DEFAULT_PSEUDONYM_LENGTH,
     cleanup_temp_dirs,
     discover_sample_directories,
     duplicate_identity,
     load_pipeline_summary_for_sample,
+)
+from vntyper.scripts.cohort_pseudonyms import (
+    DEFAULT_PSEUDONYM_ALGORITHM,
+    DEFAULT_PSEUDONYM_LENGTH,
     pseudonymized_sample_name,
 )
 from vntyper.scripts.cohort_tables import (
