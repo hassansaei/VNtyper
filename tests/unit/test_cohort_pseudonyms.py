@@ -8,9 +8,10 @@ recorded value is therefore the whole cross-process stability guarantee.
 
 They moved here with the code when the pseudonym left `cohort_inputs.py`, which locates
 samples on disk and has nothing to do with naming them. The *specification* the digest
-width answers - that the map from patient to reported sample must be injective or the run
-must stop - is in `test_cohort_identity.py`, which also exercises the validation of the
-algorithm and width read out of `config["cohort"]["pseudonym"]`.
+width answers is next door: `test_cohort_pseudonym_config.py` states it and exercises the
+validation of the algorithm and width read out of `config["cohort"]["pseudonym"]`, and
+`test_cohort_identity.py` states what no width can fix - that the map from patient to
+reported sample must already be injective at its *input*, or the run must stop.
 """
 
 from __future__ import annotations
@@ -30,26 +31,23 @@ pytestmark = pytest.mark.unit
 
 
 def test_a_pseudonym_is_the_prefix_and_twelve_hex_digits() -> None:
-    """#206: five hex characters of MD5 became twelve of SHA-256, and the value moved."""
-    assert pseudonymized_sample_name("anon_", "sample_one") == "anon_c788e939395d"
+    """#206: five hex characters of MD5 became twelve of SHA-256, and the value moved.
 
-
-def test_the_same_sample_name_always_gets_the_same_pseudonym() -> None:
-    """The mapping has to be stable so a cohort re-run stays comparable to its
-    predecessor and to the pseudonymization table written beside it.
-
-    Two calls in one interpreter, so on its own this shows only that the function is not
-    stateful; it cannot see a mapping that varied between processes. What establishes
-    cross-process stability is `test_a_pseudonym_is_the_prefix_and_twelve_hex_digits`
-    above, which pins an exact literal - `sha256` is a fixed digest with no per-process
-    salt, unlike `hash()`, so a recorded value is the whole guarantee.
+    **This is also the stability guarantee**, and it is the whole of it. A pair of
+    `test_the_same_sample_name_always_gets_the_same_pseudonym` tests - one here, one in
+    `test_cohort_pseudonym_config.py` - used to compare two calls to each other. Two calls
+    in one interpreter show only that the function is not stateful; they cannot see a
+    mapping that varies between processes, and any deterministic but wrong digest
+    satisfies them. A recorded literal is strictly stronger: `sha256` has no per-process
+    salt, unlike `hash()`, so pinning the value pins it for every process that will ever
+    run it.
     """
-    assert pseudonymized_sample_name("x", "s1") == pseudonymized_sample_name("x", "s1")
+    assert pseudonymized_sample_name("anon_", "sample_one") == "anon_c788e939395d"
 
 
 def test_two_particular_sample_names_get_different_pseudonyms() -> None:
     """`s1` and `s2` do not collide. That is all this shows; injectivity over a realistic
-    cohort is measured in `test_cohort_identity.py`."""
+    cohort is measured in `test_cohort_pseudonym_config.py`."""
     assert pseudonymized_sample_name("x", "s1") != pseudonymized_sample_name("x", "s2")
 
 
@@ -94,9 +92,10 @@ def test_the_prefix_may_be_any_value_the_cli_accepted() -> None:
 # replaces the whole configuration rather than merging it (AGENTS.md trap 2), so
 # a hand-written document can carry `"cohort": null` - and `None.get` is an
 # `AttributeError` that names neither the key nor the file, raised even by a run
-# that never asked for pseudonyms. The end-to-end consequences (including the
-# extraction directories it leaked) are in `test_cohort_identity.py`; what is
-# pinned here is the read itself, level by level.
+# that never asked for pseudonyms. The end-to-end consequences are in
+# `test_cohort_pseudonym_config.py`, and the extraction directories it leaked
+# in `test_cohort_zip_identity.py`; what is pinned here is the read itself,
+# level by level.
 
 
 def test_the_settings_default_when_the_configuration_says_nothing() -> None:

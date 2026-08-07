@@ -15,8 +15,12 @@ No other test in this file has been ratified.
 The two `..._today` tests in the zip section, which characterised a zip-rooted sample's
 random identity and its irreproducible order as defects rather than guarantees, are gone:
 #205 fixed both, and they now pin the fixed behaviour under names that say so. The wider
-specification of a sample's identity and the injectivity of the pseudonym map live in
-`test_cohort_identity.py`; the pseudonym itself left this module with
+specification of a sample's identity is next door, in the four modules
+`test_cohort_identity.py` became at 1,210 lines: the qualification rule and the injectivity
+of the pseudonym map there, a ZIP sample's identity and order in
+`test_cohort_zip_identity.py`, the digest and the configuration that chooses it in
+`test_cohort_pseudonym_config.py`, and one-physical-sample-is-one-record in
+`test_cohort_deduplication.py`. The pseudonym itself left this module with
 `pseudonymized_sample_name` and is characterised in `test_cohort_pseudonyms.py`.
 
 Step names are matched by exact string comparison against what `pipeline.py` writes
@@ -105,14 +109,6 @@ def test_a_directory_that_is_itself_a_sample_is_not_also_searched(tmp_path) -> N
     assert [found.directory for found in dirs] == [parent]
 
 
-def test_the_same_sample_reached_twice_is_only_processed_once(tmp_path) -> None:
-    sample = _write_summary(tmp_path / "cohort" / "sample_one")
-
-    dirs, _ = discover_sample_directories([str(sample), str(tmp_path / "cohort")])
-
-    assert [found.directory for found in dirs] == [sample]
-
-
 def test_a_missing_input_path_is_skipped_with_a_warning(tmp_path, caplog) -> None:
     caplog.set_level(logging.WARNING, logger="vntyper.scripts.cohort_inputs")
 
@@ -185,7 +181,7 @@ def test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string(tmp_p
     It held when the key was `sorted()` over `Path` (`PurePath.__lt__` compares
     `_parts_normcase`) and it holds now that the key is a tuple of parts compared
     element-wise, for the same reason and with the same result - here across two inputs,
-    and in `test_cohort_identity.py` within one.
+    and in `test_cohort_zip_identity.py` within one.
     """
     plain = _write_summary(tmp_path / "cohort" / "sample_one")
     suffixed = _write_summary(tmp_path / "cohort-extra" / "sample_one")
@@ -279,7 +275,7 @@ def test_processes_with_different_hash_seeds_discover_the_same_order(tmp_path) -
     and is total. Zip inputs used to be outside that scope entirely - their sort key ended
     in `tempfile.mkdtemp`'s random suffix, so it differed between processes whatever the
     hash seed was - and are now covered by their own cross-process test,
-    `test_cohort_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes`.
+    `test_cohort_zip_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes`.
 
     The claim this test does **not** support, and used to: that the stable fingerprint in
     `test_cohort_summary_oracle.py` is evidence for the same fix. That fingerprint is
@@ -362,7 +358,7 @@ def test_a_zip_rooted_sample_is_identified_by_the_archive_rather_than_by_the_tem
     The identity is now carried out of discovery explicitly. It is the stem of the input
     file the run itself recorded, and the archive's own stem when the summary records
     none - which is this fixture, whose summary predates `input_files`. The full identity
-    specification, including which recorded input wins, is in `test_cohort_identity.py`.
+    specification, including which recorded input wins, is in `test_cohort_zip_identity.py`.
     """
     archive = _zip_of(tmp_path, "patient_one.zip", {"pipeline_summary.json": '{"version": "2.0.6"}'})
 

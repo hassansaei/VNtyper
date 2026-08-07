@@ -27,8 +27,10 @@ upstream of any digest, and no width chosen here can fix it - ``a/sample`` and
 module free of any dependency on the discovery record.
 
 Nothing about the pseudonym changed in the move.
-``tests/unit/test_cohort_pseudonyms.py`` characterises it and
-``tests/unit/test_cohort_identity.py`` states the specification its width answers.
+``tests/unit/test_cohort_pseudonyms.py`` characterises it,
+``tests/unit/test_cohort_pseudonym_config.py`` states the specification its width answers
+and exercises the validation of both settings, and
+``tests/unit/test_cohort_identity.py`` states what no width can fix.
 """
 
 import hashlib
@@ -156,17 +158,22 @@ def pseudonymized_sample_name(
         str: The pseudonym.
 
     Raises:
-        ValueError: If ``algorithm`` is not available in this interpreter's ``hashlib``,
-            if it needs a digest length of its own (the SHAKE family), if the ``hashlib``
-            backend refuses it outright (a FIPS provider does that to a listed but
-            non-approved digest, raising ``ValueError`` from ``hashlib.new`` rather than
-            the SHAKE family's ``TypeError``), or if ``length`` is not a positive integer
-            no wider than the digest. Both settings come out of a JSON configuration, so
-            both are checked; an unknown algorithm is refused by name rather than silently
-            falling back, because a silent fallback changes every pseudonym in the report
-            without saying so.
+        ValueError: If ``algorithm`` is not a string, if it is a string that is not
+            available in this interpreter's ``hashlib``, if it needs a digest length of its
+            own (the SHAKE family), if the ``hashlib`` backend refuses it outright (a FIPS
+            provider does that to a listed but non-approved digest, raising ``ValueError``
+            from ``hashlib.new`` rather than the SHAKE family's ``TypeError``), or if
+            ``length`` is not a positive integer no wider than the digest. Both settings
+            come out of a JSON configuration, so both are checked; an unknown algorithm is
+            refused by name rather than silently falling back, because a silent fallback
+            changes every pseudonym in the report without saying so.
     """
-    if algorithm not in hashlib.algorithms_available:
+    # The type test comes first because the membership test below is `in` against a `set`,
+    # which hashes its left operand: a JSON list or object arrived as
+    # `TypeError: unhashable type: 'list'` from inside the guard whose whole purpose is to
+    # produce a `ValueError`, bypassing both the documented contract and the
+    # `logger.error` + `raise` convention. `length` beside it was already ordered this way.
+    if not isinstance(algorithm, str) or algorithm not in hashlib.algorithms_available:
         msg = f"Unknown pseudonym digest algorithm: {algorithm}"
         logger.error(msg)
         raise ValueError(msg)

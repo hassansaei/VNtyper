@@ -114,7 +114,11 @@ residual risk is a future sink the source-text tripwire's pattern does not match
 
 ## Golden-cohort gate — no genotype field moved
 
-Required because cohort output shape moved. Baseline `b46da80`, candidate `2f091fa`,
+Required because cohort output shape moved. Baseline `b46da80`, candidate **`06e2806`**
+(re-attested: the run was first taken at `2f091fa`, then `5e86798` and `06e2806` changed
+cohort and report logic, so the candidate side was re-run against the new tip and the
+unchanged baseline rather than arguing the delta was harmless -- the two comparisons are
+identical),
 marker `vntyper.scripts.cohort_pseudonyms` (absent before, present after). 50 CRAM
 fixtures derived first, so the matrix is the full **60 cases** and `--allow-matrix-drift`
 was never passed.

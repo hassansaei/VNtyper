@@ -113,7 +113,7 @@ COHORT_ORDER_WHY = (
     "tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted, "
     "::test_an_input_nested_inside_a_later_input_keeps_its_whole_path_position, "
     "::test_processes_with_different_hash_seeds_discover_the_same_order and "
-    "tests/unit/test_cohort_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes - so the "
+    "tests/unit/test_cohort_zip_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes - so the "
     "ordering fix itself is attested by those tests and NOT by this gate. Each side's raw order is recorded "
     "here uncompared; comparing it becomes worthwhile once both sides carry #205."
 )

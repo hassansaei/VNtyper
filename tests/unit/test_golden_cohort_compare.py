@@ -199,11 +199,13 @@ def test_the_cohort_order_justification_cites_only_tests_that_exist() -> None:
 
     Two files rather than one since #205: the directory-input evidence is in
     ``test_cohort_inputs.py`` and the ZIP evidence - which is what reason 2 of the note
-    now turns on - is in ``test_cohort_identity.py``.
+    now turns on - is in ``test_cohort_zip_identity.py``. The whole cohort-identity suite
+    is read rather than the two files that happen to be cited today, so splitting a module
+    again moves a citation without breaking this guard; ``test_cohort_identity.py`` was
+    1,210 lines and became four modules, and the citation it carried moved with the test.
     """
     sources = "\n".join(
-        (REPO_ROOT / "tests" / "unit" / name).read_text(encoding="utf-8")
-        for name in ("test_cohort_inputs.py", "test_cohort_identity.py")
+        path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "tests" / "unit").glob("test_cohort_*.py"))
     )
     why = compare.COHORT_ORDER_WHY
     cited = [token.strip(".,;()") for token in why.split() if token.startswith("::") or "test_" in token]

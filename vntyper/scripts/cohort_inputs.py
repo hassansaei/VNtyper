@@ -113,6 +113,14 @@ class DiscoveredSample:
     #: only if another discovered sample carries the same local value.
     identity: str
 
+    #: The sample's **local** value, kept as discovery found it and never rewritten. It is
+    #: what :func:`qualify_colliding_identities` compares and what it qualifies, which is
+    #: what makes that rule idempotent: reading :attr:`identity` instead meant a second
+    #: application saw ``job/sample`` twice, took it for a shared local value and qualified
+    #: it again into ``job/job/sample``. The rule is applied once today, so keeping the two
+    #: apart costs one field and removes the whole class of mistake.
+    local_identity: str
+
     #: The input path this sample was reached through, exactly as the caller wrote it - a
     #: directory or a zip archive. Kept for diagnostics only: it is the one thing that can
     #: name a zip sample's origin in a message, because its ``directory`` is an extraction
@@ -216,6 +224,7 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
             DiscoveredSample(
                 directory=root,
                 identity=root_identity,
+                local_identity=root_identity,
                 origin=origin,
                 sort_key=origin_parts,
             )
@@ -229,6 +238,7 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
             DiscoveredSample(
                 directory=sample_dir,
                 identity=sample_dir.name,
+                local_identity=sample_dir.name,
                 origin=origin,
                 sort_key=origin_parts + sample_dir.relative_to(root).parts,
             )
@@ -284,23 +294,32 @@ def qualify_colliding_identities(samples: list[DiscoveredSample]) -> list[Discov
     This is a pure function of the discovered list and is applied at the end of
     :func:`discover_sample_directories`, so every consumer sees one set of identities.
 
+    **It is idempotent**, because it reads and writes different fields:
+    :attr:`DiscoveredSample.local_identity` is what it compares and qualifies, and only
+    :attr:`DiscoveredSample.identity` is what it writes. Reading the identity it had just
+    written made a second application see an irreducible pair's two ``job/sample`` results
+    as a shared local value and qualify them again into ``job/job/sample``. Only one
+    application happens today, so that was latent; it is closed here rather than left as a
+    trap for the next caller.
+
     Args:
         samples: The samples discovery found, in the order it found them.
 
     Returns:
-        list[DiscoveredSample]: The same samples in the same order. A sample whose identity
-        is shared carries ``f"{namespace}/{local}"`` instead; everything else about it, and
-        every other sample, is returned unchanged. ``DiscoveredSample`` is frozen, so the
-        replacements are new records and the caller's list is not touched.
+        list[DiscoveredSample]: The same samples in the same order. A sample whose local
+        value is shared carries ``f"{namespace}/{local}"`` as its identity instead;
+        everything else about it, and every other sample, is returned unchanged.
+        ``DiscoveredSample`` is frozen, so the replacements are new records and the
+        caller's list is not touched.
 
         Two samples sharing a namespace *and* a local value come back still equal: the rule
         resolves what the inputs distinguish and invents nothing. :func:`duplicate_identity`
         is what turns that leftover into an abort.
     """
-    occurrences = Counter(sample.identity for sample in samples)
+    occurrences = Counter(sample.local_identity for sample in samples)
     return [
-        replace(sample, identity=f"{identity_namespace(sample.origin)}{NAMESPACE_SEPARATOR}{sample.identity}")
-        if occurrences[sample.identity] > 1
+        replace(sample, identity=f"{identity_namespace(sample.origin)}{NAMESPACE_SEPARATOR}{sample.local_identity}")
+        if occurrences[sample.local_identity] > 1
         else sample
         for sample in samples
     ]
@@ -323,8 +342,10 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Discovered
         the temporary directories the caller must pass to :func:`cleanup_temp_dirs`
         once the report has been written.
 
-        Samples are accumulated in a mapping keyed on the sample directory, which
-        de-duplicates a directory reached by two different input paths, and are sorted on
+        Samples are accumulated in a mapping keyed on the sample directory **as
+        ``Path.resolve()`` reports it**, and repeated inputs are dropped by the same
+        canonical comparison before anything is extracted; see the two paragraphs after
+        the sort. They are sorted on
         :attr:`DiscoveredSample.sort_key` on the way out - the sample's **effective path**,
         the parts of the input path the caller wrote followed by the sample's path
         relative to that input's own root. No component of it can move between runs. The
@@ -343,6 +364,23 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Discovered
         input found it. :attr:`DiscoveredSample.origin` is kept for diagnostics and for the
         duplicate-identity message, and takes no part in the order.
 
+        **De-duplication is on the physical location, not on the spelling.** The key used
+        to be the ``Path`` exactly as it was constructed, so one sample reached through an
+        absolute parent and again through a relative direct input - ``vntyper cohort -i
+        "$PWD/cohort" -i cohort/sample`` - produced two keys that are unequal as values and
+        identical on disk, and the cohort reported one patient as two samples. A symlinked
+        input did the same. ``Path.resolve()`` settles all three, and the record still
+        carries :attr:`DiscoveredSample.origin` exactly as the caller wrote it, because
+        canonicalisation is for identity and a diagnostic must quote what was typed.
+
+        **A repeated input is dropped before it is extracted.** A zip's sample directory is
+        its own fresh ``tempfile.mkdtemp`` root, so two extractions of one archive can never
+        compare equal however the key is canonicalised: ``-i job.zip -i job.zip`` wrote both
+        copies to disk and then aborted the cohort, because the two samples shared a
+        namespace *and* a local value and that is exactly what :func:`duplicate_identity`
+        refuses. The canonical form of each input path is therefore remembered and a repeat
+        is skipped outright, which also spares the second extraction.
+
         Identities are then passed through :func:`qualify_colliding_identities`, so what
         comes out is the cohort's final naming and every consumer agrees on it. A local
         value shared by two or more samples becomes ``namespace/value`` for those samples
@@ -355,56 +393,81 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Discovered
         ``tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted``,
         ``::test_an_input_nested_inside_a_later_input_keeps_its_whole_path_position``
         and by the cross-process tests beside them.
+
+    Raises:
+        Exception: Whatever the work after an extraction raises, re-raised unchanged after
+            the archives extracted so far have been removed. The caller's cleanup ``try``
+            can only open on the ``temp_dirs`` this function *returns*, so nothing it does
+            covers the region between the first extraction and that return - and this
+            function extracts every remaining input, sorts, and qualifies in there. Owning
+            the cleanup until the handles are handed over is the only place it can be done.
     """
     temp_dirs: list[str] = []
-    # Keyed on the directory, so a sample reached by two input paths appears once and the
-    # first input that named it decides its place in the order.
+    # Keyed on the resolved directory, so a sample reached by two spellings of one path -
+    # absolute and relative, through a symlink, or through a parent and again directly -
+    # appears once, and the first input that named it decides its place in the order.
     processed_dirs: dict[Path, DiscoveredSample] = {}
+    # The canonical form of every input already handled. A zip's samples land under a fresh
+    # mkdtemp root, so a repeated archive is only de-duplicable *before* it is extracted.
+    seen_origins: set[Path] = set()
 
-    for path_str in input_paths:
-        path = Path(path_str)
-        found: list[DiscoveredSample] = []
-        if not path.exists():
-            logger.warning(f"Input path does not exist and will be skipped: {path}")
-            continue
-        if path.is_dir():
-            found = _samples_under_root(path, path_str, path.name)
-            if not found:
-                logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in directory {path}")
-        elif zipfile.is_zipfile(path):
-            logger.info(f"Extracting zip file: {path}")
-            temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
-            try:
-                with zipfile.ZipFile(path, "r") as zip_ref:
-                    zip_ref.extractall(temp_dir)
-                temp_path = Path(temp_dir)
-                # The archive's own stem is the fallback identity: it is the only thing
-                # about a zip-rooted sample that is not the extraction directory.
-                found = _samples_under_root(temp_path, path_str, _identity_from_summary(temp_path, path.stem))
+    try:
+        for path_str in input_paths:
+            path = Path(path_str)
+            found: list[DiscoveredSample] = []
+            if not path.exists():
+                logger.warning(f"Input path does not exist and will be skipped: {path}")
+                continue
+            canonical_origin = path.resolve()
+            if canonical_origin in seen_origins:
+                logger.info(f"Input path already processed under another spelling, skipping: {path}")
+                continue
+            seen_origins.add(canonical_origin)
+            if path.is_dir():
+                found = _samples_under_root(path, path_str, path.name)
                 if not found:
-                    logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in extracted zip file: {path}")
-                temp_dirs.append(temp_dir)
-            except zipfile.BadZipFile as e:
-                logger.error(f"Bad zip file {path}: {e}")
-                shutil.rmtree(temp_dir)
+                    logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in directory {path}")
+            elif zipfile.is_zipfile(path):
+                logger.info(f"Extracting zip file: {path}")
+                temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
+                try:
+                    with zipfile.ZipFile(path, "r") as zip_ref:
+                        zip_ref.extractall(temp_dir)
+                    temp_path = Path(temp_dir)
+                    # The archive's own stem is the fallback identity: it is the only thing
+                    # about a zip-rooted sample that is not the extraction directory.
+                    found = _samples_under_root(temp_path, path_str, _identity_from_summary(temp_path, path.stem))
+                    if not found:
+                        logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in extracted zip file: {path}")
+                    temp_dirs.append(temp_dir)
+                except zipfile.BadZipFile as e:
+                    logger.error(f"Bad zip file {path}: {e}")
+                    shutil.rmtree(temp_dir)
+                    continue
+                except Exception as e:
+                    logger.error(f"Error extracting zip file {path}: {e}")
+                    shutil.rmtree(temp_dir)
+                    continue
+            else:
+                logger.warning(f"Unsupported file type (not a directory or zip): {path}")
                 continue
-            except Exception as e:
-                logger.error(f"Error extracting zip file {path}: {e}")
-                shutil.rmtree(temp_dir)
-                continue
-        else:
-            logger.warning(f"Unsupported file type (not a directory or zip): {path}")
-            continue
 
-        for sample in found:
-            processed_dirs.setdefault(sample.directory, sample)
+            for sample in found:
+                processed_dirs.setdefault(sample.directory.resolve(), sample)
 
-    # Sorted on the origin key, not on the extracted path: see the Returns section above.
-    ordered = sorted(processed_dirs.values(), key=lambda sample: sample.sort_key)
-    # Qualification is last, and over the whole list, because "shared" is a property of the
-    # cohort rather than of any one sample: nothing can be qualified until every sample is
-    # known. It does not touch sort_key, so the order above survives it.
-    return qualify_colliding_identities(ordered), temp_dirs
+        # Sorted on the origin key, not on the extracted path: see the Returns section above.
+        ordered = sorted(processed_dirs.values(), key=lambda sample: sample.sort_key)
+        # Qualification is last, and over the whole list, because "shared" is a property of the
+        # cohort rather than of any one sample: nothing can be qualified until every sample is
+        # known. It does not touch sort_key, so the order above survives it.
+        return qualify_colliding_identities(ordered), temp_dirs
+    except Exception:
+        # Everything extracted so far is unreachable once this frame unwinds: the caller has
+        # no handle on it, because the handles are the return value it never receives. The
+        # two `continue`s above are the extraction failures that clean up after themselves;
+        # this covers every other way out of the region.
+        cleanup_temp_dirs(temp_dirs)
+        raise
 
 
 def duplicate_identity(samples: list[DiscoveredSample]) -> tuple[DiscoveredSample, DiscoveredSample] | None:
@@ -423,8 +486,13 @@ def duplicate_identity(samples: list[DiscoveredSample]) -> tuple[DiscoveredSampl
     and there is nothing left to distinguish the two samples by. Refusing to run is the
     only honest answer; the message names both inputs so the operator can supply one.
 
-    Discovery de-duplicates on the sample directory, so two entries here always come from
-    two distinct directories and no further comparison is needed.
+    Discovery de-duplicates on the sample directory's canonical path, so two entries here
+    always come from two physically distinct directories and no further comparison is
+    needed. That canonicalisation is load-bearing for this guard in both directions: one
+    directory named twice used to arrive as two records - which an operator would meet as
+    an abort naming one archive against itself - and one *sample* reached by two spellings
+    used to arrive as two records with two qualified identities, which this guard cannot
+    see at all.
 
     Args:
         samples: The samples :func:`discover_sample_directories` returned.
