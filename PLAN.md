@@ -55,6 +55,14 @@ this section.**
   in the footer. PRs are **not** squashed — every commit is permanent history.
 - **Never push a `v*.*.*` tag.** It publishes to PyPI immediately and irreversibly.
 - **Never claim tests pass without showing the command output.**
+- **Test snippets in this plan are exact on *assertions*, not on *fixture names*.** They
+  are written against helpers that may not exist under those names in the target file.
+  Before writing a test, read that file's existing imports and fixtures and bind to the
+  real ones. Known cases, from the adversarial review: Task 7 must add
+  `add_artifact_gate` to `test_flagging.py`'s existing import block; Task 8's
+  `_shipped_config()` is spelled `kestrel_config()` in `test_kestrel_filtering.py:31-40`;
+  Tasks 12 and 13 name `_config`, `_t0` and `_t1` that do not exist anywhere and must be
+  written. **Never invent an assertion to match a helper — fix the helper reference.**
 
 ## Lanes and dependency graph
 
@@ -197,9 +205,24 @@ def test_a_region_shorter_than_the_depth_file_does_not_invent_negative_padding()
     assert stats["uncovered_bases"] == 0
 ```
 
-Replace the body of the existing `test_partial_coverage_counts_the_missing_positions_as_uncovered`
-(currently `test_coverage_stats.py:136`) — the new `test_the_mean_is_over_the_region...`
-supersedes it — and change `test_a_zero_length_region_reports_zero_percent_rather_than_dividing_by_zero`
+**Existing tests this task breaks. Update every one; silence none.** The first draft of
+this plan named four; there are seven.
+
+| Test | Why it breaks |
+| --- | --- |
+| `test_partial_coverage_counts_the_missing_positions_as_uncovered` (`:136`) | asserts `mean == 20.0`. Superseded by `test_the_mean_is_over_the_region...`; replace its body. |
+| `test_a_zero_length_region_reports_zero_percent...` (`:173`) | asserts `uncovered_bases == -2`; see below. |
+| **`test_the_tsv_header_and_row_are_byte_identical_to_the_pre_extraction_output`** (`:72`) | pins the exact pre-extraction bytes for `[10, 20, 30]` at `T=1501`. |
+| **`test_the_returned_dictionary_keeps_the_pre_extraction_types`** (`:95-107`) | pins the whole dict literally: `mean 20.0, median 20, stdev 10.0, min 10, uncovered 1498`. Under the new arithmetic the padded base makes all of these move. |
+| **`test_end_to_end_over_a_synthetic_depth_file`** (`:257-279`) | 12 covered positions in a 20 bp region; pins `mean 6.5, median 6.5, min 1` and the exact TSV bytes. Becomes `mean 3.9, min 0`. |
+| `test_full_coverage_reports_no_uncovered_bases` (`:127`) | values unchanged (region fully covered); docstring only. |
+| `test_the_median_of_an_even_sample_is_the_midpoint` (`:182`) | values unchanged; docstring only. |
+
+Recompute each by hand from the new definition rather than by running the code and
+pasting what it prints — a fixture regenerated from the implementation it is meant to
+check asserts nothing.
+
+Change `test_a_zero_length_region_reports_zero_percent_rather_than_dividing_by_zero`
 (`:173`) to:
 
 ```python
@@ -695,9 +718,41 @@ Expected: FAIL — the schema literal mismatches and `build_screening_summary` t
 
 - [ ] **Step 3: Implement**
 
-1. `coverage_stats.py`: append `"coverage_qc"` to `COVERAGE_COLUMNS`. It is **not** in
-   `_TWO_DECIMAL_COLUMNS`, so it is written verbatim. Note in the docstring that the
-   column is a verdict rather than a measurement and is filled by the caller.
+1. `coverage_stats.py`: **split the schema in two.** Appending `"coverage_qc"` to
+   `COVERAGE_COLUMNS` alone breaks a stated contract —
+   `test_coverage_stats.py:115` asserts `set(summarise_coverage(...)) == set(COVERAGE_COLUMNS)`
+   with the docstring "The dict keys and the TSV columns are the same set, so they cannot
+   drift", and `summarise_coverage` has no thresholds and so cannot produce a verdict.
+
+   A measurement and a verdict are different things, so say so:
+
+   ```python
+   #: The eight measured statistics. Exactly what :func:`summarise_coverage` returns.
+   COVERAGE_METRIC_COLUMNS: tuple[str, ...] = (
+       "mean", "median", "stdev", "min", "max",
+       "region_length", "uncovered_bases", "percent_uncovered",
+   )
+
+   #: The TSV schema: the measurements plus the QC verdict. The verdict is not a
+   #: measurement and `summarise_coverage` cannot produce it - it has no thresholds - so
+   #: `calculate_vntr_coverage` fills it in before writing. `format_coverage_summary`
+   #: still raises KeyError when it is absent, which is the contract that keeps a caller
+   #: from writing a summary with no verdict in it (#172).
+   COVERAGE_COLUMNS: tuple[str, ...] = COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
+   ```
+
+   `"coverage_qc"` is **not** in `_TWO_DECIMAL_COLUMNS`, so it is written verbatim.
+
+   Change `test_coverage_stats.py:115`
+   (`test_every_frozen_column_is_present_in_the_returned_dictionary`) to compare against
+   `COVERAGE_METRIC_COLUMNS`, and add one test pinning the relationship so the two still
+   cannot drift:
+
+   ```python
+   def test_the_tsv_schema_is_the_metrics_plus_the_verdict():
+       """The split is the point: `summarise_coverage` measures, the caller judges."""
+       assert COVERAGE_COLUMNS == COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
+   ```
 2. `report_formatting.py:117-126`: add `"coverage_qc": str`.
 3. `fastq_bam_processing.py`, inside `calculate_vntr_coverage` after `summarise_coverage`:
 
@@ -738,8 +793,14 @@ Expected: FAIL — the schema literal mismatches and `build_screening_summary` t
 ```
 
 7. `tests/helpers.py:405`: append `"coverage_qc"` to its own `COVERAGE_COLUMNS` copy.
-   `test_helpers.py:83` pins it to production's tuple. `validate_coverage_output` floats
-   only `mean`, `median` and `percent_uncovered`, so the string column needs no other change.
+   `validate_coverage_output` floats only `mean`, `median` and `percent_uncovered`, so the
+   string column needs no other change.
+8. **`tests/unit/test_helpers.py:82`** — `test_the_helper_columns_are_the_ones_production_writes`
+   carries a hardcoded `assert len(header) == 8`. Change to `== 9`. Missed by both the
+   issue audit and the first draft of this plan; without it the unit tier cannot go green.
+9. **`tests/unit/test_fastq_bam_command_wiring.py:406-413`** — the exact-TSV fixture is
+   stale **twice**: Task 2 already recomputed its *values*, and this task adds a ninth
+   *field*. Recompute it again here. Do not assume Task 2 left it correct.
 
 - [ ] **Step 4: Run the full unit tier**
 
@@ -1467,34 +1528,56 @@ report a confident negative for a sample carrying a pathogenic variant.
 """
 ```
 
+**The mock must simulate a *successful* Kestrel run by writing the VCF.** A mock that
+merely returns `True` leaves no VCF behind, so a correct implementation unlinks the stale
+one, finds nothing, and raises — and the test errors out before reaching its assertion.
+That defect was in the first draft of this plan and is fixed here.
+
 ```python
 def test_a_stale_vcf_does_not_skip_the_kestrel_run(tmp_path, monkeypatch):
     """The regression test #212 asks for: assert Kestrel ran, never that it silently didn't."""
-    (tmp_path / "output.vcf").write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
+    vcf = tmp_path / "output.vcf"
+    vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
     executed = []
-    monkeypatch.setattr(kg, "run_command", lambda cmd, log, **kw: executed.append(cmd) or True)
+
+    def _fake_run(cmd, log_file, **kwargs):
+        executed.append(cmd)
+        vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")  # Kestrel succeeded
+        return True
+
+    monkeypatch.setattr(kg, "run_command", _fake_run)
     monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
     monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
 
-    kg.run_kestrel(tmp_path / "output.vcf", str(tmp_path), "r1.fq", "r2.fq",
-                   "ref.fa", "kestrel.jar", _config(), "sample")
+    kg.run_kestrel(vcf, str(tmp_path), "r1.fq", "r2.fq", "ref.fa", "kestrel.jar", _config(), "sample")
 
     assert any("kestrel" in c.lower() for c in executed), "Kestrel was skipped"
 
 
 def test_a_stale_vcf_is_removed_before_the_run(tmp_path, monkeypatch, caplog):
-    """Unlinking makes the reason legible in the log rather than surfacing as a Java error."""
+    """Unlinking makes the reason legible in the log rather than surfacing as a Java error.
+
+    The mock records whether the stale file was still present *at the moment Kestrel was
+    invoked*, then writes its own VCF - so this proves the unlink happened first without
+    starving the completion check.
+    """
     vcf = tmp_path / "output.vcf"
     vcf.write_text("stale\n", encoding="utf-8")
     seen = {}
-    monkeypatch.setattr(kg, "run_command", lambda cmd, log, **kw: seen.setdefault("existed", vcf.is_file()) or True)
+
+    def _fake_run(cmd, log_file, **kwargs):
+        seen.setdefault("existed_at_launch", vcf.is_file())
+        vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", _fake_run)
     monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
     monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
 
     with caplog.at_level(logging.WARNING):
         kg.run_kestrel(vcf, str(tmp_path), "r1.fq", "r2.fq", "ref.fa", "kestrel.jar", _config(), "sample")
 
-    assert seen["existed"] is False, "the stale VCF was still present when Kestrel ran"
+    assert seen["existed_at_launch"] is False, "the stale VCF was still present when Kestrel ran"
     assert "output.vcf" in caplog.text
 
 
