@@ -395,7 +395,7 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
     depth_file = tmp_path / "cov_vntr_coverage.txt"
 
     def fake_run_command(command, log_file, critical=False, cwd=None):
-        assert command == (f"samtools depth -@ 4 -r chr1:155160500-155162000 /data/sample.bam > {depth_file}")
+        assert command == (f"samtools depth -a -@ 4 -r chr1:155160500-155162000 /data/sample.bam > {depth_file}")
         Path(log_file).write_text("")
         depth_file.write_text("chr1\t155160500\t10\nchr1\t155160501\t20\nchr1\t155160502\t30\n")
         return True

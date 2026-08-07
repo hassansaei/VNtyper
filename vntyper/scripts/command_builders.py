@@ -379,9 +379,14 @@ def build_samtools_depth_command(
     Note:
         This is one command with a redirect, not a pipe, so its exit status is
         already samtools' own and ``pipefail`` would add nothing.
+
+        ``-a`` makes samtools emit a row for every position in the region, zero-depth
+        ones included. Without it the depth table is the covered positions only, and
+        every statistic computed from it is over a base set that varies per sample
+        (#171).
     """
     return (
-        f"{samtools_path} depth -@ {quote_path(threads)} -r {quote_path(region)} "
+        f"{samtools_path} depth -a -@ {quote_path(threads)} -r {quote_path(region)} "
         f"{quote_path(bam_file)} > {quote_path(coverage_output)}"
     )
 

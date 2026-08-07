@@ -238,8 +238,15 @@ def test_the_merge_command_is_pinned():
     )
 
 
-def test_the_depth_command_is_pinned():
-    """``samtools depth`` redirects to a file; a redirect is not a pipe, so no pipefail."""
+def test_the_depth_command_requests_every_position_in_the_region():
+    """#171: without `-a`, samtools emits only covered positions.
+
+    Every statistic downstream is then over the covered bases rather than the region,
+    and `uncovered_bases` - which is derived by subtraction - silently reads 0. The flag
+    is asserted as a parsed argument, not as a substring, so `-all` could not satisfy it.
+
+    ``samtools depth`` redirects to a file; a redirect is not a pipe, so no pipefail.
+    """
     command = build_samtools_depth_command(
         samtools_path=SAMTOOLS,
         threads=4,
@@ -248,7 +255,10 @@ def test_the_depth_command_is_pinned():
         coverage_output="/out/cov_vntr_coverage.txt",
     )
 
-    assert command == "samtools depth -@ 4 -r chr1:155160500-155162000 /data/sample.bam > /out/cov_vntr_coverage.txt"
+    assert command == (
+        "samtools depth -a -@ 4 -r chr1:155160500-155162000 /data/sample.bam > /out/cov_vntr_coverage.txt"
+    )
+    assert "-a" in shlex.split(command.split(">")[0])
     assert PIPEFAIL_PREFIX not in command, "a single command with a redirect already reports its own exit status"
 
 
