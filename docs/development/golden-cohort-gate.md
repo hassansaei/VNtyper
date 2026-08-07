@@ -27,7 +27,7 @@ the harness change, so only the "after" side can prove its revision.
 | 3 | `8537a61` | `2fcc6e3` | PASS | the branch at `8537a61`, including `2ae28c5`, `2aa095a`, `50d7968`, `42c976a`, `4ce5639`, `97033d3`, `22e3d17`, `52a0ec9`, and nothing after it |
 | 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | the `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
 | 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
-| 6 | `b27ff9c` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `b27ff9c` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
+| 6 | `48f97fe` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `48f97fe` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -901,7 +901,15 @@ cover the CRAM path; run 5 did not.** Until that run is taken and written up her
 on this page attests the CRAM branch, and a reader should treat the two cases as declared
 rather than as measured.
 
-## Run 6 — `cb593b6` → `b27ff9c`, milestone 2
+## Run 6 — `cb593b6` → `48f97fe`, milestone 2
+
+**Re-attested.** The run was first taken against `b27ff9c`; the adversarial review of the
+PR then landed four fixes as `48f97fe`, and `git diff b27ff9c..HEAD -- vntyper/ docker/`
+was **not** empty (three production files). Rather than argue the delta was harmless, the
+candidate side was re-run against the new tip, reusing the unchanged baseline. The two
+comparisons are identical — same two columns added, same 46,063 changed cells, all on the
+new column — which is the evidence that the review fixes changed nothing for a valid
+configuration or a current summary. The figures below are the re-attested run.
 
 Harness `1.2.0`. Both sides clean, package resolution verified on every run, marker
 `vntyper.scripts.coverage_qc` expected absent on `before` and present on `after`.
