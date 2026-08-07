@@ -1723,7 +1723,7 @@ gate is **not** evidence for the #203 rider — `tests/unit/test_generate_bed_fi
 
 ```bash
 git add -A
-git commit -m "chore(release): 2.1.0"
+git commit -m "chore(release): 2.0.8"
 ```
 
 ---
