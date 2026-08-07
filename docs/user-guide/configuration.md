@@ -96,6 +96,7 @@ Controls Kestrel execution and the entire postprocessing pipeline (scoring, conf
     "False_Positive_4bp_Insertion": "(REF == 'C') and (ALT == 'CGGCA')",
     "Low_Depth_Conserved_Motifs": "(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
   },
+  "artifact_flags": ["False_Positive_4bp_Insertion"],
   "motif_filtering": {
     "exclude_motifs_right": ["Q", "8", "9", "7", "6p", "6", "V", "J", "I", "G", "E", "A"],
     "exclude_alts_combined": ["CCGCC", "CGGCG", "CGGCC"]
@@ -120,3 +121,21 @@ Controls Kestrel execution and the entire postprocessing pipeline (scoring, conf
 | `depth_score_thresholds.high` | 0.00515 | Minimum depth score for High_Precision |
 | `alt_depth_thresholds.low` | 20 | Minimum alternate depth for any positive call |
 | `alt_depth_thresholds.mid_high` | 100 | Threshold for High_Precision* designation |
+
+### Flagging and Artifact Exclusion
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `flagging_rules` | two rules | Named conditions that annotate a call's `Flag` column. Advisory by default: the call is still reported. |
+| `artifact_flags` | `["False_Positive_4bp_Insertion"]` | Which of those flag names identify a **technical artifact** rather than a call. A row carrying one is excluded from `kestrel_result.tsv`. |
+| `duplicate_flagging.enabled` | `false` | Whether to flag lower-priority calls sharing a `REF`/`ALT` as `Potential_Duplicate`. |
+
+A name listed in `artifact_flags` must also be raised by a `flagging_rules` entry, or it never matches anything. Excluded rows are not lost: they remain in `kestrel_pre_result.tsv` with `flag_filter_pass = False`.
+
+!!! note "Emptying `artifact_flags` restores the previous behaviour"
+    Setting `"artifact_flags": []` makes every flag advisory again --- exactly how
+    VNtyper behaved before the Issue #174 fix --- with no code change. The flag names
+    live only in this file, so narrowing or withdrawing the artifact rule is a
+    configuration edit.
+
+See [Variant Flagging](../pipeline/flagging.md) for the full description of the two flag classes.
