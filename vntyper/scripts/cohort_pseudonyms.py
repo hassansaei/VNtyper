@@ -33,6 +33,7 @@ Nothing about the pseudonym changed in the move.
 
 import hashlib
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,83 @@ DEFAULT_PSEUDONYM_ALGORITHM = "sha256"
 #: samples and 1.78e-7 at 10,000. The previous value was five characters of MD5 - 20 bits,
 #: which collides with probability ~37.9% at 1,000 samples (#206).
 DEFAULT_PSEUDONYM_LENGTH = 12
+
+#: Where the two settings live in the configuration, outermost first. Named once so the
+#: warning a malformed level produces and the read itself cannot drift apart.
+PSEUDONYM_CONFIG_PATH = ("cohort", "pseudonym")
+
+
+#: Distinguishes "the key is not there" from "the key is there and holds null". The two
+#: are the same to ``.get(key)`` and are not the same to an operator: an absent key is
+#: every configuration written before this milestone, while a null one was typed.
+_ABSENT = object()
+
+
+def _mapping_at(container: Mapping[str, Any], key: str, path: str) -> Mapping[str, Any]:
+    """Read one nested configuration level, tolerating anything JSON can put there.
+
+    Args:
+        container: The mapping to read ``key`` from.
+        key: The key to read.
+        path: The dotted name of ``key`` for the log message, e.g. ``cohort.pseudonym``.
+
+    Returns:
+        Mapping[str, Any]: The nested mapping, or an empty one when the key is absent or
+        holds anything that is not a mapping. Only the second case is logged - at
+        warning, naming the key - because falling back silently changes every pseudonym
+        in the report, while an absent key is the ordinary consequence of AGENTS.md trap
+        2 and says nothing about the operator's intent.
+    """
+    value = container.get(key, _ABSENT)
+    if value is _ABSENT:
+        return {}
+    if isinstance(value, Mapping):
+        return value
+    shape = "null" if value is None else f"a {type(value).__name__}"
+    logger.warning(
+        f"Configuration key {path!r} is {shape} rather than a mapping; "
+        f"the pseudonym defaults ({DEFAULT_PSEUDONYM_ALGORITHM}, {DEFAULT_PSEUDONYM_LENGTH}) are used instead."
+    )
+    return {}
+
+
+def pseudonym_settings(config: Any) -> tuple[Any, Any]:
+    """Read the digest algorithm and width out of a configuration.
+
+    The two settings are configuration rather than code, and ``--config-path`` replaces
+    the whole configuration rather than merging it (AGENTS.md trap 2) - so every level of
+    the read has to survive a hand-written document. A ``.get(key, {})`` chain does not:
+    it defends against a key being *absent* and not against it being present and null, and
+    ``None.get`` is an ``AttributeError`` naming neither the key nor the file. That raised
+    even for a run that had not asked for pseudonyms at all.
+
+    Neither value is validated here. :func:`pseudonymized_sample_name` refuses an unusable
+    algorithm or width by name, and it is the one place that can: it is also reached
+    directly, with defaults, by callers that never see a configuration.
+
+    Args:
+        config: The loaded configuration, or anything at all - a non-mapping is reported
+            and treated as empty.
+
+    Returns:
+        tuple[Any, Any]: The algorithm and the digest width, each falling back to its
+        module default. The types are whatever the JSON held, deliberately: validating
+        them here would duplicate the refusal that has to exist in the digest function
+        anyway, and would report the failure from the wrong place.
+    """
+    if not isinstance(config, Mapping):
+        logger.warning(
+            f"The configuration is a {type(config).__name__} rather than a mapping; "
+            f"the pseudonym defaults ({DEFAULT_PSEUDONYM_ALGORITHM}, {DEFAULT_PSEUDONYM_LENGTH}) are used instead."
+        )
+        return DEFAULT_PSEUDONYM_ALGORITHM, DEFAULT_PSEUDONYM_LENGTH
+
+    outer, inner = PSEUDONYM_CONFIG_PATH
+    section = _mapping_at(_mapping_at(config, outer, outer), inner, f"{outer}.{inner}")
+    return (
+        section.get("algorithm", DEFAULT_PSEUDONYM_ALGORITHM),
+        section.get("digest_characters", DEFAULT_PSEUDONYM_LENGTH),
+    )
 
 
 def pseudonymized_sample_name(
@@ -79,11 +157,14 @@ def pseudonymized_sample_name(
 
     Raises:
         ValueError: If ``algorithm`` is not available in this interpreter's ``hashlib``,
-            if it needs a digest length of its own (the SHAKE family), or if ``length`` is
-            not a positive integer no wider than the digest. Both settings come out of a
-            JSON configuration, so both are checked; an unknown algorithm is refused by
-            name rather than silently falling back, because a silent fallback changes every
-            pseudonym in the report without saying so.
+            if it needs a digest length of its own (the SHAKE family), if the ``hashlib``
+            backend refuses it outright (a FIPS provider does that to a listed but
+            non-approved digest, raising ``ValueError`` from ``hashlib.new`` rather than
+            the SHAKE family's ``TypeError``), or if ``length`` is not a positive integer
+            no wider than the digest. Both settings come out of a JSON configuration, so
+            both are checked; an unknown algorithm is refused by name rather than silently
+            falling back, because a silent fallback changes every pseudonym in the report
+            without saying so.
     """
     if algorithm not in hashlib.algorithms_available:
         msg = f"Unknown pseudonym digest algorithm: {algorithm}"
@@ -99,6 +180,14 @@ def pseudonymized_sample_name(
         # shake_128 and shake_256 are in algorithms_available but take their output length
         # as an argument, so hexdigest() raises rather than returning a digest.
         msg = f"Pseudonym digest algorithm {algorithm} does not produce a fixed-length digest: {e}"
+        logger.error(msg)
+        raise ValueError(msg) from e
+    except ValueError as e:
+        # `algorithms_available` lists what this interpreter *knows about*, not what its
+        # backend will compute: a FIPS-enforcing OpenSSL provider refuses a non-approved
+        # digest at construction and hashlib re-raises that as ValueError. Translated
+        # here so the message names the configured algorithm rather than quoting OpenSSL.
+        msg = f"Pseudonym digest algorithm {algorithm} was refused by this interpreter's hashlib backend: {e}"
         logger.error(msg)
         raise ValueError(msg) from e
     if length > len(digest):

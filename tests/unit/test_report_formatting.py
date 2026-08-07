@@ -353,12 +353,36 @@ def test_the_trailing_statement_terminator_is_stripped() -> None:
 
 
 def test_a_script_close_in_a_string_value_cannot_terminate_the_block() -> None:
+    """The `</script>` case, which is now covered by the blanket `<` escape.
+
+    This used to assert the literal `<\\/script>` that a `</`-only replacement
+    produced. Escaping every `<` as `\\u003c` subsumes that case, so what is
+    asserted is the property rather than the particular escape: no literal `<`
+    reaches the block, and the data survives the round trip unchanged.
+    """
     fragment = json.dumps({"rows": [["</script><img src=x onerror=alert(1)>"]]})
     result = rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON)
-    assert "</" not in result
-    assert "<\\/script>" in result
+    assert "<" not in result
     # It is still the same data once the browser parses it.
-    assert json.loads(result.replace("<\\/", "</"))["rows"][0][0].startswith("</script>")
+    assert json.loads(result)["rows"][0][0] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_the_double_escaped_script_state_cannot_be_entered() -> None:
+    """Escaping only `</` is not enough: `<!--<script>` is the other way out.
+
+    An HTML5 tokenizer that meets `<!--` followed by `<script` inside a script
+    element enters the *double-escaped* state, in which the real `</script>` no
+    longer ends the element -- so the rest of the document is swallowed as script
+    text and the report renders as a blank page below the IGV panel. No `</`
+    appears anywhere in that sequence, so the previous escape let it through
+    verbatim. Every literal `<` is escaped now, which closes both routes at once.
+    """
+    fragment = json.dumps({"rows": [["<!--<script>", "a<b"]]})
+    result = rf.js_json_literal(fragment, rf.EMPTY_TABLE_JSON)
+    assert "<" not in result
+    assert "\\u003c" in result
+    # `<` is a JSON string escape, so the browser still sees the original text.
+    assert json.loads(result)["rows"][0] == ["<!--<script>", "a<b"]
 
 
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029"])

@@ -91,10 +91,11 @@ COHORT_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
 #:    random suffix is part of that path and therefore part of the sort key - so that side
 #:    too differs between two runs of itself. This reason used to be written as holding
 #:    "on any version", which #205 made false: extraction still goes to a temporary
-#:    directory, but the sort key is now the **origin key**
-#:    ``(parts of the input path, path relative to that input's root)``, which carries no
-#:    temporary component. Leaving the old wording in place would have kept the gate
-#:    normalising away a difference it no longer has a reason to normalise.
+#:    directory, but the sort key is now the sample's **effective path** - the parts of the
+#:    input path followed by the sample's path relative to that input's root, as one flat
+#:    tuple - which carries no temporary component. Leaving the old wording in place would
+#:    have kept the gate normalising away a difference it no longer has a reason to
+#:    normalise.
 #:
 #: What this costs is stated rather than hidden: because the order is normalised away, a
 #: change that fixes or breaks cohort ordering is invisible to this gate. It is attested by
@@ -107,9 +108,10 @@ COHORT_ORDER_WHY = (
     "runs of itself, and a baseline predating #205 sorts ZIP samples on their extracted path, whose leading "
     "component is tempfile.mkdtemp's random suffix, so it differs between two runs of itself as well. Neither "
     "reason describes the current tree: vntyper.scripts.cohort_inputs.discover_sample_directories returns "
-    "sorted() on an origin key of (parts of the input path, path relative to that input's root) today, which "
-    "contains no temporary component - pinned by "
+    "sorted() on an effective-path key of the parts of the input path followed by the path relative to that "
+    "input's root today, which contains no temporary component - pinned by "
     "tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted, "
+    "::test_an_input_nested_inside_a_later_input_keeps_its_whole_path_position, "
     "::test_processes_with_different_hash_seeds_discover_the_same_order and "
     "tests/unit/test_cohort_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes - so the "
     "ordering fix itself is attested by those tests and NOT by this gate. Each side's raw order is recorded "

@@ -32,15 +32,16 @@ by design, so that is not a violation and is not tested here. The read-only-inpu
 guarantee is a guarantee about ``vntyper pipeline``.
 """
 
-import contextlib
 import os
 import shlex
 import stat
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from vntyper.scripts import utils
 from vntyper.scripts.utils import run_command, validate_bam_file
 
 pytestmark = pytest.mark.unit
@@ -71,11 +72,19 @@ def readonly_dir(tmp_path: Path) -> Iterator[Path]:
 def test_run_command_raises_when_its_log_file_is_not_writable(readonly_dir: Path) -> None:
     """The mechanism: the log is opened before the child process starts.
 
-    This is a **characterisation test**. It passes before the fix as well as
-    after it, because ``run_command`` is not what changes -- what changes is the
-    path the pipeline hands it. It is here so that the failures of the tests
-    below are unambiguous: they are about *where* VNtyper decided to write, not
-    about how ``run_command`` behaves when it cannot.
+    This is a **characterisation test, and it passes against ``main`` as well as
+    against this branch** -- deliberately. ``run_command`` is not what #201
+    changed; what changed is the path the pipeline hands it. So what this proves
+    is only that opening the log is what fails on a read-only mount, and that it
+    fails before the child runs. It proves *nothing* about where VNtyper chooses
+    to write, which is the actual invariant and is the business of the two tests
+    below. It is here so their failures are unambiguous when they do fail.
+
+    It is also the one test in this module that calls ``run_command`` for real,
+    and that too is deliberate: the command is ``true``, a shell builtin with no
+    output and no dependency on any bioinformatics tool, so the test stays pure
+    in the sense AGENTS.md requires -- no external binary, nothing downloaded,
+    nothing environment-dependent about the result.
 
     Args:
         readonly_dir: The read-only input directory fixture.
@@ -84,42 +93,81 @@ def test_run_command_raises_when_its_log_file_is_not_writable(readonly_dir: Path
         run_command("true", str(readonly_dir / "sample.bam.quickcheck.log"))
 
 
-def test_validate_bam_file_writes_its_log_under_log_dir(readonly_dir: Path, tmp_path: Path) -> None:
+@pytest.fixture
+def recorded_quickcheck(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Capture the ``run_command`` call ``validate_bam_file`` makes, running nothing.
+
+    These two tests are about *which path* ``validate_bam_file`` hands to
+    ``run_command``, and that is decided before any process starts. Letting the
+    real call through invoked the host's ``samtools`` -- verified: the log a real
+    run left behind read ``sample.bam caused an error whilst reading its header``,
+    which is samtools' own wording. On a host without samtools the shell's
+    ``command not found`` landed in the same file and the assertion passed
+    anyway, so the tier's purity was spent on a call whose outcome never mattered
+    (AGENTS.md: the unit tier is ``tmp_path`` + ``unittest.mock``, no external
+    binaries).
+
+    The stub returns True, so ``validate_bam_file`` reaches its success path and
+    no ``ValueError`` has to be suppressed -- another thing that used to hide
+    which failure the test was actually tolerating.
+
+    Args:
+        monkeypatch: Pytest's monkeypatch fixture.
+
+    Returns:
+        list[dict[str, Any]]: One entry per ``run_command`` call, with the
+        keyword names ``validate_bam_file`` uses.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def _record(command: str, log_file: str, critical: bool = False, cwd: str | None = None) -> bool:
+        calls.append({"command": command, "log_file": log_file, "critical": critical, "cwd": cwd})
+        return True
+
+    monkeypatch.setattr(utils, "run_command", _record)
+    return calls
+
+
+def test_validate_bam_file_writes_its_log_under_log_dir(
+    readonly_dir: Path, tmp_path: Path, recorded_quickcheck: list[dict[str, Any]]
+) -> None:
     """The whole point: a read-only input mount must survive a run.
 
-    ``samtools quickcheck`` is really invoked, through ``run_command``. A 4-byte
-    stub is not a real BAM, so quickcheck fails and ``validate_bam_file`` raises
-    ``ValueError`` -- and on a machine with no samtools at all the command fails
-    the same way. Either way the log file has already been created, which is what
-    this asserts; whether the alignment is valid is a different test's business.
+    ``run_command`` opens its log before it runs anything, so the log path is the
+    whole of #201 -- asserting on the argument it received is asserting on the
+    thing that broke, not on a side effect of it.
 
     Args:
         readonly_dir: The read-only input directory fixture.
         tmp_path: Pytest temporary directory.
+        recorded_quickcheck: The ``run_command`` recorder.
     """
     out = tmp_path / "out"
     out.mkdir()
 
-    with contextlib.suppress(ValueError):
-        validate_bam_file(str(readonly_dir / "sample.bam"), log_dir=str(out))
+    validate_bam_file(str(readonly_dir / "sample.bam"), log_dir=str(out))
 
-    assert (out / "sample.bam.quickcheck.log").exists()
+    (call,) = recorded_quickcheck
+    assert call["log_file"] == str(out / "sample.bam.quickcheck.log")
     assert list(readonly_dir.iterdir()) == [readonly_dir / "sample.bam"]
 
 
-def test_validate_bam_file_still_logs_beside_the_input_without_log_dir(tmp_path: Path) -> None:
+def test_validate_bam_file_still_logs_beside_the_input_without_log_dir(
+    tmp_path: Path, recorded_quickcheck: list[dict[str, Any]]
+) -> None:
     """The default is unchanged, deliberately -- this stays a contained change.
 
     Args:
         tmp_path: Pytest temporary directory.
+        recorded_quickcheck: The ``run_command`` recorder.
     """
     bam = tmp_path / "sample.bam"
     bam.write_bytes(b"BAM\x01")
 
-    with contextlib.suppress(ValueError):
-        validate_bam_file(str(bam))
+    validate_bam_file(str(bam))
 
-    assert (tmp_path / "sample.bam.quickcheck.log").exists()
+    (call,) = recorded_quickcheck
+    assert call["log_file"] == f"{bam}.quickcheck.log"
 
 
 def _index_destinations(command: str) -> list[tuple[str, str]]:

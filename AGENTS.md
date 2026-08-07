@@ -88,9 +88,12 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     width it is configured with, split out of `cohort_inputs.py`. Discovery keeps
     `DiscoveredSample`, `discover_sample_directories` and `duplicate_identity`: an
     identity collision is upstream of any digest, so no width fixes it.
-  - `alignment_index.py` — resolving an *existing* BAM index htslib's way (`<file>.bai`,
-    then `<stem>.bai`), split out of `fastq_bam_processing.py`, which keeps every
-    `run_command`/samtools call including the one that builds a missing index.
+  - `alignment_index.py` — resolving an *existing* **BAI** under either name it can carry
+    (`<file>.bai`, then `<stem>.bai`), split out of `fastq_bam_processing.py`, which keeps
+    every `run_command`/samtools call including the one that builds a missing index. It is
+    **not** htslib's resolution order — htslib tries CSI first, and a CSI is ignored here
+    on purpose, because the only consumer of the path is the BAI-only offset extractor in
+    `extract_unmapped_from_offset.py`. Widening it is a change to that reader first.
   All eight are fully annotated and at or near 100% branch coverage. Put new pure logic
   there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.

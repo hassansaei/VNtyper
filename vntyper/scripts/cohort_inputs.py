@@ -24,9 +24,10 @@ zip is extracted into ``tempfile.mkdtemp(prefix="cohort_zip_")``:
   mapping in insertion order would follow the argument order and iterating a ``set`` -
   what it was before - followed ``Path.__hash__``, which is the hash of the path string
   and is randomised per process. The sort key is now
-  :attr:`DiscoveredSample.sort_key`: the parts of the input path the caller wrote, then
-  the sample's path relative to *that input's* root. The sample's extracted path was the
-  old key, so two runs over the same archives ordered their rows differently.
+  :attr:`DiscoveredSample.sort_key`: one flat tuple, the parts of the input path the
+  caller wrote followed by the sample's path relative to *that input's* root. The
+  sample's extracted path was the old key, so two runs over the same archives ordered
+  their rows differently.
 * A zip whose ``pipeline_summary.json`` sits at the archive root - the layout the web
   worker produces - had the ``mkdtemp`` root itself as its sample directory, so the
   reported sample was a random ``cohort_zip_*`` string. :attr:`DiscoveredSample.identity`
@@ -89,15 +90,24 @@ class DiscoveredSample:
     identity: str
 
     #: The input path this sample was reached through, exactly as the caller wrote it - a
-    #: directory or a zip archive. Kept because it is the only thing that can name a zip
-    #: sample's origin in a diagnostic: its ``directory`` is an extraction directory.
+    #: directory or a zip archive. Kept for diagnostics only: it is the one thing that can
+    #: name a zip sample's origin in a message, because its ``directory`` is an extraction
+    #: directory. It is **not** part of the ordering - see :attr:`sort_key`.
     origin: str
 
-    #: What the ordering is total on: the parts of :attr:`origin`, then the parts of the
-    #: sample's path relative to that input's root. Both halves are user-supplied or
-    #: archive-internal, so neither can contain a ``tempfile.mkdtemp`` component and two
-    #: runs agree.
-    sort_key: tuple[tuple[str, ...], tuple[str, ...]]
+    #: What the ordering is total on: the sample's **effective path**, a single flat tuple
+    #: of the parts of :attr:`origin` followed by the parts of the sample's path relative
+    #: to that input's root. Every component is user-supplied or archive-internal, so none
+    #: can be a ``tempfile.mkdtemp`` name and two runs agree.
+    #:
+    #: Flat rather than the pair ``(origin parts, relative parts)`` it briefly was, and the
+    #: difference shows when one input is a prefix of another. Given ``cohort/a`` as a
+    #: direct input and ``cohort`` after it, the pair compares on its outer half alone -
+    #: ``("cohort",) < ("cohort", "a")`` - so the parent's samples all sort before the
+    #: child's and ``cohort/z`` came out ahead of ``cohort/a``. Concatenating instead makes
+    #: the key the sample's own location whichever input reached it, which is the
+    #: whole-path order this had before the key existed and the order ``ls`` shows.
+    sort_key: tuple[str, ...]
 
 
 def _stem_of_recorded_input(recorded: str) -> str:
@@ -161,14 +171,19 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
 
     Args:
         root: The input directory, or the directory a zip was extracted into.
-        origin: The input path as the caller wrote it. Its parts are the outer half of the
-            sort key, so a zip's samples sort under the archive's own path rather than
-            under the extraction directory.
+        origin: The input path as the caller wrote it. Its parts lead the sort key, so a
+            zip's samples sort under the archive's own path rather than under the
+            extraction directory.
         root_identity: The identity to give a sample sitting at ``root`` itself. For a
             directory that is the directory's name; for a zip it is what the run recorded.
 
     Returns:
-        list[DiscoveredSample]: The samples found, unsorted.
+        list[DiscoveredSample]: The samples found, unsorted. Each carries an effective
+        path as its sort key: ``origin``'s parts followed by the sample's parts below
+        ``root``. For a directory input the two concatenate back to the sample's own path,
+        which is what makes the order independent of whether the caller named the sample
+        or one of its ancestors; for a zip they compose the archive's path with the
+        member's path inside it, and the extraction directory appears in neither.
     """
     origin_parts = Path(origin).parts
     if (root / PIPELINE_SUMMARY_FILENAME).exists():
@@ -178,7 +193,7 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
                 directory=root,
                 identity=root_identity,
                 origin=origin,
-                sort_key=(origin_parts, ()),
+                sort_key=origin_parts,
             )
         ]
 
@@ -191,7 +206,7 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
                 directory=sample_dir,
                 identity=sample_dir.name,
                 origin=origin,
-                sort_key=(origin_parts, sample_dir.relative_to(root).parts),
+                sort_key=origin_parts + sample_dir.relative_to(root).parts,
             )
         )
     return samples
@@ -216,22 +231,31 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Discovered
 
         Samples are accumulated in a mapping keyed on the sample directory, which
         de-duplicates a directory reached by two different input paths, and are sorted on
-        :attr:`DiscoveredSample.sort_key` on the way out. Neither half of that key can
-        move between runs: the first is the parts of the input path the caller wrote, the
-        second is the sample's path relative to that input's own root. The key used to be
-        the sample's full *extracted* path, whose leading component for a zip is
-        ``tempfile.mkdtemp``'s random suffix - so two runs over the same archives sorted
-        their samples into different positions (#205), and every CSV/TSV/JSON row order
-        followed. Keying the outer half on the input path rather than on its position in
+        :attr:`DiscoveredSample.sort_key` on the way out - the sample's **effective path**,
+        the parts of the input path the caller wrote followed by the sample's path
+        relative to that input's own root. No component of it can move between runs. The
+        key used to be the sample's full *extracted* path, whose leading component for a
+        zip is ``tempfile.mkdtemp``'s random suffix - so two runs over the same archives
+        sorted their samples into different positions (#205), and every CSV/TSV/JSON row
+        order followed. Composing from the input path rather than from its position in
         ``input_paths`` is deliberate: a cohort of directories keeps the lexicographic
         order it has always had, and only the temporary component goes away.
+
+        The two halves are **concatenated rather than nested**. Nested, the comparison is
+        decided by the input path alone whenever two inputs differ, which reorders a
+        cohort whose inputs nest: ``cohort/a`` named directly and ``cohort`` named after it
+        put ``cohort/z`` first, because ``("cohort",) < ("cohort", "a")`` and the relative
+        half was never reached. Concatenated, a sample keys on its own location whichever
+        input found it. :attr:`DiscoveredSample.origin` is kept for diagnostics and for the
+        duplicate-identity message, and takes no part in the order.
 
         Tuples of path *parts* are compared element by element, so the separator never
         participates and ``cohort/sample`` sorts before ``cohort-extra/sample`` - the
         order ``ls`` would show. Sorting here rather than at the one call site means every
         consumer gets the same order. Pinned by
-        ``tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted``
-        and by the cross-process tests beside it.
+        ``tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted``,
+        ``::test_an_input_nested_inside_a_later_input_keeps_its_whole_path_position``
+        and by the cross-process tests beside them.
     """
     temp_dirs: list[str] = []
     # Keyed on the directory, so a sample reached by two input paths appears once and the

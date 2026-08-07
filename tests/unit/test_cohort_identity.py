@@ -23,9 +23,12 @@ archive root - the layout the web worker produces, so the normal path for web co
 that temporary directory *was* the sample directory, and the reported ``Sample`` was
 therefore a random ``cohort_zip_*`` string. The same random component was in the sort key,
 so two runs over the same archives ordered their rows differently. Neither depends on the
-inputs any more: the identity comes from the input file the run itself recorded, and the
-sort key is ``(index of the input on the command line, path relative to that input's
-root)``.
+extraction any more: the identity comes from the input file the run itself recorded, and
+the sort key is the sample's *effective path* - the parts of the input path the caller
+wrote, followed by the sample's path relative to that input's root, as one flat tuple.
+(It was briefly a nested pair of those two tuples, which decided the comparison on the
+input path alone and therefore reordered a cohort whose inputs nest; see
+``test_cohort_inputs.py::test_an_input_nested_inside_a_later_input_keeps_its_whole_path_position``.)
 
 At 48 bits the collision guard is a tripwire rather than an operational risk:
 ``1 - exp(-n(n-1)/2**49)`` is 1.78e-9 at 1,000 samples and 1.78e-7 at 10,000.
@@ -36,6 +39,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -144,6 +148,35 @@ def test_an_algorithm_that_needs_a_digest_length_is_refused_by_name() -> None:
         pseudonymized_sample_name("anon_", "s1", algorithm="shake_128")
 
 
+def test_an_algorithm_the_backend_refuses_is_reported_by_name(monkeypatch, caplog) -> None:
+    """``hashlib.algorithms_available`` lists what is *known*, not what will be computed.
+
+    Under a FIPS-enforcing OpenSSL the provider refuses a non-approved digest at
+    construction time and ``hashlib.new`` raises ``ValueError`` -- ``md5`` is listed there
+    and still unusable. Only ``TypeError`` was translated, so that ``ValueError`` escaped
+    with the backend's own wording and named neither the configured algorithm nor the
+    configuration key it came from. The backend is stubbed here because a FIPS provider
+    cannot be assumed on a developer machine, and the assertion is about the translation
+    rather than about OpenSSL.
+    """
+    from vntyper.scripts import cohort_pseudonyms
+
+    def _refused_by_the_provider(name: str, data: bytes = b"", **kwargs: object) -> object:
+        raise ValueError("[digital envelope routines] unsupported")
+
+    monkeypatch.setattr(cohort_pseudonyms.hashlib, "new", _refused_by_the_provider)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="vntyper.scripts.cohort_pseudonyms"),
+        pytest.raises(ValueError, match="sha256"),
+    ):
+        pseudonymized_sample_name("anon_", "s1", algorithm="sha256")
+
+    assert any("sha256" in record.getMessage() for record in caplog.records), (
+        "the refusal must be logged at error naming the algorithm, per AGENTS.md"
+    )
+
+
 def test_the_shipped_config_declares_the_pseudonym_settings() -> None:
     """Config-driven, never hardcoded: the values live in config.json."""
     config = json.loads((REPO_ROOT / "vntyper" / "config.json").read_text(encoding="utf-8"))
@@ -195,6 +228,94 @@ def test_a_configuration_without_the_pseudonym_block_falls_back_to_the_defaults(
 
     table = (output_dir / "pseudonymization_table.tsv").read_text(encoding="utf-8")
     assert "anon_c788e939395d\tsample_one" in table
+
+
+@pytest.mark.parametrize(
+    ("cohort_block", "warned_key"),
+    [
+        (None, "cohort"),
+        ({"pseudonym": None}, "cohort.pseudonym"),
+        ("sha256", "cohort"),
+        ({"pseudonym": ["sha256", 12]}, "cohort.pseudonym"),
+        ({"pseudonym": 12}, "cohort.pseudonym"),
+    ],
+    ids=["cohort-is-null", "pseudonym-is-null", "cohort-is-a-string", "pseudonym-is-a-list", "pseudonym-is-a-number"],
+)
+def test_a_pseudonym_block_that_is_not_a_mapping_falls_back_to_the_defaults(
+    tmp_path, caplog, cohort_block: object, warned_key: str
+) -> None:
+    """A hand-written config may carry ``"cohort": null``, and JSON has no schema.
+
+    ``config.get("cohort", {}).get("pseudonym", {})`` reads ``.get`` off whatever the two
+    keys hold. ``.get("cohort", {})`` only defends against the key being *absent*: present
+    and null it returns ``None``, and ``None.get`` is an ``AttributeError`` with no log
+    line, no mention of the key at fault, and - because it was raised before the cleanup
+    ``try`` - a leaked extraction directory per zip input. It fired whether or not
+    pseudonymisation had been asked for, so a config that never intended to use the
+    feature still aborted the cohort.
+
+    Every non-mapping shape a JSON document can put in either position is treated the same
+    way: fall back to the module defaults and say so at warning, naming the key. A silent
+    fallback is not acceptable here - the digest settings decide every pseudonym in the
+    report - but neither is a crash on a setting the run was not going to use.
+    """
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    config = {"paths": {"template_dir": "vntyper/templates"}, "cohort": cohort_block}
+
+    with caplog.at_level(logging.WARNING, logger="vntyper.scripts.cohort_pseudonyms"):
+        cohort_summary.aggregate_cohort(
+            input_paths=[str(_sample_on_disk(tmp_path / "cohort" / "sample_one"))],
+            output_dir=str(output_dir),
+            summary_file="cohort_summary.html",
+            config=config,
+            pseudonymize_samples="anon_",
+        )
+
+    table = (output_dir / "pseudonymization_table.tsv").read_text(encoding="utf-8")
+    assert "anon_c788e939395d\tsample_one" in table
+    assert any(warned_key in record.getMessage() for record in caplog.records), (
+        f"the fallback must be logged at warning naming {warned_key!r}, not applied silently"
+    )
+
+
+def test_a_failure_between_discovery_and_the_sample_loop_still_removes_the_extractions(tmp_path, monkeypatch) -> None:
+    """The cleanup ``try`` has to start at discovery, not at the loop.
+
+    Everything between the two - the digest settings read out of the config, the
+    duplicate-identity guard - used to sit outside it, so anything raising there left one
+    ``cohort_zip_*`` directory per archive on disk. That is how the null-``cohort``
+    ``AttributeError`` above leaked. The guard is stated generally rather than against the
+    one line that raised: ``duplicate_identity`` is made to fail here because it is the
+    last thing between discovery and the loop, and no exception from that region may skip
+    the cleanup.
+    """
+    archive = _zip_of(tmp_path / "job7.zip", {"pipeline_summary.json": _summary({"bam": "patient1.bam"})})
+    extraction_root = tmp_path / "extracted"
+
+    def _mkdtemp(prefix: str = "") -> str:
+        directory = extraction_root / f"{prefix}fixed"
+        directory.mkdir(parents=True)
+        return str(directory)
+
+    def _explode(_samples: object) -> None:
+        raise RuntimeError("raised between discovery and the sample loop")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", _mkdtemp)
+    monkeypatch.setattr(cohort_summary, "duplicate_identity", _explode)
+
+    with pytest.raises(RuntimeError, match="between discovery and the sample loop"):
+        cohort_summary.aggregate_cohort(
+            input_paths=[str(archive)],
+            output_dir=str(tmp_path / "out"),
+            summary_file="cohort_summary.html",
+            config=load_config(None),
+            pseudonymize_samples="anon_",
+        )
+
+    assert not (extraction_root / "cohort_zip_fixed").exists(), (
+        "the extracted archive was left behind: the cleanup try does not cover this region"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -512,9 +633,9 @@ def test_a_sample_in_a_subdirectory_keeps_its_directory_name(tmp_path) -> None:
 def test_the_sort_key_contains_no_temporary_path_component(tmp_path) -> None:
     """The mechanism, stated directly: nothing in the key comes from ``mkdtemp``.
 
-    Both halves are asserted as values. The outer half is the archive path the caller
-    wrote and the inner half is empty for a root-level sample, so the whole key is
-    reconstructible from the command line alone - which is what makes it reproducible.
+    The key is asserted as a value. For a root-level sample it is exactly the archive path
+    the caller wrote - there is nothing below the archive root to append - so the whole key
+    is reconstructible from the command line alone, which is what makes it reproducible.
     """
     first = _zip_of(tmp_path / "aaa_cohort.zip", {"pipeline_summary.json": _summary({"bam": "patient1.bam"})})
     second = _zip_of(tmp_path / "zzz_cohort.zip", {"pipeline_summary.json": _summary({"bam": "patient2.bam"})})
@@ -522,9 +643,9 @@ def test_the_sort_key_contains_no_temporary_path_component(tmp_path) -> None:
     samples, temp_dirs = discover_sample_directories([str(first), str(second)])
 
     try:
-        assert [sample.sort_key for sample in samples] == [(first.parts, ()), (second.parts, ())]
+        assert [sample.sort_key for sample in samples] == [first.parts, second.parts]
         assert [sample.origin for sample in samples] == [str(first), str(second)]
-        assert all("cohort_zip_" not in part for sample in samples for half in sample.sort_key for part in half)
+        assert all("cohort_zip_" not in part for sample in samples for part in sample.sort_key)
         # The temporary directory is still where extraction goes; it is only out of the key.
         assert all("cohort_zip_" in str(sample.directory) for sample in samples)
     finally:
@@ -718,12 +839,16 @@ def test_the_extraction_still_goes_to_a_temporary_directory(tmp_path) -> None:
 
 
 def test_a_directory_sample_sorts_by_its_path_below_the_input_root(tmp_path) -> None:
-    """Within one input the key is the relative path's *parts*, so the separator never sorts.
+    """Within one input the key is the path's *parts*, so the separator never sorts.
 
     ``cohort/sample_one`` comes before ``cohort-extra/sample_one`` because
     ``"cohort" < "cohort-extra"``, where the raw strings compare the other way round
     (``"-"`` is 0x2d and ``"/"`` is 0x2f). It is the order ``ls`` would show, which is the
-    point of choosing it, and it survives the move from whole paths to relative ones.
+    point of choosing it, and it survives both the move from whole paths to
+    input-relative ones and the flattening of the key that followed.
+
+    For a directory input the flattened key reconstructs the sample's own path exactly,
+    which is the property the nesting case in ``test_cohort_inputs.py`` turns on.
     """
     plain = _sample_on_disk(tmp_path / "cohort" / "sample_one")
     suffixed = _sample_on_disk(tmp_path / "cohort-extra" / "sample_one")
@@ -732,9 +857,10 @@ def test_a_directory_sample_sorts_by_its_path_below_the_input_root(tmp_path) -> 
     samples, _ = discover_sample_directories([str(tmp_path)])
 
     assert [sample.directory for sample in samples] == [plain, suffixed]
+    assert [sample.sort_key for sample in samples] == [plain.parts, suffixed.parts]
     assert [sample.sort_key for sample in samples] == [
-        (tmp_path.parts, ("cohort", "sample_one")),
-        (tmp_path.parts, ("cohort-extra", "sample_one")),
+        (*tmp_path.parts, "cohort", "sample_one"),
+        (*tmp_path.parts, "cohort-extra", "sample_one"),
     ]
 
 
@@ -786,6 +912,6 @@ def test_the_discovery_result_carries_a_frozen_record_per_sample(tmp_path) -> No
     assert found.directory == sample
     assert found.identity == "sample_one"
     assert found.origin == str(sample)
-    assert found.sort_key == (sample.parts, ())
+    assert found.sort_key == sample.parts
     with pytest.raises(dataclasses.FrozenInstanceError):
         found.identity = "renamed"  # type: ignore[misc]

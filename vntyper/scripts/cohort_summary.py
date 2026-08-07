@@ -45,8 +45,7 @@ from vntyper.scripts.cohort_inputs import (
     load_pipeline_summary_for_sample,
 )
 from vntyper.scripts.cohort_pseudonyms import (
-    DEFAULT_PSEUDONYM_ALGORITHM,
-    DEFAULT_PSEUDONYM_LENGTH,
+    pseudonym_settings,
     pseudonymized_sample_name,
 )
 from vntyper.scripts.cohort_tables import (
@@ -394,43 +393,47 @@ def aggregate_cohort(
     # Identify valid directories/zip files
     processed_dirs, temp_dirs = discover_sample_directories(input_paths)
 
-    if not processed_dirs:
-        cleanup_temp_dirs(temp_dirs)
-        logger.error("No valid input directories or zip files found for cohort aggregation.")
-        return
-
-    # The digest and its width are configuration, not code. `--config-path` replaces the
-    # whole config rather than merging it (AGENTS.md trap 2), so every read is a .get()
-    # chain against the module defaults and a config predating #206 still runs.
-    pseudonym_config = config.get("cohort", {}).get("pseudonym", {})
-    pseudonym_algorithm = pseudonym_config.get("algorithm", DEFAULT_PSEUDONYM_ALGORITHM)
-    pseudonym_length = pseudonym_config.get("digest_characters", DEFAULT_PSEUDONYM_LENGTH)
-
-    # The reported sample must identify exactly one patient, and that has to hold before
-    # any digest is taken: two discovered directories can share a basename, so their
-    # identities are already equal and no digest width separates them. sample_categories()
-    # groups on the reported sample, so an undetected pair is counted as one (#206).
-    collision = duplicate_identity(processed_dirs)
-    if collision is not None:
-        first, second = collision
-        # The sample directory of a zip input is an extraction directory, which tells the
-        # operator nothing, so each one is named together with the input it came from.
-        msg = (
-            f"Duplicate cohort sample identity {first.identity!r}: "
-            f"{first.directory} (from {first.origin}) and "
-            f"{second.directory} (from {second.origin}) would be reported as one sample. "
-            "Give them distinct directory names, or distinct recorded input files for a zipped run."
-        )
-        cleanup_temp_dirs(temp_dirs)
-        logger.error(msg)
-        raise ValueError(msg)
-
     # If pseudonymization is requested, build a mapping from original to pseudonym names.
     sample_mapping = {}
 
     kestrel_list = []
     advntr_list = []
+    # The `try` opens here, immediately after discovery, and not at the sample loop: every
+    # zip input has already been extracted into a `tempfile.mkdtemp` directory by this
+    # point, so anything raising between the two leaks one directory per archive. That was
+    # not hypothetical - reading the digest settings below used to raise `AttributeError`
+    # on a config carrying `"cohort": null`, from outside the old `try`.
     try:
+        if not processed_dirs:
+            logger.error("No valid input directories or zip files found for cohort aggregation.")
+            return
+
+        # The digest and its width are configuration, not code, and `--config-path`
+        # replaces the whole config rather than merging it (AGENTS.md trap 2) - so the
+        # read has to survive a hand-written document, null levels included. It lives in
+        # cohort_pseudonyms with the defaults it falls back to.
+        pseudonym_algorithm, pseudonym_length = pseudonym_settings(config)
+
+        # The reported sample must identify exactly one patient, and that has to hold
+        # before any digest is taken: two discovered directories can share a basename, so
+        # their identities are already equal and no digest width separates them.
+        # sample_categories() groups on the reported sample, so an undetected pair is
+        # counted as one (#206).
+        collision = duplicate_identity(processed_dirs)
+        if collision is not None:
+            first, second = collision
+            # The sample directory of a zip input is an extraction directory, which tells
+            # the operator nothing, so each one is named together with the input it came
+            # from.
+            msg = (
+                f"Duplicate cohort sample identity {first.identity!r}: "
+                f"{first.directory} (from {first.origin}) and "
+                f"{second.directory} (from {second.origin}) would be reported as one sample. "
+                "Give them distinct directory names, or distinct recorded input files for a zipped run."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
         for sample in processed_dirs:
             sample_dir = sample.directory
             original_sample = sample.identity
@@ -506,8 +509,10 @@ def aggregate_cohort(
             additional_stats_html=additional_stats_html,
         )
     finally:
-        # In a `finally` because the guards above and the render itself can all raise, and
-        # an aborted cohort must not leave its extracted archives behind.
+        # In a `finally` because everything above - the config read, the two identity
+        # guards, the per-sample loop and the render - can raise, and an aborted cohort
+        # must not leave its extracted archives behind. The `return` on an empty discovery
+        # runs it too.
         cleanup_temp_dirs(temp_dirs)
 
     # Generate additional machine-readable cohort summaries if requested. The render

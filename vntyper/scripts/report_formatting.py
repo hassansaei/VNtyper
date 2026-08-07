@@ -421,10 +421,19 @@ def js_json_literal(fragment: str, fallback: str) -> str:
     ``json.dumps`` is called with ``ensure_ascii=True`` (the stdlib default, kept
     explicit here because it is load-bearing): it escapes every non-ASCII
     codepoint, which includes U+2028 and U+2029 -- line terminators to a
-    JavaScript parser that are legal inside a JSON string. That leaves ``</`` as
-    the one remaining script-context hazard: ``</script>`` inside any string value
-    would otherwise close the block early and turn everything after it into HTML,
-    so it alone is escaped by hand after serialisation.
+    JavaScript parser that are legal inside a JSON string. That leaves ``<`` as
+    the one remaining script-context hazard, and **every** literal ``<`` is
+    escaped rather than only the ``</`` of a closing tag. Escaping ``</`` alone
+    stops a direct ``</script>`` but not the HTML5 tokenizer's *double-escaped*
+    script state: ``<!--`` followed by ``<script`` inside a script element -- a
+    sequence containing no ``</`` at all -- puts the parser into a state where the
+    real ``</script>`` no longer terminates the element, and the remainder of the
+    document is consumed as script text. Escaping ``<`` subsumes both routes.
+
+    ``\\u003c`` is a JSON string escape, so what the browser parses back is the
+    original ``<`` and the data reaching the page is unchanged. Only string values
+    can contain a ``<`` -- JSON's structural characters do not -- so the
+    replacement cannot touch the literal's syntax.
 
     Keys are sorted and separators are minimised so that two runs over the same
     IGV page emit byte-identical script.
@@ -450,7 +459,7 @@ def js_json_literal(fragment: str, fallback: str) -> str:
         return fallback
 
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return encoded.replace("</", "<\\/")
+    return encoded.replace("<", "\\u003c")
 
 
 def extract_igv_fragments(content: str) -> tuple[str, str, str]:

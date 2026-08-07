@@ -102,3 +102,24 @@ def test_no_inner_or_outer_html_is_assigned_from_a_non_literal(template: Path) -
     source = template.read_text(encoding="utf-8")
     offenders = _UNSAFE_INNER_OUTER_HTML_ASSIGNMENT.findall(source)
     assert offenders == [], f"{template} assigns innerHTML/outerHTML from something that is not a string literal"
+
+
+#: AGENTS.md sets line length 120 for this repository. Ruff enforces it for `.py` only -
+#: these two files are HTML, so nothing gated them and one line had reached 127 characters.
+TEMPLATE_LINE_LENGTH = 120
+
+
+@pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: p.name)
+def test_no_template_line_exceeds_the_repository_line_length(template: Path) -> None:
+    """The templates carry the report's JavaScript, and no linter reaches it.
+
+    Trailing whitespace is stripped before measuring, matching how ruff measures a
+    Python line: a line that is only long because of trailing blanks is a whitespace
+    problem, not a length one, and reporting it here would be noise.
+    """
+    over = [
+        (number, len(line.rstrip()))
+        for number, line in enumerate(template.read_text(encoding="utf-8").splitlines(), start=1)
+        if len(line.rstrip()) > TEMPLATE_LINE_LENGTH
+    ]
+    assert over == [], f"{template} has lines over {TEMPLATE_LINE_LENGTH} characters: {over}"

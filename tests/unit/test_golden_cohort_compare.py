@@ -228,8 +228,8 @@ def test_the_cohort_order_justification_quotes_the_sort_key_discovery_actually_u
     source = (REPO_ROOT / "vntyper" / "scripts" / "cohort_inputs.py").read_text(encoding="utf-8")
     assert "return sorted(processed_dirs.values(), key=lambda sample: sample.sort_key), temp_dirs" in source
     assert (
-        "returns sorted() on an origin key of (parts of the input path, path relative to that input's root) today"
-        in compare.COHORT_ORDER_WHY
+        "returns sorted() on an effective-path key of the parts of the input path followed by the path "
+        "relative to that input's root today" in compare.COHORT_ORDER_WHY
     )
 
 

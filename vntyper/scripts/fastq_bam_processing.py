@@ -159,10 +159,11 @@ def process_bam_to_fastq(
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
         if file_format.lower() == "bam":
-            # Use the offset-based extraction. The index is resolved htslib's way
-            # and, when one has to be built, it is built into the *output*
-            # directory: the input directory holds patient data and is routinely
-            # mounted read-only (#162, #210).
+            # Use the offset-based extraction. An existing BAI is resolved under
+            # either of its two names (CSI is deliberately not resolved - the
+            # offset extractor below reads BAI only) and, when one has to be
+            # built, it is built into the *output* directory: the input directory
+            # holds patient data and is routinely mounted read-only (#162, #210).
             bam_bai = resolve_bam_index(in_bam)
             if bam_bai is None:
                 bam_bai = str(Path(output) / f"{output_name}_input.bam.bai")

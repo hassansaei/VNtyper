@@ -196,6 +196,38 @@ def test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string(tmp_p
     assert [found.directory for found in dirs] == [plain, suffixed]
 
 
+def test_an_input_nested_inside_a_later_input_keeps_its_whole_path_position(tmp_path) -> None:
+    """**Specification**: the order is the whole-path order, including when inputs nest.
+
+    The nested case is the one a two-part key gets wrong. Given `cohort/a` as a direct
+    input and then `cohort` - which holds both `a` and `z` - discovery de-duplicates on
+    the sample directory, so `cohort/a` keeps the record the *first* input gave it. Under
+    a `(origin parts, relative parts)` key that record's outer half is
+    `(..., "cohort", "a")` while `z`'s is `(..., "cohort")`, and tuple comparison decides
+    it on the outer half alone: the parent's samples sort before the child's, giving
+    `z, a`.
+
+    Sorting on `Path` - what this did before the key was introduced - gives `a, z`, and so
+    does `ls`. A single flattened effective path, the input's parts followed by the
+    sample's parts below that input, restores it: `a` keys on
+    `(..., "cohort", "a")` whichever input claimed it, because the two compose to the same
+    tuple.
+
+    Reaching a directory both directly and through its parent is not a contrived input:
+    `vntyper cohort run_1 run_1/../` is one shell expansion away, and the web service
+    passes a caller-supplied list straight through.
+    """
+    child = _write_summary(tmp_path / "cohort" / "a")
+    sibling = _write_summary(tmp_path / "cohort" / "z")
+
+    dirs, _ = discover_sample_directories([str(child), str(tmp_path / "cohort")])
+
+    assert [found.directory for found in dirs] == [child, sibling]
+    # The same set of samples, named the other way round, has to agree.
+    reversed_inputs, _ = discover_sample_directories([str(tmp_path / "cohort"), str(child)])
+    assert [found.directory for found in reversed_inputs] == [child, sibling]
+
+
 #: Run in a subprocess: report the identities discovery finds under ``argv[1]``.
 #:
 #: ``identity`` rather than ``directory.name``: the identity is what the report actually

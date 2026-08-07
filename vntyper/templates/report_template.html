@@ -422,7 +422,9 @@
                     // .text() takes a text node, so neither goes through an HTML parse --
                     // which is what undid the server's escaping when this was built by
                     // concatenating into a markup string and calling .html().
-                    var isClean = (originalText === "Not flagged" || originalText === "Not applicable" || originalText === "");
+                    var isClean = (originalText === "Not flagged"
+                        || originalText === "Not applicable"
+                        || originalText === "");
                     var $mark = $('<span>')
                         .attr('data-toggle', 'tooltip')
                         .attr('title', originalText)
