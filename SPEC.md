@@ -321,12 +321,30 @@ reaches **both** consumers without new plumbing:
   `format_coverage_summary` writes it and the TSV carries it.
 * `COVERAGE_FIELD_TYPES` (`report_formatting.py:117-126`) gains `"coverage_qc": str`, so
   `parse_coverage_stats` reads it back.
-* The cohort path needs **no whitelist edit**: `additional_stats_frame`
+* The cohort **HTML** path needs **no whitelist edit**: `additional_stats_frame`
   (`cohort_tables.py:189-193`) flattens the whole coverage mapping with a `cov_` prefix
   and applies no projection, so the column appears as `cov_coverage_qc` in the cohort
   statistics table automatically. The audit's warning about `KESTREL_DISPLAY_COLUMNS`
   applies to the *Kestrel* table, which is not where a sample-level coverage verdict
   belongs. **`KESTREL_DISPLAY_COLUMNS` is not modified.**
+* The cohort **machine-readable exports do not get it for free**, which the first draft of
+  this spec got wrong. `cohort_summary.py:446-452` calls `write_cohort_frame` for the
+  Kestrel and adVNTR frames only; the statistics frame is rendered to HTML at `:429-432`
+  and never written. So `cohort_kestrel_{csv,tsv,json}` and `cohort_advntr_{csv,tsv,json}`
+  would carry no coverage at all.
+
+  #172 asks for the status "in the result output … so downstream consumers and users can
+  act on it", and its third bullet is specifically about cohort exports. A cohort consumer
+  reads the CSV, not the HTML. **A third export is therefore added**, which is one call:
+
+  ```python
+  write_cohort_frame(additional_stats_frame(additional_stats_list), output_dir, "cohort_stats", "Statistics", formats)
+  ```
+
+  This produces `cohort_stats_{csv,tsv,json}` carrying every `cov_*` column, `coverage_qc`
+  among them. It adds one file to the cohort output set, which the golden-cohort gate
+  compares (`docs/development/golden-cohort-gate.md`, "the set of cohort output files"), so
+  it lands as an attributable delta rather than a silent one.
 
 `summarise_coverage` keeps its two-argument signature and stays free of thresholds.
 `calculate_vntr_coverage` reads the two thresholds from `config["thresholds"]`, calls
@@ -351,7 +369,26 @@ axis, the `coverage_qc` context key and the existing icons.
 
 It **recomputes** rather than trusting the TSV's `coverage_qc` string, so that
 `vntyper report` still works against a `pipeline_summary.json` written before this change.
-Same pure function, same inputs, so the two can only agree.
+
+**The verdict is evaluated on the published figures, not on the raw ones.** This is the
+fix for the sharpest finding of the adversarial review (A1 below), and without it the
+"same function, same inputs" claim is false. `format_coverage_summary` writes `mean` and
+`percent_uncovered` with `:.2f` (`coverage_stats.py:59-60`, `:198-201`), and the report
+re-reads those rounded strings back out of `pipeline_summary.json`
+(`generate_report.py:412-414`). So a raw mean of `99.999` serialises as `100.00`: a writer
+evaluating the raw value emits `FAIL` while a report evaluating the stored value
+recomputes `PASS`, and the TSV column contradicts the screening axis.
+
+Both sides therefore evaluate the **rounded** values:
+
+```python
+qc = evaluate_coverage_qc(round(stats["mean"], 2), round(stats["percent_uncovered"], 2), ...)
+```
+
+This is also the better semantics, not merely the consistent one: a report that prints
+`Mean Coverage: 100.00` beside a threshold of 100 must not also print `FAIL`. The rule is
+stated as a docstring invariant — **the QC verdict is a function of the figures the report
+displays** — and pinned by a test at exactly the `99.999` boundary.
 
 ### Artefact delta
 
@@ -438,6 +475,28 @@ Adding `"Flag"` to `filter_cols` is one line and the wrong shape, for two reason
    advisory annotation rather than an artifact. Suppressing those rows would delete real
    low-depth calls — the exact failure mode this milestone exists to prevent.
 
+### The invariant this rests on, stated rather than assumed
+
+The adversarial review's strongest point (A2 below) is that
+`(REF == 'C') and (ALT == 'CGGCA')` carries no motif, position, depth or corroboration
+condition, so the *code* cannot distinguish a recurrent artifact from a genuine call with
+the same alleles.
+
+**The invariant is a domain fact, asserted by the issue author and recorded here rather
+than derived from the code:** the 4 bp C>CGGCA insertion is the typical Kestrel false
+positive in this pipeline. `docs/pipeline/flagging.md:16` already records the mechanism —
+"k-mer graph ambiguity in GC-rich regions of the VNTR". Confirmed by @berntpopp,
+2026-08-07: *"that's the typical false positive we flag."*
+
+Two properties keep the review's concern answered by design rather than by argument:
+
+1. **Nothing is destroyed.** The excluded row is present in `kestrel_pre_result.tsv` with
+   `flag_filter_pass=False`, so the evidence for any sample is always recoverable.
+2. **Nothing is hardcoded, so the decision is reversible from configuration.** The flag
+   name lives in `kestrel_config.json`; the Python reads the list and never names a flag
+   inline. Emptying `artifact_flags` restores today's behaviour with no code change, and
+   narrowing the artifact rule later is a config edit, not a patch.
+
 Instead: `kestrel_config.json` declares which flags are artifacts, and a derived boolean
 gate column is written unconditionally.
 
@@ -455,10 +514,14 @@ def add_artifact_gate(df: pd.DataFrame, artifact_flags: Sequence[str]) -> pd.Dat
   frame is empty. So the gate contract can never raise for a missing `flag_filter_pass`.
 * `Flag` is a comma-joined string, so membership is tested per element after splitting on
   `", "`, not by substring — a flag named `X` must not match a flag named `XY`.
-* `Flag` is coerced with `.fillna("")` before splitting. `add_flags` always writes a
-  string (`flagging.py:145`), but the column is also written by `mark_potential_duplicates`
-  and can be reindexed by upstream merges, so a NaN must degrade to "no artifact" rather
-  than raising inside the gate.
+* **`Flag` is not always a string, and the contract already says so.**
+  `tests/unit/test_haplo_count_and_selection.py:398-411`
+  (`test_unexpected_flag_values_treated_as_flagged`) passes `Flag=[…, None]` deliberately,
+  and `select_single_best_variant` (`kestrel_genotyping.py:749-754`) treats it as flagged.
+  A bare `value.split(", ")` raises on `None`, `NaN` and `pd.NA`. The gate coerces first,
+  and the chosen semantics is stated rather than incidental: **an unknown flag value is
+  not a declared artifact, so it passes the gate** while still being deprioritised by
+  selection. Absence of evidence is not evidence of an artifact.
 * Called in `process_kmer_results` step 6.5, **unconditionally**, after the existing
   conditional `add_flags` block. Placing it outside that `if` is what guarantees presence.
 * `filter_cols` gains `"flag_filter_pass"` → six gates.
@@ -479,8 +542,13 @@ true and stays as-is.
 
 ### Artefact delta
 
-* `kestrel_result.tsv` — artifact rows removed. An artifact-only sample yields an empty
-  result where it previously yielded one flagged row.
+* `kestrel_result.tsv` — artifact rows removed. An artifact-only sample yields the empty
+  negative sentinel where it previously yielded one flagged row. **It also gains the
+  `flag_filter_pass` column on every surviving row**: `filter_final_dataframe` filters rows
+  without projecting columns (`kestrel_genotyping.py:826-865`) and the frame is then
+  serialised wholesale (`:472-475`), which is why the five existing gates are already in
+  this file. Keeping the sixth is consistent with them; suppressing only the new one would
+  be the inconsistency.
 * `kestrel_pre_result.tsv` — one new column, `flag_filter_pass`, on every row.
 * HTML report and cohort — an artifact-only sample flips from positive to negative.
 
@@ -510,9 +578,13 @@ The audit names one tripwire. There are **two**, and the second fails harder.
 
 ### Predicted golden-cohort diff
 
-* `kestrel_pre_result` — **delta on every case**: one new column.
-* `kestrel_result` — delta only on cases whose selected variant is a 4 bp insertion
-  artifact. Each must be named.
+* `kestrel_pre_result` and `kestrel_result` — **a `columns_added` delta on every case that
+  reaches the final filter.** Not on every case: a run with no insertion or deletion calls
+  `output_empty_result` and returns before `process_kmer_results`
+  (`kestrel_genotyping.py:424-428`), so it writes no pre-result at all. "Every case" was
+  too broad in the first draft.
+* `kestrel_result` — additionally a **row** delta on cases whose selected variant is a
+  4 bp insertion artifact. Each must be named.
 * `screening_summary`, `report_tables`, `cohort_*` — follow from the above.
 * `pipeline_step_records` — **no delta**, for the reason given under #171:
   `kestrel_result.tsv` is directly compared, so its `md5sum` is stripped.
@@ -717,9 +789,73 @@ standing instruction).
 
 ### Definition of done
 
+`make check-all` is **not sufficient**, and the first draft of this spec said it was.
+`check-all` is `format-check lint type-check-all test-unit` (`Makefile:397`) — no coverage
+at all. CI additionally runs `make test-unit-cov` (`.github/workflows/ci-tests.yml:196`)
+and `make patch-coverage` (`:222`), and both can fail a PR: the hard floor is
+branch-inclusive at 80 (`pyproject.toml`), and the patch gate scores the changed lines of
+this diff at 80%. This PR adds a lot of new code, so the patch gate is the one that will
+actually bite.
+
 1. `make check-all` green, output pasted.
-2. Golden-cohort gate re-run, every delta attributed to a named change from this spec.
-3. One PR, not stacked, closing #171, #172, #174, #203, #212.
-4. A comment on #171 stating which of its four items are done and which is deferred, and
+2. `make test-unit-cov` green — the branch-inclusive floor still met, output pasted.
+3. `make patch-coverage` green — the changed lines of this branch at ≥80%, output pasted.
+4. Golden-cohort gate re-run, every delta attributed to a named change from this spec, and
+   every delta predicted here either observed or explained.
+5. One PR, not stacked, closing #171, #172, #174, #203, #212.
+6. A comment on #171 stating which of its four items are done and which is deferred, and
    a follow-up issue for the region harmonisation.
-5. Changelog and docs updated.
+7. Changelog and the seven docs files updated.
+
+`make ci-local` covers 1–3 in one command and is the preferred form.
+
+---
+
+## Adversarial review — Codex, GPT-5.6-Sol at xhigh reasoning effort
+
+Run read-only against this tree on 2026-08-07 (Codex session
+`019fdb6a-937b-77e3-9249-84f7a9b8ce36`, 46 tool calls). The brief was to **refute** the
+spec: where is it wrong, incomplete, or silently genotype-affecting.
+
+**Thirteen findings. Every one was verified against the code before being accepted; none
+was rejected.** The two that changed the design are A1 and A3.
+
+| # | Sev | Finding | Verified | Resolution |
+| --- | --- | --- | --- | --- |
+| A1 | HIGH | `coverage_qc` and the screening axis can **disagree at threshold boundaries**: the writer sees full-precision floats, the report re-reads two-decimal strings. Raw mean `99.999` → writer `FAIL`, report `PASS`. | Yes — `coverage_stats.py:59-60`, `:198-201`; `generate_report.py:412-414` | **Design changed.** Both sides evaluate the *published* (rounded) figures. The invariant is now "the verdict is a function of the figures the report displays", pinned by a test at `99.999`. |
+| A2 | HIGH | The artifact rule has no motif/position/depth condition, so a hard gate suppresses **any** C>CGGCA call; the spec asserted an invariant it could not derive. | Yes — `kestrel_config.json:44-46`; `test_flagging.py:160-165` | **Invariant recorded, not derived.** Asserted by the issue author (@berntpopp, 2026-08-07) and by `docs/pipeline/flagging.md:16`. Answered by design: the row survives in `kestrel_pre_result.tsv`, and `artifact_flags` is configuration, so the behaviour is reversible without a code change. |
+| A3 | HIGH | `flag_filter_pass` reaches **`kestrel_result.tsv`**, not only the pre-result — the filter does not project columns. | Yes — `kestrel_genotyping.py:826-865`, `:472-475` | Predicted diff corrected. Kept, because the five existing gates are already in that file. |
+| A4 | HIGH | `coverage_qc` does **not** reach the cohort machine-readable exports; only the Kestrel and adVNTR frames are written. | Yes — `cohort_summary.py:429-452` | A `cohort_stats_{csv,tsv,json}` export is added. One call. |
+| A5 | HIGH | The coverage consumer and fixture inventory was incomplete — the exact-dict fixture and the end-to-end TSV-bytes fixture were both missing. | Yes — `test_coverage_stats.py:95-110`, `:257-279`; `test_report_formatting.py:68-90`; `test_helpers.py:79-97` | All added to the change list. |
+| A6 | HIGH | `tests/builders.py` `STAGE_COLUMNS["final"]` feeds the **real** filter, so a sixth gate raises there. | Yes — `test_builders.py:290-296` | Already found independently in self-review; retained. |
+| A7 | HIGH | The Definition of Done omitted both coverage gates. `make check-all` runs no coverage. | Yes — `Makefile:397`; `ci-tests.yml:196`, `:222` | DoD rewritten: `test-unit-cov` and `patch-coverage` are now required, output pasted. |
+| A8 | MED | `pipeline_step_records` will **not** change under #171. | Yes | Already corrected in self-review; Codex reached the same conclusion independently. |
+| A9 | MED | Most `build_screening_summary` callers were omitted (ten, not three); the module and dataclass docstrings still define quality as mean-only. | Yes — `test_screening_summary.py:329-418`; `screening_summary.py:23-32`, `:72-92` | Call sites already corrected in self-review; the two docstrings added to the change list. |
+| A10 | MED | `Flag` can legitimately be `None` — the contract says so — and `.split(", ")` raises. | Yes — `test_haplo_count_and_selection.py:398-411` | Semantics stated explicitly: an unknown flag is not a *declared* artifact, so it passes the gate and is still deprioritised. |
+| A11 | MED | `docs/pipeline/flagging.md` documents flags as affecting **preference, not eligibility**. A hard exclusion reverses that contract. | Yes — `flagging.md:3`, `:88-98` | The docs change is now a stated contract reversal: artifact-class flags exclude, advisory flags still only deprioritise. |
+| A12 | LOW | "`kestrel_pre_result` changes on every case" is too broad — runs with no indel return before the pre-result is written. | Yes — `kestrel_genotyping.py:424-428` | Narrowed to "every case that reaches the final filter". |
+| A13 | LOW | `tests/benchmark/benchamrk_downsample.py` carries a private covered-position mean and a depth command without `-a`; not a caller, but a misleading benchmark once #171 lands. | Yes — `:172-220` | Updated with a comment pointing at #171, or left with an explicit note. Not gated by anything. |
+
+### Claims Codex checked and could not refute
+
+* **#203.** It re-counted the FASTA independently: 551 records, all 120 bp, all one-dash
+  pair names. It traced `#CHROM` → `Motifs` → `Motif_fasta`, and confirmed only the three
+  annotation fields — not the mutated `POS` — are copied back. Its verdict: "The rebase is
+  dead; applying it to `POS_fasta` would indeed be semantically wrong."
+* **#171's `-a` trap**, for the in-bounds region path.
+* **Exactly 40 screening states**, and that excluding only the 4 bp artifact leaves both
+  `*_flagged` states reachable via `Low_Depth_Conserved_Motifs`.
+* **No `KESTREL_DISPLAY_COLUMNS` edit is needed.**
+* **#212's conditional `result_file_missing` key is clean-run neutral**, and **no existing
+  test re-runs into a populated output directory** — integration deletes and recreates its
+  output directory (`test_pipeline_integration.py:50-64`) and the Docker tier uses
+  per-test subdirectories.
+* **#172 cannot move `is_positive`.**
+
+### One caveat worth carrying forward
+
+On #203's "zero golden diff", Codex notes the gate contains **no BED artefact at all** and
+its report reader extracts summary boxes and static tables, not the IGV payload
+(`compare.py:37-49`, `artifacts.py:199-227`). So zero diff is expected *partly because the
+gate cannot see `output.bed`*. The new `generate_bed_file` content test is what actually
+covers the rider — the gate is not evidence for it, and must not be cited as such.
