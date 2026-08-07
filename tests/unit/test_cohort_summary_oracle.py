@@ -725,6 +725,33 @@ def test_the_exported_statistics_frame_carries_the_coverage_qc_verdict(tmp_path,
     assert captured["cohort_stats"]["cov_coverage_qc"].tolist() == ["FAIL"]
 
 
+def test_a_cohort_whose_samples_yield_no_statistics_writes_no_statistics_export(tmp_path, caplog) -> None:
+    """An empty statistics frame writes nothing, rather than a header-only CSV.
+
+    Reachable: a sample directory whose `pipeline_summary.json` does not parse is
+    logged and dropped, contributing no statistics row. `write_cohort_frame` already
+    returns early on an empty frame, so this pins the branch that decides what it is
+    handed - the same rule `cohort_advntr` follows when no sample ran adVNTR.
+    """
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_inputs")
+    cohort = tmp_path / "cohort"
+    (cohort / "sample_one").mkdir(parents=True)
+    (cohort / "sample_one" / "pipeline_summary.json").write_text("{not json", encoding="utf-8")
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv",
+    )
+
+    assert not (output_dir / "cohort_stats.csv").exists()
+    assert (output_dir / "cohort_summary.html").exists(), "the report is still written"
+
+
 def test_the_statistics_export_and_the_html_table_are_the_same_frame(tmp_path) -> None:
     """One value, two consumers: the CSV a cohort consumer reads must not be able to
     say something the rendered table does not."""
