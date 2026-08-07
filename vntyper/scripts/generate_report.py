@@ -321,6 +321,35 @@ def build_cross_match_summary(pipeline_summary):
     return "No matches were found between Kestrel and adVNTR results.", False
 
 
+#: The release in which coverage statistics became region-wide (#171). A summary written
+#: by an older version carries a ``mean`` over *covered* positions, which is not comparable
+#: with the thresholds applied to it today.
+REGION_WIDE_MEAN_SINCE = (2, 0, 8)
+
+
+def _predates_region_wide_mean(version: str | None) -> bool:
+    """Whether a recorded pipeline version is older than the region-wide coverage change.
+
+    Args:
+        version (str | None): The ``version`` recorded in ``pipeline_summary.json``.
+
+    Returns:
+        bool: True only when the version parses and is strictly older than
+        :data:`REGION_WIDE_MEAN_SINCE`. An absent, empty or unparseable version returns
+        False, so an unrecognised summary is left exactly as it is rather than having its
+        numbers silently rescaled.
+    """
+    if not version:
+        return False
+    parts = version.strip().lstrip("v").split(".")[:3]
+    try:
+        parsed = tuple(int(part) for part in parts)
+    except ValueError:
+        logger.debug("Unparseable pipeline version %r; leaving coverage figures untouched.", version)
+        return False
+    return parsed < REGION_WIDE_MEAN_SINCE
+
+
 def generate_summary_report(
     output_dir,
     template_dir,
@@ -409,16 +438,45 @@ def generate_summary_report(
     assembly_contig = header_info.get("assembly_contig", "")
 
     # VNTR coverage statistics, keyed by the frozen coverage schema (contract C1).
-    coverage = parse_coverage_stats(get_step_data(pipeline_summary, STEP_COVERAGE))
+    coverage_rows = get_step_data(pipeline_summary, STEP_COVERAGE)
+    coverage = parse_coverage_stats(coverage_rows)
     mean_vntr_coverage = coverage["mean"]
     percent_vntr_uncovered = coverage["percent_uncovered"]
 
-    # The coverage QC verdict, recomputed rather than read out of the stored
-    # `coverage_qc` column, so `vntyper report` still works against a
-    # pipeline_summary.json written before #172. Both sides evaluate the *published*
-    # two-decimal figures - these were serialised with `:.2f` - so they cannot disagree.
+    # A summary written before 2.0.8 carries no `coverage_qc` column, and its `mean` is the
+    # mean over *covered* positions rather than over the region (#171) - so judging it with
+    # the new rule would be too lenient: an old mean of 150 at 40% uncovered passes a 100x
+    # threshold, while the region-wide mean it stands for is 90 and fails.
+    #
+    # The mean is recoverable exactly rather than approximately. `percent_uncovered` was
+    # already correct before 2.0.8, and with S = sum(depths), c = covered, T = region:
+    # (S/c) * (1 - (T-c)/T) = (S/c)(c/T) = S/T. The golden-cohort gate confirmed this
+    # identity holds on 61 of 61 cases. So correct the number and judge the corrected one.
+    # Two signals are required, and the default is to change nothing. A missing
+    # `coverage_qc` column alone is not proof of an old summary - a hand-built or
+    # third-party one may simply omit it, and silently rescaling its mean would be worse
+    # than the problem being fixed. So also require the recorded version to parse to
+    # something older than 2.0.8; an absent or unreadable version leaves the number alone.
+    legacy_summary = (
+        bool(coverage_rows) and "coverage_qc" not in coverage_rows[0] and _predates_region_wide_mean(pipeline_version)
+    )
+    mean_for_qc = mean_vntr_coverage
+    if legacy_summary and mean_vntr_coverage is not None and percent_vntr_uncovered is not None:
+        mean_for_qc = round(mean_vntr_coverage * (1 - percent_vntr_uncovered / 100), 2)
+        logger.info(
+            "Coverage summary predates 2.0.8; correcting its covered-bases mean %.2f to the "
+            "region-wide %.2f before applying the QC rule (#171).",
+            mean_vntr_coverage,
+            mean_for_qc,
+        )
+
+    # Recomputed rather than read out of the stored `coverage_qc`, so `vntyper report` still
+    # works against a summary written before #172. Given the same thresholds both sides
+    # evaluate the *published* two-decimal figures - serialised with `:.2f` - so they agree.
+    # Supplying different thresholds to `vntyper report` deliberately yields a different
+    # verdict from the one stored at run time; that is the caller asking for one.
     coverage_qc = evaluate_coverage_qc(
-        mean_vntr_coverage,
+        mean_for_qc,
         percent_vntr_uncovered,
         mean_vntr_cov_threshold,
         percent_vntr_uncovered_threshold,

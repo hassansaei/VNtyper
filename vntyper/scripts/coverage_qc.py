@@ -33,10 +33,21 @@ logger = logging.getLogger(__name__)
 COVERAGE_QC_PASS = "PASS"
 COVERAGE_QC_FAIL = "FAIL"
 
+#: The verdict when there is nothing to judge. Distinct from ``PASS`` on purpose: a report
+#: that prints "Coverage QC: PASS" beside "Mean Coverage: Not calculated" is asserting a
+#: quality claim it never checked. ``passed`` stays True for this state, so the screening
+#: axis keeps the behaviour pinned by
+#: ``test_screening_summary.py::test_coverage_that_was_never_measured_passes_the_quality_gate``
+#: - only the displayed status becomes honest.
+COVERAGE_QC_NOT_EVALUATED = "NOT_EVALUATED"
+
 #: Reason identifiers, named after the ``config.json`` threshold keys they come from so a
 #: consumer can look up the number that was applied.
 REASON_MEAN = "mean_vntr_coverage"
 REASON_UNCOVERED = "percent_vntr_uncovered"
+
+#: Why a verdict could not be reached: no ``Coverage Calculation`` step ran at all.
+REASON_NOT_MEASURED = "coverage_not_measured"
 
 
 @dataclass(frozen=True)
@@ -82,6 +93,14 @@ def evaluate_coverage_qc(
         uncovered fraction fails strictly *above* its own. A sample at exactly 100x and
         exactly 50.0% uncovered passes both.
     """
+    # Nothing was measured, so there is nothing to judge. Reporting PASS here would state a
+    # quality claim that was never checked - the report would print "Coverage QC: PASS"
+    # beside "Mean Coverage: Not calculated". `passed` stays True so the screening axis is
+    # unchanged; only the status tells the truth.
+    if mean_vntr_coverage is None and percent_vntr_uncovered is None:
+        logger.info("Coverage QC not evaluated: no coverage was measured for this sample.")
+        return CoverageQC(passed=True, status=COVERAGE_QC_NOT_EVALUATED, reasons=(REASON_NOT_MEASURED,))
+
     reasons: list[str] = []
 
     if mean_vntr_coverage is not None and mean_vntr_coverage < mean_threshold:

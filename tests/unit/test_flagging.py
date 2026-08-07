@@ -819,3 +819,35 @@ def test_no_artifact_flag_name_is_written_into_the_flagging_module(kestrel_confi
 
     for flag in kestrel_config["artifact_flags"]:
         assert flag not in source, f"{flag!r} is hardcoded in flagging.py; it must come from configuration"
+
+
+def test_a_string_artifact_flags_value_is_refused_rather_than_iterated():
+    """`"artifact_flags": "Foo"` is valid JSON and an easy thing to write instead of a list.
+
+    A bare string satisfies `Sequence[str]`, and `set("Foo")` is a set of *characters* - so
+    the gate would silently degrade to matching single letters and let every artifact
+    through. The whole point of #174 is that a known artifact is not reported as a call, so
+    a config typo must not quietly undo it. Found by adversarial review of the PR.
+    """
+    df = pd.DataFrame({"Flag": ["False_Positive_4bp_Insertion"]})
+
+    with pytest.raises(ValueError, match="must be a list of flag names"):
+        add_artifact_gate(df, "False_Positive_4bp_Insertion")
+
+
+def test_an_artifact_flag_containing_a_comma_is_refused():
+    """`Flag` is comma-joined, so such a name could never match and would be inert."""
+    df = pd.DataFrame({"Flag": ["Artifact,Comma"]})
+
+    with pytest.raises(ValueError, match="must not contain a comma"):
+        add_artifact_gate(df, ["Artifact,Comma"])
+
+
+def test_the_shipped_artifact_flags_survive_both_guards():
+    """The guards must not reject the real configuration."""
+    config = json.loads(Path("vntyper/scripts/kestrel_config.json").read_text(encoding="utf-8"))
+    df = pd.DataFrame({"Flag": ["False_Positive_4bp_Insertion", "Not flagged"]})
+
+    out = add_artifact_gate(df, config["artifact_flags"])
+
+    assert out["flag_filter_pass"].tolist() == [False, True]

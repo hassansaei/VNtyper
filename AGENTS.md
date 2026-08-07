@@ -155,14 +155,14 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 80** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 81** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
-| **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+| **Target: 81%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. Measured on the same suite: **80.24% branch-inclusive, 80.77% statement-only**.
+against. Measured on the same suite: **81.70% branch-inclusive** (was 80.24% before #171-#212 raised it; 80.77% statement-only at that earlier measurement).
 So deleting `branch = true` *raises* the reported total while covering strictly less —
 the ratchet cannot catch that regression, because the number moves the wrong way, and
 `tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing

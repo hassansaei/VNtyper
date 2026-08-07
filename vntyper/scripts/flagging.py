@@ -212,8 +212,35 @@ def add_artifact_gate(df: pd.DataFrame, artifact_flags: Sequence[str]) -> pd.Dat
         carry no declared artifact and therefore pass. ``select_single_best_variant``
         still deprioritises them.
     """
+    # A bare string is a valid `Sequence[str]`, and `set("Foo")` is a set of *characters* -
+    # so writing a plain string instead of a one-element list in kestrel_config.json, which
+    # is valid JSON and an easy slip, would silently degrade the gate to matching single
+    # letters and let every artifact through. Refuse it loudly: the whole point of #174 is
+    # that a known artifact must not be reported as a call, and a config typo must not
+    # quietly undo that.
+    if isinstance(artifact_flags, str):
+        msg = (
+            f"artifact_flags must be a list of flag names, not the string {artifact_flags!r}. "
+            "A string would be iterated character by character, silently disabling the "
+            "artifact gate. See issue #174."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
     result = df.copy()
-    artifacts = set(artifact_flags)
+    artifacts = {str(flag).strip() for flag in artifact_flags}
+
+    # `Flag` is joined with ", " and split on ",", so a declared name containing a comma
+    # could never match any element and would be silently inert.
+    commas = sorted(flag for flag in artifacts if "," in flag)
+    if commas:
+        msg = (
+            f"artifact_flags entries must not contain a comma: {commas}. The 'Flag' column is "
+            "comma-joined, so such a name can never match and the gate would silently do "
+            "nothing. See issue #174."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
 
     if "Flag" not in result.columns or not artifacts:
         logger.debug("No artifact flags to apply (or no 'Flag' column); every row passes the gate.")

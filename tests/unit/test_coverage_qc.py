@@ -10,8 +10,10 @@ import pytest
 
 from vntyper.scripts.coverage_qc import (
     COVERAGE_QC_FAIL,
+    COVERAGE_QC_NOT_EVALUATED,
     COVERAGE_QC_PASS,
     REASON_MEAN,
+    REASON_NOT_MEASURED,
     REASON_UNCOVERED,
     evaluate_coverage_qc,
 )
@@ -95,3 +97,47 @@ def test_the_verdict_is_frozen():
 
     with pytest.raises(AttributeError):
         qc.passed = False  # type: ignore[misc]
+
+
+def test_an_unmeasured_sample_is_not_reported_as_passing():
+    """A verdict of PASS for a sample with no coverage data is a claim never checked.
+
+    The report would print "Coverage QC: PASS" beside "Mean Coverage: Not calculated".
+    `passed` stays True so the screening axis keeps the behaviour pinned by
+    `test_coverage_that_was_never_measured_passes_the_quality_gate`; only the displayed
+    status becomes honest. Found by adversarial review of the PR.
+    """
+    qc = evaluate_coverage_qc(None, None, 100, 50.0)
+
+    assert qc.status == COVERAGE_QC_NOT_EVALUATED
+    assert qc.reasons == (REASON_NOT_MEASURED,)
+    assert qc.passed is True, "the screening axis must not change; only the status does"
+
+
+def test_one_measured_metric_is_still_evaluated():
+    """NOT_EVALUATED is for *nothing* measured, not for a partially populated summary."""
+    assert evaluate_coverage_qc(250.0, None, 100, 50.0).status == COVERAGE_QC_PASS
+    assert evaluate_coverage_qc(10.0, None, 100, 50.0).status == COVERAGE_QC_FAIL
+    assert evaluate_coverage_qc(None, 90.0, 100, 50.0).status == COVERAGE_QC_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Judging a summary written before the region-wide coverage change (#171)
+# ---------------------------------------------------------------------------
+
+
+def test_a_pre_2_0_8_mean_is_corrected_before_it_is_judged():
+    """Adversarial review of the PR: an old mean is not comparable with the thresholds.
+
+    Before 2.0.8 the mean excluded uncovered bases, so a stored 150.0 at 40% uncovered
+    stands for a region-wide 90.0 and should fail a 100x threshold - judging the stored
+    figure passes it. `percent_uncovered` was already correct, so the identity
+    `mean_old * (1 - pct/100)` recovers the region-wide value exactly; the golden-cohort
+    gate confirmed it on 61 of 61 cases.
+    """
+    stored_mean, pct = 150.0, 40.0
+    corrected = round(stored_mean * (1 - pct / 100), 2)
+
+    assert corrected == 90.0
+    assert evaluate_coverage_qc(stored_mean, pct, 100, 50.0).status == COVERAGE_QC_PASS, "the stored figure is lenient"
+    assert evaluate_coverage_qc(corrected, pct, 100, 50.0).status == COVERAGE_QC_FAIL, "the corrected figure is right"
