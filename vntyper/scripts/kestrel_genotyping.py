@@ -234,9 +234,9 @@ def run_kestrel(
     sizes from the config (often just a single size: 20).
 
     Steps:
-      1) Construct command for each k-mer size.
-      2) If the final VCF already exists, skip.
-      3) Otherwise, run Kestrel, capturing logs.
+      1) Remove any VCF left behind by an earlier run (#212).
+      2) Construct command for each k-mer size.
+      3) Run Kestrel, capturing logs.
       4) Convert Kestrel's SAM→BAM, index.
       5) Call `process_kestrel_output()` for final filtering.
 
@@ -254,7 +254,9 @@ def run_kestrel(
             Important for Java initialization.
 
     Raises:
-        RuntimeError: If Kestrel fails for a given k-mer size.
+        RuntimeError: If Kestrel fails for a given k-mer size, or if no configured
+            k-mer size produced a VCF (see #212 -- returning silently there let the
+            pipeline report a manufactured negative).
 
     Returns:
         None
@@ -269,6 +271,25 @@ def run_kestrel(
 
     # Retrieve additional settings (defaults to empty)
     additional_settings = kestrel_settings.get("additional_settings", "")
+
+    # #212: a pre-existing output.vcf used to skip the whole stage and `return`, which
+    # also skipped the two statements that turn a VCF into a result. Re-running into a
+    # directory left by an interrupted run then either re-reported a stale result or
+    # produced none at all -- and a step with no result file is rendered as a negative.
+    # Deliberate reuse belongs behind the --resume flag proposed in #20; this ad-hoc,
+    # unflagged version is unsafe. The stale file is removed rather than left for the JAR
+    # to overwrite so the log says why, and the removal sits *before* the loop rather than
+    # inside it: the only way to reach a second iteration is for the first to have written
+    # no VCF, so a per-iteration unlink is a no-op at best and, if the loop ever grows a
+    # `continue` after a successful iteration, deletes a good result.
+    if vcf_path.is_file():
+        logger.warning(f"Removing a VCF left by an earlier run before re-running Kestrel: {vcf_path}")
+        vcf_path.unlink()
+
+    # Whether some k-mer size both ran Kestrel and post-processed its VCF. `break` below
+    # is reachable only inside `if vcf_path.is_file()`, so a Kestrel invocation that exits
+    # 0 without writing a VCF used to fall out of the loop and return None.
+    completed = False
 
     # Try each k-mer size in sequence. Usually just [20], can be more.
     for kmer_size in kmer_sizes:
@@ -291,29 +312,37 @@ def run_kestrel(
 
         log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
 
-        # If the final VCF already exists, skip new runs
+        logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+
+        # Actually run the Kestrel command
+        if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
+            logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
+            raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+
+        logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
+
+        # Now that Kestrel completed, confirm the VCF is present
         if vcf_path.is_file():
-            logger.info("VCF file already exists, skipping Kestrel run...")
-            return
-        else:
-            logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+            # Convert the intermediate SAM→BAM (for debugging or IGV)
+            sam_file = os.path.join(output_dir, "output.sam")
+            convert_sam_to_bam_and_index(sam_file, output_dir)
 
-            # Actually run the Kestrel command
-            if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
-                logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
-                raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+            # Postprocess final output
+            process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
+            completed = True
+            break  # Stop after the first successful k-mer size
 
-            logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
+        # Exit status 0 with no VCF is the silent path #212 is about. Say so, then let the
+        # next configured k-mer size try.
+        logger.warning(f"Kestrel exited successfully for k-mer size {kmer_size} but wrote no VCF to {vcf_path}.")
 
-            # Now that Kestrel completed, confirm the VCF is present
-            if vcf_path.is_file():
-                # Convert the intermediate SAM→BAM (for debugging or IGV)
-                sam_file = os.path.join(output_dir, "output.sam")
-                convert_sam_to_bam_and_index(sam_file, output_dir)
-
-                # Postprocess final output
-                process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
-                break  # Stop after the first successful k-mer size
+    if not completed:
+        msg = (
+            "Kestrel produced no VCF for any configured k-mer size, so no result file was written. "
+            "Reporting this as a negative would manufacture a confident negative genotype. See issue #212."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
 
 def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
