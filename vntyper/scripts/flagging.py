@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 
 import pandas as pd
 
@@ -174,6 +175,96 @@ def add_flags(df: pd.DataFrame, flag_rules: dict, duplicates_config: dict | None
         logger.debug("No duplicates_config or 'enabled' is False; skipping duplicate flagging.")
 
     return df_copy
+
+
+def add_artifact_gate(df: pd.DataFrame, artifact_flags: Sequence[str]) -> pd.DataFrame:
+    """Mark rows carrying a declared artifact flag as failing the final filter.
+
+    A flag is an annotation; most flags mean "this call warrants scrutiny". A few name a
+    known technical artifact instead - a row that is not a candidate variant at all - and
+    those must not reach ``kestrel_result.tsv``, where a consumer would read them as a
+    call. Before #174, an artifact-only sample produced one flagged row that
+    ``report_config.json`` mapped to ``High_Precision_flagged``, which ``is_finding``
+    treats as a positive.
+
+    Which flags are artifacts is **configuration** (``kestrel_config.json``'s
+    ``artifact_flags``), never a name written into this function. Emptying that list
+    restores the pre-#174 behaviour without a code change.
+
+    This stage marks; it does not filter. ``filter_final_dataframe`` drops the rows, and
+    ``kestrel_pre_result.tsv`` keeps every one of them with ``flag_filter_pass=False`` so
+    the evidence for a sample is never destroyed.
+
+    Args:
+        df (pd.DataFrame): The variant frame. A missing ``Flag`` column is legitimate -
+            a negative run carries none - and yields an all-True gate.
+        artifact_flags (Sequence[str]): Flag names that disqualify a row.
+
+    Returns:
+        pd.DataFrame: A copy with a boolean ``flag_filter_pass`` column, present on every
+        row including when the frame is empty. ``filter_final_dataframe`` raises on a
+        missing gate column, so unconditional presence is the contract.
+
+    Note:
+        ``Flag`` is a comma-joined string, so membership is tested per element rather than
+        by substring: an artifact named ``X`` must not exclude a flag named ``XY``. Values
+        that are not strings - ``None``, ``NaN``, ``pd.NA``, all accepted inputs today -
+        carry no declared artifact and therefore pass. ``select_single_best_variant``
+        still deprioritises them.
+    """
+    # A bare string is a valid `Sequence[str]`, and `set("Foo")` is a set of *characters* -
+    # so writing a plain string instead of a one-element list in kestrel_config.json, which
+    # is valid JSON and an easy slip, would silently degrade the gate to matching single
+    # letters and let every artifact through. Refuse it loudly: the whole point of #174 is
+    # that a known artifact must not be reported as a call, and a config typo must not
+    # quietly undo that.
+    if isinstance(artifact_flags, str):
+        msg = (
+            f"artifact_flags must be a list of flag names, not the string {artifact_flags!r}. "
+            "A string would be iterated character by character, silently disabling the "
+            "artifact gate. See issue #174."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    result = df.copy()
+    artifacts = {str(flag).strip() for flag in artifact_flags}
+
+    # `Flag` is joined with ", " and split on ",", so a declared name containing a comma
+    # could never match any element and would be silently inert.
+    commas = sorted(flag for flag in artifacts if "," in flag)
+    if commas:
+        msg = (
+            f"artifact_flags entries must not contain a comma: {commas}. The 'Flag' column is "
+            "comma-joined, so such a name can never match and the gate would silently do "
+            "nothing. See issue #174."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if "Flag" not in result.columns or not artifacts:
+        logger.debug("No artifact flags to apply (or no 'Flag' column); every row passes the gate.")
+        result["flag_filter_pass"] = pd.Series(True, index=result.index, dtype=bool)
+        return result
+
+    def _is_clean(value: object) -> bool:
+        """Return True when this ``Flag`` value names no declared artifact.
+
+        Args:
+            value (object): One ``Flag`` cell. Not necessarily a string.
+
+        Returns:
+            bool: False only when a declared artifact is one of the comma-separated
+            elements of a string value.
+        """
+        if not isinstance(value, str):
+            return True
+        return not artifacts.intersection(part.strip() for part in value.split(","))
+
+    result["flag_filter_pass"] = result["Flag"].map(_is_clean).astype(bool)
+    excluded = int((~result["flag_filter_pass"]).sum())
+    logger.debug(f"Artifact gate applied with {sorted(artifacts)}; {excluded} row(s) marked for exclusion.")
+    return result
 
 
 def mark_potential_duplicates(

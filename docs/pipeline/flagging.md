@@ -1,6 +1,25 @@
 # Variant Flagging
 
-Flagging applies configurable, post-hoc empirical filters to variant calls. Unlike the scoring and confidence system (which determines whether a variant is real), flagging identifies calls that may be technically valid but warrant additional scrutiny due to known artifact patterns.
+Flagging applies configurable, post-hoc empirical filters to variant calls. Unlike the scoring and confidence system (which determines whether a variant is real), flagging annotates calls with named patterns observed in Kestrel output.
+
+There are **two classes of flag**, and they have different consequences:
+
+| Class | Declared in | Effect on the reported call |
+|-------|-------------|-----------------------------|
+| **Advisory** | `flagging_rules` only | The call is reported. The flag lowers its priority during variant selection, and appears in the `Flag` column of the report. |
+| **Artifact** | `flagging_rules` **and** `artifact_flags` | The call is **excluded** from `kestrel_result.tsv`. It survives in `kestrel_pre_result.tsv` with `flag_filter_pass = False`. |
+
+An advisory flag identifies a call that may be technically valid but warrants additional scrutiny. An artifact flag identifies a call that is not a candidate variant at all --- a known technical artifact of the k-mer genotyping --- so reporting it as a call would be wrong rather than merely cautious.
+
+!!! warning "Artifact flags exclude, they do not merely deprioritise (Issue #174)"
+    Before the Issue #174 fix, *every* flag was advisory. A sample whose only call was
+    the 4-bp insertion artifact produced one `High_Precision` row with a non-empty `Flag`,
+    which `report_config.json` maps to the `High_Precision_flagged` screening state ---
+    and `is_finding` treats that as a **positive** MUC1 finding. The HTML report
+    therefore styled a known technical artifact as a positive result.
+
+    Which flags are artifacts is configuration, not code: see
+    [Artifact Flags](#artifact-flags) below.
 
 ## How Flagging Works
 
@@ -21,6 +40,8 @@ The default rules in `kestrel_config.json`:
 
 Flags a specific 4-bp insertion (C > CGGCA) that has been empirically observed as a recurrent false positive in the Kestrel output. This artifact likely arises from k-mer graph ambiguity in GC-rich regions of the VNTR.
 
+This is the one flag the shipped configuration declares as an **artifact** (see [Artifact Flags](#artifact-flags)), so a row carrying it is excluded from `kestrel_result.tsv`. A sample whose only call is this insertion is reported as **negative**.
+
 ### Low_Depth_Conserved_Motifs
 
 ```
@@ -28,6 +49,48 @@ Flags a specific 4-bp insertion (C > CGGCA) that has been empirically observed a
 ```
 
 Flags variants occurring in conserved repeat unit motifs (numbered motifs 1--9) when the depth score is below 0.4. These motifs are highly conserved across MUC1 VNTR alleles, making true pathogenic variants in these positions unlikely unless strongly supported by sequencing depth.
+
+This flag is **advisory**. A low-depth call in a conserved motif is still a call: it is reported, and the flag only lowers its priority if another candidate competes with it. Excluding these rows would delete real low-depth calls.
+
+## Artifact Flags
+
+`artifact_flags` lists the flag names that disqualify a row from being reported:
+
+```json
+{
+  "artifact_flags": ["False_Positive_4bp_Insertion"]
+}
+```
+
+A flag name must appear in **both** `flagging_rules` (which is what raises it) and `artifact_flags` (which is what makes it disqualifying). A name in `artifact_flags` that no rule can raise is inert.
+
+### How the exclusion works
+
+After flagging, VNtyper derives a boolean column `flag_filter_pass`, which is `False` exactly when the row's `Flag` value contains one of the declared artifact names:
+
+- The `Flag` value is comma-separated, so membership is tested **per element**, not as a substring. An artifact named `X` does not match a flag named `XY`.
+- A row carrying both an artifact flag and an advisory flag is excluded --- one artifact is enough.
+- Rows with no `Flag` value, or a missing `Flag` column (a negative run carries none), pass the gate. Absence of evidence is not evidence of an artifact.
+
+`flag_filter_pass` is then the sixth of the boolean gates that the final filter requires to all be `True`, alongside `is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass` and `motif_filter_pass`.
+
+!!! note "Nothing is destroyed"
+    Consistent with the pipeline's "stages mark, they do not filter" contract, the
+    artifact gate **marks**; only the final filter drops rows. Every excluded row is
+    written to `kestrel_pre_result.tsv` with `flag_filter_pass = False` beside the
+    `Flag` value that explains it, so the evidence for a sample is always recoverable.
+
+### Reverting or narrowing the decision
+
+Emptying the list restores the previous behaviour, where every flag was advisory, with no code change:
+
+```json
+{
+  "artifact_flags": []
+}
+```
+
+The flag name is never written into the Python; `add_artifact_gate` reads the list from `kestrel_config.json`. Narrowing or withdrawing the artifact rule is therefore a configuration edit, made by whoever owns the domain judgement.
 
 ## Duplicate Flagging
 
@@ -85,9 +148,19 @@ To add a new flagging rule:
 
 The condition string has access to all columns in the variant DataFrame at the time of evaluation, including: `REF`, `ALT`, `POS`, `Motif`, `Variant`, `Depth_Score`, `Confidence`, `Estimated_Depth_AlternateVariant`, `Estimated_Depth_Variant_ActiveRegion`, and `is_valid_frameshift`.
 
-## Impact on Variant Selection
+A new rule is **advisory** by default. It becomes an artifact rule only if you also add its name to `artifact_flags`, and you should only do so for a pattern that is not a candidate variant at all.
 
-During the final variant selection step, the selection priority is:
+## Impact on the Reported Call
+
+The two flag classes act at different points in the pipeline, in this order.
+
+### Artifact flags: exclusion, at the final filter
+
+An artifact-flagged row has `flag_filter_pass = False` and is dropped by the final filter, **before** selection runs. It cannot be selected, cannot appear in `kestrel_result.tsv`, and cannot make a sample positive. If it was the sample's only candidate, the sample is reported as negative.
+
+### Advisory flags: priority, during selection
+
+Rows that survive the filter are ranked, and the selection priority is:
 
 1. Highest confidence level
 2. **Unflagged preferred over flagged**
@@ -95,4 +168,6 @@ During the final variant selection step, the selection priority is:
 4. Highest haplo_count
 5. Lowest genomic position
 
-This means a High_Precision unflagged variant will always be selected over a High_Precision flagged variant, even if the flagged variant has a higher depth score. This behavior ensures that known artifact patterns do not take priority over cleaner calls.
+This means a High_Precision unflagged variant will always be selected over a High_Precision flagged variant, even if the flagged variant has a higher depth score. This behavior ensures that flagged calls do not take priority over cleaner ones.
+
+Step 2 still applies to advisory flags only, since artifact-flagged rows are already gone by the time selection runs.

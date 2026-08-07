@@ -47,6 +47,10 @@ The report includes quality metrics from multiple sources:
 
 Each metric is displayed with a color-coded indicator (green check or red warning) based on its threshold.
 
+The two coverage rows also decide a verdict. The report shows it as a **Coverage QC** row reading `PASS` or `FAIL`, and the same value is written to `coverage_summary.tsv` as a `coverage_qc` column and reaches the cohort exports as `cov_coverage_qc`. `FAIL` on either metric is what makes the screening summary report the sample's quality metrics as below threshold.
+
+Before VNtyper 2.0.8 the uncovered row was displayed and never enforced: only the mean decided the quality gate, so a sample with acceptable mean coverage and half the VNTR uncovered passed. The table above now describes what the code does.
+
 **BAM Header Information**
 
 For BAM/CRAM input, the report displays the detected reference assembly (from both text and contig matching), alignment pipeline, and any associated warnings.

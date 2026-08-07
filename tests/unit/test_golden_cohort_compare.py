@@ -468,3 +468,38 @@ def test_the_rendered_report_does_not_call_the_whole_matrix_derived(tmp_path: Pa
     cases: CaseSpec = {"a5c1_hg19_subset": (0, [], _GOOD_FILES)}
     text = compare.render_text(_compare(tmp_path, cases, cases))
     assert "selected by declared policy" in text
+
+
+# ---------------------------------------------------------------------------
+# The cohort statistics exports (#172), and why widening the gate needs its own test
+# ---------------------------------------------------------------------------
+
+
+def test_the_cohort_statistics_exports_are_compared() -> None:
+    """``cohort_stats_{csv,tsv,json}`` must be in the compared set, not merely written.
+
+    #172 adds a third cohort export carrying every ``cov_*`` column, ``coverage_qc``
+    among them. A new output the harness writes but never reads is a gate that narrowed
+    relative to the product: the three files would show up in ``cohort_output_files`` and
+    their *contents* would never be diffed. That is the same failure this module's
+    docstring describes for an artefact that stops being written.
+    """
+    for name in ("cohort_stats_csv", "cohort_stats_tsv", "cohort_stats_json"):
+        assert name in compare.COHORT_ARTIFACTS, f"{name} is written but not compared"
+
+    assert compare.COHORT_ARTIFACTS["cohort_stats_csv"] == ("table", ("Sample",))
+    assert compare.COHORT_ARTIFACTS["cohort_stats_json"] == ("opaque", ())
+
+
+def test_a_statistics_export_missing_from_one_side_is_a_delta_not_a_skip() -> None:
+    """The candidate failing to write the export must fail the gate, not pass it quietly.
+
+    ``absent_both`` is legitimately excluded from the delta list, so a widening that is
+    never exercised can report a pass it did not measure. One-sided absence is the case
+    that has to bite.
+    """
+    before = [{"Sample": "s1", "cov_coverage_qc": "PASS"}]
+
+    assert compare.diff_table(before, None, ("Sample",))["status"] != "absent_both"
+    assert compare.diff_table(before, None, ("Sample",))["status"] != "identical"
+    assert compare.diff_table(None, before, ("Sample",))["status"] != "identical"

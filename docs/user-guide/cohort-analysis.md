@@ -78,6 +78,11 @@ This produces:
 | `cohort_advntr.csv` | adVNTR results in CSV (if adVNTR was run) |
 | `cohort_advntr.tsv` | adVNTR results in TSV (if adVNTR was run) |
 | `cohort_advntr.json` | adVNTR results in JSON (if adVNTR was run) |
+| `cohort_stats.csv` | Per-sample statistics in CSV |
+| `cohort_stats.tsv` | Per-sample statistics in TSV |
+| `cohort_stats.json` | Per-sample statistics in JSON |
+
+`cohort_stats_*` carries the same rows as the report's additional statistics table: runtime, version, assembly and alignment pipeline per sample, plus every coverage metric under a `cov_` prefix -- `cov_mean`, `cov_percent_uncovered` and `cov_coverage_qc` among them. It is the only machine-readable cohort output carrying a coverage figure; before VNtyper 2.0.8 that table reached the HTML report and nothing else.
 
 ## HTML Report Contents
 

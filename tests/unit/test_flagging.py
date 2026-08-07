@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from vntyper.scripts.flagging import add_flags, evaluate_condition, regex_match
+from vntyper.scripts.flagging import add_artifact_gate, add_flags, evaluate_condition, regex_match
 
 pytestmark = pytest.mark.unit
 
@@ -642,3 +642,212 @@ class TestDuplicateMarkingLeavesNoTrace:
         assert "__dup_indicator" not in result.columns
         assert "__is_duplicate" not in result.columns
         assert list(result.columns) == ["REF", "ALT", "Depth_Score", "Motif", "Flag"]
+
+
+# --- #174: the artifact gate ---
+#
+# `add_artifact_gate` splits the flags into two classes. Most flags are advisory: they
+# say "this call warrants scrutiny", and their only effect is to deprioritise the row
+# during selection. A few name a known technical artifact - a row that is not a candidate
+# variant at all - and those must not reach `kestrel_result.tsv`, where a consumer would
+# read them as a call.
+#
+# Which flags are artifacts is configuration, never a name written into Python. Every test
+# below passes the list in explicitly for that reason; only
+# `test_the_shipped_config_declares_the_4bp_insertion_as_an_artifact` reads the shipped
+# value, and it is the single place the name appears.
+
+ARTIFACT_FLAG = "False_Positive_4bp_Insertion"
+
+
+class TestArtifactGate:
+    """`flag_filter_pass`: False iff the row carries a declared artifact flag."""
+
+    def test_a_declared_artifact_flag_fails_the_gate(self):
+        """The whole point: a declared artifact is marked for exclusion."""
+        df = pd.DataFrame({"Flag": [ARTIFACT_FLAG]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [False]
+
+    def test_an_advisory_flag_does_not_fail_the_gate(self):
+        """#174 excludes artifacts, not flags.
+
+        `Low_Depth_Conserved_Motifs` marks a call that warrants scrutiny, not one that is
+        technically impossible. Excluding it would delete real low-depth calls, which is
+        the failure mode this milestone exists to prevent.
+        """
+        df = pd.DataFrame({"Flag": ["Low_Depth_Conserved_Motifs", "Not flagged"]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [True, True]
+
+    def test_a_row_carrying_both_an_artifact_and_an_advisory_flag_is_excluded(self):
+        """`Flag` is comma-joined, so membership is per element."""
+        df = pd.DataFrame({"Flag": [f"Low_Depth_Conserved_Motifs, {ARTIFACT_FLAG}"]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [False]
+
+    def test_the_artifact_may_appear_in_any_position_of_the_joined_value(self):
+        """Order within `Flag` is incidental; `add_flags` emits rules in config order."""
+        df = pd.DataFrame({"Flag": [f"{ARTIFACT_FLAG}, Potential_Duplicate"]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [False]
+
+    def test_a_flag_name_is_matched_whole_and_not_as_a_substring(self):
+        """A substring test would exclude `..._Insertion_v2` given `..._Insertion`."""
+        df = pd.DataFrame({"Flag": [f"{ARTIFACT_FLAG}_v2"]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [True]
+
+    def test_a_declared_artifact_that_is_a_substring_of_a_present_flag_does_not_match(self):
+        """The mirror of the case above: the artifact is the shorter of the two names."""
+        df = pd.DataFrame({"Flag": ["Low_Depth_Conserved_Motifs"]})
+
+        assert add_artifact_gate(df, ["Low_Depth"])["flag_filter_pass"].tolist() == [True]
+
+    def test_a_frame_without_a_flag_column_still_gains_the_gate(self):
+        """A negative run's frame legitimately carries no `Flag` (report_formatting.py:68).
+
+        The gate must still be present, or `filter_final_dataframe` raises on a missing
+        required column - turning a safety gate into an abort.
+        """
+        out = add_artifact_gate(pd.DataFrame({"POS": [1, 2]}), [ARTIFACT_FLAG])
+
+        assert out["flag_filter_pass"].tolist() == [True, True]
+
+    @pytest.mark.parametrize("value", [None, float("nan"), pd.NA])
+    def test_an_unknown_flag_value_is_not_a_declared_artifact(self, value):
+        """`Flag=None` is an accepted input - test_haplo_count_and_selection.py:398 relies on it.
+
+        Selection still deprioritises it. But absence of evidence is not evidence of an
+        artifact, so it passes this gate rather than being excluded, and a bare `.split()`
+        would have raised.
+        """
+        df = pd.DataFrame({"Flag": [value]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [True]
+
+    def test_an_all_nan_float_flag_column_passes_rather_than_raising(self):
+        """The column-wide version of the case above.
+
+        A frame whose `Flag` column is entirely missing values is typed float64 by pandas,
+        not object, so the gate meets `numpy.float64` NaN rather than `None`. Elementwise
+        coercion is what keeps that from raising.
+        """
+        df = pd.DataFrame({"Flag": [float("nan"), float("nan")]})
+        assert df["Flag"].dtype == "float64", "the premise of this test is the float64 dtype"
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].tolist() == [True, True]
+
+    def test_an_empty_frame_gains_the_gate_column(self):
+        """`filter_final_dataframe` raises on a missing gate; an empty frame is no exception."""
+        assert "flag_filter_pass" in add_artifact_gate(pd.DataFrame(), [ARTIFACT_FLAG]).columns
+
+    def test_an_empty_frame_that_does_carry_a_flag_column_also_gains_the_gate(self):
+        """The other empty shape: zero rows but the full column set."""
+        out = add_artifact_gate(pd.DataFrame({"Flag": pd.Series(dtype=object)}), [ARTIFACT_FLAG])
+
+        assert out["flag_filter_pass"].tolist() == []
+
+    def test_the_gate_is_a_boolean_column(self):
+        """`filter_final_dataframe` ANDs it into a boolean mask, so the dtype is contractual."""
+        df = pd.DataFrame({"Flag": [ARTIFACT_FLAG, "Not flagged"]})
+
+        assert add_artifact_gate(df, [ARTIFACT_FLAG])["flag_filter_pass"].dtype == bool
+
+    def test_an_empty_artifact_list_excludes_nothing(self):
+        """Emptying `artifact_flags` in config restores the pre-#174 behaviour, with no code change.
+
+        This is the reversibility property #174 rests on: the decision lives in
+        `kestrel_config.json`, so narrowing or withdrawing it is a config edit.
+        """
+        df = pd.DataFrame({"Flag": [ARTIFACT_FLAG, "Low_Depth_Conserved_Motifs"]})
+
+        assert add_artifact_gate(df, [])["flag_filter_pass"].tolist() == [True, True]
+
+    def test_several_declared_artifacts_are_all_honoured(self):
+        """The config key is a list, so a second entry must gate as well as the first."""
+        df = pd.DataFrame({"Flag": [ARTIFACT_FLAG, "Another_Artifact", "Not flagged"]})
+
+        gate = add_artifact_gate(df, [ARTIFACT_FLAG, "Another_Artifact"])["flag_filter_pass"]
+
+        assert gate.tolist() == [False, False, True]
+
+    def test_the_callers_frame_is_not_mutated(self):
+        """Stages return copies; a leaked column would reach `kestrel_pre_result.tsv` twice."""
+        df = pd.DataFrame({"Flag": [ARTIFACT_FLAG]})
+
+        add_artifact_gate(df, [ARTIFACT_FLAG])
+
+        assert "flag_filter_pass" not in df.columns
+
+    def test_the_other_columns_and_the_row_order_survive(self):
+        """The gate marks; it does not drop, reorder or project."""
+        df = pd.DataFrame({"POS": [67, 54], "Flag": [ARTIFACT_FLAG, "Not flagged"]})
+
+        out = add_artifact_gate(df, [ARTIFACT_FLAG])
+
+        assert list(out.columns) == ["POS", "Flag", "flag_filter_pass"]
+        assert out["POS"].tolist() == [67, 54]
+
+    def test_the_flag_column_itself_is_left_untouched(self):
+        """The evidence stays readable in `kestrel_pre_result.tsv` beside the False gate."""
+        df = pd.DataFrame({"Flag": [f"Low_Depth_Conserved_Motifs, {ARTIFACT_FLAG}"]})
+
+        out = add_artifact_gate(df, [ARTIFACT_FLAG])
+
+        assert out["Flag"].iloc[0] == f"Low_Depth_Conserved_Motifs, {ARTIFACT_FLAG}"
+
+
+def test_the_shipped_config_declares_the_4bp_insertion_as_an_artifact(kestrel_config):
+    """Ties the code to configuration: the flag name is never written inline in Python.
+
+    The declared artifact must also be a flag some rule can actually raise, or the gate
+    would be inert - a typo in either half is invisible without this second assertion.
+    """
+    assert kestrel_config["artifact_flags"] == ["False_Positive_4bp_Insertion"]
+    assert "False_Positive_4bp_Insertion" in kestrel_config["flagging_rules"]
+
+
+def test_no_artifact_flag_name_is_written_into_the_flagging_module(kestrel_config):
+    """#174's non-negotiable constraint, asserted rather than trusted.
+
+    `add_artifact_gate` reads the list from `kestrel_config.json`. If a flag name ever
+    appears in the module's source, the reversibility property above is a fiction:
+    emptying `artifact_flags` would no longer restore the previous behaviour.
+    """
+    source = (Path(__file__).resolve().parents[2] / "vntyper" / "scripts" / "flagging.py").read_text(encoding="utf-8")
+
+    for flag in kestrel_config["artifact_flags"]:
+        assert flag not in source, f"{flag!r} is hardcoded in flagging.py; it must come from configuration"
+
+
+def test_a_string_artifact_flags_value_is_refused_rather_than_iterated():
+    """`"artifact_flags": "Foo"` is valid JSON and an easy thing to write instead of a list.
+
+    A bare string satisfies `Sequence[str]`, and `set("Foo")` is a set of *characters* - so
+    the gate would silently degrade to matching single letters and let every artifact
+    through. The whole point of #174 is that a known artifact is not reported as a call, so
+    a config typo must not quietly undo it. Found by adversarial review of the PR.
+    """
+    df = pd.DataFrame({"Flag": ["False_Positive_4bp_Insertion"]})
+
+    with pytest.raises(ValueError, match="must be a list of flag names"):
+        add_artifact_gate(df, "False_Positive_4bp_Insertion")
+
+
+def test_an_artifact_flag_containing_a_comma_is_refused():
+    """`Flag` is comma-joined, so such a name could never match and would be inert."""
+    df = pd.DataFrame({"Flag": ["Artifact,Comma"]})
+
+    with pytest.raises(ValueError, match="must not contain a comma"):
+        add_artifact_gate(df, ["Artifact,Comma"])
+
+
+def test_the_shipped_artifact_flags_survive_both_guards():
+    """The guards must not reject the real configuration."""
+    config = json.loads(Path("vntyper/scripts/kestrel_config.json").read_text(encoding="utf-8"))
+    df = pd.DataFrame({"Flag": ["False_Positive_4bp_Insertion", "Not flagged"]})
+
+    out = add_artifact_gate(df, config["artifact_flags"])
+
+    assert out["flag_filter_pass"].tolist() == [False, True]

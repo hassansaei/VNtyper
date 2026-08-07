@@ -406,7 +406,7 @@ show_missing = true
 # These percentages are a snapshot taken at the commit named above, not a live claim.
 # An earlier revision of this comment quoted kestrel_genotyping.py at 843 LOC / 41.9%,
 # figures already one commit stale when they were written.
-fail_under = 80
+fail_under = 81
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

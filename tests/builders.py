@@ -99,6 +99,7 @@ STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
         "motif_filter_pass",
         "Motif",
         "Flag",
+        "flag_filter_pass",
     ),
     "final": (
         "Motifs",
@@ -128,6 +129,7 @@ STAGE_COLUMNS: dict[str, tuple[str, ...]] = {
         "Flag",
         "Motif_fasta",
         "POS_fasta",
+        "flag_filter_pass",
     ),
 }
 
@@ -246,6 +248,9 @@ def kestrel_stage_frame(stage: str, rows: int = 1, **overrides: Any) -> pd.DataF
             "alt_filter_pass": True,
             "motif_filter_pass": True,
             "Flag": "Not flagged",
+            # #174's artifact gate. True by default because the default row is
+            # "Not flagged", and the gate is False only for a *declared* artifact.
+            "flag_filter_pass": True,
             "Motif_fasta": base["Motif"],
             "POS_fasta": base["POS"],
         }

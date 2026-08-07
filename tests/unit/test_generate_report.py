@@ -161,6 +161,62 @@ def test_coverage_that_was_never_calculated_says_so(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The coverage QC verdict - #172
+# ---------------------------------------------------------------------------
+
+
+def _coverage_qc_cell(html: str) -> str:
+    """The value rendered in the report's Coverage QC row."""
+    match = re.search(r"<td>Coverage QC</td>\s*<td>(.*?)</td>", html, re.DOTALL)
+    assert match, "the report has no Coverage QC row"
+    return match.group(1).strip()
+
+
+def test_a_well_covered_sample_reports_a_passing_coverage_qc(positive_summary) -> None:
+    """#172: 250x mean and 0.5% uncovered clears both shipped thresholds.
+
+    ``COVERAGE_ROW`` deliberately carries no ``coverage_qc`` key - it is a summary
+    written before this change - so this also pins that ``vntyper report`` recomputes
+    the verdict rather than reading a stored one.
+    """
+    assert _coverage_qc_cell(render(positive_summary)) == "PASS"
+
+
+def test_a_patchy_vntr_reports_a_failing_coverage_qc(tmp_path) -> None:
+    """The headline case: an acceptable mean with most of the VNTR uncovered.
+
+    Before #172 the report showed a red icon beside the uncovered fraction and no
+    verdict, and the screening sentence still read as quality-passing.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "percent_uncovered": 80.0}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+
+    assert _coverage_qc_cell(render(tmp_path)) == "FAIL"
+
+
+def test_the_reported_verdict_agrees_with_the_figure_it_prints_at_the_boundary(tmp_path) -> None:
+    """Adversarial review A1, end to end.
+
+    ``pipeline_summary.json`` carries what the TSV carries: a raw mean of 99.999 was
+    serialised as ``100.00``. A report evaluating that displayed figure must print
+    ``PASS`` beside it - printing ``FAIL`` next to a mean of 100.00 and a threshold of
+    100 is the contradiction the rounding contract exists to prevent.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [{**COVERAGE_ROW, "mean": "100.00"}]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+    )
+    html = render(tmp_path)
+
+    assert "100.0" in html, "the figure the verdict was computed from must be the one displayed"
+    assert _coverage_qc_cell(html) == "PASS"
+
+
+# ---------------------------------------------------------------------------
 # The Kestrel table
 # ---------------------------------------------------------------------------
 
@@ -654,3 +710,55 @@ def test_the_version_and_input_files_come_from_the_summary(positive_summary) -> 
     html = render(positive_summary)
     assert "9.9.9" in html
     assert "sample.bam" in html
+
+
+def test_an_unrecognised_pipeline_version_leaves_the_coverage_figures_alone() -> None:
+    """The legacy correction requires positive identification, and defaults to inaction.
+
+    A missing `coverage_qc` column alone is not proof of a pre-2.0.8 summary - a
+    hand-built or third-party one may simply omit it - and silently rescaling its mean
+    would be worse than the problem being fixed.
+    """
+    from vntyper.scripts.generate_report import _predates_region_wide_mean
+
+    assert _predates_region_wide_mean("2.0.7") is True
+    assert _predates_region_wide_mean("v2.0.6") is True
+    assert _predates_region_wide_mean("2.0.8") is False
+    assert _predates_region_wide_mean("2.1.0") is False
+    for unknown in (None, "", "garbage", "not.a.version"):
+        assert _predates_region_wide_mean(unknown) is False, f"{unknown!r} must not trigger a rescale"
+
+
+def test_a_pre_2_0_8_summary_is_judged_on_its_corrected_mean(tmp_path) -> None:
+    """The whole legacy path, end to end through the rendered report.
+
+    A summary recorded by 2.0.7 carries a mean over *covered* positions. Stored 150.0 at
+    40% uncovered stands for a region-wide 90.0, which fails the 100x threshold - judging
+    the stored figure would pass it and print a QC verdict the data does not support.
+    """
+    legacy_row = {**COVERAGE_ROW, "mean": 150.0, "percent_uncovered": 40.0}
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [legacy_row]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        version="2.0.7",
+    )
+
+    html = render(tmp_path)
+
+    assert _coverage_qc_cell(html) == "FAIL", "a pre-2.0.8 mean must be corrected before it is judged"
+
+
+def test_the_same_summary_recorded_by_this_version_is_taken_at_face_value(tmp_path) -> None:
+    """The correction must fire only for versions that actually predate the change."""
+    current_row = {**COVERAGE_ROW, "mean": 150.0, "percent_uncovered": 40.0}
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [current_row]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        version="2.0.8",
+    )
+
+    html = render(tmp_path)
+
+    assert _coverage_qc_cell(html) == "PASS", "a current summary's mean is already region-wide"

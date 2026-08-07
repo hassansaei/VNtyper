@@ -35,4 +35,4 @@ from __future__ import annotations
 #: result files that have no direct comparator, and folds a changed provenance banner into
 #: a table's status. Runs recorded under 1.0.0 measured strictly less; the four runs on the
 #: gate page were all produced by 1.0.0.
-HARNESS_VERSION = "1.1.0"
+HARNESS_VERSION = "1.2.0"

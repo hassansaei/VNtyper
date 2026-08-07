@@ -488,14 +488,23 @@ def motif_correction_and_annotation(df, merged_motifs, kestrel_config):
         combined_df = apply_combined_exclusions(combined_df, exclude_alts_combined, exclude_motifs_combined)
 
         # Adjust POS => create POS_fasta
+        #
+        # #203: there is nothing to adjust. `Motif_fasta` is a verbatim copy of `Motifs`,
+        # which is the VCF `#CHROM` - a record of
+        # All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa, every one of which is a
+        # 120 bp *pair* of 60 bp motifs named `<left>-<right>`. So `POS` is already an
+        # offset into the record `Motif_fasta` names, and that is exactly what
+        # generate_bed_file writes beside it. A `- position_threshold` rebase here would
+        # make every row at or above the threshold wrong by 60 bp.
+        #
+        # The code used to compute that rebase and assign it back to `POS` via
+        # `DataFrame.update` - `Series.mask` keeps the name `POS`, so it never reached
+        # `POS_fasta` - and `POS` is not read again. It read as working code.
+        #
+        # `position_threshold` keeps its live use in `split_left_right` above, which is
+        # what decides *which half* of the pair name a row's `Motif` is.
         combined_df["POS"] = pd.to_numeric(combined_df["POS"], errors="coerce").fillna(-1).astype(int)
         combined_df["POS_fasta"] = combined_df["POS"]
-        combined_df.update(
-            combined_df["POS"].mask(
-                combined_df["POS"] >= position_threshold,
-                lambda x: x - position_threshold,
-            )
-        )
     # =============== End Original Logic ===============
 
     # Mark pass/fail based on original_index

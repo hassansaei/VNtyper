@@ -26,7 +26,11 @@ The state has three axes:
   ``algorithm_logic.kestrel``, or that block's ``default``.
 * ``advntr_result`` -- likewise for ``algorithm_logic.advntr``, plus
   :data:`NOT_PERFORMED` when the adVNTR stage did not run.
-* ``quality_metrics_pass`` -- mean VNTR coverage against its threshold.
+* ``quality_metrics_pass`` -- the coverage QC verdict: **both** mean VNTR
+  coverage and the uncovered fraction against their configured thresholds
+  (#172). The caller evaluates it; this module only reads ``.passed``, so the
+  axis and the ``coverage_qc`` column written into the coverage summary are the
+  same value and cannot disagree.
 
 ``is_positive`` is derived from the first two by comparing against each block's
 declared ``default``, not by looking for a word in the rendered sentence. The
@@ -51,6 +55,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
+
+from vntyper.scripts.coverage_qc import CoverageQC
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +85,8 @@ class ScreeningSummary:
             template's emphasis; computed from the state, never from ``text``.
         kestrel_result: The computed Kestrel state value.
         advntr_result: The computed adVNTR state value.
-        quality_metrics_pass: Whether mean VNTR coverage met its threshold.
+        quality_metrics_pass: Whether the sample met every configured coverage
+            threshold - mean depth and uncovered fraction alike (#172).
         matched_rule: Whether a configured rule matched. False means ``text`` is
             the fallback default and the state has no message of its own.
     """
@@ -242,8 +249,7 @@ def build_screening_summary(
     kestrel_df: pd.DataFrame,
     advntr_df: pd.DataFrame,
     advntr_available: bool,
-    mean_vntr_coverage: float | None,
-    mean_vntr_cov_threshold: float,
+    coverage_qc: CoverageQC,
     report_config: dict[str, Any],
 ) -> ScreeningSummary:
     """Compute the screening state and look up its configured message.
@@ -252,8 +258,10 @@ def build_screening_summary(
         kestrel_df: Kestrel results, unformatted (no HTML in the cells).
         advntr_df: adVNTR results.
         advntr_available: Whether the adVNTR stage ran.
-        mean_vntr_coverage: Mean coverage over the VNTR region, or None.
-        mean_vntr_cov_threshold: The coverage threshold.
+        coverage_qc: The coverage QC verdict, already evaluated by the caller from
+            the published figures. Taking the verdict rather than the raw numbers is
+            what keeps this axis and the ``coverage_qc`` column in the coverage
+            summary from disagreeing - they are the same value (#172).
         report_config: The parsed ``report_config.json``.
 
     Returns:
@@ -269,7 +277,7 @@ def build_screening_summary(
         advntr_result = compute_algorithm_result(advntr_df, advntr_logic) if advntr_available else NOT_PERFORMED
         logger.debug("Computed Kestrel result: %s; adVNTR result: %s", kestrel_result, advntr_result)
 
-        quality_metrics_pass = not (mean_vntr_coverage is not None and mean_vntr_coverage < mean_vntr_cov_threshold)
+        quality_metrics_pass = coverage_qc.passed
 
         current = {
             "kestrel_result": kestrel_result,

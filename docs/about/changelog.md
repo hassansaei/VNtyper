@@ -2,7 +2,90 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## 2.0.7 (Current)
+## 2.0.8 (Current)
+
+Milestone 2, "Correctness of reported numbers": closes #171, #172, #174, #203 and #212.
+
+**Coverage numbers change for every sample with an uncovered VNTR base.** Historical
+reports are not directly comparable with 2.0.8 output. For any sample whose region span
+is unchanged, the corrected mean is recoverable in closed form from the old output:
+
+```
+mean_corrected == cov_mean_old * (1 - cov_percent_uncovered_old / 100)
+```
+
+### Reported-output changes
+
+- **Every VNTR coverage statistic is now computed over the region, not over the covered
+  positions** (#171). `samtools depth` was called without `-a`, so it emitted only
+  positions with at least one read, and `mean`, `median`, `stdev` and `min` divided by
+  the covered-base count. The bias was largest exactly where coverage is patchy: across
+  8215 sample rows from seven cohorts, 1585 carried an inflated mean and 61 were reported
+  as meeting the 100x QC threshold while falling below it. `min` is now `0` wherever any
+  base is uncovered, which it always should have been. `percent_uncovered` keeps its
+  value but changes derivation — it counts zero-depth positions rather than subtracting
+  the row count, because with `-a` that subtraction is always zero.
+- **The quality gate uses both coverage metrics** (#172). `percent_vntr_uncovered` was
+  configured with a threshold of 50.0 and compared to nothing; it drove a report icon and
+  no decision, so a sample with acceptable mean coverage and half the VNTR uncovered
+  passed QC. That is the wrong failure mode — a patchy VNTR is where a frameshift call is
+  missed. `quality_metrics_pass` now requires both. The verdict is emitted as an explicit
+  `coverage_qc` column in the coverage summary, in `pipeline_summary.json`, in the report,
+  and in a new `cohort_stats.{csv,tsv,json}` cohort export.
+  `docs/pipeline/reports.md` already documented this threshold as enforced; it was not,
+  and now is.
+- **Known 4 bp insertion artifacts are excluded from calls** (#174). A row flagged
+  `False_Positive_4bp_Insertion` reached `kestrel_result.tsv` and mapped to
+  `High_Precision_flagged`, which the report treats as a **positive finding** — a known
+  technical artifact presented as a positive MUC1 call. A new `flag_filter_pass` gate
+  excludes rows carrying a flag declared in `kestrel_config.json`'s new `artifact_flags`
+  list. Advisory flags such as `Low_Depth_Conserved_Motifs` are unaffected and still only
+  deprioritise. The excluded row remains in `kestrel_pre_result.tsv` with the gate
+  `False`, so the evidence is never destroyed, and emptying `artifact_flags` restores the
+  previous behaviour with no code change.
+
+### Fixes with no effect on genotypes
+
+- **The `POS_fasta` rebase that wrote to a discarded column is removed** (#203).
+  `motif_correction_and_annotation` subtracted `position_threshold` from `POS` and, because
+  `Series.mask` keeps its name, `DataFrame.update` wrote the result back to `POS` — a
+  column nothing reads afterwards. The rebase was also *wrong*: `Motif_fasta` is a verbatim
+  copy of the VCF `#CHROM`, which names a **120 bp pair record** of
+  `All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`, so `POS` is already a coordinate
+  in that record's space. `POS_fasta` values are unchanged.
+- **`output.bed` writes 0-based half-open intervals** (#203, rider). It emitted
+  `[POS, POS+1)`, naming the base *after* the variant, so IGV highlighted the wrong
+  position on every row. `generate_bed_file` had no test of its output content; it does now.
+
+### Safety
+
+- **The Kestrel stage is never skipped because `output.vcf` exists** (#212). The skip was
+  unconditional, undocumented, untested and gated on no flag, and because it `return`ed it
+  also skipped the post-processing that produces `kestrel_result.tsv`. Re-running into a
+  directory left by an interrupted run — after a crash, an OOM kill or a cancelled job —
+  could therefore re-report a stale result, or produce no result file at all, which both
+  the report and cohort mode render as a **negative**. A stale VCF is now removed with a
+  warning and Kestrel runs. If no k-mer size produces a result, the run raises instead of
+  returning silently.
+- **A step whose result file is missing is recorded loudly** (#212). `record_step` logged
+  nothing and stored an empty `data` list, indistinguishable from a step that legitimately
+  found nothing. It now logs an ERROR and sets `result_file_missing`. The key is added only
+  when the file is absent, so a normal run's `pipeline_summary.json` is byte-identical.
+
+### Not included
+
+**#171's region harmonisation.** The hg19 span is 1501 bp and the hg38 span is 4501 bp, so
+mean coverage is not comparable across builds. Choosing one homologous span and a flank
+convention is a domain decision that restates every hg38 number ever reported, and it is
+tracked separately so that each gate diff stays attributable to one change.
+
+### Coverage
+
+The floor moves 80 → 81 (branch-inclusive, 81.70% measured) and the target with it.
+`coverage_qc.py` and `coverage_stats.py` are both at 100%; patch coverage of this branch
+is 100%.
+
+## 2.0.7
 
 Follow-ups to #179: closes #181–#188, #192 and #194–#197, fixes the defects found while
 doing so, commits the golden-cohort gate for the first time, and raises the coverage

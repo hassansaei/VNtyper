@@ -47,6 +47,7 @@ GATE_COLUMNS = (
     "depth_confidence_pass",
     "alt_filter_pass",
     "motif_filter_pass",
+    "flag_filter_pass",
 )
 
 
@@ -61,7 +62,7 @@ def _passing_frame(rows: int = 1) -> pd.DataFrame:
         rows: How many rows to build.
 
     Returns:
-        pd.DataFrame: The frame, with all five gate columns True.
+        pd.DataFrame: The frame, with all six gate columns True.
     """
     frame = kestrel_stage_frame("flagged", rows=rows).copy()
     for column in GATE_COLUMNS:
@@ -69,13 +70,17 @@ def _passing_frame(rows: int = 1) -> pd.DataFrame:
     return frame
 
 
-def test_the_gate_columns_are_exactly_the_five_this_file_pins():
-    """Guard against a sixth gate being added without a test.
+def test_the_gate_columns_are_exactly_the_six_this_file_pins():
+    """Guard against a seventh gate being added without a test.
 
     ``filter_final_dataframe`` builds its list inline, so this reads the source
     rather than importing a constant that does not exist. The hit-count assertion
     matters: a scan that silently matches nothing would make every claim below
     vacuous.
+
+    The count was five until #174 added ``flag_filter_pass`` -- the config-driven
+    artifact gate. Changing this number is the deliberate act that adding a gate
+    requires; it is not maintenance.
     """
     from pathlib import Path
 
@@ -84,7 +89,7 @@ def test_the_gate_columns_are_exactly_the_five_this_file_pins():
     assert len(body) == 2, "could not find the filter_cols list in filter_final_dataframe"
     declared = body[1].split("]", 1)[0]
     found = tuple(line.strip().strip(',"') for line in declared.strip().splitlines())
-    assert len(found) == 5, f"expected 5 gate columns in the source, found {len(found)}: {found}"
+    assert len(found) == 6, f"expected 6 gate columns in the source, found {len(found)}: {found}"
     assert found == GATE_COLUMNS
 
 
@@ -129,12 +134,14 @@ def test_a_gate_that_is_absent_from_a_non_empty_frame_raises(gate, tmp_path, cap
     can silently permit variants that should have been filtered. That is not
     acceptable for this pipeline. So: do not keep fail-open."
 
-    The five gates are the entire safety net between a raw Kestrel call and a
-    reported genotype, and four of the five encode a *pathogenicity* judgement
-    (frameshift validity, depth confidence, ALT filtering, motif filtering). The
-    stages mark rather than filter (AGENTS.md trap 4), so a stage that stops
-    emitting its column does not remove a check -- it converts that check into a
-    permit. Every gate is parametrised here so none is left unguarded.
+    The six gates are the entire safety net between a raw Kestrel call and a
+    reported genotype. Four encode a *pathogenicity* judgement (frameshift
+    validity, depth confidence, ALT filtering, motif filtering) and the sixth,
+    ``flag_filter_pass`` (#174), encodes an *artifact* judgement -- the row is not
+    a candidate variant at all. The stages mark rather than filter (AGENTS.md trap
+    4), so a stage that stops emitting its column does not remove a check -- it
+    converts that check into a permit. Every gate is parametrised here so none is
+    left unguarded.
 
     Args:
         gate: The boolean column removed from the frame.
@@ -315,10 +322,126 @@ def test_the_pre_result_tsv_keeps_every_input_row_including_the_rejected_ones(tm
     assert int(pre_result["depth_confidence_pass"].sum()) == 3
 
 
-def test_a_non_gate_boolean_column_does_not_filter_anything(tmp_path):
-    """Only the five listed columns gate. A sixth boolean is inert.
+class TestTheArtifactGateEndToEnd:
+    """#174, driven through the real ``process_kmer_results`` from a raw frame.
 
-    Without this, "the gates are these five" would be an assertion about the five
+    Nothing here is stubbed. ``kestrel_config()`` is the shipped configuration, so
+    these tests fail if ``artifact_flags`` is removed from it as surely as if the
+    call site were removed from the code -- which is the point: the decision is
+    configuration, and both halves have to hold for the gate to work.
+    """
+
+    def _artifact_frame(self) -> pd.DataFrame:
+        """Build the raw frame for a sample whose only call is the 4 bp artifact.
+
+        ``REF=C``/``ALT=CGGCA`` is the flagging rule's condition. Every other gate
+        passes on this row -- it is a valid +4 frameshift at ample depth -- so the
+        artifact gate is the only thing that can stop it.
+
+        Returns:
+            pd.DataFrame: A one-row ``raw``-stage frame.
+        """
+        return kestrel_stage_frame("raw", rows=1, ref="C", alt="CGGCA")
+
+    def test_an_artifact_only_sample_is_not_reported_as_a_call(self, tmp_path):
+        """#174's regression test, end to end through the real postprocessing.
+
+        Before this change the sample yielded one ``High_Precision*`` row carrying
+        ``False_Positive_4bp_Insertion``, which ``report_config.json`` maps to
+        ``High_Precision_flagged`` and ``is_finding`` reads as positive -- a known
+        technical artifact presented as a positive MUC1 call.
+        """
+        out = kestrel_genotyping.process_kmer_results(
+            self._artifact_frame(), _merged_motifs(), str(tmp_path), kestrel_config()
+        )
+
+        assert out.empty, "an artifact-only sample has no call"
+
+    def test_the_artifact_row_survives_in_the_pre_result_with_its_gate_false(self, tmp_path):
+        """Evidence is never destroyed: stages mark, the final filter drops.
+
+        This is what answers #131's symptom -- a flagged variant vanishing without
+        trace. The row and the reason it was dropped are both on disk.
+        """
+        kestrel_genotyping.process_kmer_results(
+            self._artifact_frame(), _merged_motifs(), str(tmp_path), kestrel_config()
+        )
+
+        pre = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
+        assert pre["flag_filter_pass"].tolist() == [False]
+        assert "False_Positive_4bp_Insertion" in pre["Flag"].iloc[0]
+        assert pre["Confidence"].iloc[0] == "High_Precision*", "every other stage still judged it a strong call"
+
+    def test_every_other_gate_still_passed_so_only_the_artifact_gate_dropped_it(self, tmp_path):
+        """Locates the exclusion at the new gate rather than merely observing it.
+
+        Without this, a change that broke, say, motif filtering for ``CGGCA`` would
+        make the test above pass for entirely the wrong reason.
+        """
+        kestrel_genotyping.process_kmer_results(
+            self._artifact_frame(), _merged_motifs(), str(tmp_path), kestrel_config()
+        )
+
+        pre = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
+        for gate in GATE_COLUMNS:
+            expected = gate != "flag_filter_pass"
+            assert bool(pre[gate].iloc[0]) is expected, f"{gate} was {pre[gate].iloc[0]}, expected {expected}"
+
+    def test_an_advisory_flag_still_reaches_the_result(self, tmp_path):
+        """The other half of #174, and the one that would be silently lost.
+
+        ``Low_Depth_Conserved_Motifs`` is advisory: it marks a call that warrants
+        scrutiny, not one that is technically impossible. Suppressing those rows
+        would delete real low-depth calls -- the exact failure mode this milestone
+        exists to prevent. This passed before #174 too, and must keep passing.
+        """
+        frame = kestrel_stage_frame("raw", rows=1, motif="2", motifs="2-5", motif_sequence="SEQ3")
+        merged = pd.DataFrame({"Motif": ["2", "5"], "Motif_sequence": ["SEQ3", "SEQ2"]})
+
+        out = kestrel_genotyping.process_kmer_results(frame, merged, str(tmp_path), kestrel_config())
+
+        assert len(out) == 1
+        assert out["Flag"].iloc[0] == "Low_Depth_Conserved_Motifs"
+        assert bool(out["flag_filter_pass"].iloc[0]) is True
+
+    def test_emptying_artifact_flags_in_config_restores_the_previous_behaviour(self, tmp_path):
+        """The reversibility property, exercised rather than argued.
+
+        #174 rests on the decision living in ``kestrel_config.json``. If narrowing
+        or withdrawing it needed a code change, the artifact rule could not be
+        revised by whoever owns the domain judgement.
+        """
+        config = kestrel_config(artifact_flags=[])
+
+        out = kestrel_genotyping.process_kmer_results(self._artifact_frame(), _merged_motifs(), str(tmp_path), config)
+
+        assert len(out) == 1, "with no declared artifacts the row is reported exactly as it was before #174"
+        assert out["Flag"].iloc[0] == "False_Positive_4bp_Insertion"
+
+    def test_the_gate_is_present_even_when_no_flagging_rule_ran(self, tmp_path):
+        """The reason the call sits *outside* the conditional ``add_flags`` block.
+
+        With no flagging rules and duplicate flagging off, ``add_flags`` is skipped
+        entirely and the frame carries no ``Flag`` column at all. A gate written
+        inside that ``if`` would then be absent, and ``filter_final_dataframe``
+        raises on a missing required gate (#185) -- turning the safety gate into an
+        abort of the whole run.
+        """
+        config = kestrel_config(flagging_rules={}, artifact_flags=["False_Positive_4bp_Insertion"])
+        config["duplicate_flagging"]["enabled"] = False
+
+        out = kestrel_genotyping.process_kmer_results(self._artifact_frame(), _merged_motifs(), str(tmp_path), config)
+
+        pre = pd.read_csv(tmp_path / "kestrel_pre_result.tsv", sep="\t")
+        assert "Flag" not in pre.columns, "the premise of this test is that add_flags never ran"
+        assert pre["flag_filter_pass"].tolist() == [True]
+        assert len(out) == 1
+
+
+def test_a_non_gate_boolean_column_does_not_filter_anything(tmp_path):
+    """Only the six listed columns gate. A seventh boolean is inert.
+
+    Without this, "the gates are these six" would be an assertion about the six
     and silence about everything else.
     """
     frame = _passing_frame()

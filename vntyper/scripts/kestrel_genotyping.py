@@ -234,9 +234,9 @@ def run_kestrel(
     sizes from the config (often just a single size: 20).
 
     Steps:
-      1) Construct command for each k-mer size.
-      2) If the final VCF already exists, skip.
-      3) Otherwise, run Kestrel, capturing logs.
+      1) Remove any VCF left behind by an earlier run (#212).
+      2) Construct command for each k-mer size.
+      3) Run Kestrel, capturing logs.
       4) Convert Kestrel's SAM→BAM, index.
       5) Call `process_kestrel_output()` for final filtering.
 
@@ -254,7 +254,9 @@ def run_kestrel(
             Important for Java initialization.
 
     Raises:
-        RuntimeError: If Kestrel fails for a given k-mer size.
+        RuntimeError: If Kestrel fails for a given k-mer size, or if no configured
+            k-mer size produced a VCF (see #212 -- returning silently there let the
+            pipeline report a manufactured negative).
 
     Returns:
         None
@@ -269,6 +271,25 @@ def run_kestrel(
 
     # Retrieve additional settings (defaults to empty)
     additional_settings = kestrel_settings.get("additional_settings", "")
+
+    # #212: a pre-existing output.vcf used to skip the whole stage and `return`, which
+    # also skipped the two statements that turn a VCF into a result. Re-running into a
+    # directory left by an interrupted run then either re-reported a stale result or
+    # produced none at all -- and a step with no result file is rendered as a negative.
+    # Deliberate reuse belongs behind the --resume flag proposed in #20; this ad-hoc,
+    # unflagged version is unsafe. The stale file is removed rather than left for the JAR
+    # to overwrite so the log says why, and the removal sits *before* the loop rather than
+    # inside it: the only way to reach a second iteration is for the first to have written
+    # no VCF, so a per-iteration unlink is a no-op at best and, if the loop ever grows a
+    # `continue` after a successful iteration, deletes a good result.
+    if vcf_path.is_file():
+        logger.warning(f"Removing a VCF left by an earlier run before re-running Kestrel: {vcf_path}")
+        vcf_path.unlink()
+
+    # Whether some k-mer size both ran Kestrel and post-processed its VCF. `break` below
+    # is reachable only inside `if vcf_path.is_file()`, so a Kestrel invocation that exits
+    # 0 without writing a VCF used to fall out of the loop and return None.
+    completed = False
 
     # Try each k-mer size in sequence. Usually just [20], can be more.
     for kmer_size in kmer_sizes:
@@ -291,29 +312,37 @@ def run_kestrel(
 
         log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
 
-        # If the final VCF already exists, skip new runs
+        logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+
+        # Actually run the Kestrel command
+        if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
+            logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
+            raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+
+        logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
+
+        # Now that Kestrel completed, confirm the VCF is present
         if vcf_path.is_file():
-            logger.info("VCF file already exists, skipping Kestrel run...")
-            return
-        else:
-            logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
+            # Convert the intermediate SAM→BAM (for debugging or IGV)
+            sam_file = os.path.join(output_dir, "output.sam")
+            convert_sam_to_bam_and_index(sam_file, output_dir)
 
-            # Actually run the Kestrel command
-            if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
-                logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
-                raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
+            # Postprocess final output
+            process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
+            completed = True
+            break  # Stop after the first successful k-mer size
 
-            logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
+        # Exit status 0 with no VCF is the silent path #212 is about. Say so, then let the
+        # next configured k-mer size try.
+        logger.warning(f"Kestrel exited successfully for k-mer size {kmer_size} but wrote no VCF to {vcf_path}.")
 
-            # Now that Kestrel completed, confirm the VCF is present
-            if vcf_path.is_file():
-                # Convert the intermediate SAM→BAM (for debugging or IGV)
-                sam_file = os.path.join(output_dir, "output.sam")
-                convert_sam_to_bam_and_index(sam_file, output_dir)
-
-                # Postprocess final output
-                process_kestrel_output(output_dir, vcf_path, reference_vntr, kestrel_config, config)
-                break  # Stop after the first successful k-mer size
+    if not completed:
+        msg = (
+            "Kestrel produced no VCF for any configured k-mer size, so no result file was written. "
+            "Reporting this as a negative would manufacture a confident negative genotype. See issue #212."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
 
 def _try_compress_vcf_with_bcftools(input_vcf, output_vcf_gz, output_dir):
@@ -522,6 +551,7 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
       5) ALT-based filtering logic (e.g., 'GG' threshold)
       6) Motif correction & annotation
       6.5) Apply flagging rules before selection (fixes #145)
+      6.5b) Derive the artifact gate from the flags (fixes #174)
       7) Final filter + select single best variant
       8) Generate BED file for coverage
 
@@ -590,6 +620,15 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
 
         df = add_flags(df, flagging_rules, duplicates_config=duplicates_config)
 
+    # (6.5b) #174: derive the artifact gate. Unconditional, unlike add_flags above: a
+    # frame that reached the final filter without `flag_filter_pass` would abort the run
+    # on a missing required gate column (#185). Which flags are artifacts is
+    # configuration; an absent or empty `artifact_flags` list excludes nothing, which is
+    # exactly the pre-#174 behaviour.
+    from vntyper.scripts.flagging import add_artifact_gate
+
+    df = add_artifact_gate(df, kestrel_config.get("artifact_flags", []))
+
     # (7) Final Filter
     df = filter_final_dataframe(df, output_dir)
     if df.empty:
@@ -610,6 +649,12 @@ def generate_bed_file(df, output_dir):
     if 'Motif_fasta' and 'POS_fasta' columns exist. This can help
     with coverage visualizations in IGV or other genome browsers.
 
+    Column 1 is 'Motif_fasta', the 120 bp pair record of
+    All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa that the variant was called
+    against -- not 'Motif', which is a half-motif name and not a record in that file.
+    'POS_fasta' is the 1-based VCF position inside that record, and BED intervals are
+    0-based and half-open, so it is written as [POS_fasta - 1, POS_fasta) (#203).
+
     Args:
         df (pd.DataFrame): The final processed DataFrame with motif info.
         output_dir (str): Where to save the resulting BED file.
@@ -628,12 +673,17 @@ def generate_bed_file(df, output_dir):
 
     bed_file_path = os.path.join(output_dir, "output.bed")
 
-    # Each row: motif_fasta, start=pos_fasta, end=pos_fasta+1
+    # Each row: motif_fasta, start=pos_fasta-1, end=pos_fasta.
+    #
+    # `POS_fasta` is the 1-based VCF position within the 120 bp pair record named by
+    # `Motif_fasta` (#203). BED intervals are 0-based and half-open, so position p is the
+    # interval [p-1, p). This used to write [p, p+1), which named the base after the
+    # variant - IGV highlighted the wrong position on every row.
     with open(bed_file_path, "w") as bed_file:
         for _, row in df.iterrows():
             motif_fasta = row["Motif_fasta"]
-            pos = row["POS_fasta"]
-            bed_file.write(f"{motif_fasta}\t{pos}\t{pos + 1}\n")
+            pos = int(row["POS_fasta"])
+            bed_file.write(f"{motif_fasta}\t{pos - 1}\t{pos}\n")
 
     logger.info(f"BED file generated at: {bed_file_path}")
     return bed_file_path
@@ -778,7 +828,15 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     """
     Final step: filter the DataFrame based on the boolean columns introduced
     by earlier steps ('is_frameshift', 'is_valid_frameshift',
-    'depth_confidence_pass', 'alt_filter_pass', 'motif_filter_pass').
+    'depth_confidence_pass', 'alt_filter_pass', 'motif_filter_pass',
+    'flag_filter_pass').
+
+    Five of the six encode a *pathogenicity or quality* judgement. The sixth,
+    'flag_filter_pass' (#174), encodes an *artifact* judgement: the row carries a
+    flag that `kestrel_config.json` declares under `artifact_flags`, so it is not
+    a candidate variant at all. Advisory flags such as
+    'Low_Depth_Conserved_Motifs' leave that gate True and only deprioritise the
+    row during selection.
 
     We keep rows where *all* filter columns are True. Every column is required:
     the earlier stages mark rather than filter, so a column missing from a
@@ -795,7 +853,7 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     evidence. The final filtered DataFrame is returned in memory.
 
     Args:
-        df (pd.DataFrame): The postprocessed DataFrame, with all five
+        df (pd.DataFrame): The postprocessed DataFrame, with all six
             boolean filter columns.
         output_dir (str): Path to the main output directory.
 
@@ -830,6 +888,7 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         "depth_confidence_pass",
         "alt_filter_pass",
         "motif_filter_pass",
+        "flag_filter_pass",
     ]
 
     # Build a mask requiring all existing boolean filters == True

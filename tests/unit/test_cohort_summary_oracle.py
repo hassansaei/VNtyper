@@ -114,7 +114,7 @@ import pytest
 
 from vntyper.cli import load_config
 from vntyper.scripts import cohort_summary
-from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_BAM_HEADER, STEP_KESTREL
+from vntyper.scripts.summary_steps import STEP_ADVNTR, STEP_BAM_HEADER, STEP_COVERAGE, STEP_KESTREL
 
 pytestmark = pytest.mark.unit
 
@@ -583,8 +583,66 @@ def _cohort_on_disk(root: Path, *, advntr: bool = True) -> Path:
     return root
 
 
+def _sample_dir_with_coverage(root: Path, *, coverage_qc: str) -> Path:
+    """Write a one-sample cohort whose coverage step carries a QC verdict.
+
+    Kept separate from :func:`_cohort_on_disk`, which the report fingerprint above is
+    taken over: adding a ``Coverage Calculation`` step there would move the hash for a
+    reason that has nothing to do with the report.
+
+    Args:
+        root: The directory to create the sample in.
+        coverage_qc: The value of the coverage summary's ``coverage_qc`` column.
+
+    Returns:
+        Path: ``root``, ready to be passed to `aggregate_cohort`.
+    """
+    (root / "sample_one").mkdir(parents=True)
+    (root / "sample_one" / "pipeline_summary.json").write_text(
+        json.dumps(
+            {
+                "version": "2.0.7",
+                "steps": [
+                    {
+                        "step": STEP_KESTREL,
+                        "parsed_result": {
+                            "data": [{"Motif": "5", "Confidence": "High_Precision", "Flag": "Not flagged"}]
+                        },
+                    },
+                    {
+                        "step": STEP_COVERAGE,
+                        "parsed_result": {
+                            "data": [
+                                {
+                                    "mean": "250.00",
+                                    "median": "248.00",
+                                    "stdev": "12.50",
+                                    "min": "100",
+                                    "max": "400",
+                                    "region_length": "1000",
+                                    "uncovered_bases": "800",
+                                    "percent_uncovered": "80.00",
+                                    "coverage_qc": coverage_qc,
+                                }
+                            ]
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> None:
-    """The end-to-end path through all five extracted modules at once."""
+    """The end-to-end path through all five extracted modules at once.
+
+    The statistics export is third since #172: it is the only machine-readable cohort
+    output carrying a coverage figure at all, and every sample contributes a row to it
+    (runtime, version, assembly and pipeline are recorded whether or not the coverage
+    step ran), so it appears here even though this fixture measures no coverage.
+    """
     output_dir = tmp_path / "out"
     output_dir.mkdir()
 
@@ -607,7 +665,114 @@ def test_a_cohort_run_writes_the_report_and_every_requested_export(tmp_path) -> 
         "cohort_advntr.csv",
         "cohort_advntr.tsv",
         "cohort_advntr.json",
+        "cohort_stats.csv",
+        "cohort_stats.tsv",
+        "cohort_stats.json",
     }
+
+
+def test_the_cohort_run_exports_the_statistics_frame(tmp_path, monkeypatch) -> None:
+    """#172: a cohort consumer reads the CSV, not the HTML.
+
+    `aggregate_cohort` called `write_cohort_frame` for the Kestrel and adVNTR frames
+    only; the statistics frame was rendered to HTML and never written, so no
+    machine-readable cohort output carried a coverage figure at all.
+
+    This asserts on the *call site*, not on `write_cohort_frame` - which already worked,
+    and whose direct invocation would pass before the change and test nothing.
+    """
+    written: list[str] = []
+    monkeypatch.setattr(
+        cohort_summary,
+        "write_cohort_frame",
+        lambda frame, out, stem, label, formats: written.append(stem),
+    )
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(_sample_dir_with_coverage(tmp_path / "cohort", coverage_qc="FAIL"))],
+        output_dir=str(tmp_path / "out"),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv",
+    )
+
+    assert "cohort_stats" in written, "the statistics frame was never exported"
+
+
+def test_the_exported_statistics_frame_carries_the_coverage_qc_verdict(tmp_path, monkeypatch) -> None:
+    """The frame handed to the writer must actually contain the verdict column.
+
+    `additional_stats_frame` flattens the whole coverage mapping with a `cov_` prefix
+    and applies no projection, so the ninth column arrives without a whitelist edit -
+    but only once something writes that frame out.
+    """
+    captured: dict[str, pd.DataFrame] = {}
+    monkeypatch.setattr(
+        cohort_summary,
+        "write_cohort_frame",
+        lambda frame, out, stem, label, formats: captured.__setitem__(stem, frame),
+    )
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(_sample_dir_with_coverage(tmp_path / "cohort", coverage_qc="FAIL"))],
+        output_dir=str(tmp_path / "out"),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv",
+    )
+
+    assert "cov_coverage_qc" in captured["cohort_stats"].columns
+    assert captured["cohort_stats"]["cov_coverage_qc"].tolist() == ["FAIL"]
+
+
+def test_a_cohort_whose_samples_yield_no_statistics_writes_no_statistics_export(tmp_path, caplog) -> None:
+    """An empty statistics frame writes nothing, rather than a header-only CSV.
+
+    Reachable: a sample directory whose `pipeline_summary.json` does not parse is
+    logged and dropped, contributing no statistics row. `write_cohort_frame` already
+    returns early on an empty frame, so this pins the branch that decides what it is
+    handed - the same rule `cohort_advntr` follows when no sample ran adVNTR.
+    """
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_inputs")
+    cohort = tmp_path / "cohort"
+    (cohort / "sample_one").mkdir(parents=True)
+    (cohort / "sample_one" / "pipeline_summary.json").write_text("{not json", encoding="utf-8")
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(cohort)],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv",
+    )
+
+    assert not (output_dir / "cohort_stats.csv").exists()
+    assert (output_dir / "cohort_summary.html").exists(), "the report is still written"
+
+
+def test_the_statistics_export_and_the_html_table_are_the_same_frame(tmp_path) -> None:
+    """One value, two consumers: the CSV a cohort consumer reads must not be able to
+    say something the rendered table does not."""
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[str(_sample_dir_with_coverage(tmp_path / "cohort", coverage_qc="FAIL"))],
+        output_dir=str(output_dir),
+        summary_file="cohort_summary.html",
+        config=load_config(None),
+        additional_formats="csv",
+    )
+
+    stats_csv = (output_dir / "cohort_stats.csv").read_text(encoding="utf-8")
+    html = (output_dir / "cohort_summary.html").read_text(encoding="utf-8")
+
+    assert "cov_coverage_qc" in stats_csv.splitlines()[0]
+    assert "FAIL" in stats_csv.splitlines()[1]
+    assert "cov_coverage_qc" in html
+    assert ">FAIL</td>" in html
 
 
 def test_both_samples_reach_the_report_in_sorted_order(tmp_path) -> None:

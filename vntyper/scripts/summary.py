@@ -17,6 +17,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,10 @@ def record_step(
     and records the provided command and timing information.
     Optionally, if write_summary_path is provided, the summary is immediately written to that file.
 
+    If `result_file` does not exist, an ERROR is logged and the record gains
+    `result_file_missing: True`. The key is absent otherwise, so a normal run's summary is
+    unchanged (#212).
+
     Args:
         summary (dict): The summary dictionary to update.
         step_name (str): Name/description of the pipeline step.
@@ -216,6 +221,18 @@ def record_step(
         "md5sum": None,
         "parsed_result": None,
     }
+
+    # #212: a step whose result file is absent is a failure, not an empty result.
+    # `md5sum` swallows the FileNotFoundError into None and `parse_tsv` turns it into a
+    # comment and returns `data: []`, and both the HTML report and cohort mode render an
+    # empty `data` as a negative. The key is added only when the file is missing, so a
+    # normal run's summary -- and the golden-cohort `pipeline_step_records` artefact --
+    # is byte-identical. Recording continues rather than raising: the path is the
+    # operator's clue to which stage failed, and the stage itself is where an abort
+    # belongs (see `run_kestrel`).
+    if not os.path.exists(result_file):
+        logger.error(f"Step '{step_name}' recorded a result file that does not exist: {result_file}")
+        record["result_file_missing"] = True
 
     # Calculate MD5 checksum
     record["md5sum"] = md5sum(result_file)

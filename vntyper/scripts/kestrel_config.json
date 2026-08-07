@@ -45,6 +45,7 @@
     "False_Positive_4bp_Insertion": "(REF == 'C') and (ALT == 'CGGCA')",
     "Low_Depth_Conserved_Motifs": "(Depth_Score < 0.4) and (Motif in ['1', '2', '3', '4', '6', '7', '8', '9'])"
   },
+  "artifact_flags": ["False_Positive_4bp_Insertion"],
   "duplicate_flagging": {
     "enabled": false,
     "flag_name": "Potential_Duplicate",

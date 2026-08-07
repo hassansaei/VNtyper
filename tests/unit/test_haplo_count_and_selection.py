@@ -366,7 +366,16 @@ class TestFlagDeprioritization:
         assert result.iloc[0]["Confidence"] == "High_Precision*"
 
     def test_all_flagged_selects_best(self):
-        """When all variants are flagged, best by Depth_Score is still selected."""
+        """When all variants are flagged, best by Depth_Score is still selected.
+
+        This exercises ``select_single_best_variant`` directly, which deprioritises
+        flagged rows rather than excluding them -- and that is still correct after
+        #174. Exclusion moved *upstream*: ``add_artifact_gate`` sets
+        ``flag_filter_pass=False`` on a row carrying a declared artifact flag, and
+        ``filter_final_dataframe`` drops it before selection ever sees it. So in
+        production the ``False_Positive_4bp_Insertion`` competitor below would not
+        reach this function; called directly, it is still ranked, not removed.
+        """
         df = pd.DataFrame(
             {
                 "Confidence": ["High_Precision", "High_Precision"],
@@ -429,6 +438,13 @@ class TestFlagDeprioritization:
 
         A flagged High_Precision variant with higher haplo_count was incorrectly
         selected over an unflagged High_Precision variant with higher Depth_Score.
+
+        The POS=70 competitor carries ``False_Positive_4bp_Insertion``, so #174 now
+        removes it one step earlier: ``add_artifact_gate`` marks it
+        ``flag_filter_pass=False`` and ``filter_final_dataframe`` drops it. Called
+        directly, as here, selection still only deprioritises it -- and #145's
+        answer must not depend on that, which is what this test keeps true. The
+        winner is POS=54 either way.
         """
         df = pd.DataFrame(
             {

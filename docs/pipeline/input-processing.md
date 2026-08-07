@@ -44,14 +44,17 @@ fastp produces a JSON report (`output.json`) with metrics used in the final HTML
 
 ## Coverage Calculation
 
-After alignment, the pipeline computes per-base coverage over the VNTR region using `samtools depth`. The summary statistics include:
+After alignment, the pipeline computes per-base coverage over the VNTR region using `samtools depth -a`. The summary statistics include:
 
 - **Mean and median coverage** -- primary indicators of sequencing depth
 - **Standard deviation, min, max** -- coverage uniformity
 - **Region length** -- total VNTR span in base pairs
 - **Uncovered bases and percent uncovered** -- fraction of the VNTR with zero coverage
+- **Coverage QC** -- `PASS` or `FAIL` against the configured thresholds
 
-These metrics are written to `coverage_summary.tsv` and are used in the final report for quality assessment. A mean VNTR coverage below the configured threshold (default: 100x) triggers a warning in the report.
+**Every statistic is computed over the region, not over the positions that carry reads.** The `-a` flag makes `samtools depth` emit a row for every position in the region, zero-depth ones included, and a depth table written without it is padded back to the region with zeros before anything is computed. A sample covered at 30x across 10% of the VNTR therefore reports a mean of 3, and `min` is `0` wherever any position is uncovered. Before VNtyper 2.0.8 the mean divided by the number of covered positions and reported 30 -- the depth where there happened to be reads, which is not a property of the region and was systematically too high exactly where coverage was patchy.
+
+These metrics are written to `coverage_summary.tsv` and are used in the final report for quality assessment. A mean VNTR coverage below the configured threshold (default: 100x), or an uncovered fraction above its own (default: 50%), fails the report's coverage QC.
 
 ## BAM Header Analysis
 

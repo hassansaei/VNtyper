@@ -60,6 +60,9 @@ COHORT_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "cohort_advntr_csv": ("table", ("Sample",)),
     "cohort_advntr_tsv": ("table", ("Sample",)),
     "cohort_advntr_json": ("opaque", ()),
+    "cohort_stats_csv": ("table", ("Sample",)),
+    "cohort_stats_tsv": ("table", ("Sample",)),
+    "cohort_stats_json": ("opaque", ()),
     "pseudonymization_table": ("table", ("Pseudonym",)),
     "cohort_output_files": ("sequence", ()),
 }

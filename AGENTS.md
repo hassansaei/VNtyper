@@ -155,14 +155,14 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 80** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 81** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
-| **Target: 80%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+| **Target: 81%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. Measured on the same suite: **80.24% branch-inclusive, 80.77% statement-only**.
+against. Measured on the same suite: **81.70% branch-inclusive** (was 80.24% before #171-#212 raised it; 80.77% statement-only at that earlier measurement).
 So deleting `branch = true` *raises* the reported total while covering strictly less —
 the ratchet cannot catch that regression, because the number moves the wrong way, and
 `tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing
@@ -354,10 +354,27 @@ limit.
      `logger.error(msg)` then `raise ValueError(msg)`, on `NameError`/`SyntaxError` and on
      every other exception alike, because "no match" and "could not be evaluated" are
      indistinguishable in the report. A bad rule there now stops the run.
-4. **Stages mark, they do not filter.** Kestrel stages append boolean columns
+4. **Stages mark, they do not filter.** Kestrel stages append **six** boolean columns
    (`is_frameshift`, `is_valid_frameshift`, `depth_confidence_pass`, `alt_filter_pass`,
-   `motif_filter_pass`); `filter_final_dataframe()` ANDs them at the end. Preserve that
-   contract — dropping rows early breaks `kestrel_pre_result.tsv` debuggability.
+   `motif_filter_pass`, `flag_filter_pass`); `filter_final_dataframe()` ANDs them at the
+   end. Preserve that contract — dropping rows early breaks `kestrel_pre_result.tsv`
+   debuggability.
+
+   `flag_filter_pass` arrived with #174 and behaves differently from the other five in one
+   way worth knowing: it is written **unconditionally** in step 6.5, outside the `if
+   flagging_rules or duplicates_config` block that guards `add_flags`. That is deliberate.
+   The gate contract raises on a missing required column, and a run with no flagging rules
+   configured legitimately produces no `Flag` column at all — so a conditional gate would
+   turn a config choice into an aborted run. It reads its artifact list from
+   `kestrel_config.json`'s `artifact_flags`; **no flag name is written inline in Python**,
+   and emptying that list restores the pre-#174 behaviour with no code change.
+
+   **Two tripwires fire on any change to the gate list, and they are not in the same
+   file.** `tests/unit/test_kestrel_filtering.py` reads `kestrel_genotyping.py` as *source
+   text* and asserts the exact count; `tests/builders.py`'s `STAGE_COLUMNS["flagged"]` and
+   `["final"]` feed `kestrel_stage_frame()` to the real `filter_final_dataframe`, so a gate
+   missing from those tuples raises `ValueError` rather than failing an assertion. Change
+   both, deliberately, in the same commit.
 5. **Summary step names are string literals.** `"Kestrel Genotyping"`,
    `"adVNTR Genotyping"`, `"Coverage Calculation"`, `"BAM Header Parsing"`,
    `"Cross-Match Variant Comparison"` are matched exactly by `generate_report.py`,
