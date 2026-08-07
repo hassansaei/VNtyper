@@ -383,7 +383,14 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
     ``generate_report.py`` reads ``region_length``, ``uncovered_bases`` and
     ``percent_uncovered`` from this file with ``0`` defaults, so a renamed column
     makes the report state zero uncovered bases for a sample with no coverage at
-    all. These bytes are what the pre-extraction code wrote.
+    all.
+
+    These bytes changed with #171; they are the region-wide statistics, not the
+    covered-position ones. Three covered positions ``[10, 20, 30]`` in a 1501 bp
+    region means the base set is ``[10, 20, 30] + [0] * 1498``, so ``mean`` is
+    ``60 / 1501 = 0.0399733...`` (``0.04``), ``median`` is one of the restored zeros,
+    ``stdev`` is ``sqrt((1400 - 1501 * mean**2) / 1500) = 0.965263...`` (``0.97``) and
+    ``min`` is ``0``. It read ``20.00 20.00 10.00 10 30 1501 1498 99.80`` before.
     """
     depth_file = tmp_path / "cov_vntr_coverage.txt"
 
@@ -405,9 +412,10 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
 
     assert (tmp_path / "cov_summary.tsv").read_text() == (
         "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-        "20.00\t20.00\t10.00\t10\t30\t1501\t1498\t99.80\n"
+        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\n"
     )
-    assert stats["mean"] == 20.0
+    assert stats["mean"] == pytest.approx(60 / 1501)
+    assert stats["min"] == 0
     assert stats["region_length"] == 1501
     assert stats["uncovered_bases"] == 1498
     assert stats["percent_uncovered"] == pytest.approx(99.80013324450367)

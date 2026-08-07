@@ -12,11 +12,16 @@ reads all eight. A renamed column does not fail - it silently reports zero
 coverage in the HTML report. The header row asserted here is byte-identical to
 the one the pre-extraction code wrote.
 
-The interesting arithmetic is ``percent_uncovered``. ``samtools depth`` emits a
-row **only for positions with at least one read**, so the number of rows is the
-covered-base count and everything else in the region is uncovered. The region
-length comes from parsing the region string, not from the depth file - which is
-why a malformed region silently produces ``0`` and is pinned below.
+**Every statistic is over the region, not over the covered positions (#171).**
+``samtools depth`` is now called with ``-a``, so it emits a row for every position
+in the region including the zero-depth ones, and uncovered positions that a legacy
+file omits are restored as zeros before anything is computed. Ten positions covered
+at 20x inside a 100 bp region is therefore ``mean = 2.0`` and ``min = 0``, not
+``mean = 20.0``. ``uncovered_bases`` counts zero-depth positions rather than
+deriving them by subtraction, which is what keeps it correct under ``-a``.
+
+The region length comes from parsing the region string, not from the depth file -
+which is why a malformed region silently produces ``0`` and is pinned below.
 """
 
 import logging
@@ -69,18 +74,28 @@ def test_the_coverage_columns_are_the_frozen_lowercase_schema():
     )
 
 
-def test_the_tsv_header_and_row_are_byte_identical_to_the_pre_extraction_output():
+def test_the_tsv_header_and_row_are_the_exact_region_wide_bytes():
     """
-    The exact bytes ``calculate_vntr_coverage`` wrote before the extraction.
+    The exact bytes the TSV carries for three covered positions in a 1501 bp region.
 
-    Captured by running the pre-refactor function over a three-position depth
-    file spanning ``chr1:155160500-155162000``.
+    The header is unchanged from the pre-extraction output. The values are not:
+    they were ``20.00 20.00 10.00 10 30 1501 1498 99.80`` until #171, which is the
+    depth over the three positions that had reads. Recomputed by hand from the
+    region-wide definition, over ``[10, 20, 30] + [0] * 1498``:
+
+    * ``mean``   = 60 / 1501            = 0.0399733... -> ``0.04``
+    * ``median`` = element 750 of 1501 sorted values, which is one of the 1498
+      zeros                             = 0            -> ``0.00``
+    * ``stdev``  = sqrt((1400 - 1501 * mean**2) / 1500) = 0.965263... -> ``0.97``
+    * ``min``    = 0, because 1498 positions of the region carry no reads
+    * ``percent_uncovered`` = 1498 / 1501 * 100 = 99.80013... -> ``99.80``,
+      numerically identical to before: the metric that was already right stays right.
     """
     stats = summarise_coverage([10, 20, 30], total_region_length=1501)
 
     assert format_coverage_summary(stats) == (
         "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-        "20.00\t20.00\t10.00\t10\t30\t1501\t1498\t99.80\n"
+        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\n"
     )
 
 
@@ -92,14 +107,18 @@ def test_the_returned_dictionary_keeps_the_pre_extraction_types():
     a ``float`` for an even-length one; ``stdev`` is the integer ``0`` for a
     single observation. Coercing any of these to float would be a schema change
     in everything but name.
+
+    The values moved with #171 - the base set is the 1501 bp region, not the three
+    covered positions - but the types did not. ``median`` is still an ``int``
+    because 1501 is odd; it is now the int ``0`` rather than the int ``20``.
     """
     stats = summarise_coverage([10, 20, 30], total_region_length=1501)
 
     assert stats == {
-        "mean": 20.0,
-        "median": 20,
-        "stdev": 10.0,
-        "min": 10,
+        "mean": pytest.approx(60 / 1501),
+        "median": 0,
+        "stdev": pytest.approx(0.9652639013706887),
+        "min": 0,
         "max": 30,
         "region_length": 1501,
         "uncovered_bases": 1498,
@@ -125,7 +144,12 @@ def test_every_frozen_column_is_present_in_the_returned_dictionary():
 
 
 def test_full_coverage_reports_no_uncovered_bases():
-    """Every position in the region has a depth row, so nothing is uncovered."""
+    """
+    Every position in the region carries reads, so nothing is uncovered.
+
+    The one shape where the region-wide definition and the covered-position one
+    agree: no zeros are restored, so #171 left these three values untouched.
+    """
     stats = summarise_coverage([10, 10, 10, 10], total_region_length=4)
 
     assert stats["uncovered_bases"] == 0
@@ -133,20 +157,70 @@ def test_full_coverage_reports_no_uncovered_bases():
     assert stats["mean"] == 10.0
 
 
-def test_partial_coverage_counts_the_missing_positions_as_uncovered():
-    """
-    The core `samtools depth` semantics: absent rows are zero-coverage positions.
+def test_the_mean_is_over_the_region_not_over_covered_positions():
+    """#171: ten positions covered at 20x inside a 100 bp region is a mean of 2.0.
 
-    Ten covered positions inside a 100 bp region is 90% uncovered, and the mean is
-    the mean of the **covered** positions only - not of the region. That is the
-    pre-existing definition and it is preserved deliberately: changing it would
-    move every coverage number in every historical report.
+    The old definition divided by the covered-base count and reported 20.0, which is
+    the depth *where there were reads*, not the depth of the region.
     """
     stats = summarise_coverage([20] * 10, total_region_length=100)
 
+    assert stats["mean"] == 2.0
     assert stats["uncovered_bases"] == 90
     assert stats["percent_uncovered"] == 90.0
-    assert stats["mean"] == 20.0, "the mean is over covered positions, not over the region"
+
+
+def test_uncovered_bases_counts_zero_rows_when_samtools_emitted_every_position():
+    """#171: with `-a` the file already carries the zeros, so subtraction reports 0.
+
+    This is the regression that adding `-a` alone would have introduced: under the old
+    formula `region_length - len(values)` is `4 - 4 = 0` here, and the one metric that
+    was correct becomes the one that is always wrong.
+    """
+    stats = summarise_coverage([10, 0, 0, 10], total_region_length=4)
+
+    assert stats["uncovered_bases"] == 2
+    assert stats["percent_uncovered"] == 50.0
+    assert stats["mean"] == 5.0
+    assert stats["min"] == 0, "the true minimum of a partly uncovered region is zero"
+
+
+def test_a_legacy_depth_file_without_a_is_padded_to_the_region():
+    """A file with no zero rows still yields the region-wide statistics."""
+    stats = summarise_coverage([10, 20, 30], total_region_length=6)
+
+    assert stats["uncovered_bases"] == 3
+    assert stats["mean"] == 10.0
+    assert stats["min"] == 0
+    assert stats["max"] == 30
+
+
+@pytest.mark.parametrize(
+    ("values", "length"),
+    [([20] * 10, 100), ([10, 20, 30], 1501), ([5] * 999, 1000), ([7], 2)],
+)
+def test_the_closed_form_identity_reconciles_old_and_new_means(values, length):
+    """#171's free regression test: `mean_new == mean_old * (1 - pct_old / 100)`.
+
+    With `S = sum(v)`, `c = len(v)`, `T = length`: `(S/c) * (c/T) == S/T`. It lets a
+    historical report be reconciled with a re-run without new fixtures. Guarded on
+    `T > 0`, because an unparseable region forces `percent_uncovered = 0`.
+    """
+    assert length > 0
+    old_mean = sum(values) / len(values)
+    old_percent = (length - len(values)) / length * 100
+
+    stats = summarise_coverage(values, total_region_length=length)
+
+    assert stats["mean"] == pytest.approx(old_mean * (1 - old_percent / 100))
+
+
+def test_a_region_shorter_than_the_depth_file_does_not_invent_negative_padding():
+    """Degenerate but reachable if a region string and a BAM disagree."""
+    stats = summarise_coverage([10, 20, 30, 40], total_region_length=2)
+
+    assert stats["mean"] == 25.0, "no padding is added; the four observed values stand"
+    assert stats["uncovered_bases"] == 0
 
 
 def test_a_single_covered_position_reports_a_zero_standard_deviation():
@@ -176,10 +250,15 @@ def test_a_zero_length_region_reports_zero_percent_rather_than_dividing_by_zero(
 
     assert stats["percent_uncovered"] == 0
     assert stats["region_length"] == 0
-    assert stats["uncovered_bases"] == -2, "preserved: covered bases still subtract from an unknown length"
+    assert stats["uncovered_bases"] == 0, (
+        "#171: a negative uncovered count was nonsense. `absent` is floored at 0, so an "
+        "unparseable region reports 0 uncovered rather than -2. The WARNING from "
+        "parse_region_length is still the only signal that the region was unreadable."
+    )
 
 
 def test_the_median_of_an_even_sample_is_the_midpoint():
+    """A fully covered four-base region: no zeros are restored, so #171 moved nothing here."""
     stats = summarise_coverage([10, 20, 30, 40], total_region_length=4)
 
     assert stats["median"] == 25.0
@@ -258,7 +337,18 @@ def test_end_to_end_over_a_synthetic_depth_file(tmp_path):
     """
     The whole pure path: depth file plus region string to the exact TSV bytes.
 
-    Twelve covered positions out of a 20 bp region, depths 1..12.
+    Twelve covered positions out of a 20 bp region, depths 1..12. Recomputed by hand
+    from #171's region-wide definition, over ``[1..12] + [0] * 8``:
+
+    * ``mean``   = 78 / 20                                = 3.9      -> ``3.90``
+    * ``median`` = mean of sorted elements 9 and 10, which are 2 and 3
+      (the first eight are the restored zeros)             = 2.5      -> ``2.50``
+    * ``stdev``  = sqrt((650 - 20 * 3.9**2) / 19) = sqrt(18.2) = 4.266145... -> ``4.27``
+    * ``min``    = 0; ``max`` = 12
+    * ``percent_uncovered`` = 8 / 20 * 100 = 40.0, unchanged.
+
+    Before #171 this read ``6.50 6.50 3.61 1 12 20 8 40.00`` - the mean, median and
+    stdev of the twelve positions that had reads.
     """
     path = _write_depth(tmp_path, [("chr1", 100 + i, i + 1) for i in range(12)])
 
@@ -267,13 +357,13 @@ def test_end_to_end_over_a_synthetic_depth_file(tmp_path):
     stats = summarise_coverage(values, total_region_length=length)
 
     assert length == 20
-    assert stats["mean"] == pytest.approx(6.5)
-    assert stats["median"] == 6.5
-    assert stats["min"] == 1
+    assert stats["mean"] == pytest.approx(3.9)
+    assert stats["median"] == 2.5
+    assert stats["min"] == 0
     assert stats["max"] == 12
     assert stats["uncovered_bases"] == 8
     assert stats["percent_uncovered"] == pytest.approx(40.0)
     assert format_coverage_summary(stats) == (
         "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\n"
-        "6.50\t6.50\t3.61\t1\t12\t20\t8\t40.00\n"
+        "3.90\t2.50\t4.27\t0\t12\t20\t8\t40.00\n"
     )

@@ -17,13 +17,19 @@ with no coverage at all has 0 bp uncovered. :data:`COVERAGE_COLUMNS` is the sing
 declaration of that schema and both the TSV writer and the returned dict derive
 from it.
 
-One definition is worth stating explicitly because it is easy to get wrong when
-reading the numbers: ``samtools depth`` emits a row **only** for positions covered
-by at least one read. The number of rows is therefore the covered-base count, and
-``mean`` is the mean depth over *covered* positions - not over the region. A
-sample covered at 30x across 10% of the VNTR reports ``mean = 30`` and
-``percent_uncovered = 90``, and it is the second number that tells you the call is
-unreliable.
+One definition is worth stating explicitly because the opposite was true until #171:
+every statistic here is over the **region**, not over the covered positions. ``mean``,
+``median``, ``stdev``, ``min`` and ``max`` are computed after uncovered positions are
+restored as zeros, so a sample covered at 30x across 10% of the VNTR reports
+``mean = 3``, ``min = 0`` and ``percent_uncovered = 90``. The old ``mean = 30`` was the
+depth where there happened to be reads, which is not a property of the region and was
+systematically too high exactly where coverage was patchy.
+
+``samtools depth`` is called with ``-a`` (:func:`command_builders.build_samtools_depth_command`),
+so the depth table already spans the whole region and the zeros are real rows.
+``uncovered_bases`` counts them rather than deriving them by subtraction, which is what
+makes the two changes one change: under ``-a``, ``region_length - len(values)`` is 0 for
+every sample.
 
 Functions:
     parse_region_length: Region string to inclusive base count
@@ -109,9 +115,10 @@ def read_depth_values(depth_file: str | Path) -> list[int]:
     """
     Read the depth column out of a ``samtools depth`` output file.
 
-    ``samtools depth`` writes one tab-separated row per **covered** position:
-    contig, 1-based position, depth. Positions with no reads are absent entirely,
-    which is why the row count is the covered-base count.
+    ``samtools depth -a`` writes one tab-separated row per position in the region:
+    contig, 1-based position, depth - zero-depth positions included. Without ``-a``
+    the uncovered positions are absent entirely, and
+    :func:`summarise_coverage` restores them (#171).
 
     Args:
         depth_file (str | Path): Path to the depth table.
@@ -132,8 +139,9 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
     Summarise per-base depths into the frozen coverage schema.
 
     Args:
-        coverage_values (list[int]): Depth at each covered position, as returned
-            by :func:`read_depth_values`.
+        coverage_values (list[int]): Depth at each position the depth table
+            carries, as returned by :func:`read_depth_values`. Under ``-a`` that
+            is every position in the region, zeros included.
         total_region_length (int): Region length in bases, as returned by
             :func:`parse_region_length`. ``0`` means the region could not be
             parsed.
@@ -147,34 +155,41 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
         ``uncovered_bases`` are ``int``.
 
     Raises:
-        RuntimeError: If ``coverage_values`` is empty. An empty depth table means
-            the region matched nothing - a wrong contig name, a region past the
-            end of the chromosome, or a BAM with no reads there. Returning
+        RuntimeError: If ``coverage_values`` is empty. Under ``-a`` an empty depth
+            table can only mean the region matched no contig at all - a wrong
+            contig name, or a region past the end of the chromosome - because a
+            covered-free region would still emit its zero rows. Returning
             ``mean = 0`` instead would let the pipeline carry on and report a
             confident negative genotype.
 
     Note:
-        ``mean`` is the mean over covered positions, not over the region. Read it
-        together with ``percent_uncovered``.
+        Every statistic is over the **region**: uncovered positions are restored as
+        zeros first, so ``mean`` is the region's mean depth and ``min`` is ``0``
+        wherever anything is uncovered (#171). ``uncovered_bases`` counts zero-depth
+        positions rather than subtracting the row count from the region length.
     """
     if not coverage_values:
         raise RuntimeError("No coverage data found.")
 
-    covered_bases_count = len(coverage_values)
-    zero_coverage_bases = total_region_length - covered_bases_count
+    # `samtools depth -a` emits one row per position in the region, zeros included, so
+    # `coverage_values` *is* the region. A file written without `-a` - a legacy artefact,
+    # or a region truncated at a contig end - is short by exactly the positions that had
+    # no reads, so restoring them as zeros makes both cases the same base set. `absent` is
+    # floored at 0: an unparseable region (length 0) must not subtract padding. See #171.
+    absent = max(total_region_length - len(coverage_values), 0)
+    base = coverage_values + [0] * absent
 
-    # A region length of 0 means the region string could not be parsed; there is
-    # no denominator to divide by, so report 0 rather than crashing.
-    percent_uncovered = 0 if total_region_length <= 0 else zero_coverage_bases / total_region_length * 100
+    uncovered_bases = sum(1 for depth in base if depth == 0)
+    percent_uncovered = 0 if total_region_length <= 0 else uncovered_bases / total_region_length * 100
 
     return {
-        "mean": sum(coverage_values) / len(coverage_values),
-        "median": statistics.median(coverage_values),
-        "stdev": statistics.stdev(coverage_values) if len(coverage_values) > 1 else 0,
-        "min": min(coverage_values),
-        "max": max(coverage_values),
+        "mean": sum(base) / len(base),
+        "median": statistics.median(base),
+        "stdev": statistics.stdev(base) if len(base) > 1 else 0,
+        "min": min(base),
+        "max": max(base),
         "region_length": total_region_length,
-        "uncovered_bases": zero_coverage_bases,
+        "uncovered_bases": uncovered_bases,
         "percent_uncovered": percent_uncovered,
     }
 
