@@ -427,9 +427,13 @@ def aggregate_cohort(
         advntr_df = pd.DataFrame()
 
     # Create additional statistics DataFrame and HTML table if any stats were gathered.
+    # The frame is hoisted so the HTML table and the export below are one value: a CSV
+    # that could disagree with the rendered table would be worse than no CSV.
     if additional_stats_list:
-        additional_stats_html = stats_table_html(additional_stats_frame(additional_stats_list))
+        additional_stats_df = additional_stats_frame(additional_stats_list)
+        additional_stats_html = stats_table_html(additional_stats_df)
     else:
+        additional_stats_df = pd.DataFrame()
         additional_stats_html = ""
 
     generate_cohort_summary_report(
@@ -450,6 +454,10 @@ def aggregate_cohort(
         formats = parse_output_formats(additional_formats)
         write_cohort_frame(kestrel_df, output_dir, "cohort_kestrel", "Kestrel", formats)
         write_cohort_frame(advntr_df, output_dir, "cohort_advntr", "adVNTR", formats)
+        # #172: the statistics frame carries every cov_* column, coverage_qc among them.
+        # Until now it reached the HTML table only, so no machine-readable cohort output
+        # carried a coverage figure at all.
+        write_cohort_frame(additional_stats_df, output_dir, "cohort_stats", "Statistics", formats)
 
     # If pseudonymization was enabled, output the pseudonymization table.
     if pseudonymize_samples and sample_mapping:
