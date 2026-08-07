@@ -2,7 +2,55 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## 2.0.8 (Current)
+## 2.0.9 (Current)
+
+Milestone 2, "Web service and cohort integrity": closes #216, #207, #206, #205, #201,
+#167 and #162, plus #210 from the CRAM milestone because #162's acceptance criterion
+depends on it.
+
+**Cohort pseudonyms change format, and existing pseudonymization tables do not carry
+over.** A pseudonym was the prefix plus five hex characters of MD5 -- 20 bits, which
+collides with probability ~37.9% at 1,000 samples, and `sample_mapping` is keyed on it,
+so a collision silently merged two patients into one row and `sample_categories` counted
+them once. It is now 12 hex characters of SHA-256 (~1.8e-9 at 1,000 samples), with the
+algorithm and length in `config.json` under `cohort.pseudonym`. Re-run any cohort whose
+table you need to match new output.
+
+**Zip cohort inputs report a different sample name.** A zip whose `pipeline_summary.json`
+sits at its root -- the layout the web worker produces -- took its reported sample name
+and its sort position from `tempfile.mkdtemp`, so both differed on every run. The identity
+now comes from the input file the run itself recorded, and the ordering key contains no
+temporary component, so two runs of one cohort produce byte-identical CSV, TSV and JSON
+exports. Directory inputs keep the order they had.
+
+**Two samples that cannot be told apart are now reported separately or refused, never
+merged.** Samples sharing a name are reported under `<input>/<name>`; two inputs that
+share a name as well abort with a message naming both. A cohort reached through two
+spellings of the same path -- an absolute parent and a relative child -- is one sample
+again rather than two.
+
+**A read-only input directory works.** Nothing in the `vntyper` package writes beside the
+input any more: the `samtools quickcheck` log goes to the run's output directory, and a
+BAM index is resolved in htslib's order and built into the output directory when absent.
+On the web service this also makes the worker's input-directory cleanup reachable for the
+first time -- every job used to leave one file and one directory behind, permanently, on
+the volume every job shares.
+
+**Two XSS fixes in the reports.** The flag tooltip decoded the server's escaping and
+reparsed it, so a `Flag` value from a supplied `pipeline_summary.json` could execute; both
+templates now build that markup through DOM APIs. The two igv-reports fragments were
+interpolated into a `<script>` block behind a non-empty check and are now re-serialised
+through `json.dumps` with every `<` escaped.
+
+**`vntyper report` produces the IGV panel again.** It passed no VCF at all, and resolved
+the BAM and BED only under `--input-dir`; all three now resolve from one effective run
+directory, and `--vcf-file` was added.
+
+No genotype field changed: the golden-cohort gate was run over the full 60-case matrix
+against 2.0.8 and every `Confidence`, `Flag`, `POS`, `REF`/`ALT`, `Motif*`, `Depth_Score`
+and `VID` is byte-identical.
+
+## 2.0.8
 
 Milestone 2, "Correctness of reported numbers": closes #171, #172, #174, #203 and #212.
 
