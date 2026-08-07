@@ -49,6 +49,25 @@ beside it is being interpreted in that coordinate space" — is true of `Motif`,
 `Motif_fasta`. **Decision: the code is right, the comment is wrong. Delete the dead
 rebase, correct the comment, rename the test whose name asserts the opposite.**
 
+Confirmed by execution, not only by reading — `motif_correction_and_annotation` run
+against the shipped reference and config:
+
+```
+reference records: 551   distinct lengths: {120}
+is '1-2' a record? True;  is '2' a record? False;  is 'X' a record? False
+
+  Motifs  POS Motif Motif_fasta POS_fasta
+0    1-2   54     2         1-2        54
+1    X-5   67     X         X-5        67
+2    X-5   60     X         X-5        60
+```
+
+Every record is 120 bp. `Motif_fasta` carries the pair name and **is** a FASTA record
+ID; `Motif` carries the half name and **cannot be** one. `POS_fasta` is the unmodified
+`POS`, including for the row at `POS 60` that sits exactly on the threshold. So column 1
+of `output.bed` is resolvable only against the 120 bp record, and column 2 is already in
+that record's coordinate space.
+
 Confirmed with the user, 2026-08-07.
 
 ### D2 — #171 lands the arithmetic; the region harmonisation is deferred
