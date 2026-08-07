@@ -37,6 +37,7 @@ Functions:
 from __future__ import annotations
 
 import html
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -400,23 +401,56 @@ def extract_line_after(content: str, marker: str) -> str:
     return content[start:end].strip()
 
 
-def js_object_literal(fragment: str, fallback: str) -> str:
-    """Return ``fragment`` if it can stand as a JavaScript literal, else ``fallback``.
+def js_json_literal(fragment: str, fallback: str) -> str:
+    """Re-serialise an extracted fragment as a literal that is safe in a ``<script>``.
 
-    The template interpolates these straight into a ``<script>`` block as
-    ``const tableJson = {{ table_json|safe }};``. An empty fragment produces
-    ``const tableJson = ;`` -- a syntax error that takes the whole script block
-    down, and with it the variant table, the flag toggles and the coverage
-    switch, on every sample with no IGV report.
+    ``report_template.html`` interpolates the return value directly into a script
+    block as ``const tableJson = {{ table_json|safe }};``. The fragment reaching
+    here was lifted verbatim out of the igv-reports page by
+    :func:`extract_line_after` and is sample-derived, so it is re-parsed and
+    re-emitted rather than trusted: what the template receives is always the
+    output of :func:`json.dumps`, never the extracted text.
+
+    A single trailing ``;`` is stripped before parsing. This is defensive against
+    a *future* igv-reports version, not a correction of today's: verified against
+    the installed igv-reports 1.16.0, ``templates/variant_template.html:155-156``
+    is ``const tableJson = "@TABLE_JSON@"`` with no terminator, and
+    ``report.py:178-183`` substitutes the placeholder including its quotes, so the
+    fragment reaching here never carries a trailing ``;`` today.
+
+    ``json.dumps`` is called with ``ensure_ascii=True`` (the stdlib default, kept
+    explicit here because it is load-bearing): it escapes every non-ASCII
+    codepoint, which includes U+2028 and U+2029 -- line terminators to a
+    JavaScript parser that are legal inside a JSON string. That leaves ``</`` as
+    the one remaining script-context hazard: ``</script>`` inside any string value
+    would otherwise close the block early and turn everything after it into HTML,
+    so it alone is escaped by hand after serialisation.
+
+    Keys are sorted and separators are minimised so that two runs over the same
+    IGV page emit byte-identical script.
 
     Args:
-        fragment: The extracted literal, possibly empty.
-        fallback: A valid literal to use instead.
+        fragment: The extracted literal, possibly empty, possibly not JSON.
+        fallback: A valid literal to use when the fragment cannot be parsed. An
+            empty fragment would otherwise produce ``const tableJson = ;`` -- a
+            syntax error that takes the whole script block down, and with it the
+            variant table, the flag toggles and the coverage switch.
 
     Returns:
-        str: Something that parses.
+        str: A JSON literal that parses as JavaScript and cannot escape the
+        script block.
     """
-    return fragment if fragment.strip() else fallback
+    candidate = fragment.strip().removesuffix(";").strip()
+    if not candidate:
+        return fallback
+    try:
+        value = json.loads(candidate)
+    except ValueError as e:
+        logger.warning(f"IGV fragment could not be parsed as JSON and was discarded: {e}")
+        return fallback
+
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return encoded.replace("</", "<\\/")
 
 
 def extract_igv_fragments(content: str) -> tuple[str, str, str]:
