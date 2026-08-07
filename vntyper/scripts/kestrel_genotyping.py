@@ -522,6 +522,7 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
       5) ALT-based filtering logic (e.g., 'GG' threshold)
       6) Motif correction & annotation
       6.5) Apply flagging rules before selection (fixes #145)
+      6.5b) Derive the artifact gate from the flags (fixes #174)
       7) Final filter + select single best variant
       8) Generate BED file for coverage
 
@@ -589,6 +590,15 @@ def process_kmer_results(combined_df, merged_motifs, output_dir, kestrel_config)
         from vntyper.scripts.flagging import add_flags
 
         df = add_flags(df, flagging_rules, duplicates_config=duplicates_config)
+
+    # (6.5b) #174: derive the artifact gate. Unconditional, unlike add_flags above: a
+    # frame that reached the final filter without `flag_filter_pass` would abort the run
+    # on a missing required gate column (#185). Which flags are artifacts is
+    # configuration; an absent or empty `artifact_flags` list excludes nothing, which is
+    # exactly the pre-#174 behaviour.
+    from vntyper.scripts.flagging import add_artifact_gate
+
+    df = add_artifact_gate(df, kestrel_config.get("artifact_flags", []))
 
     # (7) Final Filter
     df = filter_final_dataframe(df, output_dir)
@@ -778,7 +788,15 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     """
     Final step: filter the DataFrame based on the boolean columns introduced
     by earlier steps ('is_frameshift', 'is_valid_frameshift',
-    'depth_confidence_pass', 'alt_filter_pass', 'motif_filter_pass').
+    'depth_confidence_pass', 'alt_filter_pass', 'motif_filter_pass',
+    'flag_filter_pass').
+
+    Five of the six encode a *pathogenicity or quality* judgement. The sixth,
+    'flag_filter_pass' (#174), encodes an *artifact* judgement: the row carries a
+    flag that `kestrel_config.json` declares under `artifact_flags`, so it is not
+    a candidate variant at all. Advisory flags such as
+    'Low_Depth_Conserved_Motifs' leave that gate True and only deprioritise the
+    row during selection.
 
     We keep rows where *all* filter columns are True. Every column is required:
     the earlier stages mark rather than filter, so a column missing from a
@@ -795,7 +813,7 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
     evidence. The final filtered DataFrame is returned in memory.
 
     Args:
-        df (pd.DataFrame): The postprocessed DataFrame, with all five
+        df (pd.DataFrame): The postprocessed DataFrame, with all six
             boolean filter columns.
         output_dir (str): Path to the main output directory.
 
@@ -830,6 +848,7 @@ def filter_final_dataframe(df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
         "depth_confidence_pass",
         "alt_filter_pass",
         "motif_filter_pass",
+        "flag_filter_pass",
     ]
 
     # Build a mask requiring all existing boolean filters == True
