@@ -8,12 +8,15 @@ rows, and the per-sample statistics.
 
 This was 120 lines of `cohort_summary.py` reachable only by calling the whole cohort
 pipeline, and it was the largest single uncovered block in the file. Everything here is
-**characterisation** - it records what a cohort run does today, including the behaviour
-named `..._today` - except the three discovery-order tests, which are specifications and
-say so in their own docstrings. No other test in this file has been ratified. The three
-specifications are about **directory** inputs; what zip inputs do to sample order and
-sample identity is characterised, not specified, and the `..._today` tests in the zip
-section say why.
+**characterisation** - it records what a cohort run does today - except the discovery-order
+and discovery-identity tests, which are specifications and say so in their own docstrings.
+No other test in this file has been ratified.
+
+The two `..._today` tests in the zip section, which characterised a zip-rooted sample's
+random identity and its irreproducible order as defects rather than guarantees, are gone:
+#205 fixed both, and they now pin the fixed behaviour under names that say so. The wider
+specification of a sample's identity and the injectivity of the pseudonym map live in
+`test_cohort_identity.py`.
 
 Step names are matched by exact string comparison against what `pipeline.py` writes
 (AGENTS.md trap 5), so this file asserts against `summary_steps.STEP_*` for the same
@@ -75,7 +78,8 @@ def test_a_directory_that_is_itself_a_sample_is_taken_as_one(tmp_path) -> None:
 
     dirs, temp_dirs = discover_sample_directories([str(sample)])
 
-    assert dirs == [sample]
+    assert [found.directory for found in dirs] == [sample]
+    assert [found.identity for found in dirs] == ["sample_one"]
     assert temp_dirs == []
 
 
@@ -87,7 +91,7 @@ def test_a_parent_directory_is_searched_recursively(tmp_path) -> None:
 
     dirs, _ = discover_sample_directories([str(tmp_path / "cohort")])
 
-    assert dirs == [two, one]
+    assert [found.directory for found in dirs] == [two, one]
 
 
 def test_a_directory_that_is_itself_a_sample_is_not_also_searched(tmp_path) -> None:
@@ -98,7 +102,7 @@ def test_a_directory_that_is_itself_a_sample_is_not_also_searched(tmp_path) -> N
 
     dirs, _ = discover_sample_directories([str(parent)])
 
-    assert dirs == [parent]
+    assert [found.directory for found in dirs] == [parent]
 
 
 def test_the_same_sample_reached_twice_is_only_processed_once(tmp_path) -> None:
@@ -106,7 +110,7 @@ def test_the_same_sample_reached_twice_is_only_processed_once(tmp_path) -> None:
 
     dirs, _ = discover_sample_directories([str(sample), str(tmp_path / "cohort")])
 
-    assert dirs == [sample]
+    assert [found.directory for found in dirs] == [sample]
 
 
 def test_a_missing_input_path_is_skipped_with_a_warning(tmp_path, caplog) -> None:
@@ -151,6 +155,14 @@ def test_the_discovered_directories_come_back_sorted(tmp_path) -> None:
 
     The inputs are named in reverse on purpose: a deliberately adverse ordering is what
     distinguishes "sorted" from "happens to arrive in order".
+
+    **This expectation survived #205 unchanged, and that was a deliberate choice.** The
+    sort key stopped being the sample's *extracted* path - whose leading component for a
+    zip is `tempfile.mkdtemp`'s random suffix, so zip samples had no reproducible position
+    at all - and became `(parts of the input path, path relative to that input's root)`.
+    An earlier draft keyed the outer half on the input's *position* in `input_paths`
+    instead, which is equally reproducible but would have reordered the rows of every
+    existing directory-input cohort report for no reason #205 required.
     """
     first = _write_summary(tmp_path / "cohort" / "sample_a")
     second = _write_summary(tmp_path / "cohort" / "sample_b")
@@ -158,17 +170,22 @@ def test_the_discovered_directories_come_back_sorted(tmp_path) -> None:
 
     dirs, _ = discover_sample_directories([str(third), str(second), str(first)])
 
-    assert dirs == [first, second, third]
+    assert [found.directory for found in dirs] == [first, second, third]
 
 
 def test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string(tmp_path) -> None:
-    """**Specification**: `sorted()` on `Path` compares the path *parts*.
+    """**Specification**: the sort compares path *parts*, not raw path strings.
 
-    `PurePath.__lt__` compares `_parts_normcase`, so the separator never takes part in
-    the comparison. That is the difference this pins: `cohort/sample_one` sorts before
-    `cohort-extra/sample_one` because `"cohort" < "cohort-extra"`, where the raw strings
-    compare the other way round (`"-"` is 0x2d and `"/"` is 0x2f). It is also the order
-    a user reading `ls` would predict, which is the point of choosing it.
+    The separator therefore never takes part in the comparison. That is the difference
+    this pins: `cohort/sample_one` sorts before `cohort-extra/sample_one` because
+    `"cohort" < "cohort-extra"`, where the raw strings compare the other way round (`"-"`
+    is 0x2d and `"/"` is 0x2f). It is also the order a user reading `ls` would predict,
+    which is the point of choosing it.
+
+    It held when the key was `sorted()` over `Path` (`PurePath.__lt__` compares
+    `_parts_normcase`) and it holds now that the key is a tuple of parts compared
+    element-wise, for the same reason and with the same result - here across two inputs,
+    and in `test_cohort_identity.py` within one.
     """
     plain = _write_summary(tmp_path / "cohort" / "sample_one")
     suffixed = _write_summary(tmp_path / "cohort-extra" / "sample_one")
@@ -176,14 +193,18 @@ def test_the_order_is_lexicographic_by_path_part_rather_than_by_raw_string(tmp_p
 
     dirs, _ = discover_sample_directories([str(suffixed), str(plain)])
 
-    assert dirs == [plain, suffixed]
+    assert [found.directory for found in dirs] == [plain, suffixed]
 
 
-#: Run in a subprocess: report the discovery order of the directories under ``argv[1]``.
+#: Run in a subprocess: report the identities discovery finds under ``argv[1]``.
+#:
+#: ``identity`` rather than ``directory.name``: the identity is what the report actually
+#: shows, so the cross-process test pins the value that matters rather than a path
+#: component that no longer decides it (#205).
 _ORDER_PROBE = (
     "import json, sys;"
     "from vntyper.scripts.cohort_inputs import discover_sample_directories;"
-    "print(json.dumps([p.name for p in discover_sample_directories(sys.argv[1:])[0]]))"
+    "print(json.dumps([s.identity for s in discover_sample_directories(sys.argv[1:])[0]]))"
 )
 
 
@@ -223,10 +244,10 @@ def test_processes_with_different_hash_seeds_discover_the_same_order(tmp_path) -
 
     **Scope: directory inputs.** The ten samples are directories under `tmp_path`, whose
     paths are the same in all five children, so the sort is over a fixed set of strings
-    and is total. It does not carry over to zip inputs: their sort key ends in
-    `tempfile.mkdtemp`'s random suffix, so it differs between processes whatever the hash
-    seed is. See
-    `test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today`.
+    and is total. Zip inputs used to be outside that scope entirely - their sort key ended
+    in `tempfile.mkdtemp`'s random suffix, so it differed between processes whatever the
+    hash seed was - and are now covered by their own cross-process test,
+    `test_cohort_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes`.
 
     The claim this test does **not** support, and used to: that the stable fingerprint in
     `test_cohort_summary_oracle.py` is evidence for the same fix. That fingerprint is
@@ -272,7 +293,7 @@ def test_a_zip_whose_root_is_a_sample_is_extracted_and_used(tmp_path) -> None:
 
     try:
         assert len(temp_dirs) == 1
-        assert dirs == [Path(temp_dirs[0])]
+        assert [found.directory for found in dirs] == [Path(temp_dirs[0])]
     finally:
         cleanup_temp_dirs(temp_dirs)
 
@@ -290,25 +311,26 @@ def test_a_zip_of_several_samples_is_searched_recursively(tmp_path) -> None:
     dirs, temp_dirs = discover_sample_directories([str(archive)])
 
     try:
-        assert [d.name for d in dirs] == ["sample_one", "sample_two"]
+        assert [found.directory.name for found in dirs] == ["sample_one", "sample_two"]
     finally:
         cleanup_temp_dirs(temp_dirs)
 
 
-def test_a_zip_rooted_sample_is_identified_by_its_extraction_directory_today(tmp_path) -> None:
-    """Characterisation of a defect, not a guarantee: a zip-rooted sample has no name.
+def test_a_zip_rooted_sample_is_identified_by_the_archive_rather_than_by_the_temp_dir(tmp_path) -> None:
+    """**Specification** (#205); this replaces the characterisation of the same layout.
 
-    When `pipeline_summary.json` sits at the root of the archive - which is the layout
-    the web worker produces - the discovered "sample directory" *is* the extraction
-    directory, and that is `tempfile.mkdtemp(prefix="cohort_zip_")`. `aggregate_cohort`
-    takes the sample's identity from `Path(sample_dir).name`, so the sample is reported,
-    exported and pseudonymised under a random `cohort_zip_XXXXXXXX` string that is
-    different on every run and carries nothing of the archive's own name.
+    When `pipeline_summary.json` sits at the root of the archive - which is the layout the
+    web worker produces, so the normal path for web cohorts - the discovered sample
+    directory *is* the extraction directory, and that is
+    `tempfile.mkdtemp(prefix="cohort_zip_")`. `aggregate_cohort` took the sample's
+    identity from `Path(sample_dir).name`, so the sample was reported, exported and
+    pseudonymised under a random `cohort_zip_XXXXXXXX` string that was different on every
+    run and carried nothing of the archive's own name.
 
-    What the right identity is - the archive stem, a name carried inside the summary, or
-    the job id the web service already holds - is a design decision, so this records the
-    behaviour rather than changing it. The orchestrator will file it; there is no issue
-    file for it in `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/` yet.
+    The identity is now carried out of discovery explicitly. It is the stem of the input
+    file the run itself recorded, and the archive's own stem when the summary records
+    none - which is this fixture, whose summary predates `input_files`. The full identity
+    specification, including which recorded input wins, is in `test_cohort_identity.py`.
     """
     archive = _zip_of(tmp_path, "patient_one.zip", {"pipeline_summary.json": '{"version": "2.0.6"}'})
 
@@ -316,31 +338,30 @@ def test_a_zip_rooted_sample_is_identified_by_its_extraction_directory_today(tmp
 
     try:
         (sample,) = dirs
-        assert sample.name.startswith("cohort_zip_")
-        assert "patient_one" not in str(sample)
+        assert sample.identity == "patient_one"
+        assert sample.directory.name.startswith("cohort_zip_")
     finally:
         cleanup_temp_dirs(temp_dirs)
 
 
-def test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today(tmp_path, monkeypatch) -> None:
-    """Characterisation of a defect, not a guarantee: multi-zip order is not reproducible.
+def test_two_zip_inputs_are_ordered_by_their_archive_paths_not_by_their_temp_dirs(tmp_path, monkeypatch) -> None:
+    """**Specification** (#205); this replaces the characterisation of the same defect.
 
-    `discover_sample_directories` sorts, so directory inputs come back in an order two
-    processes agree on - that is what
+    `discover_sample_directories` sorts, so directory inputs came back in an order two
+    processes agreed on - that is what
     `test_processes_with_different_hash_seeds_discover_the_same_order` pins. The sort key
-    for a zip-rooted sample is the extraction directory's full path, and its last
-    component is `tempfile.mkdtemp`'s random suffix, so for zips the sort is total but
-    the thing being sorted is different every run. Two archives therefore come back in a
-    different order each time, and the report's row order follows.
+    for a zip-rooted sample used to be the extraction directory's full path, and its last
+    component is `tempfile.mkdtemp`'s random suffix, so for zips the sort was total but
+    the thing being sorted was different every run. Two archives came back in a different
+    order each time, and the report's row order followed. The outer half of the key is now
+    the archive path the caller wrote, which is the zip's analogue of the directory path
+    the directory-input tests above sort on.
 
-    `mkdtemp` is stubbed here to hand out chosen suffixes, because the defect is that the
-    order follows those suffixes - and an assertion against genuinely random ones would
-    either be flaky or would assert nothing. The archive given **first**, whose name sorts
-    **first**, is deliberately the one that extracts to the suffix sorting **last**: it
-    comes back second, so neither the input order nor the archive name decides.
-
-    Fixing it means giving a zip-rooted sample a stable identity, which is the same design
-    decision as in the test above and is filed with it.
+    `mkdtemp` is stubbed to hand out chosen suffixes rather than random ones, because with
+    random ones this test would pass about half the time on unfixed code and would
+    therefore prove nothing. The archive given **first** is deliberately the one that
+    extracts to the suffix sorting **last**, which is exactly the arrangement the old sort
+    got wrong.
     """
     first = _zip_of(tmp_path, "aaa_cohort.zip", {"pipeline_summary.json": '{"version": "AAA"}'})
     second = _zip_of(tmp_path, "zzz_cohort.zip", {"pipeline_summary.json": '{"version": "ZZZ"}'})
@@ -356,9 +377,10 @@ def test_two_zip_inputs_are_ordered_by_their_random_temporary_directories_today(
     dirs, temp_dirs = discover_sample_directories([str(first), str(second)])
 
     try:
-        assert [d.name for d in dirs] == ["cohort_zip_aaaaaaaa", "cohort_zip_zzzzzzzz"]
-        # And with the order goes the data: the second archive's sample is reported first.
-        assert load_pipeline_summary_for_sample(dirs[0])[2]["version"] == "ZZZ"
+        assert [found.identity for found in dirs] == ["aaa_cohort", "zzz_cohort"]
+        assert [found.directory.name for found in dirs] == ["cohort_zip_zzzzzzzz", "cohort_zip_aaaaaaaa"]
+        # And with the order goes the data: the first archive's sample is reported first.
+        assert load_pipeline_summary_for_sample(dirs[0].directory)[2]["version"] == "AAA"
     finally:
         cleanup_temp_dirs(temp_dirs)
 
@@ -608,8 +630,9 @@ def test_the_sample_directory_may_be_given_as_a_string(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_pseudonym_is_the_prefix_and_five_hex_digits() -> None:
-    assert pseudonymized_sample_name("anon_", "sample_one") == "anon_65622"
+def test_a_pseudonym_is_the_prefix_and_twelve_hex_digits() -> None:
+    """#206: five hex characters of MD5 became twelve of SHA-256, and the value moved."""
+    assert pseudonymized_sample_name("anon_", "sample_one") == "anon_c788e939395d"
 
 
 def test_the_same_sample_name_always_gets_the_same_pseudonym() -> None:
@@ -618,42 +641,42 @@ def test_the_same_sample_name_always_gets_the_same_pseudonym() -> None:
 
     Two calls in one interpreter, so on its own this shows only that the function is not
     stateful; it cannot see a mapping that varied between processes. What establishes
-    cross-process stability is `test_a_pseudonym_is_the_prefix_and_five_hex_digits`
-    above, which pins an exact literal - `md5` is a fixed digest with no per-process
+    cross-process stability is `test_a_pseudonym_is_the_prefix_and_twelve_hex_digits`
+    above, which pins an exact literal - `sha256` is a fixed digest with no per-process
     salt, unlike `hash()`, so a recorded value is the whole guarantee.
     """
     assert pseudonymized_sample_name("x", "s1") == pseudonymized_sample_name("x", "s1")
 
 
 def test_two_particular_sample_names_get_different_pseudonyms() -> None:
-    """`s1` and `s2` do not collide. That is all this shows, and it used to be named as
-    though it showed injectivity - which the function does not have; see below."""
+    """`s1` and `s2` do not collide. That is all this shows; injectivity over a realistic
+    cohort is measured in `test_cohort_identity.py`."""
     assert pseudonymized_sample_name("x", "s1") != pseudonymized_sample_name("x", "s2")
 
 
-def test_two_sample_names_can_share_a_pseudonym_today() -> None:
-    """Characterisation of a defect, not a guarantee: pseudonyms are not injective.
+def test_the_two_sample_names_that_used_to_share_a_pseudonym_no_longer_do() -> None:
+    """#206; this replaces the characterisation of the same pair as a defect.
 
-    The pseudonym is the first **five** hex characters of an MD5 - 20 bits, about a
-    million values - so a cohort of a few thousand samples is already odds-on to contain
+    The pseudonym was the first **five** hex characters of an MD5 - 20 bits, about a
+    million values - so a cohort of a few thousand samples was already odds-on to contain
     a collision by the birthday bound. `sample_42` and `sample_919` are the first
-    colliding pair among `sample_0`..`sample_19999`, and both land on `168eb`.
+    colliding pair among `sample_0`..`sample_19999`, and both landed on `168eb`.
 
-    Two consequences, both real rather than theoretical:
+    Two consequences, both real rather than theoretical, and both closed by the widening:
 
     * `aggregate_cohort` builds `sample_mapping[pseudonym] = original_sample`, so the
-      second sample's entry **overwrites** the first in `pseudonymization_table.tsv` and
-      one of the two originals cannot be recovered from it;
-    * both samples' rows are reported under the same `Sample` value, so the cohort's
-      Kestrel table shows them as one sample with two calls.
+      second sample's entry **overwrote** the first in `pseudonymization_table.tsv` and
+      one of the two originals could not be recovered from it;
+    * both samples' rows were reported under the same `Sample` value, so the cohort's
+      Kestrel table showed them as one sample with two calls.
 
-    Widening the slice, or salting it per cohort, changes every pseudonym in every
-    existing report, so it is a recorded decision rather than a fix to make here. The
-    orchestrator will file it; there is no issue file for it in
-    `.superpowers/sdd/2026-08-06-issue-181-197-followups-plan/` yet.
+    Widening changes every pseudonym in every existing report; that was the recorded
+    reason to leave it, and this milestone made the decision the other way. The map is now
+    injective-or-loud: `aggregate_cohort` refuses a collision rather than merging, which
+    is what makes no width a silent risk. See `test_cohort_identity.py`.
     """
-    assert pseudonymized_sample_name("anon_", "sample_42") == "anon_168eb"
-    assert pseudonymized_sample_name("anon_", "sample_919") == "anon_168eb"
+    assert pseudonymized_sample_name("anon_", "sample_42") == "anon_55b67a5ddb12"
+    assert pseudonymized_sample_name("anon_", "sample_919") == "anon_177ad4b75617"
 
 
 def test_the_prefix_may_be_any_value_the_cli_accepted() -> None:

@@ -105,7 +105,11 @@
   },
   "cohort": {
     "kestrel_result_file": "kestrel_result.tsv",
-    "advntr_result_file": "output_adVNTR.tsv"
+    "advntr_result_file": "output_adVNTR.tsv",
+    "pseudonym": {
+      "algorithm": "sha256",
+      "digest_characters": 12
+    }
   },
   "file_processing": {
     "snv_length": 1

@@ -16,11 +16,24 @@ One failure mode is deliberate and is characterised rather than changed: a sampl
 cannot be read - a missing summary, malformed JSON, an unparseable timestamp - is logged
 and dropped so one bad sample cannot abort a 40-sample cohort.
 
-The discovery order is a contract. Sample directories are de-duplicated through a set
-and then **sorted**, because a set of ``Path`` iterates in string-hash order and Python
-randomises string hashing per process - which made two ``vntyper cohort`` runs over the
-same inputs disagree about the row order of the report and of every export. See
-:func:`discover_sample_directories`.
+**A sample's identity and its position in the output depend only on the inputs, never on
+where they were unpacked** (#205). Both used to depend on the extraction directory, and a
+zip is extracted into ``tempfile.mkdtemp(prefix="cohort_zip_")``:
+
+* Discovery de-duplicates through a mapping and then **sorts**, because iterating that
+  mapping in insertion order would follow the argument order and iterating a ``set`` -
+  what it was before - followed ``Path.__hash__``, which is the hash of the path string
+  and is randomised per process. The sort key is now
+  :attr:`DiscoveredSample.sort_key`: the parts of the input path the caller wrote, then
+  the sample's path relative to *that input's* root. The sample's extracted path was the
+  old key, so two runs over the same archives ordered their rows differently.
+* A zip whose ``pipeline_summary.json`` sits at the archive root - the layout the web
+  worker produces - had the ``mkdtemp`` root itself as its sample directory, so the
+  reported sample was a random ``cohort_zip_*`` string. :attr:`DiscoveredSample.identity`
+  carries the name instead, read from the input file the run itself recorded.
+
+Extraction still goes to a temporary directory; only its role in identity and order is
+gone.
 
 The four step names this module matches are compared by exact string against what
 ``pipeline.py`` writes. A typo does not fail - it silently drops a section of the report
@@ -36,6 +49,7 @@ import os
 import shutil
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -52,9 +66,152 @@ logger = logging.getLogger(__name__)
 #: The file every sample directory is identified by.
 PIPELINE_SUMMARY_FILENAME = "pipeline_summary.json"
 
+#: The ``input_files`` keys a zip-rooted sample's identity is read from, most specific
+#: first. ``pipeline.py`` records the alignment it was handed under ``bam`` or ``cram`` and
+#: the reads under ``fastq1``/``fastq2``; a run that aligned its own reads records both, and
+#: the alignment is the file the genotype was called from.
+IDENTITY_INPUT_KEYS = ("bam", "cram", "fastq1")
 
-def discover_sample_directories(input_paths: list[str]) -> tuple[list[Path], list[str]]:
-    """Resolve the cohort's input paths to the sample directories they contain.
+#: Stripped before ``Path.stem`` takes the last suffix, so ``patient_R1.fastq.gz``
+#: identifies ``patient_R1`` rather than ``patient_R1.fastq``.
+COMPRESSION_SUFFIXES = (".gz", ".bgz")
+
+#: Digest used to build a cohort pseudonym. Overridable through
+#: ``config["cohort"]["pseudonym"]``; declared here so a config that omits the key - which
+#: ``--config-path`` produces, because it replaces rather than merges (AGENTS.md trap 2) -
+#: does not raise.
+DEFAULT_PSEUDONYM_ALGORITHM = "sha256"
+
+#: Hex characters of the digest a pseudonym carries. Twelve is 48 bits: the birthday
+#: probability of at least one collision, ``1 - exp(-n(n-1)/2**49)``, is 1.78e-9 at 1,000
+#: samples and 1.78e-7 at 10,000. The previous value was five characters of MD5 - 20 bits,
+#: which collides with probability ~37.9% at 1,000 samples (#206).
+DEFAULT_PSEUDONYM_LENGTH = 12
+
+
+@dataclass(frozen=True)
+class DiscoveredSample:
+    """One sample the cohort found, with an identity that does not move between runs."""
+
+    #: Where the sample's ``pipeline_summary.json`` is right now. For a zip input this is
+    #: under ``tempfile.mkdtemp``'s output and so differs on every run, which is precisely
+    #: why it is neither the identity nor the sort key.
+    directory: Path
+
+    #: The name the sample is reported under, before any pseudonymisation.
+    identity: str
+
+    #: The input path this sample was reached through, exactly as the caller wrote it - a
+    #: directory or a zip archive. Kept because it is the only thing that can name a zip
+    #: sample's origin in a diagnostic: its ``directory`` is an extraction directory.
+    origin: str
+
+    #: What the ordering is total on: the parts of :attr:`origin`, then the parts of the
+    #: sample's path relative to that input's root. Both halves are user-supplied or
+    #: archive-internal, so neither can contain a ``tempfile.mkdtemp`` component and two
+    #: runs agree.
+    sort_key: tuple[tuple[str, ...], tuple[str, ...]]
+
+
+def _stem_of_recorded_input(recorded: str) -> str:
+    """Reduce a recorded input filename to the name a clinician would recognise.
+
+    Args:
+        recorded: A value out of a summary's ``input_files``, e.g. ``patient1.bam``.
+
+    Returns:
+        str: The stem, with one compression suffix stripped first so
+        ``patient_R1.fastq.gz`` yields ``patient_R1``.
+    """
+    name = Path(recorded).name
+    for suffix in COMPRESSION_SUFFIXES:
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return Path(name).stem
+
+
+def _identity_from_summary(sample_dir: Path, fallback: str) -> str:
+    """Name a sample from the input file its own run recorded.
+
+    The directory name is the right identity almost everywhere, but not for a zip whose
+    ``pipeline_summary.json`` sits at the root: that directory is the randomised
+    ``tempfile.mkdtemp`` root, so the reported sample differed on every run (#205). That
+    layout is what the web worker produces, so it is the normal path for web cohorts rather
+    than an edge case.
+
+    Args:
+        sample_dir: The directory holding ``pipeline_summary.json``.
+        fallback: The identity to use when the summary records no input files - the
+            archive's filename stem.
+
+    Returns:
+        str: The sample's identity. Anything that goes wrong yields ``fallback``; this
+        helper never raises, matching the module's "one bad sample must not abort the
+        cohort" contract.
+    """
+    summary_path = sample_dir / PIPELINE_SUMMARY_FILENAME
+    if not summary_path.exists():
+        return fallback
+    try:
+        with open(summary_path) as handle:
+            summary = json.load(handle)
+        input_files = summary.get("input_files") or {}
+        for key in IDENTITY_INPUT_KEYS:
+            recorded = input_files.get(key)
+            if recorded:
+                return _stem_of_recorded_input(str(recorded))
+    except Exception as e:
+        logger.warning(f"Could not read the recorded inputs of {sample_dir}, naming it {fallback}: {e}")
+    return fallback
+
+
+def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[DiscoveredSample]:
+    """Find the samples one already-resolved input root contains.
+
+    A directory holding a ``pipeline_summary.json`` is taken as one sample and is not
+    searched further; any other directory is searched recursively.
+
+    Args:
+        root: The input directory, or the directory a zip was extracted into.
+        origin: The input path as the caller wrote it. Its parts are the outer half of the
+            sort key, so a zip's samples sort under the archive's own path rather than
+            under the extraction directory.
+        root_identity: The identity to give a sample sitting at ``root`` itself. For a
+            directory that is the directory's name; for a zip it is what the run recorded.
+
+    Returns:
+        list[DiscoveredSample]: The samples found, unsorted.
+    """
+    origin_parts = Path(origin).parts
+    if (root / PIPELINE_SUMMARY_FILENAME).exists():
+        logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {root}")
+        return [
+            DiscoveredSample(
+                directory=root,
+                identity=root_identity,
+                origin=origin,
+                sort_key=(origin_parts, ()),
+            )
+        ]
+
+    samples: list[DiscoveredSample] = []
+    for summary_file_path in root.rglob(PIPELINE_SUMMARY_FILENAME):
+        sample_dir = summary_file_path.parent
+        logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {sample_dir}")
+        samples.append(
+            DiscoveredSample(
+                directory=sample_dir,
+                identity=sample_dir.name,
+                origin=origin,
+                sort_key=(origin_parts, sample_dir.relative_to(root).parts),
+            )
+        )
+    return samples
+
+
+def discover_sample_directories(input_paths: list[str]) -> tuple[list[DiscoveredSample], list[str]]:
+    """Resolve the cohort's input paths to the samples they contain.
 
     A directory holding a ``pipeline_summary.json`` is taken as one sample and is not
     searched further; any other directory is searched recursively. A zip file is
@@ -66,47 +223,44 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Path], lis
         input_paths: Directories or zip files, as ``vntyper cohort`` received them.
 
     Returns:
-        tuple[list[Path], list[str]]: The sample directories in **sorted** order, and
+        tuple[list[DiscoveredSample], list[str]]: The samples in **sorted** order, and
         the temporary directories the caller must pass to :func:`cleanup_temp_dirs`
         once the report has been written.
 
-        The sample directories are accumulated in a set, which de-duplicates a
-        directory reached by two different input paths, and then sorted on the way out.
-        The set is the reason the sort is needed: ``Path.__hash__`` is the hash of the
-        path string, Python randomises string hashing per process, and
-        ``aggregate_cohort`` used to iterate the set directly - so two ``vntyper
-        cohort`` runs over the same inputs produced the report's rows, and every
-        CSV/TSV/JSON row, in different orders. Sorting here rather than at that one
-        call site means every consumer gets the same order.
+        Samples are accumulated in a mapping keyed on the sample directory, which
+        de-duplicates a directory reached by two different input paths, and are sorted on
+        :attr:`DiscoveredSample.sort_key` on the way out. Neither half of that key can
+        move between runs: the first is the parts of the input path the caller wrote, the
+        second is the sample's path relative to that input's own root. The key used to be
+        the sample's full *extracted* path, whose leading component for a zip is
+        ``tempfile.mkdtemp``'s random suffix - so two runs over the same archives sorted
+        their samples into different positions (#205), and every CSV/TSV/JSON row order
+        followed. Keying the outer half on the input path rather than on its position in
+        ``input_paths`` is deliberate: a cohort of directories keeps the lexicographic
+        order it has always had, and only the temporary component goes away.
 
-        ``sorted()`` on ``Path`` compares ``PurePath._parts_normcase``, so the order is
-        lexicographic by path *part* - the separator itself never participates - which
-        is the order ``ls`` would show. Pinned by
+        Tuples of path *parts* are compared element by element, so the separator never
+        participates and ``cohort/sample`` sorts before ``cohort-extra/sample`` - the
+        order ``ls`` would show. Sorting here rather than at the one call site means every
+        consumer gets the same order. Pinned by
         ``tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted``
-        and by the cross-process test beside it.
+        and by the cross-process tests beside it.
     """
     temp_dirs: list[str] = []
-    processed_dirs: set[Path] = set()  # use a set to avoid duplicate directories
+    # Keyed on the directory, so a sample reached by two input paths appears once and the
+    # first input that named it decides its place in the order.
+    processed_dirs: dict[Path, DiscoveredSample] = {}
 
-    # Identify valid directories/zip files (no changes here)
     for path_str in input_paths:
         path = Path(path_str)
+        found: list[DiscoveredSample] = []
         if not path.exists():
             logger.warning(f"Input path does not exist and will be skipped: {path}")
             continue
         if path.is_dir():
-            if (path / PIPELINE_SUMMARY_FILENAME).exists():
-                logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {path}")
-                processed_dirs.add(path)
-            else:
-                found = False
-                for summary_file_path in path.rglob(PIPELINE_SUMMARY_FILENAME):
-                    sample_dir = summary_file_path.parent
-                    logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {sample_dir}")
-                    processed_dirs.add(sample_dir)
-                    found = True
-                if not found:
-                    logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in directory {path}")
+            found = _samples_under_root(path, path_str, path.name)
+            if not found:
+                logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in directory {path}")
         elif zipfile.is_zipfile(path):
             logger.info(f"Extracting zip file: {path}")
             temp_dir = tempfile.mkdtemp(prefix="cohort_zip_")
@@ -114,30 +268,57 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Path], lis
                 with zipfile.ZipFile(path, "r") as zip_ref:
                     zip_ref.extractall(temp_dir)
                 temp_path = Path(temp_dir)
-                if (temp_path / PIPELINE_SUMMARY_FILENAME).exists():
-                    logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {temp_path}")
-                    processed_dirs.add(temp_path)
-                else:
-                    found = False
-                    for summary_file_path in temp_path.rglob(PIPELINE_SUMMARY_FILENAME):
-                        sample_dir = summary_file_path.parent
-                        logger.info(f"Found {PIPELINE_SUMMARY_FILENAME} in {sample_dir}")
-                        processed_dirs.add(sample_dir)
-                        found = True
-                    if not found:
-                        logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in extracted zip file: {path}")
+                # The archive's own stem is the fallback identity: it is the only thing
+                # about a zip-rooted sample that is not the extraction directory.
+                found = _samples_under_root(temp_path, path_str, _identity_from_summary(temp_path, path.stem))
+                if not found:
+                    logger.warning(f"No {PIPELINE_SUMMARY_FILENAME} found in extracted zip file: {path}")
                 temp_dirs.append(temp_dir)
             except zipfile.BadZipFile as e:
                 logger.error(f"Bad zip file {path}: {e}")
                 shutil.rmtree(temp_dir)
+                continue
             except Exception as e:
                 logger.error(f"Error extracting zip file {path}: {e}")
                 shutil.rmtree(temp_dir)
+                continue
         else:
             logger.warning(f"Unsupported file type (not a directory or zip): {path}")
+            continue
 
-    # Sorted, not set order: see the Returns section above.
-    return sorted(processed_dirs), temp_dirs
+        for sample in found:
+            processed_dirs.setdefault(sample.directory, sample)
+
+    # Sorted on the origin key, not on the extracted path: see the Returns section above.
+    return sorted(processed_dirs.values(), key=lambda sample: sample.sort_key), temp_dirs
+
+
+def duplicate_identity(samples: list[DiscoveredSample]) -> tuple[DiscoveredSample, DiscoveredSample] | None:
+    """Find the first two samples reporting the same identity.
+
+    Widening the pseudonym digest cannot make the reported sample injective, because the
+    *inputs* to it can already be equal: ``a/sample`` and ``b/sample`` are two patients
+    with one basename. ``cohort_categories.sample_categories`` groups on the reported
+    sample, so an undetected pair is counted as one sample and one of the two genotypes is
+    lost - with or without pseudonymisation (#206).
+
+    Discovery de-duplicates on the sample directory, so two entries here always come from
+    two distinct directories and no further comparison is needed.
+
+    Args:
+        samples: The samples :func:`discover_sample_directories` returned.
+
+    Returns:
+        tuple[DiscoveredSample, DiscoveredSample] | None: The first colliding pair in
+        discovery order, or None when every identity is distinct.
+    """
+    seen: dict[str, DiscoveredSample] = {}
+    for sample in samples:
+        previous = seen.get(sample.identity)
+        if previous is not None:
+            return previous, sample
+        seen[sample.identity] = sample
+    return None
 
 
 def cleanup_temp_dirs(temp_dirs: list[str]) -> None:
@@ -157,24 +338,62 @@ def cleanup_temp_dirs(temp_dirs: list[str]) -> None:
             logger.error(f"Failed to remove temporary directory {temp_dir}: {e}")
 
 
-def pseudonymized_sample_name(prefix: Any, original_sample: str) -> str:
+def pseudonymized_sample_name(
+    prefix: Any,
+    original_sample: str,
+    *,
+    algorithm: str = DEFAULT_PSEUDONYM_ALGORITHM,
+    length: int = DEFAULT_PSEUDONYM_LENGTH,
+) -> str:
     """Build the pseudonym a sample is reported under.
 
-    The pseudonym is the caller's prefix followed by the first five hex digits of the
-    MD5 of the original name, so it is stable across runs and the pseudonymization
+    The pseudonym is the caller's prefix followed by the first ``length`` hex digits of
+    the digest of the original name, so it is stable across runs and the pseudonymization
     table written beside the report stays meaningful.
 
+    MD5 at five characters was the original scheme and is gone for two reasons: 20 bits
+    collides at realistic cohort sizes (#206), and ``hashlib.md5()`` raises on a
+    FIPS-enabled build unless it is called with ``usedforsecurity=False``.
+
     Args:
-        prefix: The value ``--pseudonymize`` supplied. Interpolated rather than
+        prefix: The value ``--pseudonymize-samples`` supplied. Interpolated rather than
             concatenated, so a non-string does not raise.
-        original_sample: The sample directory's name.
+        original_sample: The sample's identity.
+        algorithm: A ``hashlib`` algorithm name.
+        length: How many hex characters of the digest to keep.
 
     Returns:
         str: The pseudonym.
+
+    Raises:
+        ValueError: If ``algorithm`` is not available in this interpreter's ``hashlib``,
+            if it needs a digest length of its own (the SHAKE family), or if ``length`` is
+            not a positive integer no wider than the digest. Both settings come out of a
+            JSON configuration, so both are checked; an unknown algorithm is refused by
+            name rather than silently falling back, because a silent fallback changes every
+            pseudonym in the report without saying so.
     """
-    # Compute MD5 hash of the original sample name and take first 5 characters.
-    hash_suffix = hashlib.md5(original_sample.encode()).hexdigest()[:5]
-    return f"{prefix}{hash_suffix}"
+    if algorithm not in hashlib.algorithms_available:
+        msg = f"Unknown pseudonym digest algorithm: {algorithm}"
+        logger.error(msg)
+        raise ValueError(msg)
+    if isinstance(length, bool) or not isinstance(length, int) or length < 1:
+        msg = f"Pseudonym digest length must be a positive integer, got {length!r}"
+        logger.error(msg)
+        raise ValueError(msg)
+    try:
+        digest = hashlib.new(algorithm, original_sample.encode()).hexdigest()
+    except TypeError as e:
+        # shake_128 and shake_256 are in algorithms_available but take their output length
+        # as an argument, so hexdigest() raises rather than returning a digest.
+        msg = f"Pseudonym digest algorithm {algorithm} does not produce a fixed-length digest: {e}"
+        logger.error(msg)
+        raise ValueError(msg) from e
+    if length > len(digest):
+        msg = f"Pseudonym digest length {length} exceeds the {len(digest)} hex characters {algorithm} produces"
+        logger.error(msg)
+        raise ValueError(msg)
+    return f"{prefix}{digest[:length]}"
 
 
 def parse_pipeline_summary(summary: dict[str, Any]) -> tuple[list[dict], list[dict], dict[str, Any]]:

@@ -73,38 +73,47 @@ COHORT_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
 #: reproducible", and cited
 #: ``tests/unit/test_cohort_inputs.py::test_discovery_returns_an_unordered_set_today``.
 #: Both halves were wrong by the time they shipped. That test is not in the repository -
-#: it was replaced by ``test_the_discovered_directories_come_back_sorted`` when the
-#: determinism fix landed - and ``discover_sample_directories`` now ends
-#: ``return sorted(processed_dirs), temp_dirs``, so for fixed input directories the order
-#: *is* reproducible.
+#: it was replaced when the determinism fix landed - and ``discover_sample_directories``
+#: has ended in a ``sorted(...)`` call ever since, so for fixed input directories the
+#: order *is* reproducible.
 #:
-#: Two narrower reasons survive, and the sort is justified by the first of them alone for
-#: any comparison whose baseline predates the fix:
+#: Two narrower reasons survive, and **both are now version-bounded**: each describes a
+#: baseline older than a particular fix, and neither describes the current tree.
 #:
-#: 1. **Cross-version.** A baseline older than the determinism fix iterates the ``set``
+#: 1. **Cross-version, before the determinism fix.** Such a baseline iterates the ``set``
 #:    directly - at ``4fd638a``, run 4's baseline, ``cohort_summary.py`` reads
 #:    ``for sample_dir in processed_dirs:`` over an unsorted set. ``Path.__hash__`` is the
 #:    hash of the path string and Python randomises string hashing per process, so that
 #:    side's order differs between two runs of *itself*. Comparing order across such a
 #:    pair measures the interpreter's hash seed.
-#: 2. **ZIP inputs, on any version.** Each ZIP is extracted to
-#:    ``tempfile.mkdtemp(prefix="cohort_zip_")``, whose random suffix is part of the path
-#:    and therefore part of the sort key. Two runs over the same ZIP sort its samples into
-#:    different absolute positions.
+#: 2. **Cross-version, before #205.** Such a baseline sorts on the sample's extracted
+#:    path, and each ZIP is extracted to ``tempfile.mkdtemp(prefix="cohort_zip_")``, whose
+#:    random suffix is part of that path and therefore part of the sort key - so that side
+#:    too differs between two runs of itself. This reason used to be written as holding
+#:    "on any version", which #205 made false: extraction still goes to a temporary
+#:    directory, but the sort key is now the **origin key**
+#:    ``(parts of the input path, path relative to that input's root)``, which carries no
+#:    temporary component. Leaving the old wording in place would have kept the gate
+#:    normalising away a difference it no longer has a reason to normalise.
 #:
 #: What this costs is stated rather than hidden: because the order is normalised away, a
 #: change that fixes or breaks cohort ordering is invisible to this gate. It is attested by
-#: the unit tests named above and by
-#: ``test_processes_with_different_hash_seeds_discover_the_same_order``, not by any run of
-#: this harness.
+#: the unit tests named below, not by any run of this harness. Once both sides of a
+#: comparison carry #205 - which no recorded run does yet, every baseline predating it -
+#: the second reason no longer applies and comparing cohort order becomes worthwhile.
 COHORT_ORDER_WHY = (
-    "cohort sample order is not comparable across a version boundary: a baseline predating the "
-    "determinism fix iterates the discovery set directly and so differs between two runs of itself, and a "
-    "ZIP input extracts to a randomly-named tempdir on any version, which is part of the sort key. "
-    "vntyper.scripts.cohort_inputs.discover_sample_directories does return sorted() today, pinned by "
-    "tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted and "
-    "::test_processes_with_different_hash_seeds_discover_the_same_order - so the ordering fix itself is "
-    "attested by those tests and NOT by this gate. Each side's raw order is recorded here uncompared."
+    "cohort sample order is not comparable across a version boundary, for two version-bounded reasons: a "
+    "baseline predating the determinism fix iterates the discovery set directly and so differs between two "
+    "runs of itself, and a baseline predating #205 sorts ZIP samples on their extracted path, whose leading "
+    "component is tempfile.mkdtemp's random suffix, so it differs between two runs of itself as well. Neither "
+    "reason describes the current tree: vntyper.scripts.cohort_inputs.discover_sample_directories returns "
+    "sorted() on an origin key of (parts of the input path, path relative to that input's root) today, which "
+    "contains no temporary component - pinned by "
+    "tests/unit/test_cohort_inputs.py::test_the_discovered_directories_come_back_sorted, "
+    "::test_processes_with_different_hash_seeds_discover_the_same_order and "
+    "tests/unit/test_cohort_identity.py::test_zip_inputs_come_back_in_the_same_order_in_five_processes - so the "
+    "ordering fix itself is attested by those tests and NOT by this gate. Each side's raw order is recorded "
+    "here uncompared; comparing it becomes worthwhile once both sides carry #205."
 )
 
 #: Recorded on both sides and deliberately **not** compared, with why.
