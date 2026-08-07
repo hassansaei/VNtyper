@@ -169,3 +169,19 @@ def test_the_vcf_a_later_kmer_size_writes_is_not_removed(tmp_path, monkeypatch):
     assert len(launches) == 2, "the second k-mer size never ran"
     assert post_processing_saw == [True], "post-processing did not see the VCF the run produced"
     assert vcf.is_file(), "the VCF the successful k-mer size wrote was removed"
+
+
+def test_a_kestrel_invocation_that_exits_non_zero_aborts_the_run(tmp_path, monkeypatch, caplog):
+    """A failed Kestrel command must raise, not fall through to the next k-mer size.
+
+    This is the sibling of the no-VCF path above and the sharper of the two: an exit
+    status the pipeline ignored would let a sample with a pathogenic variant reach the
+    report as a negative, which is the failure mode #212 exists to close. The error
+    names the log file, because that is the only place the Java stack trace survives.
+    """
+    monkeypatch.setattr(kg, "run_command", lambda *args, **kwargs: False)
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="Kestrel failed for kmer size 20"):
+        _run(tmp_path / "output.vcf", tmp_path)
+
+    assert "kestrel_kmer_20.log" in caplog.text, "the error must name the log that holds the failure"

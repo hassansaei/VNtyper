@@ -1823,18 +1823,61 @@ Follow `docs/development/golden-cohort-gate.md`. Baseline is `cb593b6`. Every de
 be attributed to a named change from SPEC.md, and every delta SPEC.md predicts must be
 observed or explained. The predictions to check against:
 
+**This table was rewritten after a second adversarial review replayed the cohort's actual
+depth. Six of the original ten rows were wrong.** The corrections matter more than the
+predictions: three deltas this plan promised will not appear, and four guaranteed ones
+were missing.
+
 | Artefact | Expected | From |
 | --- | --- | --- |
-| `coverage_summary` | values move + one new column, every case | #171, #172 |
-| `executed_commands` | `-a`, every case | #171 |
-| `kestrel_result`, `kestrel_pre_result` | `columns_added: flag_filter_pass`, every case reaching the filter | #174 |
-| `kestrel_result` | rows removed on artifact-selected cases | #174 |
-| `advntr_result` | **possible genotype delta** on 300× cases | #171 |
-| `screening_summary` | where a corrected mean or the new uncovered rule crosses a threshold | #171, #172 |
-| `cohort_output_files` | `cohort_stats.{csv,tsv,json}` appear in the listing | #172 |
-| `cohort_stats_{csv,tsv,json}` | present after Step 3b, absent before — a one-sided delta | #172 |
+| `coverage_summary` | new `coverage_qc` column on all 61 successful cases; **numeric values move in only 26** — 35 cases are already fully covered. The two deliberate-mismatch probes stop before coverage. The table has no key, so changed values surface as row removed/added, not `cells_changed`. | #171, #172 |
+| `executed_commands` | `-a` on the 61 **successful** cases, not "every case" | #171 |
+| `kestrel_result`, `kestrel_pre_result` | `columns_added: flag_filter_pass` on cases reaching the final filter | #174 |
+| `report_tables` | **all 61 successful cases** — the new Coverage QC row is a literal HTML table row (`report_template.html:245`) and the collector extracts every table. **Missing from the first draft.** | #172 |
+| `cohort_kestrel_{csv,tsv,json}` | gain `flag_filter_pass` on all three non-empty cohorts. `cohort_exports.py:14` states "nothing here strips columns", so the gate column leaks into every export. **Missing from the first draft.** | #174 |
+| `cohort_tables` | gains `cov_coverage_qc`, **and the `2.0.7 → 2.0.8` version string**. The gate's normaliser is anchored (`(?<=VNtyper Version: )\S+`, `normalise.py:212`) and does not touch the bare version the cohort statistics table carries. **Missing from the first draft.** | #172, release |
+| `cohort_output_files` | `cohort_stats.{csv,tsv,json}` in the listing for the three non-empty cohorts; `cohort_empty` writes none | #172 |
+| `cohort_stats_{csv,tsv,json}` | one-sided (absent before, present after) for the three non-empty cohorts; `absent_both` for `cohort_empty` — **only after Step 3b** | #172 |
+| `kestrel_result` rows removed | **NO delta.** Every positive call in the recorded cohort is unflagged; there is no artifact-selected case. The #174 exclusion is unexercised here. | — |
+| `advntr_result` | **NO delta.** See below. | — |
+| `screening_summary` | **NO delta.** Replay found zero PASS/FAIL transitions at 100× / 50%. | — |
 | `pipeline_step_records` | **no delta** | — |
-| anything attributable to #203 or #212 | **no delta** | — |
+| #203, #212 | **no delta** on the compared surface | — |
+
+### Why the gate cannot attest #171's genotype safety — state this in the write-up
+
+The plan and SPEC both predicted a possible adVNTR genotype delta, because the corrected
+mean feeds `downsample_bam_if_needed` at `--advntr-max-coverage 300`. Replaying the three
+configured adVNTR cases shows it will not happen, and shows why:
+
+```
+example_a5c1_hg19_subset.bam   covered=1501/1501 zeros=0  old=1258.7215  new=1258.7215  IDENTICAL
+example_b178_hg19_subset.bam   covered=1501/1501 zeros=0  old= 878.2065  new= 878.2065  IDENTICAL
+example_dfc3_hg19_subset.bam   covered=1501/1501 zeros=0  old=2889.0286  new=2889.0286  IDENTICAL
+```
+
+All three are **fully covered**, so `uncovered_bases = 0` and the corrected mean equals the
+old one exactly. The downsampling fraction cannot move.
+
+**This is a limit of the cohort, not evidence of safety.** The mechanism is real — for a
+patchy sample the mean falls and the fraction changes — the local test data simply
+contains no sample where it bites. A green gate here must therefore be written up as *"no
+adVNTR delta, because no cohort sample has an uncovered VNTR base at 300×"*, never as
+*"#171 is genotype-neutral"*. The audit's 8215-row cohort found 1585 samples with an
+inflated mean; none of them is in `tests/data`.
+
+- [ ] **Step 3c: Test the harness widening itself**
+
+Step 3b adds three artefacts to `COHORT_ARTIFACTS`. Without a test, a candidate side that
+silently fails to write them compares `absent_both` and the gate reports a pass it did not
+measure — the exact failure `compare.py`'s module docstring warns about. Add a case to
+`tests/unit/test_golden_cohort_compare.py` (see `:289`) asserting that a missing
+`cohort_stats.csv` on one side is reported as a delta, not skipped.
+
+**Do not widen the version normaliser to hide the `cohort_tables` version delta.** It is
+attributable to a named change (the 2.0.8 bump), and normalising a difference away so a
+gate stops reporting it is how this harness acquired the claims it is being corrected for.
+Attribute it in the write-up instead.
 
 - [ ] **Step 3b: Teach the gate to compare the new export**
 
