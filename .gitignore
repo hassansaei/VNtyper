@@ -200,8 +200,9 @@ fastp.json
 *.sif
 
 # coding-agent configuration
-# AGENTS.md, CLAUDE.md and .claude/settings.json are tracked on purpose - they are
-# shared project instructions. Only per-developer overrides stay local.
+# AGENTS.md and CLAUDE.md are tracked on purpose - they are the shared project
+# instructions. Everything under .claude/ is per-developer and stays local.
+.claude/settings.json
 .claude/settings.local.json
 .claude/state/
 .claude/*.local.json
