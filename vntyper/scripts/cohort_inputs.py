@@ -36,6 +36,16 @@ zip is extracted into ``tempfile.mkdtemp(prefix="cohort_zip_")``:
 Extraction still goes to a temporary directory; only its role in identity and order is
 gone.
 
+**An identity is a (namespace, value) pair, and only the value is usually written.** HL7
+FHIR's ``Identifier`` puts uniqueness on ``system`` and ``value`` together - the value is
+"unique within the context of the system" and says nothing on its own - and that is the
+rule this module follows. A sample's namespace is its input's own name (the archive stem,
+or the directory name); its local value is what the run recorded or what its directory is
+called. Two web jobs that each uploaded ``sample.bam`` are one value in two systems, which
+is two subjects. :func:`qualify_colliding_identities` therefore rewrites a *shared* local
+value to ``namespace/value`` and leaves every unique one exactly as it was, and
+:func:`duplicate_identity` aborts only on what remains equal after that.
+
 The four step names this module matches are compared by exact string against what
 ``pipeline.py`` writes. A typo does not fail - it silently drops a section of the report
 (AGENTS.md trap 5) - so they are imported from ``summary_steps``, never spelled out.
@@ -49,7 +59,8 @@ import os
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -76,6 +87,16 @@ IDENTITY_INPUT_KEYS = ("bam", "cram", "fastq1")
 #: identifies ``patient_R1`` rather than ``patient_R1.fastq``.
 COMPRESSION_SUFFIXES = (".gz", ".bgz")
 
+#: The container suffix an archive input carries. Stripped from the namespace because it
+#: describes how the run was *packed*, not what the run was called: ``job_a.zip`` and a
+#: directory ``job_a`` are the same system under two transports.
+ARCHIVE_SUFFIX = ".zip"
+
+#: Separates the namespace from the local value in a qualified identity. Neither half can
+#: contain it - a namespace is one path component and a local value is a directory name or
+#: a filename stem - so the pair is recoverable from the identity by splitting once.
+NAMESPACE_SEPARATOR = "/"
+
 
 @dataclass(frozen=True)
 class DiscoveredSample:
@@ -86,7 +107,10 @@ class DiscoveredSample:
     #: why it is neither the identity nor the sort key.
     directory: Path
 
-    #: The name the sample is reported under, before any pseudonymisation.
+    #: The name the sample is reported under, before any pseudonymisation. Discovery sets
+    #: it to the sample's **local** value - what the run recorded, or the directory's name -
+    #: and :func:`qualify_colliding_identities` rewrites it to ``namespace/value`` if and
+    #: only if another discovered sample carries the same local value.
     identity: str
 
     #: The input path this sample was reached through, exactly as the caller wrote it - a
@@ -212,6 +236,76 @@ def _samples_under_root(root: Path, origin: str, root_identity: str) -> list[Dis
     return samples
 
 
+def identity_namespace(origin: str) -> str:
+    """Name the namespace an input establishes for the identities discovered under it.
+
+    HL7 FHIR's ``Identifier`` splits an identifier into a ``system`` - "an absolute URL
+    that describes a set [of] values that are unique" - and a ``value``, "the portion of
+    the identifier ... unique **within the context of the system**". A cohort input is the
+    system: everything one archive or one directory contains came out of one run or one
+    upload, so a name is unique inside it and means nothing outside it.
+
+    The **name** of the input is used, not its path. That is what makes ``-i /data/run1``
+    and ``-i ./run1`` the same system, so a qualified identity - and the pseudonym derived
+    from it - survives the cohort being moved or re-run from a different working directory.
+    The cost is that two inputs whose names are equal are one namespace; see
+    :func:`duplicate_identity` for what happens then.
+
+    Args:
+        origin: The input path exactly as the caller wrote it, i.e.
+            :attr:`DiscoveredSample.origin`.
+
+    Returns:
+        str: The archive stem for a ``.zip`` input and the directory name otherwise. An
+        input naming no component of its own (``.``, ``/``) has no name to give, so the
+        path itself is returned rather than an empty namespace.
+    """
+    name = Path(origin).name
+    if name.lower().endswith(ARCHIVE_SUFFIX):
+        name = name[: -len(ARCHIVE_SUFFIX)]
+    return name or origin
+
+
+def qualify_colliding_identities(samples: list[DiscoveredSample]) -> list[DiscoveredSample]:
+    """Qualify by namespace exactly those identities that more than one sample shares.
+
+    A repeated local value is **not** a repeated identifier. ``sample.bam`` is a value, and
+    two web jobs that each uploaded one are that value in two different systems - two
+    subjects, not one. Comparing values while discarding the system either merges the two
+    (what happened before their identity came out of discovery) or refuses to run (what
+    happened after); both are wrong for the same reason, and ``sample.bam`` is common
+    enough that a root-level ZIP cohort meets it on the normal path.
+
+    Only the samples that actually collide are qualified. A sample whose local value is
+    already unique keeps it untouched, so its identity, its row and its pseudonym are
+    exactly what they would have been in a cohort with no collision in it at all - stable
+    whichever other samples it is aggregated with.
+
+    This is a pure function of the discovered list and is applied at the end of
+    :func:`discover_sample_directories`, so every consumer sees one set of identities.
+
+    Args:
+        samples: The samples discovery found, in the order it found them.
+
+    Returns:
+        list[DiscoveredSample]: The same samples in the same order. A sample whose identity
+        is shared carries ``f"{namespace}/{local}"`` instead; everything else about it, and
+        every other sample, is returned unchanged. ``DiscoveredSample`` is frozen, so the
+        replacements are new records and the caller's list is not touched.
+
+        Two samples sharing a namespace *and* a local value come back still equal: the rule
+        resolves what the inputs distinguish and invents nothing. :func:`duplicate_identity`
+        is what turns that leftover into an abort.
+    """
+    occurrences = Counter(sample.identity for sample in samples)
+    return [
+        replace(sample, identity=f"{identity_namespace(sample.origin)}{NAMESPACE_SEPARATOR}{sample.identity}")
+        if occurrences[sample.identity] > 1
+        else sample
+        for sample in samples
+    ]
+
+
 def discover_sample_directories(input_paths: list[str]) -> tuple[list[DiscoveredSample], list[str]]:
     """Resolve the cohort's input paths to the samples they contain.
 
@@ -248,6 +342,11 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Discovered
         half was never reached. Concatenated, a sample keys on its own location whichever
         input found it. :attr:`DiscoveredSample.origin` is kept for diagnostics and for the
         duplicate-identity message, and takes no part in the order.
+
+        Identities are then passed through :func:`qualify_colliding_identities`, so what
+        comes out is the cohort's final naming and every consumer agrees on it. A local
+        value shared by two or more samples becomes ``namespace/value`` for those samples
+        only; a unique one is untouched.
 
         Tuples of path *parts* are compared element by element, so the separator never
         participates and ``cohort/sample`` sorts before ``cohort-extra/sample`` - the
@@ -301,17 +400,28 @@ def discover_sample_directories(input_paths: list[str]) -> tuple[list[Discovered
             processed_dirs.setdefault(sample.directory, sample)
 
     # Sorted on the origin key, not on the extracted path: see the Returns section above.
-    return sorted(processed_dirs.values(), key=lambda sample: sample.sort_key), temp_dirs
+    ordered = sorted(processed_dirs.values(), key=lambda sample: sample.sort_key)
+    # Qualification is last, and over the whole list, because "shared" is a property of the
+    # cohort rather than of any one sample: nothing can be qualified until every sample is
+    # known. It does not touch sort_key, so the order above survives it.
+    return qualify_colliding_identities(ordered), temp_dirs
 
 
 def duplicate_identity(samples: list[DiscoveredSample]) -> tuple[DiscoveredSample, DiscoveredSample] | None:
-    """Find the first two samples reporting the same identity.
+    """Find the first two samples reporting the same identity after qualification.
 
     Widening the pseudonym digest cannot make the reported sample injective, because the
-    *inputs* to it can already be equal: ``a/sample`` and ``b/sample`` are two patients
-    with one basename. ``cohort_categories.sample_categories`` groups on the reported
-    sample, so an undetected pair is counted as one sample and one of the two genotypes is
-    lost - with or without pseudonymisation (#206).
+    *inputs* to it can already be equal. ``cohort_categories.sample_categories`` groups on
+    the reported sample, so an undetected pair is counted as one sample and one of the two
+    genotypes is lost - with or without pseudonymisation (#206).
+
+    What reaches this guard is **narrower than it used to be**, because
+    :func:`qualify_colliding_identities` has already run: a shared local value is no longer
+    a collision, only a shared ``(namespace, value)`` pair is. That leaves the single case
+    the inputs genuinely cannot separate - two archives with the same stem, or two
+    directory inputs with the same name - where qualification produces one identity twice
+    and there is nothing left to distinguish the two samples by. Refusing to run is the
+    only honest answer; the message names both inputs so the operator can supply one.
 
     Discovery de-duplicates on the sample directory, so two entries here always come from
     two distinct directories and no further comparison is needed.

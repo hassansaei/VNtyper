@@ -35,7 +35,13 @@ The `--pseudonymize-samples` flag supports two modes. In both, the pseudonym is 
 
 The digest algorithm and the number of characters kept are read from `cohort.pseudonym` in `config.json` (`{"algorithm": "sha256", "digest_characters": 12}`), so `--config-path` can change either -- bearing in mind that a supplied config replaces the shipped one rather than merging into it. An algorithm that is not available in the running interpreter's `hashlib` is refused by name.
 
-The pseudonym map is one-to-one or the run stops: two input directories that share a basename, or two sample names that collide on the digest, raise an error naming both instead of silently reporting the two patients as one sample.
+## Sample identity
+
+A sample's identity is a namespace and a value. The value is the sample's own name -- its directory name, or the stem of the input file that a zipped run recorded. The namespace is the name of the input it was reached through: the archive stem for `job_a.zip`, the directory name for `-i /data/run1`. The input's *name* is used rather than its path, so `-i /data/run1` and `-i ./run1` are the same namespace and a pseudonym survives the cohort being relocated.
+
+Uniqueness is a property of the pair, not of the value alone. When two or more discovered samples share a value -- two web jobs that both uploaded `sample.bam`, for instance -- those samples are reported as `namespace/value` (`job_a/sample` and `job_b/sample`) and the cohort completes. Samples whose value is already unique are left exactly as they are, so a collision elsewhere in the cohort never moves their identity or their pseudonym.
+
+The run stops only on ambiguity qualification cannot reduce: two inputs sharing a name (two archives both called `job.zip`, or two directory inputs both called `sample`), which qualify to one identity twice; and a digest collision between two identities that are already distinct, whose fix is a wider `cohort.pseudonym.digest_characters`. Both raise an error naming the two samples and the inputs they came from, instead of silently reporting two patients as one.
 
 ## Examples
 

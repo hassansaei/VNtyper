@@ -69,9 +69,20 @@ The digest and its width are configuration, not code. They live under `cohort.ps
 
 Override them with `--config-path`, remembering that a config file **replaces** the shipped one rather than merging into it. An algorithm your Python's `hashlib` does not offer is refused by name rather than silently substituted.
 
-The mapping is required to be one-to-one: if two samples would be reported under the same name -- because two input directories share a basename, or because two names collide on the digest -- the run stops with an error naming both, rather than merging two patients' genotypes into one row. At 12 hex characters a digest collision is a tripwire rather than a practical risk (about 1.8e-9 for a 1,000-sample cohort); a shared directory basename is the case you are likely to meet, and the fix is to give the two runs distinct directory names.
-
 A `pseudonymization_table.tsv` mapping pseudonyms to original names is saved in the output directory.
+
+## Sample Identity
+
+A sample's name is only half of its identity. The other half is the **namespace** it came from: the name of the input that produced it -- `job_a` for an archive `job_a.zip`, `run1` for `-i /data/run1`. Uniqueness belongs to the pair, following HL7 FHIR's `Identifier` datatype, where a value is only ever "unique within the context of the system" that issued it. Two web jobs that each uploaded a file called `sample.bam` are therefore the same *value* in two different systems -- two patients, not a collision.
+
+So when two or more discovered samples share a name, **those samples only** are reported as `namespace/name` -- `job_a/sample` and `job_b/sample` -- and the cohort runs to completion with both patients in it. A sample whose name is already unique keeps it untouched, so neither its row nor its pseudonym moves because some other pair of samples in the cohort happened to collide.
+
+The run stops only where the inputs leave an ambiguity that cannot be reduced:
+
+- **Two inputs with the same name.** Two archives both called `job.zip`, or two directory inputs both called `sample`, are one namespace, so qualification yields `job/sample` twice and nothing is left to tell the two apart. The error names both input paths; rename one of them, or give the two runs distinct recorded input files.
+- **A digest collision.** Two distinct identities whose pseudonyms come out equal. Here the names are perfectly good and only the digest is too narrow, so the fix is to widen `cohort.pseudonym.digest_characters` rather than to rename anything. At 12 hex characters this is a tripwire rather than a practical risk (about 1.8e-9 for a 1,000-sample cohort).
+
+Either way, refusing to run beats merging two patients' genotypes into one row.
 
 ## Output Formats
 

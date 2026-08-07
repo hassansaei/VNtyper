@@ -224,9 +224,18 @@ def test_the_cohort_order_justification_quotes_the_sort_key_discovery_actually_u
     moved onto ``DiscoveredSample.sort_key``. The claim being defended is unchanged -
     discovery is ordered, so the note must not say it is unordered - and what changed is
     which line of source establishes it.
+
+    It moved a second time when identity qualification landed: the sorted list is now bound
+    and handed to ``qualify_colliding_identities`` on the way out, so the ``sorted(...)``
+    call and the ``return`` are two statements rather than one. The sort **expression** is
+    what carries the claim, so that is what is grepped for, and the return is asserted
+    separately - qualification rewrites identities and never touches ``sort_key``, so the
+    order the note describes survives it. Matching the whole old line would have failed
+    here for a change that cannot affect ordering at all.
     """
     source = (REPO_ROOT / "vntyper" / "scripts" / "cohort_inputs.py").read_text(encoding="utf-8")
-    assert "return sorted(processed_dirs.values(), key=lambda sample: sample.sort_key), temp_dirs" in source
+    assert "sorted(processed_dirs.values(), key=lambda sample: sample.sort_key)" in source
+    assert "return qualify_colliding_identities(ordered), temp_dirs" in source
     assert (
         "returns sorted() on an effective-path key of the parts of the input path followed by the path "
         "relative to that input's root today" in compare.COHORT_ORDER_WHY

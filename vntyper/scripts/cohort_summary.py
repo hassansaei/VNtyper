@@ -383,10 +383,13 @@ def aggregate_cohort(
     Raises
     ------
     ValueError
-        If two discovered samples would be reported under one name - either because two
-        directories share an identity, or because two identities share a pseudonym. A
-        cohort that silently merges two patients' genotypes is worse than one that refuses
-        to run (#206).
+        If two discovered samples would be reported under one name and nothing in the
+        inputs separates them - either because their inputs share a name as well as their
+        local values, so ``qualify_colliding_identities`` cannot tell them apart, or
+        because two distinct identities share a pseudonym. A cohort that silently merges
+        two patients' genotypes is worse than one that refuses to run (#206). Two samples
+        that merely share a local value are *not* an error: they are qualified by the name
+        of the input each came through and both are reported.
     """
     additional_stats_list = []
 
@@ -415,21 +418,28 @@ def aggregate_cohort(
         pseudonym_algorithm, pseudonym_length = pseudonym_settings(config)
 
         # The reported sample must identify exactly one patient, and that has to hold
-        # before any digest is taken: two discovered directories can share a basename, so
-        # their identities are already equal and no digest width separates them.
+        # before any digest is taken: two discovered samples can share a name, so their
+        # identities are already equal and no digest width separates them.
         # sample_categories() groups on the reported sample, so an undetected pair is
         # counted as one (#206).
+        #
+        # Discovery has already qualified every *shared* name with the namespace of the
+        # input it came through, so what survives to here is the residue: two samples whose
+        # namespace and whose local value are both equal - two archives with one stem, or
+        # two directory inputs with one name. Nothing the caller supplied distinguishes
+        # them, so there is no name to qualify with and the run stops.
         collision = duplicate_identity(processed_dirs)
         if collision is not None:
             first, second = collision
             # The sample directory of a zip input is an extraction directory, which tells
             # the operator nothing, so each one is named together with the input it came
-            # from.
+            # from - and the inputs are exactly what has to change.
             msg = (
                 f"Duplicate cohort sample identity {first.identity!r}: "
                 f"{first.directory} (from {first.origin}) and "
                 f"{second.directory} (from {second.origin}) would be reported as one sample. "
-                "Give them distinct directory names, or distinct recorded input files for a zipped run."
+                "Their inputs share a name, so qualifying by it cannot separate them. "
+                "Rename one input, or give the two runs distinct recorded input files."
             )
             logger.error(msg)
             raise ValueError(msg)
@@ -451,6 +461,17 @@ def aggregate_cohort(
                     # sample_categories() counted one result where there were two. The
                     # identities are already known to be distinct, so a repeat here is a
                     # digest collision rather than the same sample seen twice.
+                    #
+                    # This guard aborts where the name guard above now qualifies, and the
+                    # asymmetry is the point rather than an inconsistency. A *digest*
+                    # collision is between two samples that already have perfectly good
+                    # distinct names: nothing about them is ambiguous, the report could
+                    # name them today, and the fault is entirely in how many characters of
+                    # the digest were configured - so qualifying them would be gratuitous
+                    # and widening the digest is the fix. A *name* collision is the
+                    # opposite: the names themselves are ambiguous, so there is nothing to
+                    # widen and qualification is the only way to proceed at all. Different
+                    # situations, different answers.
                     msg = (
                         f"Pseudonym collision: {original_sample!r} and {existing!r} both map to {pseudonym!r}. "
                         "Widen cohort.pseudonym.digest_characters in the configuration and re-run."
