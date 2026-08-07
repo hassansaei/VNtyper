@@ -774,28 +774,67 @@ Closes #172"
 
 - [ ] **Step 1: Write the failing test**
 
+**The test must exercise the aggregation path, not the writer.** `write_cohort_frame`
+already exists and already works (`cohort_exports.py:51`), so a test that calls it
+directly passes *before* this task's change and proves nothing. What is missing is the
+**call site** in `cohort_summary.py`, so that is what the test has to reach.
+
 ```python
-def test_the_cohort_statistics_export_carries_the_coverage_qc_verdict(tmp_path):
+def test_the_cohort_run_exports_the_statistics_frame(tmp_path, monkeypatch):
     """#172: a cohort consumer reads the CSV, not the HTML.
 
-    `write_cohort_frame` was called for the Kestrel and adVNTR frames only; the
-    statistics frame was rendered to HTML and never written, so no machine-readable
-    cohort output carried any coverage at all.
+    `aggregate_cohort` called `write_cohort_frame` for the Kestrel and adVNTR frames
+    only; the statistics frame was rendered to HTML and never written, so no
+    machine-readable cohort output carried a coverage figure at all.
+
+    This asserts on the *call site*, not on `write_cohort_frame` - which already worked,
+    and whose direct invocation would pass before the change and test nothing.
     """
-    frame = additional_stats_frame(
-        [{"Sample": "s1", "coverage": {"mean": 250.0, "percent_uncovered": 80.0, "coverage_qc": "FAIL"}}]
+    written: list[str] = []
+    monkeypatch.setattr(
+        cohort_summary, "write_cohort_frame",
+        lambda frame, out, stem, label, formats: written.append(stem),
     )
 
-    write_cohort_frame(frame, tmp_path, "cohort_stats", "Statistics", ["csv"])
+    cohort_summary.aggregate_cohort(
+        input_paths=[_sample_dir(tmp_path, coverage_qc="FAIL")],
+        output_dir=str(tmp_path / "out"),
+        config=_config(),
+        additional_formats="csv",
+    )
 
-    written = (tmp_path / "cohort_stats.csv").read_text(encoding="utf-8")
-    assert "cov_coverage_qc" in written
-    assert "FAIL" in written
+    assert "cohort_stats" in written, "the statistics frame was never exported"
+
+
+def test_the_exported_statistics_frame_carries_the_coverage_qc_verdict(tmp_path, monkeypatch):
+    """The frame handed to the writer must actually contain the verdict column."""
+    captured: dict[str, pd.DataFrame] = {}
+    monkeypatch.setattr(
+        cohort_summary, "write_cohort_frame",
+        lambda frame, out, stem, label, formats: captured.__setitem__(stem, frame),
+    )
+
+    cohort_summary.aggregate_cohort(
+        input_paths=[_sample_dir(tmp_path, coverage_qc="FAIL")],
+        output_dir=str(tmp_path / "out"),
+        config=_config(),
+        additional_formats="csv",
+    )
+
+    assert "cov_coverage_qc" in captured["cohort_stats"].columns
+    assert captured["cohort_stats"]["cov_coverage_qc"].tolist() == ["FAIL"]
 ```
+
+`_sample_dir` writes a minimal `pipeline_summary.json` carrying a `Coverage Calculation`
+step whose row includes `coverage_qc`; follow the fixtures already in
+`tests/unit/test_cohort_inputs.py`. Bind `aggregate_cohort`'s real parameter names by
+reading its signature before writing the call — do not guess them.
 
 - [ ] **Step 2: Run and verify it fails**
 
-Expected: FAIL — `cohort_stats.csv` does not exist.
+Expected: FAIL — `assert "cohort_stats" in written` fails because `aggregate_cohort`
+exports only `cohort_kestrel` and `cohort_advntr`. **If it passes at this point the test
+is wrong, not the code**; that is the mistake this step exists to catch.
 
 - [ ] **Step 3: Implement**
 
@@ -1709,9 +1748,41 @@ observed or explained. The predictions to check against:
 | `kestrel_result` | rows removed on artifact-selected cases | #174 |
 | `advntr_result` | **possible genotype delta** on 300× cases | #171 |
 | `screening_summary` | where a corrected mean or the new uncovered rule crosses a threshold | #171, #172 |
-| cohort output file set | `cohort_stats.{csv,tsv,json}` added | #172 |
+| `cohort_output_files` | `cohort_stats.{csv,tsv,json}` appear in the listing | #172 |
+| `cohort_stats_{csv,tsv,json}` | present after Step 3b, absent before — a one-sided delta | #172 |
 | `pipeline_step_records` | **no delta** | — |
 | anything attributable to #203 or #212 | **no delta** | — |
+
+- [ ] **Step 3b: Teach the gate to compare the new export**
+
+`COHORT_ARTIFACTS` (`scripts/golden_cohort/compare.py:52-65`) has no `cohort_stats_*`
+entry, and `read_cohort_case` (`artifacts.py:321-328`) reads only the Kestrel and adVNTR
+exports. So without this step the gate sees the three new **filenames** appear in
+`cohort_output_files` — that artefact *is* compared — but never looks inside them. A new
+compared output that the gate cannot read is a silent narrowing of the gate relative to
+the product, which is the failure mode `compare.py`'s own module docstring warns about in
+the other direction.
+
+Add to `COHORT_ARTIFACTS`:
+
+```python
+    "cohort_stats_csv": ("table", ("Sample",)),
+    "cohort_stats_tsv": ("table", ("Sample",)),
+    "cohort_stats_json": ("opaque", ()),
+```
+
+and to `read_cohort_case`, beside the existing six:
+
+```python
+        "cohort_stats_csv": read_delimited(output_dir / "cohort_stats.csv", ",", rules, "Sample"),
+        "cohort_stats_tsv": read_delimited(output_dir / "cohort_stats.tsv", "\t", rules, "Sample"),
+        "cohort_stats_json": _sorted_records(read_json(output_dir / "cohort_stats.json"), rules),
+```
+
+This is a **deliberate, measured widening** of the gate, and it must be named as such in
+the run write-up: the baseline side produces no such file, so all three read absent on
+`before` and present on `after`. That is a correct one-sided delta, not a defect.
+`HARNESS_VERSION` should be bumped, since the comparison surface changed.
 
 - [ ] **Step 4: Write up the run**
 
