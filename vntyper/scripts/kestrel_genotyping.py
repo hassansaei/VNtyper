@@ -620,6 +620,12 @@ def generate_bed_file(df, output_dir):
     if 'Motif_fasta' and 'POS_fasta' columns exist. This can help
     with coverage visualizations in IGV or other genome browsers.
 
+    Column 1 is 'Motif_fasta', the 120 bp pair record of
+    All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa that the variant was called
+    against -- not 'Motif', which is a half-motif name and not a record in that file.
+    'POS_fasta' is the 1-based VCF position inside that record, and BED intervals are
+    0-based and half-open, so it is written as [POS_fasta - 1, POS_fasta) (#203).
+
     Args:
         df (pd.DataFrame): The final processed DataFrame with motif info.
         output_dir (str): Where to save the resulting BED file.
@@ -638,12 +644,17 @@ def generate_bed_file(df, output_dir):
 
     bed_file_path = os.path.join(output_dir, "output.bed")
 
-    # Each row: motif_fasta, start=pos_fasta, end=pos_fasta+1
+    # Each row: motif_fasta, start=pos_fasta-1, end=pos_fasta.
+    #
+    # `POS_fasta` is the 1-based VCF position within the 120 bp pair record named by
+    # `Motif_fasta` (#203). BED intervals are 0-based and half-open, so position p is the
+    # interval [p-1, p). This used to write [p, p+1), which named the base after the
+    # variant - IGV highlighted the wrong position on every row.
     with open(bed_file_path, "w") as bed_file:
         for _, row in df.iterrows():
             motif_fasta = row["Motif_fasta"]
-            pos = row["POS_fasta"]
-            bed_file.write(f"{motif_fasta}\t{pos}\t{pos + 1}\n")
+            pos = int(row["POS_fasta"])
+            bed_file.write(f"{motif_fasta}\t{pos - 1}\t{pos}\n")
 
     logger.info(f"BED file generated at: {bed_file_path}")
     return bed_file_path
