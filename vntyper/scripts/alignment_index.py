@@ -9,7 +9,7 @@ Where an alignment's index already is, decided without running samtools.
 one into the run's *output* directory when there is not - the input directory holds
 patient data and is routinely mounted read-only (#162, #210). Only the second half of
 that needs a subprocess. The first half is a pure question about filenames: which of the
-two names an index can carry, in the format-specific order from
+candidate names permitted by the alignment format, in the order from
 :func:`alignment_contract.index_candidate_names`, exists on disk. BAM CSI is supported
 by :func:`resolve_any_index`, as is CRAM CSI after pinned samtools/htslib acceptance was
 measured directly. CSI is deliberately out of scope only for

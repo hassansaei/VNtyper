@@ -26,9 +26,10 @@ Why ``no_ref=1``
 The cohort's BAM headers carry no ``M5`` tags, so htslib cannot resolve a reference by
 digest: no ``REF_PATH``/``REF_CACHE`` lookup and no refget request can succeed. A
 conventionally reference-compressed CRAM would therefore need an explicit ``-T`` at read
-time, and ``process_bam_to_fastq`` passes ``cram_ref_option = ""`` unconditionally -- so
-such a CRAM could not be decoded by the pipeline at all. ``no_ref=1`` stores sequences
-verbatim, needs no reference to write or read, and round-trips byte-for-byte.
+time. The pipeline now probes explicit and configured reference candidates before using
+one, but these lossless cohort fixtures deliberately exercise the reference-free path.
+``no_ref=1`` stores sequences verbatim, needs no reference to write or read, and
+round-trips byte-for-byte.
 
 ``embed_ref=2`` was measured and rejected: htslib cannot derive a consensus reference from
 a region subset, warns, falls back to non-ref mode part-way through a container, and the

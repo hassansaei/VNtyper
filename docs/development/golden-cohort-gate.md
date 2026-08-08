@@ -95,14 +95,15 @@ are exercised, three run `--extra-modules advntr`, and two repeat from a derived
 [The CRAM group](#the-cram-group-188) below. **Run 6 is the first to take the CRAM group**;
 runs 1–5 predate the fixtures.
 
-**The matrix is 60 cases and was 58 for runs 1–5.** Every `x / 58` figure in the run
-sections below is that earlier matrix and is left as measured; run 6's tables are over 60
-and are not comparable cell-for-cell with them.
+**The matrix is 62 cases, was 60 for run 6 and was 58 for runs 1–5.** Every `x / 58`
+figure in the run sections below is that earlier matrix and is left as measured; run 6's
+tables are over 60 and are not comparable cell-for-cell with either matrix.
 
 The CRAM fixtures are **derived, not committed** (`scripts/make_cram_fixtures.py`), so a
-fresh clone has 58 cases until they are generated. The harness refuses to launch over the
-reduced matrix rather than running it silently — run 6 hit exactly that and generated the
-50 fixtures instead of passing `--allow-matrix-drift`.
+fresh clone has 58 cases until they are generated. Each of the two selected CRAM sources
+now runs in both indexed and stream mode, adding four cases. The harness refuses to launch
+over the reduced matrix rather than running it silently — run 6 hit exactly that and
+generated the 50 fixtures instead of passing `--allow-matrix-drift`.
 
 Compared per case: the complete `kestrel_result.tsv` header and row set, keyed on
 `Motifs`/`POS`/`REF`/`ALT`/`Variant` — every column that is present, without asserting a
@@ -142,21 +143,22 @@ every cohort BAM under `tests/data/cram/`, mirroring the source layout with `.ba
 source. The fixtures are derived rather than committed because `tests/data/` is
 git-ignored and ships as a Zenodo archive. They are written `no_ref=1` — the cohort's BAM
 headers carry no `M5` tags, so no reference can be resolved by digest, and
-`process_bam_to_fastq` passes an empty `cram_ref_option` unconditionally. **A `no_ref` CRAM
-exercises the container format, the CRAM decoder, `.crai` indexing and the unmapped-read
-scan. It does not exercise reference resolution, because it needs none.** The ordinary
-externally-referenced CRAM a diagnostic lab would send is a different fixture and remains
-uncovered.
+the preflight resolves the terminal reference-free candidate without adding `-T`. **A
+`no_ref` CRAM exercises the container format, the CRAM decoder, `.crai` indexing and the
+unmapped-read scan. It does not exercise reference resolution, because it needs none.** A
+separate purpose-built reference-dependent fixture covers explicit success and missing-
+reference failure in the integration tier.
 
-Two cases are declared, in `CRAM_CASE_IDS` in `scripts/golden_cohort/matrix.py`. Like the
-non-fast and adVNTR selections this is policy, not derivation — only the *fixture paths* are
-derived, mirrored from each base case's BAM path so they cannot disagree with what
+Two source fixtures are declared in `CRAM_CASE_IDS` in
+`scripts/golden_cohort/matrix.py`, and each expands to indexed and stream cases. Like the
+non-fast and adVNTR selections this is policy, not derivation — only the *fixture paths*
+are derived, mirrored from each base case's BAM path so they cannot disagree with what
 `make_cram_fixtures.py` wrote.
 
 | Case | Repeat of | Records | Unmapped pairs | Why this one |
 | --- | --- | --- | --- | --- |
-| `b178_hg19_cram` | `b178_hg19_subset` | 34,214 | 4,478 | A known positive (`D-C` insertion, `High_Precision*`, not flagged — run 1's table below). It is what shows a CRAM run still **calls**, not merely that it exits 0. |
-| `7a61_hg38_ensembl_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 622,690 | A heavy unmapped load, and so exposed to the write race `175011e` fixed — measured there at 199,797 of 200,000 unmapped reads present at the instant the shell returned. |
+| `b178_hg19_{indexed,stream}_cram` | `b178_hg19_subset` | 34,214 | 4,478 | A known positive under the historical discard behavior and a measured mixed-layout refusal under milestone 4. Both scan strategies reach the layout decision without hiding the stranded reads. |
+| `7a61_hg38_ensembl_{indexed,stream}_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 622,690 | A heavy unmapped load, and so exposed both to the write race `175011e` fixed and to indexed-scan loss. Milestone 4 measured stream at 622,690 reads while raw `'*'` returned 2,690, so production rejects indexed before work. |
 
 Counts are from `tests/data/cram/manifest.json`. `7a61_hg38_ensembl_bwa` is **not** the
 single heaviest case in the cohort — `7a61_hg19_subset` carries 958,804 unmapped pairs and
@@ -172,7 +174,7 @@ none of the code the fixtures exist for.
 **A declared CRAM case whose fixture has not been derived is skipped and logged at error
 level, and the group then comes out short.** That is an ordinary drift mismatch: a strict
 build refuses it, and `--allow-matrix-drift` runs it knowingly as a non-attestation run.
-There is deliberately no "0 or 2 CRAM cases are both fine" rule — a run without them covers
+There is deliberately no "0 or 4 CRAM cases are both fine" rule — a run without them covers
 strictly less than this contract records, which is exactly what the `REDUCED` verdict is
 for.
 

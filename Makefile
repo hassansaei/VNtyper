@@ -214,7 +214,7 @@ test-fast:
 #                never fails.
 # scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
 # whenever coverage climbs past it.
-COVERAGE_TARGET ?= 81
+COVERAGE_TARGET ?= 84
 
 # `--cov-report=xml` costs ~0.1s and writes coverage.xml, which `patch-coverage` below
 # consumes. Emitting it here rather than from a second pytest run keeps the patch gate

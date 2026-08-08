@@ -2,7 +2,46 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## 2.0.9 (Current)
+## 2.0.10 (Current)
+
+Milestone 4, "CRAM and input robustness": closes #213, #225, #209, #178, #165 and
+#161.
+
+**A converted alignment that contains more than one read layout now stops instead of
+discarding one layout.** In the golden cohort, 32 of 50 base BAM cases produce paired
+FASTQs plus at least one non-empty single FASTQ. VNtyper 2.0.9 silently ignored those
+single reads; 2.0.10 names every produced FASTQ and record count and refuses the mixed
+layout. Pure single-end BAMs and `--fastq1` without `--fastq2` are now supported through
+fastp, BWA and Kestrel.
+
+**BAM and CRAM inputs are preflighted through a run-local alignment view.** Missing
+indexes are built beside that view, where htslib can resolve them, without writing into a
+read-only patient input tree. Existing BAI, CSI and CRAI spellings are resolved by format,
+stale views and indexes are replaced safely, and every derived BAM/FASTQ/log destination
+is checked before a processing stage starts.
+
+**Reference-dependent CRAM fails before processing unless one candidate can decode the
+real `-P` slice shape.** `--reference-fasta`, configured CRAM/BWA references and local
+htslib resolution are tried in configured order; coverage receives the same selected
+reference. Ambient network refget is disabled by default, `REF_PATH` is restored on every
+exit, and web jobs transport a curated preflight code/message without exposing worker
+paths.
+
+**Unmapped CRAM extraction is fail-closed.** `auto` uses indexed `'*'` extraction only
+when idxstats proves no placed-unmapped reads; malformed evidence selects the stream
+path, and forcing an unsafe indexed path raises instead of losing reads. On the declared
+`7a61` CRAM, stream recovered 622,690 records while a raw indexed fetch returned 2,690;
+the production guard refused that 620,000-read loss before work.
+
+Chromosome naming now votes only across configured primary-contig patterns, requires a
+strict majority and returns `unknown` for ties or zero classified contigs. Threshold and
+pattern configuration is validated rather than accepted partially.
+
+On the 18 golden-cohort BAM cases that both 2.0.9 and 2.0.10 can complete without
+discarding reads, three alternating runs measured medians of 88.68 s and 86.08 s,
+respectively; the ranges did not overlap (88.43–88.77 vs 85.92–87.41 s).
+
+## 2.0.9
 
 Milestone 2, "Web service and cohort integrity": closes #216, #207, #206, #205, #201,
 #167 and #162, plus #210 from the CRAM milestone because #162's acceptance criterion

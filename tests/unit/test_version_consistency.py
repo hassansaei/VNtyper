@@ -40,6 +40,9 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-tests.yml"
 SMOKE_TEST = REPO_ROOT / "tests" / "docker" / "test_image_structure.py"
 WEB_REQUIREMENTS = REPO_ROOT / "docker" / "requirements-web.txt"
 DOCKER_APP = REPO_ROOT / "docker" / "app"
+VERSION_MODULE = REPO_ROOT / "vntyper" / "version.py"
+CITATION = REPO_ROOT / "CITATION.cff"
+CHANGELOG = REPO_ROOT / "docs" / "about" / "changelog.md"
 
 
 def _read(path: Path) -> str:
@@ -162,6 +165,29 @@ def test_mypy_python_version_matches_requires_python() -> None:
     match = _search(r'^python_version\s*=\s*"(\d+)\.(\d+)"', _read(PYPROJECT), "mypy python_version")
     assert (int(match.group(1)), int(match.group(2))) == (major, minor), (
         f"mypy targets {match.group(0)} but requires-python is >={major}.{minor}"
+    )
+
+
+def test_release_metadata_matches_the_package_version() -> None:
+    """Citation and changelog release versions must match ``__version__``."""
+    version_tree = ast.parse(_read(VERSION_MODULE))
+    package_version = next(
+        node.value.value
+        for node in version_tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+    citation_version = _search(r'^version:\s*"([^"]+)"', _read(CITATION), "the citation version").group(1)
+    changelog_version = _search(
+        r"^##\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)", _read(CHANGELOG), "the latest changelog version"
+    ).group(1)
+    assert citation_version == package_version, (
+        f"CITATION.cff is {citation_version}, but vntyper/version.py is {package_version}"
+    )
+    assert changelog_version == package_version, (
+        f"docs/about/changelog.md is {changelog_version}, but vntyper/version.py is {package_version}"
     )
 
 
