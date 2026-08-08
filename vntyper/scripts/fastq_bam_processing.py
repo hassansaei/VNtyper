@@ -77,7 +77,6 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
 
 
 def process_bam_to_fastq(
-    in_bam,
     output,
     output_name,
     threads,
@@ -93,7 +92,6 @@ def process_bam_to_fastq(
     Process alignment files by slicing, filtering, and converting to FASTQ.
 
     Args:
-        in_bam (str or Path): Path to the input BAM/CRAM file.
         output (str or Path): Output directory.
         output_name (str): Base name for the output files.
         threads (int): Number of threads to use.
@@ -131,28 +129,24 @@ def process_bam_to_fastq(
 
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
-    # Slice/region extraction
-    if keep_intermediates and final_bam.exists():
-        logger.info(f"Reusing existing BAM slice: {final_bam}")
-    else:
-        command_slice = build_samtools_slice_command(
-            samtools_path=samtools_path,
-            in_bam=plan.view_path,
-            output_bam=final_bam,
-            region=None if bed_file else bam_region,
-            bed_file=bed_file,
-            reference_path=plan.reference_path,
-            threads=threads,
-            index_output=fast_mode,
-        )
-        log_file_slice = Path(output) / f"{output_name}_slice.log"
-        logger.info(f"Executing region slicing with command: {command_slice}")
+    command_slice = build_samtools_slice_command(
+        samtools_path=samtools_path,
+        in_bam=plan.view_path,
+        output_bam=final_bam,
+        region=None if bed_file else bam_region,
+        bed_file=bed_file,
+        reference_path=plan.reference_path,
+        threads=threads,
+        index_output=fast_mode,
+    )
+    log_file_slice = Path(output) / f"{output_name}_slice.log"
+    logger.info(f"Executing region slicing with command: {command_slice}")
 
-        success = run_command(str(command_slice), str(log_file_slice), critical=True)
-        if not success:
-            logger.error(f"{plan.file_format.upper()} region slicing failed.")
-            raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
-        logger.info("BAM/CRAM region slicing completed.")
+    success = run_command(str(command_slice), str(log_file_slice), critical=True)
+    if not success:
+        logger.error(f"{plan.file_format.upper()} region slicing failed.")
+        raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
+    logger.info("BAM/CRAM region slicing completed.")
 
     # Extract & merge unmapped reads if not in fast_mode
     if not fast_mode:
@@ -228,37 +222,23 @@ def process_bam_to_fastq(
     final_fastq_other = Path(output) / f"{output_name}_other.fastq.gz"
     final_fastq_single = Path(output) / f"{output_name}_single.fastq.gz"
 
-    if keep_intermediates and all(
-        p.exists()
-        for p in [
-            final_fastq_1,
-            final_fastq_2,
-            final_fastq_other,
-            final_fastq_single,
-        ]
-    ):
-        logger.info(
-            f"Reusing existing FASTQ files: {final_fastq_1}, {final_fastq_2}, "
-            f"{final_fastq_other}, and {final_fastq_single}"
-        )
-    else:
-        command_sort_fastq = build_bam_to_fastq_command(
-            samtools_path=samtools_path,
-            in_bam=final_bam,
-            threads=threads,
-            fastq_r1=final_fastq_1,
-            fastq_r2=final_fastq_2,
-            fastq_other=final_fastq_other,
-            fastq_single=final_fastq_single,
-        )
-        log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
-        logger.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
+    command_sort_fastq = build_bam_to_fastq_command(
+        samtools_path=samtools_path,
+        in_bam=final_bam,
+        threads=threads,
+        fastq_r1=final_fastq_1,
+        fastq_r2=final_fastq_2,
+        fastq_other=final_fastq_other,
+        fastq_single=final_fastq_single,
+    )
+    log_file_sort_fastq = Path(output) / f"{output_name}_sort_fastq.log"
+    logger.info(f"Executing BAM to FASTQ conversion with command: {command_sort_fastq}")
 
-        success = run_command(str(command_sort_fastq), str(log_file_sort_fastq), critical=True)
-        if not success:
-            logger.error("BAM to FASTQ conversion failed.")
-            raise RuntimeError("BAM to FASTQ conversion failed.")
-        logger.info("BAM to FASTQ conversion completed.")
+    success = run_command(str(command_sort_fastq), str(log_file_sort_fastq), critical=True)
+    if not success:
+        logger.error("BAM to FASTQ conversion failed.")
+        raise RuntimeError("BAM to FASTQ conversion failed.")
+    logger.info("BAM to FASTQ conversion completed.")
 
     # Clean up intermediates if requested
     if delete_intermediates and not keep_intermediates:

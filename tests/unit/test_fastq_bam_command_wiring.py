@@ -67,8 +67,8 @@ class _Recorder:
 def _run_bam_to_fastq(tmp_path, **overrides):
     """Drive ``process_bam_to_fastq`` with every external effect mocked out."""
     recorder = _Recorder()
+    input_path = overrides.pop("input_path", "/data/sample.bam")
     kwargs = {
-        "in_bam": "/data/sample.bam",
         "output": str(tmp_path),
         "output_name": "output",
         "threads": 4,
@@ -77,14 +77,13 @@ def _run_bam_to_fastq(tmp_path, **overrides):
     }
     file_format = overrides.pop("file_format", "bam")
     kwargs.update(overrides)
-    in_bam = kwargs["in_bam"]
     kwargs.setdefault(
         "plan",
         AlignmentPlan(
-            input_path=str(in_bam),
-            view_path=str(in_bam),
+            input_path=str(input_path),
+            view_path=str(input_path),
             file_format=file_format,
-            index_path=f"{in_bam}.{'bai' if file_format == 'bam' else 'crai'}",
+            index_path=f"{input_path}.{'bai' if file_format == 'bam' else 'crai'}",
             reference_path=None,
             reference_source="test",
             uncovered_contigs=(),
@@ -213,7 +212,7 @@ def test_the_bam_stage_never_rebuilds_the_preflight_index(tmp_path):
     in_bam = input_dir / "sample.bam"
     in_bam.write_bytes(b"BAM\x01")
 
-    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, in_bam=str(in_bam), output=str(output_dir))
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, input_path=str(in_bam), output=str(output_dir))
 
     index_commands = _index_commands_for(commands, str(in_bam))
     assert index_commands == []
@@ -237,7 +236,7 @@ def test_an_existing_index_beside_the_input_is_reused_rather_than_rebuilt(tmp_pa
     in_bam.write_bytes(b"BAM\x01")
     (input_dir / index_name).write_bytes(b"BAI\x01")
 
-    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, in_bam=str(in_bam), output=str(output_dir))
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, input_path=str(in_bam), output=str(output_dir))
 
     assert _index_commands_for(commands, str(in_bam)) == [], (
         f"{index_name} was already there; indexing again writes a file nothing reads"
@@ -272,7 +271,6 @@ def test_the_preflight_index_is_handed_directly_to_the_offset_extractor(tmp_path
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
-            in_bam=str(in_bam),
             output=str(tmp_path),
             output_name="output",
             threads=4,
@@ -319,7 +317,6 @@ def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_pat
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
-            in_bam=str(in_bam),
             output=str(output_dir),
             output_name="output",
             threads=4,
@@ -382,7 +379,7 @@ def _cram_unmapped_command(tmp_path, **overrides):
     kwargs = {
         "fast_mode": False,
         "file_format": "cram",
-        "in_bam": "/data/sample.cram",
+        "input_path": "/data/sample.cram",
         "config": config,
     }
     kwargs.update(overrides)
@@ -482,7 +479,7 @@ def test_a_hostile_cram_path_survives_both_stages_of_the_pipe(tmp_path):
     output_dir = tmp_path / "run one"
     output_dir.mkdir()
 
-    command = _cram_unmapped_command(tmp_path, in_bam=hostile_cram, output=str(output_dir))
+    command = _cram_unmapped_command(tmp_path, input_path=hostile_cram, output=str(output_dir))
     tokens = shlex.split(command.removeprefix("set -o pipefail; "))
 
     assert hostile_cram in tokens, f"the input CRAM did not survive as one operand: {command}"
@@ -501,7 +498,7 @@ def test_the_merge_runs_immediately_after_the_cram_unmapped_extraction(tmp_path)
     """
     config = {**CONFIG, "tools": {**CONFIG["tools"], "samtools": "/envs/vntyper/bin/samtools"}}
     commands = _run_bam_to_fastq(
-        tmp_path, fast_mode=False, file_format="cram", in_bam="/data/sample.cram", config=config
+        tmp_path, fast_mode=False, file_format="cram", input_path="/data/sample.cram", config=config
     )
 
     extraction = next(i for i, c in enumerate(commands) if "-f 12" in c)
@@ -536,7 +533,7 @@ def test_a_bam_path_with_a_space_survives_every_emitted_command(tmp_path):
     output_dir = tmp_path / "run one"
     output_dir.mkdir()
 
-    commands = _run_bam_to_fastq(tmp_path, in_bam=hostile_bam, fast_mode=False, output=str(output_dir))
+    commands = _run_bam_to_fastq(tmp_path, input_path=hostile_bam, fast_mode=False, output=str(output_dir))
 
     assert commands, "the stage emitted no commands; this test would pass vacuously"
     for command in commands:

@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TypedDict
 
+from vntyper.scripts.alignment_target_io import install_generated_bed
 from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -26,7 +27,7 @@ class AlignmentPreflightKwargs(TypedDict):
     reference_assembly: str
     reference_fasta: None
     header_contigs: tuple[str, ...]
-    m5: None
+    m5: str | None
     fast_mode: bool
 
 
@@ -53,6 +54,31 @@ def format_regions_as_bed(regions: str) -> str:
             raise ValueError(message) from error
         rows.append(f"{chrom}\t{start}\t{end}\n")
     return "".join(rows)
+
+
+def _first_active_bed_contig(bed_text: str) -> str | None:
+    for line in bed_text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped.split(maxsplit=1)[0]
+    return None
+
+
+def _target_m5_from_header(header: str, target_contig: str | None) -> str | None:
+    if target_contig is None:
+        return None
+    for line in header.splitlines():
+        fields = line.split("\t")
+        if not fields or fields[0] != "@SQ":
+            continue
+        tags: dict[str, str] = {}
+        for field in fields[1:]:
+            key, separator, value = field.partition(":")
+            if separator:
+                tags[key] = value
+        if tags.get("SN") == target_contig:
+            return tags.get("M5")
+    return None
 
 
 def prepare_alignment_target(
@@ -120,7 +146,14 @@ def prepare_alignment_target(
         bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
         description = "Predefined regions"
 
-    bed_file_path.write_text(format_regions_as_bed(regions), encoding="utf-8")
+    input_path = bam if input_type == "BAM" else cram if input_type == "CRAM" else None
+    file_format = input_type.lower() if input_path is not None else None
+    install_generated_bed(
+        bed_file_path,
+        format_regions_as_bed(regions),
+        input_path=input_path,
+        file_format=file_format,
+    )
     logger.info(f"{description} converted to BED file: {bed_file_path}")
     return bed_file_path
 
@@ -160,6 +193,8 @@ def build_alignment_preflight_kwargs(
         if alignment_header is not None
         else ()
     )
+    target_contig = _first_active_bed_contig(bed_file.read_text(encoding="utf-8"))
+    target_m5 = _target_m5_from_header(alignment_header, target_contig) if alignment_header is not None else None
     return {
         "in_path": str(in_path),
         "output_dir": str(output_dir),
@@ -172,6 +207,6 @@ def build_alignment_preflight_kwargs(
         "reference_assembly": reference_assembly,
         "reference_fasta": None,
         "header_contigs": header_contigs,
-        "m5": None,
+        "m5": target_m5,
         "fast_mode": fast_mode,
     }

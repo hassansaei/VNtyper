@@ -295,7 +295,6 @@ def test_the_fastq_path_hands_every_stage_the_declared_basename(tmp_path: Path) 
 #: rather than an error.
 BAM_RUN_ARTEFACTS: set[str] = {
     ".",  # generate_summary_report's own output_dir argument
-    "in.bam",  # the harness's input, which lives under the output dir
     "predefined_regions_hg19.bed",
     "fastq_bam_processing",
     "fastq_bam_processing/input.bam",

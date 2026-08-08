@@ -14,6 +14,7 @@ from vntyper.scripts.alignment_preflight import (
     run_preflight,
 )
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
+from vntyper.scripts.alignment_target_io import validate_alignment_output_root
 from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
@@ -190,6 +191,9 @@ def run_pipeline(
             )
 
         # Validation owns a run-local log, but stage directories wait until preflight passes.
+        if input_type in ["BAM", "CRAM"]:
+            input_alignment = bam if input_type == "BAM" else cram
+            validate_alignment_output_root(output_dir, input_alignment, input_type.lower())
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "BAM":
             validate_bam_file(bam, cwd=project_root, log_dir=output_dir)
@@ -263,7 +267,6 @@ def run_pipeline(
                     raise ValueError("Invalid BAM file input.")
 
                 fastq1, fastq2, _, _ = process_bam_to_fastq(
-                    in_bam=bam,
                     output=dirs["fastq_bam_processing"],
                     output_name="output",
                     threads=threads,
@@ -275,7 +278,7 @@ def run_pipeline(
                     keep_intermediates=keep_intermediates,
                     bed_file=bed_file_path,
                 )
-                conversion_command = f"process_bam_to_fastq(in_bam={bam}, ...)"
+                conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
                 header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
                 # Reuse the header the guard already read: one samtools invocation, not
                 # two. If the guard could not read it, re-read here so that a samtools
@@ -299,7 +302,6 @@ def run_pipeline(
                     raise ValueError("Invalid CRAM file input.")
 
                 fastq1, fastq2, _, _ = process_bam_to_fastq(
-                    in_bam=cram,
                     output=dirs["fastq_bam_processing"],
                     output_name="output",
                     threads=threads,
@@ -311,7 +313,7 @@ def run_pipeline(
                     keep_intermediates=keep_intermediates,
                     bed_file=bed_file_path,
                 )
-                conversion_command = f"process_bam_to_fastq(in_bam={cram}, plan=alignment_plan, ...)"
+                conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
             conversion_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
@@ -430,7 +432,6 @@ def run_pipeline(
             logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
             conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
             fastq1, fastq2, _, _ = process_bam_to_fastq(
-                in_bam=sorted_bam,
                 output=dirs["fastq_bam_processing"],
                 output_name="output",
                 threads=threads,
@@ -448,7 +449,7 @@ def run_pipeline(
                 "BAM to FASTQ Conversion (Post-alignment)",
                 os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz"),
                 "fastq",
-                "process_bam_to_fastq(sorted_bam, ...)",
+                "process_bam_to_fastq(plan=post_alignment_plan, ...)",
                 conv2_start,
                 conv2_end,
                 write_summary_path=summary_file_path,

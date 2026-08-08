@@ -209,7 +209,7 @@ def run_pipeline_under_harness(
             recorder. Return ``unittest.mock.DEFAULT`` to keep the stubbed return
             value; anything else replaces it.
         **run_pipeline_kwargs: Forwarded to ``run_pipeline``; ``bam`` defaults to a
-            BAM inside ``output_dir`` so the common case needs no arguments.
+            BAM in a separate sibling input tree so the common case needs no arguments.
 
     Returns:
         PipelineHarness: The recorded stage calls.
@@ -234,7 +234,9 @@ def run_pipeline_under_harness(
     }
     kwargs.update(run_pipeline_kwargs)
     if not any(kwargs.get(key) for key in ("bam", "cram", "fastq1")):
-        bam_path = output_dir / "in.bam"
+        input_root = output_dir.parent / f"{output_dir.name}_input"
+        input_root.mkdir()
+        bam_path = input_root / "in.bam"
         bam_path.touch()
         kwargs["bam"] = str(bam_path)
 

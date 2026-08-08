@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -46,7 +47,13 @@ def _plan(tmp_path: Path, file_format: str, *, unmapped_scan: str = "indexed") -
     )
 
 
-def _run_conversion(tmp_path: Path, plan: AlignmentPlan, *, fast_mode: bool) -> tuple[list[str], MagicMock]:
+def _run_conversion(
+    tmp_path: Path,
+    plan: AlignmentPlan,
+    *,
+    fast_mode: bool,
+    keep_intermediates: bool = False,
+) -> tuple[list[str], MagicMock]:
     """Run conversion with shell and filesystem effects recorded.
 
     Args:
@@ -72,16 +79,20 @@ def _run_conversion(tmp_path: Path, plan: AlignmentPlan, *, fast_mode: bool) -> 
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
-            in_bam=plan.input_path,
             output=str(tmp_path / "run"),
             output_name="output",
             threads=4,
             config=CONFIG,
             fast_mode=fast_mode,
+            keep_intermediates=keep_intermediates,
             plan=plan,
         )
     assert isinstance(extractor, MagicMock)
     return commands, extractor
+
+
+def test_conversion_api_has_one_authoritative_alignment_input() -> None:
+    assert "in_bam" not in inspect.signature(fastq_bam_processing.process_bam_to_fastq).parameters
 
 
 @pytest.mark.parametrize(("fast_mode", "expects_index"), [(False, False), (True, True)])
@@ -187,3 +198,25 @@ def test_conversion_leaves_the_input_tree_byte_identical(tmp_path: Path, file_fo
     _run_conversion(tmp_path, plan, fast_mode=False)
 
     assert _tree_digest(input_root) == before
+
+
+def test_keep_intermediates_regenerates_stale_artifacts_for_the_new_plan(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    run_dir = tmp_path / "run"
+    stale_paths = [
+        run_dir / "output_sliced.bam",
+        run_dir / "output_R1.fastq.gz",
+        run_dir / "output_R2.fastq.gz",
+        run_dir / "output_other.fastq.gz",
+        run_dir / "output_single.fastq.gz",
+    ]
+    for stale_path in stale_paths:
+        stale_path.write_bytes(b"prior-patient-artifact")
+
+    commands, _ = _run_conversion(tmp_path, plan, fast_mode=True, keep_intermediates=True)
+
+    assert len(commands) == 2
+    assert plan.view_path in commands[0]
+    assert "samtools view" in commands[0]
+    assert "samtools fastq" in commands[1]
+    assert str(run_dir / "output_sliced.bam") in commands[1]

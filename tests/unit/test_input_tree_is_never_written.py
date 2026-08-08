@@ -237,7 +237,6 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
-            in_bam=str(in_bam),
             output=str(output_dir),
             output_name="output",
             threads=4,

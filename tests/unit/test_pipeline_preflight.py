@@ -103,6 +103,26 @@ def test_fresh_output_root_exists_for_validation_but_stage_directories_wait_for_
     assert harness.stages["run_preflight"].called
 
 
+def test_patient_input_tree_cannot_be_used_as_the_output_root(tmp_path: Path) -> None:
+    input_root = tmp_path / "patient-input"
+    input_root.mkdir()
+    bam = input_root / "patient.bam"
+    bam.write_bytes(b"patient-bytes")
+
+    harness = run_pipeline_under_harness(
+        input_root,
+        create_output_dir=False,
+        bam=str(bam),
+        expect_failure=True,
+    )
+
+    assert isinstance(harness.error, SystemExit)
+    assert set(input_root.iterdir()) == {bam}
+    assert bam.read_bytes() == b"patient-bytes"
+    assert not harness.stages["validate_bam_file"].called
+    assert not harness.stages["run_preflight"].called
+
+
 def test_cram_plan_drives_conversion_and_reference_aware_coverage(tmp_path: Path) -> None:
     out = tmp_path / "out"
     cram = tmp_path / "patient.cram"
@@ -165,14 +185,20 @@ def test_post_alignment_bam_is_preflighted_and_its_returned_plan_is_consumed(tmp
     assert harness.kwargs("calculate_vntr_coverage")["bam_file"] == plan.view_path
 
 
-@pytest.mark.parametrize("fail_after_preflight", [False, True])
+@pytest.mark.parametrize("initial_ref_path", [None, "http://operator.example/%s"])
+@pytest.mark.parametrize("outcome", ["return", "system_exit", "base_exception"])
 def test_ref_path_is_pinned_through_the_run_and_restored_exactly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_after_preflight: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_ref_path: str | None,
+    outcome: str,
 ) -> None:
     out = tmp_path / "out"
-    original = "http://operator.example/%s"
     pinned = "/local/cache/%2s/%2s/%s"
-    monkeypatch.setenv("REF_PATH", original)
+    if initial_ref_path is None:
+        monkeypatch.delenv("REF_PATH", raising=False)
+    else:
+        monkeypatch.setenv("REF_PATH", initial_ref_path)
     config = {**MINIMAL_CONFIG, "cram": {"local_ref_path": pinned}}
     plan = _plan(out, "bam")
 
@@ -181,22 +207,30 @@ def test_ref_path_is_pinned_through_the_run_and_restored_exactly(
         return mock.DEFAULT
 
     stage_side_effects: dict[str, Any] = {"process_bam_to_fastq": observe_pin}
-    if fail_after_preflight:
-        stage_side_effects["run_kestrel"] = RuntimeError("late stage failed")
+    if outcome == "system_exit":
+        stage_side_effects["run_kestrel"] = SystemExit(7)
+    elif outcome == "base_exception":
+        stage_side_effects["run_kestrel"] = KeyboardInterrupt("operator interrupted")
 
     stage_side_effects["run_preflight"] = lambda *args, **kwargs: plan
     harness = run_pipeline_under_harness(
         out,
         config=config,
-        expect_failure=fail_after_preflight,
+        expect_failure=outcome != "return",
         stage_side_effects=stage_side_effects,
     )
 
-    if fail_after_preflight:
+    if outcome == "system_exit":
         assert isinstance(harness.error, SystemExit)
+        assert harness.error.code == 7
+    elif outcome == "base_exception":
+        assert isinstance(harness.error, KeyboardInterrupt)
     else:
         assert harness.error is None
-    assert os.environ["REF_PATH"] == original
+    if initial_ref_path is None:
+        assert "REF_PATH" not in os.environ
+    else:
+        assert os.environ["REF_PATH"] == initial_ref_path
 
 
 def test_preflight_failure_stops_before_any_processing_stage(tmp_path: Path) -> None:
