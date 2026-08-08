@@ -31,6 +31,7 @@ from unittest.mock import patch
 import pytest
 
 from vntyper.scripts import alignment_processing, fastq_bam_processing
+from vntyper.scripts.alignment_contract import AlignmentPlan
 
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
@@ -73,9 +74,23 @@ def _run_bam_to_fastq(tmp_path, **overrides):
         "threads": 4,
         "config": CONFIG,
         "fast_mode": True,
-        "file_format": "bam",
     }
+    file_format = overrides.pop("file_format", "bam")
     kwargs.update(overrides)
+    in_bam = kwargs["in_bam"]
+    kwargs.setdefault(
+        "plan",
+        AlignmentPlan(
+            input_path=str(in_bam),
+            view_path=str(in_bam),
+            file_format=file_format,
+            index_path=f"{in_bam}.{'bai' if file_format == 'bam' else 'crai'}",
+            reference_path=None,
+            reference_source="test",
+            uncovered_contigs=(),
+            unmapped_scan="stream" if file_format == "cram" else "indexed",
+        ),
+    )
 
     with (
         patch.object(fastq_bam_processing, "run_command", recorder),
@@ -132,8 +147,8 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
-        f"samtools index {tmp_path}/output_sliced.bam",
+        f"samtools view -P -b -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
+        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -145,25 +160,14 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     """
     The full BAM path, in order.
 
-    The input BAM is indexed first (neither ``/data/sample.bam.bai`` nor
-    ``/data/sample.bai`` exists), unmapped reads are pulled out by the offset
-    extractor rather than by samtools, the slice and the unmapped reads are
-    merged, the merged file is renamed back to ``_sliced.bam`` and re-indexed, and
-    only then converted to FASTQ.
-
-    The second command was ``samtools index /data/sample.bam`` until #210: that
-    wrote ``/data/sample.bam.bai`` into the *input* directory, which holds patient
-    data and is routinely mounted read-only. It now carries ``-o`` and names a
-    destination inside the run's own output directory. The re-index at the fourth
-    position deliberately does **not**: ``output_sliced.bam`` is a file this stage
-    produced in the output directory, so the default destination is already right.
+    Preflight has already proved and supplied the input index. The temporary slice
+    is not indexed because the merge immediately replaces it; the merged BAM is
+    indexed once before conversion.
     """
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
-        f"samtools index {tmp_path}/output_sliced.bam",
-        f"samtools index -o {tmp_path}/output_input.bam.bai /data/sample.bam",
+        f"samtools view -P -b -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"samtools index {tmp_path}/output_sliced.bam",
@@ -197,15 +201,10 @@ def _index_commands_for(commands: list[str], indexed_file: str) -> list[list[str
     return matches
 
 
-def test_the_index_the_bam_path_builds_for_its_input_is_written_to_the_output_directory(tmp_path):
+def test_the_bam_stage_never_rebuilds_the_preflight_index(tmp_path):
     """
-    #162/#210 at the wiring level: the ``-o`` operand, re-parsed as a shell would.
-
-    Asserting that no index command *mentions* the input directory does not work
-    and would fail after the fix as well as before it -- a correct
-    ``samtools index -o <out> <in>`` has to name the input as its operand. What
-    can be asserted is the argument immediately after ``-o``, because that is the
-    only path samtools writes.
+    Preflight owns input index resolution and construction. The conversion stage
+    must not repeat that decision or write beside the patient alignment.
     """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -217,11 +216,7 @@ def test_the_index_the_bam_path_builds_for_its_input_is_written_to_the_output_di
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False, in_bam=str(in_bam), output=str(output_dir))
 
     index_commands = _index_commands_for(commands, str(in_bam))
-    assert index_commands, "the non-fast BAM path must index its input when no index exists"
-    for tokens in index_commands:
-        assert "-o" in tokens, f"an index command with no -o writes beside its input: {tokens}"
-        destination = Path(tokens[tokens.index("-o") + 1])
-        assert destination.parent == output_dir, f"the index was written outside the output directory: {destination}"
+    assert index_commands == []
 
 
 @pytest.mark.parametrize("index_name", ["sample.bam.bai", "sample.bai"])
@@ -249,26 +244,32 @@ def test_an_existing_index_beside_the_input_is_reused_rather_than_rebuilt(tmp_pa
     )
 
 
-def test_a_failed_index_of_the_input_aborts_the_stage(tmp_path):
+def test_the_preflight_index_is_handed_directly_to_the_offset_extractor(tmp_path):
     """
-    Extracting unmapped reads from an index that was never built is not a partial
-    result, it is a wrong one -- the offsets would be read from a missing or
-    truncated file. The stage stops instead.
+    Conversion consumes the exact BAI that preflight proved instead of resolving
+    or rebuilding an index of its own.
     """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     in_bam = input_dir / "sample.bam"
     in_bam.write_bytes(b"BAM\x01")
 
-    def _fail_the_index(command, log_file, critical=False, cwd=None):
-        Path(log_file).write_text("")
-        return "index -o" not in command
+    plan = AlignmentPlan(
+        input_path=str(in_bam),
+        view_path=str(tmp_path / "view.bam"),
+        file_format="bam",
+        index_path=str(tmp_path / "view.bam.bai"),
+        reference_path=None,
+        reference_source="not-required",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+    )
 
     with (
-        patch.object(fastq_bam_processing, "run_command", _fail_the_index),
+        patch.object(fastq_bam_processing, "run_command", return_value=True),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
         patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset") as extractor,
-        pytest.raises(RuntimeError, match="Indexing BAM file failed"),
+        patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
             in_bam=str(in_bam),
@@ -276,11 +277,12 @@ def test_a_failed_index_of_the_input_aborts_the_stage(tmp_path):
             output_name="output",
             threads=4,
             config=CONFIG,
+            plan=plan,
             fast_mode=False,
-            file_format="bam",
         )
 
-    extractor.assert_not_called()
+    assert extractor.call_args.kwargs["bam_file"] == plan.view_path
+    assert extractor.call_args.kwargs["bai_file"] == plan.index_path
 
 
 @pytest.mark.parametrize(
@@ -323,14 +325,23 @@ def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_pat
             threads=4,
             config=CONFIG,
             fast_mode=False,
-            file_format="bam",
+            plan=AlignmentPlan(
+                input_path=str(in_bam),
+                view_path=str(in_bam),
+                file_format="bam",
+                index_path=str(input_dir / existing) if existing is not None else str(output_dir / "proven.bai"),
+                reference_path=None,
+                reference_source="test",
+                uncovered_contigs=(),
+                unmapped_scan="indexed",
+            ),
         )
 
     bai_file = Path(extractor.call_args.kwargs["bai_file"])
     if existing is not None:
         assert bai_file == input_dir / existing
     else:
-        assert bai_file == output_dir / "output_input.bam.bai"
+        assert bai_file == output_dir / "proven.bai"
     assert bai_file.parent.name == expected_relative_to
 
 
@@ -508,8 +519,8 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b /data/sample.bam -L {bed} -o {tmp_path}/output_sliced.bam && "
-        f"samtools index {tmp_path}/output_sliced.bam"
+        f"samtools view -P -b -@ 4 /data/sample.bam -L {bed} -o {tmp_path}/output_sliced.bam && "
+        f"samtools index -@ 4 {tmp_path}/output_sliced.bam"
     )
     assert REGION not in commands[0]
 

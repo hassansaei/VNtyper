@@ -42,6 +42,7 @@ from typing import Any
 import pytest
 
 from vntyper.scripts import utils
+from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.utils import run_command, validate_bam_file
 
 pytestmark = pytest.mark.unit
@@ -205,9 +206,8 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
     """#162/#210, end to end through the real stage.
 
     Every ``samtools index`` the non-fast BAM path emits is resolved to the path
-    it writes, and every one of them must land in the run's output directory --
-    including the one for the *input* alignment, which used to be written beside
-    it.
+    it writes, and every one of them must land in the run's output directory.
+    The input index is already present in the proven plan and is never rebuilt.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -242,8 +242,17 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
             output_name="output",
             threads=4,
             config={"tools": {"samtools": "samtools"}},
+            plan=AlignmentPlan(
+                input_path=str(in_bam),
+                view_path=str(output_dir / "input.bam"),
+                file_format="bam",
+                index_path=str(output_dir / "input.bam.bai"),
+                reference_path=None,
+                reference_source="not-required",
+                uncovered_contigs=(),
+                unmapped_scan="indexed",
+            ),
             fast_mode=False,
-            file_format="bam",
         )
 
     indexed = [pair for command in issued for pair in _index_destinations(command)]
@@ -254,6 +263,4 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
             f"indexing {operand} wrote {written}, which is outside the run's output directory"
         )
 
-    assert any(operand == str(in_bam) for operand, _ in indexed), (
-        "the input alignment was never indexed; #210's branch was not exercised"
-    )
+    assert all(operand != str(in_bam) for operand, _ in indexed)

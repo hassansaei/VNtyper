@@ -8,6 +8,11 @@ import timeit
 from datetime import datetime, timezone
 from pathlib import Path
 
+from vntyper.scripts.alignment_preflight import (
+    pin_reference_resolution,
+    restore_reference_resolution,
+    run_preflight,
+)
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.artifact_names import select_best_vcf_file
 
@@ -27,6 +32,7 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
+from vntyper.scripts.pipeline_alignment import build_alignment_preflight_kwargs, prepare_alignment_target
 
 # The declared-assembly guard. Its policy lives in its own module so that this
 # behaviour change - it rejects inputs that previously ran to completion - is a
@@ -63,25 +69,6 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
-
-
-def write_bed_file(regions, bed_file_path):
-    """
-    Writes regions to a BED file in the correct format.
-
-    Parameters:
-      - regions (str): Comma-separated regions in 'chr:start-end' format.
-      - bed_file_path (Path): Path to the BED file to be written.
-    """
-    with open(bed_file_path, "w", encoding="utf-8") as bed_fh:
-        for region in regions.split(","):
-            try:
-                chrom, positions = region.strip().split(":")
-                start, end = positions.strip().split("-")
-                bed_fh.write(f"{chrom}\t{start}\t{end}\n")
-            except ValueError as e:
-                logger.error(f"Invalid region format: {region}. Expected format 'chr:start-end'.")
-                raise ValueError(f"Invalid region format: {region}. Expected format 'chr:start-end'.") from e
 
 
 def run_pipeline(
@@ -158,19 +145,8 @@ def run_pipeline(
     logger.debug(f"BWA reference set to: {bwa_reference}")
     logger.debug(f"Output directory set to: {output_dir}")
 
-    dirs = create_output_directories(output_dir)
-    logger.info(f"Created output directories in: {output_dir}")
-
-    tool_versions = get_tool_versions(config)
-    logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
-
     overall_start = timeit.default_timer()
     logger.info("Pipeline execution started.")
-
-    # Initialize summary to record pipeline steps, including vntyper version and empty input_files.
-    summary = start_summary(version=VERSION, input_files={})
-    # Define the summary file path to be used for writing after each step.
-    summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
 
     input_type = None
     if fastq1 and fastq2:
@@ -191,9 +167,8 @@ def run_pipeline(
         input_files["bam"] = os.path.basename(bam)
     elif input_type == "CRAM":
         input_files["cram"] = os.path.basename(cram)
-    # Update the summary with input file information
-    summary["input_files"] = input_files
-
+    previous_ref_path = None
+    reference_resolution_pinned = False
     try:
         input_count = sum(
             [
@@ -214,13 +189,8 @@ def run_pipeline(
                 "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing."
             )
 
-        # Validate input files
-        # log_dir is the run's own output directory, created above by
-        # create_output_directories(): the quickcheck log is an artefact of the run,
-        # and the input directory holds patient data that is routinely mounted
-        # read-only. run_command opens its log before it spawns anything, so a log
-        # path derived from the input used to fail every BAM and CRAM run on such a
-        # mount before quickcheck even executed (#162, #201).
+        # Validation owns a run-local log, but stage directories wait until preflight passes.
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "BAM":
             validate_bam_file(bam, cwd=project_root, log_dir=output_dir)
         elif input_type == "CRAM":
@@ -243,38 +213,45 @@ def run_pipeline(
             alignment_header = read_alignment_header(bam if input_type == "BAM" else cram, config)
             enforce_declared_assembly(reference_assembly, alignment_header)
 
-        # BED file logic
-        if bed_file:
-            bed_file_path = Path(bed_file)
-            if not bed_file_path.exists():
-                logger.error(f"Provided BED file does not exist: {bed_file_path}")
-                raise FileNotFoundError(f"BED file not found: {bed_file_path}")
-            logger.info(f"Using provided BED file: {bed_file_path}")
-        elif custom_regions:
-            bed_file_path = Path(output_dir) / "custom_regions.bed"
-            write_bed_file(custom_regions, bed_file_path)
-            logger.info(f"Custom regions converted to BED file: {bed_file_path}")
-        else:
-            # Use dynamic region resolution for BAM/CRAM, fallback to legacy for FASTQ
-            if input_type in ["BAM", "CRAM"]:
-                input_file = bam if input_type == "BAM" else cram
-                predefined_regions = get_region_string_with_fallback(
-                    bam_file=input_file, reference_assembly=reference_assembly, region_type="bam_region", config=config
+        bed_file_path = prepare_alignment_target(
+            input_type=input_type,
+            bam=bam,
+            cram=cram,
+            output_dir=output_dir,
+            reference_assembly=reference_assembly,
+            config=config,
+            bed_file=bed_file,
+            custom_regions=custom_regions,
+        )
+
+        previous_ref_path = pin_reference_resolution(config)
+        reference_resolution_pinned = True
+        alignment_plan = None
+        if input_type in ["BAM", "CRAM"]:
+            input_alignment = bam if input_type == "BAM" else cram
+            alignment_plan = run_preflight(
+                **build_alignment_preflight_kwargs(
+                    in_path=str(input_alignment),
+                    output_dir=Path(output_dir) / "fastq_bam_processing",
+                    output_name="input",
+                    file_format=input_type.lower(),
+                    config=config,
+                    threads=threads,
+                    bed_file=bed_file_path,
+                    reference_assembly=reference_assembly,
+                    fast_mode=fast_mode,
+                    alignment_header=alignment_header,
                 )
-            else:
-                # FASTQ input - use fallback to legacy format (no BAM available yet)
-                region_key = f"bam_region_{reference_assembly}"
-                predefined_regions = config.get("bam_processing", {}).get(region_key)
-                if not predefined_regions:
-                    logger.error(f"Region key '{region_key}' not found in config.json under 'bam_processing'.")
-                    raise ValueError(f"Missing configuration for region: {region_key}")
+            )
 
-            bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
-            write_bed_file(predefined_regions, bed_file_path)
-            logger.info(f"Predefined regions converted to BED file: {bed_file_path}")
+        dirs = create_output_directories(output_dir)
+        logger.info(f"Created output directories in: {output_dir}")
 
-        logger.debug(f"Final bed_file_path => {bed_file_path}")
-        logger.debug(f"bed_file_path exists? {bed_file_path.exists()}")
+        tool_versions = get_tool_versions(config)
+        logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
+
+        summary = start_summary(version=VERSION, input_files=input_files)
+        summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
 
         # --- Input Conversion ---
         if input_type in ["BAM", "CRAM"]:
@@ -291,6 +268,7 @@ def run_pipeline(
                     output_name="output",
                     threads=threads,
                     config=config,
+                    plan=alignment_plan,
                     reference_assembly=reference_assembly,
                     fast_mode=fast_mode,
                     delete_intermediates=delete_intermediates,
@@ -326,14 +304,14 @@ def run_pipeline(
                     output_name="output",
                     threads=threads,
                     config=config,
+                    plan=alignment_plan,
                     reference_assembly=reference_assembly,
                     fast_mode=fast_mode,
                     delete_intermediates=delete_intermediates,
                     keep_intermediates=keep_intermediates,
                     bed_file=bed_file_path,
-                    file_format="cram",
                 )
-                conversion_command = f"process_bam_to_fastq(in_bam={cram}, file_format='cram', ...)"
+                conversion_command = f"process_bam_to_fastq(in_bam={cram}, plan=alignment_plan, ...)"
             conversion_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
@@ -436,6 +414,19 @@ def run_pipeline(
                 )
                 raise RuntimeError("Alignment failed due to missing or incomplete BWA reference indices.")
             logger.info("FASTQ alignment completed.")
+            alignment_plan = run_preflight(
+                **build_alignment_preflight_kwargs(
+                    in_path=str(sorted_bam),
+                    output_dir=Path(output_dir) / "fastq_bam_processing",
+                    output_name="post_alignment",
+                    file_format="bam",
+                    config=config,
+                    threads=threads,
+                    bed_file=bed_file_path,
+                    reference_assembly=reference_assembly,
+                    fast_mode=fast_mode,
+                )
+            )
             logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
             conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
             fastq1, fastq2, _, _ = process_bam_to_fastq(
@@ -444,6 +435,7 @@ def run_pipeline(
                 output_name="output",
                 threads=threads,
                 config=config,
+                plan=alignment_plan,
                 reference_assembly=reference_assembly,
                 fast_mode=fast_mode,
                 delete_intermediates=delete_intermediates,
@@ -465,12 +457,9 @@ def run_pipeline(
                 logger.error("Failed to generate FASTQ files from BAM. Exiting.")
                 raise ValueError("Failed to generate FASTQ files from BAM.")  # --- Coverage Calculation ---
         logger.info("Calculating mean coverage over the VNTR region.")
-        if input_type == "BAM":
-            input_bam = Path(bam)
-        elif input_type == "CRAM":
-            input_bam = Path(cram)
-        else:
-            input_bam = Path(dirs["alignment_processing"]) / "output_sorted.bam"
+        if alignment_plan is None:
+            raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
+        input_bam = Path(alignment_plan.view_path)
 
         # Use dynamic region resolution with fallback to legacy format
         vntr_region = get_region_string_with_fallback(
@@ -485,6 +474,7 @@ def run_pipeline(
             config=config,
             output_dir=dirs["coverage"],
             output_name="coverage",
+            reference_path=alignment_plan.reference_path,
         )
         cov_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
@@ -721,6 +711,9 @@ def run_pipeline(
     except Exception:
         logger.exception("An error occurred")
         sys.exit(1)
+    finally:
+        if reference_resolution_pinned:
+            restore_reference_resolution(previous_ref_path)
 
     overall_stop = timeit.default_timer()
     elapsed_time = (overall_stop - overall_start) / 60

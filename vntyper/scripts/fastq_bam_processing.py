@@ -8,10 +8,11 @@ import os
 import subprocess
 from pathlib import Path
 
-from vntyper.scripts.alignment_index import resolve_bam_index
+from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
     build_cram_unmapped_filter_command,
+    build_cram_unmapped_indexed_command,
     build_fastp_command,
     build_samtools_depth_command,
     build_samtools_index_command,
@@ -81,12 +82,12 @@ def process_bam_to_fastq(
     output_name,
     threads,
     config,
+    plan: AlignmentPlan,
     reference_assembly="hg19",
     fast_mode=False,
     delete_intermediates=True,
     keep_intermediates=False,
     bed_file=None,
-    file_format="bam",
 ):
     """
     Process alignment files by slicing, filtering, and converting to FASTQ.
@@ -97,6 +98,7 @@ def process_bam_to_fastq(
         output_name (str): Base name for the output files.
         threads (int): Number of threads to use.
         config (dict): Configuration dictionary containing tool paths and parameters.
+        plan: Proven alignment paths, index, reference, and unmapped-scan decision.
         reference_assembly (str, optional): Reference assembly used
             ("hg19", "hg38", "GRCh37", or "GRCh38"). Defaults to "hg19".
         fast_mode (bool, optional): If True, skips filtering of unmapped and partially
@@ -106,9 +108,6 @@ def process_bam_to_fastq(
         keep_intermediates (bool, optional): If True, keeps intermediate files for later
             use. Defaults to False.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
-        file_format (str, optional): "bam" or "cram". Default is "bam". This parameter
-            enables CRAM support.
-
     Returns:
         tuple: Paths to the generated FASTQ files (R1, R2, other, single).
 
@@ -126,7 +125,7 @@ def process_bam_to_fastq(
     else:
         # Use dynamic region resolution with fallback to legacy format
         bam_region = get_region_string_with_fallback(
-            bam_file=str(in_bam), reference_assembly=reference_assembly, region_type="bam_region", config=config
+            bam_file=plan.view_path, reference_assembly=reference_assembly, region_type="bam_region", config=config
         )
         logger.debug(f"BAM region set to: {bam_region}")
 
@@ -138,55 +137,46 @@ def process_bam_to_fastq(
     else:
         command_slice = build_samtools_slice_command(
             samtools_path=samtools_path,
-            in_bam=in_bam,
+            in_bam=plan.view_path,
             output_bam=final_bam,
             region=None if bed_file else bam_region,
             bed_file=bed_file,
+            reference_path=plan.reference_path,
+            threads=threads,
+            index_output=fast_mode,
         )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
         logger.info(f"Executing region slicing with command: {command_slice}")
 
         success = run_command(str(command_slice), str(log_file_slice), critical=True)
         if not success:
-            logger.error(f"{file_format.upper()} region slicing failed.")
-            raise RuntimeError(f"{file_format.upper()} region slicing failed.")
+            logger.error(f"{plan.file_format.upper()} region slicing failed.")
+            raise RuntimeError(f"{plan.file_format.upper()} region slicing failed.")
         logger.info("BAM/CRAM region slicing completed.")
 
     # Extract & merge unmapped reads if not in fast_mode
     if not fast_mode:
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
-        if file_format.lower() == "bam":
-            # Use the offset-based extraction. An existing BAI is resolved under
-            # either of its two names (CSI is deliberately not resolved - the
-            # offset extractor below reads BAI only) and, when one has to be
-            # built, it is built into the *output* directory: the input directory
-            # holds patient data and is routinely mounted read-only (#162, #210).
-            bam_bai = resolve_bam_index(in_bam)
-            if bam_bai is None:
-                bam_bai = str(Path(output) / f"{output_name}_input.bam.bai")
-                index_cmd = build_samtools_index_command(
-                    samtools_path=samtools_path, bam_file=in_bam, output_bai=bam_bai
-                )
-                log_file_index = Path(output) / f"{output_name}_unmapped_index.log"
-                logger.info(f"Indexing BAM before extracting unmapped: {index_cmd}")
-                success = run_command(str(index_cmd), str(log_file_index), critical=True)
-                if not success:
-                    raise RuntimeError("Indexing BAM file failed.")
-
+        if plan.file_format == "bam":
             logger.info("Extracting unmapped reads using offset calculation...")
             extract_unmapped_reads_from_offset(
-                bam_file=str(in_bam),
-                bai_file=bam_bai,
+                bam_file=plan.view_path,
+                bai_file=plan.index_path,
                 output_bam=str(unmapped_bam),
             )
         else:
-            # Fallback: CRAM uses samtools for unmapped extraction
-            command_filter = build_cram_unmapped_filter_command(
+            unmapped_builder = (
+                build_cram_unmapped_indexed_command
+                if plan.unmapped_scan == "indexed"
+                else build_cram_unmapped_filter_command
+            )
+            command_filter = unmapped_builder(
                 samtools_path=samtools_path,
-                in_bam=in_bam,
+                in_bam=plan.view_path,
                 unmapped_bam=unmapped_bam,
                 threads=threads,
+                reference_path=plan.reference_path,
             )
             log_file_filter = Path(output) / f"{output_name}_filter.log"
             logger.info(f"Executing filtering with command: {command_filter}")
@@ -290,7 +280,16 @@ def process_bam_to_fastq(
     )
 
 
-def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, output_name, summary_filename=None):
+def calculate_vntr_coverage(
+    bam_file,
+    region,
+    threads,
+    config,
+    output_dir,
+    output_name,
+    summary_filename=None,
+    reference_path=None,
+):
     """
     Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
 
@@ -303,6 +302,7 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         output_name (str): Base name for the coverage output file.
         summary_filename (str or Path, optional): File name for the TSV coverage summary.
             Defaults to "<output_name>_summary.tsv" in output_dir.
+        reference_path (str or Path, optional): Proven reference FASTA for CRAM decoding.
 
     Returns:
         dict: Exactly the keys in :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`
@@ -327,6 +327,7 @@ def calculate_vntr_coverage(bam_file, region, threads, config, output_dir, outpu
         region=region,
         bam_file=bam_file,
         coverage_output=coverage_output,
+        reference_path=reference_path,
     )
     logger.info(f"Calculating VNTR coverage with command: {depth_command}")
     success = run_command(

@@ -39,6 +39,7 @@ import pytest
 
 from tests.support.pipeline_harness import artifact_paths_from_summary, run_pipeline_under_harness
 from vntyper.scripts import cli_report, generate_report, pipeline
+from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.artifact_names import (
     COVERAGE_BASENAME,
     PIPELINE_BASENAME,
@@ -131,15 +132,20 @@ def _relative_named_paths(harness) -> set[str]:
             continue
         for call in stub.call_args_list:
             for value in (*call.args, *call.kwargs.values()):
-                if not isinstance(value, str | Path):
-                    continue
-                candidate = Path(value)
-                if not candidate.is_absolute():
-                    continue
-                try:
-                    found.add(candidate.resolve().relative_to(root).as_posix())
-                except ValueError:
-                    continue
+                candidates = (
+                    (Path(value.view_path), Path(value.index_path))
+                    if isinstance(value, AlignmentPlan)
+                    else (Path(value),)
+                    if isinstance(value, str | Path)
+                    else ()
+                )
+                for candidate in candidates:
+                    if not candidate.is_absolute():
+                        continue
+                    try:
+                        found.add(candidate.resolve().relative_to(root).as_posix())
+                    except ValueError:
+                        continue
     return found
 
 
@@ -292,6 +298,8 @@ BAM_RUN_ARTEFACTS: set[str] = {
     "in.bam",  # the harness's input, which lives under the output dir
     "predefined_regions_hg19.bed",
     "fastq_bam_processing",
+    "fastq_bam_processing/input.bam",
+    "fastq_bam_processing/input.bam.bai",
     "fastq_bam_processing/output_R1.fastq.gz",
     "fastq_bam_processing/output_R2.fastq.gz",
     "fastq_bam_processing/output_sliced.bam",
@@ -314,6 +322,8 @@ FASTQ_RUN_ARTEFACTS: set[str] = {
     ".",
     "predefined_regions_hg19.bed",
     "fastq_bam_processing",
+    "fastq_bam_processing/post_alignment.bam",
+    "fastq_bam_processing/post_alignment.bam.bai",
     "fastq_bam_processing/output.json",
     "fastq_bam_processing/output_R1.fastq.gz",
     "fastq_bam_processing/output_R2.fastq.gz",
