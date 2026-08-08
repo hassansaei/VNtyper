@@ -13,7 +13,7 @@ policy.
 
 The CRAM group carries one extra rule the others do not, and it is pinned here: a declared
 CRAM case whose fixture has not been derived is skipped **loudly** and leaves the group
-short, which is an ordinary drift mismatch. There is no "0 or 2 CRAM cases are both fine"
+short, which is an ordinary drift mismatch. There is no "0 or 4 CRAM cases are both fine"
 rule, because a run without them covers strictly less and must not read as attestation-grade.
 """
 
@@ -27,7 +27,7 @@ pytestmark = pytest.mark.unit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-from golden_cohort import matrix  # noqa: E402
+from golden_cohort import cram_cases, matrix  # noqa: E402
 from golden_cohort.admissibility import COHORT_REQUIRED_ARTIFACTS, PIPELINE_REQUIRED_ARTIFACTS  # noqa: E402
 
 
@@ -79,8 +79,8 @@ def _documented_data_dir(tmp_path: Path, *, with_cram: bool = True) -> Path:
 
     Seven multi-reference samples at six assemblies is 42; plus their hg19 subsets already
     counted, plus the hg38-only ``example_40cf``. The shape below reaches the documented
-    per-assembly counts (21 hg19, 9 hg38, 8 GRCh38, 8 hg38_ensembl, 7 each of the rest)
-    using the two filename shapes ``derive_base_cases`` recognises, plus the two CRAM
+    per-assembly counts (22 hg19, 9 hg38, 8 GRCh38, 9 hg38_ensembl, 7 each of the rest)
+    using the two filename shapes ``derive_base_cases`` recognises, plus the four CRAM
     repeats.
 
     Args:
@@ -101,7 +101,7 @@ def _documented_data_dir(tmp_path: Path, *, with_cram: bool = True) -> Path:
         for sample in samples:
             (target / f"example_{sample}_{assembly}.bam").write_bytes(b"")
     # 8 subset + 42 remapped = 50 base cases, and the per-assembly totals land on the
-    # documented ones once the 5 non-fast, 3 adVNTR and 2 CRAM repeats are added.
+    # documented ones once the 5 non-fast, 3 adVNTR and 4 CRAM repeats are added.
     if with_cram:
         _derive_cram_fixtures(root)
     return root
@@ -218,9 +218,9 @@ def test_only_the_pseudonymized_cohort_case_requires_the_pseudonymization_table(
 
 
 def test_a_matrix_matching_the_documented_contract_builds_and_is_attestation_grade(tmp_path: Path) -> None:
-    """The fixture reproduces 50/5/3/2 and the per-assembly counts, so strict mode passes.
+    """The fixture reproduces 50/5/3/4 and the per-assembly counts, so strict mode passes.
 
-    The total is 60 rather than the 58 runs 1-5 measured: the CRAM group is two cases wider.
+    The total is 62 rather than the 58 runs 1-5 measured: the CRAM group is four cases wider.
 
     Args:
         tmp_path: pytest's per-test directory.
@@ -228,8 +228,8 @@ def test_a_matrix_matching_the_documented_contract_builds_and_is_attestation_gra
     built = _build(_documented_data_dir(tmp_path))
     assert built["check"]["mismatches"] == []
     assert built["check"]["attestation_grade"] is True
-    assert built["check"]["counts"]["total"] == 60
-    assert built["check"]["counts"]["cram"] == 2
+    assert built["check"]["counts"]["total"] == 62
+    assert built["check"]["counts"]["cram"] == 4
     assert built["check"]["counts"]["probes"] == 3
 
 
@@ -429,8 +429,13 @@ def test_a_cram_case_is_built_for_each_declared_id_when_the_fixture_exists(tmp_p
     root = _documented_data_dir(tmp_path)
     built = _build(root)
     cram = _cram_cases(built)
-    assert sorted(cram) == ["7a61_hg38_ensembl_cram", "b178_hg19_cram"]
-    case = cram["b178_hg19_cram"]
+    assert sorted(cram) == [
+        "7a61_hg38_ensembl_indexed_cram",
+        "7a61_hg38_ensembl_stream_cram",
+        "b178_hg19_indexed_cram",
+        "b178_hg19_stream_cram",
+    ]
+    case = cram["b178_hg19_indexed_cram"]
     assert case["kind"] == "pipeline"
     assert case["alignment_kind"] == "cram"
     assert case["expect_exit"] == "zero"
@@ -456,6 +461,18 @@ def test_a_cram_case_never_runs_in_fast_mode(tmp_path: Path) -> None:
         assert case["fast_mode"] is False, case_id
 
 
+def test_cram_cases_exercise_both_lossless_scan_strategies(tmp_path: Path) -> None:
+    """Every declared CRAM fixture is run once through indexed and stream extraction."""
+    cram = _cram_cases(_build(_documented_data_dir(tmp_path)))
+
+    assert len(cram) == 4
+    assert {case["unmapped_scan"] for case in cram.values()} == {"indexed", "stream"}
+    assert {case["repeat_of"] for case in cram.values()} == {
+        "b178_hg19_subset",
+        "7a61_hg38_ensembl_bwa",
+    }
+
+
 def test_a_cram_case_points_at_the_derived_fixture_and_not_at_the_bam(tmp_path: Path) -> None:
     """The fixture path mirrors the source layout, on both shapes the cohort uses.
 
@@ -469,11 +486,11 @@ def test_a_cram_case_points_at_the_derived_fixture_and_not_at_the_bam(tmp_path: 
     root = _documented_data_dir(tmp_path)
     cram = _cram_cases(_build(root))
 
-    subset = cram["b178_hg19_cram"]
+    subset = cram["b178_hg19_indexed_cram"]
     assert Path(subset["cram"]) == root / "cram" / "example_b178_hg19_subset.cram"
     assert Path(subset["source_bam"]) == root / "example_b178_hg19_subset.bam"
 
-    remapped = cram["7a61_hg38_ensembl_cram"]
+    remapped = cram["7a61_hg38_ensembl_indexed_cram"]
     expected = root / "cram" / "remapped" / "bwa" / "hg38_ensembl" / "example_7a61_hg38_ensembl.cram"
     assert Path(remapped["cram"]) == expected
 
@@ -491,7 +508,7 @@ def test_a_missing_cram_fixture_is_logged_and_leaves_the_group_short(tmp_path: P
     built = _build(root, strict=False)
     assert _cram_cases(built) == {}
     assert built["check"]["counts"]["cram"] == 0
-    assert "cram: derived 0, page records 2" in built["check"]["mismatches"]
+    assert "cram: derived 0, page records 4" in built["check"]["mismatches"]
     assert built["check"]["attestation_grade"] is False
     assert any("CRAM fixtures missing for" in line for line in built["derivation_log"])
 
@@ -528,7 +545,7 @@ def test_a_missing_cram_fixture_refuses_a_strict_build(tmp_path: Path) -> None:
     with pytest.raises(ValueError) as excinfo:
         _build(root)
     message = str(excinfo.value)
-    assert "cram: derived 0, page records 2" in message
+    assert "cram: derived 0, page records 4" in message
     assert "--allow-matrix-drift" in message
 
 
@@ -540,33 +557,33 @@ def test_check_matrix_counts_the_cram_group(tmp_path: Path) -> None:
     """
     built = _build(_documented_data_dir(tmp_path))
     recount = matrix.check_matrix(built["cases"], built["probes"])
-    assert recount["counts"]["cram"] == 2
-    assert recount["counts"]["total"] == 60
+    assert recount["counts"]["cram"] == 4
+    assert recount["counts"]["total"] == 62
     assert recount["documented"]["cram"] == matrix.DOCUMENTED_TOTALS["cram"]
     assert recount["mismatches"] == []
 
     without_cram = [case for case in built["cases"] if case["group"] != "cram"]
     reduced = matrix.check_matrix(without_cram, built["probes"])
     assert reduced["counts"]["cram"] == 0
-    assert "cram: derived 0, page records 2" in reduced["mismatches"]
+    assert "cram: derived 0, page records 4" in reduced["mismatches"]
     assert reduced["attestation_grade"] is False
 
 
 def test_the_cram_cases_move_the_documented_per_assembly_counts(tmp_path: Path) -> None:
     """Adding a case adds it to its assembly's count too, so the two must move together.
 
-    ``b178_hg19_subset`` takes hg19 from the 20 runs 1-5 measured to 21, and
-    ``7a61_hg38_ensembl_bwa`` takes hg38_ensembl from 7 to 8. Leaving
+    ``b178_hg19_subset`` takes hg19 from the 20 runs 1-5 measured to 22, and
+    ``7a61_hg38_ensembl_bwa`` takes hg38_ensembl from 7 to 9. Leaving
     ``DOCUMENTED_ASSEMBLY_COUNTS`` alone would make every full run drift on two assemblies.
 
     Args:
         tmp_path: pytest's per-test directory.
     """
     built = _build(_documented_data_dir(tmp_path))
-    assert built["check"]["counts"]["by_assembly"]["hg19"] == 21
-    assert built["check"]["counts"]["by_assembly"]["hg38_ensembl"] == 8
-    assert matrix.DOCUMENTED_ASSEMBLY_COUNTS["hg19"] == 21
-    assert matrix.DOCUMENTED_ASSEMBLY_COUNTS["hg38_ensembl"] == 8
+    assert built["check"]["counts"]["by_assembly"]["hg19"] == 22
+    assert built["check"]["counts"]["by_assembly"]["hg38_ensembl"] == 9
+    assert matrix.DOCUMENTED_ASSEMBLY_COUNTS["hg19"] == 22
+    assert matrix.DOCUMENTED_ASSEMBLY_COUNTS["hg38_ensembl"] == 9
 
 
 def test_a_cram_policy_naming_a_case_the_data_does_not_provide_is_refused(tmp_path: Path) -> None:
@@ -598,4 +615,4 @@ def test_a_fixture_path_cannot_be_derived_for_a_bam_outside_the_data_directory(t
     """
     case = {"case_id": "stray", "bam": str(tmp_path / "elsewhere" / "example_a5c1_hg19_subset.bam")}
     with pytest.raises(ValueError, match="is not under the data directory"):
-        matrix.cram_fixture_for(case, tmp_path / "data", tmp_path / "data" / "cram")
+        cram_cases.cram_fixture_for(case, tmp_path / "data", tmp_path / "data" / "cram")

@@ -54,6 +54,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pysam
+
+from scripts.cram_fixture_selection import select_source_bams
+
 logger = logging.getLogger("cram_fixtures")
 
 #: Encoding options for the derived fixtures. See the module docstring for why this is
@@ -62,6 +66,7 @@ CRAM_WRITE_OPTIONS = ("no_ref=1",)
 
 #: Where derived fixtures are written, mirroring the source layout underneath.
 DEFAULT_FIXTURE_ROOT = Path("tests/data/cram")
+DEFAULT_DATA_CONFIG = Path("tests/test_data_config.json")
 
 
 class LossyConversionError(RuntimeError):
@@ -107,6 +112,21 @@ class Summary:
     @property
     def total_cram_bytes(self) -> int:
         return sum(f.cram_bytes for f in self.fixtures)
+
+
+@dataclass(frozen=True)
+class ReferenceDependentFixture:
+    """A reference-compressed CRAM and the local reference named by its header."""
+
+    cram: Path
+    reference: Path
+
+
+@dataclass(frozen=True)
+class PlacedFlag12Fixture:
+    """A CRAM whose placed flag-12 records make indexed extraction lossy."""
+
+    cram: Path
 
 
 def _run(argv: list[str]) -> str:
@@ -200,10 +220,35 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
     )
 
 
-def build_fixtures(samtools: str, data_root: Path, fixture_root: Path, limit: int | None = None) -> Summary:
-    """Derive a verified CRAM for every BAM in the cohort."""
+def build_fixtures(
+    samtools: str,
+    data_root: Path,
+    fixture_root: Path,
+    limit: int | None = None,
+    *,
+    data_config: Path = DEFAULT_DATA_CONFIG,
+    include_all: bool = False,
+) -> Summary:
+    """Derive verified CRAMs for declared BAMs, or every BAM when requested.
+
+    Args:
+        samtools: The samtools executable.
+        data_root: The source ``tests/data`` root.
+        fixture_root: Destination root for derived CRAMs.
+        limit: Optional smoke-test cap after selection.
+        data_config: Manifest defining the normal fixture set.
+        include_all: Derive every discovered source BAM for the golden cohort.
+
+    Returns:
+        The derivation summary.
+    """
     summary = Summary()
-    bams = discover_source_bams(data_root, fixture_root)
+    bams = select_source_bams(
+        discover_source_bams(data_root, fixture_root),
+        data_config=data_config,
+        data_root=data_root,
+        include_all=include_all,
+    )
     if limit is not None:
         bams = bams[:limit]
     for bam in bams:
@@ -217,6 +262,93 @@ def build_fixtures(samtools: str, data_root: Path, fixture_root: Path, limit: in
             logger.error("skipping %s: %s", bam, exc)
             summary.skipped.append((bam, str(exc)))
     return summary
+
+
+def _write_reference(samtools: str, path: Path, *, length: int) -> str:
+    """Write and index a deterministic single-contig FASTA, returning its sequence."""
+    sequence = "A" * length
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f">chr1\n{sequence}\n")
+    _run([samtools, "faidx", str(path)])
+    return sequence
+
+
+def _segment(name: str, *, flag: int, reference_id: int, reference_start: int) -> pysam.AlignedSegment:
+    """Build one short, deterministic alignment record for a purpose-built fixture."""
+    record = pysam.AlignedSegment()
+    record.query_name = name
+    record.flag = flag
+    record.reference_id = reference_id
+    record.reference_start = reference_start
+    record.mapping_quality = 60
+    record.cigarstring = "100M" if reference_id >= 0 else None
+    record.query_sequence = "A" * 100
+    record.query_qualities = pysam.qualitystring_to_array("I" * 100)
+    return record
+
+
+def build_reference_dependent_fixture(fixture_root: Path, samtools: str = "samtools") -> ReferenceDependentFixture:
+    """Create a CRAM that needs the copied local FASTA named by its ``UR:`` header.
+
+    The 10 kb/50-read fixture deliberately stores a reference-compressed payload. Tests
+    exercising a missing reference must rename or remove ``reference`` first: htslib may
+    otherwise satisfy a no-``-T`` decode from the header's still-resolvable ``UR:`` path.
+
+    Args:
+        fixture_root: Destination directory for the purpose-built fixture.
+        samtools: Samtools executable used to index the copied FASTA and CRAM.
+
+    Returns:
+        The CRAM and the copied reference which its header names.
+    """
+    root = fixture_root / "reference-dependent"
+    reference = root / "reference.fa"
+    sequence = _write_reference(samtools, reference, length=10_000)
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [
+            {"SN": "chr1", "LN": len(sequence), "M5": hashlib.md5(sequence.encode()).hexdigest(), "UR": str(reference)}
+        ],
+    }
+    cram = root / "reference-dependent.cram"
+    with pysam.AlignmentFile(str(cram), "wc", header=header, reference_filename=str(reference)) as output:
+        for number in range(50):
+            output.write(_segment(f"reference-{number}", flag=0, reference_id=0, reference_start=100 + number * 90))
+    _run([samtools, "index", str(cram)])
+    return ReferenceDependentFixture(cram=cram, reference=reference)
+
+
+def build_placed_flag12_fixture(fixture_root: Path, samtools: str = "samtools") -> PlacedFlag12Fixture:
+    """Create the 130-read fixture proving ``idxstats`` column four detects loss.
+
+    It holds 600 mapped records, 25 placed flag-12 pairs and 40 unplaced flag-12 pairs.
+    ``samtools view -f 12 <cram> '*'`` therefore sees 80 records while a full scan sees
+    130, and ``idxstats`` reports the missing 50 in its fourth ``chr1`` column.
+
+    Args:
+        fixture_root: Destination directory for the purpose-built fixture.
+        samtools: Samtools executable used for CRAM conversion and indexing.
+
+    Returns:
+        The indexed CRAM fixture.
+    """
+    root = fixture_root / "placed-flag12"
+    root.mkdir(parents=True, exist_ok=True)
+    bam = root / "placed-flag12.bam"
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 20_000}]}
+    with pysam.AlignmentFile(str(bam), "wb", header=header) as output:
+        for number in range(600):
+            output.write(_segment(f"mapped-{number}", flag=0, reference_id=0, reference_start=number * 20))
+        for number in range(50):
+            output.write(
+                _segment(f"placed-{number // 2}", flag=12, reference_id=0, reference_start=13_000 + number * 10)
+            )
+        for number in range(80):
+            output.write(_segment(f"unplaced-{number // 2}", flag=12, reference_id=-1, reference_start=-1))
+    cram = root / "placed-flag12.cram"
+    _run([samtools, "view", "-C", "--output-fmt-option", "no_ref=1", "-o", str(cram), str(bam)])
+    _run([samtools, "index", str(cram)])
+    return PlacedFlag12Fixture(cram=cram)
 
 
 def write_manifest(summary: Summary, manifest_path: Path) -> None:
@@ -236,9 +368,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-root", type=Path, default=Path("tests/data"))
     parser.add_argument("--fixture-root", type=Path, default=DEFAULT_FIXTURE_ROOT)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_FIXTURE_ROOT / "manifest.json")
+    parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--samtools", default="samtools")
     parser.add_argument("--limit", type=int, default=None, help="derive only the first N, for a smoke run")
+    parser.add_argument("--data-config", type=Path, default=DEFAULT_DATA_CONFIG)
+    parser.add_argument("--all", action="store_true", help="derive every discovered BAM, for the golden cohort")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
@@ -247,8 +381,17 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("no cohort at %s; run `make download-test-data` first", args.data_root)
         return 2
 
-    summary = build_fixtures(args.samtools, args.data_root, args.fixture_root, args.limit)
-    write_manifest(summary, args.manifest)
+    summary = build_fixtures(
+        args.samtools,
+        args.data_root,
+        args.fixture_root,
+        args.limit,
+        data_config=args.data_config,
+        include_all=args.all,
+    )
+    build_reference_dependent_fixture(args.fixture_root, args.samtools)
+    build_placed_flag12_fixture(args.fixture_root, args.samtools)
+    write_manifest(summary, args.manifest or args.fixture_root / "manifest.json")
 
     if not summary.fixtures:
         logger.error("no fixtures derived")

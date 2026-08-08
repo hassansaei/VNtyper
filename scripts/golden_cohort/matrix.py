@@ -49,7 +49,7 @@ Two properties of these cases are load-bearing rather than incidental:
 * a declared CRAM case whose fixture has not been derived is **skipped and logged**, never
   silently dropped from the contract. The count then comes out short, which is an ordinary
   :func:`check_matrix` mismatch and refuses the run unless ``--allow-matrix-drift`` is
-  passed. There is deliberately no "0 or 2 CRAM cases are both fine" rule: a run without
+  passed. There is deliberately no "0 or 4 CRAM cases are both fine" rule: a run without
   them is a reduced run and must not earn an attestation-grade verdict.
 
 What "derived" does and does not mean
@@ -64,7 +64,7 @@ it, and the gate page has done exactly that.
 Drift is fatal by default
 -------------------------
 :func:`check_matrix` compares the derivation against the per-group contract the gate page
-records - 50 base, 5 non-fast, 3 adVNTR, 2 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
+records - 50 base, 5 non-fast, 3 adVNTR, 4 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
 for runs 1-5, which is the matrix every result table on that page was measured over; the
 CRAM group is new and no run has taken it yet.) That check used to be advisory in every
 direction: ``build_matrix`` logged the
@@ -94,6 +94,7 @@ from pathlib import Path
 from typing import Any
 
 from golden_cohort.admissibility import COHORT_REQUIRED_ARTIFACTS, PIPELINE_REQUIRED_ARTIFACTS
+from golden_cohort.cram_cases import build_cram_cases
 
 logger = logging.getLogger(__name__)
 
@@ -163,22 +164,21 @@ PROBE_SPECS: tuple[tuple[str, str, str, str], ...] = (
 #:
 #: Runs 1-5 measured 20 hg19 / 9 hg38 / 8 GRCh38 / 7 GRCh37 / 7 hg19_ensembl /
 #: 7 hg38_ensembl, and run 2's after-side assembly-guard verdict counts are that same
-#: distribution. Adding the CRAM group moves two of them: ``b178_hg19_subset`` takes hg19
-#: from 20 to 21 and ``7a61_hg38_ensembl_bwa`` takes hg38_ensembl from 7 to 8. The gate
-#: page's ``x / 58`` result tables therefore describe the pre-CRAM matrix and are not
-#: restated here.
+#: distribution. Each selected CRAM fixture now runs through both lossless scan strategies,
+#: moving hg19 to 22 and hg38_ensembl to 9. The page's ``x / 58`` result tables therefore
+#: describe the pre-CRAM matrix and are not restated here.
 DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
-    "hg19": 21,
+    "hg19": 22,
     "hg38": 9,
     "GRCh38": 8,
     "GRCh37": 7,
     "hg19_ensembl": 7,
-    "hg38_ensembl": 8,
+    "hg38_ensembl": 9,
 }
 
-#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; the two CRAM
-#: cases take it to 60.
-DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 2, "total": 60, "probes": 3}
+#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; four CRAM
+#: cases cover indexed and stream extraction and take it to 62.
+DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 4, "total": 62, "probes": 3}
 
 
 def _short(sample: str) -> str:
@@ -352,110 +352,6 @@ def apply_policies(
         cases.append(case)
     log.append(f"adVNTR repeats: {len(advntr_ids)} at --advntr-max-coverage {advntr_max_coverage}")
 
-    return cases, log
-
-
-def cram_fixture_for(case: dict[str, Any], data_dir: Path, cram_root: Path) -> Path:
-    """Where ``make_cram_fixtures.py`` wrote the CRAM derived from this case's BAM.
-
-    The fixture tree mirrors the source layout with ``.bam`` replaced by ``.cram``, so this
-    reproduces ``derive_cram``'s ``(fixture_root / relative).with_suffix(".cram")`` rather
-    than declaring a second copy of the path that could disagree with it.
-
-    Args:
-        case: A derived base case, whose ``bam`` is an absolute path under ``data_dir``.
-        data_dir: The ``tests/data`` directory the case was derived from.
-        cram_root: The fixture root, normally ``data_dir / "cram"``.
-
-    Returns:
-        Path: The fixture path, which may or may not exist.
-
-    Raises:
-        ValueError: If the case's BAM is not under ``data_dir``, which would mean the case
-            did not come from this derivation and its fixture path cannot be computed.
-    """
-    source = Path(case["bam"])
-    try:
-        relative = source.relative_to(data_dir.resolve())
-    except ValueError:
-        msg = (
-            f"Cannot derive a CRAM fixture path for {case['case_id']}: its BAM {source} is not under "
-            f"the data directory {data_dir}. The fixture tree mirrors the data directory, so a BAM "
-            "from outside it has no mirrored position."
-        )
-        logger.error(msg)
-        raise ValueError(msg) from None
-    return (cram_root / relative).with_suffix(".cram")
-
-
-def build_cram_cases(
-    base_cases: list[dict[str, Any]],
-    *,
-    cram_ids: tuple[str, ...],
-    data_dir: Path,
-    cram_root: Path,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Repeat the declared base cases from their derived CRAM fixtures.
-
-    Each case carries ``alignment_kind="cram"`` and the fixture path under ``cram``, which
-    is what :func:`golden_cohort.runner.pipeline_argv` switches on to emit ``--cram``
-    instead of ``--bam``. The source BAM is kept as ``source_bam`` for provenance, and
-    ``bam`` is removed so that nothing can read it and quietly run the BAM instead.
-
-    Every CRAM case is non-fast on purpose: ``--fast-mode`` skips the unmapped-read
-    extraction, and the CRAM-specific extraction is the code under test.
-
-    A declared case whose fixture is missing is **skipped and logged at error level**. The
-    group then comes out short of :data:`DOCUMENTED_TOTALS`, which :func:`check_matrix`
-    reports as a mismatch and ``build_matrix`` refuses in strict mode - so "the fixtures
-    were never derived" fails the run rather than silently shrinking the matrix.
-
-    Args:
-        base_cases: The derived BAM-by-assembly cases.
-        cram_ids: Which base cases repeat from CRAM.
-        data_dir: The ``tests/data`` directory, used to mirror each BAM's relative path.
-        cram_root: The fixture root, normally ``data_dir / "cram"``.
-
-    Returns:
-        tuple[list[dict], list[str]]: The CRAM cases, and the derivation log lines.
-
-    Raises:
-        ValueError: If a declared id is not in the derived set, via :func:`_resolve`.
-    """
-    by_id = {case["case_id"]: case for case in base_cases}
-    cases: list[dict[str, Any]] = []
-    log: list[str] = []
-    missing: list[str] = []
-
-    for base in _resolve(cram_ids, by_id, "CRAM"):
-        fixture = cram_fixture_for(base, data_dir, cram_root)
-        if not fixture.is_file():
-            missing.append(base["case_id"])
-            log.append(f"skipped (no derived CRAM fixture at {fixture}): {base['case_id']}")
-            logger.error(
-                f"matrix: no CRAM fixture for {base['case_id']} at {fixture}. Run `make cram-fixtures` to "
-                "derive it. This run's CRAM group is short, which the matrix check reports as drift."
-            )
-            continue
-        case = dict(base)
-        case.pop("bam", None)
-        case.update(
-            {
-                "case_id": f"{_short(base['sample'])}_{base['assembly']}_cram",
-                "group": "cram",
-                "alignment_kind": "cram",
-                "cram": str(fixture),
-                "source_bam": base["bam"],
-                # The CRAM unmapped-read extraction only runs when fast mode is off.
-                "fast_mode": False,
-                "repeat_of": base["case_id"],
-            }
-        )
-        cases.append(case)
-
-    log.append(f"CRAM repeats: {len(cases)}/{len(cram_ids)} from {cram_root}")
-    if missing:
-        log.append(f"CRAM fixtures missing for: {', '.join(missing)}")
     return cases, log
 
 
@@ -698,6 +594,7 @@ def build_matrix(
         cram_ids=cram_ids,
         data_dir=data_dir,
         cram_root=resolved_cram_root,
+        resolve=_resolve,
     )
     cases.extend(cram_cases)
     log.extend(cram_log)

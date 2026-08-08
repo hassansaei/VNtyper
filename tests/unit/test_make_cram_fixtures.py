@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
+import pysam
 import pytest
 
+import scripts.make_cram_fixtures as cram_fixtures
 from scripts.make_cram_fixtures import (
     CRAM_WRITE_OPTIONS,
     Fixture,
@@ -24,6 +27,8 @@ from scripts.make_cram_fixtures import (
 )
 
 pytestmark = pytest.mark.unit
+
+pysam_any: Any = pysam
 
 
 def _touch(path: Path, content: str = "x") -> Path:
@@ -164,3 +169,94 @@ def test_the_manifest_records_what_was_derived_and_what_was_skipped(tmp_path: Pa
     # A skipped BAM must stay visible: a silently shorter fixture set would weaken the
     # equivalence claim without anyone noticing.
     assert payload["skipped"] == [{"bam": "tests/data/broken.bam", "reason": "truncated"}]
+
+
+def test_the_default_deriver_uses_only_bams_declared_in_the_data_config(tmp_path: Path, monkeypatch) -> None:
+    """An incidental BAM must not silently enlarge the normal fixture set."""
+    data_root = tmp_path / "data"
+    declared = _touch(data_root / "declared.bam")
+    incidental = _touch(data_root / "incidental.bam")
+    config = tmp_path / "test_data_config.json"
+    config.write_text(json.dumps({"file_resources": [{"local_path": "tests/data", "filename": declared.name}]}))
+    derived: list[Path] = []
+    monkeypatch.setattr(
+        "scripts.make_cram_fixtures.derive_cram",
+        lambda _s, bam, _d, _f: derived.append(bam),
+    )
+
+    cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config, include_all=False)
+
+    assert derived == [declared]
+    assert incidental not in derived
+
+
+def test_the_all_switch_derives_every_discovered_bam(tmp_path: Path, monkeypatch) -> None:
+    """The gate can intentionally request all cohort BAMs, including new discoveries."""
+    data_root = tmp_path / "data"
+    declared = _touch(data_root / "declared.bam")
+    incidental = _touch(data_root / "incidental.bam")
+    config = tmp_path / "test_data_config.json"
+    config.write_text(json.dumps({"file_resources": [{"local_path": "tests/data", "filename": declared.name}]}))
+    derived: list[Path] = []
+    monkeypatch.setattr(
+        "scripts.make_cram_fixtures.derive_cram",
+        lambda _s, bam, _d, _f: derived.append(bam),
+    )
+
+    cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config, include_all=True)
+
+    assert derived == [declared, incidental]
+
+
+def test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed(tmp_path: Path) -> None:
+    """A missing-reference test is valid only after its header ``UR:`` target is gone."""
+    fixture = cram_fixtures.build_reference_dependent_fixture(tmp_path)
+    with pysam.AlignmentFile(str(fixture.cram), "rc", reference_filename=str(fixture.reference)) as alignment:
+        sequence = alignment.header.to_dict()["SQ"][0]
+
+    assert sequence["M5"]
+    assert Path(sequence["UR"]) == fixture.reference
+    missing = fixture.reference.with_name("reference-is-missing.fa")
+    fixture.reference.rename(missing)
+    with pytest.raises(pysam.SamtoolsError):
+        pysam_any.view("-h", str(fixture.cram))
+
+
+def test_placed_flag12_fixture_proves_idxstats_column_four_requires_the_stream_scan(tmp_path: Path) -> None:
+    """The indexed ``'*'`` query loses precisely the placed flag-12 records."""
+    fixture = cram_fixtures.build_placed_flag12_fixture(tmp_path)
+
+    assert int(pysam_any.view("-c", "-f", "12", str(fixture.cram))) == 130
+    assert int(pysam_any.view("-c", "-f", "12", str(fixture.cram), "*")) == 80
+    fields = pysam_any.idxstats(str(fixture.cram)).splitlines()[0].split("\t")
+    assert fields == ["chr1", "20000", "600", "50"]
+
+
+def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_path: Path, monkeypatch) -> None:
+    """``make cram-fixtures`` must make the #209 and A-SCAN-1 fixtures available."""
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    calls: list[Path] = []
+    selections: list[bool] = []
+
+    def fake_build(*_args, **kwargs) -> Summary:
+        selections.append(kwargs["include_all"])
+        return Summary()
+
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", fake_build)
+    monkeypatch.setattr(
+        "scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda root, _samtools: calls.append(root)
+    )
+    monkeypatch.setattr(
+        "scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda root, _samtools: calls.append(root)
+    )
+
+    exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
+    all_exit_code = cram_fixtures.main(
+        ["--data-root", str(data_root), "--fixture-root", str(tmp_path / "all-cram"), "--all"]
+    )
+
+    assert exit_code == 1
+    assert all_exit_code == 1
+    assert selections == [False, True]
+    assert calls == [tmp_path / "cram", tmp_path / "cram", tmp_path / "all-cram", tmp_path / "all-cram"]

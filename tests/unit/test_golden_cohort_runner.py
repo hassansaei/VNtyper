@@ -218,6 +218,54 @@ def test_a_cram_case_is_launched_without_fast_mode(tmp_path: Path) -> None:
     assert "--fast-mode" not in _argv(case, tmp_path)
 
 
+def test_a_cram_case_launches_with_a_complete_per_case_scan_config(tmp_path: Path) -> None:
+    """The case's scan policy must reach VNtyper through replacement-safe config input."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}, "tools": {"samtools": "samtools"}}))
+    case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
+    del case["bam"]
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8, config_path=config_path)
+
+    assert effective_mode == "indexed"
+    assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == "indexed"
+    assert argv[argv.index("--config-path") + 1] == str(config_path)
+
+
+@pytest.mark.parametrize("override", ["auto", "indexed", "stream"])
+def test_the_harness_environment_override_beats_a_cram_cases_mode(tmp_path: Path, monkeypatch, override: str) -> None:
+    """Wave 3 can compare one override mode across all CRAM cases without touching product config."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case = _case("b178_stream_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="stream")
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", override)
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+    assert effective_mode == override
+    assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == override
+
+
+def test_an_invalid_harness_scan_override_is_refused_before_launch(tmp_path: Path, monkeypatch) -> None:
+    """A typo must not become a silently auto-selected scan."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case = _case("b178_stream_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="stream")
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", "lossy")
+
+    with pytest.raises(ValueError, match="VNTYPER_CRAM_UNMAPPED_SCAN"):
+        runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+
 def test_an_unrecognised_alignment_kind_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     """Falling back to ``--bam`` would launch a different input from the declared one.
 
