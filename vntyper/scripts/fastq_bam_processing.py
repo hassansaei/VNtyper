@@ -9,7 +9,10 @@ import subprocess
 from pathlib import Path
 
 from vntyper.scripts.alignment_contract import AlignmentPlan
-from vntyper.scripts.alignment_target_io import validate_alignment_conversion_destinations
+from vntyper.scripts.alignment_target_io import (
+    remove_validated_slice_indexes,
+    validate_alignment_conversion_destinations,
+)
 from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
     build_cram_unmapped_filter_command,
@@ -115,6 +118,7 @@ def process_bam_to_fastq(
         RuntimeError: If any step in the processing fails.
     """
     validate_alignment_conversion_destinations(output, output_name, plan)
+    remove_validated_slice_indexes(output, output_name)
     samtools_path = config["tools"]["samtools"]
 
     if bed_file:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import os
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vntyper.scripts import fastq_bam_processing
-from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_contract import AlignmentPlan, index_candidate_names
 
 pytestmark = pytest.mark.unit
 
@@ -369,3 +370,70 @@ def test_single_link_regular_derived_artifacts_remain_replaceable(tmp_path: Path
     commands, _ = _run_conversion(tmp_path, plan, fast_mode=True)
 
     assert len(commands) == 2
+
+
+@pytest.mark.parametrize(
+    "stale_index_name",
+    [
+        "output_sliced.bam.bai",
+        "output_sliced.bai",
+        "output_sliced.bam.csi",
+        "output_sliced.csi",
+    ],
+)
+def test_successful_rerun_removes_every_stale_slice_index_before_regenerating_the_default_bai(
+    tmp_path: Path,
+    stale_index_name: str,
+) -> None:
+    plan = _plan(tmp_path, "bam")
+    run_dir = tmp_path / "run"
+    sliced_bam = run_dir / "output_sliced.bam"
+    index_candidates = tuple(Path(path) for path in index_candidate_names(str(sliced_bam), "bam"))
+    stale_index = run_dir / stale_index_name
+    stale_index.write_bytes(b"prior-patient-index")
+    stale_inode = stale_index.stat().st_ino
+    commands: list[str] = []
+
+    def regenerate_default_index(command, log_file, critical=False, cwd=None):
+        commands.append(command)
+        if len(commands) == 1:
+            assert all(not os.path.lexists(candidate) for candidate in index_candidates)
+            sliced_bam.write_bytes(b"fresh-slice")
+            index_candidates[0].write_bytes(b"fresh-default-bai")
+        return True
+
+    with (
+        patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
+        patch.object(fastq_bam_processing, "run_command", regenerate_default_index),
+    ):
+        fastq_bam_processing.process_bam_to_fastq(
+            output=run_dir,
+            output_name="output",
+            threads=4,
+            config=CONFIG,
+            fast_mode=True,
+            plan=plan,
+        )
+
+    assert len(commands) == 2
+    assert index_candidates[0].read_bytes() == b"fresh-default-bai"
+    if stale_index == index_candidates[0]:
+        assert index_candidates[0].stat().st_ino != stale_inode
+    assert all(not candidate.exists() for candidate in index_candidates[1:])
+
+
+def test_unsafe_fastq_destination_leaves_validated_stale_csi_untouched(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    run_dir = tmp_path / "run"
+    stale_csi = run_dir / "output_sliced.bam.csi"
+    stale_csi.write_bytes(b"prior-patient-csi")
+    stale_inode = stale_csi.stat().st_ino
+    unsafe_fastq = run_dir / "output_R1.fastq.gz"
+    unsafe_fastq.symlink_to(plan.input_path)
+    before = hashlib.sha256(stale_csi.read_bytes()).hexdigest()
+
+    _assert_rejected_before_conversion_work(tmp_path, plan, fast_mode=True)
+
+    assert stale_csi.stat().st_ino == stale_inode
+    assert hashlib.sha256(stale_csi.read_bytes()).hexdigest() == before
+    assert unsafe_fastq.is_symlink()

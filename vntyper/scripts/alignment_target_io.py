@@ -113,6 +113,32 @@ def validate_alignment_conversion_destinations(
         _validate_owned_destination(destination, protected_paths)
 
 
+def remove_validated_slice_indexes(output: str | Path, output_name: str) -> None:
+    """Remove stale slice indexes only after destination validation succeeds.
+
+    All candidate entries are rechecked before the first unlink so a concurrent
+    unsafe replacement cannot cause partial cleanup. Paths are derived directly
+    beneath the conversion output directory.
+
+    Args:
+        output: Conversion-stage output directory.
+        output_name: Base name used for the sliced BAM.
+
+    Raises:
+        ValueError: If a candidate escaped the output or became unsafe.
+    """
+    output_root = _absolute(output)
+    sliced_bam = output_root / f"{output_name}_sliced.bam"
+    candidates = tuple(Path(candidate) for candidate in index_candidate_names(str(sliced_bam), "bam"))
+    for candidate in candidates:
+        if _absolute(candidate).parent != output_root:
+            _reject(f"Slice index cleanup escaped the conversion output: {candidate}")
+        _validate_owned_destination(candidate, ())
+    for candidate in candidates:
+        if os.path.lexists(candidate):
+            candidate.unlink()
+
+
 def validate_alignment_output_root(
     output_root: str | Path,
     input_path: str | Path,
