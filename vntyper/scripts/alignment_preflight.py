@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import secrets
 import subprocess
 import tempfile
 from collections.abc import Iterable
@@ -23,6 +22,13 @@ from vntyper.scripts.alignment_contract import (
     unresolvable_reference_message,
 )
 from vntyper.scripts.alignment_index import resolve_any_index, resolve_bam_index
+from vntyper.scripts.alignment_index_provenance import (
+    _atomic_symlink,
+    _remove_stale_view_indexes,
+    generated_index_is_owned,
+    remove_generated_index_provenance,
+    write_generated_index_provenance,
+)
 from vntyper.scripts.command_builders import (
     build_cram_reference_probe_command,
     build_samtools_idxstats_command,
@@ -93,29 +99,6 @@ def _validate_log_entry(path: Path, protected_paths: Iterable[str | Path]) -> No
     if os.path.lexists(path) and path.is_dir() and not path.is_symlink():
         message = f"Log path has a wrong type and will not be replaced: {path}"
         _reject(message)
-
-
-def _atomic_symlink(target: str | Path, link_path: str | Path) -> None:
-    target_absolute = os.path.abspath(target)
-    destination = Path(link_path)
-    if destination.is_symlink() and _same_file(destination, target_absolute):
-        return
-    for _ in range(100):
-        temporary = destination.parent / f".{destination.name}.{secrets.token_hex(8)}.tmp"
-        try:
-            os.symlink(target_absolute, temporary)
-        except FileExistsError:
-            continue
-        try:
-            os.replace(temporary, destination)
-        except OSError:
-            with suppress(OSError):
-                os.unlink(temporary)
-            raise
-        return
-    message = f"Unable to allocate a temporary symlink beside {destination}"
-    logger.error(message)
-    raise RuntimeError(message)
 
 
 def _safe_output_paths(output_dir: str, output_name: str, file_format: str) -> tuple[Path, Path]:
@@ -206,12 +189,6 @@ def capture_command(
     return True, output
 
 
-def _remove_stale_view_indexes(view_path: str, file_format: str, keep: str | None) -> None:
-    for candidate in index_candidate_names(view_path, file_format):
-        if candidate != keep and os.path.lexists(candidate):
-            os.unlink(candidate)
-
-
 def build_alignment_view(
     in_path: str,
     output_dir: str,
@@ -253,11 +230,14 @@ def build_alignment_view(
     view_index_candidates = tuple(Path(candidate) for candidate in index_candidate_names(str(view_path), file_format))
     protected_paths: tuple[str | Path, ...] = (in_path, existing_index) if existing_index is not None else (in_path,)
     _validate_symlink_entry(view_path, (in_path,))
+    owned_indexes: set[Path] = set()
     for candidate in view_index_candidates:
+        if generated_index_is_owned(candidate, protected_paths):
+            owned_indexes.add(candidate)
         _validate_symlink_entry(
             candidate,
             protected_paths,
-            allow_regular=existing_index is None and candidate == view_index,
+            allow_regular=candidate in owned_indexes,
         )
     log_file = output / f"{output_name}_index.log"
     if existing_index is None:
@@ -265,10 +245,12 @@ def build_alignment_view(
     output.mkdir(parents=True, exist_ok=True)
     _atomic_symlink(in_path, view_path)
     if existing_index is not None:
-        _remove_stale_view_indexes(str(view_path), file_format, str(view_index))
+        _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
         _atomic_symlink(existing_index, view_index)
+        if view_index in owned_indexes:
+            remove_generated_index_provenance(view_index, protected_paths)
         return str(view_path), str(view_index)
-    _remove_stale_view_indexes(str(view_path), file_format, str(view_index))
+    _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
     temporary_index: Path | None = None
     try:
@@ -290,6 +272,16 @@ def build_alignment_view(
             raise OSError("samtools did not create a non-empty index")
         os.replace(temporary_index, view_index)
         temporary_index = None
+        try:
+            write_generated_index_provenance(
+                view_index,
+                protected_paths,
+                replace_owned=view_index in owned_indexes,
+            )
+        except ValueError:
+            with suppress(OSError):
+                os.unlink(view_index)
+            raise
     except OSError as error:
         message = missing_index_message(in_path, file_format, input_index_candidates)
         logger.error(message)
