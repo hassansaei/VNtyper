@@ -136,18 +136,58 @@ two-contig CRAM, slicing a chr1 region with `-T chr1only.fa` and `REF_PATH` pinn
 nonexistent local path produced results identical to `-T full.fa`: exit 0, 135 reads, all
 on chr1.
 
-This matters because once §3.5's change lands, chr1 is the only sequence a VNtyper run
-ever asks the CRAM decoder for — so the reference VNtyper already ships becomes a viable
-candidate rather than a dead end.
+That result holds only for a slice **without** `-P`. See §3.7, which overturns the
+optimistic reading of it.
 
-**Not yet settled, and deliberately so:** whether `samtools view -P` (`--fetch-pairs`,
-which the slice builder already passes) retrieves a mate located on another contig, which
-would make a chr1-only reference insufficient for some real CRAMs. The synthetic fixture
-built to test this was not correctly coordinate-sorted, so its index dropped the
-cross-contig pair and the result is void. **This is resolved by design rather than by
-measurement** — see §4.2: the reference is chosen by *proving* it decodes, so a candidate
-that cannot serve the run is rejected at submission whatever the reason. The measurement
-is still owed as a test (§7, T-209-4).
+### 3.7 `-P` fetches cross-contig mates, so a chr1-only reference is not sufficient
+
+Re-run on a correctly coordinate-sorted two-contig CRAM containing one deliberate
+cross-contig pair (`x1` on chr1:5000, mate on chr2:7000), with `REF_PATH` pinned to a
+nonexistent local path and the header's `UR:` target removed so no fallback can
+contaminate the result:
+
+| Query | Reference | Exit | Reads | Contigs returned |
+| --- | --- | --- | --- | --- |
+| `view -P … chr1:4900-5100` | full | 0 | 12 | chr1, **chr2** |
+| `view -P … chr1:4900-5100` | chr1-only | **1** | 11 (partial, then aborts) | chr1 |
+| `view … chr1:4900-5100` (no `-P`) | chr1-only | 0 | 9 | chr1 |
+
+`[E::cram_decode_slice] Unable to fetch reference chr2:1-12070`
+
+**`samtools view -P` — which `build_samtools_slice_command` already passes — chases mates
+onto other contigs and therefore needs those contigs' reference.** A chr1-only FASTA is
+sufficient only for a CRAM whose reads in the MUC1 region have no cross-contig mate, which
+is a property of the *sample*, not of the pipeline. §3.6's conclusion is withdrawn.
+
+Two consequences, both load-bearing:
+
+1. **The probe must have the same shape as the real slice.** A probe that omits `-P`
+   passes with the chr1-only reference and the real slice then fails mid-run — the exact
+   "fix that masks rather than removes a failure mode" this milestone exists to avoid. The
+   probe therefore uses the same flags and the same region as the slice it authorises.
+2. **The shipped chr1 FASTA is a last-resort candidate, not the answer.** It is kept in
+   the order because it succeeds for many samples, but the run logs which candidate won,
+   and warns when it is a reference that does not cover every contig in the CRAM header.
+
+### 3.8 htslib will not silently return wrong bases
+
+Three failure shapes were measured, and none of them is silent:
+
+| Situation | Result |
+| --- | --- |
+| Reference **absent** entirely | exit 1, `Unable to fetch reference`, 0 reads |
+| Reference present but **contig missing** from it | exit 1, `Unable to fetch reference <contig>` |
+| Reference present, contig present, **wrong sequence** (same name, same length) | exit 1, `MD5 checksum reference mismatch`, prints CRAM/Ref/@SQ digests, 0 reads |
+
+htslib verifies the per-slice `M5` before it emits anything, so a mismatched reference
+cannot produce wrong bases. **This is what makes "prove it by decoding" a sound design**:
+a probe that exits 0 has not merely produced output, it has produced output htslib
+checksum-verified against the CRAM's own digest.
+
+The partial-output case is worth naming: the failing `-P` run wrote 11 of 12 reads before
+aborting. VNtyper is safe there only because `run_command(..., critical=True)` raises on
+the non-zero exit and the partial file is never consumed. That is an existing invariant
+this milestone must not weaken.
 
 ## 4. Design
 
@@ -184,9 +224,22 @@ Candidates are tried in this order, and the first one that **decodes a probe sli
 3. config `reference_data.bwa_reference_<assembly>` — the shipped chr1 FASTA
 4. the header's `UR:` field, if it names a readable file
 
+**The probe is the real slice command with `-c` substituted for `-b -o`** — same `-P`,
+same region, same reference fragment. Nothing else is an authorisation: §3.7 measured a
+`-P`-less probe passing on a reference the real slice then failed on. The probe region
+defaults to the run's own `bam_region` for the same reason.
+
+Candidate 3 is retained but demoted in the logs: when the winner does not cover every
+contig in the CRAM header, the run logs a warning naming the uncovered contigs, because
+its success is a property of this sample's mate placement rather than of the pipeline.
+
 The winner is passed as `-T` to **every** CRAM samtools invocation for the rest of the
 run. If no candidate decodes, the run is rejected **at submission** with a message naming
 the contig, its `M5`, and every candidate tried with the reason each failed.
+
+Soundness rests on §3.8: htslib verifies each slice's `M5` against the reference before
+emitting a record, so "the probe exited 0" means "htslib checksum-verified this reference
+against this CRAM", not merely "some bytes came out".
 
 This is deliberately empirical, and that is what makes it correct across every assembly
 and naming convention VNtyper supports. A CRAM whose chr1 is called `1` or
@@ -394,7 +447,8 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-209-1 | A reference-dependent CRAM with its reference removed is rejected **before** any stage runs, with a message naming the contig, its `M5` and every candidate tried. |
 | A-209-2 | The same CRAM with `--reference-fasta` pointed at its reference runs to completion. |
 | A-209-3 | A `no_ref=1` CRAM runs to completion with no reference supplied. |
-| T-209-4 | A correctly coordinate-sorted two-contig CRAM settles whether `-P` fetches cross-contig mates; the answer is recorded here and the candidate order in §4.2 adjusted if it is "yes". |
+| A-209-4 | **Settled (§3.7): `-P` does fetch cross-contig mates.** The criterion is now that the reference probe uses the *same* flags and region as the slice it authorises — a `-P`-less probe must fail this test, since it passes on a chr1-only reference the real slice then rejects. |
+| A-209-5 | A CRAM whose winning reference does not cover every header contig produces a logged warning naming the uncovered contigs. |
 | A-178-1 | With `REF_PATH` pointed at an unresponsive endpoint, a CRAM run completes or fails; it does not block. |
 | A-178-2 | Indexed and stream unmapped scans produce identical genotypes across the golden cohort. |
 | A-165-1 | The issue's 93-contig header returns `ucsc`; a genuinely ambiguous header still returns `unknown`. |
