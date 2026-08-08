@@ -10,6 +10,14 @@ edit_uri: edit/main/docs/
 
 copyright: Copyright &copy; 2023–2026 Hassan Saei, Bernt Popp
 
+# Implementation specs and plans live beside the code they describe, but they are
+# working documents for contributors -- not part of the published site. Excluding them
+# here keeps `mkdocs build --strict` honest about the pages that *are* published, and
+# keeps the `macros` plugin from Jinja-templating prose that legitimately contains
+# `{#...}` (a GitHub issue list such as `{#209, #178}` is a Jinja comment to it).
+exclude_docs: |
+  plans/
+
 theme:
   name: material
   custom_dir: docs/overrides
