@@ -33,6 +33,29 @@ class TestParse:
     def test_anything_malformed_is_rejected_rather_than_guessed(self, bad):
         assert parse_idxstats(bad) is None
 
+    @pytest.mark.parametrize(
+        ("column", "spelling"),
+        [
+            (1, " 20000"),
+            (2, " 600"),
+            (3, " 50"),
+            (1, "20000 "),
+            (2, "600 "),
+            (3, "50 "),
+            (1, "+20000"),
+            (2, "+600"),
+            (3, "+50"),
+            (1, "-0"),
+            (2, "-0"),
+            (3, "-0"),
+        ],
+    )
+    def test_numeric_fields_must_be_ascii_decimal_tokens(self, column, spelling):
+        fields = ["chr1", "20000", "600", "50"]
+        fields[column] = spelling
+        text = "\t".join(fields) + "\n*\t0\t0\t80\n"
+        assert parse_idxstats(text) is None
+
 
 class TestChooseScan:
     def test_auto_picks_indexed_only_when_nothing_would_be_lost(self):
@@ -54,3 +77,14 @@ class TestChooseScan:
 
     def test_stream_is_always_allowed_because_it_is_never_lossy(self):
         assert choose_scan("stream", GOOD, exit_ok=True)[0] == SCAN_STREAM
+
+    def test_an_unknown_scan_mode_is_rejected(self):
+        with pytest.raises(ValueError, match="bogus"):
+            choose_scan("bogus", CLEAN, exit_ok=True)
+
+    def test_auto_falls_back_to_stream_when_idxstats_output_is_missing(self):
+        assert choose_scan("auto", None, exit_ok=True)[0] == SCAN_STREAM
+
+    @pytest.mark.parametrize("idxstats_text", [None, "garbage"])
+    def test_forced_indexed_falls_back_to_stream_without_valid_evidence(self, idxstats_text):
+        assert choose_scan("indexed", idxstats_text, exit_ok=True)[0] == SCAN_STREAM

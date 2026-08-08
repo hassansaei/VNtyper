@@ -30,13 +30,10 @@ def parse_idxstats(text: str) -> tuple[int, int] | None:
         fields = line.split("\t")
         if len(fields) != 4:
             return None
+        if not all(field.isascii() and field.isdecimal() for field in fields[1:]):
+            return None
 
-        try:
-            counts = tuple(int(field) for field in fields[1:])
-        except ValueError:
-            return None
-        if any(count < 0 for count in counts):
-            return None
+        counts = tuple(int(field) for field in fields[1:])
 
         if fields[0] == "*":
             star_rows += 1
@@ -63,8 +60,13 @@ def choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool) -> tu
         The selected scan mode and a human-readable reason.
 
     Raises:
-        ValueError: If indexed scanning was forced despite placed unmapped reads.
+        ValueError: If the configured mode is invalid or indexed scanning was forced despite
+            placed unmapped reads.
     """
+    if configured not in {"auto", SCAN_INDEXED, SCAN_STREAM}:
+        message = f"invalid unmapped scan mode: {configured}"
+        logger.error(message)
+        raise ValueError(message)
     if configured == SCAN_STREAM:
         return SCAN_STREAM, "stream scan configured"
     if not exit_ok:
