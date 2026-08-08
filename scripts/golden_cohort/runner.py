@@ -147,7 +147,7 @@ def materialize_case_config(tree: Path, case: dict[str, Any], config_dir: Path) 
 
     source = tree / "vntyper" / "config.json"
     payload = json.loads(source.read_text(encoding="utf-8"))
-    cram_config = payload.get("cram")
+    cram_config = payload.setdefault("cram", {})
     if not isinstance(cram_config, dict):
         msg = f"The complete config at {source} has no object-valued 'cram' section"
         logger.error(msg)

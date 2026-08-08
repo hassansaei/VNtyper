@@ -235,6 +235,21 @@ def test_a_cram_case_launches_with_a_complete_per_case_scan_config(tmp_path: Pat
     assert argv[argv.index("--config-path") + 1] == str(config_path)
 
 
+def test_a_cram_case_adds_a_missing_cram_section_to_its_complete_config_copy(tmp_path: Path) -> None:
+    """Older target trees must still receive a replacement-safe complete config."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"tools": {"samtools": "samtools"}}))
+    case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
+    del case["bam"]
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+    assert effective_mode == "indexed"
+    assert json.loads(config_path.read_text())["cram"] == {"unmapped_scan": "indexed"}
+
+
 @pytest.mark.parametrize("override", ["auto", "indexed", "stream"])
 def test_the_harness_environment_override_beats_a_cram_cases_mode(tmp_path: Path, monkeypatch, override: str) -> None:
     """Wave 3 can compare one override mode across all CRAM cases without touching product config."""

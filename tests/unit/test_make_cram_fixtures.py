@@ -9,6 +9,9 @@ against the real cohort, not something a unit test should re-litigate on every r
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,7 @@ from scripts.make_cram_fixtures import (
 pytestmark = pytest.mark.unit
 
 pysam_any: Any = pysam
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _touch(path: Path, content: str = "x") -> Path:
@@ -77,6 +81,21 @@ def test_discovery_finds_every_bam_and_excludes_the_fixture_root(tmp_path: Path)
     found = discover_source_bams(data_root, fixture_root)
 
     assert found == [data_root / "a.bam", data_root / "remapped" / "b.bam"]
+
+
+def test_the_direct_script_entry_point_loads_its_sibling_selection_module_without_pythonpath(tmp_path: Path) -> None:
+    """A direct invocation cannot rely on importing the repository's ``scripts`` package."""
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "make_cram_fixtures.py"), "--help"],
+        cwd=REPO_ROOT,
+        env={"PATH": os.defpath},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--all" in result.stdout
 
 
 def test_a_lossy_conversion_raises_rather_than_being_recorded(tmp_path: Path, monkeypatch) -> None:
@@ -208,8 +227,71 @@ def test_the_all_switch_derives_every_discovered_bam(tmp_path: Path, monkeypatch
     assert derived == [declared, incidental]
 
 
-def test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed(tmp_path: Path) -> None:
+def test_a_known_task9_derived_fixture_declaration_is_validated_without_changing_cram_selection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Task9's schema is recognized, but its single-end builder stays independently owned."""
+    data_root = tmp_path / "data"
+    declared = _touch(data_root / "declared.bam")
+    config = tmp_path / "test_data_config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "file_resources": [{"local_path": "tests/data", "filename": declared.name}],
+                "derived_fixtures": [
+                    {
+                        "name": "declared-single-end",
+                        "kind": "single_end_bam",
+                        "source_bam": "tests/data/declared.bam",
+                        "output_bam": "tests/data/derived/declared-single-end.bam",
+                    }
+                ],
+            }
+        )
+    )
+    derived: list[Path] = []
+    monkeypatch.setattr("scripts.make_cram_fixtures.derive_cram", lambda _s, bam, _d, _f: derived.append(bam))
+
+    cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config)
+
+    assert derived == [declared]
+
+
+def test_an_unknown_declared_fixture_kind_is_refused_instead_of_being_ignored(tmp_path: Path) -> None:
+    """A new derived-fixture kind must get an explicit dispatch decision."""
+    data_root = tmp_path / "data"
+    config = tmp_path / "test_data_config.json"
+    config.write_text(json.dumps({"derived_fixtures": [{"name": "unknown", "kind": "new_kind"}]}))
+
+    with pytest.raises(ValueError, match="unsupported derived fixture kind 'new_kind'"):
+        cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config)
+
+
+def test_all_mode_still_refuses_an_unknown_declared_fixture_kind(tmp_path: Path) -> None:
+    """Selection breadth must not bypass declaration validation."""
+    data_root = tmp_path / "data"
+    config = tmp_path / "test_data_config.json"
+    config.write_text(json.dumps({"derived_fixtures": [{"name": "unknown", "kind": "new_kind"}]}))
+
+    with pytest.raises(ValueError, match="unsupported derived fixture kind 'new_kind'"):
+        cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config, include_all=True)
+
+
+def test_a_malformed_known_derived_fixture_declaration_is_refused(tmp_path: Path) -> None:
+    """Recognizing Task9's kind includes checking the fields its later dispatcher needs."""
+    data_root = tmp_path / "data"
+    config = tmp_path / "test_data_config.json"
+    config.write_text(
+        json.dumps({"derived_fixtures": [{"name": "single", "kind": "single_end_bam", "source_bam": "x.bam"}]})
+    )
+
+    with pytest.raises(ValueError, match="single_end_bam.*output_bam"):
+        cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config)
+
+
+def test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed(tmp_path: Path, monkeypatch) -> None:
     """A missing-reference test is valid only after its header ``UR:`` target is gone."""
+    monkeypatch.setenv("PATH", str(tmp_path / "no-samtools"))
     fixture = cram_fixtures.build_reference_dependent_fixture(tmp_path)
     with pysam.AlignmentFile(str(fixture.cram), "rc", reference_filename=str(fixture.reference)) as alignment:
         sequence = alignment.header.to_dict()["SQ"][0]
@@ -222,8 +304,11 @@ def test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed(t
         pysam_any.view("-h", str(fixture.cram))
 
 
-def test_placed_flag12_fixture_proves_idxstats_column_four_requires_the_stream_scan(tmp_path: Path) -> None:
+def test_placed_flag12_fixture_proves_idxstats_column_four_requires_the_stream_scan(
+    tmp_path: Path, monkeypatch
+) -> None:
     """The indexed ``'*'`` query loses precisely the placed flag-12 records."""
+    monkeypatch.setenv("PATH", str(tmp_path / "no-samtools"))
     fixture = cram_fixtures.build_placed_flag12_fixture(tmp_path)
 
     assert int(pysam_any.view("-c", "-f", "12", str(fixture.cram))) == 130
@@ -244,12 +329,8 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
         return Summary()
 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", fake_build)
-    monkeypatch.setattr(
-        "scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda root, _samtools: calls.append(root)
-    )
-    monkeypatch.setattr(
-        "scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda root, _samtools: calls.append(root)
-    )
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda root: calls.append(root))
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda root: calls.append(root))
 
     exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
     all_exit_code = cram_fixtures.main(

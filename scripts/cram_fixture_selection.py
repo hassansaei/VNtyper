@@ -10,6 +10,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+KNOWN_DERIVED_FIXTURE_KINDS = frozenset({"single_end_bam"})
+
+
+def _validate_derived_fixtures(payload: dict[object, object]) -> None:
+    """Validate declarations owned by neighboring fixture derivation tasks.
+
+    Task 9 owns construction of ``single_end_bam`` fixtures. CRAM selection still parses
+    that declaration so a new kind cannot silently be left out of a future dispatcher.
+    """
+    declarations = payload.get("derived_fixtures", [])
+    if not isinstance(declarations, list):
+        raise ValueError("derived_fixtures must be a list")
+    for declaration in declarations:
+        if not isinstance(declaration, dict):
+            raise ValueError("each derived fixture declaration must be an object")
+        kind = declaration.get("kind")
+        if kind not in KNOWN_DERIVED_FIXTURE_KINDS:
+            raise ValueError(f"unsupported derived fixture kind {kind!r}")
+        for field in ("name", "source_bam", "output_bam"):
+            if not isinstance(declaration.get(field), str) or not declaration[field]:
+                raise ValueError(f"derived fixture kind {kind!r} must declare non-empty {field!r}")
+
 
 def declared_bam_paths(data_config: Path, data_root: Path) -> set[Path]:
     """Return the BAM paths declared in a test-data manifest.
@@ -22,6 +44,9 @@ def declared_bam_paths(data_config: Path, data_root: Path) -> set[Path]:
         The absolute paths of declared BAMs beneath ``data_root``.
     """
     payload = json.loads(data_config.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("test-data config must be an object")
+    _validate_derived_fixtures(payload)
     declared: set[Path] = set()
     for resource in payload.get("file_resources", []):
         filename = resource.get("filename")
@@ -49,7 +74,7 @@ def select_source_bams(discovered: list[Path], *, data_config: Path, data_root: 
     Returns:
         A deterministic list of discovered BAMs to derive.
     """
+    declared = declared_bam_paths(data_config, data_root)
     if include_all:
         return discovered
-    declared = declared_bam_paths(data_config, data_root)
     return [bam for bam in discovered if bam.resolve() in declared]

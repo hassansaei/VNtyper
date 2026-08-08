@@ -53,10 +53,9 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pysam
-
-from scripts.cram_fixture_selection import select_source_bams
 
 logger = logging.getLogger("cram_fixtures")
 
@@ -67,6 +66,11 @@ CRAM_WRITE_OPTIONS = ("no_ref=1",)
 #: Where derived fixtures are written, mirroring the source layout underneath.
 DEFAULT_FIXTURE_ROOT = Path("tests/data/cram")
 DEFAULT_DATA_CONFIG = Path("tests/test_data_config.json")
+
+# Pysam's typed interface exposes ``AlignmentFile`` but not its htslib-command wrappers.
+# Purpose-built fixtures use the latter deliberately so the unit tier never needs PATH's
+# external samtools binary.
+pysam_any: Any = pysam
 
 
 class LossyConversionError(RuntimeError):
@@ -173,6 +177,17 @@ def discover_source_bams(data_root: Path, fixture_root: Path) -> list[Path]:
     return bams
 
 
+def _select_source_bams(discovered: list[Path], *, data_config: Path, data_root: Path, include_all: bool) -> list[Path]:
+    """Import the selection policy in package and direct-script execution modes."""
+    if __package__:
+        from .cram_fixture_selection import select_source_bams as package_selector
+
+        return package_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all)
+    from cram_fixture_selection import select_source_bams as direct_selector
+
+    return direct_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all)
+
+
 def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -> Fixture:
     """Convert one BAM to CRAM and verify the conversion lost nothing.
 
@@ -243,7 +258,7 @@ def build_fixtures(
         The derivation summary.
     """
     summary = Summary()
-    bams = select_source_bams(
+    bams = _select_source_bams(
         discover_source_bams(data_root, fixture_root),
         data_config=data_config,
         data_root=data_root,
@@ -264,12 +279,12 @@ def build_fixtures(
     return summary
 
 
-def _write_reference(samtools: str, path: Path, *, length: int) -> str:
+def _write_reference(path: Path, *, length: int) -> str:
     """Write and index a deterministic single-contig FASTA, returning its sequence."""
     sequence = "A" * length
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f">chr1\n{sequence}\n")
-    _run([samtools, "faidx", str(path)])
+    pysam_any.faidx(str(path))
     return sequence
 
 
@@ -287,7 +302,7 @@ def _segment(name: str, *, flag: int, reference_id: int, reference_start: int) -
     return record
 
 
-def build_reference_dependent_fixture(fixture_root: Path, samtools: str = "samtools") -> ReferenceDependentFixture:
+def build_reference_dependent_fixture(fixture_root: Path) -> ReferenceDependentFixture:
     """Create a CRAM that needs the copied local FASTA named by its ``UR:`` header.
 
     The 10 kb/50-read fixture deliberately stores a reference-compressed payload. Tests
@@ -296,14 +311,12 @@ def build_reference_dependent_fixture(fixture_root: Path, samtools: str = "samto
 
     Args:
         fixture_root: Destination directory for the purpose-built fixture.
-        samtools: Samtools executable used to index the copied FASTA and CRAM.
-
     Returns:
         The CRAM and the copied reference which its header names.
     """
     root = fixture_root / "reference-dependent"
     reference = root / "reference.fa"
-    sequence = _write_reference(samtools, reference, length=10_000)
+    sequence = _write_reference(reference, length=10_000)
     header = {
         "HD": {"VN": "1.6", "SO": "coordinate"},
         "SQ": [
@@ -314,11 +327,11 @@ def build_reference_dependent_fixture(fixture_root: Path, samtools: str = "samto
     with pysam.AlignmentFile(str(cram), "wc", header=header, reference_filename=str(reference)) as output:
         for number in range(50):
             output.write(_segment(f"reference-{number}", flag=0, reference_id=0, reference_start=100 + number * 90))
-    _run([samtools, "index", str(cram)])
+    pysam_any.index(str(cram))
     return ReferenceDependentFixture(cram=cram, reference=reference)
 
 
-def build_placed_flag12_fixture(fixture_root: Path, samtools: str = "samtools") -> PlacedFlag12Fixture:
+def build_placed_flag12_fixture(fixture_root: Path) -> PlacedFlag12Fixture:
     """Create the 130-read fixture proving ``idxstats`` column four detects loss.
 
     It holds 600 mapped records, 25 placed flag-12 pairs and 40 unplaced flag-12 pairs.
@@ -327,16 +340,16 @@ def build_placed_flag12_fixture(fixture_root: Path, samtools: str = "samtools") 
 
     Args:
         fixture_root: Destination directory for the purpose-built fixture.
-        samtools: Samtools executable used for CRAM conversion and indexing.
-
     Returns:
         The indexed CRAM fixture.
     """
     root = fixture_root / "placed-flag12"
     root.mkdir(parents=True, exist_ok=True)
-    bam = root / "placed-flag12.bam"
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 20_000}]}
-    with pysam.AlignmentFile(str(bam), "wb", header=header) as output:
+    cram = root / "placed-flag12.cram"
+    with pysam_any.AlignmentFile(
+        str(cram), "wc", header=header, format_options=[option.encode() for option in CRAM_WRITE_OPTIONS]
+    ) as output:
         for number in range(600):
             output.write(_segment(f"mapped-{number}", flag=0, reference_id=0, reference_start=number * 20))
         for number in range(50):
@@ -345,9 +358,7 @@ def build_placed_flag12_fixture(fixture_root: Path, samtools: str = "samtools") 
             )
         for number in range(80):
             output.write(_segment(f"unplaced-{number // 2}", flag=12, reference_id=-1, reference_start=-1))
-    cram = root / "placed-flag12.cram"
-    _run([samtools, "view", "-C", "--output-fmt-option", "no_ref=1", "-o", str(cram), str(bam)])
-    _run([samtools, "index", str(cram)])
+    pysam_any.index(str(cram))
     return PlacedFlag12Fixture(cram=cram)
 
 
@@ -389,8 +400,8 @@ def main(argv: list[str] | None = None) -> int:
         data_config=args.data_config,
         include_all=args.all,
     )
-    build_reference_dependent_fixture(args.fixture_root, args.samtools)
-    build_placed_flag12_fixture(args.fixture_root, args.samtools)
+    build_reference_dependent_fixture(args.fixture_root)
+    build_placed_flag12_fixture(args.fixture_root)
     write_manifest(summary, args.manifest or args.fixture_root / "manifest.json")
 
     if not summary.fixtures:
