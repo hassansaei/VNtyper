@@ -29,7 +29,26 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from vntyper.scripts.alignment_contract import index_candidate_names
+
 logger = logging.getLogger(__name__)
+
+
+def resolve_any_index(in_path: str | Path, file_format: str) -> str | None:
+    """Find the first existing index accepted for an alignment format.
+
+    Args:
+        in_path (str | Path): The alignment whose index is wanted.
+        file_format (str): The alignment format, either ``"bam"`` or ``"cram"``.
+
+    Returns:
+        str | None: The first existing candidate in the contract-defined order, or
+        None when no candidate exists.
+    """
+    for candidate in index_candidate_names(str(in_path), file_format):
+        if Path(candidate).exists():
+            return candidate
+    return None
 
 
 def resolve_bam_index(in_bam: str | Path) -> str | None:

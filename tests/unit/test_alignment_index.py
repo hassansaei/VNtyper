@@ -23,9 +23,59 @@ from pathlib import Path
 
 import pytest
 
-from vntyper.scripts.alignment_index import resolve_bam_index
+from vntyper.scripts.alignment_index import resolve_any_index, resolve_bam_index
 
 pytestmark = pytest.mark.unit
+
+
+def test_cram_index_uses_appended_spelling_before_stem_spelling(tmp_path: Path) -> None:
+    """CRAM index resolution returns the first existing CRAI candidate."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    appended = tmp_path / "sample.cram.crai"
+    appended.write_bytes(b"CRAI")
+    stem = tmp_path / "sample.crai"
+    stem.write_bytes(b"CRAI")
+
+    assert resolve_any_index(cram, "cram") == str(appended)
+
+
+def test_cram_index_uses_stem_spelling_when_appended_is_missing(tmp_path: Path) -> None:
+    """A CRAM's stem-based CRAI spelling is found when it is the only candidate."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    stem = tmp_path / "sample.crai"
+    stem.write_bytes(b"CRAI")
+
+    assert resolve_any_index(cram, "cram") == str(stem)
+
+
+def test_bai_beside_cram_is_not_a_cram_index(tmp_path: Path) -> None:
+    """A BAI next to a CRAM does not satisfy CRAI resolution."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    (tmp_path / "sample.bai").write_bytes(b"BAI\x01")
+
+    assert resolve_any_index(cram, "cram") is None
+
+
+def test_bam_csi_is_found_by_any_index_but_not_bai_index(tmp_path: Path) -> None:
+    """General resolution accepts CSI while the BAI-only reader does not."""
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"BAM\x01")
+    csi = tmp_path / "sample.bam.csi"
+    csi.write_bytes(b"CSI\x01")
+
+    assert resolve_any_index(bam, "bam") == str(csi)
+    assert resolve_bam_index(bam) is None
+
+
+def test_no_supported_index_resolves_to_none(tmp_path: Path) -> None:
+    """No existing candidate is reported as unavailable."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+
+    assert resolve_any_index(cram, "cram") is None
 
 
 def test_an_alternate_index_name_is_found_and_no_second_index_is_built(tmp_path: Path) -> None:
