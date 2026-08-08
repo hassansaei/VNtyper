@@ -112,7 +112,7 @@ def test_every_conda_run_in_the_worker_streams_its_child_output():
     rather than shipping buffered.
     """
     source = (REPO_ROOT / "docker" / "app" / "tasks.py").read_text(encoding="utf-8")
-    launchers = re.findall(r'"conda",\s*\n\s*"run",\s*\n(.*?)"-n",', source, re.S)
+    launchers = re.findall(r'"conda",\s*\n\s*"run",\s*\n(.*?)"-n",', source, re.DOTALL)
     assert launchers, "no `conda run` argument vectors found in docker/app/tasks.py"
     buffering = [block for block in launchers if "--no-capture-output" not in block]
     assert not buffering, (

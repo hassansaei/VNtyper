@@ -80,7 +80,16 @@ class AlignmentPlan:
 
 
 def missing_index_message(in_path: str, file_format: str, tried: Iterable[str]) -> str:
-    """Build an actionable message for an alignment with no usable index."""
+    """Build an actionable message for an alignment with no usable index.
+
+    Args:
+        in_path: Alignment path whose index could not be resolved.
+        file_format: Alignment format used while looking for an index.
+        tried: Candidate index paths that were checked.
+
+    Returns:
+        Actionable diagnostic naming the input, candidates, and indexing command.
+    """
     candidates = ", ".join(str(path) for path in tried)
     return (
         f"No usable {file_format.upper()} index found for {in_path}. "
@@ -94,7 +103,17 @@ def unresolvable_reference_message(
     m5: str | None,
     attempts: Iterable[ReferenceAttempt],
 ) -> str:
-    """Build diagnostics for a CRAM contig whose reference cannot be resolved."""
+    """Build diagnostics for a CRAM contig whose reference cannot be resolved.
+
+    Args:
+        in_path: CRAM path whose reference could not be resolved.
+        contig: Contig requiring a reference sequence.
+        m5: Reference sequence checksum from the alignment header, if available.
+        attempts: Candidate reference sources, paths, and resolution reasons.
+
+    Returns:
+        Diagnostic containing the contig identity and every candidate attempt.
+    """
     checksum = m5 if m5 is not None else "no M5"
     details = "; ".join(
         f"source={source}, path={path if path is not None else 'no path'}, reason={reason}"
@@ -104,5 +123,14 @@ def unresolvable_reference_message(
 
 
 def preflight_error_payload(code: str, message: str, attempts: Iterable[ReferenceAttempt]) -> dict:
-    """Return the serializable contents of ``preflight_error.json``."""
+    """Return the serializable contents of ``preflight_error.json``.
+
+    Args:
+        code: Stable machine-readable preflight error code.
+        message: Human-readable diagnostic for the failed preflight.
+        attempts: Candidate reference sources, paths, and resolution reasons.
+
+    Returns:
+        Payload containing only the error code, message, and candidate attempts.
+    """
     return {"code": code, "message": message, "candidates": list(attempts)}
