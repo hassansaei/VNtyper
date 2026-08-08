@@ -97,6 +97,36 @@ def quote_path(value: str | Path | int) -> str:
     return shlex.quote(str(value))
 
 
+def _thread_flag(threads: int) -> str:
+    """Return the optional samtools thread flag.
+
+    Args:
+        threads: Requested thread count.
+
+    Returns:
+        The trailing-space-terminated ``-@`` fragment when more than one thread
+        was requested; otherwise an empty string.
+    """
+    if threads <= 1:
+        return ""
+    return f"-@ {quote_path(threads)} "
+
+
+def _reference_flag(reference_path: str | Path | None) -> str:
+    """Return the optional, shell-quoted samtools reference flag.
+
+    Args:
+        reference_path: Reference FASTA path, if one was resolved.
+
+    Returns:
+        The trailing-space-terminated ``-T`` fragment, or an empty string when
+        no reference was provided.
+    """
+    if reference_path is None:
+        return ""
+    return f"-T {quote_path(reference_path)} "
+
+
 def build_fastp_command(
     *,
     fastp_path: str,
@@ -170,7 +200,9 @@ def build_samtools_slice_command(
     output_bam: str | Path,
     region: str | None = None,
     bed_file: str | Path | None = None,
-    cram_ref_option: str = "",
+    reference_path: str | Path | None = None,
+    threads: int = 1,
+    index_output: bool = True,
 ) -> str:
     """
     Build the region-slicing command, followed by indexing the slice.
@@ -184,12 +216,12 @@ def build_samtools_slice_command(
         output_bam (str | Path): Where the slice is written.
         region (str | None): Region string such as ``chr1:155158000-155163000``.
         bed_file (str | Path | None): BED file passed as ``-L``.
-        cram_ref_option (str): A pre-formatted flag fragment (e.g. ``-T ref.fa``),
-            interpolated verbatim and therefore **not** quoted. Currently always
-            empty, which is where the double space in the output comes from.
+        reference_path (str | Path | None): Reference FASTA for CRAM decoding.
+        threads (int): Thread count for view and index.
+        index_output (bool): Whether to append indexing of the resulting slice.
 
     Returns:
-        str: ``samtools view ... && samtools index ...``.
+        str: ``samtools view ...``, optionally followed by ``&& samtools index``.
 
     Raises:
         ValueError: If neither ``region`` nor ``bed_file`` is given. Slicing with
@@ -205,15 +237,17 @@ def build_samtools_slice_command(
         logger.error(message)
         raise ValueError(message)
 
-    return (
-        f"{samtools_path} view -P -b {cram_ref_option} {quote_path(in_bam)} {target} "
-        f"-o {quote_path(output_bam)} && "
-        f"{samtools_path} index {quote_path(output_bam)}"
+    command = (
+        f"{samtools_path} view -P -b {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"{quote_path(in_bam)} {target} -o {quote_path(output_bam)}"
     )
+    if not index_output:
+        return command
+    return f"{command} && {samtools_path} index {_thread_flag(threads)}{quote_path(output_bam)}"
 
 
 def build_samtools_index_command(
-    *, samtools_path: str, bam_file: str | Path, output_bai: str | Path | None = None
+    *, samtools_path: str, bam_file: str | Path, output_bai: str | Path | None = None, threads: int = 1
 ) -> str:
     """
     Build the ``samtools index`` command for a BAM file.
@@ -227,13 +261,14 @@ def build_samtools_index_command(
             directory, wrong for the user's input alignment, whose directory is
             routinely read-only (#162, #210). ``-o`` requires samtools >= 1.15;
             ``conda/environment_vntyper.yml`` pins 1.20.
+        threads (int): Thread count for indexing.
 
     Returns:
         str: The complete index command.
     """
     if output_bai is None:
-        return f"{samtools_path} index {quote_path(bam_file)}"
-    return f"{samtools_path} index -o {quote_path(output_bai)} {quote_path(bam_file)}"
+        return f"{samtools_path} index {_thread_flag(threads)}{quote_path(bam_file)}"
+    return f"{samtools_path} index {_thread_flag(threads)}-o {quote_path(output_bai)} {quote_path(bam_file)}"
 
 
 def build_cram_unmapped_filter_command(
@@ -242,7 +277,7 @@ def build_cram_unmapped_filter_command(
     in_bam: str | Path,
     unmapped_bam: str | Path,
     threads: int,
-    cram_ref_option: str = "",
+    reference_path: str | Path | None = None,
 ) -> str:
     """
     Build the CRAM unmapped-read extraction command.
@@ -260,7 +295,7 @@ def build_cram_unmapped_filter_command(
         in_bam (str | Path): The input CRAM.
         unmapped_bam (str | Path): Where the unmapped reads are written.
         threads (int): Thread count for both samtools invocations.
-        cram_ref_option (str): Pre-formatted flag fragment, interpolated verbatim.
+        reference_path (str | Path | None): Reference FASTA for CRAM decoding.
 
     Returns:
         str: The complete command, prefixed with ``set -o pipefail``.
@@ -292,9 +327,89 @@ def build_cram_unmapped_filter_command(
     """
     return (
         f"{PIPEFAIL_PREFIX}"
-        f"{samtools_path} view {cram_ref_option} -@ {quote_path(threads)} -h {quote_path(in_bam)} | "
-        f"{samtools_path} view -b -f 12 -@ {quote_path(threads)} - -o {quote_path(unmapped_bam)}"
+        f"{samtools_path} view {_reference_flag(reference_path)}{_thread_flag(threads)}-h {quote_path(in_bam)} | "
+        f"{samtools_path} view -b -f 12 {_thread_flag(threads)}- -o {quote_path(unmapped_bam)}"
     )
+
+
+def build_cram_unmapped_indexed_command(
+    *,
+    samtools_path: str,
+    in_bam: str | Path,
+    unmapped_bam: str | Path,
+    threads: int,
+    reference_path: str | Path | None = None,
+) -> str:
+    """Build the indexed CRAM extraction command for unplaced unmapped reads.
+
+    Args:
+        samtools_path: samtools invocation from config.
+        in_bam: Indexed BAM or CRAM alignment view.
+        unmapped_bam: Destination BAM for flag-12 reads.
+        threads: Thread count for samtools.
+        reference_path: Reference FASTA for CRAM decoding.
+
+    Returns:
+        A single ``samtools view`` command that requests literal ``'*'`` reads.
+    """
+    return (
+        f"{samtools_path} view -b -f 12 {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"{quote_path(in_bam)} {quote_path('*')} -o {quote_path(unmapped_bam)}"
+    )
+
+
+def build_cram_reference_probe_command(
+    *,
+    samtools_path: str,
+    in_bam: str | Path,
+    region: str | None = None,
+    bed_file: str | Path | None = None,
+    reference_path: str | Path | None = None,
+    threads: int = 1,
+) -> str:
+    """Build a throwaway slice that proves a reference decodes the requested target.
+
+    Args:
+        samtools_path: samtools invocation from config.
+        in_bam: Indexed BAM or CRAM alignment view.
+        region: Region string to probe.
+        bed_file: BED target to probe. Takes precedence over ``region``.
+        reference_path: Candidate reference FASTA.
+        threads: Thread count for samtools.
+
+    Returns:
+        A CRAM-decoding ``samtools view`` command which writes to ``/dev/null``.
+
+    Raises:
+        ValueError: If neither a region nor a BED target was supplied.
+    """
+    if bed_file is not None:
+        target = f"-L {quote_path(bed_file)}"
+    elif region is not None:
+        target = quote_path(region)
+    else:
+        message = "build_cram_reference_probe_command needs either a region or a bed_file"
+        logger.error(message)
+        raise ValueError(message)
+
+    return (
+        f"{samtools_path} view -P {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"{quote_path(in_bam)} {target} -o /dev/null"
+    )
+
+
+def build_samtools_idxstats_command(*, samtools_path: str, in_bam: str | Path, threads: int = 1) -> str:
+    """Build ``samtools idxstats`` without a reference argument.
+
+    Args:
+        samtools_path: samtools invocation from config.
+        in_bam: Indexed BAM or CRAM alignment view.
+        threads: Thread count for samtools.
+
+    Returns:
+        The complete ``idxstats`` command.
+    """
+    return f"{samtools_path} idxstats {_thread_flag(threads)}{quote_path(in_bam)}"
 
 
 def build_samtools_merge_command(
@@ -372,6 +487,7 @@ def build_samtools_depth_command(
     region: str,
     bam_file: str | Path,
     coverage_output: str | Path,
+    reference_path: str | Path | None = None,
 ) -> str:
     """
     Build the per-base depth command for a region, redirected to a file.
@@ -382,6 +498,7 @@ def build_samtools_depth_command(
         region (str): Region string such as ``chr1:155160500-155162000``.
         bam_file (str | Path): The BAM to measure.
         coverage_output (str | Path): Where the depth table is written.
+        reference_path (str | Path | None): Reference FASTA for CRAM decoding.
 
     Returns:
         str: The complete command.
@@ -396,7 +513,7 @@ def build_samtools_depth_command(
         (#171).
     """
     return (
-        f"{samtools_path} depth -a -@ {quote_path(threads)} -r {quote_path(region)} "
+        f"{samtools_path} depth -a {_thread_flag(threads)}{_reference_flag(reference_path)}-r {quote_path(region)} "
         f"{quote_path(bam_file)} > {quote_path(coverage_output)}"
     )
 

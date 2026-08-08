@@ -130,7 +130,6 @@ def process_bam_to_fastq(
         )
         logger.debug(f"BAM region set to: {bam_region}")
 
-    cram_ref_option = ""
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
     # Slice/region extraction
@@ -143,7 +142,6 @@ def process_bam_to_fastq(
             output_bam=final_bam,
             region=None if bed_file else bam_region,
             bed_file=bed_file,
-            cram_ref_option=cram_ref_option,
         )
         log_file_slice = Path(output) / f"{output_name}_slice.log"
         logger.info(f"Executing region slicing with command: {command_slice}")
@@ -189,7 +187,6 @@ def process_bam_to_fastq(
                 in_bam=in_bam,
                 unmapped_bam=unmapped_bam,
                 threads=threads,
-                cram_ref_option=cram_ref_option,
             )
             log_file_filter = Path(output) / f"{output_name}_filter.log"
             logger.info(f"Executing filtering with command: {command_filter}")

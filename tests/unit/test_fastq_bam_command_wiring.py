@@ -132,7 +132,7 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b  /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
+        f"samtools view -P -b /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
         f"samtools index {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
@@ -161,7 +161,7 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b  /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
+        f"samtools view -P -b /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
         f"samtools index {tmp_path}/output_sliced.bam",
         f"samtools index -o {tmp_path}/output_input.bam.bai /data/sample.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
@@ -386,11 +386,10 @@ def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
     """
     The whole command, byte for byte.
 
-    The double space after ``view`` is the empty ``cram_ref_option`` and is
-    preserved from the pre-extraction code, as it is in every other builder.
+    With no resolved reference yet, the optional ``-T`` fragment is omitted.
     """
     assert _cram_unmapped_command(tmp_path) == (
-        f"set -o pipefail; /envs/vntyper/bin/samtools view  -@ 4 -h /data/sample.cram | "
+        f"set -o pipefail; /envs/vntyper/bin/samtools view -@ 4 -h /data/sample.cram | "
         f"/envs/vntyper/bin/samtools view -b -f 12 -@ 4 - -o {tmp_path}/output_unmapped.bam"
     )
 
@@ -509,7 +508,7 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b  /data/sample.bam -L {bed} -o {tmp_path}/output_sliced.bam && "
+        f"samtools view -P -b /data/sample.bam -L {bed} -o {tmp_path}/output_sliced.bam && "
         f"samtools index {tmp_path}/output_sliced.bam"
     )
     assert REGION not in commands[0]
