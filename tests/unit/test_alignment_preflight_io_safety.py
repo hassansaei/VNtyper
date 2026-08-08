@@ -349,6 +349,91 @@ def test_a_missing_index_is_built_beside_the_view_and_never_beside_the_input(tmp
     assert not (input_dir / "sample.bai").exists()
 
 
+def test_a_locally_built_index_is_safely_rebuilt_on_a_same_input_rerun(tmp_path: Path) -> None:
+    """A reserved regular index from one run must not make a sequential rerun fail."""
+    input_dir = tmp_path / "input"
+    output = tmp_path / "output"
+    input_dir.mkdir()
+    alignment = input_dir / "sample.cram"
+    alignment.write_bytes(b"patient alignment")
+    build_number = 0
+
+    def build_index(
+        command: str,
+        log_file: str,
+        cwd: str | None = None,
+        *,
+        protected_paths: tuple[str | Path, ...] = (),
+    ) -> tuple[bool, str]:
+        nonlocal build_number
+        del log_file, cwd, protected_paths
+        build_number += 1
+        arguments = shlex.split(command)
+        Path(arguments[arguments.index("-o") + 1]).write_bytes(f"index {build_number}".encode())
+        return True, ""
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_index):
+        first_view, first_index = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=2
+        )
+        second_view, second_index = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=2
+        )
+
+    assert first_view == second_view
+    assert first_index == second_index
+    assert Path(second_view).samefile(alignment)
+    assert Path(second_index).is_file()
+    assert not Path(second_index).is_symlink()
+    assert Path(second_index).read_bytes() == b"index 2"
+    assert alignment.read_bytes() == b"patient alignment"
+    assert not (input_dir / "sample.cram.crai").exists()
+    assert not (input_dir / "sample.crai").exists()
+
+
+def test_a_local_index_is_safely_replaced_when_a_different_input_reuses_the_output(tmp_path: Path) -> None:
+    """Sequential output reuse must update both view and generated index without patient-tree writes."""
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    output = tmp_path / "output"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_alignment = first_dir / "sample.cram"
+    second_alignment = second_dir / "sample.cram"
+    first_alignment.write_bytes(b"first patient alignment")
+    second_alignment.write_bytes(b"second patient alignment")
+    build_number = 0
+
+    def build_index(
+        command: str,
+        log_file: str,
+        cwd: str | None = None,
+        *,
+        protected_paths: tuple[str | Path, ...] = (),
+    ) -> tuple[bool, str]:
+        nonlocal build_number
+        del log_file, cwd, protected_paths
+        build_number += 1
+        arguments = shlex.split(command)
+        Path(arguments[arguments.index("-o") + 1]).write_bytes(f"index {build_number}".encode())
+        return True, ""
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_index):
+        build_alignment_view(str(first_alignment), str(output), "sample", "cram", _config(), threads=2)
+        view_path, index_path = build_alignment_view(
+            str(second_alignment), str(output), "sample", "cram", _config(), threads=2
+        )
+
+    assert Path(view_path).samefile(second_alignment)
+    assert Path(index_path).is_file()
+    assert not Path(index_path).is_symlink()
+    assert Path(index_path).read_bytes() == b"index 2"
+    assert first_alignment.read_bytes() == b"first patient alignment"
+    assert second_alignment.read_bytes() == b"second patient alignment"
+    assert not tuple(first_dir.glob("*.crai"))
+    assert not tuple(second_dir.glob("*.crai"))
+
+
 @pytest.mark.parametrize("command_succeeds", [False, True])
 def test_a_failed_or_empty_index_build_raises_an_actionable_error(tmp_path: Path, command_succeeds: bool) -> None:
     """Both command failure and a missing promised artifact stop preflight."""

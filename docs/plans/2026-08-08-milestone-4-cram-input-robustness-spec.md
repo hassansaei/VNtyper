@@ -388,7 +388,7 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | Module | Kind | Owns |
 | --- | --- | --- |
 | `alignment_contract.py` | pure | what each format requires; the `AlignmentPlan` dataclass; the text of every failure message |
-| `reference_resolution.py` | pure | the ordered candidate list and which candidate wins given probe outcomes |
+| `reference_resolution.py` | pure | validated ordered candidate mapping and known or unavailable FASTA contig coverage |
 | `read_layout.py` | pure | the `paired`/`single`/`mixed`/`empty` verdict from counts, and which FASTQ paths feed downstream |
 | `alignment_preflight.py` | I/O | runs samtools: build the alignment view, resolve or build the index, choose the scan from `idxstats`, probe-decode each reference candidate. **It does not compute the read layout** — §4.4 explains why that cannot be known before conversion. |
 
@@ -811,9 +811,10 @@ Every behaviour above is reachable from configuration. New keys:
   "unmapped_scan": "auto",                      // "auto" | "indexed" | "stream"
 
   // Order in which reference candidates are probed. Editing this list is the supported
-  // way to change resolution policy; the order is not written in Python.
+  // way to change resolution policy; the Python fallback is identical for replacement
+  // configs that omit this new key.
   "reference_candidate_order": [
-    "none", "cli", "config_cram_reference", "config_bwa_reference", "header_ur"
+    "cli", "config_cram_reference", "config_bwa_reference", "htslib_resolved"
   ]
 },
 // No `read_layout` block. An earlier draft had `fail_on_unconsumed_reads`, defaulting

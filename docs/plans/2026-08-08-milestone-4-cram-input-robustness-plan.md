@@ -77,7 +77,7 @@ make format && make test-unit
 | File | Status | Responsibility |
 | --- | --- | --- |
 | `vntyper/scripts/alignment_contract.py` | create | `AlignmentPlan`; index names per format; the text of every failure message; the `preflight_error.json` payload. Pure. |
-| `vntyper/scripts/reference_resolution.py` | create | Ordered reference candidates; which header contigs a FASTA fails to cover. Pure. |
+| `vntyper/scripts/reference_resolution.py` | create | Validated ordered reference candidates; known or unavailable FASTA contig coverage. Pure. |
 | `vntyper/scripts/idxstats_parsing.py` | create | Parse an `idxstats` table and decide the scan. Fails closed. Pure. |
 | `vntyper/scripts/read_layout.py` | create | The layout verdict from FASTQ record counts, and which files are consumed vs stranded. Pure. |
 | `vntyper/scripts/alignment_preflight.py` | create | The only new module that shells out: build the view, resolve/build the index, choose the scan, probe the reference, pin `REF_PATH`. |
@@ -323,7 +323,8 @@ reference).
 ### Task 5: `alignment_preflight.py`
 
 **Files:** create `vntyper/scripts/alignment_preflight.py`,
-`tests/unit/test_alignment_preflight.py`, `tests/unit/test_ref_path_is_pinned.py`;
+`vntyper/scripts/reference_resolution.py`, focused alignment-preflight unit modules,
+`tests/unit/test_reference_resolution.py`, and `tests/unit/test_ref_path_is_pinned.py`;
 modify `vntyper/config.json`
 
 **Interfaces produced:**
@@ -336,6 +337,9 @@ modify `vntyper/config.json`
 - `run_preflight(...) -> AlignmentPlan`
 - `capture_command(command, log_file, cwd=None) -> tuple[bool, str]` — the stdout-capturing
   seam `idxstats` needs; `run_command` returns only a bool and streams stdout to a log.
+- `ordered_reference_candidates(config, reference_assembly, reference_fasta)` and
+  `uncovered_reference_contigs(header_contigs, reference_contigs)` — pure candidate-policy
+  and reference-coverage decisions consumed by the I/O preflight.
 
 **Config** (spec §6) — add `cram.allow_ambient_reference_resolution` (false),
 `cram.local_ref_path` (`"%2s/%2s/%s"`), `cram.unmapped_scan` (`"auto"`),
