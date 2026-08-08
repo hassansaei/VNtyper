@@ -414,6 +414,33 @@ def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
     )
 
 
+@pytest.mark.parametrize("scan", ["indexed", "stream"])
+def test_a_no_ref_cram_plan_emits_no_reference_flag_in_any_conversion_command(tmp_path, scan):
+    """A-209-3: the proven no-reference plan must remain byte-free of ``-T``."""
+    input_path = "/data/no-ref.cram"
+    plan = AlignmentPlan(
+        input_path=input_path,
+        view_path=input_path,
+        file_format="cram",
+        index_path=f"{input_path}.crai",
+        reference_path=None,
+        reference_source="htslib-resolved (header UR: or REF_PATH)",
+        uncovered_contigs=(),
+        unmapped_scan=scan,
+    )
+
+    commands = _run_bam_to_fastq(
+        tmp_path,
+        file_format="cram",
+        input_path=input_path,
+        fast_mode=False,
+        plan=plan,
+    )
+
+    assert commands
+    assert all(" -T " not in command for command in commands)
+
+
 def test_the_cram_unmapped_command_has_no_process_substitution(tmp_path):
     """
     No ``>(...)``, and no ``tee`` for it to hang off.

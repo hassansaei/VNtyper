@@ -41,6 +41,27 @@ def _touch(path: Path, content: str = "x") -> Path:
     return path
 
 
+def _paired_source_bam(path: Path) -> Path:
+    """Write a minimal indexed-coordinate BAM suitable for single-end derivation."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
+    with pysam.AlignmentFile(str(path), "wb", header=header) as output:
+        read = pysam.AlignedSegment()
+        read.query_name = "pair-1"
+        read.query_sequence = "ACGT"
+        read.query_qualities = pysam.qualitystring_to_array("IIII")
+        read.flag = 99
+        read.reference_id = 0
+        read.reference_start = 100
+        read.mapping_quality = 60
+        read.cigarstring = "4M"
+        read.next_reference_id = 0
+        read.next_reference_start = 200
+        read.template_length = 104
+        output.write(read)
+    return path
+
+
 class _FakeSamtools:
     """Records the commands asked of it and replays scripted digests.
 
@@ -96,6 +117,52 @@ def test_the_direct_script_entry_point_loads_its_sibling_selection_module_withou
 
     assert result.returncode == 0, result.stderr
     assert "--all" in result.stdout
+
+
+def test_the_direct_script_dispatches_its_sibling_single_end_builder_without_pythonpath(tmp_path: Path) -> None:
+    """The ordinary direct-script command must import and run both sibling modules."""
+    repository_root = tmp_path / "repo"
+    data_root = repository_root / "tests" / "data"
+    source = _paired_source_bam(data_root / "source.bam")
+    output = data_root / "derived" / "source-single.bam"
+    config = repository_root / "tests" / "test_data_config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        json.dumps(
+            {
+                "derived_fixtures": [
+                    {
+                        "name": "source-single",
+                        "kind": "single_end_bam",
+                        "source_bam": str(source.relative_to(repository_root)),
+                        "output_bam": str(output.relative_to(repository_root)),
+                    }
+                ]
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "make_cram_fixtures.py"),
+            "--data-root",
+            "tests/data",
+            "--fixture-root",
+            "tests/data/cram",
+            "--data-config",
+            "tests/test_data_config.json",
+        ],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    assert output.is_file()
+    assert output.with_suffix(".bam.bai").is_file()
 
 
 def test_a_lossy_conversion_raises_rather_than_being_recorded(tmp_path: Path, monkeypatch) -> None:
@@ -227,13 +294,14 @@ def test_the_all_switch_derives_every_discovered_bam(tmp_path: Path, monkeypatch
     assert derived == [declared, incidental]
 
 
-def test_a_known_task9_derived_fixture_declaration_is_validated_without_changing_cram_selection(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Task9's schema is recognized, but its single-end builder stays independently owned."""
-    data_root = tmp_path / "data"
-    declared = _touch(data_root / "declared.bam")
-    config = tmp_path / "test_data_config.json"
+def test_a_known_task9_declaration_is_dispatched_without_changing_cram_selection(tmp_path: Path, monkeypatch) -> None:
+    """Task9 dispatch is additional to, rather than a replacement for, CRAM selection."""
+    repository_root = tmp_path / "repo"
+    data_root = repository_root / "tests" / "data"
+    declared = _paired_source_bam(data_root / "declared.bam")
+    output = data_root / "derived" / "declared-single-end.bam"
+    config = repository_root / "tests" / "test_data_config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(
         json.dumps(
             {
@@ -252,9 +320,110 @@ def test_a_known_task9_derived_fixture_declaration_is_validated_without_changing
     derived: list[Path] = []
     monkeypatch.setattr("scripts.make_cram_fixtures.derive_cram", lambda _s, bam, _d, _f: derived.append(bam))
 
-    cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config)
+    cram_fixtures.build_fixtures(
+        "samtools",
+        data_root,
+        data_root / "cram",
+        data_config=config,
+        repository_root=repository_root,
+    )
 
     assert derived == [declared]
+    assert output.is_file()
+
+
+@pytest.mark.parametrize("include_all", [False, True])
+def test_build_fixtures_dispatches_declared_single_end_bams_without_all_bypassing_them(
+    tmp_path: Path,
+    include_all: bool,
+) -> None:
+    """Task9 declarations are materialized by the same command that validates them."""
+    repository_root = tmp_path / "repo"
+    data_root = repository_root / "tests" / "data"
+    source = _paired_source_bam(data_root / "source.bam")
+    output = data_root / "derived" / "source-single.bam"
+    config = repository_root / "tests" / "test_data_config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        json.dumps(
+            {
+                "derived_fixtures": [
+                    {
+                        "name": "source-single",
+                        "kind": "single_end_bam",
+                        "source_bam": str(source.relative_to(repository_root)),
+                        "output_bam": str(output.relative_to(repository_root)),
+                    }
+                ]
+            }
+        )
+    )
+
+    cram_fixtures.build_fixtures(
+        "samtools",
+        data_root,
+        data_root / "cram",
+        data_config=config,
+        include_all=include_all,
+        repository_root=repository_root,
+    )
+
+    assert output.is_file()
+    assert output.with_suffix(".bam.bai").is_file()
+    with pysam.AlignmentFile(str(output), "rb") as alignment:
+        records = list(alignment.fetch(until_eof=True))
+    assert len(records) == 1
+    assert records[0].is_paired is False
+
+
+def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_to_the_repo(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository_root = tmp_path / "repo"
+    data_root = repository_root / "tests" / "data"
+    source = _paired_source_bam(data_root / "source.bam")
+    output = data_root / "derived" / "source-single.bam"
+    config = repository_root / "tests" / "test_data_config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        json.dumps(
+            {
+                "file_resources": [{"local_path": "tests/data", "filename": source.name}],
+                "derived_fixtures": [
+                    {
+                        "name": "source-single",
+                        "kind": "single_end_bam",
+                        "source_bam": str(source.relative_to(repository_root)),
+                        "output_bam": str(output.relative_to(repository_root)),
+                    }
+                ],
+            }
+        )
+    )
+
+    def fake_derive_cram(_samtools: str, bam: Path, _data_root: Path, fixture_root: Path) -> Fixture:
+        return Fixture(bam, fixture_root / "source.cram", 1, 0, "digest", 1, 1)
+
+    monkeypatch.chdir(repository_root)
+    monkeypatch.setattr(cram_fixtures, "derive_cram", fake_derive_cram)
+    monkeypatch.setattr(cram_fixtures, "build_reference_dependent_fixture", lambda _root: None)
+    monkeypatch.setattr(cram_fixtures, "build_placed_flag12_fixture", lambda _root: None)
+
+    exit_code = cram_fixtures.main(
+        [
+            "--data-root",
+            "tests/data",
+            "--fixture-root",
+            "tests/data/cram",
+            "--data-config",
+            "tests/test_data_config.json",
+        ]
+    )
+
+    assert exit_code == 0
+    assert output.is_file()
+    assert output.with_suffix(".bam.bai").is_file()
 
 
 def test_an_unknown_declared_fixture_kind_is_refused_instead_of_being_ignored(tmp_path: Path) -> None:
@@ -350,3 +519,15 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
     assert all_exit_code == 1
     assert selections == [False, True]
     assert calls == [tmp_path / "cram", tmp_path / "cram", tmp_path / "all-cram", tmp_path / "all-cram"]
+
+
+def test_the_reference_contract_purpose_fixtures_are_registered_with_portable_paths() -> None:
+    payload = json.loads((REPO_ROOT / "tests" / "test_data_config.json").read_text())
+    fixtures = payload["purpose_fixtures"]["cram_reference_contract"]
+
+    assert fixtures == {
+        "reference_dependent_cram": "tests/data/cram/reference-dependent/reference-dependent.cram",
+        "reference_fasta": "tests/data/cram/reference-dependent/reference.fa",
+        "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram",
+    }
+    assert all(not Path(path).is_absolute() and ".." not in Path(path).parts for path in fixtures.values())

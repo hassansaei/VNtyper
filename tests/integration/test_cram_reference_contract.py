@@ -1,0 +1,135 @@
+"""A-209 reference-dependent and reference-free CRAM pipeline contracts."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import subprocess
+import sys
+from pathlib import Path
+
+import pysam
+import pytest
+
+from scripts.make_cram_fixtures import build_placed_flag12_fixture, build_reference_dependent_fixture
+
+logger = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.integration
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _local_config(tmp_path: Path) -> Path:
+    """Pin reference lookup and coverage to the purpose fixture's compact contig."""
+    payload = json.loads((REPO_ROOT / "vntyper" / "config.json").read_text(encoding="utf-8"))
+    payload["cram"]["local_ref_path"] = str(tmp_path / "local-ref" / "%2s" / "%2s" / "%s")
+    payload["bam_processing"]["assemblies"]["GRCh37"]["vntr_region_coords"] = "1-10000"
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(payload), encoding="utf-8")
+    return config
+
+
+def _run_cram(
+    cram: Path,
+    output_dir: Path,
+    config: Path,
+    *,
+    reference: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the purpose CRAM over its own compact target interval."""
+    command = [
+        sys.executable,
+        "-m",
+        "vntyper.cli",
+        "--config-path",
+        str(config),
+        "-l",
+        "DEBUG",
+        "pipeline",
+        "--cram",
+        str(cram),
+        "--reference-assembly",
+        "hg19",
+        "--custom-regions",
+        "chr1:1-10000",
+        "--threads",
+        "2",
+        "--fast-mode",
+        "--keep-intermediates",
+        "--output-dir",
+        str(output_dir),
+    ]
+    if reference is not None:
+        command.extend(["--reference-fasta", str(reference)])
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    logger.info("CRAM contract stdout:\n%s", result.stdout)
+    logger.info("CRAM contract stderr:\n%s", result.stderr)
+    return result
+
+
+def test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    """The actual header ``UR:`` target is renamed before the failing decode."""
+    fixture = build_reference_dependent_fixture(tmp_path / "purpose")
+    with pysam.AlignmentFile(str(fixture.cram), "rc", reference_filename=str(fixture.reference)) as alignment:
+        sequence = alignment.header.to_dict()["SQ"][0]
+    ur_target = Path(sequence["UR"])
+    expected_m5 = hashlib.md5(("A" * 10_000).encode()).hexdigest()
+    assert ur_target.samefile(fixture.reference)
+    assert sequence["M5"] == expected_m5
+
+    hidden_target = ur_target.with_name(f"{ur_target.name}.a209-missing")
+    ur_target.rename(hidden_target)
+    output = tmp_path / "missing-output"
+    try:
+        config = _local_config(tmp_path)
+        result = _run_cram(fixture.cram, output, config)
+    finally:
+        hidden_target.rename(ur_target)
+
+    diagnostic = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode != 0
+    assert "contig=chr1" in diagnostic
+    assert f"M5={expected_m5}" in diagnostic
+    for source in (
+        "source=cli",
+        "source=config_cram_reference",
+        "source=config_bwa_reference",
+        "source=htslib-resolved",
+    ):
+        assert source in diagnostic
+    assert not (output / "kestrel").exists()
+    assert not (output / "coverage").exists()
+    assert not (output / "pipeline_summary.json").exists()
+
+
+def test_a209_2_explicit_reference_completes_the_reference_dependent_cram(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    fixture = build_reference_dependent_fixture(tmp_path / "purpose")
+    output = tmp_path / "explicit-reference-output"
+
+    result = _run_cram(fixture.cram, output, _local_config(tmp_path), reference=fixture.reference)
+
+    assert result.returncode == 0
+    assert (output / "pipeline_summary.json").is_file()
+    assert (output / "kestrel" / "kestrel_result.tsv").is_file()
+
+
+def test_a209_3_no_ref_cram_completes_without_an_explicit_reference(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    fixture = build_placed_flag12_fixture(tmp_path / "purpose")
+    output = tmp_path / "no-ref-output"
+
+    result = _run_cram(fixture.cram, output, _local_config(tmp_path))
+
+    assert result.returncode == 0
+    assert (output / "pipeline_summary.json").is_file()
+    assert (output / "kestrel" / "kestrel_result.tsv").is_file()

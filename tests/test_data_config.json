@@ -699,6 +699,13 @@
       "output_bam": "tests/data/derived/single_end/example_b178_hg19_single_end.bam"
     }
   ],
+  "purpose_fixtures": {
+    "cram_reference_contract": {
+      "reference_dependent_cram": "tests/data/cram/reference-dependent/reference-dependent.cram",
+      "reference_fasta": "tests/data/cram/reference-dependent/reference.fa",
+      "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram"
+    }
+  },
   "unit_tests": {},
   "integration_tests": {
     "bam_tests": [
@@ -950,11 +957,11 @@
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 7110,
+            "value": 6111,
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.05869074492099323,
+            "value": 0.0677466863033873,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"

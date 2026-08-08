@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import logging
 import subprocess
@@ -188,6 +189,23 @@ def _select_source_bams(discovered: list[Path], *, data_config: Path, data_root:
     return direct_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all)
 
 
+def _derive_declared_single_end_fixtures(data_config: Path, repository_root: Path) -> None:
+    """Dispatch every validated Task9 fixture declaration.
+
+    Args:
+        data_config: Manifest containing top-level ``derived_fixtures`` entries.
+        repository_root: Root against which their portable paths are resolved.
+    """
+    payload = json.loads(data_config.read_text())
+    declarations = payload.get("derived_fixtures", [])
+    module_name = f"{__package__}.single_end_fixture" if __package__ else "single_end_fixture"
+    fixture_builder = importlib.import_module(module_name)
+
+    for declaration in declarations:
+        spec = fixture_builder.parse_single_end_fixture(declaration, root=repository_root)
+        fixture_builder.derive_single_end_bam(spec)
+
+
 def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -> Fixture:
     """Convert one BAM to CRAM and verify the conversion lost nothing.
 
@@ -243,6 +261,7 @@ def build_fixtures(
     *,
     data_config: Path = DEFAULT_DATA_CONFIG,
     include_all: bool = False,
+    repository_root: Path = Path("."),
 ) -> Summary:
     """Derive verified CRAMs for declared BAMs, or every BAM when requested.
 
@@ -253,6 +272,7 @@ def build_fixtures(
         limit: Optional smoke-test cap after selection.
         data_config: Manifest defining the normal fixture set.
         include_all: Derive every discovered source BAM for the golden cohort.
+        repository_root: Root used to resolve portable derived-fixture paths.
 
     Returns:
         The derivation summary.
@@ -264,6 +284,7 @@ def build_fixtures(
         data_root=data_root,
         include_all=include_all,
     )
+    _derive_declared_single_end_fixtures(data_config, repository_root)
     if limit is not None:
         bams = bams[:limit]
     for bam in bams:
