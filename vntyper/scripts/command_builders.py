@@ -512,8 +512,9 @@ def build_samtools_depth_command(
         every statistic computed from it is over a base set that varies per sample
         (#171).
     """
+    reference_flag = "" if reference_path is None else f"--reference {quote_path(reference_path)} "
     return (
-        f"{samtools_path} depth -a {_thread_flag(threads)}{_reference_flag(reference_path)}-r {quote_path(region)} "
+        f"{samtools_path} depth -a {_thread_flag(threads)}{reference_flag}-r {quote_path(region)} "
         f"{quote_path(bam_file)} > {quote_path(coverage_output)}"
     )
 

@@ -328,18 +328,23 @@ def test_index_carries_threads_but_one_thread_preserves_the_old_command():
     assert single_thread == "samtools index /o/s.bam"
 
 
-def test_depth_carries_the_reference_so_coverage_does_not_die_on_a_cram():
-    """Coverage reads the original CRAM and therefore needs the resolved reference too."""
+def test_depth_quotes_a_reference_path_with_spaces_and_shell_metacharacters():
+    """Depth uses its supported long reference flag without exposing a shell injection path."""
+    reference = "/r/my genome; touch /tmp/pwned.fa"
     command = build_samtools_depth_command(
         samtools_path=SAMTOOLS,
         threads=4,
         region="chr1:1-2",
         bam_file="/o/view.cram",
         coverage_output="/o/d.txt",
-        reference_path="/r/g.fa",
+        reference_path=reference,
     )
 
-    assert "-T /r/g.fa" in command
+    assert "--reference '/r/my genome; touch /tmp/pwned.fa'" in command
+    assert "-T" not in command
+    tokens = shlex.split(command)
+    assert tokens[tokens.index("--reference") + 1] == reference
+    assert "touch" not in tokens
 
 
 def test_a_reference_path_with_a_space_is_quoted_not_split():
