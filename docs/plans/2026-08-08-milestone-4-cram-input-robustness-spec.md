@@ -9,10 +9,25 @@
 
 ## 1. The exit bar
 
-A CRAM run either succeeds, or fails **at submission** with a message naming exactly what
-is missing. No input is ever silently discarded. Every behaviour this spec adds is
-config-driven; no threshold, contig name, reference path or scan strategy is written
-inline in Python.
+A CRAM run either succeeds, or fails with a message naming exactly what is missing,
+**before any stage does work**. No input is ever silently discarded. Every behaviour this
+spec adds is config-driven; no threshold, contig name, reference path or scan strategy is
+written inline in Python.
+
+"Before any stage does work" is deliberately not "at submission", because the two entry
+points differ and the difference is not something this milestone can paper over:
+
+* **CLI** — the preflight is the first thing `run_pipeline` does, so a bad input fails in
+  under a second with the message on stderr. This is "at submission" in every sense a CLI
+  user means.
+* **Web** — `docker/app/main.py` stores the upload, enqueues a Celery task and returns
+  *Job submitted* before any worker looks at the file (`main.py:463`, `:494`, `:547`), so
+  no check VNtyper adds inside `run_pipeline` can make the HTTP response name the problem.
+  The honest scope is therefore: the preflight runs first in the worker, and the
+  **message it raises is surfaced verbatim in the job status** instead of the generic text
+  `main.py:605` substitutes today. Preflighting inside the HTTP request would need the API
+  to run samtools synchronously, which is a change to the service's contract and is out of
+  scope (§9).
 
 ## 2. The one root cause
 
@@ -39,9 +54,20 @@ lands first for that reason.
 
 ## 3. Measured evidence
 
-All measurements on samtools 1.20 / htslib 1.23 — the pin in
-`conda/environment_vntyper.yml`, and the same pin `v2.0.3` carried, so these results
-apply to the environment #178 was reported against.
+All measurements on **samtools 1.20 with htslib 1.23**, which is what
+`conda/environment_vntyper.yml`'s `samtools=1.20` actually resolves to here:
+
+```
+$ conda list | grep -E "^(samtools|htslib)"
+htslib    1.23   h566b1c6_0   bioconda
+samtools  1.20   h50ea8bc_1   bioconda
+```
+
+`v2.0.3` pinned the same `samtools=1.20`, but conda resolves htslib independently and at
+a different date, so **the image #178 was reported against may have carried a different
+htslib than the one measured here.** That is a limitation of these measurements and it is
+also the point of §3.4: the behaviour VNtyper inherits from "leave it to htslib" is not
+pinned by anything in this repository.
 
 Fixture: a purpose-built reference-compressed CRAM (10 kb single contig, 50 reads,
 `M5` present, `UR:` present) with its reference then removed.
@@ -68,8 +94,20 @@ exit=124 elapsed=25s
 ```
 
 **Exit 124 means the timeout fired.** samtools produced no output, no error and did not
-exit. That is #178's reported shape verbatim: *"The process does not exit, no error is
-raised, and no output directory/files are generated."*
+exit.
+
+**This is a proven hang mechanism on this stack. It is not proof that it is #178's
+mechanism**, and the spec previously overstated that. `run_pipeline` calls
+`create_output_directories` at `pipeline.py:161`, before validation and before any CRAM is
+touched, and `cli.py:139` creates the log directory earlier still — so a hang anywhere
+inside `process_bam_to_fastq` would leave an output directory and a `pipeline.log` behind.
+The reporter states that *no* output directory was generated, which points at something
+before that line rather than at the reference fetch.
+
+What can be claimed: #213 is why the report contains no stage log to distinguish these,
+this milestone removes the reference-fetch hang and the whole-file scan as *possible*
+causes, and once #213 lands the next report of this shape arrives with the evidence needed
+to close it. A-178-3 asks the reporter for `docker logs` on a post-#213 image.
 
 The control confirms this is specific to a *network* REF_PATH, not to a missing reference:
 
@@ -189,6 +227,75 @@ aborting. VNtyper is safe there only because `run_command(..., critical=True)` r
 the non-zero exit and the partial file is never consumed. That is an existing invariant
 this milestone must not weaken.
 
+
+### 3.9 An index outside the alignment's directory is invisible without `-X`
+
+The obvious reading of #225 — "build the missing index into the output directory" — does
+not work on its own. Measured:
+
+```
+samtools index -o out/s.cram.crai in/s.cram          # builds fine
+samtools view -c -T full.fa in/s.cram chr1:4900-5100
+  [E::cram_index_load] Could not retrieve index file for 'in/s.cram'
+  samtools view: Random alignment retrieval only works for indexed ... files.
+samtools view -c -T full.fa -X in/s.cram out/s.cram.crai chr1:4900-5100
+  9
+```
+
+Same result for BAM with a relocated `.bai`. **Putting the index path in a plan object
+does not make htslib find it.** Either every random-retrieval command carries
+`-X <alignment> <index>`, or the alignment and its index are made co-located by some
+means that does not write to the input tree. §4.1a takes the second route, because
+`samtools idxstats` — which §4.3(b) depends on — has no `-X` option at all:
+
+```
+samtools idxstats -X in/s.cram out/s.cram.crai
+  idxstats: invalid option -- 'X'
+```
+
+### 3.10 `-P` and `-c` cannot be combined, so the probe writes instead of counting
+
+```
+samtools view -P -c ... :  samtools view: The options -P and -c cannot be combined
+```
+
+The probe therefore runs the real slice shape and discards the output:
+
+```
+samtools view -P -T <candidate> <aln> <region> -o /dev/null   # exit status is the proof
+```
+
+Measured against the §3.7 fixture with the `UR:` fallback suppressed: exit **1** for the
+chr1-only candidate, exit **0** for the full reference. The probe rejects exactly the
+reference the real slice would have failed on.
+
+**A `UR:` target that still exists on disk silently rescues a candidate that would
+otherwise fail.** Two of the measurements in this document were wrong until that was
+noticed. It is correct behaviour — a resolvable `UR:` *is* a working reference — but it
+makes candidate 4 succeed for reasons that have nothing to do with candidates 1–3, and
+any test of this path must suppress it.
+
+### 3.11 `idxstats` proves the indexed scan is lossless, from the index alone
+
+`samtools view -f 12 <cram> '*'` returns *unplaced* reads. A flag-12 read (read unmapped
+**and** mate unmapped) that is nonetheless *placed* would be missed. That is a
+silent-data-loss risk, and a config escape hatch does not discharge it.
+
+`samtools idxstats` reports, per contig, `name / length / mapped / placed-unmapped`, and
+reads only the index:
+
+```
+samtools idxstats big.cram      wall=0.00s
+chr1  20000  601  0
+chr2  20000  301  0
+*     0      0    4000
+```
+
+**If column 4 sums to zero across every contig, no placed unmapped read exists, so `'*'`
+provably recovers every flag-12 read in the file.** That is a per-run proof costing one
+index read, not an assumption. When it is non-zero the run falls back to the whole-file
+stream scan automatically. §4.3(b) is rewritten around this.
+
 ## 4. Design
 
 ### 4.1 The seam
@@ -213,6 +320,32 @@ The three pure modules are unit-testable with no filesystem and are held to the 
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
 `cohort_rules.py`) already meet.
 
+`fastq_bam_processing.py` measures **649 lines** today, not the 612 AGENTS.md's snapshot
+table records. It is therefore already at the ~650 guideline before this milestone adds a
+line, so every change to it must be net-negative: the index-resolution block moves into
+the preflight and the CRAM branch moves into a helper.
+
+### 4.1a The run-local alignment view
+
+§3.9 measured that an index built into the output directory is **invisible** to
+`samtools view`; the naive reading of #225 builds an index and then fails exactly as
+before. Two mechanisms can fix that, and only one of them works everywhere:
+
+* `-X <alignment> <index>` on every random-retrieval command. Correct for `view`, but
+  `samtools idxstats` — which §4.3(b)'s losslessness proof depends on — **has no `-X`**
+  (measured: `idxstats: invalid option -- 'X'`).
+* Make the alignment and its index co-located somewhere writable.
+
+So the preflight materialises a **run-local alignment view** inside the output directory:
+a symlink to the input alignment, plus its index beside it — the existing index symlinked
+when there is one, a freshly built one when there is not. Every subsequent samtools call
+uses the view's path.
+
+This costs two symlinks, writes nothing to the input tree (the milestone-3 invariant), and
+makes co-location the normal case rather than a special case, so no builder needs an
+index argument and `idxstats` works. When the input already has a co-located index the
+view is still created, so there is exactly one code path rather than two.
+
 ### 4.2 The reference contract — proof, not inference
 
 > **A reference is whatever decodes the target region. Prove it; do not infer it.**
@@ -224,10 +357,21 @@ Candidates are tried in this order, and the first one that **decodes a probe sli
 3. config `reference_data.bwa_reference_<assembly>` — the shipped chr1 FASTA
 4. the header's `UR:` field, if it names a readable file
 
-**The probe is the real slice command with `-c` substituted for `-b -o`** — same `-P`,
-same region, same reference fragment. Nothing else is an authorisation: §3.7 measured a
-`-P`-less probe passing on a reference the real slice then failed on. The probe region
-defaults to the run's own `bam_region` for the same reason.
+**The probe is the real slice command with its output sent to `/dev/null`** — same `-P`,
+same region *or the run's actual BED file*, same reference fragment, same alignment view.
+Nothing else is an authorisation: §3.7 measured a `-P`-less probe passing on a reference
+the real slice then failed on.
+
+It cannot be a `-c` count: §3.10 measured that **`-P` and `-c` cannot be combined**. The
+probe's exit status is the proof, and it discards its output:
+
+```
+samtools view -P <ref> <view.cram> <region|-L bed> -o /dev/null
+```
+
+When the run has a BED file — `--bed`, `--custom-regions`, or the predefined regions
+`pipeline.py` writes — the probe uses that BED, not a region string. A BED naming contigs
+the candidate does not cover is exactly the case a region-only probe would miss.
 
 Candidate 3 is retained but demoted in the logs: when the winner does not cover every
 contig in the CRAM header, the run logs a warning naming the uncovered contigs, because
@@ -248,8 +392,18 @@ disagrees with the shipped FASTA, is not reasoned about — it is probed, and it
 decodes or produces a named submission-time error. No ucsc/ensembl/ncbi inference and no
 `M5` table are needed anywhere in this path.
 
-Reference-free (`no_ref=1`) CRAMs, which #199's fixtures use, decode with no `-T` at all;
-the probe records that and the run proceeds with no reference, unchanged.
+**Candidate 0 is "no reference at all".** It is probed first, because a reference-free
+(`no_ref=1`) CRAM — which is what #199's fixtures are — decodes with no `-T` and must not
+be handed one. If that probe succeeds the plan records `reference_path=None` and every
+CRAM command keeps the empty fragment it has today, so the existing fixtures are
+bit-for-bit unaffected. Only if it fails are candidates 1–4 tried.
+
+**The `UR:` caveat is load-bearing for anyone testing this.** §3.10: a `UR:` target that
+still exists on disk silently rescues a candidate that would otherwise fail, because
+htslib falls back to it. That is correct behaviour in production — a resolvable `UR:` *is*
+a working reference, and it is candidate 4 — but it means a test asserting that candidate
+3 fails must delete or rename the `UR:` target first. Two measurements in §3 were wrong
+until this was noticed.
 
 ### 4.3 Making the hang unreachable
 
@@ -261,13 +415,28 @@ think of — can block on a network fetch. Config-driven: `cram.allow_ambient_re
 default `false`. Set it `true` and an operator's deliberately configured refget server is
 honoured, with a logged warning that the run can now block on it.
 
-**(b) Bound the unmapped scan.** `samtools view -b -f 12 <cram> '*'` replaces the
-whole-file stream. Config-driven: `cram.unmapped_scan`, `indexed` (default) or `stream`.
-The `stream` path is kept because `'*'` retrieves *unplaced* reads, and although flag 12
-(read unmapped **and** mate unmapped) is unplaced in every aligner output we have
-measured, a CRAM that places such reads would lose them silently — so the escape hatch
-stays, and the golden-cohort gate proves the default matches the stream on real data
-before it ships.
+**(b) Bound the unmapped scan, and *prove* the bound is lossless.**
+`samtools view -b -f 12 <view.cram> '*'` replaces the whole-file stream — but `'*'`
+returns only *unplaced* reads, so a flag-12 read that is nonetheless placed would be
+dropped. "It is unplaced in every aligner we tried" is not a guarantee, and a config
+escape hatch does not discharge a silent-loss risk.
+
+§3.11 supplies the guarantee. `samtools idxstats` reports placed-unmapped counts per
+contig from the index alone, in 0.00 s. So the scan is **selected per run, from evidence**:
+
+```
+placed_unmapped = sum(column 4 of samtools idxstats <view.cram>)
+if placed_unmapped == 0:  indexed scan   # provably recovers every flag-12 read
+else:                     stream scan    # the O(file) form, because it is the correct one
+```
+
+Config-driven: `cram.unmapped_scan` is `auto` (default), `indexed` or `stream`. `auto` is
+the rule above. The two explicit values exist for reproducing a historical run and for
+the golden-cohort equivalence check; `indexed` logs a warning when it is forced on a file
+whose `idxstats` says it will lose reads.
+
+This is the difference between removing a failure mode and hiding it: the fast path is
+taken only where it is proven equivalent, and the proof costs one index read.
 
 ### 4.4 No read is silently discarded
 
@@ -275,6 +444,26 @@ before it ships.
 of them to `_`. `read_layout.py` replaces that with an explicit verdict: every produced
 FASTQ is either routed into the run or named in the failure. There is no branch in which
 a non-empty FASTQ is dropped without the run saying so.
+
+**The verdict is computed from the produced FASTQs, not from the input slice**, and that
+correction matters twice over:
+
+1. *Correctness.* In normal mode the FASTQ source is the merged slice **plus** the
+   whole-input unmapped set (`fastq_bam_processing.py:157`, `:202`, `:258`). A perfectly
+   paired slice can therefore still yield singletons once unmapped mates are merged in, so
+   a layout inferred from the slice would plan for `paired` and then silently strand the
+   `other`/`single` files — the very class this section closes.
+2. *Constructibility.* An earlier draft had the preflight both return a frozen
+   `AlignmentPlan` **and** compute the layout, while the layout was to be read from a slice
+   that only exists after `process_bam_to_fastq` runs — a cycle. Splitting it removes the
+   cycle: `AlignmentPlan` carries index and reference and is frozen at preflight; the
+   layout is a separate verdict computed after conversion and before anything consumes a
+   FASTQ.
+
+**`mixed_tolerance` is removed.** A tolerance necessarily coerces some reads into a layout
+they do not belong to without saying where they went, which contradicts the invariant this
+section exists to state. The rule is exact: a non-empty FASTQ that nothing consumes fails
+the run, naming the file and its read count.
 
 ## 5. Per-issue changes
 
@@ -284,10 +473,18 @@ a non-empty FASTQ is dropped without the run saying so.
   `--no-capture-output`, so conda buffers child stdout/stderr until exit. The Docker test
   suite bypasses `entrypoint.sh` via `bash -c` and *does* pass the flag, so no test
   exercises the path users take.
-* **Change:** add the flag at all four sites.
-* **Failure mode made impossible:** a running pipeline that produces no log output.
-* **Test:** a Docker test that runs the image **through its entrypoint** and asserts a
-  stage log line appears before the process exits.
+* **Change:** add the flag at all four sites — **and at the fifth, which the issue does
+  not mention.** `docker/app/tasks.py:191` builds
+  `["conda", "run", "-n", "vntyper", "vntyper", "pipeline", ...]` and runs it at `:312`.
+  That is the invocation every *web* job goes through, and it has the same defect. Fixing
+  only `entrypoint.sh` makes the Celery worker's own output stream while the pipeline it
+  launches stays buffered, so the web path — the one #199 routed CRAM uploads onto — would
+  still produce a job that runs for an hour and logs nothing.
+* **Failure mode made impossible:** a running pipeline that produces no log output, by
+  either entry point.
+* **Test:** a source-level assertion that every `conda run` in the repository that launches
+  a long-running child carries the flag (so a sixth site added later fails the build), plus
+  a Docker test that runs the image **through its entrypoint** and asserts output appears.
 
 ### #225 — index resolved too late (BAM) or not at all (CRAM)
 
@@ -296,9 +493,23 @@ a non-empty FASTQ is dropped without the run saying so.
   (`grep -rn crai vntyper/` returns nothing).
 * **Change:** preflight resolves the index before the slice, for both formats, and builds
   a missing one into the **output** directory (`samtools index -o`, available at the
-  pinned 1.20). `resolve_bam_index` is left BAI-only and unchanged — the offset extractor
-  parses BAI directly and would raise on a CSI. A new `resolve_cram_index` handles
-  `.crai` under both `<file>.crai` and `<stem>.crai`.
+  pinned 1.20) — then exposes it through the run-local alignment view of §4.1a, because
+  §3.9 measured that an index merely *placed* in the output directory is invisible to
+  `samtools view`. `resolve_bam_index` is left BAI-only and unchanged — the offset
+  extractor parses BAI directly and would raise on a CSI. A new `resolve_cram_index`
+  handles `.crai` under both `<file>.crai` and `<stem>.crai`.
+* **An index that exists is not an index that works.** Resolution is by filename only
+  (`Path.exists()`), so a truncated, stale or wrong-sample index resolves happily. The
+  preflight does not add a separate validation step for this: the reference probe (§4.2)
+  is a real indexed retrieval through the view, so for CRAM a broken index fails there,
+  at submission. For BAM the equivalent is a probe slice with no reference fragment. That
+  is cheaper and stronger than inspecting the index, because it tests the operation the
+  run will actually perform.
+* **Fast mode and CSI.** `resolve_bam_index` returning None causes a BAI rebuild even for
+  a CSI-indexed BAM in fast mode, which never reaches the offset extractor and would have
+  sliced fine through htslib. The preflight therefore asks for a BAI only when the run
+  needs the offset extractor (non-fast BAM); otherwise any index htslib accepts is enough,
+  which the probe decides.
 * **Failure mode made impossible:** `Random alignment retrieval only works for indexed…`
   reaching a user mid-run.
 * **Test:** unit tests for both resolvers over all four name spellings; a preflight test
@@ -309,9 +520,21 @@ a non-empty FASTQ is dropped without the run saying so.
 
 * **Root cause:** `process_bam_to_fastq` sets `cram_ref_option = ""` unconditionally,
   even though both CRAM command builders accept a `-T` fragment.
-* **Change:** §4.2.
+* **Change:** §4.2 — **and the winning reference must reach every CRAM consumer, not just
+  the slice.** `pipeline.py:468` sets `input_bam = Path(cram)` and runs
+  `calculate_vntr_coverage` directly against the original CRAM, while
+  `build_samtools_depth_command` (`command_builders.py:398`) emits no `-T` at all. So a
+  reference-dependent CRAM would pass the probe, slice, convert — and then die at coverage;
+  and pinning `REF_PATH` (§4.3a) removes the ambient fallback that hides this today. The
+  depth command takes the reference, and coverage runs against the alignment view.
+* **The reference is a path, not a preformatted flag.** `cram_ref_option` is interpolated
+  **unquoted** by contract (`command_builders.py:187`, `:263`), so building `"-T " + path`
+  from a user-supplied `--reference-fasta` would split on spaces and execute on a
+  metacharacter under `run_command(shell=True)`. The builders take `reference_path` and
+  quote it with `quote_path` themselves.
 * **Failure mode made impossible:** an undecodable CRAM being accepted, queued, started
-  and failing an hour into a cohort run.
+  and failing an hour into a cohort run; and a CRAM that decodes for the slice but not for
+  coverage.
 * **Test:** the §3.1 ladder as a unit test with samtools mocked; an integration test on a
   reference-dependent CRAM fixture with its reference removed, asserting the run is
   rejected at submission and the message names the reference.
@@ -350,8 +573,10 @@ a non-empty FASTQ is dropped without the run saying so.
 * **Change:** single-end becomes a supported layout. Preflight determines it from flag
   counts; `read_layout` decides which FASTQs feed downstream; `process_fastq`,
   `align_and_sort_fastq` and `construct_kestrel_command` accept a single FASTQ.
-  `mixed` (both paired and unpaired reads present above a configured tolerance) is
-  reported, not silently coerced.
+  `mixed` (both paired and unpaired reads present) is reported, not coerced.
+  `cli_handlers.py:227` also rejects `--fastq1` without `--fastq2`, so single-end **FASTQ**
+  input is refused at argument parsing. That is the same gap seen from the other side, and
+  the issue asks about both, so it is fixed here too rather than left as a second report.
 * **Failure mode made impossible:** a non-empty FASTQ produced by a stage and consumed by
   nothing.
 * **Test:** single-end fixtures derived from the cohort; a unit test that fails if any
@@ -407,7 +632,16 @@ consumes them. Removing it is a genotyping change, not a performance change.
 ### Gate
 
 `A-PERF-1` below. The golden cohort is the measuring instrument: it already runs the
-whole pipeline over 50 samples, so its wall-clock before and after is the honest number.
+whole pipeline over 50 samples.
+
+**One before/after run cannot decide this.** The slice covers 5–10 kb
+(`config.json` `bam_region_*`), so `-@` adds thread setup to a job that may be too small
+to benefit, and page cache makes a second run of anything faster than the first. The
+measurement is therefore: three runs of each arm, alternating, on an otherwise idle host,
+reporting median and range; a regression is called only when the slower arm's *best* run
+is worse than the faster arm's *worst*. If P1/P2 fall inside the noise band they are kept
+anyway — they are strictly less work — but the spec will say so rather than claim a win it
+did not measure.
 
 ## 6. Config surface
 
@@ -415,21 +649,45 @@ Every behaviour above is reachable from configuration. New keys:
 
 ```jsonc
 "cram": {
-  "allow_ambient_reference_resolution": false,  // §4.3(a)
-  "unmapped_scan": "indexed",                   // "indexed" | "stream", §4.3(b)
-  "reference_probe_region": null                // null = the run's own bam_region
+  // §4.3(a). false pins REF_PATH to `local_ref_path` for the run, so no samtools call
+  // can block on a network refget endpoint. true honours the operator's own REF_PATH
+  // and logs that the run may now block on it.
+  "allow_ambient_reference_resolution": false,
+  "local_ref_path": "%2s/%2s/%s",
+
+  // §4.3(b). "auto" selects indexed when idxstats proves no placed-unmapped read
+  // exists, and stream otherwise. The explicit values reproduce a historical run.
+  "unmapped_scan": "auto",                      // "auto" | "indexed" | "stream"
+
+  // Order in which reference candidates are probed. Editing this list is the supported
+  // way to change resolution policy; the order is not written in Python.
+  "reference_candidate_order": [
+    "none", "cli", "config_cram_reference", "config_bwa_reference", "header_ur"
+  ]
 },
 "read_layout": {
-  "mixed_tolerance": 0.0                        // §5 #161
+  // A non-empty FASTQ that nothing consumes fails the run. Set false only to reproduce
+  // pre-milestone-4 behaviour, which discarded them silently (#161).
+  "fail_on_unconsumed_reads": true
 },
 "reference_data": {
   "cram_reference_hg19": null,
   "cram_reference_hg38": null
 },
 "assembly_detection": {
-  "naming_convention_threshold": 0.5            // §5 #165, was inline
+  // §5 #165. The threshold was inline; the primary set is what the denominator is
+  // computed over, so both belong here.
+  "naming_convention_threshold": 0.5,
+  "primary_contig_patterns": [
+    "^chr[0-9XYM]+$", "^NC_\\d{6}\\.\\d+$", "^([0-9]+|X|Y|MT?)$"
+  ]
 }
 ```
+
+`vntyper/config.json` is the shipped default. Because `--config-path` **replaces** the
+whole config rather than merging it (trap 2), every read of these keys uses `.get` with
+the value above as its default, and a config that omits them behaves exactly like one that
+sets them to the shipped values.
 
 `--config-path` replaces the whole config rather than merging (trap 2), so every read of
 these keys uses `.get` with the shipped default and no `KeyError` can abort a run over a
@@ -439,31 +697,37 @@ threshold.
 
 Each is a command whose output decides it. None is satisfied by reading code.
 
-| ID | Criterion |
-| --- | --- |
-| A-213-1 | The image, run through its entrypoint, emits a stage log line before the process exits. |
-| A-225-1 | An unindexed BAM and an unindexed CRAM both reach the slice with an index, or are rejected at submission naming the missing index. |
-| A-225-2 | After a run over a read-only input mount, the input tree is byte-identical, for BAM and CRAM. |
-| A-209-1 | A reference-dependent CRAM with its reference removed is rejected **before** any stage runs, with a message naming the contig, its `M5` and every candidate tried. |
-| A-209-2 | The same CRAM with `--reference-fasta` pointed at its reference runs to completion. |
-| A-209-3 | A `no_ref=1` CRAM runs to completion with no reference supplied. |
-| A-209-4 | **Settled (§3.7): `-P` does fetch cross-contig mates.** The criterion is now that the reference probe uses the *same* flags and region as the slice it authorises — a `-P`-less probe must fail this test, since it passes on a chr1-only reference the real slice then rejects. |
-| A-209-5 | A CRAM whose winning reference does not cover every header contig produces a logged warning naming the uncovered contigs. |
-| A-178-1 | With `REF_PATH` pointed at an unresponsive endpoint, a CRAM run completes or fails; it does not block. |
-| A-178-2 | Indexed and stream unmapped scans produce identical genotypes across the golden cohort. |
-| A-165-1 | The issue's 93-contig header returns `ucsc`; a genuinely ambiguous header still returns `unknown`. |
-| A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. |
-| A-161-2 | No run produces a non-empty FASTQ that nothing consumes and nothing names. |
-| A-PERF-1 | Golden-cohort wall-clock does not regress on the BAM path, measured on the same host before and after. P1–P3 are expected to improve it; the criterion is "no regression", and the measured delta is recorded in the plan. |
-| A-PERF-2 | A default (non-fast) BAM run builds the sliced BAM's index **once**, proven by counting `samtools index` invocations in the stage logs. |
-| A-ALL-1 | `make check-all` passes; `make patch-coverage` is ≥ 80%; the coverage floor is not lowered. |
+| ID | Criterion | Decided by |
+| --- | --- | --- |
+| A-213-1 | Every `conda run` that launches a long-running child carries `--no-capture-output`, in `docker/entrypoint.sh` **and** `docker/app/tasks.py`. | source assertion in the unit tier |
+| A-213-2 | The image, run through its entrypoint, emits output before the process exits. | docker tier |
+| A-225-1 | An unindexed BAM and an unindexed CRAM both complete a region slice, with the built index never written beside the input. | integration, read-only input mount |
+| A-225-2 | The slice is performed through a path whose index htslib can actually find — proven by a run whose input directory contains **no** index at any point. | integration |
+| A-225-3 | After a run over a read-only input mount, the input tree is byte-identical, for BAM and CRAM. | `test_input_tree_is_never_written.py` |
+| A-209-1 | A reference-dependent CRAM with its reference removed **and its `UR:` target renamed** is rejected before any stage runs, with a message naming the contig, its `M5` and every candidate tried. | integration |
+| A-209-2 | The same CRAM with `--reference-fasta` pointed at its reference runs to completion. | integration |
+| A-209-3 | A `no_ref=1` CRAM runs to completion with no reference supplied, and its commands carry no `-T`. | unit + golden cohort |
+| A-209-4 | The reference probe uses the same flags (`-P`) and the same region *or BED* as the slice it authorises. A `-P`-less probe must fail this test. | unit |
+| A-209-5 | Coverage (`samtools depth`) on a reference-dependent CRAM carries the same reference the slice used. | unit + integration |
+| A-209-6 | A reference path containing a space or a shell metacharacter is quoted, not executed. | unit |
+| A-178-1 | With `REF_PATH` pointed at an endpoint that accepts TCP and never responds, a CRAM run **exits within 120 s**. The test asserts on elapsed time; without a deadline the criterion cannot fail. | integration |
+| A-178-2 | For every golden-cohort CRAM sample, the indexed and stream scans produce the **same read set** (`samtools view -c` on the unmapped BAM, and a sorted read-name digest), not merely the same genotype. Equal genotypes cannot prove equal reads. | golden cohort |
+| A-178-3 | `auto` selects `stream` on a CRAM constructed to contain a placed flag-12 read, and `indexed` on one without. | unit + purpose-built fixture |
+| A-165-1 | The issue's 93-contig header returns `ucsc`; a genuinely ambiguous header still returns `unknown`; a header with no classifiable contig returns `unknown` and does not divide by zero. | unit |
+| A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. | integration, derived fixture |
+| A-161-2 | A run that produces a non-empty FASTQ nothing consumes fails, naming the file and its read count. | unit |
+| A-161-3 | `--fastq1` without `--fastq2` is accepted and genotyped rather than rejected at argument parsing. | unit + integration |
+| A-PERF-1 | Golden-cohort wall-clock does not regress on the BAM path: three alternating runs per arm on an idle host, median and range reported; a regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
+| A-PERF-2 | A default (non-fast) BAM run builds the sliced BAM's index **once**, counted from the stage logs. | integration |
+| A-WEB-1 | A preflight failure reaches the job status as its own message, not the generic text `main.py:605` substitutes. | web tier |
+| A-ALL-1 | `make check-all` passes; `make patch-coverage` ≥ 80%; the coverage floor is not lowered; every function modified by this milestone gains a unit test for the behaviour that changed (AGENTS.md rule 1). | full gate |
 
 ## 8. Dependency order
 
 ```
 wave 0   #213                       independent; lands first so every later failure is legible
 wave 1   #225 + the preflight seam  keystone; every later change consumes AlignmentPlan
-wave 2   {#209, #178}   #165   #161   fixtures        parallel worktrees
+wave 2   {#209, #178}   #165   #161   fixtures + gate matrix   parallel worktrees
 wave 3   golden-cohort gate, full check-all, one PR
 ```
 
@@ -483,6 +747,16 @@ other.
 * A web form field for the CRAM reference. The worker reads the configured key; a UI for
   it is a separate change to `docker/app/`.
 * #210's second BAM index and #188, both already filed.
+* Preflighting inside the HTTP request. §1 explains why: it would make the API run
+  samtools synchronously, changing the service's contract. What *is* in scope is surfacing
+  the preflight's message in the job status (A-WEB-1).
+* A timeout on `run_command`. `allow_ambient_reference_resolution: true` re-enables an
+  unbounded wait by definition, and the default `false` removes it; a general subprocess
+  deadline is a change to every stage's failure semantics and belongs in its own issue.
+  Filed as a follow-up rather than smuggled in here.
+* Extracting `construct_kestrel_command` out of the 936-line `kestrel_genotyping.py`.
+  AGENTS.md rule 3 asks for it and this milestone touches that function; the extraction is
+  included in #161's task, but a wider split of that module is not.
 
 ## 10. Adversarial review
 
@@ -490,6 +764,46 @@ Codex `gpt-5.6-sol` at `xhigh` reasoning, run against this spec, against the pla
 against the final diff. Verdict recorded here. **No HIGH concern may survive into the
 PR.**
 
-| Round | Target | HIGH | MED | LOW | Verdict |
+| Round | Target | HIGH | MED | LOW | Outcome |
 | --- | --- | --- | --- | --- | --- |
-| 1 | this spec | _pending_ | | | |
+| 1 | spec | 14 | 12 | 2 | 12 accepted and fixed, 2 rebutted with evidence |
+
+### Round 1 — what changed as a result
+
+Two findings would have shipped a fix that does not fix anything, and both were confirmed
+by measurement rather than by argument:
+
+* **An index in the output directory is invisible to `samtools view`** (§3.9). The naive
+  #225 fix builds an index and then fails identically. → §4.1a, the run-local alignment
+  view.
+* **`-P` and `-c` cannot be combined** (§3.10), so the specified probe cannot be run at
+  all. → the probe writes to `/dev/null` and its exit status is the proof.
+
+Also accepted and specified: the second `conda run` in `docker/app/tasks.py` (#213's real
+web path); the reference never reaching `samtools depth` (#209 × coverage); the web
+service returning *Job submitted* before any check runs (§1's honest scope); layout
+inferred from the pre-merge slice being both wrong and circular (§4.4); `'*'` losing
+placed flag-12 reads (§4.3(b), now proven per run by `idxstats`); `mixed_tolerance`
+contradicting the no-discard invariant (removed); an unquoted `-T` fragment being an
+injection path (builders take a path); the missing reference-free candidate (candidate 0);
+config keys promised but not specified (§6); acceptance criteria with no deadline and no
+read-set comparison (§7); the stale 612-line figure (649).
+
+### Round 1 — rebutted
+
+* **"The measured htslib stack is not the repository's pinned stack."** The claim was that
+  `samtools=1.20` pins htslib `<1.21`. In this environment `conda list` reports
+  `samtools 1.20 h50ea8bc_1` alongside `htslib 1.23 h566b1c6_0`, and `samtools --version`
+  reports *Using htslib 1.23* — the measurements were taken on exactly the pair the
+  repository resolves. The *underlying* point is nonetheless right and is now stated in
+  §3: conda resolves htslib independently of the pin, so the image #178 was reported
+  against may differ, and that is an argument for pinning behaviour rather than inheriting
+  it.
+* **"The plan page violates the repository's docs rule."** AGENTS.md says never add a page
+  under `docs/` without registering it in `mkdocs.yml` `nav:`. Measured: an unregistered
+  page is an **INFO** in mkdocs 1.6.1, not a warning, so it does not fail `--strict`; what
+  actually failed the build was the `macros` plugin reading the prose `{#209, #178}` as an
+  unterminated Jinja comment. `exclude_docs: plans/` states the real intent — these are
+  contributor working documents, not published pages — and keeps the strict build honest
+  about the pages that *are* published. AGENTS.md's wording is updated to match rather
+  than the plan being bent to a rule that measurement shows is misstated.
