@@ -267,8 +267,8 @@ def test_a_provenance_alias_of_patient_data_is_rejected_without_following_it(tmp
     assert not (output / "sample.cram").exists()
 
 
-def test_generated_cram_index_transitions_to_a_new_source_crai(tmp_path: Path) -> None:
-    """A source CRAI appearing after a local build safely replaces owned output."""
+def test_generated_cram_index_is_rebuilt_when_a_source_crai_appears(tmp_path: Path) -> None:
+    """A newly appearing source CRAI is preserved but never trusted."""
     input_dir = tmp_path / "input"
     output = tmp_path / "output"
     cram = _alignment(input_dir, "cram", b"patient alignment")
@@ -281,18 +281,19 @@ def test_generated_cram_index_transitions_to_a_new_source_crai(tmp_path: Path) -
     source_crai = Path(f"{cram}.crai")
     source_crai.write_bytes(b"patient source index")
 
-    view_path, selected_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
+        view_path, selected_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
 
     assert Path(view_path).samefile(cram)
-    assert Path(selected_index).is_symlink()
-    assert Path(selected_index).samefile(source_crai)
-    assert not _provenance(selected_index).exists()
+    assert Path(selected_index).is_file()
+    assert not Path(selected_index).is_symlink()
+    assert generated_index_is_owned(selected_index, (cram, source_crai)) is True
     assert cram.read_bytes() == b"patient alignment"
     assert source_crai.read_bytes() == b"patient source index"
 
 
-def test_generated_cram_index_transitions_to_a_different_inputs_source_csi(tmp_path: Path) -> None:
-    """Output reuse selects a new input's CSI and removes its stale owned CRAI."""
+def test_generated_cram_index_is_rebuilt_for_a_different_input_with_source_csi(tmp_path: Path) -> None:
+    """Output reuse rebuilds from the new CRAM instead of trusting its CSI."""
     output = tmp_path / "output"
     first_cram = _alignment(tmp_path / "first", "cram", b"first patient alignment")
     second_cram = _alignment(tmp_path / "second", "cram", b"second patient alignment")
@@ -304,16 +305,17 @@ def test_generated_cram_index_transitions_to_a_different_inputs_source_csi(tmp_p
     source_csi = Path(f"{second_cram}.csi")
     source_csi.write_bytes(b"second patient source index")
 
-    view_path, selected_index = build_alignment_view(
-        str(second_cram), str(output), "sample", "cram", _config(), threads=2
-    )
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
+        view_path, selected_index = build_alignment_view(
+            str(second_cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert Path(view_path).samefile(second_cram)
-    assert Path(selected_index) == output / "sample.cram.csi"
-    assert Path(selected_index).is_symlink()
-    assert Path(selected_index).samefile(source_csi)
-    assert not Path(stale_crai).exists()
-    assert not stale_provenance.exists()
+    assert Path(selected_index) == output / "sample.cram.crai"
+    assert Path(selected_index).is_file()
+    assert not Path(selected_index).is_symlink()
+    assert generated_index_is_owned(selected_index, (second_cram, source_csi)) is True
+    assert stale_provenance.is_file()
     assert first_cram.read_bytes() == b"first patient alignment"
     assert second_cram.read_bytes() == b"second patient alignment"
     assert source_csi.read_bytes() == b"second patient source index"
@@ -324,10 +326,10 @@ def test_generated_cram_index_transitions_to_a_different_inputs_source_csi(tmp_p
     [(True, ".bai"), (False, ".csi")],
     ids=["non-fast-bai", "fast-csi"],
 )
-def test_generated_bam_index_transitions_only_to_an_accepted_source_index(
+def test_generated_bam_index_is_rebuilt_even_when_an_accepted_source_index_appears(
     tmp_path: Path, bai_only: bool, source_suffix: str
 ) -> None:
-    """BAM reruns preserve BAI-only mode while fast mode may select CSI."""
+    """Neither BAI-only nor fast mode trusts an unbound source index."""
     input_dir = tmp_path / "input"
     output = tmp_path / "output"
     bam = _alignment(input_dir, "bam", b"patient alignment")
@@ -341,14 +343,16 @@ def test_generated_bam_index_transitions_only_to_an_accepted_source_index(
     source_index = Path(f"{bam}{source_suffix}")
     source_index.write_bytes(b"patient source index")
 
-    view_path, selected_index = build_alignment_view(
-        str(bam), str(output), "sample", "bam", _config(), threads=2, bai_only=bai_only
-    )
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
+        view_path, selected_index = build_alignment_view(
+            str(bam), str(output), "sample", "bam", _config(), threads=2, bai_only=bai_only
+        )
 
     assert Path(view_path).samefile(bam)
-    assert Path(selected_index).is_symlink()
-    assert Path(selected_index).samefile(source_index)
-    assert not generated_provenance.exists()
+    assert Path(selected_index).is_file()
+    assert not Path(selected_index).is_symlink()
+    assert generated_index_is_owned(selected_index, (bam, source_index)) is True
+    assert generated_provenance.is_file()
     assert bam.read_bytes() == b"patient alignment"
     assert source_index.read_bytes() == b"patient source index"
 
@@ -482,53 +486,8 @@ def test_provenance_update_failure_restores_the_old_pair_and_rerun_recovers(tmp_
     assert generated_index_is_owned(index, (cram,)) is True
 
 
-def test_source_transition_provenance_remove_failure_restores_the_old_pair_and_rerun_recovers(
-    tmp_path: Path,
-) -> None:
-    """A source-index transition rolls back when old ownership cannot be removed."""
-    cram = _alignment(tmp_path / "input", "cram", b"patient alignment")
-    output = tmp_path / "output"
-
-    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, generated_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
-
-    index = Path(generated_index)
-    provenance = _provenance(index)
-    old_inode = index.stat().st_ino
-    source_index = Path(f"{cram}.crai")
-    source_index.write_bytes(b"patient source index")
-    real_unlink = os.unlink
-    fault_injected = False
-
-    def fail_provenance_remove(path: str | os.PathLike[str]) -> None:
-        nonlocal fault_injected
-        if not fault_injected and Path(path) == provenance:
-            fault_injected = True
-            raise OSError("provenance remove failed")
-        real_unlink(path)
-
-    with (
-        patch("vntyper.scripts.alignment_index_provenance.os.unlink", side_effect=fail_provenance_remove),
-        pytest.raises(ValueError, match="provenance remove failed"),
-    ):
-        build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
-
-    assert fault_injected
-    assert index.is_file()
-    assert not index.is_symlink()
-    assert index.stat().st_ino == old_inode
-    assert generated_index_is_owned(index, (cram, source_index)) is True
-
-    _, recovered_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
-
-    assert recovered_index == generated_index
-    assert index.is_symlink()
-    assert index.samefile(source_index)
-    assert not provenance.exists()
-
-
-def test_stale_index_unlink_failure_leaves_no_final_pair_and_rerun_recovers(tmp_path: Path) -> None:
-    """Stale owned cleanup removes final names before fallible artifact deletion."""
+def test_rebuild_tombstone_cleanup_failure_keeps_the_new_owned_index(tmp_path: Path) -> None:
+    """A post-commit tombstone cleanup failure cannot roll back a trusted rebuild."""
     first_cram = _alignment(tmp_path / "first", "cram", b"first patient alignment")
     second_cram = _alignment(tmp_path / "second", "cram", b"second patient alignment")
     output = tmp_path / "output"
@@ -557,20 +516,18 @@ def test_stale_index_unlink_failure_leaves_no_final_pair_and_rerun_recovers(tmp_
         real_unlink(path)
 
     with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index),
         patch("vntyper.scripts.alignment_index_provenance.os.unlink", side_effect=fail_stale_index_unlink),
-        pytest.raises(ValueError, match="stale index unlink failed"),
     ):
-        build_alignment_view(str(second_cram), str(output), "sample", "cram", _config(), threads=2)
+        view_path, rebuilt_index = build_alignment_view(
+            str(second_cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert fault_injected
-    assert not os.path.lexists(stale_index)
-    assert not os.path.lexists(stale_provenance)
-
-    view_path, recovered_index = build_alignment_view(
-        str(second_cram), str(output), "sample", "cram", _config(), threads=2
-    )
-
     assert Path(view_path).samefile(second_cram)
-    assert Path(recovered_index) == output / "sample.cram.csi"
-    assert Path(recovered_index).is_symlink()
-    assert Path(recovered_index).samefile(source_csi)
+    assert Path(rebuilt_index) == output / "sample.cram.crai"
+    assert Path(rebuilt_index).is_file()
+    assert not Path(rebuilt_index).is_symlink()
+    assert stale_provenance.is_file()
+    assert generated_index_is_owned(rebuilt_index, (second_cram, source_csi)) is True
+    assert source_csi.read_bytes() == b"patient source index"

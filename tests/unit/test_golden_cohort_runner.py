@@ -251,6 +251,57 @@ def test_a_cram_case_places_global_config_before_pipeline_and_current_cli_accept
     assert parsed.config_path == config_path
 
 
+def test_side_expectation_is_materialized_before_admissibility() -> None:
+    """A candidate refusal and a baseline success are both intentional outcomes."""
+    case = {
+        "case_id": "mixed",
+        "expect_exit": "zero",
+        "required_artifacts": ["pipeline_summary.json"],
+        "side_expectations": {
+            "before": {"expect_exit": "zero", "required_artifacts": ["pipeline_summary.json"]},
+            "after": {"expect_exit": "nonzero", "required_artifacts": []},
+        },
+    }
+
+    assert runner.materialize_side_expectation(case, "before") == {
+        **case,
+        "expect_exit": "zero",
+        "required_artifacts": ["pipeline_summary.json"],
+    }
+    assert runner.materialize_side_expectation(case, "after") == {
+        **case,
+        "expect_exit": "nonzero",
+        "required_artifacts": [],
+    }
+
+
+def test_side_expectation_rejects_a_missing_side() -> None:
+    """A malformed differential declaration must not fall back to the legacy default."""
+    case = {
+        "case_id": "mixed",
+        "side_expectations": {"before": {"expect_exit": "zero", "required_artifacts": []}},
+    }
+
+    with pytest.raises(ValueError, match="has no 'after' expectation"):
+        runner.materialize_side_expectation(case, "after")
+
+
+@pytest.mark.parametrize(
+    ("selected", "problem"),
+    [
+        ({"required_artifacts": []}, "expect_exit"),
+        ({"expect_exit": "maybe", "required_artifacts": []}, "expect_exit"),
+        ({"expect_exit": "zero", "required_artifacts": "summary.json"}, "required_artifacts"),
+    ],
+)
+def test_side_expectation_rejects_malformed_outcome_fields(selected: object, problem: str) -> None:
+    """A partial side declaration must not inherit a legacy outcome and pass silently."""
+    case = {"case_id": "mixed", "side_expectations": {"after": selected}}
+
+    with pytest.raises(ValueError, match=problem):
+        runner.materialize_side_expectation(case, "after")
+
+
 def test_a_cram_case_adds_a_missing_cram_section_to_its_complete_config_copy(tmp_path: Path) -> None:
     """Older target trees must still receive a replacement-safe complete config."""
     tree = tmp_path / "tree"
@@ -383,6 +434,14 @@ def test_a_side_records_a_failed_revision_lookup_rather_than_losing_the_run(tmp_
     assert record["revision"]["head"] is None
     assert record["revision"]["error"] == "not a git repository"
     assert record["launch_verified"] is True
+
+
+def test_load_side_rejects_a_non_object_record(tmp_path: Path) -> None:
+    """A syntactically valid JSON array cannot masquerade as a side attestation."""
+    (tmp_path / "side.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        runner.load_side(tmp_path)
 
 
 # --------------------------------------------------------------------------------------

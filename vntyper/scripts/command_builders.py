@@ -290,8 +290,8 @@ def build_cram_unmapped_filter_command(
 
     BAM inputs use the offset-based extractor in
     ``extract_unmapped_from_offset.py``; CRAM has no equivalent, so it streams the
-    whole file through samtools and picks out flag 12 (read unmapped **and** mate
-    unmapped).
+    whole file through samtools and picks out flag 4 (read unmapped). This also
+    retains unpaired reads, which do not carry the mate-unmapped bit.
 
     Args:
         samtools_path (str): samtools invocation from config. This is used for
@@ -334,7 +334,7 @@ def build_cram_unmapped_filter_command(
     return (
         f"{PIPEFAIL_PREFIX}"
         f"{samtools_path} view {_reference_flag(reference_path)}{_thread_flag(threads)}-h {quote_path(in_bam)} | "
-        f"{samtools_path} view -b -f 12 {_thread_flag(threads)}- -o {quote_path(unmapped_bam)}"
+        f"{samtools_path} view -b -f 4 {_thread_flag(threads)}- -o {quote_path(unmapped_bam)}"
     )
 
 
@@ -351,15 +351,16 @@ def build_cram_unmapped_indexed_command(
     Args:
         samtools_path: samtools invocation from config.
         in_bam: Indexed BAM or CRAM alignment view.
-        unmapped_bam: Destination BAM for flag-12 reads.
+        unmapped_bam: Destination BAM for read-unmapped records.
         threads: Thread count for samtools.
         reference_path: Reference FASTA for CRAM decoding.
 
     Returns:
-        A single ``samtools view`` command that requests literal ``'*'`` reads.
+        A single ``samtools view`` command that requests literal ``'*'`` reads
+        whose read-unmapped bit is set, including unpaired reads.
     """
     return (
-        f"{samtools_path} view -b -f 12 {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"{samtools_path} view -b -f 4 {_thread_flag(threads)}{_reference_flag(reference_path)}"
         f"{quote_path(in_bam)} {quote_path('*')} -o {quote_path(unmapped_bam)}"
     )
 
@@ -401,6 +402,30 @@ def build_cram_reference_probe_command(
     return (
         f"{samtools_path} view -P {_thread_flag(threads)}{_reference_flag(reference_path)}"
         f"{quote_path(in_bam)} {target} -o /dev/null"
+    )
+
+
+def build_cram_stream_reference_probe_command(
+    *,
+    samtools_path: str,
+    in_bam: str | Path,
+    reference_path: str | Path | None = None,
+    threads: int = 1,
+) -> str:
+    """Build the whole-file decode proof required by the stream consumer.
+
+    Args:
+        samtools_path: Samtools invocation from config.
+        in_bam: CRAM alignment view to decode completely.
+        reference_path: Candidate reference FASTA, or ``None`` for htslib resolution.
+        threads: Thread count for samtools.
+
+    Returns:
+        A whole-file SAM decode whose output is discarded.
+    """
+    return (
+        f"{samtools_path} view {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"-h {quote_path(in_bam)} -o /dev/null"
     )
 
 

@@ -56,7 +56,8 @@ MINIMAL_CONFIG: dict[str, Any] = {
     "paths": {"template_dir": "vntyper/templates"},
 }
 
-#: The stage functions the harness replaces, as attribute names on ``pipeline``.
+#: The stage functions the harness replaces. Header reading is owned by the input
+#: alignment boundary; the remaining attributes live on ``pipeline``.
 PIPELINE_STAGE_ATTRS = (
     "get_tool_versions",
     "validate_bam_file",
@@ -252,12 +253,28 @@ def run_pipeline_under_harness(
     stages: dict[str, mock.MagicMock] = {}
     with ExitStack() as stack:
         for attr in PIPELINE_STAGE_ATTRS:
-            stages[attr] = stack.enter_context(mock.patch.object(pipeline_module, attr, autospec=True))
+            owner = pipeline_alignment_module if attr == "read_alignment_header" else pipeline_module
+            stages[attr] = stack.enter_context(mock.patch.object(owner, attr, autospec=True))
         stack.enter_context(
             mock.patch.object(
                 pipeline_alignment_module,
                 "get_region_string_with_fallback",
                 stages["get_region_string_with_fallback"],
+            )
+        )
+        stack.enter_context(mock.patch.object(pipeline_alignment_module, "run_preflight", stages["run_preflight"]))
+        stack.enter_context(
+            mock.patch.object(
+                pipeline_alignment_module,
+                "pin_reference_resolution",
+                pipeline_module.pin_reference_resolution,
+            )
+        )
+        stack.enter_context(
+            mock.patch.object(
+                pipeline_alignment_module,
+                "restore_reference_resolution",
+                pipeline_module.restore_reference_resolution,
             )
         )
         for attr in ADVNTR_STAGE_ATTRS:

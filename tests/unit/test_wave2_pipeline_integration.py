@@ -47,14 +47,16 @@ def test_cli_reference_and_single_fastq_values_survive_one_handler_contract(tmp_
 
 def test_cram_preflight_transport_and_four_fastq_routing_coexist_in_one_run(tmp_path: Path) -> None:
     """Task7 preflight metadata and Task9 routing must reach their consumers together."""
-    cram = tmp_path / "patient.cram"
+    patient_dir = tmp_path / "patient"
+    patient_dir.mkdir()
+    cram = patient_dir / "patient.cram"
     cram.touch()
     reference = tmp_path / "reference.fa"
     produced = tuple(f"/reads/output_{name}.fastq.gz" for name in ("R1", "R2", "other", "single"))
     routed_single = produced[2]
 
     harness = run_pipeline_under_harness(
-        tmp_path / "out",
+        tmp_path / "run" / "out",
         bam=None,
         cram=str(cram),
         reference_fasta=reference,
@@ -66,7 +68,7 @@ def test_cram_preflight_transport_and_four_fastq_routing_coexist_in_one_run(tmp_
 
     preflight = harness.kwargs("run_preflight")
     assert preflight["reference_fasta"] == str(reference)
-    assert preflight["error_output_dir"] == str(tmp_path / "out")
+    assert preflight["error_output_dir"] == str(tmp_path / "run" / "out")
     assert harness.positional("route_converted_fastqs")[0] == produced
     kestrel = harness.kwargs("run_kestrel")
     assert kestrel["fastq_1"] == routed_single
@@ -102,10 +104,12 @@ def test_merged_pipeline_guards_still_stop_conflicts_and_single_end_shark_before
 
 def test_only_fastq_input_requires_a_bwa_reference(tmp_path: Path) -> None:
     """A no-ref CRAM must reach terminal preflight while FASTQ still needs BWA."""
-    cram = tmp_path / "no-ref.cram"
+    patient_dir = tmp_path / "patient"
+    patient_dir.mkdir()
+    cram = patient_dir / "no-ref.cram"
     cram.touch()
     cram_run = run_pipeline_under_harness(
-        tmp_path / "cram",
+        tmp_path / "run" / "cram",
         bam=None,
         cram=str(cram),
         bwa_reference=None,

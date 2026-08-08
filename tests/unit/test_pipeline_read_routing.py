@@ -111,13 +111,21 @@ def test_replacement_configs_use_the_shipped_four_line_default(tmp_path: Path) -
     assert route_converted_fastqs(produced, config={"utils": {}}) == (produced[2], None)
 
 
-def test_the_existing_lines_per_record_setting_drives_counting(tmp_path: Path) -> None:
-    produced = _paths(tmp_path, (0, 0, 3, 0), lines_per_record=2)
+def test_the_shipped_four_line_setting_counts_fastq_records(tmp_path: Path) -> None:
+    produced = _paths(tmp_path, (0, 0, 3, 0), lines_per_record=4)
 
-    assert route_converted_fastqs(produced, config={"utils": {"fastq_validation_lines": 2}}) == (
+    assert route_converted_fastqs(produced, config={"utils": {"fastq_validation_lines": 4}}) == (
         produced[2],
         None,
     )
+
+
+def test_fastq_record_structure_cannot_be_configured_away_from_four_lines(tmp_path: Path) -> None:
+    """FASTQ has exactly four lines per record; another value would miscount reads."""
+    produced = _paths(tmp_path, (0, 0, 1, 0), lines_per_record=2)
+
+    with pytest.raises(ValueError, match="must be 4"):
+        route_converted_fastqs(produced, config={"utils": {"fastq_validation_lines": 2}})
 
 
 @pytest.mark.parametrize("bad_value", [0, -1, True, "4"])

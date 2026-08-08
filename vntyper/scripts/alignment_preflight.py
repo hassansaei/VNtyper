@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
-import subprocess
 import tempfile
 from collections.abc import Iterable
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from pathlib import Path
 from typing import NoReturn
 
@@ -27,44 +27,36 @@ from vntyper.scripts.alignment_index_provenance import (
     _atomic_symlink,
     _install_generated_index,
     _remove_stale_view_indexes,
-    _replace_owned_index_with_symlink,
     generated_index_is_owned,
 )
 from vntyper.scripts.command_builders import (
     build_cram_reference_probe_command,
+    build_cram_stream_reference_probe_command,
     build_samtools_idxstats_command,
     build_samtools_index_command,
 )
 from vntyper.scripts.idxstats_parsing import choose_scan
+from vntyper.scripts.preflight_command_io import (
+    capture_command,
+)
+from vntyper.scripts.preflight_command_io import (
+    protected_collision as _protected_collision,
+)
+from vntyper.scripts.preflight_command_io import (
+    validate_log_entry as _validate_log_entry,
+)
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
 
 logger = logging.getLogger(__name__)
 
 HTSLIB_REFERENCE_SOURCE = "htslib-resolved (header UR: or REF_PATH)"
 _REMOTE_REFERENCE_URL = re.compile(r"(?:^|:)(?!file://)[A-Za-z][A-Za-z0-9+.-]*://", re.IGNORECASE)
+_MAX_REFERENCE_PROBE_TIMEOUT_SECONDS = 120.0
 
 
 def _reject(message: str) -> NoReturn:
     logger.error(message)
     raise ValueError(message)
-
-
-def _same_file(left: str | Path, right: str | Path) -> bool:
-    try:
-        return os.path.samefile(left, right)
-    except OSError:
-        return False
-
-
-def _protected_collision(path: Path, protected_paths: Iterable[str | Path]) -> str | None:
-    path_absolute = os.path.abspath(path)
-    for protected in protected_paths:
-        protected_absolute = os.path.abspath(protected)
-        if path_absolute == protected_absolute:
-            return protected_absolute
-        if os.path.lexists(path) and _same_file(path, protected):
-            return protected_absolute
-    return None
 
 
 def _validate_symlink_entry(
@@ -92,16 +84,6 @@ def _validate_symlink_entry(
         _reject(message)
 
 
-def _validate_log_entry(path: Path, protected_paths: Iterable[str | Path]) -> None:
-    protected = _protected_collision(path, protected_paths)
-    if protected is not None:
-        message = f"Log path {path} aliases protected source {protected}"
-        _reject(message)
-    if os.path.lexists(path) and path.is_dir() and not path.is_symlink():
-        message = f"Log path has a wrong type and will not be replaced: {path}"
-        _reject(message)
-
-
 def _safe_output_paths(output_dir: str, output_name: str, file_format: str) -> tuple[Path, Path]:
     if not output_name or output_name in {".", ".."} or Path(output_name).name != output_name:
         message = f"Alignment output_name must be a single basename: {output_name}"
@@ -117,79 +99,6 @@ def _safe_output_paths(output_dir: str, output_name: str, file_format: str) -> t
     return output, view_path
 
 
-def capture_command(
-    command: str,
-    log_file: str,
-    cwd: str | None = None,
-    *,
-    protected_paths: Iterable[str | Path] = (),
-) -> tuple[bool, str]:
-    """Run a shell command while retaining its combined output for parsing.
-
-    Args:
-        command: Complete shell command to run under Bash.
-        log_file: File receiving the command's combined stdout and stderr.
-        cwd: Working directory for the child, or ``None`` to inherit it.
-        protected_paths: Paths whose inodes the final log must not alias.
-
-    Returns:
-        A success flag and complete output or safe diagnostic. Non-zero exits and
-        OS failures are returned so preflight can try another candidate.
-    """
-    logger.debug(f"Running captured command: {command}")
-    final_log = Path(log_file)
-    try:
-        if not final_log.parent.is_dir():
-            raise OSError(f"log directory does not exist: {final_log.parent}")
-        _validate_log_entry(final_log, protected_paths)
-    except (OSError, ValueError) as error:
-        diagnostic = f"Unable to write command log safely: {error}"
-        logger.error(diagnostic)
-        return False, diagnostic
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=final_log.parent,
-            prefix=f".{final_log.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary_log:
-            temporary_path = Path(temporary_log.name)
-            try:
-                completed = subprocess.run(
-                    command,
-                    shell=True,
-                    executable="/bin/bash",
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    cwd=cwd,
-                    check=False,
-                )
-                output = completed.stdout or ""
-                return_code = completed.returncode
-            except OSError as error:
-                output = f"Unable to run command: {error}"
-                return_code = 1
-            temporary_log.write(output)
-        os.replace(temporary_path, final_log)
-        temporary_path = None
-    except OSError as error:
-        diagnostic = f"Unable to write command log safely: {error}"
-        logger.error(diagnostic)
-        return False, diagnostic
-    finally:
-        if temporary_path is not None:
-            with suppress(OSError):
-                os.unlink(temporary_path)
-    if return_code != 0:
-        logger.error(f"Command failed: {command}")
-        return False, output
-    return True, output
-
-
 def build_alignment_view(
     in_path: str,
     output_dir: str,
@@ -200,7 +109,12 @@ def build_alignment_view(
     *,
     bai_only: bool = False,
 ) -> tuple[str, str]:
-    """Create a run-local alignment symlink and a co-located usable index.
+    """Create a run-local alignment symlink and a freshly built co-located index.
+
+    Supplied indexes are enumerated only as protected patient inputs. BAI, CRAI,
+    and CSI do not bind themselves to the alignment bytes, so even a structurally
+    valid wrong-sample index can return an empty slice with exit status zero. The
+    run-local index is therefore rebuilt from the view before any indexed proof.
 
     Args:
         in_path: Input BAM or CRAM path.
@@ -226,8 +140,7 @@ def build_alignment_view(
         else resolve_any_index(in_path, file_format)
     )
     built_suffix = {FORMAT_BAM: ".bai", FORMAT_CRAM: ".crai"}[file_format]
-    selected_suffix = Path(existing_index).suffix if existing_index is not None else built_suffix
-    view_index = Path(f"{view_path}{selected_suffix}")
+    view_index = Path(f"{view_path}{built_suffix}")
     view_index_candidates = tuple(Path(candidate) for candidate in index_candidate_names(str(view_path), file_format))
     protected_paths: tuple[str | Path, ...] = (in_path, existing_index) if existing_index is not None else (in_path,)
     _validate_symlink_entry(view_path, (in_path,))
@@ -241,17 +154,9 @@ def build_alignment_view(
             allow_regular=candidate in owned_indexes,
         )
     log_file = output / f"{output_name}_index.log"
-    if existing_index is None:
-        _validate_log_entry(log_file, protected_paths)
+    _validate_log_entry(log_file, protected_paths)
     output.mkdir(parents=True, exist_ok=True)
     _atomic_symlink(in_path, view_path)
-    if existing_index is not None:
-        _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
-        if view_index in owned_indexes:
-            _replace_owned_index_with_symlink(view_index, existing_index, protected_paths)
-        else:
-            _atomic_symlink(existing_index, view_index)
-        return str(view_path), str(view_index)
     _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
     temporary_index: Path | None = None
@@ -296,8 +201,10 @@ def choose_unmapped_scan(
     threads: int,
     output_dir: str,
     output_name: str,
+    *,
+    file_format: str = FORMAT_CRAM,
 ) -> str:
-    """Choose a lossless CRAM unmapped-read scan from captured idxstats evidence.
+    """Choose a lossless alignment unmapped-read scan from captured idxstats evidence.
 
     Args:
         view_path: Run-local indexed alignment path.
@@ -305,6 +212,7 @@ def choose_unmapped_scan(
         threads: Thread count for idxstats.
         output_dir: Run output directory for the idxstats log.
         output_name: Base name for the idxstats log.
+        file_format: Alignment format whose scan policy is being selected.
 
     Returns:
         ``"indexed"`` only when idxstats proves it lossless; otherwise ``"stream"``.
@@ -313,7 +221,7 @@ def choose_unmapped_scan(
         ValueError: If scan mode is invalid or forced indexed mode would lose reads.
     """
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
-    configured = config.get("cram", {}).get("unmapped_scan", "auto")
+    configured = config.get(file_format, {}).get("unmapped_scan", "auto")
     command = build_samtools_idxstats_command(
         samtools_path=samtools_path,
         in_bam=view_path,
@@ -352,6 +260,20 @@ def pin_reference_resolution(config: dict) -> str | None:
         _reject(message)
     os.environ["REF_PATH"] = local_ref_path
     return previous
+
+
+def _reference_probe_timeout_seconds(config: dict) -> float:
+    """Return a validated reference-probe deadline no greater than 120 seconds."""
+    configured = config.get("cram", {}).get("reference_probe_timeout_seconds", _MAX_REFERENCE_PROBE_TIMEOUT_SECONDS)
+    if (
+        isinstance(configured, bool)
+        or not isinstance(configured, (int, float))
+        or not math.isfinite(configured)
+        or configured <= 0
+        or configured > _MAX_REFERENCE_PROBE_TIMEOUT_SECONDS
+    ):
+        _reject("cram.reference_probe_timeout_seconds must be a finite number greater than 0 and at most 120")
+    return float(configured)
 
 
 def restore_reference_resolution(previous: str | None) -> None:
@@ -419,6 +341,7 @@ def resolve_reference(
     header_contigs: Iterable[str],
     m5: str | None,
     *,
+    unmapped_scan: str = "indexed",
     failure_context: error_io.PreflightErrorContext | None = None,
 ) -> tuple[str | None, str, tuple[str, ...]]:
     """Probe explicit CRAM references before one final htslib-resolved candidate.
@@ -434,6 +357,8 @@ def resolve_reference(
         output_name: Base name for probe logs.
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
+        unmapped_scan: Downstream CRAM unmapped-read scan. Stream mode requires
+            an additional whole-file decode proof from the same candidate.
         failure_context: Boundary diagnostics receiving structured candidate details.
 
     Returns:
@@ -444,8 +369,40 @@ def resolve_reference(
         ValueError: If no candidate decodes the selected target.
     """
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
+    timeout_seconds = _reference_probe_timeout_seconds(config)
     attempts: list[ReferenceAttempt] = []
     explicit_candidates = list(candidates)
+
+    def probe_candidate(reference_path: str | None, position: int) -> tuple[bool, str]:
+        target_command = build_cram_reference_probe_command(
+            samtools_path=samtools_path,
+            in_bam=view_path,
+            region=region,
+            bed_file=bed_file,
+            reference_path=reference_path,
+            threads=threads,
+        )
+        target_log = str(Path(output_dir) / f"{output_name}_reference_probe_{position}.log")
+        exit_ok, probe_output = capture_command(
+            target_command,
+            target_log,
+            timeout_seconds=timeout_seconds,
+        )
+        if not exit_ok or unmapped_scan != "stream":
+            return exit_ok, probe_output
+        stream_command = build_cram_stream_reference_probe_command(
+            samtools_path=samtools_path,
+            in_bam=view_path,
+            reference_path=reference_path,
+            threads=threads,
+        )
+        stream_log = str(Path(output_dir) / f"{output_name}_reference_stream_probe_{position}.log")
+        return capture_command(
+            stream_command,
+            stream_log,
+            timeout_seconds=timeout_seconds,
+        )
+
     for position, (source, reference_path) in enumerate(explicit_candidates, start=1):
         if reference_path is None:
             attempts.append((source, None, "not supplied"))
@@ -454,16 +411,7 @@ def resolve_reference(
         if unavailable_reason is not None:
             attempts.append((source, reference_path, unavailable_reason))
             continue
-        command = build_cram_reference_probe_command(
-            samtools_path=samtools_path,
-            in_bam=view_path,
-            region=region,
-            bed_file=bed_file,
-            reference_path=reference_path,
-            threads=threads,
-        )
-        log_file = str(Path(output_dir) / f"{output_name}_reference_probe_{position}.log")
-        exit_ok, output = capture_command(command, log_file)
+        exit_ok, output = probe_candidate(reference_path, position)
         if not exit_ok:
             attempts.append((source, reference_path, output.strip() or "probe exited non-zero"))
             continue
@@ -484,17 +432,8 @@ def resolve_reference(
             )
         logger.info(f"Resolved CRAM reference from {source}: {reference_path}")
         return reference_path, source, uncovered
-    command = build_cram_reference_probe_command(
-        samtools_path=samtools_path,
-        in_bam=view_path,
-        region=region,
-        bed_file=bed_file,
-        reference_path=None,
-        threads=threads,
-    )
     ambient_position = len(explicit_candidates) + 1
-    log_file = str(Path(output_dir) / f"{output_name}_reference_probe_{ambient_position}.log")
-    exit_ok, output = capture_command(command, log_file)
+    exit_ok, output = probe_candidate(None, ambient_position)
     if exit_ok:
         logger.info(f"Resolved CRAM reference through {HTSLIB_REFERENCE_SOURCE}")
         return None, HTSLIB_REFERENCE_SOURCE, ()
@@ -528,8 +467,15 @@ def _validate_preflight_logs(
         log_paths.extend(
             output / f"{output_name}_reference_probe_{position}.log" for position in range(1, len(candidates) + 2)
         )
+        log_paths.extend(
+            output / f"{output_name}_reference_stream_probe_{position}.log"
+            for position in range(1, len(candidates) + 2)
+        )
     else:
-        log_paths = [output / f"{output_name}_alignment_probe.log"]
+        log_paths = [
+            output / f"{output_name}_idxstats.log",
+            output / f"{output_name}_alignment_probe.log",
+        ]
     for log_path in log_paths:
         _validate_log_entry(log_path, protected_paths)
 
@@ -550,6 +496,7 @@ def run_preflight(
     m5: str | None = None,
     fast_mode: bool = False,
     error_output_dir: str | Path | None = None,
+    failure_context: error_io.PreflightErrorContext | None = None,
 ) -> AlignmentPlan:
     """Resolve and prove every alignment prerequisite used by later stages.
 
@@ -568,6 +515,8 @@ def run_preflight(
         m5: Header M5 checksum for the target contig, when available.
         fast_mode: Whether downstream BAM processing can use any htslib index.
         error_output_dir: Run output root for the curated failure artifact.
+        failure_context: Optional outer-owned failure context. When absent, this
+            function retains its direct-call persistence behavior.
 
     Returns:
         A frozen plan whose index, scan, and CRAM reference have been exercised.
@@ -576,8 +525,13 @@ def run_preflight(
         RuntimeError: If an indexed BAM cannot retrieve the requested target.
         ValueError: If format, scan, candidate policy, target, or reference is invalid.
     """
-    failure_context = error_io.PreflightErrorContext(error_output_dir if error_output_dir is not None else output_dir)
-    with error_io.persist_preflight_failure(failure_context):
+    owns_failure_context = failure_context is None
+    if failure_context is None:
+        failure_context = error_io.PreflightErrorContext(
+            error_output_dir if error_output_dir is not None else output_dir
+        )
+    persistence = error_io.persist_preflight_failure(failure_context) if owns_failure_context else nullcontext()
+    with persistence:
         bai_only = file_format == FORMAT_BAM and not fast_mode
         failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
         candidates = (
@@ -585,6 +539,8 @@ def run_preflight(
             if file_format == FORMAT_CRAM
             else ()
         )
+        if file_format == FORMAT_CRAM:
+            _reference_probe_timeout_seconds(config)
         failure_context.phase = error_io.OUTPUT_SAFETY_FAILURE
         _validate_preflight_logs(in_path, output_dir, output_name, file_format, candidates, bai_only=bai_only)
         failure_context.phase = error_io.VIEW_INDEX_FAILURE
@@ -597,9 +553,16 @@ def run_preflight(
             threads,
             bai_only=bai_only,
         )
+        failure_context.phase = error_io.SCAN_SELECTION_FAILURE
+        unmapped_scan = choose_unmapped_scan(
+            view_path,
+            config,
+            threads,
+            output_dir,
+            output_name,
+            file_format=file_format,
+        )
         if file_format == FORMAT_CRAM:
-            failure_context.phase = error_io.SCAN_SELECTION_FAILURE
-            unmapped_scan = choose_unmapped_scan(view_path, config, threads, output_dir, output_name)
             failure_context.phase = error_io.REFERENCE_PROBE_FAILURE
             reference_path, reference_source, uncovered_contigs = resolve_reference(
                 view_path,
@@ -612,6 +575,7 @@ def run_preflight(
                 output_name,
                 tuple(header_contigs),
                 m5,
+                unmapped_scan=unmapped_scan,
                 failure_context=failure_context,
             )
         else:
@@ -631,7 +595,7 @@ def run_preflight(
                 message = f"BAM preflight probe failed: {reason}"
                 logger.error(message)
                 raise RuntimeError(message)
-            unmapped_scan, reference_path, reference_source, uncovered_contigs = "indexed", None, "not-required", ()
+            reference_path, reference_source, uncovered_contigs = None, "not-required", ()
 
         return AlignmentPlan(
             input_path=in_path,

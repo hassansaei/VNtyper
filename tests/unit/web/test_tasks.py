@@ -180,19 +180,13 @@ def _subprocess_stub(
     monkeypatch: pytest.MonkeyPatch,
     tasks,
     *,
-    index_error: Exception | None = None,
     pipeline_error: Exception | None = None,
 ) -> list:
     """Replace `tasks.subprocess.run` with a recorder that can be told to fail.
 
-    Standing in for `samtools index`, it also writes the `.bai` file that
-    command would have produced, so "was an index built" is an assertion
-    about the commands issued rather than a file that appeared by magic.
-
     Args:
         monkeypatch: Standard pytest fixture; restores the patch at teardown.
         tasks: The imported `app.tasks` module.
-        index_error: If given, raised instead of running `samtools index`.
         pipeline_error: If given, raised instead of running `vntyper pipeline`.
 
     Returns:
@@ -202,11 +196,6 @@ def _subprocess_stub(
 
     def _run(command, *args, **kwargs):
         commands.append(list(command))
-        if command[:2] == ["samtools", "index"]:
-            if index_error is not None:
-                raise index_error
-            Path(f"{command[2]}.bai").write_bytes(b"generated-index")
-            return None
         if pipeline_error is not None:
             raise pipeline_error
         return None
@@ -370,33 +359,31 @@ def test_a_failure_before_the_pipeline_even_starts_is_marked_failed_and_cleaned_
 
 
 # ---------------------------------------------------------------------------
-# run_vntyper_job: subprocess exits non-zero
+# run_vntyper_job: pipeline subprocess exits non-zero
 # ---------------------------------------------------------------------------
 
 
-def test_index_generation_failure_stops_the_job_before_the_pipeline_runs(
+def test_missing_index_is_deferred_to_pipeline_preflight_without_writing_beside_upload(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """`samtools index` exiting non-zero fails the job without running the pipeline.
+    """The worker must let pipeline preflight build its run-local index.
 
     Args:
         monkeypatch: Standard pytest fixture.
         redis_mocks: The three mocked Redis clients.
-        no_email_task: The mocked `send_email_task`.
+        no_email_task: The mocked email task.
         tmp_path: Scratch directory standing in for the job tree.
     """
     from app import tasks
 
     bam_path, _ = _make_job_input(tmp_path)
-    index_error = subprocess.CalledProcessError(1, ["samtools", "index", str(bam_path)])
-    commands = _subprocess_stub(monkeypatch, tasks, index_error=index_error)
+    commands = _subprocess_stub(monkeypatch, tasks)
 
-    with pytest.raises(subprocess.CalledProcessError):
-        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, email="user@example.com"))
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
 
-    assert commands == [["samtools", "index", str(bam_path)]], "the pipeline must not run after the index step fails"
-    assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
-    assert no_email_task.delay.call_count == 0, "only a pipeline failure emails; an index failure is not a pipeline run"
+    assert len(commands) == 1
+    assert commands[0][:7] == ["conda", "run", "--no-capture-output", "-n", "vntyper", "vntyper", "pipeline"]
+    assert not any(command[:2] == ["samtools", "index"] for command in commands)
 
 
 def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
@@ -419,8 +406,7 @@ def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
     with pytest.raises(subprocess.CalledProcessError):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, email="user@example.com", cohort_key=None))
 
-    assert commands[0] == ["samtools", "index", str(bam_path)], "the index is still built before the pipeline runs"
-    assert commands[1][:7] == ["conda", "run", "--no-capture-output", "-n", "vntyper", "vntyper", "pipeline"]
+    assert commands[0][:7] == ["conda", "run", "--no-capture-output", "-n", "vntyper", "vntyper", "pipeline"]
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
     no_email_task.delay.assert_called_once()
     email_kwargs = no_email_task.delay.call_args.kwargs
@@ -452,9 +438,13 @@ def test_pipeline_failure_stores_the_curated_preflight_code_and_message(
         "message": "Unable to resolve CRAM reference: contig=chr1, M5=digest.",
         "candidates": [["cli", "full.fa", "probe exited non-zero"]],
     }
-    (output_dir / "preflight_error.json").write_text(json.dumps(artifact), encoding="utf-8")
     pipeline_error = subprocess.CalledProcessError(1, ["vntyper", "pipeline"])
-    _subprocess_stub(monkeypatch, tasks, pipeline_error=pipeline_error)
+
+    def _run_pipeline_and_emit_current_artifact(command, *args, **kwargs):
+        (output_dir / "preflight_error.json").write_text(json.dumps(artifact), encoding="utf-8")
+        raise pipeline_error
+
+    monkeypatch.setattr(tasks.subprocess, "run", _run_pipeline_and_emit_current_artifact)
 
     with pytest.raises(subprocess.CalledProcessError):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
@@ -747,7 +737,7 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
         ),
     )
 
-    pipeline_command = commands[1]
+    pipeline_command = commands[0]
     assert pipeline_command == [
         "conda",
         "run",
@@ -807,11 +797,10 @@ def test_index_path_none_falls_back_to_the_conventional_bai_name_and_skips_rebui
     assert not conventional_index.exists(), "cleanup must still remove the index it fell back to"
 
 
-def test_index_path_none_still_builds_an_index_when_none_exists(
+def test_index_path_none_defers_a_missing_index_to_pipeline_preflight(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """With `index_path=None` and no index on disk, one is generated at the
-    conventional name.
+    """With no uploaded index, the worker still writes nothing beside the input.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -826,8 +815,8 @@ def test_index_path_none_still_builds_an_index_when_none_exists(
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, index_path=None))
 
-    assert commands[0] == ["samtools", "index", str(bam_path)]
-    assert not Path(f"{bam_path}.bai").exists(), "the generated index is cleaned up like any other job input"
+    assert not any(command[:2] == ["samtools", "index"] for command in commands)
+    assert not Path(f"{bam_path}.bai").exists()
 
 
 # ---------------------------------------------------------------------------

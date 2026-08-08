@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
+from vntyper.scripts import preflight_error_io as error_io
+from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_preflight import (
+    pin_reference_resolution,
+    restore_reference_resolution,
+    run_preflight,
+)
 from vntyper.scripts.alignment_target_io import install_generated_bed
 from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
+from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -30,6 +39,16 @@ class AlignmentPreflightKwargs(TypedDict):
     m5: str | None
     fast_mode: bool
     error_output_dir: str
+
+
+@dataclass(frozen=True)
+class PreparedAlignmentPreflight:
+    """Header, exact target and proven plan produced by the input seam."""
+
+    alignment_header: str | None
+    bed_file: Path
+    plan: AlignmentPlan
+    previous_ref_path: str | None
 
 
 def format_regions_as_bed(regions: str) -> str:
@@ -216,3 +235,81 @@ def build_alignment_preflight_kwargs(
         "fast_mode": fast_mode,
         "error_output_dir": str(error_output_dir) if error_output_dir is not None else str(output_dir),
     }
+
+
+def prepare_input_alignment_preflight(
+    *,
+    in_path: str | Path,
+    input_type: str,
+    output_dir: str | Path,
+    config: dict,
+    threads: int,
+    reference_assembly: str,
+    bed_file: str | Path | None,
+    custom_regions: str | None,
+    reference_fasta: str | Path | None,
+    fast_mode: bool,
+) -> PreparedAlignmentPreflight:
+    """Own header, target and proof preparation immediately after validation.
+
+    Args:
+        in_path: Validated BAM or CRAM input path.
+        input_type: Alignment kind, ``BAM`` or ``CRAM``.
+        output_dir: Pipeline output root.
+        config: Pipeline configuration.
+        threads: Samtools thread count.
+        reference_assembly: Declared input assembly.
+        bed_file: Operator-provided BED path, when present.
+        custom_regions: Operator-provided comma-separated regions, when present.
+        reference_fasta: Explicit CRAM reference candidate, when supplied.
+        fast_mode: Whether downstream processing permits any htslib index.
+
+    Returns:
+        The reusable header, exact BED, proven plan, and REF_PATH restoration token.
+
+    Raises:
+        ValueError: If ``input_type`` is not an alignment format or preparation fails.
+        RuntimeError: If alignment preflight cannot prove a required input.
+    """
+    if input_type not in {"BAM", "CRAM"}:
+        raise ValueError(f"Alignment preflight requires BAM or CRAM input, got: {input_type}")
+    input_path = str(in_path)
+    failure_context = error_io.PreflightErrorContext(output_dir)
+    with error_io.persist_preflight_failure(failure_context):
+        previous_ref_path = pin_reference_resolution(config)
+        try:
+            failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
+            alignment_header = read_alignment_header(input_path, config)
+            enforce_declared_assembly(reference_assembly, alignment_header)
+            failure_context.phase = error_io.TARGET_PREPARATION_FAILURE
+            exact_bed = prepare_alignment_target(
+                input_type=input_type,
+                bam=input_path if input_type == "BAM" else None,
+                cram=input_path if input_type == "CRAM" else None,
+                output_dir=output_dir,
+                reference_assembly=reference_assembly,
+                config=config,
+                bed_file=bed_file,
+                custom_regions=custom_regions,
+            )
+            plan = run_preflight(
+                **build_alignment_preflight_kwargs(
+                    in_path=input_path,
+                    output_dir=Path(output_dir) / "fastq_bam_processing",
+                    output_name="input",
+                    file_format=input_type.lower(),
+                    config=config,
+                    threads=threads,
+                    bed_file=exact_bed,
+                    reference_assembly=reference_assembly,
+                    fast_mode=fast_mode,
+                    alignment_header=alignment_header,
+                    reference_fasta=reference_fasta,
+                    error_output_dir=output_dir,
+                ),
+                failure_context=failure_context,
+            )
+        except BaseException:
+            restore_reference_resolution(previous_ref_path)
+            raise
+    return PreparedAlignmentPreflight(alignment_header, exact_bed, plan, previous_ref_path)

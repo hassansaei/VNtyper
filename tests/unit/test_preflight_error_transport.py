@@ -49,8 +49,8 @@ def _artifact(run_root: Path) -> dict:
             RuntimeError,
             "samtools index",
             "alignment_index_unusable",
-            "Alignment preflight could not prepare a safe local view and index; remove conflicting view or index "
-            "entries, or create a usable index with samtools index.",
+            "Alignment preflight could not prepare a safe local view and fresh index; remove conflicting "
+            "run-output entries and verify samtools can index the alignment.",
             0,
         ),
         (
@@ -67,7 +67,8 @@ def _artifact(run_root: Path) -> dict:
             ValueError,
             "invalid unmapped scan mode",
             "unmapped_scan_invalid",
-            "CRAM unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
+            "Alignment unmapped-read scan selection failed; use auto or stream mode to avoid losing "
+            "placed-unmapped reads.",
             0,
         ),
         (
@@ -75,7 +76,8 @@ def _artifact(run_root: Path) -> dict:
             ValueError,
             "3 placed-unmapped reads",
             "unmapped_scan_invalid",
-            "CRAM unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
+            "Alignment unmapped-read scan selection failed; use auto or stream mode to avoid losing "
+            "placed-unmapped reads.",
             0,
         ),
         (
@@ -133,9 +135,18 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     elif failure == "missing_index":
         command_results = [(False, "cannot build /private/worker/patient.bam")]
     elif failure == "bam_probe":
-        command_results = [(False, "private target /private/worker/patient.bam is stale")]
+        command_results = [
+            (True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"),
+            (False, "private target /private/worker/patient.bam is stale"),
+        ]
 
     with ExitStack() as stack:
+        if failure in {"scan_policy", "forced_indexed", "bam_probe", "reference"}:
+            view = work_dir / f"sample.{file_format}"
+            index = Path(f"{view}.{'bai' if file_format == 'bam' else 'crai'}")
+            stack.enter_context(
+                patch("vntyper.scripts.alignment_preflight.build_alignment_view", return_value=(str(view), str(index)))
+            )
         if command_results:
             stack.enter_context(
                 patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=command_results)
@@ -233,8 +244,8 @@ def test_every_view_index_provenance_exception_uses_the_same_stable_phase_payloa
     assert raised.value is original
     assert _artifact(run_root) == {
         "code": "alignment_index_unusable",
-        "message": "Alignment preflight could not prepare a safe local view and index; remove conflicting view or "
-        "index entries, or create a usable index with samtools index.",
+        "message": "Alignment preflight could not prepare a safe local view and fresh index; remove conflicting "
+        "run-output entries and verify samtools can index the alignment.",
         "candidates": [],
     }
 
@@ -247,6 +258,13 @@ def test_an_unexpected_reference_probe_exception_uses_the_reference_phase_payloa
     original = RuntimeError("unexpected reference probe /private/worker failure")
 
     with (
+        patch(
+            "vntyper.scripts.alignment_preflight.build_alignment_view",
+            return_value=(
+                str(run_root / "alignment" / "sample.cram"),
+                str(run_root / "alignment" / "sample.cram.crai"),
+            ),
+        ),
         patch(
             "vntyper.scripts.alignment_preflight.capture_command",
             return_value=(True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"),
@@ -343,3 +361,33 @@ def test_preflight_boundary_does_not_catch_base_exceptions(tmp_path: Path) -> No
         )
 
     writer.assert_not_called()
+
+
+def test_shared_failure_context_is_persisted_only_by_its_outer_owner(tmp_path: Path) -> None:
+    """Passing a context suppresses run_preflight's otherwise self-owned persistence."""
+    run_root = tmp_path / "run-output"
+    run_root.mkdir()
+    alignment = _alignment(tmp_path, "bam")
+    context = PreflightErrorContext(run_root)
+    original = RuntimeError("index preparation failed")
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.build_alignment_view", side_effect=original),
+        patch("vntyper.scripts.preflight_error_io.write_preflight_error") as writer,
+        pytest.raises(RuntimeError) as raised,
+        persist_preflight_failure(context),
+    ):
+        run_preflight(
+            str(alignment),
+            str(run_root / "alignment"),
+            "sample",
+            "bam",
+            {},
+            1,
+            region="chr1:1-2",
+            error_output_dir=run_root,
+            failure_context=context,
+        )
+
+    assert raised.value is original
+    writer.assert_called_once()

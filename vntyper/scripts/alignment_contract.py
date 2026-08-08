@@ -80,20 +80,21 @@ class AlignmentPlan:
 
 
 def missing_index_message(in_path: str, file_format: str, tried: Iterable[str]) -> str:
-    """Build an actionable message for an alignment with no usable index.
+    """Build an actionable message when a fresh run-local index cannot be built.
 
     Args:
         in_path: Alignment path whose index could not be resolved.
         file_format: Alignment format used while looking for an index.
-        tried: Candidate index paths that were checked.
+        tried: Supplied index names inspected and protected by preflight.
 
     Returns:
         Actionable diagnostic naming the input, candidates, and indexing command.
     """
     candidates = ", ".join(str(path) for path in tried)
     return (
-        f"No usable {file_format.upper()} index found for {in_path}. "
-        f"Tried: {candidates}. Create one with samtools index {in_path}."
+        f"Unable to build a fresh run-local {file_format.upper()} index for {in_path}. "
+        f"Supplied index candidates inspected: {candidates}. Verify the alignment is readable and "
+        f"samtools index {in_path} succeeds."
     )
 
 

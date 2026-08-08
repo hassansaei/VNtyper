@@ -181,7 +181,7 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
         f"samtools view -P -b -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
-        f"samtools index {tmp_path}/output_sliced.bam",
+        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -358,7 +358,7 @@ def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_pat
 # The CRAM unmapped-read path
 #
 # This branch used to be
-#     ... | tee >(samtools view -b -f 12 - -o unmapped.bam) > /dev/null
+#     ... | tee >(samtools view -b -f 4 - -o unmapped.bam) > /dev/null
 # and bash does not wait for a ``>(...)`` process substitution: the shell returned
 # as soon as ``tee`` exited, while the substituted samtools was still flushing
 # ``unmapped.bam``. ``process_bam_to_fastq`` runs ``samtools merge`` against that
@@ -385,7 +385,7 @@ def _cram_unmapped_command(tmp_path, **overrides):
         **overrides: Passed through to ``_run_bam_to_fastq``.
 
     Returns:
-        str: The one emitted command containing ``-f 12``.
+        str: The one emitted command containing ``-f 4``.
     """
     config = {**CONFIG, "tools": {**CONFIG["tools"], "samtools": "/envs/vntyper/bin/samtools"}}
     kwargs = {
@@ -397,7 +397,7 @@ def _cram_unmapped_command(tmp_path, **overrides):
     kwargs.update(overrides)
 
     commands = _run_bam_to_fastq(tmp_path, **kwargs)
-    filters = [c for c in commands if "-f 12" in c]
+    filters = [c for c in commands if "-f 4" in c]
     assert len(filters) == 1, f"expected exactly one unmapped-read extraction command, got {filters}"
     return filters[0]
 
@@ -410,7 +410,7 @@ def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
     """
     assert _cram_unmapped_command(tmp_path) == (
         f"set -o pipefail; /envs/vntyper/bin/samtools view -@ 4 -h /data/sample.cram | "
-        f"/envs/vntyper/bin/samtools view -b -f 12 -@ 4 - -o {tmp_path}/output_unmapped.bam"
+        f"/envs/vntyper/bin/samtools view -b -f 4 -@ 4 - -o {tmp_path}/output_unmapped.bam"
     )
 
 
@@ -461,7 +461,7 @@ def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
     The writing samtools must be a **stage**, which is what makes bash wait for it.
 
     Two stages joined by one ``|``: the reader streams the CRAM, the writer filters
-    flag 12 into the output BAM. Because the writer is in the pipeline, the shell
+    flag 4 into the output BAM. Because the writer is in the pipeline, the shell
     does not return until it has exited, and ``pipefail`` covers its exit status.
     """
     command = _cram_unmapped_command(tmp_path)
@@ -470,7 +470,7 @@ def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
     assert len(stages) == 2, f"expected a two-stage pipeline, got {len(stages)}: {stages}"
     reader, writer = stages
     assert reader.endswith("-h /data/sample.cram"), f"the reader must end at the CRAM input: {reader}"
-    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 12"), f"the writer is not stage two: {writer}"
+    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"the writer is not stage two: {writer}"
     assert writer.endswith(f"- -o {tmp_path}/output_unmapped.bam"), (
         f"the writer must read stdin and write the unmapped BAM: {writer}"
     )
@@ -540,7 +540,7 @@ def test_the_merge_runs_immediately_after_the_cram_unmapped_extraction(tmp_path)
         tmp_path, fast_mode=False, file_format="cram", input_path="/data/sample.cram", config=config
     )
 
-    extraction = next(i for i, c in enumerate(commands) if "-f 12" in c)
+    extraction = next(i for i, c in enumerate(commands) if "-f 4" in c)
     assert commands[extraction + 1] == (
         f"/envs/vntyper/bin/samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam"
@@ -712,7 +712,7 @@ def test_align_and_sort_emits_the_pinned_pipeline_with_pipefail(tmp_path):
         f"set -o pipefail; bwa mem -t 4 {reference} /data/r1.fq.gz /data/r2.fq.gz | "
         f"samtools view -@ 4 -b | "
         f"samtools sort -@ 4 -o {sorted_bam}",
-        f"samtools index {sorted_bam}",
+        f"samtools index -@ 4 {sorted_bam}",
     ]
 
 

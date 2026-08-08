@@ -8,10 +8,11 @@
 before any stage does work, naming exactly what is missing, and no input is ever silently
 discarded.
 
-**Architecture:** A preflight runs first in `run_pipeline`. It materialises a *run-local
-alignment view* (a symlink to the input plus a co-located index, both inside the output
-directory), chooses the unmapped-scan strategy from `samtools idxstats`, and proves a
-reference by decoding the run's own target region with it. It returns a frozen
+**Architecture:** An owned alignment-preflight boundary runs first in `run_pipeline`. It
+resolves the exact target internally, materialises a *run-local alignment view* (a symlink
+to the input plus a freshly built co-located index, both inside the output directory),
+chooses the unmapped-scan strategy from `samtools idxstats`, and proves a reference by
+decoding every consumer shape the selected scan will use. It returns the target and a frozen
 `AlignmentPlan`. Read layout is **not** part of that plan — it is decided after conversion,
 from the FASTQs that were actually written. Decisions live in pure modules; only the
 preflight shells out.
@@ -25,7 +26,7 @@ pytest, ruff, mypy, Docker + Celery for the web layer.
 > this area are wrong and the measurements say which. In particular: an index in the
 > output directory is invisible (§3.9); `-P` and `-c` cannot be combined (§3.10); `-P`
 > fetches cross-contig mates (§3.7); a resolvable `UR:` silently rescues a candidate that
-> should fail (§3.10); `'*'` loses *placed* flag-12 reads and `idxstats` detects them
+> should fail (§3.10); `'*'` loses *placed* read-unmapped records and `idxstats` detects them
 > (§3.13).
 
 ## Global Constraints
@@ -80,7 +81,8 @@ make format && make test-unit
 | `vntyper/scripts/reference_resolution.py` | create | Validated ordered reference candidates; known or unavailable FASTA contig coverage. Pure. |
 | `vntyper/scripts/idxstats_parsing.py` | create | Parse an `idxstats` table and decide the scan. Fails closed. Pure. |
 | `vntyper/scripts/read_layout.py` | create | The layout verdict from FASTQ record counts, and which files are consumed vs stranded. Pure. |
-| `vntyper/scripts/alignment_preflight.py` | create | The only new module that shells out: build the view, resolve/build the index, choose the scan, probe the reference, pin `REF_PATH`. |
+| `vntyper/scripts/alignment_preflight.py` | create | Orchestrate the view, fresh index, scan choice and reference proof; pin `REF_PATH`. |
+| `vntyper/scripts/preflight_command_io.py` | create | The one captured-command executor: atomic logs plus optional process-group deadline, kill and reap. |
 | `vntyper/scripts/kestrel_command.py` | create | `construct_kestrel_command`, extracted from the 936-line `kestrel_genotyping.py` per AGENTS.md rule 3. |
 | `vntyper/scripts/alignment_index.py` | modify | Add `resolve_any_index`; `resolve_bam_index` unchanged. |
 | `vntyper/scripts/command_builders.py` | modify | Thread slice + index; optional slice indexing; indexed unplaced fetch; reference probe; `reference_path` (quoted here) on slice, filter, probe and **depth**. |
@@ -124,7 +126,9 @@ Wave 2 until `make check-all` is green on the tip of Wave 1.
 - `AlignmentPlan` frozen dataclass: `input_path: str`, `view_path: str`,
   `file_format: str`, `index_path: str`, `reference_path: str | None`,
   `reference_source: str`, `uncovered_contigs: tuple[str, ...]`, `unmapped_scan: str`
-- `missing_index_message(in_path, file_format, tried) -> str`
+- `missing_index_message(in_path, file_format, tried) -> str` — final round-3 wording
+  names failure to build the fresh run-local index; it does not tell users to create a
+  supplied index the implementation deliberately will not trust.
 - `unresolvable_reference_message(in_path, contig, m5, attempts) -> str`
 - `preflight_error_payload(code: str, message: str, attempts) -> dict` — what
   `preflight_error.json` holds.
@@ -135,7 +139,8 @@ Wave 2 until `make check-all` is green on the tip of Wave 1.
 - [ ] **Step 1: write the failing tests.** Cover: both index spellings per suffix; CSI
       included for BAM and excluded under `bai_only=True`; CRAM never offers `.bai`;
       an unknown format raises `ValueError` matching `"unknown alignment format"`;
-      `missing_index_message` contains the path, every name tried and `samtools index`;
+      `missing_index_message` contains the path, every supplied name inspected and the
+      `samtools index` diagnostic command;
       `unresolvable_reference_message` contains the contig, the M5 (or the words
       `no M5` when it is None), every candidate source, every candidate path and every
       reason; the dataclass is frozen; and:
@@ -231,7 +236,9 @@ class TestChooseScan:
 **Files:** modify `vntyper/scripts/alignment_index.py`, `tests/unit/test_alignment_index.py`
 
 **Interfaces produced:** `resolve_any_index(in_path, file_format) -> str | None` — the
-first existing name from `index_candidate_names(...)`, i.e. any index htslib accepts.
+first existing name from `index_candidate_names(...)`. The final round-3 design uses this
+only to enumerate/protect supplied patient artifacts; §3.15 forbids consuming any supplied
+index because a valid wrong-sample index can return an empty slice with exit 0.
 
 **Do not touch `resolve_bam_index`.** It is BAI-only because
 `extract_unmapped_from_offset.get_last_chunk_end` parses the BAI container and rejects
@@ -308,7 +315,7 @@ def test_a_reference_path_with_a_space_is_quoted_not_split():
 
 Plus: slice threaded (`-@ 8`); `index_output=False` emits no `&&` and no `index`;
 `index_output=True` still the default; index threaded; `threads=1` emits no `-@` so
-existing literal comparisons hold; the indexed fetch contains `'*'`, `-f 12` and **no**
+existing literal comparisons hold; the indexed fetch contains `'*'`, `-f 4` and **no**
 pipe; `build_samtools_idxstats_command` carries no `-T` (spec §3.13: idxstats needs no
 reference).
 
@@ -330,19 +337,21 @@ modify `vntyper/config.json`
 **Interfaces produced:**
 - `build_alignment_view(in_path, output_dir, output_name, file_format, config, threads) -> tuple[str, str]`
   → `(view_path, index_path)`
-- `choose_unmapped_scan(view_path, config, threads, output_dir, output_name) -> str`
+- `choose_unmapped_scan(view_path, config, threads, output_dir, output_name, *, file_format) -> str`
 - `resolve_reference(view_path, candidates, region, bed_file, config, threads, output_dir, output_name, header_contigs, m5) -> tuple[str | None, str, tuple[str, ...]]`
 - `pin_reference_resolution(config) -> str | None` and
   `restore_reference_resolution(previous: str | None) -> None`
 - `run_preflight(...) -> AlignmentPlan`
-- `capture_command(command, log_file, cwd=None) -> tuple[bool, str]` — the stdout-capturing
-  seam `idxstats` needs; `run_command` returns only a bool and streams stdout to a log.
+- `capture_command(command, log_file, cwd=None, *, timeout_seconds=None) -> tuple[bool, str]`
+  — the stdout-capturing seam `idxstats` needs and the process-group deadline reference
+  probes require; `run_command` returns only a bool and streams stdout to a log.
 - `ordered_reference_candidates(config, reference_assembly, reference_fasta)` and
   `uncovered_reference_contigs(header_contigs, reference_contigs)` — pure candidate-policy
   and reference-coverage decisions consumed by the I/O preflight.
 
-**Config** (spec §6) — add `cram.allow_ambient_reference_resolution` (false),
-`cram.local_ref_path` (`"%2s/%2s/%s"`), `cram.unmapped_scan` (`"auto"`),
+**Config** (spec §6) — add `bam.unmapped_scan` (`"auto"`),
+`cram.allow_ambient_reference_resolution` (false), `cram.local_ref_path`
+(`"%2s/%2s/%s"`), `cram.reference_probe_timeout_seconds` (120), `cram.unmapped_scan` (`"auto"`),
 `cram.reference_candidate_order`, `reference_data.cram_reference_hg19`/`_hg38` (null),
 `assembly_detection.naming_convention_threshold` (0.5) and `primary_contig_patterns`.
 There is **no** `read_layout` block.
@@ -351,8 +360,9 @@ There is **no** `read_layout` block.
 
 ```python
 class TestAlignmentView:
-    def test_an_existing_index_is_symlinked_not_rebuilt(self, tmp_path): ...
-    def test_a_missing_index_is_built_beside_the_view_never_beside_the_input(self, tmp_path): ...
+    def test_a_supplied_index_is_never_trusted_and_a_fresh_one_is_built(self, tmp_path): ...
+    def test_the_index_is_built_beside_the_view_never_beside_the_input(self, tmp_path): ...
+    def test_a_valid_wrong_sample_index_cannot_authorise_an_empty_slice(self, tmp_path): ...
     def test_the_input_directory_is_untouched_even_when_it_is_read_only(self, tmp_path): ...
     def test_a_stale_view_pointing_at_a_different_alignment_is_replaced(self, tmp_path):
         """spec 4.5: --keep-intermediates makes reruns normal, and a view left pointing at
@@ -362,7 +372,8 @@ class TestAlignmentView:
 
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement `build_alignment_view` using
       `os.symlink`, `FileExistsError`, `os.readlink` and `os.path.samefile`.
-- [ ] **Step 4:** write and run the failing tests for `choose_unmapped_scan` (delegates to
+- [ ] **Step 4:** write and run the failing tests for `choose_unmapped_scan` for both BAM
+      and CRAM (delegates to
       `idxstats_parsing.choose_scan`, feeding it `capture_command`'s output and exit) and
       for `resolve_reference`:
 
@@ -374,6 +385,8 @@ def test_the_no_reference_candidate_is_last_and_is_recorded_as_htslib_resolved(s
 def test_the_first_candidate_that_decodes_wins(self): ...
 def test_no_candidate_decoding_raises_naming_every_one_with_its_reason(self): ...
 def test_the_probe_uses_the_runs_own_region_and_bed_not_a_hardcoded_one(self): ...
+def test_stream_mode_additionally_proves_a_complete_whole_file_decode(self): ...
+def test_every_reference_probe_has_a_bounded_process_group_deadline(self): ...
 def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplog): ...
 ```
 
@@ -402,8 +415,10 @@ tests in `tests/unit/test_fastq_bam_processing.py`, `tests/unit/test_pipeline.py
       replace the `file_format="bam"` parameter with `plan: AlignmentPlan`; delete the
       inline `resolve_bam_index` block (lines ~167-177) and use `plan.index_path`;
       replace `cram_ref_option = ""` with the plan's reference; branch the CRAM scan on
-      `plan.unmapped_scan`. In `pipeline.py`, call `run_preflight` before region
-      resolution, pass the plan to both call sites, and change
+      `plan.unmapped_scan`. In `pipeline.py`, invoke the owned input-alignment preflight
+      boundary before header/region resolution; the boundary resolves and materialises the
+      exact BED internally, calls `run_preflight`, and returns both BED and plan. Pass the
+      plan to both call sites, and change
       `input_bam = Path(cram)` at `:468` to the view plus the plan's reference.
 - [ ] **Step 4:** run the three suites → PASS.
 - [ ] **Step 5:** `wc -l vntyper/scripts/fastq_bam_processing.py` → **must be < 649**.
@@ -542,7 +557,7 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
 - [ ] **Step 3:** add `build_reference_dependent_fixture` (its own docstring already
       describes it) producing a reference-compressed CRAM plus a copy of its reference —
       #209's path cannot be tested without one.
-- [ ] **Step 4:** add a CRAM fixture containing **placed** flag-12 reads, for A-SCAN-1.
+- [ ] **Step 4:** add a CRAM fixture containing **placed** read-unmapped records, for A-SCAN-1.
 - [ ] **Step 5:** extend `scripts/golden_cohort/matrix.py` so the CRAM cases cover both
       scan modes; the current matrix declares only two CRAM cases (`matrix.py:126`,
       `:143`), so deriving more fixtures does not by itself run them.

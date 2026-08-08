@@ -10,6 +10,8 @@ from unittest import mock
 import pytest
 
 from vntyper.scripts.preflight_error_io import (
+    PreflightErrorContext,
+    persist_preflight_failure,
     public_reference_error_payload,
     write_preflight_error,
 )
@@ -93,6 +95,27 @@ def test_writer_atomically_replaces_an_existing_single_link_regular_artifact(tmp
 
     assert json.loads(destination.read_text(encoding="utf-8")) == _payload()
     assert destination.stat().st_nlink == 1
+
+
+def test_successful_preflight_clears_a_stale_failure_artifact(tmp_path: Path) -> None:
+    """Reusing an output root cannot expose an obsolete diagnosis on a later failure."""
+    destination = tmp_path / "preflight_error.json"
+    destination.write_text(json.dumps(_payload()), encoding="utf-8")
+
+    with persist_preflight_failure(PreflightErrorContext(tmp_path)):
+        pass
+
+    assert not destination.exists()
+
+
+def test_missing_output_directory_does_not_replace_the_preflight_exception(tmp_path: Path) -> None:
+    """No stale artifact can exist before its output directory is created."""
+    original = RuntimeError("preflight owns this failure")
+
+    with pytest.raises(RuntimeError) as raised, persist_preflight_failure(PreflightErrorContext(tmp_path / "absent")):
+        raise original
+
+    assert raised.value is original
 
 
 def test_writer_rejects_a_payload_with_extra_or_missing_contract_keys(tmp_path: Path) -> None:

@@ -166,6 +166,72 @@ def test_every_derived_base_case_declares_the_pipeline_artefact_requirement(tmp_
         assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS), case["case_id"]
 
 
+def test_mixed_base_cases_declare_side_specific_fail_closed_outcomes(tmp_path: Path) -> None:
+    """The baseline may succeed only because it drops reads; the candidate must reject them."""
+    built = _build(_documented_data_dir(tmp_path))
+    by_id = {case["case_id"]: case for case in built["cases"]}
+    mixed_base_ids = {
+        "40cf_hg38_subset",
+        "6449_hg19_subset",
+        "66bf_GRCh37_bwa",
+        "66bf_GRCh38_bwa",
+        "66bf_hg19_bwa",
+        "66bf_hg19_ensembl_bwa",
+        "66bf_hg19_subset",
+        "66bf_hg38_bwa",
+        "66bf_hg38_ensembl_bwa",
+        "6c28_hg19_subset",
+        "7a61_GRCh37_bwa",
+        "7a61_GRCh38_bwa",
+        "7a61_hg19_bwa",
+        "7a61_hg19_ensembl_bwa",
+        "7a61_hg19_subset",
+        "7a61_hg38_bwa",
+        "7a61_hg38_ensembl_bwa",
+        "a5c1_GRCh37_bwa",
+        "a5c1_GRCh38_bwa",
+        "a5c1_hg19_bwa",
+        "a5c1_hg19_ensembl_bwa",
+        "a5c1_hg19_subset",
+        "a5c1_hg38_bwa",
+        "a5c1_hg38_ensembl_bwa",
+        "b178_hg19_subset",
+        "dfc3_GRCh37_bwa",
+        "dfc3_GRCh38_bwa",
+        "dfc3_hg19_bwa",
+        "dfc3_hg19_ensembl_bwa",
+        "dfc3_hg19_subset",
+        "dfc3_hg38_bwa",
+        "dfc3_hg38_ensembl_bwa",
+    }
+
+    declared = {case_id for case_id, case in by_id.items() if case.get("side_expectations")}
+    base_ids = {case["case_id"] for case in built["cases"] if case["group"] == "base"}
+    assert declared.intersection(base_ids) == mixed_base_ids
+    for case_id in mixed_base_ids:
+        assert by_id[case_id]["side_expectations"]["before"] == {
+            "expect_exit": "zero",
+            "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+        }
+        assert by_id[case_id]["side_expectations"]["after"] == {
+            "expect_exit": "nonzero",
+            "required_artifacts": [],
+        }
+
+
+def test_repeats_do_not_blindly_inherit_the_base_layout_outcome(tmp_path: Path) -> None:
+    """Non-fast extraction repairs layout, while fast adVNTR repeats retain the refusal."""
+    built = _build(_documented_data_dir(tmp_path))
+    by_id = {case["case_id"]: case for case in built["cases"]}
+
+    assert by_id["b178_hg19_nonfast"].get("side_expectations") is None
+    assert by_id["b178_hg19_nonfast"]["expect_exit"] == "zero"
+    assert by_id["a5c1_hg19_advntr"]["side_expectations"]["after"] == {
+        "expect_exit": "nonzero",
+        "required_artifacts": [],
+    }
+
+
 def test_a_probe_expected_to_fail_requires_no_artefacts(tmp_path: Path) -> None:
     """The two mismatch probes refuse before writing anything; requiring output inverts them.
 
@@ -188,6 +254,42 @@ def test_the_naming_probe_is_expected_to_succeed_and_carries_the_full_requiremen
     naming = next(probe for probe in built["probes"] if probe["case_id"] == "probe_naming_ncbi_as_hg38")
     assert naming["expect_exit"] == "zero"
     assert naming["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
+    assert naming.get("side_expectations") is None
+
+
+def test_cohorts_only_consume_cases_expected_to_write_candidate_summaries(tmp_path: Path) -> None:
+    """Intentional candidate refusals must not block every downstream cohort case."""
+    built = _build(_documented_data_dir(tmp_path))
+    candidate_successes = {
+        case["case_id"]
+        for case in built["cases"]
+        if case.get("side_expectations", {}).get("after", {}).get("expect_exit", case["expect_exit"]) == "zero"
+    }
+
+    assert candidate_successes
+    assert len(candidate_successes) == 24
+    for cohort in built["cohort_cases"]:
+        if cohort.get("empty_input_dir"):
+            continue
+        assert set(cohort["inputs"]).issubset(candidate_successes)
+    assert set(built["cohort_cases"][0]["inputs"]) == candidate_successes
+
+
+def test_exporting_cohorts_receive_a_candidate_successful_advntr_case(tmp_path: Path) -> None:
+    """Cohort adVNTR exports are impossible when every upstream adVNTR case refuses."""
+    built = _build(_documented_data_dir(tmp_path))
+    successful_advntr = [
+        case
+        for case in built["cases"]
+        if case["group"] == "advntr" and matrix.materialize_side_expectation(case, "after")["expect_exit"] == "zero"
+    ]
+
+    assert [(case["case_id"], case["repeat_of"]) for case in successful_advntr] == [
+        ("b178_hg19_advntr", "b178_hg19_bwa")
+    ]
+    for cohort in built["cohort_cases"]:
+        if "cohort_advntr.tsv" in cohort["required_artifacts"]:
+            assert "b178_hg19_advntr" in cohort["inputs"]
 
 
 def test_the_cohort_cases_declare_their_exports_and_the_empty_one_declares_none() -> None:
@@ -441,6 +543,43 @@ def test_a_cram_case_is_built_for_each_declared_id_when_the_fixture_exists(tmp_p
     assert case["expect_exit"] == "zero"
     assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
     assert case["repeat_of"] == "b178_hg19_subset"
+
+
+def test_cram_cases_pin_candidate_rejection_and_recorded_read_set_evidence(tmp_path: Path) -> None:
+    """The CRAM gate must decide A-178-2, not merely serialize optional measurements."""
+    cram = _cram_cases(_build(_documented_data_dir(tmp_path)))
+    indexed = cram["7a61_hg38_ensembl_indexed_cram"]
+    stream = cram["7a61_hg38_ensembl_stream_cram"]
+    expected_raw = {
+        "count": 2_690,
+        "sorted_read_name_sha256": "c64be739cd6344b8b62004fc9ea568779b3cc06ff1d472ac0e5d97c343130d7d",
+    }
+    expected_stream = {
+        "count": 634_261,
+        "sorted_read_name_sha256": "b7f75d19497698f12d6dbbc38afc12702b2d262670a4c893b39f95967ebf7b7b",
+    }
+
+    for case in (indexed, stream):
+        assert case["side_expectations"]["after"]["expect_exit"] == "nonzero"
+        assert case["side_expectations"]["after"]["required_artifacts"] == []
+        assert case["side_expectations"]["after"]["cram_evidence_expectation"] == {
+            "raw_indexed_read_set": expected_raw,
+            "stream_read_set": expected_stream,
+        }
+
+    b178_expected_raw = {
+        "count": 4_478,
+        "sorted_read_name_sha256": "dad9a81a4e8cf30d1d938717459614f7d8ac6decb84978a5bc23c090b4d90a8b",
+    }
+    b178_expected_stream = {
+        "count": 4_807,
+        "sorted_read_name_sha256": "d3aa88fe91c8964b2f9a1b053a672f2bc3d1896b71de986f5cde02999d552591",
+    }
+    for case_id in ("b178_hg19_indexed_cram", "b178_hg19_stream_cram"):
+        assert cram[case_id]["side_expectations"]["after"]["cram_evidence_expectation"] == {
+            "raw_indexed_read_set": b178_expected_raw,
+            "stream_read_set": b178_expected_stream,
+        }
 
 
 def test_a_cram_case_never_runs_in_fast_mode(tmp_path: Path) -> None:

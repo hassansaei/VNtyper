@@ -11,6 +11,29 @@ logger = logging.getLogger(__name__)
 
 CRAM_SCAN_MODES: tuple[str, ...] = ("indexed", "stream")
 
+CRAM_READ_SET_EXPECTATIONS: dict[str, dict[str, dict[str, int | str]]] = {
+    "7a61_hg38_ensembl_bwa": {
+        "raw_indexed_read_set": {
+            "count": 2_690,
+            "sorted_read_name_sha256": "c64be739cd6344b8b62004fc9ea568779b3cc06ff1d472ac0e5d97c343130d7d",
+        },
+        "stream_read_set": {
+            "count": 634_261,
+            "sorted_read_name_sha256": "b7f75d19497698f12d6dbbc38afc12702b2d262670a4c893b39f95967ebf7b7b",
+        },
+    },
+    "b178_hg19_subset": {
+        "raw_indexed_read_set": {
+            "count": 4_478,
+            "sorted_read_name_sha256": "dad9a81a4e8cf30d1d938717459614f7d8ac6decb84978a5bc23c090b4d90a8b",
+        },
+        "stream_read_set": {
+            "count": 4_807,
+            "sorted_read_name_sha256": "d3aa88fe91c8964b2f9a1b053a672f2bc3d1896b71de986f5cde02999d552591",
+        },
+    },
+}
+
 
 def cram_fixture_for(case: dict[str, Any], data_dir: Path, cram_root: Path) -> Path:
     """Return the mirrored CRAM path for a derived base BAM case.
@@ -79,6 +102,7 @@ def build_cram_cases(
         for scan in CRAM_SCAN_MODES:
             case = dict(base)
             case.pop("bam", None)
+            evidence_expectation = CRAM_READ_SET_EXPECTATIONS.get(base["case_id"])
             case.update(
                 {
                     "case_id": f"{base['sample'].removeprefix('example_')}_{base['assembly']}_{scan}_cram",
@@ -91,6 +115,18 @@ def build_cram_cases(
                     "repeat_of": base["case_id"],
                 }
             )
+            if evidence_expectation is not None:
+                case["side_expectations"] = {
+                    "before": {
+                        "expect_exit": "zero",
+                        "required_artifacts": list(base["required_artifacts"]),
+                    },
+                    "after": {
+                        "expect_exit": "nonzero",
+                        "required_artifacts": [],
+                        "cram_evidence_expectation": evidence_expectation,
+                    },
+                }
             cases.append(case)
 
     log.append(f"CRAM repeats: {len(cases)}/{len(cram_ids) * len(CRAM_SCAN_MODES)} from {cram_root}")

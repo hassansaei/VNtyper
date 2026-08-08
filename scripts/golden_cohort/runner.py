@@ -35,8 +35,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from golden_cohort import HARNESS_VERSION, admissibility, launcher, read_set_commands
+from golden_cohort import HARNESS_VERSION, admissibility, cram_evidence, launcher, read_set_commands
 from golden_cohort.artifacts import read_json
+from golden_cohort.case_expectations import materialize_side_expectation
 
 logger = logging.getLogger(__name__)
 
@@ -280,11 +281,15 @@ def _run_one(
         "effective_unmapped_scan": case.get("effective_unmapped_scan"),
         "case_config_path": case.get("case_config_path"),
         "unmapped_read_set": None,
+        "raw_indexed_read_set": None,
+        "raw_indexed_loss": None,
     }
 
-    read_set_problem = ""
+    read_set_problems: list[str] = []
     unmapped_bam = output_dir / "fastq_bam_processing" / "output_unmapped.bam"
-    if case.get("alignment_kind", "bam") == "cram" and unmapped_bam.is_file():
+    is_cram = case.get("alignment_kind", "bam") == "cram"
+    needs_raw_evidence = case.get("cram_evidence_expectation") is not None
+    if is_cram and (unmapped_bam.is_file() or needs_raw_evidence):
         try:
             raw_config_path = case.get("case_config_path")
             if not isinstance(raw_config_path, str) or not raw_config_path:
@@ -295,20 +300,40 @@ def _run_one(
             if not isinstance(samtools_path, str) or not samtools_path:
                 raise ValueError(f"the complete case config at {raw_config_path} has no tools.samtools string")
 
-            record["unmapped_read_set"] = read_set_commands.collect_read_set_evidence(
-                unmapped_bam,
-                samtools_path,
-                cwd=tree,
-                temporary_parent=log_dir,
-                timeout=timeout,
-            )
+            if needs_raw_evidence:
+                record["raw_indexed_read_set"] = read_set_commands.collect_read_set_evidence(
+                    Path(case["cram"]),
+                    samtools_path,
+                    cwd=tree,
+                    temporary_parent=log_dir,
+                    timeout=timeout,
+                    regions=("*",),
+                )
+            if unmapped_bam.is_file():
+                record["unmapped_read_set"] = read_set_commands.collect_read_set_evidence(
+                    unmapped_bam,
+                    samtools_path,
+                    cwd=tree,
+                    temporary_parent=log_dir,
+                    timeout=timeout,
+                )
         except Exception as exc:
-            read_set_problem = f"could not collect CRAM read-set evidence: {exc}"
-            logger.error(f"[{side}] {case_id}: {read_set_problem}")
+            problem = f"could not collect CRAM read-set evidence: {exc}"
+            read_set_problems.append(problem)
+            logger.error(f"[{side}] {case_id}: {problem}")
+
+    raw_evidence = record.get("raw_indexed_read_set")
+    stream_evidence = record.get("unmapped_read_set")
+    if isinstance(raw_evidence, dict) and isinstance(stream_evidence, dict):
+        raw_count = raw_evidence.get("count")
+        stream_count = stream_evidence.get("count")
+        if isinstance(raw_count, int) and isinstance(stream_count, int):
+            record["raw_indexed_loss"] = stream_count - raw_count
 
     record.update(admissibility.check_case(case, record, output_dir))
-    if read_set_problem:
-        record["expectation_problems"].append(read_set_problem)
+    read_set_problems.extend(cram_evidence.validate_cram_evidence(case, record))
+    if read_set_problems:
+        record["expectation_problems"].extend(read_set_problems)
         record["expectation_met"] = False
     (log_dir / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
@@ -363,7 +388,7 @@ def run_side(
         output_dir = cases_root / case["case_id"]
         log_dir = logs_root / case["case_id"]
         config_path, effective_scan = materialize_case_config(tree, case, log_dir)
-        runtime_case = dict(case)
+        runtime_case = materialize_side_expectation(case, side)
         runtime_case["effective_unmapped_scan"] = effective_scan
         runtime_case["case_config_path"] = str(config_path) if config_path is not None else None
         argv = pipeline_argv(
@@ -573,11 +598,15 @@ def load_side(run_root: Path) -> dict[str, Any]:
         dict[str, Any]: The side record.
 
     Raises:
-        ValueError: If the side record is not there, which means that side never ran.
+        ValueError: If the side record is absent or is not a JSON object.
     """
     record = read_json(run_root / "side.json")
     if record is None:
         msg = f"No side.json under {run_root}. That side has not been run, so there is nothing to compare."
+        logger.error(msg)
+        raise ValueError(msg)
+    if not isinstance(record, dict):
+        msg = f"{run_root / 'side.json'} must contain a JSON object, got {type(record).__name__}"
         logger.error(msg)
         raise ValueError(msg)
     return record

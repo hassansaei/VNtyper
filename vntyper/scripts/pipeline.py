@@ -31,12 +31,11 @@ from vntyper.scripts.fastq_bam_processing import (
 )
 from vntyper.scripts.generate_report import generate_summary_report
 from vntyper.scripts.kestrel_genotyping import run_kestrel
-from vntyper.scripts.pipeline_alignment import build_alignment_preflight_kwargs, prepare_alignment_target
-
-# The declared-assembly guard. Its policy lives in its own module so that this
-# behaviour change - it rejects inputs that previously ran to completion - is a
-# single revertible commit (AGENTS.md rule 3: pipeline.py is over the size limit).
-from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
+from vntyper.scripts.pipeline_alignment import (
+    build_alignment_preflight_kwargs,
+    prepare_alignment_target,
+    prepare_input_alignment_preflight,
+)
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -205,45 +204,40 @@ def run_pipeline(
             logger.error("No supported input was provided.")
             raise ValueError("No supported input was provided.")
 
-        # BAM and CRAM share one path here; FASTQ has no header of its own and is
-        # deliberately not guarded (see pipeline_guards for why).
         alignment_header = None
-        if input_type in ["BAM", "CRAM"]:
-            alignment_header = read_alignment_header(bam if input_type == "BAM" else cram, config)
-            enforce_declared_assembly(reference_assembly, alignment_header)
-
-        bed_file_path = prepare_alignment_target(
-            input_type=input_type,
-            bam=bam,
-            cram=cram,
-            output_dir=output_dir,
-            reference_assembly=reference_assembly,
-            config=config,
-            bed_file=bed_file,
-            custom_regions=custom_regions,
-        )
-
-        previous_ref_path = pin_reference_resolution(config)
-        reference_resolution_pinned = True
         alignment_plan = None
         if input_type in ["BAM", "CRAM"]:
             input_alignment = bam if input_type == "BAM" else cram
-            alignment_plan = run_preflight(
-                **build_alignment_preflight_kwargs(
-                    in_path=str(input_alignment),
-                    output_dir=Path(output_dir) / "fastq_bam_processing",
-                    output_name="input",
-                    file_format=input_type.lower(),
-                    config=config,
-                    threads=threads,
-                    bed_file=bed_file_path,
-                    reference_assembly=reference_assembly,
-                    fast_mode=fast_mode,
-                    alignment_header=alignment_header,
-                    reference_fasta=reference_fasta,
-                    error_output_dir=output_dir,
-                )
+            prepared = prepare_input_alignment_preflight(
+                in_path=str(input_alignment),
+                input_type=input_type,
+                output_dir=output_dir,
+                config=config,
+                threads=threads,
+                reference_assembly=reference_assembly,
+                bed_file=bed_file,
+                custom_regions=custom_regions,
+                reference_fasta=reference_fasta,
+                fast_mode=fast_mode,
             )
+            alignment_header = prepared.alignment_header
+            bed_file_path = prepared.bed_file
+            alignment_plan = prepared.plan
+            previous_ref_path = prepared.previous_ref_path
+            reference_resolution_pinned = True
+        else:
+            bed_file_path = prepare_alignment_target(
+                input_type=input_type,
+                bam=bam,
+                cram=cram,
+                output_dir=output_dir,
+                reference_assembly=reference_assembly,
+                config=config,
+                bed_file=bed_file,
+                custom_regions=custom_regions,
+            )
+            previous_ref_path = pin_reference_resolution(config)
+            reference_resolution_pinned = True
 
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")

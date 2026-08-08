@@ -33,6 +33,17 @@ def test_failed_idxstats_selects_the_lossless_stream_scan(tmp_path: Path) -> Non
     assert scan == "stream"
 
 
+def test_bam_idxstats_with_placed_unmapped_reads_selects_the_complete_stream(tmp_path: Path) -> None:
+    """The BAI tail shortcut cannot recover placed unmapped records."""
+    placed = "chr1\t20000\t600\t329\n*\t0\t0\t4478\n"
+    config = {"tools": {"samtools": "samtools"}, "bam": {"unmapped_scan": "auto"}}
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, placed)):
+        scan = choose_unmapped_scan("/run/view.bam", config, 4, str(tmp_path), "sample", file_format="bam")
+
+    assert scan == "stream"
+
+
 def test_an_invalid_configured_scan_is_rejected(tmp_path: Path) -> None:
     """Only the shipped automatic and explicit safe scan modes are accepted."""
     config = {"cram": {"unmapped_scan": "quick"}}
@@ -53,6 +64,7 @@ def test_shipped_config_exposes_the_actual_safe_preflight_policy() -> None:
     assert config["cram"] == {
         "allow_ambient_reference_resolution": False,
         "local_ref_path": "%2s/%2s/%s",
+        "reference_probe_timeout_seconds": 120,
         "unmapped_scan": "auto",
         "reference_candidate_order": [
             "cli",
@@ -61,6 +73,7 @@ def test_shipped_config_exposes_the_actual_safe_preflight_policy() -> None:
             "htslib_resolved",
         ],
     }
+    assert config["bam"] == {"unmapped_scan": "auto"}
     assert config["reference_data"]["cram_reference_hg19"] is None
     assert config["reference_data"]["cram_reference_hg38"] is None
     assert config["assembly_detection"]["naming_convention_threshold"] == 0.5
@@ -103,8 +116,11 @@ def test_a_cram_plan_uses_configured_candidate_order_and_idxstats_evidence(tmp_p
         },
     }
 
-    def successful_commands(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
-        del log_file, cwd
+    def successful_commands(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"CRAI")
+            return True, ""
         if " idxstats " in f" {command} ":
             return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
         return True, "decoded"
@@ -152,8 +168,11 @@ def test_default_policy_probes_the_cli_reference_before_configured_candidates(tm
     }
     reference_probes: list[str] = []
 
-    def commands(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
-        del log_file, cwd
+    def commands(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"CRAI")
+            return True, ""
         if " idxstats " in f" {command} ":
             return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
         reference_probes.append(command)
@@ -179,8 +198,8 @@ def test_default_policy_probes_the_cli_reference_before_configured_candidates(tm
     assert plan.reference_source == "config_cram_reference"
 
 
-def test_a_bam_plan_probes_the_index_without_reference_or_idxstats_resolution(tmp_path: Path) -> None:
-    """BAM needs one retrieval proof but no CRAM reference decision."""
+def test_a_bam_plan_builds_an_index_selects_a_scan_and_probes_the_target(tmp_path: Path) -> None:
+    """BAM preflight proves its own index, unmapped scan, and target retrieval."""
     input_dir = tmp_path / "input"
     output = tmp_path / "output"
     input_dir.mkdir()
@@ -189,9 +208,13 @@ def test_a_bam_plan_probes_the_index_without_reference_or_idxstats_resolution(tm
     (input_dir / "sample.bam.bai").write_bytes(b"BAI")
     commands: list[str] = []
 
-    def successful_probe(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
-        del log_file, cwd
+    def successful_probe(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
         commands.append(command)
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"BAI")
+        if arguments[1] == "idxstats":
+            return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=successful_probe):
@@ -206,12 +229,45 @@ def test_a_bam_plan_probes_the_index_without_reference_or_idxstats_resolution(tm
             fast_mode=False,
         )
 
-    assert len(commands) == 1
-    assert " -T " not in f" {commands[0]} "
+    assert len(commands) == 3
+    assert any(" index " in f" {command} " for command in commands)
+    assert any(" idxstats " in f" {command} " for command in commands)
+    assert " -T " not in f" {commands[-1]} "
     assert plan.reference_path is None
     assert plan.reference_source == "not-required"
     assert plan.unmapped_scan == "indexed"
     assert plan.index_path.endswith(".bai")
+
+
+def test_a_bam_plan_records_stream_when_idxstats_reports_placed_unmapped(tmp_path: Path) -> None:
+    """BAM preflight must carry the lossless scan decision into conversion."""
+    input_dir = tmp_path / "input"
+    output = tmp_path / "output"
+    input_dir.mkdir()
+    alignment = input_dir / "sample.bam"
+    alignment.write_bytes(b"BAM")
+
+    def commands(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"BAI")
+            return True, ""
+        if arguments[1] == "idxstats":
+            return True, "chr1\t100\t2\t3\n*\t0\t0\t4\n"
+        return True, ""
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=commands):
+        plan = run_preflight(
+            str(alignment),
+            str(output),
+            "sample",
+            "bam",
+            {"bam": {"unmapped_scan": "auto"}},
+            2,
+            region="chr1:1-2",
+        )
+
+    assert plan.unmapped_scan == "stream"
 
 
 def test_a_bam_whose_index_cannot_retrieve_the_target_fails_preflight(tmp_path: Path) -> None:
@@ -223,8 +279,17 @@ def test_a_bam_whose_index_cannot_retrieve_the_target_fails_preflight(tmp_path: 
     alignment.write_bytes(b"BAM")
     (input_dir / "sample.bam.bai").write_bytes(b"BAI")
 
+    def fail_probe_only(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"BAI")
+            return True, ""
+        if arguments[1] == "idxstats":
+            return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
+        return False, "stale index"
+
     with (
-        patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(False, "stale index")),
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=fail_probe_only),
         pytest.raises(RuntimeError, match="stale index"),
     ):
         run_preflight(str(alignment), str(output), "sample", "bam", {}, 2, region="chr1:1-2")

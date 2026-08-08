@@ -5,13 +5,13 @@ Module Purpose:
 ---------------
 Where an alignment's index already is, decided without running samtools.
 
-``process_bam_to_fastq`` reuses an existing BAM index when there is one and builds a new
-one into the run's *output* directory when there is not - the input directory holds
-patient data and is routinely mounted read-only (#162, #210). Only the second half of
-that needs a subprocess. The first half is a pure question about filenames: which of the
-candidate names permitted by the alignment format, in the order from
-:func:`alignment_contract.index_candidate_names`, exists on disk. BAM CSI is supported
-by :func:`resolve_any_index`, as is CRAM CSI after pinned samtools/htslib acceptance was
+Alignment preflight enumerates existing indexes as protected patient inputs, but it does
+not trust them for retrieval: BAI/CRAI/CSI carry no binding to the alignment bytes, and
+round-3 measurement proved a valid wrong-sample BAI can return an empty target with exit
+status zero. The trusted index is rebuilt beside the run-local view. The remaining pure
+question here is which candidate name permitted by the alignment format exists, in the
+order from :func:`alignment_contract.index_candidate_names`. BAM CSI is supported by
+:func:`resolve_any_index`, as is CRAM CSI after pinned samtools/htslib acceptance was
 measured directly. CSI is deliberately out of scope only for
 :func:`resolve_bam_index`, because the offset extractor downstream parses BAI bytes
 directly and makes that the correct answer rather than a gap.

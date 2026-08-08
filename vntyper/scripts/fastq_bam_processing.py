@@ -159,7 +159,7 @@ def process_bam_to_fastq(
     if not fast_mode:
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
-        if plan.file_format == "bam":
+        if plan.file_format == "bam" and plan.unmapped_scan == "indexed":
             logger.info("Extracting unmapped reads using offset calculation...")
             extract_unmapped_reads_from_offset(
                 bam_file=plan.view_path,
@@ -216,7 +216,11 @@ def process_bam_to_fastq(
         # No output_bai here, deliberately: final_bam is the merged BAM this stage
         # just wrote inside `output`, so samtools' default destination beside it is
         # already inside the output directory (#162).
-        command_index = build_samtools_index_command(samtools_path=samtools_path, bam_file=final_bam)
+        command_index = build_samtools_index_command(
+            samtools_path=samtools_path,
+            bam_file=final_bam,
+            threads=threads,
+        )
         log_file_index = Path(output) / f"{output_name}_index.log"
         logger.info(f"Re-indexing BAM file with command: {command_index}")
         if not run_command(command_index, str(log_file_index), critical=True):

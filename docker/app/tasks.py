@@ -73,13 +73,11 @@ def is_cram(alignment_path: str) -> bool:
 
 
 def resolve_index_path(alignment_path: str, index_path: str | None) -> str:
-    """Name the index this job will use.
+    """Name the submitted or conventional index this job will clean up.
 
-    `samtools index` writes `.crai` beside a CRAM and `.bai` beside a BAM, so
-    the fallback has to be chosen by format (#188). Naming `.bai` for a CRAM
-    named a file that is never created: the existence check never found the
-    index the worker had itself just built, and cleanup then removed nothing
-    while the real `.crai` stayed on the volume every job shares.
+    The pipeline now builds missing indexes only in its run-local output view.
+    The fallback still has to be format-aware so cleanup covers conventional
+    index names left by older jobs without inventing a BAM suffix for CRAM.
 
     Args:
         alignment_path: The stored alignment.
@@ -95,16 +93,11 @@ def resolve_index_path(alignment_path: str, index_path: str | None) -> str:
 
 
 def derived_index_paths(alignment_path: str) -> tuple[str, ...]:
-    """Name every index this job's own tooling can put beside its alignment.
+    """Name every conventional index entry cleanup may find beside an alignment.
 
-    The worker is not the only thing that indexes the submission. Non-fast BAM
-    processing in `vntyper/scripts/fastq_bam_processing.py` reconstructs the
-    index name as `f"{in_bam}.bai"` and builds it whenever that exact path is
-    missing -- it never sees an index the client uploaded as `sample.bai`. So a
-    submission that carried `sample.bai` still ends up with `sample.bam.bai`
-    beside it, under a name neither the client nor the worker ever mentioned,
-    and cleanup that removes only the submitted paths leaves it on the volume
-    every job shares.
+    Current pipeline preflight never creates these in the input tree, but jobs
+    may carry either accepted spelling and older workers could have generated
+    one. Cleanup remains deliberately bounded to these exact names.
 
     The names are derived from the alignment rather than discovered, and every
     one of them is joined back onto the alignment's own directory, so this can
@@ -261,12 +254,9 @@ def run_vntyper_job(
     Sends an email upon job completion or failure if email is provided.
 
     `index_path` is where the submission's own index was stored, when it carried
-    one. The endpoint accepts several index names, so the worker is told which
-    one it got rather than guessing: guessing means rebuilding an index the job
-    was already given, under a different name, and leaving the supplied file on
-    the shared volume afterwards. With no index supplied it falls back to the
-    conventional name beside the alignment, which is also where `samtools index`
-    puts the one it builds.
+    one. The endpoint accepts several index names, so cleanup uses that exact
+    path rather than guessing. Missing-index construction belongs exclusively
+    to pipeline preflight, which builds a run-local index under `output_dir`.
     """
     job_id = os.path.basename(output_dir)
     # Bound before the try block: the cleanup below runs whether or not the task
@@ -290,18 +280,6 @@ def run_vntyper_job(
         }
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
-
-        # Ensure the alignment has an index the pipeline can find
-        if not os.path.exists(index_path):
-            logger.info(f"Index not found for {bam_path}. Generating index.")
-            try:
-                subprocess.run(["samtools", "index", bam_path], check=True)
-                logger.info(f"Successfully generated index at {index_path}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Error generating index: {e}")
-                # Update usage data on failure
-                redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
-                raise
 
         # Build the base command for VNtyper
         command = build_vntyper_command(

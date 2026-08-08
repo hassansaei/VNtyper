@@ -20,6 +20,7 @@ def collect_read_set_evidence(
     cwd: Path,
     temporary_parent: Path,
     timeout: int,
+    regions: tuple[str, ...] = (),
 ) -> ReadSetEvidence:
     """Count and hash one unmapped BAM without retaining its SAM text in memory.
 
@@ -34,6 +35,8 @@ def collect_read_set_evidence(
         cwd: Source tree used as the command working directory.
         temporary_parent: Existing case-log directory for managed temporary files.
         timeout: Wall-clock bound in seconds for each evidence command and the stream.
+        regions: Optional samtools regions, including ``("*",)`` for the raw indexed
+            diagnostic that deliberately measures what the unsafe strategy would lose.
 
     Returns:
         Validated count and sorted-QNAME SHA-256 evidence.
@@ -46,7 +49,7 @@ def collect_read_set_evidence(
         raise ValueError(f"unmapped BAM does not exist: {unmapped_bam}")
 
     completed_count = subprocess.run(
-        [samtools_path, "view", "-c", str(unmapped_bam)],
+        [samtools_path, "view", "-c", str(unmapped_bam), *regions],
         cwd=str(cwd),
         capture_output=True,
         text=True,
@@ -62,7 +65,7 @@ def collect_read_set_evidence(
         names_path = temporary_root / "read-names.txt"
         sorted_names_path = temporary_root / "read-names.sorted.txt"
         stderr_path = temporary_root / "samtools-view.stderr"
-        view_command = [samtools_path, "view", str(unmapped_bam)]
+        view_command = [samtools_path, "view", str(unmapped_bam), *regions]
         with stderr_path.open("w+", encoding="utf-8") as view_stderr:
             view_process = subprocess.Popen(
                 view_command,

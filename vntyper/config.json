@@ -29,9 +29,13 @@
     "code_adVNTR_RUs": "reference/code-adVNTR_RUs.fa",
     "muc1_motifs_rev_com": "reference/MUC1_motifs_Rev_com.fa"
   },
+  "bam": {
+    "unmapped_scan": "auto"
+  },
   "cram": {
     "allow_ambient_reference_resolution": false,
     "local_ref_path": "%2s/%2s/%s",
+    "reference_probe_timeout_seconds": 120,
     "unmapped_scan": "auto",
     "reference_candidate_order": [
       "cli",

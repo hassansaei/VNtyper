@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +158,81 @@ def test_healthcheck_declared(image_metadata: dict[str, Any]) -> None:
 def test_entrypoint_is_exec_form(image_metadata: dict[str, Any]) -> None:
     """Exec form keeps signal handling intact under docker stop / k8s."""
     assert image_metadata["Config"]["Entrypoint"] == ["/usr/local/bin/entrypoint.sh"]
+
+
+def test_production_entrypoint_streams_child_output_before_the_child_exits(
+    image_metadata: dict[str, Any], tmp_path: Path
+) -> None:
+    """A live child sentinel must reach Docker logs through the real entrypoint.
+
+    The bind mount replaces only the command exercised by the entrypoint; the
+    image, entrypoint, conda environment and ``conda run`` invocation remain the
+    production ones. The child stays alive for 30 seconds so observing the
+    sentinel and then observing ``State.Running=true`` proves output arrived
+    before process exit rather than being flushed during teardown.
+
+    Args:
+        image_metadata: Ensures the configured image exists before launch.
+        tmp_path: Scratch location for the controlled child executable.
+    """
+    assert image_metadata["Config"]["Entrypoint"] == ["/usr/local/bin/entrypoint.sh"]
+    sentinel = "VNTYPER_ENTRYPOINT_STREAM_SENTINEL"
+    child = tmp_path / "vntyper"
+    child.write_text(f'#!/bin/bash\nprintf "%s\\n" "{sentinel}"\nsleep 30\n', encoding="utf-8")
+    child.chmod(0o755)
+
+    started = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--detach",
+            "--rm",
+            "--network",
+            "none",
+            "--mount",
+            f"type=bind,src={child},dst=/opt/conda/envs/vntyper/bin/vntyper,readonly",
+            IMAGE,
+            "vntyper",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    assert started.returncode == 0, started.stderr
+    container_id = started.stdout.strip()
+    try:
+        deadline = time.monotonic() + 8
+        logs = ""
+        while sentinel not in logs and time.monotonic() < deadline:
+            captured = subprocess.run(
+                ["docker", "logs", container_id],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            logs = captured.stdout + captured.stderr
+            if sentinel not in logs:
+                time.sleep(0.05)
+
+        assert sentinel in logs, f"child output was not streamed while container {container_id} was alive:\n{logs}"
+        running = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        assert running.returncode == 0, running.stderr
+        assert running.stdout.strip() == "true", "sentinel appeared only after the controlled child exited"
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", container_id],
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
 
 
 def test_port_exposed(image_metadata: dict[str, Any]) -> None:

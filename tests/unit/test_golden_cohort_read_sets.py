@@ -4,6 +4,7 @@ import io
 import json
 import sys
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 import pytest
@@ -13,7 +14,7 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from golden_cohort import read_set_commands, runner  # noqa: E402
+from golden_cohort import cram_evidence, read_set_commands, runner  # noqa: E402
 from golden_cohort.read_sets import summarize_sorted_read_names, summarize_unmapped_read_set  # noqa: E402
 
 
@@ -193,6 +194,153 @@ def test_a_nonzero_cram_case_with_an_unmapped_bam_still_records_read_set_evidenc
     assert record["seconds"] == 2.34
     assert record["expectation_met"] is True
     assert record["expectation_problems"] == []
+
+
+def test_rejected_indexed_cram_records_raw_star_evidence_without_bypassing_the_guard(tmp_path: Path) -> None:
+    """A-178-2 requires the rejected strategy's would-be read set and no produced BAM."""
+    tree = tmp_path / "tree"
+    output_dir = tmp_path / "out"
+    log_dir = tmp_path / "logs"
+    config_path = log_dir / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"tools": {"samtools": "/case/samtools"}}), encoding="utf-8")
+    case = _case("7a61_indexed_cram", config_path)
+    case.update(
+        {
+            "expect_exit": "nonzero",
+            "effective_unmapped_scan": "indexed",
+            "cram_evidence_expectation": {
+                "raw_indexed_read_set": {
+                    "count": 2_690,
+                    "sorted_read_name_sha256": "c64be739cd6344b8b62004fc9ea568779b3cc06ff1d472ac0e5d97c343130d7d",
+                },
+                "stream_read_set": {
+                    "count": 622_690,
+                    "sorted_read_name_sha256": "6677ba2931466a1519bf0f8b9527d783e2a73049462fe9a72cf9326c83cb8b91",
+                },
+            },
+        }
+    )
+    pipeline_result = mock.Mock(
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n", stderr="indexed unsafe", returncode=1
+    )
+    expectation = cast(dict[str, object], case["cram_evidence_expectation"])
+    raw_evidence = cast(dict[str, object], expectation["raw_indexed_read_set"])
+
+    with (
+        mock.patch.object(read_set_commands, "collect_read_set_evidence", return_value=raw_evidence) as collect,
+        mock.patch.object(runner.subprocess, "run", return_value=pipeline_result),
+    ):
+        record = runner._run_one(
+            case=case,
+            argv=["--config-path", str(config_path), "pipeline", "--cram", str(case["cram"])],
+            tree=tree,
+            side="after",
+            marker="vntyper.scripts.cram_preflight",
+            expect_marker=True,
+            output_dir=output_dir,
+            log_dir=log_dir,
+            timeout=60,
+        )
+
+    collect.assert_called_once_with(
+        Path(str(case["cram"])),
+        "/case/samtools",
+        cwd=tree,
+        temporary_parent=log_dir,
+        timeout=60,
+        regions=("*",),
+    )
+    assert record["unmapped_read_set"] is None
+    assert record["raw_indexed_read_set"] == raw_evidence
+    assert record["raw_indexed_loss"] is None
+    assert record["expectation_met"] is True
+    assert record["expectation_problems"] == []
+
+
+def test_stream_cram_decision_records_exact_read_set_and_raw_loss() -> None:
+    """The stream decision fails closed unless both measurements match the declared evidence."""
+    raw = {
+        "count": 2_690,
+        "sorted_read_name_sha256": "c64be739cd6344b8b62004fc9ea568779b3cc06ff1d472ac0e5d97c343130d7d",
+    }
+    stream = {
+        "count": 634_261,
+        "sorted_read_name_sha256": "b7f75d19497698f12d6dbbc38afc12702b2d262670a4c893b39f95967ebf7b7b",
+    }
+    case = {
+        "case_id": "7a61_stream_cram",
+        "effective_unmapped_scan": "stream",
+        "cram_evidence_expectation": {"raw_indexed_read_set": raw, "stream_read_set": stream},
+    }
+    record = {"raw_indexed_read_set": raw, "unmapped_read_set": stream, "raw_indexed_loss": 631_571}
+
+    assert cram_evidence.validate_cram_evidence(case, record) == []
+
+
+def test_stream_cram_decision_fails_when_raw_loss_evidence_is_missing() -> None:
+    """A successful exit expectation cannot hide an unmeasured A-178-2 decision."""
+    stream = {"count": 4_478, "sorted_read_name_sha256": "d" * 64}
+    case = {
+        "case_id": "b178_stream_cram",
+        "effective_unmapped_scan": "stream",
+        "cram_evidence_expectation": {"raw_indexed_read_set": stream, "stream_read_set": stream},
+    }
+    record = {"raw_indexed_read_set": stream, "unmapped_read_set": stream, "raw_indexed_loss": None}
+
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        "A-178-2 stream evidence did not record the raw indexed loss"
+    ]
+
+
+def test_stream_cram_decision_rejects_a_raw_loss_inconsistent_with_the_read_sets() -> None:
+    """The recorded loss is a decision input, not an unchecked decorative number."""
+    raw = {"count": 10, "sorted_read_name_sha256": "a" * 64}
+    stream = {"count": 14, "sorted_read_name_sha256": "b" * 64}
+    case = {
+        "case_id": "x_stream_cram",
+        "effective_unmapped_scan": "stream",
+        "cram_evidence_expectation": {"raw_indexed_read_set": raw, "stream_read_set": stream},
+    }
+    record = {"raw_indexed_read_set": raw, "unmapped_read_set": stream, "raw_indexed_loss": 3}
+
+    assert cram_evidence.validate_cram_evidence(case, record) == ["A-178-2 raw indexed loss differs: expected 4, got 3"]
+
+
+def test_raw_star_evidence_uses_the_same_bounded_collector_with_a_region(tmp_path: Path) -> None:
+    """The raw diagnostic must select ``*`` without restoring full-SAM buffering."""
+    alignment = tmp_path / "input.cram"
+    alignment.touch()
+    temporary_parent = tmp_path / "logs"
+    temporary_parent.mkdir()
+    count_result = mock.Mock(stdout="1\n", stderr="", returncode=0)
+    view_process = mock.Mock(stdout=io.StringIO("read-a\t4\n"))
+    view_process.wait.return_value = 0
+
+    def run_command(command: list[str], **_kwargs: object) -> mock.Mock:
+        if command[:3] == ["samtools", "view", "-c"]:
+            return count_result
+        sorted_path = Path(command[command.index("-o") + 1])
+        names_path = Path(command[-1])
+        sorted_path.write_text(names_path.read_text())
+        return mock.Mock(stdout="", stderr="", returncode=0)
+
+    with (
+        mock.patch.object(read_set_commands.subprocess, "run", side_effect=run_command) as run,
+        mock.patch.object(read_set_commands.subprocess, "Popen", return_value=view_process) as popen,
+    ):
+        evidence = read_set_commands.collect_read_set_evidence(
+            alignment,
+            "samtools",
+            cwd=tmp_path,
+            temporary_parent=temporary_parent,
+            timeout=30,
+            regions=("*",),
+        )
+
+    assert evidence["count"] == 1
+    assert run.call_args_list[0].args[0] == ["samtools", "view", "-c", str(alignment), "*"]
+    assert popen.call_args.args[0] == ["samtools", "view", str(alignment), "*"]
 
 
 def test_a_cram_preflight_failure_without_an_unmapped_bam_preserves_the_original_expectation(tmp_path: Path) -> None:

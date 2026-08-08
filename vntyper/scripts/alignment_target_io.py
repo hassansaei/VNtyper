@@ -160,8 +160,9 @@ def validate_alignment_output_root(
     logical_input_tree = _absolute(input_path).parent
     resolved_input_tree = _absolute(input_path).resolve(strict=False).parent
     for root_variant in root_variants:
-        if root_variant in (logical_input_tree, resolved_input_tree):
-            _reject(f"Alignment output root must stay outside the patient input tree: {root}")
+        for input_tree in (logical_input_tree, resolved_input_tree):
+            if root_variant == input_tree or input_tree in root_variant.parents:
+                _reject(f"Alignment output root must stay outside the patient input tree: {root}")
 
     if os.path.lexists(root) and not root.is_dir():
         _reject(f"Alignment output root must be a directory: {root}")

@@ -65,6 +65,34 @@ def test_declared_failures_do_not_retain_unreachable_success_expectations() -> N
     assert stale == {}
 
 
+def test_clean_remapped_paired_bam_retains_a_real_advntr_success_contract() -> None:
+    """MED11: early-return negative tests cannot replace downstream paired/adVNTR proof."""
+    successful = [case for case in get_advntr_test_cases() if case.get("expected_exit_code", 0) == 0]
+
+    assert successful == [
+        {
+            "test_name": "example_b178_hg19_bwa_advntr",
+            "bam": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+            "reference_assembly": "hg19",
+            "cli_options": [
+                "--fast-mode",
+                "--keep-intermediates",
+                "--extra-modules",
+                "advntr",
+                "--advntr-max-coverage",
+                "300",
+            ],
+            "advntr_assertions": {
+                "VID": "25561",
+                "State": "I22_4_G_LEN1",
+                "NumberOfSupportingReads": 39,
+                "MeanCoverage": {"value": 70.3333333333, "tolerance_percentage": 10},
+                "Pvalue": {"value": 5.774455097259999e-59, "log10_tolerance": 2},
+            },
+        }
+    ]
+
+
 def test_mixed_layout_diagnostic_renders_the_exact_dynamic_paths_and_counts(tmp_path: Path) -> None:
     """The contract must match the pipeline's full no-discard diagnostic, not a vague prefix."""
     expected = orchestration.mixed_layout_diagnostic(_negative_case(), tmp_path / "case-output")

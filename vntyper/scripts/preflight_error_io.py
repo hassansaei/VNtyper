@@ -44,12 +44,12 @@ OUTPUT_SAFETY_FAILURE = PreflightFailurePhase(
 )
 VIEW_INDEX_FAILURE = PreflightFailurePhase(
     "alignment_index_unusable",
-    "Alignment preflight could not prepare a safe local view and index; remove conflicting view or index entries, "
-    "or create a usable index with samtools index.",
+    "Alignment preflight could not prepare a safe local view and fresh index; remove conflicting run-output "
+    "entries and verify samtools can index the alignment.",
 )
 SCAN_SELECTION_FAILURE = PreflightFailurePhase(
     "unmapped_scan_invalid",
-    "CRAM unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
+    "Alignment unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
 )
 REFERENCE_PROBE_FAILURE = PreflightFailurePhase(
     "reference_unresolved",
@@ -58,6 +58,15 @@ REFERENCE_PROBE_FAILURE = PreflightFailurePhase(
 BAM_PROBE_FAILURE = PreflightFailurePhase(
     "alignment_probe_failed",
     "BAM preflight could not retrieve the requested target; verify the index and target coordinates.",
+)
+HEADER_PREPARATION_FAILURE = PreflightFailurePhase(
+    "alignment_header_invalid",
+    "Alignment preflight rejected the alignment header or declared assembly; verify the input and "
+    "--reference-assembly.",
+)
+TARGET_PREPARATION_FAILURE = PreflightFailurePhase(
+    "alignment_target_invalid",
+    "Alignment preflight could not prepare the requested target; verify the BED file or configured regions.",
 )
 
 
@@ -124,6 +133,21 @@ def public_preflight_error_payload(phase: PreflightFailurePhase) -> dict:
     return preflight_error_payload(phase.code, phase.message, ())
 
 
+def _clear_preflight_error(output_dir: str | Path) -> None:
+    """Remove a prior run's artifact through an unfollowed directory handle."""
+    directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        directory_descriptor = os.open(output_dir, directory_flags)
+    except FileNotFoundError:
+        return
+    try:
+        with suppress(FileNotFoundError):
+            os.unlink(PREFLIGHT_ERROR_FILENAME, dir_fd=directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
 @contextmanager
 def persist_preflight_failure(context: PreflightErrorContext) -> Iterator[None]:
     """Persist one curated artifact and re-raise the original exception unchanged.
@@ -135,6 +159,7 @@ def persist_preflight_failure(context: PreflightErrorContext) -> Iterator[None]:
         Control to the complete preflight operation.
     """
     try:
+        _clear_preflight_error(context.output_dir)
         yield
     except Exception:
         payload = context.payload or public_preflight_error_payload(context.phase)

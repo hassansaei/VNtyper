@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from unittest import mock
 import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
-from vntyper.scripts import pipeline
+from vntyper.scripts import pipeline, pipeline_alignment
 from vntyper.scripts.alignment_contract import AlignmentPlan
 
 pytestmark = pytest.mark.unit
@@ -40,7 +41,10 @@ def _plan(output_dir: Path, file_format: str, *, reference_path: str | None = No
     )
 
 
-def test_alignment_validation_and_target_resolution_precede_preflight_and_all_stages(tmp_path: Path) -> None:
+def test_owned_alignment_preflight_boundary_immediately_follows_validation_and_precedes_all_stages(
+    tmp_path: Path,
+) -> None:
+    """Header and target preparation belong inside the post-validation seam."""
     out = tmp_path / "out"
     plan = _plan(out, "bam")
     events: list[str] = []
@@ -57,7 +61,14 @@ def test_alignment_validation_and_target_resolution_precede_preflight_and_all_st
         mock.patch.object(
             pipeline, "pin_reference_resolution", side_effect=lambda config: events.append("pin"), create=True
         ),
+        mock.patch.object(
+            pipeline_alignment,
+            "pin_reference_resolution",
+            side_effect=lambda config: events.append("pin"),
+            create=True,
+        ),
         mock.patch.object(pipeline, "restore_reference_resolution", create=True),
+        mock.patch.object(pipeline_alignment, "restore_reference_resolution", create=True),
     ):
         harness = run_pipeline_under_harness(
             out,
@@ -72,9 +83,7 @@ def test_alignment_validation_and_target_resolution_precede_preflight_and_all_st
         )
 
     assert harness.error is None
-    assert events.index("validate") < events.index("header") < events.index("region")
-    assert events.index("region") < events.index("pin") < events.index("preflight")
-    assert events.index("preflight") < events.index("tools") < events.index("process")
+    assert events[:7] == ["validate", "pin", "header", "region", "preflight", "tools", "process"]
     preflight_kwargs = harness.kwargs("run_preflight")
     process_kwargs = harness.kwargs("process_bam_to_fastq")
     assert preflight_kwargs["bed_file"] == process_kwargs["bed_file"]
@@ -82,9 +91,55 @@ def test_alignment_validation_and_target_resolution_precede_preflight_and_all_st
     assert process_kwargs["plan"] is plan
 
 
+@pytest.mark.parametrize("failure", [ValueError("target resolution failed"), KeyboardInterrupt("interrupted")])
+def test_alignment_boundary_restores_ref_path_when_target_preparation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    """A failure after pinning cannot leak run-local REF_PATH into the process."""
+    out = tmp_path / "out"
+    original = "http://operator.example/%s"
+    pinned = "/local/cache/%2s/%2s/%s"
+    observed_ref_paths: list[str | None] = []
+    monkeypatch.setenv("REF_PATH", original)
+    config = {**MINIMAL_CONFIG, "cram": {"local_ref_path": pinned}}
+    out.mkdir(parents=True)
+    artifact = out / "preflight_error.json"
+    artifact.write_text('{"code":"stale"}\n', encoding="utf-8")
+
+    def fail_target_resolution(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        observed_ref_paths.append(os.environ.get("REF_PATH"))
+        raise failure
+
+    harness = run_pipeline_under_harness(
+        out,
+        config=config,
+        expect_failure=True,
+        stage_side_effects={"get_region_string_with_fallback": fail_target_resolution},
+    )
+
+    assert isinstance(harness.error, SystemExit if isinstance(failure, Exception) else KeyboardInterrupt)
+    assert observed_ref_paths == [pinned]
+    assert os.environ["REF_PATH"] == original
+    assert not harness.stages["run_preflight"].called
+    assert not harness.stages["get_tool_versions"].called
+    if isinstance(failure, Exception):
+        assert json.loads(artifact.read_text(encoding="utf-8")) == {
+            "code": "alignment_target_invalid",
+            "message": "Alignment preflight could not prepare the requested target; verify the BED file or "
+            "configured regions.",
+            "candidates": [],
+        }
+    else:
+        assert not artifact.exists()
+
+
 def test_fresh_output_root_exists_for_validation_but_stage_directories_wait_for_preflight(tmp_path: Path) -> None:
-    out = tmp_path / "fresh-output"
-    bam = tmp_path / "patient.bam"
+    out = tmp_path / "run-output" / "fresh-output"
+    bam = tmp_path / "patient-input" / "patient.bam"
+    bam.parent.mkdir()
     bam.touch()
 
     def validate(*args: Any, **kwargs: Any) -> None:
@@ -124,8 +179,9 @@ def test_patient_input_tree_cannot_be_used_as_the_output_root(tmp_path: Path) ->
 
 
 def test_cram_plan_drives_conversion_and_reference_aware_coverage(tmp_path: Path) -> None:
-    out = tmp_path / "out"
-    cram = tmp_path / "patient.cram"
+    out = tmp_path / "run-output"
+    cram = tmp_path / "patient-input" / "patient.cram"
+    cram.parent.mkdir()
     cram.touch()
     reference = str(tmp_path / "reference genome.fa")
     plan = _plan(out, "cram", reference_path=reference)
@@ -154,8 +210,9 @@ def test_pipeline_threads_the_explicit_cram_reference_to_preflight(tmp_path: Pat
     Args:
         tmp_path: Pytest temporary directory.
     """
-    out = tmp_path / "out"
-    cram = tmp_path / "patient.cram"
+    out = tmp_path / "run-output"
+    cram = tmp_path / "patient-input" / "patient.cram"
+    cram.parent.mkdir()
     cram.touch()
     reference = tmp_path / "full reference.fa"
 

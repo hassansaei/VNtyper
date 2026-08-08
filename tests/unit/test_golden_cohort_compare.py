@@ -385,6 +385,31 @@ def test_two_healthy_sides_compare_identical(tmp_path: Path) -> None:
     assert result["verdict"] == "IDENTICAL"
 
 
+def test_cram_read_set_and_raw_loss_evidence_are_compared(tmp_path: Path) -> None:
+    """H7: A-178-2 evidence must not remain an ignored result.json field."""
+    before_root, after_root = tmp_path / "before", tmp_path / "after"
+    cases: CaseSpec = {"cram": (1, [], {})}
+    before = _write_side(before_root, "before", "/trees/base", "absent", cases, head="a" * 40)
+    after = _write_side(after_root, "after", "/trees/cand", "present", cases, head="b" * 40)
+    before_result = before_root / "logs" / "cram" / "result.json"
+    after_result = after_root / "logs" / "cram" / "result.json"
+    before_payload = json.loads(before_result.read_text())
+    after_payload = json.loads(after_result.read_text())
+    before_payload.update({"unmapped_read_set": None, "raw_indexed_read_set": {"count": 1}, "raw_indexed_loss": None})
+    after_payload.update(
+        {"unmapped_read_set": {"count": 4}, "raw_indexed_read_set": {"count": 1}, "raw_indexed_loss": 3}
+    )
+    before_result.write_text(json.dumps(before_payload))
+    after_result.write_text(json.dumps(after_payload))
+    rules = normalise.build_rules(source_root=Path("/trees/x"), run_root=before_root)
+
+    result = compare.compare_sides(before_root, after_root, before, after, normalise.manifest(rules), rules, rules)
+
+    assert result["cases"]["cram"]["artefacts"]["unmapped_read_set"]["status"] == "added_after"
+    assert result["cases"]["cram"]["artefacts"]["raw_indexed_read_set"]["status"] == "same"
+    assert result["cases"]["cram"]["artefacts"]["raw_indexed_loss"]["status"] == "added_after"
+
+
 def test_two_sides_that_both_produced_nothing_are_not_identical(tmp_path: Path) -> None:
     """The gate's worst failure, end to end.
 

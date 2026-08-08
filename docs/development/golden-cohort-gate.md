@@ -155,12 +155,15 @@ non-fast and adVNTR selections this is policy, not derivation — only the *fixt
 are derived, mirrored from each base case's BAM path so they cannot disagree with what
 `make_cram_fixtures.py` wrote.
 
-| Case | Repeat of | Records | Unmapped pairs | Why this one |
+| Case | Repeat of | Records | Whole-stream flag-4 reads | Why this one |
 | --- | --- | --- | --- | --- |
-| `b178_hg19_{indexed,stream}_cram` | `b178_hg19_subset` | 34,214 | 4,478 | A known positive under the historical discard behavior and a measured mixed-layout refusal under milestone 4. Both scan strategies reach the layout decision without hiding the stranded reads. |
-| `7a61_hg38_ensembl_{indexed,stream}_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 622,690 | A heavy unmapped load, and so exposed both to the write race `175011e` fixed and to indexed-scan loss. Milestone 4 measured stream at 622,690 reads while raw `'*'` returned 2,690, so production rejects indexed before work. |
+| `b178_hg19_{indexed,stream}_cram` | `b178_hg19_subset` | 34,214 | 4,807 | A known positive under the historical discard behavior and a measured mixed-layout refusal under milestone 4. Raw `'*'` returns 4,478, so the gate records a 329-read would-be indexed loss. |
+| `7a61_hg38_ensembl_{indexed,stream}_cram` | `7a61_hg38_ensembl_bwa` | 985,731 | 634,261 | A heavy unmapped load, and so exposed both to the write race `175011e` fixed and to indexed-scan loss. Raw `'*'` returns 2,690, so production rejects indexed before work and the gate records a 631,571-read would-be loss. |
 
-Counts are from `tests/data/cram/manifest.json`. `7a61_hg38_ensembl_bwa` is **not** the
+Record totals are from `tests/data/cram/manifest.json`; the flag-4 read sets and sorted-name
+digests are measured by the gate. The earlier 622,690/4,478 stream values came from the
+historical flag-12 filter and remain audit evidence, not current expectations.
+`7a61_hg38_ensembl_bwa` is **not** the
 single heaviest case in the cohort — `7a61_hg19_subset` carries 958,804 unmapped pairs and
 the six remapped `7a61` cases tie at 623,792 / 622,690. This pair is the one already proven
 end to end, and it also covers both layouts the fixture tree mirrors: one top-level subset
@@ -561,7 +564,7 @@ is for, and is not the same as showing that it fires when it should.
 
 **#188 is not exercised.** The cohort had no CRAM input when run 4 was taken, and run 5's
 did not either. Its evidence is a hand-run end-to-end CRAM comparison, which is not in CI.
-The fixtures and the two CRAM cases arrived afterwards — see
+The fixtures and the two CRAM sources (now four scan-mode cases) arrived afterwards — see
 [The CRAM group](#the-cram-group-188) — and no run on this page has taken them.
 
 **The Kestrel allele-shape guard is not exercised, and this is counted rather than
@@ -629,7 +632,7 @@ have done to run 4:
 | A case expected to exit zero must also have written its declared artefacts (`pipeline_summary.json`, both Kestrel tables, the coverage summary, the report; adVNTR stays optional; `cohort_empty` declares none, since it writes only its log by design). | **None.** All 59 zero-expected pipeline cases wrote all five on both sides; the three exporting cohort cases wrote all seven. |
 | `compare` refuses two sides that share a run root, a source tree, a commit or a marker expectation, that are mislabelled, or that recorded no case results. | **None.** Run 4's two sides are properly opposed. |
 | Each side records its `HEAD`, branch and working-tree state; `compare` can verify them. | **Not retroactive.** Run 4's sides have no `revision` key, and `compare` warns rather than refuses so existing run roots stay readable. |
-| An unfiltered matrix that deviates from the documented per-group contract is refused before launching, a zero-case matrix always, and a clean result over a reduced matrix reads `REDUCED` rather than `IDENTICAL`. (The contract was 50 base / 5 non-fast / 3 adVNTR plus 3 probes when run 4 ran; it is now 50 / 5 / 3 / **2 CRAM** plus 3 probes.) | **None.** Run 4's `matrix.json` records zero mismatches and no filter, against the contract as it stood then. |
+| An unfiltered matrix that deviates from the documented per-group contract is refused before launching, a zero-case matrix always, and a clean result over a reduced matrix reads `REDUCED` rather than `IDENTICAL`. (The contract was 50 base / 5 non-fast / 3 adVNTR plus 3 probes when run 4 ran; it is now 50 / 5 / 3 / **4 CRAM** plus 3 probes.) | **None.** Run 4's `matrix.json` records zero mismatches and no filter, against the contract as it stood then. |
 | `md5sum` is kept for step result files with no direct comparator — `pipeline_info.json` (which carries the assembly guard's verdict), `output_R1.fastq.gz` and `cross_match_results.tsv` — and dropped only for the three the harness parses row by row. | **None.** Those three checksums are identical between the two sides on 59/59, 59/59 and 3/3 cases. (`kestrel_result.tsv`'s differs on 59 of 59, which is what the original justification was written for and why it stays dropped.) |
 | A changed `##` provenance banner now makes a table `differ` instead of being computed and discarded. | **None.** 0 provenance changes across all 180 compared tables. |
 
@@ -776,7 +779,8 @@ Still true of runs 1–5, and addressed in the matrix but **not yet by any run**
   No run up to and including run 5 fed VNtyper a CRAM; `tests/data` held eight BAMs and no
   CRAM when those runs were taken, and #188's evidence was a hand-run end-to-end CRAM
   comparison that is not in CI. `make cram-fixtures` now derives the fixtures and the matrix
-  now declares two CRAM cases (see [The CRAM group](#the-cram-group-188)), so this moves to
+  now declares four CRAM cases, indexed and stream repeats of two sources (see
+  [The CRAM group](#the-cram-group-188)), so this moves to
   the list below **when a run has actually taken them** — not before.
 * A CRAM whose reference is unavailable, which is the ordinary externally-referenced CRAM a
   diagnostic lab sends. The derived fixtures are `no_ref=1` and need no reference, so they
@@ -897,11 +901,11 @@ equivalence run, not by this run of this gate.
 
 What *has* changed since run 5 is the matrix, not run 5. #188's fixtures exist —
 `make cram-fixtures` derives a verified CRAM beside every cohort BAM — and the matrix now
-declares two CRAM cases, `b178_hg19_cram` and `7a61_hg38_ensembl_cram`, both non-fast, both
-counted by the drift check (see [The CRAM group](#the-cram-group-188)). **The next run will
-cover the CRAM path; run 5 did not.** Until that run is taken and written up here, nothing
-on this page attests the CRAM branch, and a reader should treat the two cases as declared
-rather than as measured.
+declares four CRAM cases: indexed and stream repeats of `b178_hg19_subset` and
+`7a61_hg38_ensembl_bwa`, all non-fast and all counted by the drift check (see
+[The CRAM group](#the-cram-group-188)). **The next run will cover the CRAM path; run 5 did
+not.** Until that run is taken and written up here, nothing in the historical run-5 record
+attests the CRAM branch; the later measured evidence is recorded in the CRAM-group section.
 
 ## Run 6 — `cb593b6` → `48f97fe`, milestone 2
 

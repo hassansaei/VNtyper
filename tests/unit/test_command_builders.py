@@ -410,8 +410,26 @@ def test_the_indexed_unmapped_fetch_uses_star_without_a_pipe():
     )
 
     assert "'*'" in command
-    assert "-f 12" in command
+    assert "-f 4" in command
     assert "|" not in command
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [build_cram_unmapped_filter_command, command_builders.build_cram_unmapped_indexed_command],
+)
+def test_every_unmapped_builder_selects_read_unmapped_flag_four_for_single_end(builder):
+    """Unpaired unmapped reads have flag 4 but not paired-only flag 12."""
+    command = builder(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=2,
+        reference_path="/r/g.fa",
+    )
+
+    assert "-f 4" in command
+    assert "-f 12" not in command
 
 
 def test_the_probe_never_combines_P_with_c_because_samtools_rejects_that():
@@ -427,6 +445,20 @@ def test_the_probe_never_combines_P_with_c_because_samtools_rejects_that():
     assert " -c" not in probe, "samtools: The options -P and -c cannot be combined"
     assert "-b" not in probe, "the probe discards SAM output and need not encode a BAM"
     assert "-o /dev/null" in probe
+
+
+def test_the_stream_reference_probe_decodes_the_whole_cram_without_a_target():
+    """A target-only probe cannot authorize the later whole-file stream consumer."""
+    probe = command_builders.build_cram_stream_reference_probe_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        reference_path="/r/full genome.fa",
+        threads=4,
+    )
+
+    assert probe == "samtools view -@ 4 -T '/r/full genome.fa' -h /o/view.cram -o /dev/null"
+    assert " -P " not in f" {probe} "
+    assert "chr" not in probe
 
 
 def test_the_probe_has_the_same_shape_as_the_slice_it_authorises():
@@ -543,7 +575,7 @@ def test_the_cram_filter_command_is_pinned():
 
     assert command == (
         "set -o pipefail; samtools view -@ 4 -h /data/sample.cram | "
-        "samtools view -b -f 12 -@ 4 - -o /out/output_unmapped.bam"
+        "samtools view -b -f 4 -@ 4 - -o /out/output_unmapped.bam"
     )
 
 

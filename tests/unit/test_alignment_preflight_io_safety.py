@@ -36,6 +36,35 @@ def _write_built_index(command: str) -> None:
     Path(arguments[arguments.index("-o") + 1]).write_bytes(b"current index")
 
 
+def _write_successful_index(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+    """Materialize a valid index and return the capture-command success contract."""
+    _write_built_index(command)
+    return True, ""
+
+
+def test_an_existing_source_index_is_rebuilt_from_the_alignment_before_use(tmp_path: Path) -> None:
+    """A filename-compatible but wrong-sample index must never be trusted."""
+    alignment, source_index = _indexed_cram(tmp_path / "input")
+    source_index.write_bytes(b"valid index for a different sample")
+    output = tmp_path / "output"
+
+    def build_current_index(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        _write_built_index(command)
+        return True, ""
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_current_index) as capture:
+        view_path, view_index = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=3
+        )
+
+    assert Path(view_path).is_symlink()
+    assert Path(view_path).samefile(alignment)
+    assert Path(view_index).read_bytes() == b"current index"
+    assert not Path(view_index).is_symlink()
+    assert source_index.read_bytes() == b"valid index for a different sample"
+    assert "-@ 3" in capture.call_args.args[0]
+
+
 def test_an_output_name_cannot_traverse_an_in_output_symlink_component(tmp_path: Path) -> None:
     """A nested output name must not replace a victim outside the run directory."""
     alignment, _ = _indexed_cram(tmp_path / "input")
@@ -119,8 +148,20 @@ def test_a_dangling_view_link_is_atomically_replaced_without_unlinking_the_final
     output.mkdir()
     view = output / "sample.cram"
     view.symlink_to(tmp_path / "missing.cram")
+    real_unlink = os.unlink
 
-    with patch("vntyper.scripts.alignment_preflight.os.unlink", side_effect=AssertionError("blind unlink")):
+    def reject_blind_view_unlink(path: str | os.PathLike[str]) -> None:
+        if Path(path) == view:
+            raise AssertionError("blind view unlink")
+        real_unlink(path)
+
+    with (
+        patch(
+            "vntyper.scripts.alignment_preflight.capture_command",
+            side_effect=_write_successful_index,
+        ),
+        patch("vntyper.scripts.alignment_preflight.os.unlink", side_effect=reject_blind_view_unlink),
+    ):
         view_path, _ = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
 
     assert Path(view_path).is_symlink()
@@ -159,7 +200,7 @@ def test_capture_command_rejects_a_log_alias_of_a_protected_input(tmp_path: Path
     elif alias_kind == "hardlink":
         os.link(patient, log_file)
 
-    with patch("vntyper.scripts.alignment_preflight.subprocess.run") as run:
+    with patch("vntyper.scripts.preflight_command_io.subprocess.run") as run:
         success, diagnostic = capture_command("command", str(log_file), protected_paths=(patient,))
 
     assert success is False
@@ -176,7 +217,7 @@ def test_capture_command_atomically_replaces_a_stale_log_symlink_without_followi
     log_file.symlink_to(victim)
     completed = subprocess.CompletedProcess(args="command", returncode=0, stdout="new log\n")
 
-    with patch("vntyper.scripts.alignment_preflight.subprocess.run", return_value=completed):
+    with patch("vntyper.scripts.preflight_command_io.subprocess.run", return_value=completed):
         success, output = capture_command("command", str(log_file))
 
     assert (success, output) == (True, "new log\n")
@@ -190,7 +231,7 @@ def test_capture_command_turns_an_oserror_into_a_safe_logged_diagnostic(tmp_path
     """An OS-level spawn failure is a parseable failure, not an escaped exception."""
     log_file = tmp_path / "command.log"
 
-    with patch("vntyper.scripts.alignment_preflight.subprocess.run", side_effect=OSError("cannot spawn")):
+    with patch("vntyper.scripts.preflight_command_io.subprocess.run", side_effect=OSError("cannot spawn")):
         success, diagnostic = capture_command("command", str(log_file))
 
     assert success is False
@@ -266,8 +307,8 @@ def test_every_later_preflight_log_is_validated_before_the_alignment_view_is_cre
     assert not (output / f"sample.{file_format}").exists()
 
 
-def test_an_existing_cram_csi_is_reused_beside_the_view_without_reindexing(tmp_path: Path) -> None:
-    """A CRAM CSI proven usable by htslib is a reusable general preflight index."""
+def test_an_existing_cram_csi_is_ignored_and_a_trusted_crai_is_built(tmp_path: Path) -> None:
+    """A source CSI cannot prove that it belongs to this CRAM."""
     input_dir = tmp_path / "input"
     output = tmp_path / "output"
     input_dir.mkdir()
@@ -277,12 +318,17 @@ def test_an_existing_cram_csi_is_reused_beside_the_view_without_reindexing(tmp_p
     alignment.write_bytes(b"CRAM\x02")
     source_csi.write_bytes(b"CSI\x01")
 
-    with patch("vntyper.scripts.alignment_preflight.capture_command") as capture:
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=_write_successful_index,
+    ) as capture:
         _, index_path = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
 
-    assert Path(index_path).is_symlink()
-    assert Path(index_path).samefile(source_csi)
-    capture.assert_not_called()
+    assert Path(index_path) == output / "sample.cram.crai"
+    assert Path(index_path).read_bytes() == b"current index"
+    assert not Path(index_path).is_symlink()
+    assert source_csi.read_bytes() == b"CSI\x01"
+    capture.assert_called_once()
 
 
 def test_a_stale_cram_csi_cannot_override_the_selected_crai(tmp_path: Path) -> None:
@@ -295,26 +341,35 @@ def test_a_stale_cram_csi_cannot_override_the_selected_crai(tmp_path: Path) -> N
     stale_view_csi = output / "sample.cram.csi"
     stale_view_csi.symlink_to(stale_source)
 
-    _, index_path = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=_write_successful_index,
+    ):
+        _, index_path = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
 
-    assert Path(index_path).samefile(source_crai)
+    assert Path(index_path).read_bytes() == b"current index"
+    assert source_crai.read_bytes() == b"patient index"
     assert not os.path.lexists(stale_view_csi)
 
 
-def test_an_existing_index_is_symlinked_without_invoking_the_index_builder(tmp_path: Path) -> None:
-    """A selected source index is represented by an owned run-local symlink."""
+def test_an_existing_index_is_protected_while_the_view_index_is_rebuilt(tmp_path: Path) -> None:
+    """Rebuilding a trusted view index never mutates the supplied source index."""
     alignment, source_index = _indexed_cram(tmp_path / "input")
     output = tmp_path / "output"
 
-    with patch("vntyper.scripts.alignment_preflight.capture_command") as capture:
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=_write_successful_index,
+    ) as capture:
         view_path, index_path = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=4
         )
 
     assert Path(view_path).samefile(alignment)
-    assert Path(index_path).is_symlink()
-    assert Path(index_path).samefile(source_index)
-    capture.assert_not_called()
+    assert Path(index_path).read_bytes() == b"current index"
+    assert not Path(index_path).is_symlink()
+    assert source_index.read_bytes() == b"patient index"
+    capture.assert_called_once()
 
 
 def test_a_missing_index_is_built_beside_the_view_and_never_beside_the_input(tmp_path: Path) -> None:
@@ -462,8 +517,8 @@ def test_an_unknown_alignment_format_is_rejected_before_output_creation(tmp_path
     assert not output.exists()
 
 
-def test_a_view_already_pointing_at_the_same_input_is_reused(tmp_path: Path) -> None:
-    """A correct owned view survives a rerun without replacement."""
+def test_a_view_already_pointing_at_the_same_input_gets_a_fresh_index(tmp_path: Path) -> None:
+    """A correct view link remains usable while its untrusted index is replaced."""
     alignment, source_index = _indexed_cram(tmp_path / "input")
     output = tmp_path / "output"
     output.mkdir()
@@ -471,10 +526,17 @@ def test_a_view_already_pointing_at_the_same_input_is_reused(tmp_path: Path) -> 
     view.symlink_to(os.path.relpath(alignment, output))
     (output / "sample.cram.crai").symlink_to(os.path.relpath(source_index, output))
 
-    with patch("vntyper.scripts.alignment_preflight.os.replace", side_effect=AssertionError("view replaced")):
-        view_path, _ = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=2)
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=_write_successful_index,
+    ):
+        view_path, index_path = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert Path(view_path).samefile(alignment)
+    assert Path(index_path).read_bytes() == b"current index"
+    assert source_index.read_bytes() == b"patient index"
 
 
 @pytest.mark.parametrize(
@@ -488,7 +550,7 @@ def test_capture_command_returns_and_persists_complete_output(
     completed = subprocess.CompletedProcess(args="command", returncode=return_code, stdout=output)
     log_file = tmp_path / "capture.log"
 
-    with patch("vntyper.scripts.alignment_preflight.subprocess.run", return_value=completed):
+    with patch("vntyper.scripts.preflight_command_io.subprocess.run", return_value=completed):
         result = capture_command("command", str(log_file), cwd=str(tmp_path))
 
     assert result == (expected_success, output)

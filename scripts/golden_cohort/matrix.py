@@ -93,7 +93,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-from golden_cohort.admissibility import COHORT_REQUIRED_ARTIFACTS, PIPELINE_REQUIRED_ARTIFACTS
+from golden_cohort.admissibility import PIPELINE_REQUIRED_ARTIFACTS
+from golden_cohort.case_expectations import (
+    declare_mixed_layout_outcome,
+    materialize_side_expectation,
+    without_side_expectations,
+)
+from golden_cohort.cohort_cases import build_cohort_cases
 from golden_cohort.cram_cases import build_cram_cases
 
 logger = logging.getLogger(__name__)
@@ -117,23 +123,25 @@ NON_FAST_CASE_IDS: tuple[str, ...] = (
 )
 
 #: Named on the gate page as ``a5c1_hg19_advntr`` / ``b178_hg19_advntr`` /
-#: ``dfc3_hg19_advntr``, all at ``--advntr-max-coverage 300``.
+#: ``dfc3_hg19_advntr``, all at ``--advntr-max-coverage 300``. ``b178`` uses the
+#: measured clean remapped BAM so candidate cohort runs retain a real adVNTR producer.
 ADVNTR_CASE_IDS: tuple[str, ...] = (
     "a5c1_hg19_subset",
-    "b178_hg19_subset",
+    "b178_hg19_bwa",
     "dfc3_hg19_subset",
 )
 
 #: Which base cases repeat from their derived CRAM fixture. Policy, like the two selections
 #: above, and chosen to cover both a call and the write race:
 #:
-#: * ``b178_hg19_subset`` - a known positive (``D-C`` insertion, ``High_Precision*``, not
-#:   flagged, per the gate page's run-1 table), 34,214 records and 4,478 unmapped pairs. It
-#:   is the case that shows a CRAM run still *calls*, not merely that it exits 0.
-#: * ``7a61_hg38_ensembl_bwa`` - 985,731 records and 622,690 unmapped pairs, one of the
+#: * ``b178_hg19_subset`` - a known historical positive (``D-C`` insertion,
+#:   ``High_Precision*``, not flagged, per the gate page's run-1 table), 34,214 records
+#:   and 4,478 flag-12 pairs in the fixture manifest. Corrected flag-4 extraction records
+#:   4,807 reads and exposes the 329 reads an indexed ``'*'`` fetch would lose.
+#: * ``7a61_hg38_ensembl_bwa`` - 985,731 records and 622,690 flag-12 pairs, one of the
 #:   heaviest unmapped loads in the cohort, and so the most exposed to the write race
 #:   ``175011e`` fixed (measured there at 199,797 of 200,000 unmapped reads present when the
-#:   shell returned).
+#:   shell returned). Corrected flag-4 extraction records 634,261 reads.
 #:
 #: It is **not** the single heaviest: ``7a61_hg19_subset`` carries 958,804 unmapped pairs,
 #: and the six remapped ``7a61`` cases tie at 623,792 / 622,690. This pair is kept because it
@@ -226,19 +234,21 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
         sample = match.group("sample")
         assembly = match.group("assembly")
         cases.append(
-            {
-                "case_id": f"{_short(sample)}_{assembly}_subset",
-                "kind": "pipeline",
-                "group": "base",
-                "sample": sample,
-                "assembly": assembly,
-                "source": "subset",
-                "bam": str(bam.resolve()),
-                "fast_mode": True,
-                "advntr": False,
-                "expect_exit": "zero",
-                "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-            }
+            declare_mixed_layout_outcome(
+                {
+                    "case_id": f"{_short(sample)}_{assembly}_subset",
+                    "kind": "pipeline",
+                    "group": "base",
+                    "sample": sample,
+                    "assembly": assembly,
+                    "source": "subset",
+                    "bam": str(bam.resolve()),
+                    "fast_mode": True,
+                    "advntr": False,
+                    "expect_exit": "zero",
+                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+                }
+            )
         )
     log.append(f"subset BAMs: {sum(1 for c in cases if c['source'] == 'subset')}")
 
@@ -253,19 +263,21 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 continue
             sample = match.group("sample")
             cases.append(
-                {
-                    "case_id": f"{_short(sample)}_{assembly}_{aligner}",
-                    "kind": "pipeline",
-                    "group": "base",
-                    "sample": sample,
-                    "assembly": assembly,
-                    "source": f"remapped/{aligner}",
-                    "bam": str(bam.resolve()),
-                    "fast_mode": True,
-                    "advntr": False,
-                    "expect_exit": "zero",
-                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-                }
+                declare_mixed_layout_outcome(
+                    {
+                        "case_id": f"{_short(sample)}_{assembly}_{aligner}",
+                        "kind": "pipeline",
+                        "group": "base",
+                        "sample": sample,
+                        "assembly": assembly,
+                        "source": f"remapped/{aligner}",
+                        "bam": str(bam.resolve()),
+                        "fast_mode": True,
+                        "advntr": False,
+                        "expect_exit": "zero",
+                        "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+                    }
+                )
             )
         log.append(f"remapped BAMs: {sum(1 for c in cases if c['source'].startswith('remapped'))}")
     else:
@@ -326,7 +338,7 @@ def apply_policies(
     cases = list(base_cases)
 
     for base in _resolve(non_fast_ids, by_id, "non-fast"):
-        case = dict(base)
+        case = without_side_expectations(base)
         case.update(
             {
                 "case_id": f"{_short(base['sample'])}_{base['assembly']}_nonfast",
@@ -374,7 +386,7 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     probes: list[dict[str, Any]] = []
     for probe_id, base_id, declared, expectation in PROBE_SPECS:
         base = _resolve((base_id,), by_id, f"probe {probe_id}")[0]
-        probe = dict(base)
+        probe = without_side_expectations(base)
         probe.update(
             {
                 "case_id": probe_id,
@@ -389,91 +401,6 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         probes.append(probe)
     return probes
-
-
-def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
-    """Build the cohort-mode cases over the per-sample output directories.
-
-    These exist because cohort mode was uncovered by every run of this gate up to and
-    including run 3, which the gate page's "What this gate does not cover" section said in
-    so many words. The page is a growing record, so this docstring deliberately does not
-    quote its current state - an earlier version of this sentence claimed the page still
-    records cohort mode as not covered, which stopped being true the moment run 4 was
-    written up with these four cases in it.
-
-    The flags are read off ``vntyper/scripts/cli_parser.py``: ``-i/--input-dirs`` (or
-    ``--input-file``, one of which is required), ``-o/--output-dir`` (required),
-    ``--summary-file``, ``--summary-formats`` and ``--pseudonymize-samples``.
-
-    Four cases, each covering something the others do not:
-
-    * ``cohort_multi`` - every per-sample directory, all three export formats.
-    * ``cohort_multi_pseudonymized`` - the same inputs with ``--pseudonymize-samples``,
-      which is the only way ``pseudonymization_table.tsv`` is written at all.
-    * ``cohort_single`` - one sample, the smallest cohort the CLI accepts as input.
-    * ``cohort_empty`` - a directory holding no ``pipeline_summary.json``. The CLI cannot
-      be given zero input directories (the group is ``required=True``), so this is the
-      smallest empty case there is; ``aggregate_cohort`` logs an error and **returns**,
-      writing no report and exiting 0.
-
-    Args:
-        pipeline_case_ids: The ids of the per-sample cases that will have run first.
-
-    Returns:
-        list[dict]: The cohort cases, in run order.
-    """
-    single = pipeline_case_ids[:1]
-    return [
-        {
-            "case_id": "cohort_multi",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": list(pipeline_case_ids),
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": None,
-            "expect_exit": "zero",
-            "allow_missing_inputs": False,
-            "required_artifacts": list(COHORT_REQUIRED_ARTIFACTS),
-        },
-        {
-            "case_id": "cohort_multi_pseudonymized",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": list(pipeline_case_ids),
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": "sample_",
-            "expect_exit": "zero",
-            "allow_missing_inputs": False,
-            # The only case that writes it at all, so it is the only case that can require it.
-            "required_artifacts": [*COHORT_REQUIRED_ARTIFACTS, "pseudonymization_table.tsv"],
-        },
-        {
-            "case_id": "cohort_single",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": single,
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": None,
-            "expect_exit": "zero",
-            "allow_missing_inputs": False,
-            "required_artifacts": list(COHORT_REQUIRED_ARTIFACTS),
-        },
-        {
-            "case_id": "cohort_empty",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": [],
-            "empty_input_dir": True,
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": None,
-            "expect_exit": "zero",
-            "allow_missing_inputs": True,
-            # Writes only `cohort.log` and exits 0 by design, so it can require nothing.
-            # This is the one legitimate "exited zero, produced no substantive output" case
-            # in the matrix, and it says so here rather than being an unexplained exemption.
-            "required_artifacts": [],
-        },
-    ]
 
 
 def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -612,7 +539,10 @@ def build_matrix(
     cases.sort(key=lambda case: (case["group"], case["case_id"]))
     probes.sort(key=lambda case: case["case_id"])
 
-    cohort_cases = build_cohort_cases([case["case_id"] for case in cases]) if include_cohort else []
+    candidate_output_ids = [
+        case["case_id"] for case in cases if materialize_side_expectation(case, "after").get("expect_exit") == "zero"
+    ]
+    cohort_cases = build_cohort_cases(candidate_output_ids) if include_cohort else []
     check = check_matrix(cases, probes)
     check["skipped"] = bool(case_filter)
     check["strict"] = bool(strict)

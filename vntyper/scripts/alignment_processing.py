@@ -129,9 +129,13 @@ def align_and_sort_fastq(
     # wrote inside output_dir, so samtools' default destination beside it is already
     # inside the run's output directory. `output_bai` exists for the one caller that
     # indexes the user's *input* alignment, whose directory is routinely mounted
-    # read-only (#162, #210); it is keyword-only and optional, so this call is
-    # unchanged.
-    samtools_index_command = build_samtools_index_command(samtools_path=str(samtools_path), bam_file=sorted_bam_out)
+    # read-only (#162, #210). The index still receives the caller's configured
+    # thread count like every other samtools stage.
+    samtools_index_command = build_samtools_index_command(
+        samtools_path=str(samtools_path),
+        bam_file=sorted_bam_out,
+        threads=threads,
+    )
     log_file_index = output_dir / f"{output_name}_index.log"
 
     if not run_command(str(samtools_index_command), str(log_file_index), critical=True):

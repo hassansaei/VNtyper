@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import pytest
 
-from vntyper.scripts.alignment_preflight import HTSLIB_REFERENCE_SOURCE, resolve_reference, run_preflight
+from vntyper.scripts import alignment_preflight
+from vntyper.scripts.alignment_preflight import (
+    HTSLIB_REFERENCE_SOURCE,
+    resolve_reference,
+    run_preflight,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -222,8 +227,8 @@ def test_explicit_candidates_are_probed_in_order_before_one_no_reference_probe(t
     references = tuple(_reference(tmp_path / f"candidate-{position}.fa") for position in range(3))
     commands: list[str] = []
 
-    def fail_until_ambient(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
-        del log_file, cwd
+    def fail_until_ambient(command: str, log_file: str, cwd: str | None = None, **kwargs: object) -> tuple[bool, str]:
+        del log_file, cwd, kwargs
         commands.append(command)
         return (" -T " not in f" {command} ", "did not decode")
 
@@ -349,8 +354,8 @@ def test_reference_probes_use_the_runs_region_or_bed_target(tmp_path: Path) -> N
     bed_file.write_text("chr9\t90\t99\n")
     commands: list[str] = []
 
-    def succeed(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
-        del log_file, cwd
+    def succeed(command: str, log_file: str, cwd: str | None = None, **kwargs: object) -> tuple[bool, str]:
+        del log_file, cwd, kwargs
         commands.append(command)
         return True, ""
 
@@ -411,3 +416,57 @@ def test_known_fai_differences_are_returned_as_uncovered_contigs(
 
     assert uncovered == ("chr2",)
     assert "chr2" in caplog.text
+
+
+def test_stream_mode_rejects_a_target_only_winner_and_tries_the_next_candidate(tmp_path: Path) -> None:
+    """A candidate must decode both the target and the later whole-file stream."""
+    target_only = _reference(tmp_path / "target-only.fa")
+    full = _reference(tmp_path / "full.fa")
+    commands: list[str] = []
+
+    def decode(command: str, log_file: str, cwd: str | None = None, **kwargs: object) -> tuple[bool, str]:
+        del log_file, cwd, kwargs
+        commands.append(command)
+        if " -P " in f" {command} ":
+            return True, "target decoded"
+        if str(target_only) in command:
+            return False, "Unable to fetch reference chr2"
+        return True, "whole file decoded"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=decode):
+        reference, source, _ = resolve_reference(
+            "/run/view.cram",
+            (("cli", str(target_only)), ("config_cram_reference", str(full))),
+            "chr1:1-2",
+            None,
+            {"cram": {"reference_probe_timeout_seconds": 7}},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1", "chr2"),
+            "abc",
+            unmapped_scan="stream",
+        )
+
+    assert (reference, source) == (str(full), "config_cram_reference")
+    assert len(commands) == 4
+    assert " -P " in f" {commands[0]} "
+    assert " -P " not in f" {commands[1]} "
+    assert " -P " in f" {commands[2]} "
+    assert " -P " not in f" {commands[3]} "
+
+
+@pytest.mark.parametrize("configured", [0, -1, 120.1, "30", True, float("inf"), float("nan")])
+def test_reference_probe_timeout_rejects_values_outside_the_bounded_numeric_contract(configured: object) -> None:
+    """A replacement config cannot disable or exceed the 120-second deadline."""
+    with pytest.raises(ValueError, match="reference_probe_timeout_seconds"):
+        alignment_preflight._reference_probe_timeout_seconds({"cram": {"reference_probe_timeout_seconds": configured}})
+
+
+def test_reference_probe_timeout_defaults_to_120_and_accepts_a_smaller_deadline() -> None:
+    """The shipped ceiling is also the replacement-config default."""
+    assert alignment_preflight._reference_probe_timeout_seconds({}) == 120.0
+    assert (
+        alignment_preflight._reference_probe_timeout_seconds({"cram": {"reference_probe_timeout_seconds": 0.25}})
+        == 0.25
+    )

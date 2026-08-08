@@ -321,11 +321,11 @@ def test_an_unreadable_cram_header_does_not_stop_the_pipeline_at_the_guard(tmp_p
     Args:
         tmp_path: Pytest temporary directory.
     """
-    cram = tmp_path / "in.cram"
+    cram = tmp_path / "patient-input" / "in.cram"
     cram.parent.mkdir(parents=True, exist_ok=True)
     cram.touch()
     harness = _run(
-        tmp_path,
+        tmp_path / "run-output",
         bam=None,
         cram=str(cram),
         header_error=subprocess.CalledProcessError(1, "samtools view -H"),

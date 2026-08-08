@@ -1,6 +1,8 @@
 """Pure unit tests for pipeline alignment target and preflight preparation."""
 
 import hashlib
+import json
+import os
 from pathlib import Path
 from unittest import mock
 
@@ -11,7 +13,9 @@ from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     format_regions_as_bed,
     prepare_alignment_target,
+    prepare_input_alignment_preflight,
 )
+from vntyper.scripts.preflight_error_io import PreflightErrorContext
 
 pytestmark = pytest.mark.unit
 
@@ -192,6 +196,37 @@ def test_generated_bed_rejects_the_patient_input_tree_as_its_output_root(tmp_pat
     assert error is not None and "input tree" in str(error).lower()
 
 
+def test_generated_bed_rejects_an_output_directory_nested_in_the_patient_tree(tmp_path: Path) -> None:
+    """Containment, not only equality, would let pipeline artifacts mutate input."""
+    input_root = tmp_path / "input"
+    nested_output = input_root / "results"
+    input_root.mkdir()
+    nested_output.mkdir()
+    alignment = input_root / "patient.cram"
+    alignment.write_bytes(b"patient-cram")
+    before = _tree_digest(input_root)
+
+    with (
+        mock.patch(
+            "vntyper.scripts.pipeline_alignment.get_region_string_with_fallback",
+            return_value="chr1:10-20",
+        ),
+        pytest.raises(ValueError, match="input tree"),
+    ):
+        prepare_alignment_target(
+            input_type="CRAM",
+            bam=None,
+            cram=str(alignment),
+            output_dir=nested_output,
+            reference_assembly="hg19",
+            config={},
+            bed_file=None,
+            custom_regions=None,
+        )
+
+    assert _tree_digest(input_root) == before
+
+
 def test_generated_bed_rejects_a_hardlink_to_the_patient_source_index(tmp_path: Path) -> None:
     input_root = tmp_path / "input"
     output = tmp_path / "output"
@@ -350,6 +385,110 @@ def test_preflight_kwargs_select_the_m5_for_the_first_active_bed_target(tmp_path
 
     assert result["header_contigs"] == ("chr1", "chr2")
     assert result["m5"] == "target-checksum"
+
+
+def test_input_alignment_preflight_rejects_a_non_alignment_type_before_pinning(tmp_path: Path) -> None:
+    """The owned seam cannot silently reinterpret a FASTQ path as an alignment."""
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.pin_reference_resolution", return_value=None) as pin,
+        pytest.raises(ValueError, match="requires BAM or CRAM input, got: FASTQ"),
+    ):
+        prepare_input_alignment_preflight(
+            in_path=tmp_path / "reads.fastq.gz",
+            input_type="FASTQ",
+            output_dir=tmp_path / "output",
+            config={},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+        )
+
+    pin.assert_not_called()
+
+
+def test_input_alignment_header_failure_has_a_stable_artifact_and_restores_ref_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Assembly/header rejection belongs to a curated outer preflight phase."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    monkeypatch.setenv("REF_PATH", "operator-value")
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value="@SQ\tSN:chr1\n"),
+        mock.patch(
+            "vntyper.scripts.pipeline_alignment.enforce_declared_assembly",
+            side_effect=ValueError("private assembly detail"),
+        ),
+        mock.patch("vntyper.scripts.pipeline_alignment.run_preflight") as preflight,
+        pytest.raises(ValueError, match="private assembly detail"),
+    ):
+        prepare_input_alignment_preflight(
+            in_path=tmp_path / "patient-input" / "sample.bam",
+            input_type="BAM",
+            output_dir=output,
+            config={"cram": {"local_ref_path": "/local/cache/%s"}},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+        )
+
+    assert os.environ["REF_PATH"] == "operator-value"
+    assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8")) == {
+        "code": "alignment_header_invalid",
+        "message": "Alignment preflight rejected the alignment header or declared assembly; verify the input "
+        "and --reference-assembly.",
+        "candidates": [],
+    }
+    preflight.assert_not_called()
+
+
+def test_outer_boundary_preserves_the_inner_structured_reference_payload(tmp_path: Path) -> None:
+    """The outer preparation owner must not replace candidate-specific diagnostics."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    bed = tmp_path / "target.bed"
+    bed.write_text("chr1\t10\t20\n", encoding="utf-8")
+    payload = {
+        "code": "reference_unresolved",
+        "message": "curated reference failure",
+        "candidates": [["cli", "reference.fa", "probe exited non-zero"]],
+    }
+
+    def fail_with_structured_payload(*args: object, **kwargs: object) -> None:
+        del args
+        context = kwargs["failure_context"]
+        assert isinstance(context, PreflightErrorContext)
+        context.payload = payload
+        raise RuntimeError("private probe detail")
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value="@SQ\tSN:chr1\n"),
+        mock.patch("vntyper.scripts.pipeline_alignment.enforce_declared_assembly"),
+        mock.patch("vntyper.scripts.pipeline_alignment.run_preflight", side_effect=fail_with_structured_payload),
+        pytest.raises(RuntimeError, match="private probe detail"),
+    ):
+        prepare_input_alignment_preflight(
+            in_path=tmp_path / "patient-input" / "sample.cram",
+            input_type="CRAM",
+            output_dir=output,
+            config={},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=bed,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+        )
+
+    assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8")) == payload
 
 
 def test_terminal_reference_diagnostic_uses_the_bed_target_and_its_m5(tmp_path: Path) -> None:

@@ -166,11 +166,17 @@ unset and no `UR:` recorded no network syscalls.
 the property an input contract exists to remove. A user on an older image, or one with
 `REF_PATH` set in their environment or by their site's module system, still reaches 3.2.
 
-### 3.5 The unmapped scan is O(whole file) for CRAM and O(index) for BAM
+### 3.5 The historical unmapped scan is O(whole file) for CRAM and O(index) for BAM
 
 `build_cram_unmapped_filter_command` streams the entire CRAM through `samtools view -h`
 (as SAM **text**) and filters flag 12 downstream. The BAM path does not: it reads the
 BAI's last chunk offset and seeks straight to the unplaced block.
+
+Those historical shapes both used the paired-only flag-12 premise. §3.13 and §3.14 later
+show why the final contract is flag 4 and why the BAM offset shortcut is authorised only
+when `idxstats` proves no placed-unmapped record exists. The table below remains the
+measurement that motivated the indexed optimization, not a claim that every input may
+take it.
 
 The index-based equivalent for CRAM retrieves the identical read set:
 
@@ -296,9 +302,10 @@ any test of this path must suppress it.
 
 ### 3.11 `idxstats` proves the indexed scan is lossless, from the index alone
 
-`samtools view -f 12 <cram> '*'` returns *unplaced* reads. A flag-12 read (read unmapped
-**and** mate unmapped) that is nonetheless *placed* would be missed. That is a
-silent-data-loss risk, and a config escape hatch does not discharge it.
+`samtools view -f 4 <alignment> '*'` returns *unplaced* read-unmapped records. A flag-4
+read that is nonetheless *placed* would be missed. That is a silent-data-loss risk for
+BAM and CRAM, paired and single-end alike, and a config escape hatch does not discharge
+it. The earlier flag-12 wording is superseded by §3.14.
 
 `samtools idxstats` reports, per contig, `name / length / mapped / placed-unmapped`, and
 reads only the index:
@@ -311,9 +318,9 @@ chr2  20000  301  0
 ```
 
 **If column 4 sums to zero across every contig, no placed unmapped read exists, so `'*'`
-provably recovers every flag-12 read in the file.** That is a per-run proof costing one
-index read, not an assumption. When it is non-zero the run falls back to the whole-file
-stream scan automatically. §4.3(b) is rewritten around this.
+provably recovers every flag-4 read in the file.** That is a per-run proof, not an
+assumption. When it is non-zero the run falls back to the whole-file stream scan
+automatically. §4.3(b) is rewritten around this.
 
 
 ### 3.12 The run-local alignment view works, measured end to end
@@ -339,8 +346,10 @@ Three things this settles:
    milestone-3 invariant is preserved by the mechanism rather than by remembering a flag.
 2. **`-X` is not needed anywhere.** Co-location is restored, so no builder grows an index
    argument and `idxstats` — which has no `-X` — works.
-3. **An existing index is symlinked rather than rebuilt**, so the common case costs two
-   symlinks and no samtools invocation at all.
+3. **A co-located source index is mechanically usable through the view.** This original
+   measurement established visibility, but §3.15 later proved that filename and htslib
+   acceptance do not establish that the index belongs to the alignment. The final design
+   therefore rebuilds it; this bullet is retained as superseded evidence, not policy.
 
 
 ### 3.13 The `idxstats` premise, tested against a CRAM that would lose reads
@@ -357,8 +366,10 @@ samtools idxstats placed.cram            -> chr1 20000 600 50   /   * 0 0 80
 ```
 
 **The indexed scan would have silently dropped 50 of 130 reads on this file, and column 4
-reports exactly those 50 — identically for BAM and CRAM.** So `sum(col4) > 0` is a correct
-trigger, and `sum(col4) == 0` is a correct proof that `'*'` is complete.
+reports exactly those 50 — identically for BAM and CRAM.** Every flag-12 record in this
+fixture is also flag 4; §3.14 adds the single-end evidence that makes flag 4 the production
+contract. So `sum(col4) > 0` is a correct trigger, and `sum(col4) == 0` is a correct proof
+that `'*'` is complete.
 
 Two further properties, both measured:
 
@@ -372,14 +383,88 @@ Two further properties, both measured:
   decode it replaces, which is the only comparison that matters, and it is stated this way
   rather than as a complexity claim that was not measured.
 
+### 3.14 The whole-stream evidence must use flag 4, not flag 12
+
+The first Wave 3 CRAM evidence run inherited the historical `-f 12` extraction shape.
+That shape requires both the read and its mate to be unmapped, so it is not a complete
+measurement of the read-unmapped set that the corrected whole-stream path must preserve.
+It recorded 622,690 reads for `7a61` (digest `6677ba29…83cb8b91`) and 4,478 for
+`b178` (digest `dad9a81a…4d90a8b`). Those values remain historical evidence of the
+invalid flag-12 path; they are not gate expectations.
+
+The corrected flag-4 measurement records every read whose own unmapped bit is set:
+`7a61` produces **634,261** reads with digest `b7f75d19…ebf7b7b`, while `b178`
+produces **4,807** with digest `d3aa88fe…d552591`. The raw indexed `'*'` diagnostics
+remain 2,690 (`c64be739…130d7d`) and 4,478 (`dad9a81a…4d90a8b`), respectively.
+The would-be indexed losses are therefore **631,571** and **329** reads. The golden gate
+pins all four counts and full digests: forced indexed still rejects before producing an
+unmapped BAM, and forced stream must match the corrected complete read set.
+
+### 3.15 A valid index is not bound to its alignment
+
+Round 3 tested a structurally valid index from a different sample rather than a truncated
+index. `example_b178_hg19_subset.bam` was paired with the BAI from
+`example_40cf_hg38_subset.bam`, then sliced over the configured hg19 target:
+
+```
+samtools view -c -X b178.bam wrong-40cf.bai chr1:155158000-155163000  -> 0, exit 0
+samtools view -c -X b178.bam freshly-built.bai chr1:155158000-155163000 -> 29736, exit 0
+```
+
+The wrong index is not merely stale or corrupt: htslib accepts it and returns an empty
+retrieval with success. A probe of that target therefore cannot distinguish “the sample
+has no reads here” from “this index belongs to another sample.” BAI/CSI/CRAI carry no
+binding to the alignment bytes that VNtyper can authenticate. The run-local view must
+always receive an index freshly built from that view; a supplied index is protected as
+patient input but never trusted as proof.
+
+### 3.16 A target proof does not prove a whole-file stream
+
+Round 3 built a two-contig reference-compressed CRAM and supplied a candidate containing
+only chr1. With the header `UR:` target hidden and `REF_PATH` pinned locally, the exact
+target probe succeeded:
+
+```
+samtools view -P -T chr1.fa two.cram chr1:1-500 -o /dev/null  -> exit 0
+```
+
+The stream consumer that candidate would authorise then failed:
+
+```
+samtools view -h -T chr1.fa two.cram -o /dev/null
+-> exit 1, "Reference file given, but ref 'chr2' not present"
+```
+
+So reference proof is consumer-shaped. Indexed extraction needs the target-shaped `-P`
+probe; stream extraction needs that probe **and** a complete `view -h ... -o /dev/null`
+decode with the same candidate. Header/FAI coverage is useful diagnostics, not a checksum-
+verified substitute for the real whole-file decode.
+
+### 3.17 Reference probes need their own deadline
+
+The §3.2 blackhole remains the portable failure mechanism even though the current local
+htslib 1.23 rejects an `SQ UR:http://...` immediately with “remote files are not
+supported.” That rejection is version-dependent (§3.4), and an ambient remote `REF_PATH`
+still represents an endpoint that can accept TCP and never answer. Before round 3,
+`capture_command` used an unbounded `subprocess.run`.
+
+The real A-178-1 integration now starts a localhost blackhole, enables ambient resolution,
+sets a 0.25 s probe deadline and observes the CRAM run exit in 0.75 s with a timeout
+diagnostic. The subprocess runs in a new session; timeout sends `SIGKILL` to its process
+group and reaps it. The shipped deadline is 120 s and replacement configs use the same
+default; configured values must be finite and satisfy `0 < seconds <= 120`.
+
 ## 4. Design
 
 ### 4.1 The seam
 
-One preflight, run immediately after `validate_bam_file` and before any region is
-resolved or any stage runs. It resolves and **proves** everything the run will need, and
-returns a frozen `AlignmentPlan`. `process_bam_to_fastq` consumes the plan instead of
-rediscovering its contents.
+One owned alignment-preflight boundary, invoked immediately after `validate_bam_file` and
+before any header or region is resolved or any stage runs. The boundary pins `REF_PATH`,
+reads and guards the header, resolves/materialises the exact BED target, then calls the I/O
+proof and returns both that target and a frozen `AlignmentPlan`. Every ordinary failure in
+the boundary shares one curated-error context; `REF_PATH` is restored even for
+`BaseException`. `process_bam_to_fastq` consumes the plan instead of rediscovering its
+contents.
 
 `fastq_bam_processing.py` is 649 LOC against a ~650 guideline, and AGENTS.md rule 3 says
 to extract the region under change rather than grow the file. So the decisions go into
@@ -391,15 +476,17 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | `reference_resolution.py` | pure | validated ordered candidate mapping and known or unavailable FASTA contig coverage |
 | `read_layout.py` | pure | the `paired`/`single`/`mixed`/`empty` verdict from counts, and which FASTQ paths feed downstream |
 | `alignment_preflight.py` | I/O | runs samtools: build the alignment view, resolve or build the index, choose the scan from `idxstats`, probe-decode each reference candidate. **It does not compute the read layout** — §4.4 explains why that cannot be known before conversion. |
+| `preflight_command_io.py` | I/O | atomic captured logs and optional process-group deadline/termination for reference probes |
+| `pipeline_alignment.py` | boundary | owns header/assembly/target preparation and the shared curated-error/`REF_PATH` lifetime before returning BED + `AlignmentPlan` |
 
 The three pure modules are unit-testable with no filesystem and are held to the ~100%
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
 `cohort_rules.py`) already meet.
 
-`fastq_bam_processing.py` measures **649 lines** today, not the 612 AGENTS.md's snapshot
-table records. It is therefore already at the ~650 guideline before this milestone adds a
-line, so every change to it must be net-negative: the index-resolution block moves into
-the preflight and the CRAM branch moves into a helper.
+`fastq_bam_processing.py` measured **649 lines** at the design point, not the 612 in
+AGENTS.md's older snapshot table. It was therefore already at the ~650 guideline before
+this milestone added a line, so the changes were net-negative: the final file is 638
+lines, with index/reference decisions in preflight and command construction in helpers.
 
 ### 4.1a The run-local alignment view
 
@@ -413,30 +500,32 @@ before. Two mechanisms can fix that, and only one of them works everywhere:
 * Make the alignment and its index co-located somewhere writable.
 
 So the preflight materialises a **run-local alignment view** inside the output directory:
-a symlink to the input alignment, plus its index beside it — the existing index symlinked
-when there is one, a freshly built one when there is not. Every subsequent samtools call
-uses the view's path.
+a symlink to the input alignment, plus a freshly built index beside it. Every subsequent
+samtools call uses the view's path. A supplied index is enumerated and protected from
+mutation, but it is never used to authorise a run: §3.15 measured a valid wrong-sample BAI
+returning an empty slice with exit 0.
 
-This costs two symlinks, writes nothing to the input tree (the milestone-3 invariant), and
-makes co-location the normal case rather than a special case, so no builder needs an
-index argument and `idxstats` works. When the input already has a co-located index the
-view is still created, so there is exactly one code path rather than two.
+This costs one symlink and one index build, writes nothing to the input tree (the
+milestone-3 invariant), and makes co-location the normal case rather than a special case,
+so no builder needs an index argument and `idxstats` works. The index is installed
+atomically with run-local provenance, so reruns replace only artifacts VNtyper owns.
 
 ### 4.2 The reference contract — proof, not inference
 
 > **A reference is whatever decodes the target region. Prove it; do not infer it.**
 
-Candidates are tried in this order, and the first one that **decodes a probe slice** wins:
+Candidates are tried in this order, and the first one that **decodes every consumer-shaped
+probe required by the selected scan** wins:
 
 1. `--reference-fasta` (new CLI flag; also a config key for the web worker)
 2. config `reference_data.cram_reference_<assembly>`
 3. config `reference_data.bwa_reference_<assembly>` — the shipped chr1 FASTA
 4. the header's `UR:` field, if it names a readable file
 
-**The probe is the real slice command with its output sent to `/dev/null`** — same `-P`,
-same region *or the run's actual BED file*, same reference fragment, same alignment view.
-Nothing else is an authorisation: §3.7 measured a `-P`-less probe passing on a reference
-the real slice then failed on.
+**The first probe is the real slice command with its output sent to `/dev/null`** — same
+`-P`, same region *or the run's actual BED file*, same reference fragment, same alignment
+view. Nothing else authorises the indexed target: §3.7 measured a `-P`-less probe passing
+on a reference the real slice then failed on.
 
 It cannot be a `-c` count: §3.10 measured that **`-P` and `-c` cannot be combined**. The
 probe's exit status is the proof, and it discards its output:
@@ -451,6 +540,17 @@ input alignment.)
 When the run has a BED file — `--bed`, `--custom-regions`, or the predefined regions
 `pipeline.py` writes — the probe uses that BED, not a region string. A BED naming contigs
 the candidate does not cover is exactly the case a region-only probe would miss.
+
+When `idxstats` selects `stream`, the same candidate must additionally complete the exact
+whole-file decode shape used by that consumer:
+
+```
+samtools view -T <candidate.fa> -h <view.cram> -o /dev/null
+```
+
+The target probe still runs first because the later slice always uses `-P`; the whole-file
+probe is additional, not a replacement. §3.16 measured a chr1-only candidate passing the
+target proof and failing this stream proof on chr2. Each probe has the §3.17 deadline.
 
 Candidate 3 is retained but demoted in the logs: when the winner does not cover every
 contig in the CRAM header, the run logs a warning naming the uncovered contigs, because
@@ -503,24 +603,29 @@ Two independent changes, either of which alone would leave a path open:
 value, so no samtools invocation VNtyper makes — including any this milestone did not
 think of — can block on a network fetch. Config-driven: `cram.allow_ambient_reference_resolution`,
 default `false`. Set it `true` and an operator's deliberately configured refget server is
-honoured, with a logged warning that the run can now block on it.
+honoured, with a logged warning. Every reference probe is independently bounded by
+`cram.reference_probe_timeout_seconds` (default and maximum 120), so even that opt-in
+cannot strand preflight on the §3.2 blackhole. Pinning remains necessary because later
+stage commands are outside the probe deadline.
 
 **(b) Bound the unmapped scan, and *prove* the bound is lossless.**
-`samtools view -b -f 12 <view.cram> '*'` replaces the whole-file stream — but `'*'`
-returns only *unplaced* reads, so a flag-12 read that is nonetheless placed would be
-dropped. "It is unplaced in every aligner we tried" is not a guarantee, and a config
-escape hatch does not discharge a silent-loss risk.
+`samtools view -b -f 4 <view> '*'` is the indexed alternative to a whole-file stream —
+but `'*'` returns only *unplaced* reads, so a read-unmapped record that is nonetheless
+placed would be dropped. The contract is flag 4, not flag 12: single-end reads do not have
+a meaningful mate-unmapped bit (§3.14). This applies to BAM and CRAM alike.
 
 §3.11 supplies the guarantee. `samtools idxstats` reports placed-unmapped counts per
 contig from the index alone, in 0.00 s. So the scan is **selected per run, from evidence**:
 
 ```
-placed_unmapped = sum(column 4 of samtools idxstats <view.cram>)
-if placed_unmapped == 0:  indexed scan   # provably recovers every flag-12 read
+placed_unmapped = sum(column 4 of samtools idxstats <view>)
+if placed_unmapped == 0:  indexed scan   # provably recovers every flag-4 read
 else:                     stream scan    # the O(file) form, because it is the correct one
 ```
 
-Config-driven: `cram.unmapped_scan` is `auto` (default), `indexed` or `stream`.
+Config-driven: both `bam.unmapped_scan` and `cram.unmapped_scan` are `auto` (default),
+`indexed` or `stream`. BAM's indexed implementation may use the BAI tail-offset shortcut
+only after the same zero-placed proof; otherwise it performs the complete flag-4 stream.
 
 **The explicit values cannot be used to discard reads.** `indexed` forced on a file whose
 `idxstats` says reads would be lost **raises**, naming the count; it does not warn and
@@ -589,16 +694,14 @@ contract: capture the previous value (including "unset"), set the pinned one, an
 it in a `finally`. Without that, one CRAM run silently reconfigures every later run in the
 same process.
 
-**Which index the run needs depends on the mode, and only one mode is fussy.** The
-non-fast BAM path feeds `extract_unmapped_from_offset`, which parses the BAI container
-itself and rejects anything whose first four bytes are not `BAI\x01` — so that mode needs
-a BAI specifically, and `resolve_bam_index` stays BAI-only for it. Every other mode
-(fast-mode BAM, and CRAM in both modes) hands the index to samtools, which accepts CSI and
-CRAI too. The preflight therefore asks for "an index htslib accepts" in those modes and
-symlinks the first compatible candidate under the same suffix beside the view: BAM tries
-BAI then CSI spellings, while CRAM tries CRAI then CSI spellings. The CRAM CSI support was
-measured directly with the pinned samtools 1.20/htslib stack. Only the non-fast BAM path
-forces a BAI rebuild when only a CSI is present.
+**Every run-local index is fresh.** The resolver still enumerates both spellings of BAI,
+CSI and CRAI so supplied patient artifacts can be protected and diagnostics can name
+them. It does not select one for consumption. §3.15 proved that neither a valid container
+nor successful htslib retrieval binds an index to the intended alignment: a wrong BAI can
+return an empty target with exit 0. Preflight therefore builds BAI for BAM and CRAI for
+CRAM from the run-local view on every run, installs it atomically, and consumes only that
+artifact. This also keeps the BAI-only offset parser's format requirement explicit while
+removing separate “reuse” and “build” correctness paths.
 
 ## 5. Per-issue changes
 
@@ -626,26 +729,24 @@ forces a BAI rebuild when only a CSI is present.
 * **Root cause:** the region slice is random retrieval and requires an index;
   `resolve_bam_index` runs ~7 lines after it, and CRAM has no equivalent
   (`grep -rn crai vntyper/` returns nothing).
-* **Change:** preflight resolves the index before the slice, for both formats, and builds
-  a missing one into the **output** directory (`samtools index -o`, available at the
-  pinned 1.20) — then exposes it through the run-local alignment view of §4.1a, because
+* **Change:** preflight builds a fresh index before the slice, for both formats, into the
+  **output** directory (`samtools index -o`, available at the pinned 1.20) — then exposes
+  it through the run-local alignment view of §4.1a, because
   §3.9 measured that an index merely *placed* in the output directory is invisible to
   `samtools view`. `resolve_bam_index` is left BAI-only and unchanged — the offset
   extractor parses BAI directly and would raise on a CSI. The general
   `resolve_any_index` handles CRAI under both `<file>.crai` and `<stem>.crai`, followed
   by the two equivalent CSI spellings measured against the pinned toolchain.
-* **An index that exists is not an index that works.** Resolution is by filename only
-  (`Path.exists()`), so a truncated, stale or wrong-sample index resolves happily. The
-  preflight does not add a separate validation step for this: the reference probe (§4.2)
-  is a real indexed retrieval through the view, so for CRAM a broken index fails there,
-  at submission. For BAM the equivalent is a probe slice with no reference fragment. That
-  is cheaper and stronger than inspecting the index, because it tests the operation the
-  run will actually perform.
-* **Fast mode and CSI.** `resolve_bam_index` returning None causes a BAI rebuild even for
-  a CSI-indexed BAM in fast mode, which never reaches the offset extractor and would have
-  sliced fine through htslib. The preflight therefore asks for a BAI only when the run
-  needs the offset extractor (non-fast BAM); otherwise any index htslib accepts is enough,
-  which the probe decides.
+* **An index that exists is not evidence about which alignment it indexes.** Resolution by
+  filename accepts a wrong-sample index, and §3.15 measured that htslib can then return an
+  empty target with exit 0. A probe cannot distinguish that from a genuinely empty target.
+  Therefore supplied BAI/CSI/CRAI files are never trusted: every run builds its own BAI or
+  CRAI from the alignment view, then probes the operation the run will perform.
+* **Fast mode and CSI.** `resolve_any_index` still recognises CSI as a supplied patient
+  artifact, so safety validation and cleanup cannot ignore it. Consumption is deliberately
+  narrower: the fresh run-local BAM index is BAI and the fresh CRAM index is CRAI in every
+  mode, giving one matched-by-construction path and satisfying the BAI-only offset
+  parser when that fast path is authorised.
 * **Failure mode made impossible:** `Random alignment retrieval only works for indexed…`
   reaching a user mid-run.
 * **Test:** unit tests for both resolvers over all four name spellings; a preflight test
@@ -745,20 +846,23 @@ rules and four measured wins.
 
 ### Rules
 
-1. **The preflight costs nothing on the BAM path.** Index resolution is two
-   `Path.exists()` calls — no subprocess. The reference probe is **skipped entirely for
-   BAM**, which needs no reference. That leaves at most one extra indexed region read.
+1. **The BAM preflight performs only the work the no-loss proof requires.** It builds one
+   fresh run-local BAI (§3.15), reads `idxstats` to select the safe unmapped strategy, and
+   performs one indexed target probe. It still skips reference resolution entirely. The
+   fresh build supersedes the earlier no-subprocess premise; §5b's final timings are
+   remeasured after round 3 rather than extrapolated from it.
 2. **Read layout is decided from the FASTQs the conversion already wrote**, by reading
    their sizes and, only for a non-empty one, its record count. It is not a second pass
    over the input and not a pass over the slice — §4.4 explains why the slice is the wrong
    source. Missing *inputs* (index, reference) are still decided before any stage runs;
    those are the exit bar. Layout is a property of the output, and deciding it there still
    precedes bwa, fastp, Kestrel and adVNTR by a wide margin.
-3. **The CRAM probe decodes one region and discards it.** It cannot be a `-c` count:
+3. **The CRAM probe decodes the consumer shapes and discards them.** It cannot be a `-c` count:
    §3.10 measured that `-P` and `-c` cannot be combined, and the probe must carry `-P`
    because the slice does. So it is
    `samtools view -P -T <candidate> <view> <region|-L bed> -o /dev/null`, whose exit
-   status is the whole result. Milliseconds, once, CRAM only.
+   status is the whole result. When the selected scan is `stream`, §3.16 requires a
+   second whole-file decode proof; indexed cases retain only the target probe.
 
 ### Measured defects to fix in passing
 
@@ -769,7 +873,7 @@ These are in the files this milestone already opens, and each is a strict improv
 | P1 | The region slice runs **single-threaded**. `build_samtools_slice_command` takes no `threads` parameter and emits no `-@`, while merge, fastq, depth, bwa and the CRAM filter all thread. | `command_builders.py:208-212` — no `-@` in the returned string; contrast `:322`, `:361`, `:399`. | Thread the slice. |
 | P2 | `samtools index` runs **single-threaded** everywhere. `build_samtools_index_command` has no `threads` parameter. | `command_builders.py:234-236`. | Thread the index; `-@` is supported at the pinned 1.20. |
 | P3 | In the default (non-fast) mode the slice's index is **built, invalidated and rebuilt**. The slice command indexes `<name>_sliced.bam`; the merge then `os.replace`s the merged BAM onto that same path, leaving the index stale; the code re-indexes it. | `command_builders.py:211` builds it; `fastq_bam_processing.py:224` overwrites the BAM; `:231` rebuilds the index. | Make indexing an explicit argument of the slice builder and skip it when the merge will overwrite the file. Fast mode keeps it — `pipeline.py:580` consumes `output_sliced.bam` there. |
-| P4 | The CRAM unmapped scan decodes and re-encodes the entire file as SAM text. | §3.5. | §4.3(b) — the indexed `'*'` fetch. Largest single win in the milestone, CRAM only. |
+| P4 | The CRAM unmapped scan decodes and re-encodes the entire file as SAM text. | §3.5. | §4.3(b) — use indexed `'*'` only when `idxstats` proves it complete; BAM uses the same proof before its BAI-tail shortcut. |
 
 P1–P3 are BAM-path wins and apply to CRAM equally. P3 removes one whole index build from
 every default run.
@@ -818,15 +922,15 @@ not merely “inside noise.” The separate whole-50 run found 32 explicit mixed
 failures on the milestone arm; the baseline completed those cases only by discarding the
 stranded FASTQ, so they are exit-bar evidence rather than performance samples.
 
-The forced CRAM measurement also corrected an impossible premise in the original
+The forced CRAM measurement also corrected two impossible premises in the original
 A-178-2 wording. Both declared golden CRAM sources have non-zero placed-unmapped counts,
-so the production guard refuses forced `indexed` before producing an unmapped BAM. Forced
-`stream` recorded stable duplicate-case evidence: `7a61` produced 622,690 records with
-digest `6677ba29…83cb8b91`; `b178` produced 4,478 with digest
-`dad9a81a…4d90a8b`. A raw diagnostic `'*'` fetch on `7a61` produced only 2,690 records and
-a different digest — 620,000 reads lost — while `b178` happened to match despite 329
-placed-unmapped reads. Therefore equality is required only when preflight authorises both
-strategies; otherwise the acceptance result is the indexed rejection plus the stream
+so the production guard refuses forced `indexed` before producing an unmapped BAM. The
+first forced-stream run used the historical flag-12 filter and recorded 622,690 `7a61`
+reads and 4,478 `b178` reads. The corrected flag-4 run records the complete read-unmapped
+sets: 634,261 (`b7f75d19…ebf7b7b`) and 4,807 (`d3aa88fe…d552591`). Raw `'*'`
+diagnostics record only 2,690 and 4,478 reads, so the measured would-be losses are 631,571
+and 329. Therefore equality is required only when preflight authorises both strategies;
+otherwise the acceptance result is the indexed rejection plus the corrected stream
 count/digest and the measured would-be loss. Requiring the rejected strategy to emit an
 equal read set would contradict A-SCAN-1 and reopen silent loss.
 
@@ -835,6 +939,10 @@ equal read set would contradict A-SCAN-1 and reopen silent loss.
 Every behaviour above is reachable from configuration. New keys:
 
 ```jsonc
+"bam": {
+  // §4.3(b). The same no-loss proof governs the BAI-tail shortcut.
+  "unmapped_scan": "auto"                       // "auto" | "indexed" | "stream"
+},
 "cram": {
   // §4.3(a). false pins REF_PATH to `local_ref_path` for the run, so no samtools call
   // can block on a network refget endpoint. true honours the operator's own REF_PATH
@@ -842,8 +950,12 @@ Every behaviour above is reachable from configuration. New keys:
   "allow_ambient_reference_resolution": false,
   "local_ref_path": "%2s/%2s/%s",
 
+  // §3.17. Applies to each target and whole-stream reference probe. Replacement
+  // configs default to 120; larger or non-finite values are rejected.
+  "reference_probe_timeout_seconds": 120,
+
   // §4.3(b). "auto" selects indexed when idxstats proves no placed-unmapped read
-  // exists, and stream otherwise. The explicit values reproduce a historical run.
+  // exists, and stream otherwise. Forced indexed still rejects a lossy input.
   "unmapped_scan": "auto",                      // "auto" | "indexed" | "stream"
 
   // Order in which reference candidates are probed. Editing this list is the supported
@@ -888,7 +1000,8 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-213-2 | The image, run through its entrypoint, emits output before the process exits. | docker tier |
 | A-225-1 | An unindexed BAM and an unindexed CRAM both complete a region slice, with the built index never written beside the input. | integration, read-only input mount |
 | A-225-2 | The slice is performed through a path whose index htslib can actually find — proven by a run whose input directory contains **no** index at any point. | integration |
-| A-225-3 | After a run over a read-only input mount, the input tree is byte-identical, for BAM and CRAM. | `test_input_tree_is_never_written.py` |
+| A-225-3 | After a real run over a read-only input tree, its file set and bytes are identical, for BAM and CRAM. | integration, `test_read_only_alignment_preflight.py` |
+| A-225-4 | A structurally valid BAI from a different sample cannot authorise an empty successful slice; the view rebuild returns the measured 29,736-record target. | integration |
 | A-209-1 | A reference-dependent CRAM with its reference removed **and its `UR:` target renamed** is rejected before any stage runs, with a message naming the contig, its `M5` and every candidate tried. | integration |
 | A-209-2 | The same CRAM with `--reference-fasta` pointed at its reference runs to completion. | integration |
 | A-209-3 | A `no_ref=1` CRAM runs to completion with no reference supplied, and its commands carry no `-T`. | unit + golden cohort |
@@ -898,13 +1011,13 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-178-1 | With `REF_PATH` pointed at an endpoint that accepts TCP and never responds, a CRAM run **exits within 120 s**. The test asserts on elapsed time; without a deadline the criterion cannot fail. | integration |
 | A-178-2 | For every golden-cohort CRAM sample that preflight authorises for both strategies, indexed and stream produce the **same read set** (`samtools view -c` plus sorted read-name digest). When placed-unmapped evidence makes indexed unsafe, forced indexed rejects before work and the gate records the stream read set plus the raw indexed loss; it never bypasses the guard to manufacture equality. | golden cohort |
 | A-178-4 | The #178 reporter, on a post-#213 image, supplies `docker logs`; the stage the run reaches is recorded here. This is an evidence request, not a code change, and it does not gate the PR. | issue thread |
-| A-SCAN-1 | On a CRAM containing placed flag-12 reads, `auto` selects `stream` and the run recovers all of them; forcing `indexed` **raises** naming the count rather than dropping them. | unit + fixture |
+| A-SCAN-1 | On BAM and CRAM containing placed read-unmapped records, `auto` selects `stream` and recovers every flag-4 read, including single-end reads; forcing `indexed` **raises** naming the count rather than dropping them. | unit + integration fixture |
 | A-SCAN-2 | A malformed, empty or non-zero-exit `idxstats` selects `stream`, never `indexed`. | unit |
 | A-VIEW-1 | A view symlink left by a previous run pointing at a *different* alignment is replaced, not reused. | unit |
 | A-VIEW-2 | `REF_PATH` holds its original value (including unset) after `run_pipeline` returns and after it raises. | unit |
 | A-165-2 | A header split exactly 50/50 between two conventions returns `unknown`, not the first one checked. | unit |
 | A-161-4 | R1 and R2 with unequal record counts are reported as `mixed` and the run fails, rather than being genotyped as a pair. | unit |
-| A-178-3 | `auto` selects `stream` on a CRAM constructed to contain a placed flag-12 read, and `indexed` on one without. | unit + purpose-built fixture |
+| A-178-3 | `auto` selects `stream` on an alignment containing a placed read-unmapped record, and `indexed` on one without, for BAM and CRAM. | unit + purpose-built fixture |
 | A-165-1 | The issue's 93-contig header returns `ucsc`; a genuinely ambiguous header still returns `unknown`; a header with no classifiable contig returns `unknown` and does not divide by zero. | unit |
 | A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. | integration, derived fixture |
 | A-161-2 | A run that produces a non-empty FASTQ nothing consumes fails, naming the file and its read count. | unit |
@@ -942,10 +1055,10 @@ other.
 * Preflighting inside the HTTP request. §1 explains why: it would make the API run
   samtools synchronously, changing the service's contract. What *is* in scope is surfacing
   the preflight's message in the job status (A-WEB-1).
-* A timeout on `run_command`. `allow_ambient_reference_resolution: true` re-enables an
-  unbounded wait by definition, and the default `false` removes it; a general subprocess
-  deadline is a change to every stage's failure semantics and belongs in its own issue.
-  Filed as a follow-up rather than smuggled in here.
+* A general timeout on `run_command`. Round 3 added a bounded captured-command seam only
+  for reference probes, because A-178-1 cannot be decided without an elapsed deadline and
+  §3.2 measured that exact hang. Changing every later stage's subprocess semantics remains
+  a separate issue.
 * Extracting `construct_kestrel_command` out of the 936-line `kestrel_genotyping.py`.
   AGENTS.md rule 3 asks for it and this milestone touches that function; the extraction is
   included in #161's task, but a wider split of that module is not.
@@ -967,9 +1080,11 @@ PR.**
 is the non-overlapping 88.43–88.77 s baseline versus 85.92–87.41 s milestone range in
 §5b. The full base matrix also exposed 32 inputs whose previously ignored single FASTQ is
 now named and rejected. Forced indexed CRAM runs were rejected by the placed-unmapped
-guard; forced stream recorded the 622,690- and 4,478-record read sets, and a raw indexed
-diagnostic proved a 620,000-read loss on `7a61`. These are recorded as gate findings, not
-hidden by changing scan policy or relaxing the no-discard rule.
+guard. The initial flag-12 stream evidence (622,690 and 4,478 records) was superseded by
+the corrected flag-4 whole-stream evidence (634,261 and 4,807 records); raw indexed
+diagnostics prove losses of 631,571 and 329 records. Both measurements remain recorded so
+the corrected gate values are auditable rather than silently substituted. These are gate
+findings, not hidden by changing scan policy or relaxing the no-discard rule.
 
 ### Round 2 — what changed as a result
 

@@ -911,6 +911,32 @@
           "other": 0,
           "single": 3
         }
+      },
+      {
+        "test_name": "example_b178_hg19_bwa_advntr",
+        "bam": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--extra-modules",
+          "advntr",
+          "--advntr-max-coverage",
+          "300"
+        ],
+        "advntr_assertions": {
+          "VID": "25561",
+          "State": "I22_4_G_LEN1",
+          "NumberOfSupportingReads": 39,
+          "MeanCoverage": {
+            "value": 70.3333333333,
+            "tolerance_percentage": 10
+          },
+          "Pvalue": {
+            "value": 5.774455097259999e-59,
+            "log10_tolerance": 2
+          }
+        }
       }
     ],
     "fastq_tests": [

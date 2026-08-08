@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 #: strings) and ``opaque`` (any JSON value, compared structurally).
 PIPELINE_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "exit_code": ("scalar", ()),
+    "unmapped_read_set": ("opaque", ()),
+    "raw_indexed_read_set": ("opaque", ()),
+    "raw_indexed_loss": ("opaque", ()),
     "kestrel_result": ("table", artifacts.KESTREL_KEY),
     "kestrel_pre_result": ("table", artifacts.KESTREL_KEY),
     "advntr_result": ("table", artifacts.ADVNTR_KEY),

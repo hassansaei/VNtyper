@@ -127,6 +127,18 @@ def test_non_fast_bam_uses_the_plan_view_and_exact_plan_index_for_offsets(tmp_pa
     )
 
 
+def test_bam_with_placed_unmapped_evidence_uses_the_complete_stream_scan(tmp_path: Path) -> None:
+    """A placed unmapped record can occur before the BAI tail offset."""
+    plan = _plan(tmp_path, "bam", unmapped_scan="stream")
+
+    commands, extractor = _run_conversion(tmp_path, plan, fast_mode=False)
+
+    extractor.assert_not_called()
+    (unmapped_command,) = [command for command in commands if "-f 4" in command]
+    assert "set -o pipefail" in unmapped_command
+    assert plan.view_path in unmapped_command
+
+
 @pytest.mark.parametrize(
     ("scan", "expected_fragment", "unexpected_fragment"),
     [
@@ -141,7 +153,7 @@ def test_cram_unmapped_command_is_selected_by_the_proven_plan(
 
     commands, _ = _run_conversion(tmp_path, plan, fast_mode=False)
 
-    (unmapped_command,) = [command for command in commands if "-f 12" in command]
+    (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert expected_fragment in unmapped_command
     assert unexpected_fragment not in unmapped_command
     assert plan.view_path in unmapped_command

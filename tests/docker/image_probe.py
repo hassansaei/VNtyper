@@ -78,7 +78,13 @@ def _collect_references(pkg_dir, config):
     Returns:
         dict: Mapping of config key to a path record.
     """
-    refs = {key: _entry(value) for key, value in sorted(config.get("reference_data", {}).items())}
+    refs = {}
+    for key, value in sorted(config.get("reference_data", {}).items()):
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"reference_data.{key} must be a path string or null")
+        refs[key] = _entry(value)
 
     shark_config = os.path.join(pkg_dir, "modules", "shark", "shark_config.json")
     if os.path.isfile(shark_config):
@@ -149,4 +155,5 @@ def main():
     )
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import socket
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pysam
@@ -179,3 +182,65 @@ def test_a209_3_no_ref_cram_completes_without_an_explicit_reference(
     _assert_no_reference_flags_in_cram_commands(result)
     assert (output / "pipeline_summary.json").is_file()
     assert (output / "kestrel" / "kestrel_result.tsv").is_file()
+
+
+def test_a178_1_blackhole_reference_probe_exits_within_its_configured_deadline(
+    tmp_path: Path,
+    ensure_test_data: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server that accepts and never responds cannot hold a CRAM run forever."""
+    fixture = build_reference_dependent_fixture(tmp_path / "purpose")
+    hidden_reference = fixture.reference.with_name("hidden-reference.fa")
+    fixture.reference.rename(hidden_reference)
+
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.1)
+    port = listener.getsockname()[1]
+    accepted = threading.Event()
+    stop = threading.Event()
+
+    def blackhole() -> None:
+        connection: socket.socket | None = None
+        try:
+            while not stop.is_set():
+                try:
+                    connection, _ = listener.accept()
+                    break
+                except TimeoutError:
+                    continue
+            if connection is not None:
+                accepted.set()
+                stop.wait(10)
+        finally:
+            if connection is not None:
+                connection.close()
+
+    server = threading.Thread(target=blackhole, daemon=True)
+    server.start()
+    monkeypatch.setenv("REF_PATH", f"http://127.0.0.1:{port}/%s")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    config = _no_ref_config(tmp_path)
+    payload = json.loads(config.read_text(encoding="utf-8"))
+    payload["cram"]["allow_ambient_reference_resolution"] = True
+    payload["cram"]["reference_probe_timeout_seconds"] = 0.25
+    config.write_text(json.dumps(payload), encoding="utf-8")
+
+    started = time.monotonic()
+    try:
+        result = _run_cram(fixture.cram, tmp_path / "blackhole-output", config)
+    finally:
+        elapsed = time.monotonic() - started
+        stop.set()
+        listener.close()
+        server.join(timeout=2)
+        hidden_reference.rename(fixture.reference)
+
+    diagnostic = f"{result.stdout}\n{result.stderr}"
+    assert accepted.is_set(), "the CRAM decode never reached the blackhole reference server"
+    assert result.returncode != 0
+    assert elapsed < 5
+    assert "timed out after 0.25 seconds" in diagnostic

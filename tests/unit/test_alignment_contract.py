@@ -85,12 +85,14 @@ def test_index_suffix_contract_has_the_supported_formats() -> None:
 
 
 def test_missing_index_message_names_path_candidates_and_repair_command() -> None:
-    """A preflight failure tells the user what was checked and how to repair it."""
+    """A fresh-index failure names the actual operation, candidates, and diagnostic command."""
     tried = ("/data/sample.bam.bai", "/data/sample.bai", "/data/sample.bam.csi", "/data/sample.csi")
     message = missing_index_message("/data/sample.bam", FORMAT_BAM, tried)
     assert "/data/sample.bam" in message
     assert all(candidate in message for candidate in tried)
     assert "samtools index" in message
+    assert "Unable to build a fresh run-local BAM index" in message
+    assert "Create one with" not in message
 
 
 def test_unresolvable_reference_message_reports_m5_and_all_attempts() -> None:

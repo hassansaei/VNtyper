@@ -71,8 +71,8 @@ def _configured_lines_per_record(config: Mapping[str, Any]) -> int:
         logger.error(msg)
         raise ValueError(msg)
     value = utils_config.get("fastq_validation_lines", 4)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        msg = "Configuration key utils.fastq_validation_lines must be a positive integer."
+    if isinstance(value, bool) or not isinstance(value, int) or value != 4:
+        msg = "Configuration key utils.fastq_validation_lines must be 4 for FASTQ records."
         logger.error(msg)
         raise ValueError(msg)
     return value
