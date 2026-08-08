@@ -300,6 +300,15 @@ def test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed(t
     assert Path(sequence["UR"]) == fixture.reference
     missing = fixture.reference.with_name("reference-is-missing.fa")
     fixture.reference.rename(missing)
+    local_only_ref_path = str(tmp_path / "no-reference-cache" / "%2s" / "%2s" / "%s")
+    real_view = pysam_any.view
+    monkeypatch.setenv("REF_PATH", local_only_ref_path)
+
+    def guarded_view(*args: str) -> str:
+        assert os.environ.get("REF_PATH") == local_only_ref_path
+        return real_view(*args)
+
+    monkeypatch.setattr(pysam_any, "view", guarded_view)
     with pytest.raises(pysam.SamtoolsError):
         pysam_any.view("-h", str(fixture.cram))
 
