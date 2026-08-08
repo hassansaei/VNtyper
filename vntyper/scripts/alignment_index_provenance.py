@@ -195,6 +195,7 @@ def write_generated_index_provenance(
         _reject(f"Previously owned generated-index provenance disappeared: {provenance}")
 
     temporary_path: Path | None = None
+    exclusive_install_succeeded = False
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -211,9 +212,20 @@ def write_generated_index_provenance(
             os.replace(temporary_path, provenance)
         else:
             os.link(temporary_path, provenance)
+            exclusive_install_succeeded = True
             os.unlink(temporary_path)
         temporary_path = None
     except OSError as error:
+        if exclusive_install_succeeded:
+            try:
+                os.unlink(provenance)
+            except OSError as rollback_error:
+                message = (
+                    f"Unable to write generated-index provenance {provenance}: {error}; "
+                    f"unable to roll back installed provenance: {rollback_error}"
+                )
+                logger.error(message)
+                raise RuntimeError(message) from rollback_error
         _reject(f"Unable to write generated-index provenance {provenance}: {error}")
     finally:
         if temporary_path is not None:
@@ -245,6 +257,118 @@ def remove_generated_index_provenance(
         _reject(f"Unable to remove generated-index provenance {provenance}: {error}")
 
 
+def _reserve_index_tombstone(index_path: Path) -> Path:
+    with tempfile.NamedTemporaryFile(
+        dir=index_path.parent,
+        prefix=f".{index_path.name}.",
+        suffix=".tombstone",
+        delete=False,
+    ) as temporary:
+        return Path(temporary.name)
+
+
+def _stage_owned_index(index_path: Path) -> Path:
+    tombstone = _reserve_index_tombstone(index_path)
+    try:
+        os.replace(index_path, tombstone)
+    except OSError as error:
+        with suppress(OSError):
+            os.unlink(tombstone)
+        _reject(f"Unable to stage generated index {index_path} for an atomic transition: {error}")
+    return tombstone
+
+
+def _restore_owned_index(tombstone: Path, index_path: Path, operation_error: Exception) -> None:
+    try:
+        os.replace(tombstone, index_path)
+    except OSError as rollback_error:
+        message = (
+            f"Generated-index transition failed for {index_path}: {operation_error}; "
+            f"unable to restore the old owned index: {rollback_error}"
+        )
+        logger.error(message)
+        raise RuntimeError(message) from rollback_error
+
+
+def _discard_committed_tombstone(tombstone: Path, index_path: Path) -> None:
+    try:
+        os.unlink(tombstone)
+    except OSError as error:
+        logger.warning(
+            f"Generated-index transition committed for {index_path}, but its rollback tombstone "
+            f"could not be removed: {tombstone}: {error}"
+        )
+
+
+def _install_generated_index(
+    temporary_index: str | Path,
+    index_path: str | Path,
+    protected_paths: Iterable[str | Path],
+    *,
+    replace_owned: bool,
+) -> None:
+    protected = tuple(protected_paths)
+    temporary = Path(temporary_index)
+    index = Path(index_path)
+    if not replace_owned:
+        os.replace(temporary, index)
+        try:
+            write_generated_index_provenance(index, protected, replace_owned=False)
+        except Exception:
+            if not os.path.lexists(_provenance_path(index)):
+                try:
+                    os.unlink(index)
+                except OSError as cleanup_error:
+                    message = (
+                        f"Unable to remove unowned generated index after provenance failure: {index}: {cleanup_error}"
+                    )
+                    logger.error(message)
+                    raise RuntimeError(message) from cleanup_error
+            raise
+        return
+
+    tombstone = _stage_owned_index(index)
+    try:
+        os.replace(temporary, index)
+        write_generated_index_provenance(index, protected, replace_owned=True)
+    except Exception as error:
+        _restore_owned_index(tombstone, index, error)
+        raise
+    _discard_committed_tombstone(tombstone, index)
+
+
+def _replace_owned_index_with_symlink(
+    index_path: str | Path,
+    source_index: str | Path,
+    protected_paths: Iterable[str | Path],
+) -> None:
+    protected = tuple(protected_paths)
+    index = Path(index_path)
+    tombstone = _stage_owned_index(index)
+    try:
+        _atomic_symlink(source_index, index)
+        remove_generated_index_provenance(index, protected)
+    except Exception as error:
+        _restore_owned_index(tombstone, index, error)
+        raise
+    _discard_committed_tombstone(tombstone, index)
+
+
+def _remove_owned_index_pair(index_path: str | Path, protected_paths: Iterable[str | Path]) -> None:
+    protected = tuple(protected_paths)
+    index = Path(index_path)
+    tombstone = _stage_owned_index(index)
+    try:
+        remove_generated_index_provenance(index, protected)
+    except Exception as error:
+        _restore_owned_index(tombstone, index, error)
+        raise
+    try:
+        os.unlink(tombstone)
+    except OSError as error:
+        _reject(f"Unable to remove stale generated index {index}: {error}")
+
+
 def _remove_stale_view_indexes(
     view_path: str,
     file_format: str,
@@ -256,5 +380,9 @@ def _remove_stale_view_indexes(
     for candidate in index_candidate_names(view_path, file_format):
         if candidate != keep and os.path.lexists(candidate):
             if Path(candidate) in owned_indexes:
-                remove_generated_index_provenance(candidate, protected)
-            os.unlink(candidate)
+                _remove_owned_index_pair(candidate, protected)
+            else:
+                try:
+                    os.unlink(candidate)
+                except OSError as error:
+                    _reject(f"Unable to remove stale view index {candidate}: {error}")

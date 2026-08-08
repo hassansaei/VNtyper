@@ -24,10 +24,10 @@ from vntyper.scripts.alignment_contract import (
 from vntyper.scripts.alignment_index import resolve_any_index, resolve_bam_index
 from vntyper.scripts.alignment_index_provenance import (
     _atomic_symlink,
+    _install_generated_index,
     _remove_stale_view_indexes,
+    _replace_owned_index_with_symlink,
     generated_index_is_owned,
-    remove_generated_index_provenance,
-    write_generated_index_provenance,
 )
 from vntyper.scripts.command_builders import (
     build_cram_reference_probe_command,
@@ -246,9 +246,10 @@ def build_alignment_view(
     _atomic_symlink(in_path, view_path)
     if existing_index is not None:
         _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
-        _atomic_symlink(existing_index, view_index)
         if view_index in owned_indexes:
-            remove_generated_index_provenance(view_index, protected_paths)
+            _replace_owned_index_with_symlink(view_index, existing_index, protected_paths)
+        else:
+            _atomic_symlink(existing_index, view_index)
         return str(view_path), str(view_index)
     _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
@@ -270,18 +271,13 @@ def build_alignment_view(
         exit_ok, _ = capture_command(command, str(log_file), protected_paths=protected_paths)
         if not exit_ok or temporary_index.stat().st_size == 0:
             raise OSError("samtools did not create a non-empty index")
-        os.replace(temporary_index, view_index)
+        _install_generated_index(
+            temporary_index,
+            view_index,
+            protected_paths,
+            replace_owned=view_index in owned_indexes,
+        )
         temporary_index = None
-        try:
-            write_generated_index_provenance(
-                view_index,
-                protected_paths,
-                replace_owned=view_index in owned_indexes,
-            )
-        except ValueError:
-            with suppress(OSError):
-                os.unlink(view_index)
-            raise
     except OSError as error:
         message = missing_index_message(in_path, file_format, input_index_candidates)
         logger.error(message)

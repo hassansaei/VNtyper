@@ -375,3 +375,202 @@ def test_nonfast_bam_rerun_ignores_new_source_csi_and_rebuilds_owned_bai(tmp_pat
     assert generated_index_is_owned(second_index, (bam,)) is True
     assert source_csi.read_bytes() == b"patient source CSI"
     assert not Path(f"{bam}.bai").exists()
+
+
+def test_first_provenance_install_cleanup_failure_leaves_no_final_pair_and_rerun_recovers(
+    tmp_path: Path,
+) -> None:
+    """A failed first ownership install cannot strand provenance without its index."""
+    cram = _alignment(tmp_path / "input", "cram", b"patient alignment")
+    output = tmp_path / "output"
+    view_index = output / "sample.cram.crai"
+    provenance = _provenance(view_index)
+    real_unlink = os.unlink
+    fault_injected = False
+
+    def fail_first_temporary_provenance_unlink(path: str | os.PathLike[str]) -> None:
+        nonlocal fault_injected
+        candidate = Path(path)
+        if (
+            not fault_injected
+            and candidate.parent == output
+            and candidate.name.startswith(f".{provenance.name}.")
+            and candidate.name.endswith(".tmp")
+            and provenance.exists()
+        ):
+            fault_injected = True
+            raise OSError("temporary provenance unlink failed")
+        real_unlink(path)
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index),
+        patch(
+            "vntyper.scripts.alignment_index_provenance.os.unlink",
+            side_effect=fail_first_temporary_provenance_unlink,
+        ),
+        pytest.raises(ValueError, match="temporary provenance unlink failed"),
+    ):
+        build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert fault_injected
+    assert not os.path.lexists(view_index)
+    assert not os.path.lexists(provenance)
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
+        _, recovered_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert Path(recovered_index) == view_index
+    assert generated_index_is_owned(recovered_index, (cram,)) is True
+
+
+def test_provenance_update_failure_restores_the_old_pair_and_rerun_recovers(tmp_path: Path) -> None:
+    """Rebuilding an owned index rolls its bytes back when metadata cannot update."""
+    cram = _alignment(tmp_path / "input", "cram", b"patient alignment")
+    output = tmp_path / "output"
+    build_number = 0
+
+    def build_numbered_index(
+        command: str,
+        log_file: str,
+        cwd: str | None = None,
+        *,
+        protected_paths: tuple[str | Path, ...] = (),
+    ) -> tuple[bool, str]:
+        nonlocal build_number
+        del log_file, cwd, protected_paths
+        build_number += 1
+        arguments = shlex.split(command)
+        Path(arguments[arguments.index("-o") + 1]).write_bytes(f"generated index {build_number}".encode())
+        return True, ""
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_numbered_index):
+        _, generated_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    index = Path(generated_index)
+    provenance = _provenance(index)
+    old_inode = index.stat().st_ino
+    real_replace = os.replace
+    fault_injected = False
+
+    def fail_provenance_update(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+    ) -> None:
+        nonlocal fault_injected
+        if not fault_injected and Path(destination) == provenance:
+            fault_injected = True
+            raise OSError("provenance update failed")
+        real_replace(source, destination)
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_numbered_index),
+        patch("vntyper.scripts.alignment_index_provenance.os.replace", side_effect=fail_provenance_update),
+        pytest.raises(ValueError, match="provenance update failed"),
+    ):
+        build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert fault_injected
+    assert index.read_bytes() == b"generated index 1"
+    assert index.stat().st_ino == old_inode
+    assert generated_index_is_owned(index, (cram,)) is True
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_numbered_index):
+        _, recovered_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert recovered_index == generated_index
+    assert index.read_bytes() == b"generated index 3"
+    assert generated_index_is_owned(index, (cram,)) is True
+
+
+def test_source_transition_provenance_remove_failure_restores_the_old_pair_and_rerun_recovers(
+    tmp_path: Path,
+) -> None:
+    """A source-index transition rolls back when old ownership cannot be removed."""
+    cram = _alignment(tmp_path / "input", "cram", b"patient alignment")
+    output = tmp_path / "output"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
+        _, generated_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    index = Path(generated_index)
+    provenance = _provenance(index)
+    old_inode = index.stat().st_ino
+    source_index = Path(f"{cram}.crai")
+    source_index.write_bytes(b"patient source index")
+    real_unlink = os.unlink
+    fault_injected = False
+
+    def fail_provenance_remove(path: str | os.PathLike[str]) -> None:
+        nonlocal fault_injected
+        if not fault_injected and Path(path) == provenance:
+            fault_injected = True
+            raise OSError("provenance remove failed")
+        real_unlink(path)
+
+    with (
+        patch("vntyper.scripts.alignment_index_provenance.os.unlink", side_effect=fail_provenance_remove),
+        pytest.raises(ValueError, match="provenance remove failed"),
+    ):
+        build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert fault_injected
+    assert index.is_file()
+    assert not index.is_symlink()
+    assert index.stat().st_ino == old_inode
+    assert generated_index_is_owned(index, (cram, source_index)) is True
+
+    _, recovered_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert recovered_index == generated_index
+    assert index.is_symlink()
+    assert index.samefile(source_index)
+    assert not provenance.exists()
+
+
+def test_stale_index_unlink_failure_leaves_no_final_pair_and_rerun_recovers(tmp_path: Path) -> None:
+    """Stale owned cleanup removes final names before fallible artifact deletion."""
+    first_cram = _alignment(tmp_path / "first", "cram", b"first patient alignment")
+    second_cram = _alignment(tmp_path / "second", "cram", b"second patient alignment")
+    output = tmp_path / "output"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
+        _, generated_index = build_alignment_view(str(first_cram), str(output), "sample", "cram", _config(), threads=2)
+
+    stale_index = Path(generated_index)
+    stale_provenance = _provenance(stale_index)
+    source_csi = Path(f"{second_cram}.csi")
+    source_csi.write_bytes(b"patient source index")
+    real_unlink = os.unlink
+    fault_injected = False
+
+    def fail_stale_index_unlink(path: str | os.PathLike[str]) -> None:
+        nonlocal fault_injected
+        candidate = Path(path)
+        if (
+            not fault_injected
+            and candidate.is_file()
+            and not candidate.is_symlink()
+            and candidate.read_bytes() == b"generated index"
+        ):
+            fault_injected = True
+            raise OSError("stale index unlink failed")
+        real_unlink(path)
+
+    with (
+        patch("vntyper.scripts.alignment_index_provenance.os.unlink", side_effect=fail_stale_index_unlink),
+        pytest.raises(ValueError, match="stale index unlink failed"),
+    ):
+        build_alignment_view(str(second_cram), str(output), "sample", "cram", _config(), threads=2)
+
+    assert fault_injected
+    assert not os.path.lexists(stale_index)
+    assert not os.path.lexists(stale_provenance)
+
+    view_path, recovered_index = build_alignment_view(
+        str(second_cram), str(output), "sample", "cram", _config(), threads=2
+    )
+
+    assert Path(view_path).samefile(second_cram)
+    assert Path(recovered_index) == output / "sample.cram.csi"
+    assert Path(recovered_index).is_symlink()
+    assert Path(recovered_index).samefile(source_csi)
