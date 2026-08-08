@@ -148,6 +148,32 @@ def test_cram_plan_drives_conversion_and_reference_aware_coverage(tmp_path: Path
     assert coverage["reference_path"] == reference
 
 
+def test_explicit_cram_reference_reaches_preflight_as_the_cli_candidate(tmp_path: Path) -> None:
+    """Dropping this value would let config or htslib outrank the CLI flag.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    out = tmp_path / "out"
+    cram = tmp_path / "patient.cram"
+    cram.touch()
+    reference = tmp_path / "full reference.fa"
+
+    with (
+        mock.patch.object(pipeline, "pin_reference_resolution", return_value=None, create=True),
+        mock.patch.object(pipeline, "restore_reference_resolution", create=True),
+    ):
+        harness = run_pipeline_under_harness(
+            out,
+            bam=None,
+            cram=str(cram),
+            reference_fasta=reference,
+        )
+
+    assert harness.kwargs("run_preflight")["reference_fasta"] == str(reference)
+    assert harness.kwargs("run_preflight")["error_output_dir"] == str(out)
+
+
 def test_post_alignment_bam_is_preflighted_and_its_returned_plan_is_consumed(tmp_path: Path) -> None:
     out = tmp_path / "out"
     plan = _plan(out, "bam")

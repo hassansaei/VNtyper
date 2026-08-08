@@ -43,6 +43,7 @@ from .cohorts import (
 )
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
 from .identifiers import canonical_id
+from .job_failures import stored_preflight_message
 from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
 from .scratch_response import ScratchFileResponse
@@ -110,9 +111,6 @@ redis_usage_client = redis.Redis(
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
 
-# Client-facing text for a job that failed. The task's own exception carries the
-# command line and the per-job container paths, which a job-status poller has no
-# use for; it is logged instead of returned.
 JOB_FAILURE_MESSAGE = (
     "The job failed during processing. Quote the job ID when reporting it so the "
     "failure can be looked up in the server logs."
@@ -605,7 +603,8 @@ def get_job_status(job_id: str):
         # Log the task's own exception, return a generic message: the detail is
         # operator-facing, and this endpoint is unauthenticated.
         logger.error(f"Job {job_id} (Task ID: {task_id}) failed: {type(task_result.info).__name__}: {task_result.info}")
-        return JobStatusResponse(job_id=job_id, status="failed", error=JOB_FAILURE_MESSAGE)
+        error = stored_preflight_message(redis_usage_client, job_id) or JOB_FAILURE_MESSAGE
+        return JobStatusResponse(job_id=job_id, status="failed", error=error)
     else:
         return JobStatusResponse(job_id=job_id, status=status.lower())
 

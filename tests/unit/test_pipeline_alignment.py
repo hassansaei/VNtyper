@@ -294,6 +294,8 @@ def test_build_alignment_preflight_kwargs_pins_exact_bed_and_header_contigs(
 ) -> None:
     bed = tmp_path / "target.bed"
     bed.write_text("chr1\t10\t20\n", encoding="utf-8")
+    reference = tmp_path / "full reference.fa"
+    error_output = tmp_path / "run-output"
 
     result = build_alignment_preflight_kwargs(
         in_path="/input/sample.cram",
@@ -306,6 +308,8 @@ def test_build_alignment_preflight_kwargs_pins_exact_bed_and_header_contigs(
         reference_assembly="hg38",
         fast_mode=True,
         alignment_header=alignment_header,
+        reference_fasta=reference,
+        error_output_dir=error_output,
     )
 
     assert result == {
@@ -318,10 +322,11 @@ def test_build_alignment_preflight_kwargs_pins_exact_bed_and_header_contigs(
         "region": None,
         "bed_file": bed,
         "reference_assembly": "hg38",
-        "reference_fasta": None,
+        "reference_fasta": str(reference),
         "header_contigs": () if alignment_header is None else ("chr1", "chr2"),
         "m5": None,
         "fast_mode": True,
+        "error_output_dir": str(error_output),
     }
 
 

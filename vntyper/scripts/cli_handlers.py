@@ -309,6 +309,7 @@ def handle_pipeline(
         fastq2=args.fastq2,
         bam=args.bam,
         cram=args.cram,
+        reference_fasta=args.reference_fasta,
         threads=args.threads,
         reference_assembly=args.reference_assembly,
         fast_mode=args.fast_mode,

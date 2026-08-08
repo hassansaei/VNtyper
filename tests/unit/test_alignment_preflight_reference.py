@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -277,6 +278,8 @@ def test_a_total_decode_failure_names_every_candidate_and_reason(tmp_path: Path)
     cli_reference = _reference(tmp_path / "cli.fa")
     bwa_reference = _reference(tmp_path / "bwa.fa")
     outcomes = [(False, "checksum mismatch"), (False, "missing chr2"), (False, "UR unavailable")]
+    run_output = tmp_path / "run-output"
+    run_output.mkdir()
 
     with (
         patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=outcomes),
@@ -297,6 +300,7 @@ def test_a_total_decode_failure_names_every_candidate_and_reason(tmp_path: Path)
             "sample",
             ("chr1", "chr2"),
             "012345",
+            error_output_dir=run_output,
         )
 
     message = str(error.value)
@@ -312,6 +316,12 @@ def test_a_total_decode_failure_names_every_candidate_and_reason(tmp_path: Path)
         "UR unavailable",
     ):
         assert expected in message
+
+    payload = json.loads((run_output / "preflight_error.json").read_text(encoding="utf-8"))
+    assert set(payload) == {"code", "message", "candidates"}
+    assert payload["code"] == "reference_unresolved"
+    assert "contig=chr1" in payload["message"]
+    assert "/run/" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize("target_source", ["region", "bed"])

@@ -468,6 +468,50 @@ def test_job_status_of_a_failed_job_still_says_something_useful(
     assert len(error.split()) >= 4, f"not an informative message: {error!r}"
 
 
+def test_job_status_returns_the_stored_curated_preflight_message(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A known preflight failure is more useful than the generic failure text."""
+    _register_failed_job(fake_redis, web_app, monkeypatch)
+    message = "Unable to resolve CRAM reference: contig=chr1, M5=digest."
+    fake_redis.hset(
+        f"usage:{FAILED_JOB_ID}",
+        mapping={"code": "reference_unresolved", "message": message},
+    )
+
+    response = client.get(f"/job-status/{FAILED_JOB_ID}/")
+
+    assert response.json()["error"] == message
+
+
+def test_job_status_uses_the_generic_message_when_no_curated_message_is_stored(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-preflight failures keep the existing no-disclosure response."""
+    _register_failed_job(fake_redis, web_app, monkeypatch)
+
+    response = client.get(f"/job-status/{FAILED_JOB_ID}/")
+
+    assert response.json()["error"] == web_app.JOB_FAILURE_MESSAGE
+
+
+def test_job_status_refuses_a_stored_message_with_an_absolute_worker_path(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even corrupt Redis state cannot turn the unauthenticated route into a path oracle."""
+    _register_failed_job(fake_redis, web_app, monkeypatch)
+    worker_path = f"/opt/vntyper/output/{FAILED_JOB_ID}/private.cram"
+    fake_redis.hset(
+        f"usage:{FAILED_JOB_ID}",
+        mapping={"code": "reference_unresolved", "message": f"Cannot decode {worker_path}"},
+    )
+
+    response = client.get(f"/job-status/{FAILED_JOB_ID}/")
+
+    assert response.json()["error"] == web_app.JOB_FAILURE_MESSAGE
+    assert worker_path not in response.text
+
+
 def test_job_status_failure_detail_is_still_logged_server_side(
     client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

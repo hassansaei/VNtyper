@@ -25,10 +25,11 @@ class AlignmentPreflightKwargs(TypedDict):
     region: None
     bed_file: Path
     reference_assembly: str
-    reference_fasta: None
+    reference_fasta: str | None
     header_contigs: tuple[str, ...]
     m5: str | None
     fast_mode: bool
+    error_output_dir: str
 
 
 def format_regions_as_bed(regions: str) -> str:
@@ -170,6 +171,8 @@ def build_alignment_preflight_kwargs(
     reference_assembly: str,
     fast_mode: bool,
     alignment_header: str | None = None,
+    reference_fasta: str | Path | None = None,
+    error_output_dir: str | Path | None = None,
 ) -> AlignmentPreflightKwargs:
     """Build the exact, BED-shaped request used by a real alignment preflight.
 
@@ -184,6 +187,8 @@ def build_alignment_preflight_kwargs(
         reference_assembly: Declared input assembly.
         fast_mode: Whether downstream processing permits any htslib index.
         alignment_header: Header already read by the assembly guard, if available.
+        reference_fasta: Explicit CRAM reference candidate, when supplied.
+        error_output_dir: Run output root for the curated failure artifact.
 
     Returns:
         Typed keyword arguments for :func:`alignment_preflight.run_preflight`.
@@ -205,8 +210,9 @@ def build_alignment_preflight_kwargs(
         "region": None,
         "bed_file": bed_file,
         "reference_assembly": reference_assembly,
-        "reference_fasta": None,
+        "reference_fasta": str(reference_fasta) if reference_fasta is not None else None,
         "header_contigs": header_contigs,
         "m5": target_m5,
         "fast_mode": fast_mode,
+        "error_output_dir": str(error_output_dir) if error_output_dir is not None else str(output_dir),
     }

@@ -1,5 +1,3 @@
-# vntyper/scripts/pipeline.py
-
 import logging
 import os
 import shutil
@@ -82,6 +80,7 @@ def run_pipeline(
     fastq2=None,
     bam=None,
     cram=None,
+    reference_fasta=None,
     threads=4,
     reference_assembly="hg19",
     fast_mode=False,
@@ -109,6 +108,7 @@ def run_pipeline(
         fastq2 (str, optional): Path to the second FASTQ file.
         bam (str, optional): Path to the BAM file.
         cram (str, optional): Path to the CRAM file.
+        reference_fasta (Path, optional): Explicit reference FASTA for CRAM decoding.
         threads (int, optional): Number of threads to use. Default is 4.
         reference_assembly (str, optional): Reference assembly ("hg19" or "hg38").
         fast_mode (bool, optional): Skip filtering steps if True.
@@ -206,10 +206,6 @@ def run_pipeline(
             logger.error("Incomplete FASTQ inputs provided.")
             raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")
 
-        # --- Declared-assembly guard ---
-        # Reconcile --reference-assembly against the header before any region is
-        # resolved: declaring the wrong build slices a region ~30 kb from the VNTR,
-        # which this pipeline reports as a confident negative rather than an error.
         # BAM and CRAM share one path here; FASTQ has no header of its own and is
         # deliberately not guarded (see pipeline_guards for why).
         alignment_header = None
@@ -245,6 +241,8 @@ def run_pipeline(
                     reference_assembly=reference_assembly,
                     fast_mode=fast_mode,
                     alignment_header=alignment_header,
+                    reference_fasta=reference_fasta,
+                    error_output_dir=output_dir,
                 )
             )
 

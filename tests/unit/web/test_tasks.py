@@ -27,6 +27,7 @@ imports before this module, so `app.tasks` is importable here.
 """
 
 import inspect
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -428,6 +429,40 @@ def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
     assert "Job ID <strong>job-1</strong>" in email_kwargs["content"]
     assert "Cohort ID" not in email_kwargs["content"]
     assert not bam_path.exists(), "cleanup must still run after a pipeline failure"
+
+
+def test_pipeline_failure_stores_the_curated_preflight_code_and_message(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A nonzero pipeline exit transports its reviewed artifact into the job hash.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked email task.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    artifact = {
+        "code": "reference_unresolved",
+        "message": "Unable to resolve CRAM reference: contig=chr1, M5=digest.",
+        "candidates": [["cli", "full.fa", "probe exited non-zero"]],
+    }
+    (output_dir / "preflight_error.json").write_text(json.dumps(artifact), encoding="utf-8")
+    pipeline_error = subprocess.CalledProcessError(1, ["vntyper", "pipeline"])
+    _subprocess_stub(monkeypatch, tasks, pipeline_error=pipeline_error)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    redis_mocks.usage.hset.assert_any_call(
+        "usage:job-1",
+        mapping={"code": "reference_unresolved", "message": artifact["message"]},
+    )
 
 
 def test_pipeline_failure_email_names_the_cohort_when_one_is_set(

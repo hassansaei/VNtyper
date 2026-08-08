@@ -79,6 +79,21 @@ def test_the_default_output_name_runs_the_pipeline(tmp_path: Path) -> None:
     assert stub.call_count == 1
 
 
+def test_reference_fasta_is_forwarded_to_the_pipeline(tmp_path: Path) -> None:
+    """The explicit CRAM reference must survive the parser/handler boundary.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    reference = tmp_path / "full reference.fa"
+
+    stub = _run_handler(
+        ["pipeline", "-o", str(tmp_path / "out"), "--cram", "in.cram", "--reference-fasta", str(reference)]
+    )
+
+    assert stub.call_args.kwargs["reference_fasta"] == reference
+
+
 def test_the_pipeline_basename_is_accepted_explicitly(tmp_path: Path) -> None:
     """Asking for the basename the pipeline already uses is a no-op, not an error.
 

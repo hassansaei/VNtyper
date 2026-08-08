@@ -12,6 +12,7 @@ from celery.utils.log import get_task_logger
 from .celery_app import celery_app
 from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
+from .job_failures import read_preflight_failure
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -322,6 +323,9 @@ def run_vntyper_job(
             logger.error(f"Error running VNtyper: {e}")
             # Update usage data on failure
             redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+            preflight_failure = read_preflight_failure(output_dir)
+            if preflight_failure is not None:
+                redis_usage_client.hset(f"usage:{job_id}", mapping=preflight_failure)
             # Send failure email if provided
             if email:
                 subject = "VNtyper Job Failed"

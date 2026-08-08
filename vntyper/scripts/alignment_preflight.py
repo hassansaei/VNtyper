@@ -35,6 +35,7 @@ from vntyper.scripts.command_builders import (
     build_samtools_index_command,
 )
 from vntyper.scripts.idxstats_parsing import choose_scan
+from vntyper.scripts.preflight_error_io import public_reference_error_payload, write_preflight_error
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
 
 logger = logging.getLogger(__name__)
@@ -417,6 +418,8 @@ def resolve_reference(
     output_name: str,
     header_contigs: Iterable[str],
     m5: str | None,
+    *,
+    error_output_dir: str | Path | None = None,
 ) -> tuple[str | None, str, tuple[str, ...]]:
     """Probe explicit CRAM references before one final htslib-resolved candidate.
 
@@ -431,6 +434,7 @@ def resolve_reference(
         output_name: Base name for probe logs.
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
+        error_output_dir: Run output root for the curated failure artifact.
 
     Returns:
         The winning path, source, and uncovered header contigs. An htslib-resolved
@@ -498,6 +502,11 @@ def resolve_reference(
     contigs = tuple(header_contigs)
     target_contig = _target_contig(region, bed_file, contigs)
     message = unresolvable_reference_message(view_path, target_contig, m5, attempts)
+    public_payload = public_reference_error_payload(target_contig, m5, attempts)
+    try:
+        write_preflight_error(error_output_dir if error_output_dir is not None else output_dir, public_payload)
+    except (OSError, ValueError) as error:
+        logger.error(f"Unable to write preflight error artifact safely: {error}")
     _reject(message)
 
 
@@ -543,6 +552,7 @@ def run_preflight(
     header_contigs: Iterable[str] = (),
     m5: str | None = None,
     fast_mode: bool = False,
+    error_output_dir: str | Path | None = None,
 ) -> AlignmentPlan:
     """Resolve and prove every alignment prerequisite used by later stages.
 
@@ -560,6 +570,7 @@ def run_preflight(
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
         fast_mode: Whether downstream BAM processing can use any htslib index.
+        error_output_dir: Run output root for the curated failure artifact.
 
     Returns:
         A frozen plan whose index, scan, and CRAM reference have been exercised.
@@ -603,6 +614,7 @@ def run_preflight(
             output_name,
             contigs,
             m5,
+            error_output_dir=error_output_dir,
         )
     else:
         command = build_cram_reference_probe_command(
