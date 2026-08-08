@@ -419,7 +419,7 @@ def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, email="user@example.com", cohort_key=None))
 
     assert commands[0] == ["samtools", "index", str(bam_path)], "the index is still built before the pipeline runs"
-    assert commands[1][:6] == ["conda", "run", "-n", "vntyper", "vntyper", "pipeline"]
+    assert commands[1][:7] == ["conda", "run", "--no-capture-output", "-n", "vntyper", "vntyper", "pipeline"]
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
     no_email_task.delay.assert_called_once()
     email_kwargs = no_email_task.delay.call_args.kwargs
@@ -716,6 +716,7 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
     assert pipeline_command == [
         "conda",
         "run",
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",

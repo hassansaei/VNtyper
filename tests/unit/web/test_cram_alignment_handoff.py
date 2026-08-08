@@ -159,6 +159,7 @@ def test_every_other_flag_is_unchanged_by_the_extraction() -> None:
     assert command == [
         "conda",
         "run",
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",
@@ -190,6 +191,7 @@ def test_no_optional_flag_is_appended_when_none_was_asked_for() -> None:
     assert command == [
         "conda",
         "run",
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",

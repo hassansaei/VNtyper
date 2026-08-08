@@ -191,6 +191,13 @@ def build_vntyper_command(
     command = [
         "conda",
         "run",
+        # Without this, conda buffers the pipeline's stdout and stderr until it exits, so
+        # a web job that runs for an hour logs nothing until the hour is up and a job that
+        # hangs logs nothing at all (#213). `docker/entrypoint.sh` carries the same flag;
+        # this is the second invocation, and it is the one every *web* job goes through.
+        # It precedes `-n` because `conda run` parses its own options before the
+        # environment selector.
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",
