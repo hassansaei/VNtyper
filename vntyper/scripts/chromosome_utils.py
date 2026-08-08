@@ -134,7 +134,7 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
     return None
 
 
-def detect_naming_convention(contig_names: list[str]) -> str:
+def detect_naming_convention(contig_names: list[str], config: dict | None = None) -> str:
     """
     Detect the chromosome naming convention from a list of contig names.
 
@@ -144,7 +144,10 @@ def detect_naming_convention(contig_names: list[str]) -> str:
     - NCBI accessions: NC_000001.XX, NC_000002.XX, ...
 
     Args:
-        contig_names (List[str]): List of contig names from BAM header
+        contig_names (list[str]): List of contig names from BAM header.
+        config (dict | None): Pipeline configuration. ``assembly_detection`` can
+            set ``naming_convention_threshold`` and
+            ``primary_contig_patterns``. Missing values use the shipped defaults.
 
     Returns:
         str: Convention identifier ("ucsc", "ensembl", "ncbi", "unknown")
@@ -161,40 +164,39 @@ def detect_naming_convention(contig_names: list[str]) -> str:
         logger.warning("Empty contig list provided to detect_naming_convention")
         return "unknown"
 
-    # Count naming patterns
-    ucsc_count = 0
-    ensembl_count = 0
-    ncbi_count = 0
+    assembly_detection = (config or {}).get("assembly_detection", {})
+    threshold = assembly_detection.get("naming_convention_threshold", 0.5)
+    primary_patterns = assembly_detection.get(
+        "primary_contig_patterns",
+        [r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$"],
+    )
+    conventions = ("ucsc", "ncbi", "ensembl")
+    counts = dict.fromkeys(conventions, 0)
 
     for name in contig_names:
-        # UCSC: starts with "chr" followed by number/letter
-        if re.match(r"^chr[0-9XYM]+$", name, re.IGNORECASE):
-            ucsc_count += 1
-        # NCBI: NC_XXXXXX.YY format
-        elif re.match(r"^NC_\d{6}\.\d+$", name):
-            ncbi_count += 1
-        # ENSEMBL simple numeric: just digits or X, Y, MT
-        elif re.match(r"^([0-9]+|X|Y|MT?)$", name, re.IGNORECASE):
-            ensembl_count += 1
+        for convention, pattern in zip(conventions, primary_patterns, strict=False):
+            if re.match(pattern, name, re.IGNORECASE):
+                counts[convention] += 1
+                break
 
-    # Determine convention based on majority
-    total = len(contig_names)
-    threshold = 0.5  # At least 50% of contigs should match the pattern
+    classified_total = sum(counts.values())
+    if classified_total == 0:
+        logger.warning("Could not determine naming convention: no contigs matched a configured primary pattern")
+        return "unknown"
 
-    if ucsc_count / total >= threshold:
-        logger.debug(f"Detected UCSC naming convention ({ucsc_count}/{total} contigs)")
-        return "ucsc"
-    elif ncbi_count / total >= threshold:
-        logger.debug(f"Detected NCBI naming convention ({ncbi_count}/{total} contigs)")
-        return "ncbi"
-    elif ensembl_count / total >= threshold:
-        logger.debug(f"Detected ENSEMBL naming convention ({ensembl_count}/{total} contigs)")
-        return "ensembl"
-    else:
+    winning_count = max(counts.values())
+    winners = [convention for convention, count in counts.items() if count == winning_count]
+    if len(winners) != 1 or winning_count * 2 <= classified_total or winning_count / classified_total < threshold:
         logger.warning(
-            f"Could not determine naming convention. UCSC: {ucsc_count}, ENSEMBL: {ensembl_count}, NCBI: {ncbi_count}"
+            "Could not determine naming convention. "
+            f"UCSC: {counts['ucsc']}, ENSEMBL: {counts['ensembl']}, NCBI: {counts['ncbi']}; "
+            f"classified contigs: {classified_total}"
         )
         return "unknown"
+
+    convention = winners[0]
+    logger.debug(f"Detected {convention.upper()} naming convention ({winning_count}/{classified_total} contigs)")
+    return convention
 
 
 def get_chromosome_name_from_bam(
@@ -246,7 +248,7 @@ def get_chromosome_name_from_bam(
     logger.debug(f"Found {len(contig_names)} contigs in BAM header. First 5: {contig_names[:5]}")
 
     # Detect naming convention
-    convention = detect_naming_convention(contig_names)
+    convention = detect_naming_convention(contig_names, config)
     logger.debug(f"Detected naming convention: {convention}")
 
     # Build expected chromosome name based on convention

@@ -43,15 +43,31 @@ class TestDetectNamingConvention:
         """Test handling of empty contig list."""
         assert detect_naming_convention([]) == "unknown"
 
-    def test_a_bare_majority_of_ucsc_names_wins(self):
-        """3 of 5 clears the 50% threshold, so the convention is decided."""
+    def test_all_classified_ucsc_names_win_despite_unclassified_contigs(self):
+        """Unclassified contigs do not dilute the naming-convention vote."""
         contigs = ["chr1", "chr2", "chr3", "chrUn_KI270302v1", "HLA-A*01:01:01:01"]
         assert detect_naming_convention(contigs) == "ucsc"
 
-    def test_a_minority_of_ucsc_names_decides_nothing(self):
-        """2 of 5 misses the threshold and no other convention reaches it either."""
-        contigs = ["chr1", "chr2", "chrUn_KI270302v1", "HLA-A*01:01:01:01", "phiX174"]
-        assert detect_naming_convention(contigs) == "unknown"
+    def test_the_issues_own_93_contig_header_resolves_to_ucsc(self):
+        primaries = [f"chr{n}" for n in list(range(1, 23)) + ["X", "Y", "M"]]
+        decoys = [f"chr{i}_gl{i:06d}_random" for i in range(68)]
+        contigs = primaries + decoys
+
+        assert len(contigs) == 93
+        assert detect_naming_convention(contigs) == "ucsc"
+
+    def test_a_two_way_fifty_fifty_split_is_unknown_not_whichever_is_checked_first(self):
+        """An exact tie must not silently become the first checked convention."""
+        assert detect_naming_convention(["chr1", "chr2", "1", "2"]) == "unknown"
+
+    def test_a_header_with_no_classifiable_contig_is_unknown_and_does_not_divide_by_zero(self):
+        assert detect_naming_convention(["scaffold_1", "scaffold_2"]) == "unknown"
+
+    def test_the_threshold_comes_from_config_not_from_a_literal(self):
+        contigs = ["chr1", "chr2", "chr3", "1"]
+        assert (
+            detect_naming_convention(contigs, {"assembly_detection": {"naming_convention_threshold": 0.9}}) == "unknown"
+        )
 
     def test_mixed_naming_with_no_majority_is_unknown(self):
         """Three conventions, one contig each: nothing reaches 50%."""
