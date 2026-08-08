@@ -33,7 +33,10 @@ def parse_idxstats(text: str) -> tuple[int, int] | None:
         if not all(field.isascii() and field.isdecimal() for field in fields[1:]):
             return None
 
-        counts = tuple(int(field) for field in fields[1:])
+        try:
+            counts = tuple(int(field) for field in fields[1:])
+        except ValueError:
+            return None
 
         if fields[0] == "*":
             star_rows += 1

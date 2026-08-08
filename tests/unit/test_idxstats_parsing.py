@@ -56,6 +56,11 @@ class TestParse:
         text = "\t".join(fields) + "\n*\t0\t0\t80\n"
         assert parse_idxstats(text) is None
 
+    def test_an_oversized_decimal_count_is_rejected_without_raising(self):
+        oversized_count = "9" * 5000
+        text = f"chr1\t{oversized_count}\t600\t50\n*\t0\t0\t80\n"
+        assert parse_idxstats(text) is None
+
 
 class TestChooseScan:
     def test_auto_picks_indexed_only_when_nothing_would_be_lost(self):
