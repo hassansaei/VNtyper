@@ -10,7 +10,6 @@ from unittest import mock
 import pytest
 
 from vntyper.scripts.preflight_error_io import (
-    public_preflight_error_payload,
     public_reference_error_payload,
     write_preflight_error,
 )
@@ -68,46 +67,6 @@ def test_public_reference_payload_sanitizes_hostile_header_identifiers() -> None
     )
     assert "/private/" not in json.dumps(payload)
     assert "\\private\\" not in json.dumps(payload)
-
-
-@pytest.mark.parametrize(
-    ("internal_message", "code", "public_message"),
-    [
-        (
-            "Alignment view must stay inside output directory: /private/view.bam",
-            "preflight_output_unsafe",
-            "Alignment preflight rejected an unsafe alignment view; choose a safe output directory.",
-        ),
-        (
-            "Log path /private/sample.log aliases protected source /private/patient.bam",
-            "preflight_output_unsafe",
-            "Alignment preflight rejected an unsafe log destination; remove the conflicting entry and retry.",
-        ),
-        (
-            "Generated index /private/sample.bai resolves to the same file as protected source /private/input.bai",
-            "preflight_output_unsafe",
-            "Alignment preflight rejected an unsafe index destination or ownership record; "
-            "remove the conflicting entry and retry.",
-        ),
-        (
-            "cram.local_ref_path must not contain a remote URL when ambient reference resolution is disabled: "
-            "https://private.invalid/ref",
-            "reference_policy_invalid",
-            "CRAM reference policy rejected a remote REF_PATH; configure a local cache or explicitly allow "
-            "ambient resolution.",
-        ),
-    ],
-)
-def test_public_failure_curator_preserves_the_safe_actionable_failure_category(
-    internal_message: str,
-    code: str,
-    public_message: str,
-) -> None:
-    """Unsafe destinations remain actionable without copying their private paths."""
-    payload = public_preflight_error_payload(ValueError(internal_message))
-
-    assert payload == {"code": code, "message": public_message, "candidates": []}
-    assert "/private/" not in json.dumps(payload)
 
 
 def test_writer_atomically_replaces_a_destination_symlink_without_following_it(tmp_path: Path) -> None:

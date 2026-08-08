@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import secrets
 import stat
 from collections.abc import Iterator
@@ -19,7 +18,47 @@ logger = logging.getLogger(__name__)
 
 PREFLIGHT_ERROR_FILENAME = "preflight_error.json"
 _PAYLOAD_KEYS = {"code", "message", "candidates"}
-_PLACED_UNMAPPED = re.compile(r"idxstats reports (\d+) placed-unmapped reads")
+
+
+@dataclass(frozen=True)
+class PreflightFailurePhase:
+    """Stable public failure semantics for one preflight operation."""
+
+    code: str
+    message: str
+
+
+UNCLASSIFIED_FAILURE = PreflightFailurePhase(
+    "alignment_preflight_failed",
+    "Alignment preflight failed before processing; inspect the server logs for the job.",
+)
+REFERENCE_POLICY_FAILURE = PreflightFailurePhase(
+    "reference_policy_invalid",
+    "CRAM reference candidate policy is invalid; configure a list ending in exactly one terminal "
+    "htslib-resolved candidate.",
+)
+OUTPUT_SAFETY_FAILURE = PreflightFailurePhase(
+    "preflight_output_unsafe",
+    "Alignment preflight rejected an unsafe output or log destination; use a dedicated output directory "
+    "and remove conflicting entries.",
+)
+VIEW_INDEX_FAILURE = PreflightFailurePhase(
+    "alignment_index_unusable",
+    "Alignment preflight could not prepare a safe local view and index; remove conflicting view or index entries, "
+    "or create a usable index with samtools index.",
+)
+SCAN_SELECTION_FAILURE = PreflightFailurePhase(
+    "unmapped_scan_invalid",
+    "CRAM unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
+)
+REFERENCE_PROBE_FAILURE = PreflightFailurePhase(
+    "reference_unresolved",
+    "CRAM reference preflight could not prove the requested target; verify the reference FASTA and target contigs.",
+)
+BAM_PROBE_FAILURE = PreflightFailurePhase(
+    "alignment_probe_failed",
+    "BAM preflight could not retrieve the requested target; verify the index and target coordinates.",
+)
 
 
 @dataclass
@@ -27,6 +66,7 @@ class PreflightErrorContext:
     """Mutable diagnostics retained while the preflight advances through stages."""
 
     output_dir: str | Path
+    phase: PreflightFailurePhase = UNCLASSIFIED_FAILURE
     payload: dict | None = None
 
 
@@ -72,80 +112,16 @@ def public_reference_error_payload(
     return preflight_error_payload("reference_unresolved", message, public_attempts)
 
 
-def public_preflight_error_payload(error: Exception) -> dict:
-    """Build a path-free public payload for a non-reference preflight failure.
+def public_preflight_error_payload(phase: PreflightFailurePhase) -> dict:
+    """Build a public payload from stable phase metadata, never exception prose.
 
     Args:
-        error: Original exception retained for CLI diagnostics and server logs.
+        phase: Explicit operation active when preflight failed.
 
     Returns:
         The exact public contract with an empty candidate list.
     """
-    detail = str(error)
-    if "reference candidate" in detail:
-        code = "reference_policy_invalid"
-        if "exactly one terminal" in detail:
-            message = "CRAM reference candidate policy must contain exactly one terminal htslib-resolved candidate."
-        elif "must end with terminal" in detail:
-            message = "CRAM reference candidate policy must end with the terminal htslib-resolved candidate."
-        elif "duplicate explicit" in detail:
-            message = "CRAM reference candidate policy contains a duplicate explicit source."
-        elif "unknown reference candidate source" in detail:
-            message = "CRAM reference candidate policy contains an unknown source."
-        else:
-            message = "CRAM reference candidate policy must be a list."
-    elif "cram.local_ref_path" in detail:
-        code = "reference_policy_invalid"
-        message = (
-            "CRAM reference policy rejected a remote REF_PATH; configure a local cache or explicitly allow "
-            "ambient resolution."
-        )
-    elif "output_name" in detail:
-        code = "preflight_output_unsafe"
-        message = "Alignment preflight rejected an unsafe output name; use a single basename."
-    elif detail.startswith("No usable BAM index"):
-        code = "alignment_index_unusable"
-        message = "No usable BAM index found. Create one with samtools index before retrying."
-    elif detail.startswith("No usable CRAM index"):
-        code = "alignment_index_unusable"
-        message = "No usable CRAM index found. Create one with samtools index before retrying."
-    elif "unknown alignment format" in detail:
-        code = "alignment_format_invalid"
-        message = "Alignment format is not supported by preflight."
-    elif (placed := _PLACED_UNMAPPED.search(detail)) is not None:
-        code = "unmapped_scan_lossy"
-        message = f"Indexed CRAM scanning would omit {placed.group(1)} placed-unmapped reads; use auto or stream mode."
-    elif "invalid unmapped scan mode" in detail:
-        code = "unmapped_scan_invalid"
-        message = "CRAM unmapped-read scan policy is invalid; use auto, indexed, or stream."
-    elif detail.startswith("BAM preflight probe failed"):
-        code = "alignment_probe_failed"
-        message = "BAM preflight could not retrieve the requested target; verify the index and target coordinates."
-    elif detail.startswith("Alignment view"):
-        code = "preflight_output_unsafe"
-        message = "Alignment preflight rejected an unsafe alignment view; choose a safe output directory."
-    elif detail.startswith("Log path") or "command log" in detail:
-        code = "preflight_output_unsafe"
-        message = "Alignment preflight rejected an unsafe log destination; remove the conflicting entry and retry."
-    elif detail.startswith(("Generated index", "Generated-index")) or "stale view index" in detail:
-        code = "preflight_output_unsafe"
-        message = (
-            "Alignment preflight rejected an unsafe index destination or ownership record; "
-            "remove the conflicting entry and retry."
-        )
-    elif detail.startswith("Derived"):
-        code = "preflight_output_unsafe"
-        message = (
-            "Alignment preflight rejected an unsafe alignment view or index destination; "
-            "remove the conflicting entry and retry."
-        )
-    elif "output directory" in detail:
-        code = "preflight_output_unsafe"
-        message = "Alignment preflight rejected the output directory; use a real directory outside the input tree."
-    else:
-        code = "alignment_preflight_failed"
-        message = "Alignment preflight failed before processing; inspect the server logs for the job."
-    return preflight_error_payload(code, message, ())
+    return preflight_error_payload(phase.code, phase.message, ())
 
 
 @contextmanager
@@ -160,8 +136,8 @@ def persist_preflight_failure(context: PreflightErrorContext) -> Iterator[None]:
     """
     try:
         yield
-    except Exception as error:
-        payload = context.payload or public_preflight_error_payload(error)
+    except Exception:
+        payload = context.payload or public_preflight_error_payload(context.phase)
         try:
             write_preflight_error(context.output_dir, payload)
         except Exception as artifact_error:

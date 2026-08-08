@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from vntyper.scripts.alignment_preflight import run_preflight
+from vntyper.scripts.preflight_error_io import PreflightErrorContext, persist_preflight_failure
 
 pytestmark = pytest.mark.unit
 
@@ -32,29 +33,70 @@ def _artifact(run_root: Path) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected_type", "original_fragment", "code", "public_fragment", "candidate_count"),
+    ("failure", "expected_type", "original_fragment", "code", "public_message", "candidate_count"),
     [
-        ("unsafe_output", ValueError, "single basename", "preflight_output_unsafe", "output name", 0),
-        ("missing_index", RuntimeError, "samtools index", "alignment_index_unusable", "BAM index", 0),
+        (
+            "unsafe_output",
+            ValueError,
+            "single basename",
+            "preflight_output_unsafe",
+            "Alignment preflight rejected an unsafe output or log destination; use a dedicated output directory "
+            "and remove conflicting entries.",
+            0,
+        ),
+        (
+            "missing_index",
+            RuntimeError,
+            "samtools index",
+            "alignment_index_unusable",
+            "Alignment preflight could not prepare a safe local view and index; remove conflicting view or index "
+            "entries, or create a usable index with samtools index.",
+            0,
+        ),
         (
             "candidate_policy",
             ValueError,
             "exactly one terminal",
             "reference_policy_invalid",
-            "candidate policy",
+            "CRAM reference candidate policy is invalid; configure a list ending in exactly one terminal "
+            "htslib-resolved candidate.",
             0,
         ),
-        ("scan_policy", ValueError, "invalid unmapped scan mode", "unmapped_scan_invalid", "scan policy", 0),
+        (
+            "scan_policy",
+            ValueError,
+            "invalid unmapped scan mode",
+            "unmapped_scan_invalid",
+            "CRAM unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
+            0,
+        ),
         (
             "forced_indexed",
             ValueError,
             "3 placed-unmapped reads",
-            "unmapped_scan_lossy",
-            "3 placed-unmapped reads",
+            "unmapped_scan_invalid",
+            "CRAM unmapped-read scan selection failed; use auto or stream mode to avoid losing placed-unmapped reads.",
             0,
         ),
-        ("bam_probe", RuntimeError, "private target", "alignment_probe_failed", "requested target", 0),
-        ("reference", ValueError, "contig=chr1", "reference_unresolved", "contig=chr1", 4),
+        (
+            "bam_probe",
+            RuntimeError,
+            "private target",
+            "alignment_probe_failed",
+            "BAM preflight could not retrieve the requested target; verify the index and target coordinates.",
+            0,
+        ),
+        (
+            "reference",
+            ValueError,
+            "contig=chr1",
+            "reference_unresolved",
+            "Unable to resolve reference for CRAM input: contig=chr1, M5=digest. Candidates: source=cli, "
+            "path=no path, reason=not supplied; source=config_cram_reference, path=no path, reason=not supplied; "
+            "source=config_bwa_reference, path=no path, reason=not supplied; source=htslib-resolved "
+            "(header UR: or REF_PATH), path=no path, reason=probe exited non-zero",
+            4,
+        ),
     ],
 )
 def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_reraising(
@@ -63,7 +105,7 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     expected_type: type[Exception],
     original_fragment: str,
     code: str,
-    public_fragment: str,
+    public_message: str,
     candidate_count: int,
 ) -> None:
     """Each preflight stage crosses the same path-free three-field boundary."""
@@ -116,11 +158,136 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     payload = _artifact(run_root)
     assert set(payload) == {"code", "message", "candidates"}
     assert payload["code"] == code
-    assert public_fragment in payload["message"]
+    assert payload["message"] == public_message
     assert len(payload["candidates"]) == candidate_count
     serialized = json.dumps(payload)
     assert "/private/" not in serialized
     assert "\\private\\" not in serialized
+
+
+@pytest.mark.parametrize(
+    "candidate_order",
+    ["cli", ["cli"]],
+)
+def test_reference_policy_type_and_order_share_one_stable_public_failure(
+    tmp_path: Path,
+    candidate_order: str | list[str],
+) -> None:
+    """Policy transport is stable across validation prose and never copies the invalid value."""
+    run_root = tmp_path / "run-output"
+    run_root.mkdir()
+    alignment = _alignment(tmp_path, "cram")
+
+    with pytest.raises(ValueError):
+        run_preflight(
+            str(alignment),
+            str(run_root / "alignment"),
+            "sample",
+            "cram",
+            {"cram": {"reference_candidate_order": candidate_order}},
+            1,
+            region="chr1:1-2",
+            error_output_dir=run_root,
+        )
+
+    assert _artifact(run_root) == {
+        "code": "reference_policy_invalid",
+        "message": "CRAM reference candidate policy is invalid; configure a list ending in exactly one terminal "
+        "htslib-resolved candidate.",
+        "candidates": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        ValueError("Regular reserved index has no generated-index provenance: /private/view.bai"),
+        ValueError("Unable to inspect generated-index provenance /private/view.bai: private failure"),
+        RuntimeError("Unable to allocate a temporary symlink beside /private/view.bai"),
+    ],
+)
+def test_every_view_index_provenance_exception_uses_the_same_stable_phase_payload(
+    tmp_path: Path,
+    original: Exception,
+) -> None:
+    """View/index internals cannot change the public code or leak their destination."""
+    run_root = tmp_path / "run-output"
+    run_root.mkdir()
+    alignment = _alignment(tmp_path, "bam")
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.build_alignment_view", side_effect=original),
+        pytest.raises(type(original)) as raised,
+    ):
+        run_preflight(
+            str(alignment),
+            str(run_root / "alignment"),
+            "sample",
+            "bam",
+            {},
+            1,
+            region="chr1:1-2",
+            error_output_dir=run_root,
+        )
+
+    assert raised.value is original
+    assert _artifact(run_root) == {
+        "code": "alignment_index_unusable",
+        "message": "Alignment preflight could not prepare a safe local view and index; remove conflicting view or "
+        "index entries, or create a usable index with samtools index.",
+        "candidates": [],
+    }
+
+
+def test_an_unexpected_reference_probe_exception_uses_the_reference_phase_payload(tmp_path: Path) -> None:
+    """Reference probe internals cannot fall back to scan semantics or expose their prose."""
+    run_root = tmp_path / "run-output"
+    run_root.mkdir()
+    alignment = _alignment(tmp_path, "cram")
+    original = RuntimeError("unexpected reference probe /private/worker failure")
+
+    with (
+        patch(
+            "vntyper.scripts.alignment_preflight.capture_command",
+            return_value=(True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"),
+        ),
+        patch("vntyper.scripts.alignment_preflight.resolve_reference", side_effect=original),
+        pytest.raises(RuntimeError) as raised,
+    ):
+        run_preflight(
+            str(alignment),
+            str(run_root / "alignment"),
+            "sample",
+            "cram",
+            {},
+            1,
+            region="chr1:1-2",
+            error_output_dir=run_root,
+        )
+
+    assert raised.value is original
+    assert _artifact(run_root) == {
+        "code": "reference_unresolved",
+        "message": "CRAM reference preflight could not prove the requested target; verify the reference FASTA and "
+        "target contigs.",
+        "candidates": [],
+    }
+
+
+def test_an_unclassified_boundary_exception_uses_only_the_generic_public_failure(tmp_path: Path) -> None:
+    """Unexpected internals retain their identity while exposing no exception prose."""
+    original = RuntimeError("unexpected /private/worker detail")
+    context = PreflightErrorContext(tmp_path)
+
+    with pytest.raises(RuntimeError) as raised, persist_preflight_failure(context):
+        raise original
+
+    assert raised.value is original
+    assert _artifact(tmp_path) == {
+        "code": "alignment_preflight_failed",
+        "message": "Alignment preflight failed before processing; inspect the server logs for the job.",
+        "candidates": [],
+    }
 
 
 def test_artifact_write_failure_does_not_mask_the_original_preflight_exception(tmp_path: Path) -> None:

@@ -579,19 +579,15 @@ def run_preflight(
     failure_context = error_io.PreflightErrorContext(error_output_dir if error_output_dir is not None else output_dir)
     with error_io.persist_preflight_failure(failure_context):
         bai_only = file_format == FORMAT_BAM and not fast_mode
+        failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
         candidates = (
             ordered_reference_candidates(config, reference_assembly, reference_fasta)
             if file_format == FORMAT_CRAM
             else ()
         )
-        _validate_preflight_logs(
-            in_path,
-            output_dir,
-            output_name,
-            file_format,
-            candidates,
-            bai_only=bai_only,
-        )
+        failure_context.phase = error_io.OUTPUT_SAFETY_FAILURE
+        _validate_preflight_logs(in_path, output_dir, output_name, file_format, candidates, bai_only=bai_only)
+        failure_context.phase = error_io.VIEW_INDEX_FAILURE
         view_path, index_path = build_alignment_view(
             in_path,
             output_dir,
@@ -602,7 +598,9 @@ def run_preflight(
             bai_only=bai_only,
         )
         if file_format == FORMAT_CRAM:
+            failure_context.phase = error_io.SCAN_SELECTION_FAILURE
             unmapped_scan = choose_unmapped_scan(view_path, config, threads, output_dir, output_name)
+            failure_context.phase = error_io.REFERENCE_PROBE_FAILURE
             reference_path, reference_source, uncovered_contigs = resolve_reference(
                 view_path,
                 candidates,
@@ -617,6 +615,7 @@ def run_preflight(
                 failure_context=failure_context,
             )
         else:
+            failure_context.phase = error_io.BAM_PROBE_FAILURE
             command = build_cram_reference_probe_command(
                 samtools_path=config.get("tools", {}).get("samtools", "samtools"),
                 in_bam=view_path,
@@ -632,10 +631,7 @@ def run_preflight(
                 message = f"BAM preflight probe failed: {reason}"
                 logger.error(message)
                 raise RuntimeError(message)
-            unmapped_scan = "indexed"
-            reference_path = None
-            reference_source = "not-required"
-            uncovered_contigs = ()
+            unmapped_scan, reference_path, reference_source, uncovered_contigs = "indexed", None, "not-required", ()
 
         return AlignmentPlan(
             input_path=in_path,
