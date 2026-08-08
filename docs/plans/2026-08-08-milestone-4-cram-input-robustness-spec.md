@@ -24,10 +24,29 @@ points differ and the difference is not something this milestone can paper over:
   *Job submitted* before any worker looks at the file (`main.py:463`, `:494`, `:547`), so
   no check VNtyper adds inside `run_pipeline` can make the HTTP response name the problem.
   The honest scope is therefore: the preflight runs first in the worker, and the
-  **message it raises is surfaced verbatim in the job status** instead of the generic text
-  `main.py:605` substitutes today. Preflighting inside the HTTP request would need the API
-  to run samtools synchronously, which is a change to the service's contract and is out of
-  scope (§9).
+  **message it raises is surfaced in the job status** instead of the generic text
+  `main.py:605` substitutes today.
+
+  "Surfaced" needs a mechanism, because there is currently no path for one.
+  `run_pipeline` converts every exception into `SystemExit(1)` (`pipeline.py:721`), the
+  worker runs the CLI with `subprocess.run` and does not capture stderr (`tasks.py:317`),
+  and the status endpoint substitutes generic text **deliberately** — it is
+  unauthenticated, and raw exception text would leak absolute paths and full samtools
+  command lines. So the transport is neither "print the exception" nor "return it to the
+  client":
+
+  1. The preflight writes `preflight_error.json` into the run's output directory before
+     raising — `{"code": ..., "message": ..., "candidates": [...]}` — built from the same
+     `alignment_contract` helpers that compose the CLI message, and containing only values
+     VNtyper itself composed.
+  2. The worker reads that file when the pipeline exits non-zero and stores `code` and
+     `message` on the job's Redis hash.
+  3. The status endpoint returns that stored message when present, and its existing
+     generic text otherwise. It is a curated string rather than an exception, so the
+     endpoint's no-leak property is preserved rather than traded away.
+
+  A-WEB-1 tests exactly this, including that no absolute path from the worker's filesystem
+  appears in the response. Preflighting inside the HTTP request remains out of scope (§9).
 
 ## 2. The one root cause
 
@@ -107,7 +126,7 @@ before that line rather than at the reference fetch.
 What can be claimed: #213 is why the report contains no stage log to distinguish these,
 this milestone removes the reference-fetch hang and the whole-file scan as *possible*
 causes, and once #213 lands the next report of this shape arrives with the evidence needed
-to close it. A-178-3 asks the reporter for `docker logs` on a post-#213 image.
+to close it. A-178-4 asks the reporter for `docker logs` from a post-#213 image.
 
 The control confirms this is specific to a *network* REF_PATH, not to a missing reference:
 
@@ -323,6 +342,36 @@ Three things this settles:
 3. **An existing index is symlinked rather than rebuilt**, so the common case costs two
    symlinks and no samtools invocation at all.
 
+
+### 3.13 The `idxstats` premise, tested against a CRAM that would lose reads
+
+§3.11 assumed `idxstats` column 4 detects placed unmapped reads. Assumption tested on a
+purpose-built fixture containing 25 flag-12 **pairs placed on chr1** (RNAME and POS set,
+both mates unmapped) alongside 40 genuinely unplaced pairs:
+
+```
+samtools view -c -f 12 placed.bam        -> 130     # ground truth
+samtools view -c -f 12 placed.bam '*'    ->  80     # what the indexed scan would recover
+samtools idxstats placed.bam             -> chr1 20000 600 50   /   * 0 0 80
+samtools idxstats placed.cram            -> chr1 20000 600 50   /   * 0 0 80
+```
+
+**The indexed scan would have silently dropped 50 of 130 reads on this file, and column 4
+reports exactly those 50 — identically for BAM and CRAM.** So `sum(col4) > 0` is a correct
+trigger, and `sum(col4) == 0` is a correct proof that `'*'` is complete.
+
+Two further properties, both measured:
+
+* **`idxstats` needs no reference.** With `REF_PATH` pointed at a nonexistent path and no
+  `-T`, it returned the correct table for the CRAM and exited 0. The scan decision can
+  therefore be taken **before** reference resolution and cannot itself hang.
+* **It is cheap, but the spec does not claim it is O(index).** CRAI carries no per-contig
+  counts, so samtools derives them from container headers rather than from the index
+  alone. On the fixtures here it was not measurably distinguishable from zero; on a WGS
+  CRAM it reads container headers, not slices. That is far cheaper than the whole-file
+  decode it replaces, which is the only comparison that matters, and it is stated this way
+  rather than as a complexity claim that was not measured.
+
 ## 4. Design
 
 ### 4.1 The seam
@@ -332,7 +381,7 @@ resolved or any stage runs. It resolves and **proves** everything the run will n
 returns a frozen `AlignmentPlan`. `process_bam_to_fastq` consumes the plan instead of
 rediscovering its contents.
 
-`fastq_bam_processing.py` is 612 LOC against a ~650 guideline, and AGENTS.md rule 3 says
+`fastq_bam_processing.py` is 649 LOC against a ~650 guideline, and AGENTS.md rule 3 says
 to extract the region under change rather than grow the file. So the decisions go into
 new **pure** modules and only the subprocess calls stay behind I/O:
 
@@ -341,7 +390,7 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | `alignment_contract.py` | pure | what each format requires; the `AlignmentPlan` dataclass; the text of every failure message |
 | `reference_resolution.py` | pure | the ordered candidate list and which candidate wins given probe outcomes |
 | `read_layout.py` | pure | the `paired`/`single`/`mixed`/`empty` verdict from counts, and which FASTQ paths feed downstream |
-| `alignment_preflight.py` | I/O | runs samtools: resolve or build the index, probe-decode each candidate, count the layout |
+| `alignment_preflight.py` | I/O | runs samtools: build the alignment view, resolve or build the index, choose the scan from `idxstats`, probe-decode each reference candidate. **It does not compute the read layout** — §4.4 explains why that cannot be known before conversion. |
 
 The three pure modules are unit-testable with no filesystem and are held to the ~100%
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
@@ -393,8 +442,11 @@ It cannot be a `-c` count: §3.10 measured that **`-P` and `-c` cannot be combin
 probe's exit status is the proof, and it discards its output:
 
 ```
-samtools view -P <ref> <view.cram> <region|-L bed> -o /dev/null
+samtools view -P -T <candidate.fa> <view.cram> <region|-L bed> -o /dev/null
 ```
+
+(The `-T` is not optional in that line: without it the reference path is read as a second
+input alignment.)
 
 When the run has a BED file — `--bed`, `--custom-regions`, or the predefined regions
 `pipeline.py` writes — the probe uses that BED, not a region string. A BED naming contigs
@@ -419,11 +471,22 @@ disagrees with the shipped FASTA, is not reasoned about — it is probed, and it
 decodes or produces a named submission-time error. No ucsc/ensembl/ncbi inference and no
 `M5` table are needed anywhere in this path.
 
-**Candidate 0 is "no reference at all".** It is probed first, because a reference-free
-(`no_ref=1`) CRAM — which is what #199's fixtures are — decodes with no `-T` and must not
-be handed one. If that probe succeeds the plan records `reference_path=None` and every
-CRAM command keeps the empty fragment it has today, so the existing fixtures are
-bit-for-bit unaffected. Only if it fails are candidates 1–4 tried.
+**"No reference" and "header `UR:`" are the same probe, and are therefore one candidate,
+tried last.** htslib consults the header's `UR:` automatically whenever it needs a
+reference and no `-T` was given, so a probe with no `-T` cannot distinguish "this CRAM is
+reference-free" from "htslib resolved the reference itself, via `UR:` or via the pinned
+local `REF_PATH`". An earlier draft listed them as separate candidates and probed the
+no-reference one *first*, which had two defects: `UR:` could win over an explicitly
+supplied `--reference-fasta`, and a success was recorded as `reference_path=None` —
+"reference-free" — when an external file had in fact done the decoding.
+
+So the order is: **explicit candidates first** (`--reference-fasta`, config
+`cram_reference_<assembly>`, config `bwa_reference_<assembly>`), then a final candidate
+`no -T`, whose source is recorded as `htslib-resolved (header UR: or REF_PATH)` rather
+than as `None`. A `no_ref=1` CRAM reaches that candidate and succeeds there, and because
+the winning fragment is empty its commands are byte-identical to today's, so #199's
+fixtures are unaffected. Passing `-T` to a reference-free CRAM is harmless, so nothing is
+lost by trying the explicit candidates first.
 
 **The `UR:` caveat is load-bearing for anyone testing this.** §3.10: a `UR:` target that
 still exists on disk silently rescues a candidate that would otherwise fail, because
@@ -457,10 +520,15 @@ if placed_unmapped == 0:  indexed scan   # provably recovers every flag-12 read
 else:                     stream scan    # the O(file) form, because it is the correct one
 ```
 
-Config-driven: `cram.unmapped_scan` is `auto` (default), `indexed` or `stream`. `auto` is
-the rule above. The two explicit values exist for reproducing a historical run and for
-the golden-cohort equivalence check; `indexed` logs a warning when it is forced on a file
-whose `idxstats` says it will lose reads.
+Config-driven: `cram.unmapped_scan` is `auto` (default), `indexed` or `stream`.
+
+**The explicit values cannot be used to discard reads.** `indexed` forced on a file whose
+`idxstats` says reads would be lost **raises**, naming the count; it does not warn and
+continue. An earlier draft allowed it to proceed "for reproducing a historical run", which
+would have let a configuration flag defeat the exit bar this spec opens with — a run that
+exits 0 having dropped 50 of 130 unmapped reads (§3.13) is precisely the outcome the
+milestone exists to make impossible. Reproducing a historical run is what `stream` is for;
+it is always safe, only slower.
 
 This is the difference between removing a failure mode and hiding it: the fast path is
 taken only where it is proven equivalent, and the proof costs one index read.
@@ -491,6 +559,45 @@ correction matters twice over:
 they do not belong to without saying where they went, which contradicts the invariant this
 section exists to state. The rule is exact: a non-empty FASTQ that nothing consumes fails
 the run, naming the file and its read count.
+
+
+### 4.5 Operational contracts the mechanisms need
+
+Three of the new mechanisms read output, create files, or mutate process state. Each needs
+a stated contract, because the default behaviour of the code around them is permissive.
+
+**Parsing `idxstats` fails closed.** `run_command` returns a boolean and streams stdout
+into a log file (`utils.py:18`), so the scan decision needs its own capture seam rather
+than reusing it. The contract: exit status 0; every line exactly four tab-separated
+fields; counts parse as non-negative integers; exactly one terminal `*` row. **Anything
+else selects the stream scan**, logged with the offending line. An unparsable table must
+never be read as "column 4 summed to zero", which is the reading that loses reads.
+
+**The alignment view is created exclusively, and never reused blindly.**
+`create_output_directories` reuses an existing output directory silently (`utils.py:128`),
+and `--keep-intermediates` makes reruns normal, so a view from a previous run can already
+be present. The contract: create the symlink with `os.symlink` and catch `FileExistsError`;
+on collision, read the existing link's target with `os.readlink` and accept it **only if
+it resolves to the same file as this run's input** (`os.path.samefile`); otherwise replace
+it. A stale view pointing at a different alignment would silently genotype the wrong
+sample, which is the worst failure this repository can have.
+
+**`REF_PATH` is saved and restored.** Pinning mutates `os.environ`, which is
+process-global and outlives a single `run_pipeline` call — and `run_pipeline` is imported
+and called in-process by tests and by anything embedding VNtyper as a library. The
+contract: capture the previous value (including "unset"), set the pinned one, and restore
+it in a `finally`. Without that, one CRAM run silently reconfigures every later run in the
+same process.
+
+**Which index the run needs depends on the mode, and only one mode is fussy.** The
+non-fast BAM path feeds `extract_unmapped_from_offset`, which parses the BAI container
+itself and rejects anything whose first four bytes are not `BAI\x01` — so that mode needs
+a BAI specifically, and `resolve_bam_index` stays BAI-only for it. Every other mode
+(fast-mode BAM, and CRAM in both modes) hands the index to samtools, which accepts CSI and
+CRAI too. The preflight therefore asks for "an index htslib accepts" in those modes and
+symlinks whichever of `<file>.bai`, `<stem>.bai`, `<file>.csi`, `<stem>.csi`,
+`<file>.crai`, `<stem>.crai` exists, under the same suffix beside the view. Only the
+non-fast BAM path forces a BAI rebuild when only a CSI is present.
 
 ## 5. Per-issue changes
 
@@ -586,6 +693,13 @@ the run, naming the file and its read count.
 * **Change:** score against contigs that match *some* convention — non-matching contigs
   leave the denominator instead of poisoning it — with the primary-contig set and the
   threshold read from config.
+* **The tie has to be fixed at the same time.** The existing code tests `>= 0.5` and
+  returns the first convention that passes, so a header split exactly 50/50 between two
+  conventions returns whichever is checked first (`ucsc`). Narrowing the denominator makes
+  that reachable far more often, since the classified-only denominator is small. So a
+  convention wins only if it is a **strict majority of classified contigs and no other
+  convention ties it**; otherwise `unknown`. The test for this is a two-way 50/50 header —
+  a three-way one-third split does not exercise it.
 * **Failure mode made impossible:** a header whose primary contigs unanimously agree
   returning `unknown`.
 * **Test:** the issue's exact 93-contig shape as a unit test; a genuinely ambiguous
@@ -600,7 +714,12 @@ the run, naming the file and its read count.
 * **Change:** single-end becomes a supported layout. Preflight determines it from flag
   counts; `read_layout` decides which FASTQs feed downstream; `process_fastq`,
   `align_and_sort_fastq` and `construct_kestrel_command` accept a single FASTQ.
-  `mixed` (both paired and unpaired reads present) is reported, not coerced.
+  `mixed` — R1/R2 **and** `other`/`single` all non-empty — is **rejected**, naming every
+  file and its record count. It is not coerced and not silently half-processed: VNtyper
+  has one k-mer genotyping path and no defined semantics for genotyping two read sets as
+  one sample, so inventing one here would be a guess dressed as support. The `paired`
+  verdict additionally requires R1 and R2 to hold **equal record counts**; unequal counts
+  are `mixed`, because that is a truncated conversion rather than a layout.
   `cli_handlers.py:227` also rejects `--fastq1` without `--fastq2`, so single-end **FASTQ**
   input is refused at argument parsing. That is the same gap seen from the other side, and
   the issue asks about both, so it is fixed here too rather than left as a second report.
@@ -627,14 +746,17 @@ rules and four measured wins.
 1. **The preflight costs nothing on the BAM path.** Index resolution is two
    `Path.exists()` calls — no subprocess. The reference probe is **skipped entirely for
    BAM**, which needs no reference. That leaves at most one extra indexed region read.
-2. **Read layout is decided from the slice VNtyper already produces**, not from a second
-   pass over the input. The slice is a ~5 kb region that exists on disk by the time the
-   layout matters, so counting flags in it is free. Missing *inputs* (index, reference)
-   are still decided at submission — those are the exit bar. Layout is a property of the
-   data, and deciding it from the slice still precedes bwa, fastp, Kestrel and adVNTR by
-   a wide margin.
-3. **The CRAM probe is a count, not a copy.** `samtools view -c -T <candidate> <cram>
-   <probe_region>` decodes one region and writes nothing. Milliseconds, once, CRAM only.
+2. **Read layout is decided from the FASTQs the conversion already wrote**, by reading
+   their sizes and, only for a non-empty one, its record count. It is not a second pass
+   over the input and not a pass over the slice — §4.4 explains why the slice is the wrong
+   source. Missing *inputs* (index, reference) are still decided before any stage runs;
+   those are the exit bar. Layout is a property of the output, and deciding it there still
+   precedes bwa, fastp, Kestrel and adVNTR by a wide margin.
+3. **The CRAM probe decodes one region and discards it.** It cannot be a `-c` count:
+   §3.10 measured that `-P` and `-c` cannot be combined, and the probe must carry `-P`
+   because the slice does. So it is
+   `samtools view -P -T <candidate> <view> <region|-L bed> -o /dev/null`, whose exit
+   status is the whole result. Milliseconds, once, CRAM only.
 
 ### Measured defects to fix in passing
 
@@ -692,11 +814,10 @@ Every behaviour above is reachable from configuration. New keys:
     "none", "cli", "config_cram_reference", "config_bwa_reference", "header_ur"
   ]
 },
-"read_layout": {
-  // A non-empty FASTQ that nothing consumes fails the run. Set false only to reproduce
-  // pre-milestone-4 behaviour, which discarded them silently (#161).
-  "fail_on_unconsumed_reads": true
-},
+// No `read_layout` block. An earlier draft had `fail_on_unconsumed_reads`, defaulting
+// true, "to reproduce pre-milestone-4 behaviour". There is no such key: a switch whose
+// false value silently discards reads contradicts the exit bar, and "config-driven" means
+// the *policy* is configurable, not that the guarantee is optional.
 "reference_data": {
   "cram_reference_hg19": null,
   "cram_reference_hg38": null
@@ -716,9 +837,7 @@ whole config rather than merging it (trap 2), every read of these keys uses `.ge
 the value above as its default, and a config that omits them behaves exactly like one that
 sets them to the shipped values.
 
-`--config-path` replaces the whole config rather than merging (trap 2), so every read of
-these keys uses `.get` with the shipped default and no `KeyError` can abort a run over a
-threshold.
+
 
 ## 7. Acceptance criteria
 
@@ -739,6 +858,13 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-209-6 | A reference path containing a space or a shell metacharacter is quoted, not executed. | unit |
 | A-178-1 | With `REF_PATH` pointed at an endpoint that accepts TCP and never responds, a CRAM run **exits within 120 s**. The test asserts on elapsed time; without a deadline the criterion cannot fail. | integration |
 | A-178-2 | For every golden-cohort CRAM sample, the indexed and stream scans produce the **same read set** (`samtools view -c` on the unmapped BAM, and a sorted read-name digest), not merely the same genotype. Equal genotypes cannot prove equal reads. | golden cohort |
+| A-178-4 | The #178 reporter, on a post-#213 image, supplies `docker logs`; the stage the run reaches is recorded here. This is an evidence request, not a code change, and it does not gate the PR. | issue thread |
+| A-SCAN-1 | On a CRAM containing placed flag-12 reads, `auto` selects `stream` and the run recovers all of them; forcing `indexed` **raises** naming the count rather than dropping them. | unit + fixture |
+| A-SCAN-2 | A malformed, empty or non-zero-exit `idxstats` selects `stream`, never `indexed`. | unit |
+| A-VIEW-1 | A view symlink left by a previous run pointing at a *different* alignment is replaced, not reused. | unit |
+| A-VIEW-2 | `REF_PATH` holds its original value (including unset) after `run_pipeline` returns and after it raises. | unit |
+| A-165-2 | A header split exactly 50/50 between two conventions returns `unknown`, not the first one checked. | unit |
+| A-161-4 | R1 and R2 with unequal record counts are reported as `mixed` and the run fails, rather than being genotyped as a pair. | unit |
 | A-178-3 | `auto` selects `stream` on a CRAM constructed to contain a placed flag-12 read, and `indexed` on one without. | unit + purpose-built fixture |
 | A-165-1 | The issue's 93-contig header returns `ucsc`; a genuinely ambiguous header still returns `unknown`; a header with no classifiable contig returns `unknown` and does not divide by zero. | unit |
 | A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. | integration, derived fixture |
@@ -794,6 +920,42 @@ PR.**
 | Round | Target | HIGH | MED | LOW | Outcome |
 | --- | --- | --- | --- | --- | --- |
 | 1 | spec | 14 | 12 | 2 | 12 accepted and fixed, 2 rebutted with evidence |
+| 2 | spec + plan | 11 | 7 | 4 | 10 accepted and fixed, 1 rebutted by measurement |
+
+### Round 2 — what changed as a result
+
+Round 2's dominant finding was procedural and correct: **the spec had been revised and the
+plan had not**, so the plan still contained the invalid `view -c -P` probe, `mixed_tolerance`,
+`indexed` as an unconditional default, and layout counted in the preflight. Several
+findings recorded as "only appears resolved" were that same staleness seen from different
+angles. The plan is regenerated from this spec rather than patched.
+
+Substantive changes: the web error transport now has a mechanism instead of a promise
+(`preflight_error.json` -> Redis -> status endpoint, §1), because `run_pipeline` flattens
+every exception to `SystemExit(1)` and the status endpoint's genericity is a deliberate
+no-leak property rather than an oversight. Both "historical reproduction" escape hatches
+are removed: a forced `indexed` scan now raises rather than dropping reads, and
+`fail_on_unconsumed_reads` does not exist (§4.3(b), §6). "No reference" and "header `UR:`"
+are one candidate tried last rather than two with the no-reference one first, which had let
+`UR:` outrank an explicit `--reference-fasta` and had recorded an externally-decoded CRAM
+as reference-free (§4.2). New §4.5 states the contracts the new mechanisms need: `idxstats`
+parsing fails closed, the view symlink is created exclusively and validated against
+`os.path.samefile` on collision, `REF_PATH` is restored in a `finally`, and which index a
+run needs is decided per mode so a CSI-only BAM is not rebuilt in fast mode. #165 gains a
+tie rule; #161 defines `mixed` as rejected and adds R1/R2 count parity. `AGENTS.md`'s docs
+rule is actually corrected this time — round 2 was right that the previous entry claimed an
+edit that had not been made.
+
+### Round 2 — rebutted
+
+* **"`auto` relies on a false index-only premise."** Tested rather than argued (§3.13). On
+  a CRAM built to contain 25 placed flag-12 pairs, ground truth is 130 flag-12 reads and
+  `'*'` recovers 80 — so the indexed scan would indeed have lost 50, exactly as the finding
+  feared. `samtools idxstats` reports those 50 in column 4, identically for BAM and CRAM,
+  and needs no reference to do it. The premise holds and the trigger fires. The finding's
+  *secondary* point is accepted: CRAI stores no counts, so this is not O(index) for CRAM,
+  and the spec no longer claims it is — it claims only that reading container headers is
+  far cheaper than the whole-file decode it replaces, which is the comparison that matters.
 
 ### Round 1 — what changed as a result
 
