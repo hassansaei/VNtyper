@@ -39,6 +39,7 @@ from tests.parametrization import (
 )
 from tests.support.orchestration import (
     ADVNTR_TIMEOUT_SECONDS,
+    mixed_layout_diagnostic,
     run_advntr_test_case,
     run_bam_test_case,
     run_fastq_test_case,
@@ -64,8 +65,8 @@ def _fresh_output_dir(tmp_path: Path, test_name: str) -> Path:
     return output_dir
 
 
-def _run_cli(command: list[str]) -> int:
-    """Run the ``vntyper`` CLI and return its exit code.
+def _run_cli(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run the ``vntyper`` CLI and return its complete captured result.
 
     stdout and stderr are logged rather than swallowed: the pipeline writes its whole
     stage log to stderr, and it is the only diagnosis available when a case fails.
@@ -74,7 +75,7 @@ def _run_cli(command: list[str]) -> int:
         command: The full argv to execute.
 
     Returns:
-        int: The process exit code.
+        Captured process result, including the diagnostic stderr contract.
     """
     logger.info("Command to execute: %s", " ".join(command))
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -86,7 +87,7 @@ def _run_cli(command: list[str]) -> int:
     else:
         logger.debug("STDERR:\n%s", result.stderr)
 
-    return result.returncode
+    return result
 
 
 #
@@ -134,7 +135,7 @@ def test_fastq_input(tmp_path: Path, ensure_test_data: None, fastq_case: dict) -
         )
         if extra_modules:
             command.extend(["--extra-modules", ",".join(extra_modules)])
-        return _run_cli(command)
+        return _run_cli(command).returncode
 
     run_fastq_test_case(fastq_case, local_runner, output_dir)
 
@@ -178,7 +179,13 @@ def test_bam_input_with_kestrel_checks(tmp_path: Path, ensure_test_data: None, b
             str(out_dir),
             *cli_options,
         ]
-        return _run_cli(command)
+        result = _run_cli(command)
+        if "expected_mixed_fastq_records" in bam_case:
+            expected = mixed_layout_diagnostic(bam_case, out_dir)
+            assert expected in result.stderr, (
+                f"Missing exact mixed-layout diagnostic:\n{expected}\nSTDERR:\n{result.stderr}"
+            )
+        return result.returncode
 
     run_bam_test_case(bam_case, local_runner, output_dir)
 
@@ -238,6 +245,12 @@ def test_advntr_input(tmp_path: Path, ensure_test_data: None, advntr_case: dict)
             command.extend(["--extra-modules", ",".join(extra_modules)])
 
         command.extend(extra_cli_options)
-        return _run_cli(command)
+        result = _run_cli(command)
+        if "expected_mixed_fastq_records" in advntr_case:
+            expected = mixed_layout_diagnostic(advntr_case, out_dir)
+            assert expected in result.stderr, (
+                f"Missing exact mixed-layout diagnostic:\n{expected}\nSTDERR:\n{result.stderr}"
+            )
+        return result.returncode
 
     run_advntr_test_case(advntr_case, local_runner, output_dir)

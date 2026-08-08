@@ -32,6 +32,39 @@ from tests.helpers import (
 # literal, so recalibrating for new CI hardware is a one-line change here.
 ADVNTR_TIMEOUT_SECONDS = 2700
 
+_FASTQ_OUTPUTS = (
+    ("r1", "output_R1.fastq.gz"),
+    ("r2", "output_R2.fastq.gz"),
+    ("other", "output_other.fastq.gz"),
+    ("single", "output_single.fastq.gz"),
+)
+
+
+def mixed_layout_diagnostic(test_case: dict, output_dir: Path) -> str:
+    """Render the exact fail-closed diagnostic declared for one mixed fixture.
+
+    Args:
+        test_case: Integration case carrying ``expected_mixed_fastq_records``.
+        output_dir: Per-case pipeline output directory.
+
+    Returns:
+        The complete diagnostic emitted by ``route_converted_fastqs``.
+
+    Raises:
+        KeyError: If the case omits a required FASTQ record count.
+    """
+    counts = test_case["expected_mixed_fastq_records"]
+    fastq_dir = output_dir / "fastq_bam_processing"
+    details = ", ".join(f"{fastq_dir / filename}: {counts[key]} records" for key, filename in _FASTQ_OUTPUTS)
+    return f"FASTQ layout 'mixed' cannot be consumed without dropping reads. Produced FASTQs: {details}"
+
+
+def _assert_expected_exit(test_case: dict, exit_code: int, *, label: str) -> bool:
+    """Assert the configured application exit and report whether success artefacts apply."""
+    expected_exit = test_case.get("expected_exit_code", 0)
+    assert exit_code == expected_exit, f"{label} pipeline exit: expected {expected_exit}, got {exit_code}"
+    return expected_exit == 0
+
 
 def run_bam_test_case(
     test_case: dict,
@@ -73,8 +106,9 @@ def run_bam_test_case(
     # 2. Run pipeline via runner (ONLY difference between local and Docker)
     exit_code = runner(bam_file, reference, output_dir)
 
-    # 3. Assert success
-    assert exit_code == 0, f"Pipeline failed with exit code {exit_code}"
+    # 3. Assert the declared outcome. Fail-closed cases stop before success artefacts.
+    if not _assert_expected_exit(test_case, exit_code, label="BAM"):
+        return
 
     # 4. Validate required files exist
     required_files = [
@@ -144,8 +178,9 @@ def run_advntr_test_case(
     # 2. Run pipeline via runner
     exit_code = runner(bam_file, reference, output_dir, extra_modules, extra_cli_options)
 
-    # 3. Assert success
-    assert exit_code == 0, f"adVNTR pipeline failed with exit code {exit_code}"
+    # 3. Assert the declared outcome. Fail-closed cases stop before success artefacts.
+    if not _assert_expected_exit(test_case, exit_code, label="adVNTR"):
+        return
 
     # 4. Validate required files
     required_files = [
