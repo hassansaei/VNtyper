@@ -5,8 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+import secrets
 import subprocess
+import tempfile
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 
 from vntyper.scripts.alignment_contract import (
@@ -25,7 +28,6 @@ from vntyper.scripts.command_builders import (
     build_samtools_index_command,
 )
 from vntyper.scripts.idxstats_parsing import choose_scan
-from vntyper.scripts.utils import run_command
 
 logger = logging.getLogger(__name__)
 
@@ -36,60 +38,186 @@ _EXPLICIT_REFERENCE_SOURCES = {"cli", "config_cram_reference", "config_bwa_refer
 _REMOTE_REFERENCE_URL = re.compile(r"(?:^|:)(?!file://)[A-Za-z][A-Za-z0-9+.-]*://", re.IGNORECASE)
 
 
-def capture_command(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
+def _same_file(left: str | Path, right: str | Path) -> bool:
+    """Return whether two existing paths identify one inode."""
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _protected_collision(path: Path, protected_paths: Iterable[str | Path]) -> str | None:
+    """Return the protected path aliased by ``path``, if any."""
+    path_absolute = os.path.abspath(path)
+    for protected in protected_paths:
+        protected_absolute = os.path.abspath(protected)
+        if path_absolute == protected_absolute:
+            return protected_absolute
+        if os.path.lexists(path) and _same_file(path, protected):
+            return protected_absolute
+    return None
+
+
+def _validate_symlink_entry(path: Path, protected_paths: Iterable[str | Path]) -> None:
+    """Reject an unsafe collision at a path reserved for an owned symlink."""
+    path_absolute = os.path.abspath(path)
+    for protected_path in protected_paths:
+        protected_absolute = os.path.abspath(protected_path)
+        if path_absolute == protected_absolute:
+            message = (
+                f"Derived output {path} resolves to the same path or same file as protected source {protected_absolute}"
+            )
+            logger.error(message)
+            raise ValueError(message)
+    protected = _protected_collision(path, protected_paths)
+    if protected is not None and not path.is_symlink():
+        message = f"Derived output {path} resolves to the same path or same file as protected source {protected}"
+        logger.error(message)
+        raise ValueError(message)
+    if os.path.lexists(path) and not path.is_symlink():
+        message = f"Derived symlink path has a wrong type and will not be replaced: {path}"
+        logger.error(message)
+        raise ValueError(message)
+
+
+def _validate_log_entry(path: Path, protected_paths: Iterable[str | Path]) -> None:
+    """Reject a log path that aliases protected data or is a directory."""
+    protected = _protected_collision(path, protected_paths)
+    if protected is not None:
+        message = f"Log path {path} aliases protected source {protected}"
+        logger.error(message)
+        raise ValueError(message)
+    if os.path.lexists(path) and path.is_dir() and not path.is_symlink():
+        message = f"Log path has a wrong type and will not be replaced: {path}"
+        logger.error(message)
+        raise ValueError(message)
+
+
+def _atomic_symlink(target: str | Path, link_path: str | Path) -> None:
+    """Install a symlink with an atomic final-directory-entry replacement."""
+    target_absolute = os.path.abspath(target)
+    destination = Path(link_path)
+    if destination.is_symlink():
+        try:
+            existing_target = os.readlink(destination)
+            if not os.path.isabs(existing_target):
+                existing_target = os.path.join(destination.parent, existing_target)
+            if _same_file(existing_target, target_absolute):
+                return
+        except OSError:
+            pass
+
+    for _ in range(100):
+        temporary = destination.parent / f".{destination.name}.{secrets.token_hex(8)}.tmp"
+        try:
+            os.symlink(target_absolute, temporary)
+        except FileExistsError:
+            continue
+        try:
+            os.replace(temporary, destination)
+        except OSError:
+            with suppress(OSError):
+                os.unlink(temporary)
+            raise
+        return
+    message = f"Unable to allocate a temporary symlink beside {destination}"
+    logger.error(message)
+    raise RuntimeError(message)
+
+
+def _safe_output_paths(output_dir: str, output_name: str, file_format: str) -> tuple[Path, Path]:
+    """Validate the output basename and resolved parent before any mutation."""
+    if not output_name or output_name in {".", ".."} or Path(output_name).name != output_name:
+        message = f"Alignment output_name must be a single basename: {output_name}"
+        logger.error(message)
+        raise ValueError(message)
+    output = Path(output_dir)
+    view_path = output / f"{output_name}.{file_format}"
+    if view_path.parent.resolve(strict=False) != output.resolve(strict=False):
+        message = f"Alignment view must stay inside output directory: {view_path}"
+        logger.error(message)
+        raise ValueError(message)
+    if os.path.lexists(output) and not output.is_dir():
+        message = f"Alignment output directory has a wrong type: {output}"
+        logger.error(message)
+        raise ValueError(message)
+    return output, view_path
+
+
+def capture_command(
+    command: str,
+    log_file: str,
+    cwd: str | None = None,
+    *,
+    protected_paths: Iterable[str | Path] = (),
+) -> tuple[bool, str]:
     """Run a shell command while retaining its combined output for parsing.
 
     Args:
         command: Complete shell command to run under Bash.
         log_file: File receiving the command's combined stdout and stderr.
         cwd: Working directory for the child, or ``None`` to inherit it.
+        protected_paths: Paths whose inodes the final log must not alias.
 
     Returns:
-        A success flag and the complete captured output. A non-zero exit is
-        returned rather than raised so preflight can try another candidate.
+        A success flag and the complete captured output or safe diagnostic. A
+        non-zero exit and OS-level failures are returned rather than raised so
+        preflight can try another candidate.
     """
     logger.debug(f"Running captured command: {command}")
-    completed = subprocess.run(
-        command,
-        shell=True,
-        executable="/bin/bash",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        cwd=cwd,
-        check=False,
-    )
-    output = completed.stdout or ""
-    with open(log_file, "w") as log_handle:
-        log_handle.write(output)
-    if completed.returncode != 0:
+    final_log = Path(log_file)
+    try:
+        if not final_log.parent.is_dir():
+            raise OSError(f"log directory does not exist: {final_log.parent}")
+        _validate_log_entry(final_log, protected_paths)
+    except (OSError, ValueError) as error:
+        diagnostic = f"Unable to write command log safely: {error}"
+        logger.error(diagnostic)
+        return False, diagnostic
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=final_log.parent,
+            prefix=f".{final_log.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_log:
+            temporary_path = Path(temporary_log.name)
+            try:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    executable="/bin/bash",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=cwd,
+                    check=False,
+                )
+                output = completed.stdout or ""
+                return_code = completed.returncode
+            except OSError as error:
+                output = f"Unable to run command: {error}"
+                return_code = 1
+            temporary_log.write(output)
+        os.replace(temporary_path, final_log)
+        temporary_path = None
+    except OSError as error:
+        diagnostic = f"Unable to write command log safely: {error}"
+        logger.error(diagnostic)
+        return False, diagnostic
+    finally:
+        if temporary_path is not None:
+            with suppress(OSError):
+                os.unlink(temporary_path)
+
+    if return_code != 0:
         logger.error(f"Command failed: {command}")
         return False, output
     return True, output
-
-
-def _ensure_symlink(target: str, link_path: str) -> None:
-    """Create a symlink, retaining only an existing link to the same file."""
-    absolute_target = os.path.abspath(target)
-    try:
-        os.symlink(absolute_target, link_path)
-        return
-    except FileExistsError:
-        pass
-
-    same_target = False
-    try:
-        existing_target = os.readlink(link_path)
-        if not os.path.isabs(existing_target):
-            existing_target = os.path.join(os.path.dirname(link_path), existing_target)
-        same_target = os.path.samefile(existing_target, absolute_target)
-    except OSError:
-        same_target = False
-
-    if same_target:
-        return
-    os.unlink(link_path)
-    os.symlink(absolute_target, link_path)
 
 
 def _remove_stale_view_indexes(view_path: str, file_format: str, keep: str | None) -> None:
@@ -126,57 +254,66 @@ def build_alignment_view(
 
     Raises:
         RuntimeError: If samtools cannot build a missing index or does not create it.
-        ValueError: If ``file_format`` is unsupported, the view escapes the output
-            directory, or the input and view have the same path.
+        ValueError: If ``file_format`` is unsupported, the output name is unsafe,
+            or a derived path collides with a protected or wrong-type entry.
     """
     input_index_candidates = index_candidate_names(in_path, file_format, bai_only=bai_only)
-    output = Path(output_dir)
-    view_path = output / f"{output_name}.{file_format}"
-    output_absolute = os.path.abspath(output)
-    view_absolute = os.path.abspath(view_path)
-    input_absolute = os.path.abspath(in_path)
-    try:
-        view_is_contained = os.path.commonpath((output_absolute, view_absolute)) == output_absolute
-    except ValueError:
-        view_is_contained = False
-    if not view_is_contained:
-        message = f"Alignment view must stay inside output directory: {view_absolute}"
-        logger.error(message)
-        raise ValueError(message)
-    if input_absolute == view_absolute:
-        message = f"Input alignment and alignment view resolve to the same path: {input_absolute}"
-        logger.error(message)
-        raise ValueError(message)
-
-    output.mkdir(parents=True, exist_ok=True)
-    _ensure_symlink(in_path, str(view_path))
-
+    output, view_path = _safe_output_paths(output_dir, output_name, file_format)
     existing_index = (
         resolve_bam_index(in_path)
         if bai_only and file_format == FORMAT_BAM
         else resolve_any_index(in_path, file_format)
     )
+    built_suffix = {FORMAT_BAM: ".bai", FORMAT_CRAM: ".crai"}[file_format]
+    selected_suffix = Path(existing_index).suffix if existing_index is not None else built_suffix
+    view_index = Path(f"{view_path}{selected_suffix}")
+    view_index_candidates = tuple(Path(candidate) for candidate in index_candidate_names(str(view_path), file_format))
+    protected_paths: tuple[str | Path, ...] = (in_path, existing_index) if existing_index is not None else (in_path,)
+    _validate_symlink_entry(view_path, (in_path,))
+    for candidate in view_index_candidates:
+        _validate_symlink_entry(candidate, protected_paths)
+    log_file = output / f"{output_name}_index.log"
+    if existing_index is None:
+        _validate_log_entry(log_file, protected_paths)
+
+    output.mkdir(parents=True, exist_ok=True)
+    _atomic_symlink(in_path, view_path)
+
     if existing_index is not None:
-        index_suffix = Path(existing_index).suffix
-        view_index = Path(f"{view_path}{index_suffix}")
         _remove_stale_view_indexes(str(view_path), file_format, str(view_index))
-        _ensure_symlink(existing_index, str(view_index))
+        _atomic_symlink(existing_index, view_index)
         return str(view_path), str(view_index)
 
-    built_suffix = {FORMAT_BAM: ".bai", FORMAT_CRAM: ".crai"}[file_format]
-    view_index = Path(f"{view_path}{built_suffix}")
-    _remove_stale_view_indexes(str(view_path), file_format, None)
+    _remove_stale_view_indexes(str(view_path), file_format, str(view_index))
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
-    command = build_samtools_index_command(
-        samtools_path=samtools_path,
-        bam_file=view_path,
-        threads=threads,
-    )
-    log_file = output / f"{output_name}_index.log"
-    if not run_command(command, str(log_file), critical=False) or not view_index.exists():
+    temporary_index: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=output,
+            prefix=f".{view_index.name}.",
+            suffix=".tmp",
+        )
+        os.close(descriptor)
+        temporary_index = Path(temporary_name)
+        command = build_samtools_index_command(
+            samtools_path=samtools_path,
+            bam_file=view_path,
+            output_bai=temporary_index,
+            threads=threads,
+        )
+        exit_ok, _ = capture_command(command, str(log_file), protected_paths=protected_paths)
+        if not exit_ok or temporary_index.stat().st_size == 0:
+            raise OSError("samtools did not create a non-empty index")
+        os.replace(temporary_index, view_index)
+        temporary_index = None
+    except OSError as error:
         message = missing_index_message(in_path, file_format, input_index_candidates)
         logger.error(message)
-        raise RuntimeError(message)
+        raise RuntimeError(message) from error
+    finally:
+        if temporary_index is not None:
+            with suppress(OSError):
+                os.unlink(temporary_index)
     return str(view_path), str(view_index)
 
 
@@ -272,6 +409,18 @@ def _reference_contigs(reference_path: str) -> set[str] | None:
     return None
 
 
+def _reference_unavailable_reason(reference_path: str) -> str | None:
+    """Return why an explicit FASTA cannot be read, if applicable."""
+    try:
+        with open(reference_path, "rb") as reference_handle:
+            reference_handle.read(1)
+    except FileNotFoundError:
+        return "reference FASTA not found"
+    except OSError as error:
+        return f"reference FASTA unreadable: {error}"
+    return None
+
+
 def _target_contig(
     region: str | None,
     bed_file: str | Path | None,
@@ -337,6 +486,10 @@ def resolve_reference(
         if reference_path is None:
             attempts.append((source, None, "not supplied"))
             continue
+        unavailable_reason = _reference_unavailable_reason(reference_path)
+        if unavailable_reason is not None:
+            attempts.append((source, reference_path, unavailable_reason))
+            continue
         command = build_cram_reference_probe_command(
             samtools_path=samtools_path,
             in_bam=view_path,
@@ -357,7 +510,12 @@ def resolve_reference(
             if reference_contigs is not None
             else ()
         )
-        if uncovered:
+        if reference_contigs is None:
+            logger.warning(
+                f"Resolved CRAM reference from {source}, but reference-contig coverage unavailable because "
+                f"{reference_path}.fai is missing or unreadable"
+            )
+        elif uncovered:
             logger.warning(
                 f"Resolved CRAM reference from {source}, but it does not cover header contigs: {', '.join(uncovered)}"
             )
@@ -394,22 +552,63 @@ def _ordered_reference_candidates(
 ) -> tuple[tuple[str, str | None], ...]:
     """Build explicit candidates in configured order, leaving ambient lookup implicit."""
     order = config.get("cram", {}).get("reference_candidate_order", list(_DEFAULT_REFERENCE_ORDER))
+    if not isinstance(order, list):
+        message = "cram.reference_candidate_order must be a list"
+        logger.error(message)
+        raise ValueError(message)
+    if order.count("htslib_resolved") != 1:
+        message = "reference candidate order must contain exactly one terminal htslib_resolved"
+        logger.error(message)
+        raise ValueError(message)
+    if order[-1] != "htslib_resolved":
+        message = "reference candidate order must end with terminal htslib_resolved"
+        logger.error(message)
+        raise ValueError(message)
+    for source in order:
+        if not isinstance(source, str) or source not in _EXPLICIT_REFERENCE_SOURCES | {"htslib_resolved"}:
+            message = f"unknown reference candidate source: {source}"
+            logger.error(message)
+            raise ValueError(message)
+    explicit_order = order[:-1]
+    if len(explicit_order) != len(set(explicit_order)):
+        message = "duplicate explicit reference candidate source"
+        logger.error(message)
+        raise ValueError(message)
     reference_data = config.get("reference_data", {})
     values = {
         "cli": reference_fasta,
         "config_cram_reference": reference_data.get(f"cram_reference_{reference_assembly}"),
         "config_bwa_reference": reference_data.get(f"bwa_reference_{reference_assembly}"),
     }
-    candidates: list[tuple[str, str | None]] = []
-    for source in order:
-        if source in _AMBIENT_SOURCE_ALIASES:
-            continue
-        if source not in _EXPLICIT_REFERENCE_SOURCES:
-            message = f"unknown reference candidate source: {source}"
-            logger.error(message)
-            raise ValueError(message)
-        candidates.append((source, values[source]))
-    return tuple(candidates)
+    return tuple((source, values[source]) for source in explicit_order)
+
+
+def _validate_preflight_logs(
+    in_path: str,
+    output_dir: str,
+    output_name: str,
+    file_format: str,
+    candidates: tuple[tuple[str, str | None], ...],
+    *,
+    bai_only: bool,
+) -> None:
+    """Validate every log a run may write before creating its alignment view."""
+    output, _ = _safe_output_paths(output_dir, output_name, file_format)
+    existing_index = (
+        resolve_bam_index(in_path)
+        if bai_only and file_format == FORMAT_BAM
+        else resolve_any_index(in_path, file_format)
+    )
+    protected_paths: tuple[str | Path, ...] = (in_path, existing_index) if existing_index is not None else (in_path,)
+    if file_format == FORMAT_CRAM:
+        log_paths = [output / f"{output_name}_idxstats.log"]
+        log_paths.extend(
+            output / f"{output_name}_reference_probe_{position}.log" for position in range(1, len(candidates) + 2)
+        )
+    else:
+        log_paths = [output / f"{output_name}_alignment_probe.log"]
+    for log_path in log_paths:
+        _validate_log_entry(log_path, protected_paths)
 
 
 def run_preflight(
@@ -456,6 +655,17 @@ def run_preflight(
             reference is invalid.
     """
     bai_only = file_format == FORMAT_BAM and not fast_mode
+    candidates = (
+        _ordered_reference_candidates(config, reference_assembly, reference_fasta) if file_format == FORMAT_CRAM else ()
+    )
+    _validate_preflight_logs(
+        in_path,
+        output_dir,
+        output_name,
+        file_format,
+        candidates,
+        bai_only=bai_only,
+    )
     view_path, index_path = build_alignment_view(
         in_path,
         output_dir,
@@ -469,7 +679,6 @@ def run_preflight(
 
     if file_format == FORMAT_CRAM:
         unmapped_scan = choose_unmapped_scan(view_path, config, threads, output_dir, output_name)
-        candidates = _ordered_reference_candidates(config, reference_assembly, reference_fasta)
         reference_path, reference_source, uncovered_contigs = resolve_reference(
             view_path,
             candidates,

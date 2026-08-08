@@ -595,9 +595,10 @@ itself and rejects anything whose first four bytes are not `BAI\x01` — so that
 a BAI specifically, and `resolve_bam_index` stays BAI-only for it. Every other mode
 (fast-mode BAM, and CRAM in both modes) hands the index to samtools, which accepts CSI and
 CRAI too. The preflight therefore asks for "an index htslib accepts" in those modes and
-symlinks whichever of `<file>.bai`, `<stem>.bai`, `<file>.csi`, `<stem>.csi`,
-`<file>.crai`, `<stem>.crai` exists, under the same suffix beside the view. Only the
-non-fast BAM path forces a BAI rebuild when only a CSI is present.
+symlinks the first compatible candidate under the same suffix beside the view: BAM tries
+BAI then CSI spellings, while CRAM tries CRAI then CSI spellings. The CRAM CSI support was
+measured directly with the pinned samtools 1.20/htslib stack. Only the non-fast BAM path
+forces a BAI rebuild when only a CSI is present.
 
 ## 5. Per-issue changes
 
@@ -630,8 +631,9 @@ non-fast BAM path forces a BAI rebuild when only a CSI is present.
   pinned 1.20) — then exposes it through the run-local alignment view of §4.1a, because
   §3.9 measured that an index merely *placed* in the output directory is invisible to
   `samtools view`. `resolve_bam_index` is left BAI-only and unchanged — the offset
-  extractor parses BAI directly and would raise on a CSI. A new `resolve_cram_index`
-  handles `.crai` under both `<file>.crai` and `<stem>.crai`.
+  extractor parses BAI directly and would raise on a CSI. The general
+  `resolve_any_index` handles CRAI under both `<file>.crai` and `<stem>.crai`, followed
+  by the two equivalent CSI spellings measured against the pinned toolchain.
 * **An index that exists is not an index that works.** Resolution is by filename only
   (`Path.exists()`), so a truncated, stale or wrong-sample index resolves happily. The
   preflight does not add a separate validation step for this: the reference probe (§4.2)

@@ -35,7 +35,15 @@ def _plan(*, reference_path: str | None = "/r/genome.fa") -> AlignmentPlan:
     ("file_format", "expected"),
     [
         (FORMAT_BAM, ("/data/sample.bam.bai", "/data/sample.bai", "/data/sample.bam.csi", "/data/sample.csi")),
-        (FORMAT_CRAM, ("/data/sample.cram.crai", "/data/sample.crai")),
+        (
+            FORMAT_CRAM,
+            (
+                "/data/sample.cram.crai",
+                "/data/sample.crai",
+                "/data/sample.cram.csi",
+                "/data/sample.csi",
+            ),
+        ),
     ],
 )
 def test_index_candidates_try_appended_then_stem_for_each_supported_suffix(
@@ -53,10 +61,15 @@ def test_bam_bai_only_excludes_csi_candidates() -> None:
     )
 
 
-def test_cram_bai_only_still_offers_crai_and_never_bai() -> None:
-    """CRAM indexes are CRAI regardless of the BAM-only reader option."""
+def test_cram_bai_only_still_offers_all_cram_indexes_and_never_bai() -> None:
+    """The BAM-only restriction does not remove htslib-supported CRAM CSI."""
     candidates = index_candidate_names("/data/sample.cram", FORMAT_CRAM, bai_only=True)
-    assert candidates == ("/data/sample.cram.crai", "/data/sample.crai")
+    assert candidates == (
+        "/data/sample.cram.crai",
+        "/data/sample.crai",
+        "/data/sample.cram.csi",
+        "/data/sample.csi",
+    )
     assert all(not candidate.endswith(".bai") for candidate in candidates)
 
 
@@ -68,7 +81,7 @@ def test_unknown_alignment_format_is_rejected() -> None:
 
 def test_index_suffix_contract_has_the_supported_formats() -> None:
     """The public suffix table describes the format-specific index choices."""
-    assert INDEX_SUFFIXES == {FORMAT_BAM: ("bai", "csi"), FORMAT_CRAM: ("crai",)}
+    assert INDEX_SUFFIXES == {FORMAT_BAM: ("bai", "csi"), FORMAT_CRAM: ("crai", "csi")}
 
 
 def test_missing_index_message_names_path_candidates_and_repair_command() -> None:

@@ -117,7 +117,8 @@ Wave 2 until `make check-all` is green on the tip of Wave 1.
 **Interfaces produced:**
 - `FORMAT_BAM = "bam"`, `FORMAT_CRAM = "cram"`
 - `INDEX_SUFFIXES: dict[str, tuple[str, ...]]` — `bam` → `("bai", "csi")`,
-  `cram` → `("crai",)`
+  `cram` → `("crai", "csi")`. The CRAM CSI support is based on a direct measurement
+  with the pinned samtools 1.20/htslib stack; CRAI remains first.
 - `index_candidate_names(in_path, file_format, *, bai_only: bool = False) -> tuple[str, ...]`
   — `<file>.<suffix>` then `<stem>.<suffix>` for each suffix in order.
 - `AlignmentPlan` frozen dataclass: `input_path: str`, `view_path: str`,
@@ -238,9 +239,10 @@ anything not starting `BAI\x01`. `test_a_csi_index_is_ignored_and_a_bai_is_built
 pins that.
 
 - [ ] **Step 1: write the failing tests** — `.cram.crai` and `.crai` both found, file
-      spelling wins; a `.bai` beside a CRAM is not an index for it; for BAM a `.csi` is
-      found by `resolve_any_index` but still **not** by `resolve_bam_index`; `None` when
-      nothing exists.
+      spelling wins; CRAM CSI is found only after both CRAI spellings, while a `.bai`
+      beside a CRAM is not an index for it; for BAM a `.csi` is found by
+      `resolve_any_index` but still **not** by `resolve_bam_index`; `None` when nothing
+      exists.
 - [ ] **Step 2:** run → FAIL (`ImportError`). **Step 3:** implement. **Step 4:** run the
       whole file → PASS, every pre-existing test unchanged. **Step 5:** commit.
 

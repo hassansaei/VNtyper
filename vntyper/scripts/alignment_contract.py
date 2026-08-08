@@ -20,7 +20,7 @@ FORMAT_BAM = "bam"
 FORMAT_CRAM = "cram"
 INDEX_SUFFIXES: dict[str, tuple[str, ...]] = {
     FORMAT_BAM: ("bai", "csi"),
-    FORMAT_CRAM: ("crai",),
+    FORMAT_CRAM: ("crai", "csi"),
 }
 
 ReferenceAttempt = tuple[str, str | None, str]
@@ -32,7 +32,7 @@ def index_candidate_names(in_path: str, file_format: str, *, bai_only: bool = Fa
     Args:
         in_path: Alignment path whose index is sought.
         file_format: Either ``"bam"`` or ``"cram"``.
-        bai_only: Restrict BAM candidates to BAI. CRAM always uses CRAI.
+        bai_only: Restrict BAM candidates to BAI. CRAM still offers CRAI then CSI.
 
     Returns:
         Candidate index paths, with appended-file spelling before stem spelling.

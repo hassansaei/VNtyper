@@ -51,6 +51,28 @@ def test_cram_index_uses_stem_spelling_when_appended_is_missing(tmp_path: Path) 
     assert resolve_any_index(cram, "cram") == str(stem)
 
 
+@pytest.mark.parametrize("spelling", ["sample.cram.csi", "sample.csi"])
+def test_cram_csi_is_resolved_in_either_supported_spelling(tmp_path: Path, spelling: str) -> None:
+    """Pinned samtools/htslib accepts CRAM CSI when no CRAI is available."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    csi = tmp_path / spelling
+    csi.write_bytes(b"CSI\x01")
+
+    assert resolve_any_index(cram, "cram") == str(csi)
+
+
+def test_cram_crai_precedes_csi_when_both_exist(tmp_path: Path) -> None:
+    """A selected CRAI cannot be overridden by a lower-priority CRAM CSI."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    crai = tmp_path / "sample.cram.crai"
+    crai.write_bytes(b"CRAI")
+    (tmp_path / "sample.cram.csi").write_bytes(b"CSI\x01")
+
+    assert resolve_any_index(cram, "cram") == str(crai)
+
+
 def test_bai_beside_cram_is_not_a_cram_index(tmp_path: Path) -> None:
     """A BAI next to a CRAM does not satisfy CRAI resolution."""
     cram = tmp_path / "sample.cram"
