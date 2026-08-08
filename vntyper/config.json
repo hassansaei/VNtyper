@@ -24,8 +24,21 @@
     "advntr_reference_vntr_hg38": "reference/vntr_db_advntr/hg38_muc1.db",
     "bwa_reference_hg19": "reference/alignment/chr1.hg19.fa",
     "bwa_reference_hg38": "reference/alignment/chr1.hg38.fa",
+    "cram_reference_hg19": null,
+    "cram_reference_hg38": null,
     "code_adVNTR_RUs": "reference/code-adVNTR_RUs.fa",
     "muc1_motifs_rev_com": "reference/MUC1_motifs_Rev_com.fa"
+  },
+  "cram": {
+    "allow_ambient_reference_resolution": false,
+    "local_ref_path": "%2s/%2s/%s",
+    "unmapped_scan": "auto",
+    "reference_candidate_order": [
+      "cli",
+      "config_cram_reference",
+      "config_bwa_reference",
+      "htslib_resolved"
+    ]
   },
   "tools": {
     "fastp": "fastp",
@@ -129,6 +142,12 @@
   },
   "assembly_detection": {
     "detection_threshold": 0.9,
+    "naming_convention_threshold": 0.5,
+    "primary_contig_patterns": [
+      "^chr[0-9XYM]+$",
+      "^NC_\\d{6}\\.\\d+$",
+      "^([0-9]+|X|Y|MT?)$"
+    ],
     "known_assemblies": {
       "hg19": {
         "name": "hg19",
