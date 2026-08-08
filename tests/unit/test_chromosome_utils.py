@@ -69,6 +69,69 @@ class TestDetectNamingConvention:
             detect_naming_convention(contigs, {"assembly_detection": {"naming_convention_threshold": 0.9}}) == "unknown"
         )
 
+    def test_omitted_naming_settings_use_the_shipped_half_threshold(self):
+        contigs = ["chr1", "chr2", "chr3", "1", "2"]
+        assert detect_naming_convention(contigs, {"assembly_detection": {}}) == "ucsc"
+
+    def test_a_configured_threshold_is_inclusive_at_three_quarters(self):
+        contigs = ["chr1", "chr2", "chr3", "1"]
+        assert (
+            detect_naming_convention(contigs, {"assembly_detection": {"naming_convention_threshold": 0.75}}) == "ucsc"
+        )
+
+    def test_a_configured_threshold_above_three_quarters_rejects_three_of_four(self):
+        contigs = ["chr1", "chr2", "chr3", "1"]
+        assert (
+            detect_naming_convention(contigs, {"assembly_detection": {"naming_convention_threshold": 0.751}})
+            == "unknown"
+        )
+
+    def test_a_unique_winner_without_a_strict_majority_is_unknown(self):
+        contigs = ["chr1", "chr2", "1", "NC_000003.11"]
+        config = {"assembly_detection": {"naming_convention_threshold": 0.4}}
+        assert detect_naming_convention(contigs, config) == "unknown"
+
+    def test_a_fifty_fifty_tie_is_unknown_even_below_the_configured_threshold(self):
+        config = {"assembly_detection": {"naming_convention_threshold": 0.4}}
+        assert detect_naming_convention(["chr1", "chr2", "1", "2"], config) == "unknown"
+
+    def test_custom_primary_patterns_keep_the_ucsc_ncbi_ensembl_order(self):
+        config = {"assembly_detection": {"primary_contig_patterns": [r"^ucsc_\d+$", r"^ncbi_\d+$", r"^ensembl_\d+$"]}}
+        assert detect_naming_convention(["ncbi_1", "ncbi_2", "ucsc_1"], config) == "ncbi"
+
+    @pytest.mark.parametrize(
+        "threshold",
+        [-0.1, 1.1, float("nan"), float("inf"), float("-inf"), True, "0.5", None],
+    )
+    def test_invalid_naming_thresholds_are_logged_and_rejected(self, caplog, threshold):
+        config = {"assembly_detection": {"naming_convention_threshold": threshold}}
+
+        with pytest.raises(ValueError, match="naming_convention_threshold"):
+            detect_naming_convention(["chr1"], config)
+
+        assert "naming_convention_threshold" in caplog.text
+
+    @pytest.mark.parametrize(
+        "patterns",
+        [
+            None,
+            "not-a-pattern-list",
+            (r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$"),
+            [r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$"],
+            [r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$", r"^extra$"],
+            [r"^chr[0-9XYM]+$", 1, r"^([0-9]+|X|Y|MT?)$"],
+            ["", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$"],
+            ["[", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$"],
+        ],
+    )
+    def test_invalid_primary_patterns_are_logged_and_rejected(self, caplog, patterns):
+        config = {"assembly_detection": {"primary_contig_patterns": patterns}}
+
+        with pytest.raises(ValueError, match="primary_contig_patterns"):
+            detect_naming_convention(["chr1"], config)
+
+        assert "primary_contig_patterns" in caplog.text
+
     def test_mixed_naming_with_no_majority_is_unknown(self):
         """Three conventions, one contig each: nothing reaches 50%."""
         contigs = ["chr1", "2", "NC_000003.11"]

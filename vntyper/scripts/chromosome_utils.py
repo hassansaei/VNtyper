@@ -16,6 +16,7 @@ Functions:
 from __future__ import annotations
 
 import logging
+import math
 import re
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,12 @@ def detect_naming_convention(contig_names: list[str], config: dict | None = None
     Returns:
         str: Convention identifier ("ucsc", "ensembl", "ncbi", "unknown")
 
+    Raises:
+        ValueError: If the configured naming-convention threshold is not a
+            finite number from 0 through 1, or if the configured primary
+            patterns are not three nonempty, compilable strings in UCSC, NCBI,
+            ENSEMBL order.
+
     Examples:
         >>> detect_naming_convention(["chr1", "chr2", "chrX"])
         'ucsc'
@@ -166,16 +173,44 @@ def detect_naming_convention(contig_names: list[str], config: dict | None = None
 
     assembly_detection = (config or {}).get("assembly_detection", {})
     threshold = assembly_detection.get("naming_convention_threshold", 0.5)
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not math.isfinite(threshold)
+        or not 0 <= threshold <= 1
+    ):
+        message = "Invalid naming_convention_threshold: expected a finite number from 0 through 1"
+        logger.error(message)
+        raise ValueError(message)
+
     primary_patterns = assembly_detection.get(
         "primary_contig_patterns",
         [r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$"],
     )
     conventions = ("ucsc", "ncbi", "ensembl")
+    if not isinstance(primary_patterns, list) or len(primary_patterns) != len(conventions):
+        message = "Invalid primary_contig_patterns: expected three patterns in UCSC, NCBI, ENSEMBL order"
+        logger.error(message)
+        raise ValueError(message)
+
+    compiled_patterns = []
+    for convention, pattern in zip(conventions, primary_patterns, strict=True):
+        if not isinstance(pattern, str) or not pattern:
+            message = f"Invalid primary_contig_patterns: {convention} pattern must be a nonempty string"
+            logger.error(message)
+            raise ValueError(message)
+        try:
+            compiled_patterns.append(re.compile(pattern, re.IGNORECASE))
+        except re.error as error:
+            message = f"Invalid primary_contig_patterns: {convention} pattern cannot be compiled: {error}"
+            logger.error(message)
+            raise ValueError(message) from error
+
     counts = dict.fromkeys(conventions, 0)
 
     for name in contig_names:
-        for convention, pattern in zip(conventions, primary_patterns, strict=False):
-            if re.match(pattern, name, re.IGNORECASE):
+        for convention, pattern in zip(conventions, compiled_patterns, strict=True):
+            if pattern.match(name):
                 counts[convention] += 1
                 break
 
