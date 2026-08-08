@@ -555,23 +555,38 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
 ### Task 11: golden cohort and the performance measurement
 
 - [ ] **Step 1:** baseline — three runs on `main`, alternating with the branch, on an idle
-      host: `time python scripts/golden_cohort_gate.py --json /tmp/base-N.json`.
+      host, through the harness's `run` subcommand. Time the BAM cases that complete on
+      both revisions; separately record every case the new no-discard rule refuses so an
+      early failure is never compared with completed genotyping.
 - [ ] **Step 2:** `make cram-fixtures` (never `--allow-matrix-drift`).
 - [ ] **Step 3:** three runs on the branch. Report median and range per arm. A regression
       is called only when the slower arm's *best* run beats the faster arm's *worst*
       (spec §5b).
-- [ ] **Step 4:** prove A-178-2 — indexed and stream scans must produce the **same read
-      set**, not merely the same genotype:
+- [ ] **Step 4:** prove A-178-2 — when preflight authorises both strategies, indexed and
+      stream must produce the **same read set**, not merely the same genotype. When
+      placed-unmapped evidence rejects indexed, preserve that rejection and record the
+      stream read set plus a raw diagnostic of the reads `'*'` would lose:
 
 ```bash
 for mode in indexed stream; do
-  VNTYPER_CRAM_UNMAPPED_SCAN=$mode python scripts/golden_cohort_gate.py --json /tmp/$mode.json
+  VNTYPER_CRAM_UNMAPPED_SCAN=$mode python scripts/golden_cohort_gate.py run \
+    --side after --tree "$PWD" --data-dir "$PWD/tests/data" \
+    --run-root "/tmp/$mode" --marker vntyper.scripts.alignment_contract \
+    --expect-marker present --no-probes --no-cohort --case _cram
+  test $? -le 1  # exit 1 is the required result when indexed is rejected
 done
 python - <<'PY'
 import json
-a, b = (json.load(open(f"/tmp/{m}.json")) for m in ("indexed", "stream"))
-assert a["samples"] == b["samples"], "indexed and stream scans disagree"
-print("indexed == stream across", len(a["samples"]), "samples")
+
+indexed, stream = (json.load(open(f"/tmp/{mode}/side.json")) for mode in ("indexed", "stream"))
+for case_id, stream_result in stream["pipeline_results"].items():
+    indexed_result = indexed["pipeline_results"][case_id]
+    if indexed_result["unmapped_read_set"] is None:
+        assert indexed_result["exit_code"] == 1
+        assert stream_result["unmapped_read_set"] is not None
+    else:
+        assert indexed_result["unmapped_read_set"] == stream_result["unmapped_read_set"]
+print("every CRAM either matched exactly or rejected unsafe indexed extraction")
 PY
 ```
 

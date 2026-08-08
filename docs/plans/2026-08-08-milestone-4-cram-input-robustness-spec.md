@@ -782,8 +782,14 @@ consumes them. Removing it is a genotyping change, not a performance change.
 
 ### Gate
 
-`A-PERF-1` below. The golden cohort is the measuring instrument: it already runs the
-whole pipeline over 50 samples.
+`A-PERF-1` below. The golden cohort is the measuring instrument. The first Wave 3 pass
+also measured a property the earlier design reviews could not infer from BAM metadata:
+32 of the 50 base cases produce a paired FASTQ set **and** at least one non-empty single
+FASTQ. The 2.0.9 arm silently ignores those singles; the milestone arm correctly refuses
+the mixed layout. Comparing their full wall-clocks would therefore compare completed
+genotyping with an intentional early failure. The performance arm is the 18-case
+intersection that completes on both revisions; the 32 fail-closed outcomes are recorded
+separately and are not reclassified or suppressed to make the timing gate pass.
 
 **One before/after run cannot decide this.** The slice covers 5–10 kb
 (`config.json` `bam_region_*`), so `-@` adds thread setup to a job that may be too small
@@ -793,6 +799,36 @@ reporting median and range; a regression is called only when the slower arm's *b
 is worse than the faster arm's *worst*. If P1/P2 fall inside the noise band they are kept
 anyway — they are strictly less work — but the spec will say so rather than claim a win it
 did not measure.
+
+### Wave 3 measurement (2026-08-08)
+
+The host was otherwise idle; the six runs used one harness job, four pipeline threads and
+alternated `ddf49a1` (2.0.9) with `678b2d2` (milestone code; the later `4489e06` changes
+only the CRAM gate harness). Every counted side verified its package marker, revision and
+all 18 expectations.
+
+| Arm | Runs (s) | Median | Range |
+| --- | --- | --- | --- |
+| 2.0.9 baseline | 88.43, 88.77, 88.68 | 88.68 | 88.43–88.77 |
+| milestone | 87.41, 86.08, 85.92 | 86.08 | 85.92–87.41 |
+
+The ranges do not overlap: the milestone arm's worst run is 1.02 s faster than the
+baseline arm's best. On the work both revisions can complete, A-PERF-1 is a measured win,
+not merely “inside noise.” The separate whole-50 run found 32 explicit mixed-layout
+failures on the milestone arm; the baseline completed those cases only by discarding the
+stranded FASTQ, so they are exit-bar evidence rather than performance samples.
+
+The forced CRAM measurement also corrected an impossible premise in the original
+A-178-2 wording. Both declared golden CRAM sources have non-zero placed-unmapped counts,
+so the production guard refuses forced `indexed` before producing an unmapped BAM. Forced
+`stream` recorded stable duplicate-case evidence: `7a61` produced 622,690 records with
+digest `6677ba29…83cb8b91`; `b178` produced 4,478 with digest
+`dad9a81a…4d90a8b`. A raw diagnostic `'*'` fetch on `7a61` produced only 2,690 records and
+a different digest — 620,000 reads lost — while `b178` happened to match despite 329
+placed-unmapped reads. Therefore equality is required only when preflight authorises both
+strategies; otherwise the acceptance result is the indexed rejection plus the stream
+count/digest and the measured would-be loss. Requiring the rejected strategy to emit an
+equal read set would contradict A-SCAN-1 and reopen silent loss.
 
 ## 6. Config surface
 
@@ -860,7 +896,7 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-209-5 | Coverage (`samtools depth`) on a reference-dependent CRAM carries the same reference the slice used. | unit + integration |
 | A-209-6 | A reference path containing a space or a shell metacharacter is quoted, not executed. | unit |
 | A-178-1 | With `REF_PATH` pointed at an endpoint that accepts TCP and never responds, a CRAM run **exits within 120 s**. The test asserts on elapsed time; without a deadline the criterion cannot fail. | integration |
-| A-178-2 | For every golden-cohort CRAM sample, the indexed and stream scans produce the **same read set** (`samtools view -c` on the unmapped BAM, and a sorted read-name digest), not merely the same genotype. Equal genotypes cannot prove equal reads. | golden cohort |
+| A-178-2 | For every golden-cohort CRAM sample that preflight authorises for both strategies, indexed and stream produce the **same read set** (`samtools view -c` plus sorted read-name digest). When placed-unmapped evidence makes indexed unsafe, forced indexed rejects before work and the gate records the stream read set plus the raw indexed loss; it never bypasses the guard to manufacture equality. | golden cohort |
 | A-178-4 | The #178 reporter, on a post-#213 image, supplies `docker logs`; the stage the run reaches is recorded here. This is an evidence request, not a code change, and it does not gate the PR. | issue thread |
 | A-SCAN-1 | On a CRAM containing placed flag-12 reads, `auto` selects `stream` and the run recovers all of them; forcing `indexed` **raises** naming the count rather than dropping them. | unit + fixture |
 | A-SCAN-2 | A malformed, empty or non-zero-exit `idxstats` selects `stream`, never `indexed`. | unit |
@@ -873,7 +909,7 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. | integration, derived fixture |
 | A-161-2 | A run that produces a non-empty FASTQ nothing consumes fails, naming the file and its read count. | unit |
 | A-161-3 | `--fastq1` without `--fastq2` is accepted and genotyped rather than rejected at argument parsing. | unit + integration |
-| A-PERF-1 | Golden-cohort wall-clock does not regress on the BAM path: three alternating runs per arm on an idle host, median and range reported; a regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
+| A-PERF-1 | Golden-cohort wall-clock does not regress on BAM cases that complete on both revisions: three alternating runs per arm on an idle host, median and range reported; fail-closed mixed-layout cases are reported separately, never timed as if an early refusal were completed work. A regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
 | A-PERF-2 | A default (non-fast) BAM run builds the sliced BAM's index **once**, counted from the stage logs. | integration |
 | A-WEB-1 | A preflight failure reaches the job status as its own message, not the generic text `main.py:605` substitutes. | web tier |
 | A-ALL-1 | `make check-all` passes; `make patch-coverage` ≥ 80%; the coverage floor is not lowered; every function modified by this milestone gains a unit test for the behaviour that changed (AGENTS.md rule 1). | full gate |
@@ -924,6 +960,16 @@ PR.**
 | --- | --- | --- | --- | --- | --- |
 | 1 | spec | 14 | 12 | 2 | 12 accepted and fixed, 2 rebutted with evidence |
 | 2 | spec + plan | 11 | 7 | 4 | 10 accepted and fixed, 1 rebutted by measurement |
+
+### Wave 3 gate evidence before round 3
+
+`make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. The BAM timing result
+is the non-overlapping 88.43–88.77 s baseline versus 85.92–87.41 s milestone range in
+§5b. The full base matrix also exposed 32 inputs whose previously ignored single FASTQ is
+now named and rejected. Forced indexed CRAM runs were rejected by the placed-unmapped
+guard; forced stream recorded the 622,690- and 4,478-record read sets, and a raw indexed
+diagnostic proved a 620,000-read loss on `7a61`. These are recorded as gate findings, not
+hidden by changing scan policy or relaxing the no-discard rule.
 
 ### Round 2 — what changed as a result
 
