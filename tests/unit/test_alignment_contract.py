@@ -115,8 +115,9 @@ def test_alignment_plan_is_frozen_and_has_no_layout_field() -> None:
         "uncovered_contigs",
         "unmapped_scan",
     }
+    field_name = "index_path"
     with pytest.raises(FrozenInstanceError):
-        setattr(plan, "index_path", "/other/index.bai")
+        setattr(plan, field_name, "/other/index.bai")
 
 
 def test_the_reference_fragment_is_quoted_because_builders_interpolate_it_raw():
