@@ -10,10 +10,16 @@ There are **two** such invocations, and the issue only names one:
 
 * ``docker/entrypoint.sh`` -- the container's own entry point, which is how a CLI user
   runs the image.
-* ``docker/app/tasks.py`` -- ``build_vntyper_command``, which is how every *web* job runs
-  the pipeline. Fixing only the entrypoint makes the Celery worker's own output stream
-  while the pipeline it launches stays buffered, so a web job would still run for an hour
-  and log nothing.
+* ``docker/app/tasks.py`` -- **two** invocations: ``build_vntyper_command``, which is how
+  every *web* job runs the pipeline, and the ``vntyper cohort`` command built inline in
+  ``run_cohort_analysis_job``. Fixing only the entrypoint makes the Celery worker's own
+  output stream while the pipeline it launches stays buffered, so a web job would still
+  run for an hour and log nothing.
+
+An earlier version of this module asserted only on ``build_vntyper_command`` while
+claiming to cover "every long-running child", and the cohort launcher was buffered behind
+that claim. The source-level scan below exists so the claim is actually true: it finds
+every ``conda run`` in the module, however it is built.
 
 This test reads both as **source text**, so it fails on a new invocation added later. It
 lives in the unit tier rather than the docker tier deliberately: the docker tier needs a
@@ -94,6 +100,24 @@ def test_the_web_worker_launches_the_pipeline_with_streaming_enabled():
     assert "--no-capture-output" in command, (
         "the Celery worker launches the pipeline through its own `conda run`; without "
         f"--no-capture-output every web job's output is buffered until it exits: {command}"
+    )
+
+
+def test_every_conda_run_in_the_worker_streams_its_child_output():
+    """Catches an invocation built inline rather than through a helper.
+
+    ``run_cohort_analysis_job`` assembles its own argument list, so a test that only
+    calls ``build_vntyper_command`` cannot see it. This reads the module as source text
+    and checks each ``conda`` / ``run`` pair, so a third launcher added later fails here
+    rather than shipping buffered.
+    """
+    source = (REPO_ROOT / "docker" / "app" / "tasks.py").read_text(encoding="utf-8")
+    launchers = re.findall(r'"conda",\s*\n\s*"run",\s*\n(.*?)"-n",', source, re.S)
+    assert launchers, "no `conda run` argument vectors found in docker/app/tasks.py"
+    buffering = [block for block in launchers if "--no-capture-output" not in block]
+    assert not buffering, (
+        f"{len(buffering)} of {len(launchers)} `conda run` launchers in docker/app/tasks.py "
+        "buffer their child's output until it exits"
     )
 
 

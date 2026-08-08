@@ -549,6 +549,9 @@ def run_cohort_analysis_job(
         command = [
             "conda",
             "run",
+            # Same reason as build_vntyper_command: without this, conda buffers the child
+            # until it exits, so a cohort analysis logs nothing while it runs (#213).
+            "--no-capture-output",
             "-n",
             "vntyper",
             "vntyper",

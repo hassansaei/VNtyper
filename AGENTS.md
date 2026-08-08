@@ -485,7 +485,18 @@ limit.
 - Never commit into `tests/data/`, `reference/`, `out/`, `download/`, `vntyper.egg-info/`
   or the local `adVNTR/` clone — all are generated or downloaded.
 - Never hand-edit `vntyper/dependencies/kestrel/*.jar` or anything in `vntyper.egg-info/`.
-- Never add a page under `docs/` without registering it in `mkdocs.yml` `nav:` —
-  the docs workflow runs `mkdocs build --strict`, so a dangling nav entry or broken
-  internal link fails CI.
+- Never add a **published** page under `docs/` without registering it in `mkdocs.yml`
+  `nav:`. Two corrections to the older wording of this rule, both measured on
+  mkdocs 1.6.1:
+  - An unregistered page is logged at **INFO** ("The following pages exist in the docs
+    directory, but are not included in the nav configuration"), not WARNING, so it does
+    **not** fail `--strict` on its own. A dangling nav entry or a broken internal link
+    does.
+  - What actually breaks the build on an unregistered page is usually the `macros`
+    plugin, which Jinja-templates every page: prose containing `{#...}` (a list of GitHub
+    issues such as `{#209, #178}` is enough) fails as an unterminated comment.
+  Contributor working documents that are not meant to be published belong in
+  `docs/plans/`, which `mkdocs.yml` lists under `exclude_docs:`. Excluded pages are
+  neither rendered nor templated, so they carry no nav entry and no macro hazard. Add new
+  non-published directories there rather than to `nav:`.
 - Never claim tests pass without showing the command output.
