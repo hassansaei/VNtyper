@@ -114,6 +114,33 @@ def test_a_single_fastq_is_forwarded_without_a_paired_end_usage_error(tmp_path: 
     assert stub.call_args.kwargs["fastq2"] is None
 
 
+def test_a_single_fastq_with_shark_is_a_usage_error_before_pipeline_dispatch(tmp_path: Path) -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "pipeline",
+            "-o",
+            str(tmp_path),
+            "--fastq1",
+            "single.fastq.gz",
+            "--extra-modules",
+            "shark",
+        ]
+    )
+
+    with mock.patch.object(cli_handlers, "run_pipeline", autospec=True) as stub, pytest.raises(SystemExit) as excinfo:
+        cli_handlers.handle_pipeline(
+            args,
+            config=MINIMAL_CONFIG,
+            parser=parser,
+            log_level_value=logging.INFO,
+            log_file_str=None,
+        )
+
+    assert excinfo.value.code == 2
+    stub.assert_not_called()
+
+
 def test_an_output_name_the_pipeline_cannot_honour_is_refused(tmp_path: Path, caplog) -> None:
     """The defect: ``-n mysample`` used to be resolved, dropped and forgotten.
 

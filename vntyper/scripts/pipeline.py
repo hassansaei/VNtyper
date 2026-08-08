@@ -150,16 +150,32 @@ def run_pipeline(
     overall_start = timeit.default_timer()
     logger.info("Pipeline execution started.")
 
-    input_type = None
-    if fastq1:
-        input_type = "FASTQ"
-    elif bam:
-        input_type = "BAM"
-    elif cram:
-        input_type = "CRAM"
-    else:
-        logger.error("No input files provided.")
-        raise ValueError("No input files provided.")
+    supplied_groups = [
+        input_type
+        for input_type, supplied in (
+            ("FASTQ", fastq1 is not None or fastq2 is not None),
+            ("BAM", bam is not None),
+            ("CRAM", cram is not None),
+        )
+        if supplied
+    ]
+    if len(supplied_groups) > 1:
+        msg = "Provide either BAM, CRAM, or FASTQ files, not multiples."
+        logger.error(msg)
+        raise ValueError(msg)
+    if not supplied_groups:
+        msg = "No input files provided."
+        logger.error(msg)
+        raise ValueError(msg)
+    input_type = supplied_groups[0]
+    if input_type == "FASTQ" and not fastq1:
+        msg = "When not providing BAM/CRAM, --fastq1 must be specified; --fastq2 is optional."
+        logger.error(msg)
+        raise ValueError(msg)
+    if input_type == "FASTQ" and not fastq2 and "shark" in extra_modules:
+        msg = "SHARK requires paired-end FASTQ input; provide --fastq2 or remove the shark module."
+        logger.error(msg)
+        raise ValueError(msg)
 
     input_files = {}
     if input_type == "FASTQ":
@@ -173,22 +189,6 @@ def run_pipeline(
     previous_ref_path = None
     reference_resolution_pinned = False
     try:
-        input_count = sum(
-            [
-                1 if input_type == "FASTQ" else 0,
-                1 if input_type == "BAM" else 0,
-                1 if input_type == "CRAM" else 0,
-            ]
-        )
-        if input_count > 1:
-            logger.error("Multiple input types provided. Provide only one: FASTQ, BAM, or CRAM.")
-            raise ValueError("Provide either BAM, CRAM, or FASTQ files, not multiples.")
-
-        if not bam and not cram and not fastq1:
-            msg = "When not providing BAM/CRAM, --fastq1 must be specified; --fastq2 is optional."
-            logger.error(msg)
-            raise ValueError(msg)
-
         # Validation owns a run-local log, but stage directories wait until preflight passes.
         if input_type in ["BAM", "CRAM"]:
             input_alignment = bam if input_type == "BAM" else cram

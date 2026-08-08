@@ -229,6 +229,9 @@ def handle_pipeline(
         logger.debug("Missing required FASTQ1 input.")
         sys.exit(1)
 
+    if args.fastq1 is not None and args.fastq2 is None and "shark" in flattened_modules:
+        parser.error("SHARK requires paired-end FASTQ input; provide --fastq2 or remove the shark module.")
+
     # Construct module_args_dict for advntr, etc.
     module_args_dict: dict[str, dict[str, Any]] = {}
     if "advntr" in flattened_modules:
