@@ -296,6 +296,33 @@ provably recovers every flag-12 read in the file.** That is a per-run proof cost
 index read, not an assumption. When it is non-zero the run falls back to the whole-file
 stream scan automatically. §4.3(b) is rewritten around this.
 
+
+### 3.12 The run-local alignment view works, measured end to end
+
+§4.1a is a new mechanism, so it was measured before being specified rather than after.
+Setup: an input directory made **read-only** (`chmod -w`) containing a CRAM with no index,
+and an output directory holding a symlink to it.
+
+| Operation, through the view | Result |
+| --- | --- |
+| `samtools index out/view.cram` (bare, no `-o`) | exit 0 — writes `out/view.cram.crai` **beside the symlink**, not beside the target |
+| input directory afterwards | `s.cram` only — untouched, and it was read-only throughout |
+| `samtools view -c -T ref out/view.cram chr1:4900-5100` | 9 — the index is found through the symlink |
+| `samtools view -P -b -T ref out/view.cram <region> -o slice.bam` | exit 0 |
+| `samtools idxstats out/view.cram` | full table — the operation that has no `-X` form |
+| `samtools view -c -T ref out/view.cram '*'` | 0, matching the `*` row of `idxstats` |
+| existing index beside the input, symlinked as `out/view.cram.crai` | resolves; `view` and `idxstats` both work |
+
+Three things this settles:
+
+1. **`samtools index` does not follow the symlink when choosing where to write.** So the
+   view needs no `-o` and cannot write into the input tree even by accident — the
+   milestone-3 invariant is preserved by the mechanism rather than by remembering a flag.
+2. **`-X` is not needed anywhere.** Co-location is restored, so no builder grows an index
+   argument and `idxstats` — which has no `-X` — works.
+3. **An existing index is symlinked rather than rebuilt**, so the common case costs two
+   symlinks and no samtools invocation at all.
+
 ## 4. Design
 
 ### 4.1 The seam
