@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -220,3 +221,151 @@ def test_keep_intermediates_regenerates_stale_artifacts_for_the_new_plan(tmp_pat
     assert "samtools view" in commands[0]
     assert "samtools fastq" in commands[1]
     assert str(run_dir / "output_sliced.bam") in commands[1]
+
+
+def _assert_rejected_before_conversion_work(
+    tmp_path: Path,
+    plan: AlignmentPlan,
+    *,
+    fast_mode: bool,
+    error_match: str = "derived alignment-conversion destination",
+) -> None:
+    """Assert an unsafe derived entry stops both region and command execution."""
+    region_resolver = MagicMock(return_value=REGION)
+    command_runner = MagicMock(return_value=True)
+    with (
+        patch.object(fastq_bam_processing, "get_region_string_with_fallback", region_resolver),
+        patch.object(fastq_bam_processing, "run_command", command_runner),
+        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset"),
+        patch.object(fastq_bam_processing.os, "replace"),
+        pytest.raises(ValueError, match=error_match),
+    ):
+        fastq_bam_processing.process_bam_to_fastq(
+            output=str(tmp_path / "run"),
+            output_name="output",
+            threads=4,
+            config=CONFIG,
+            fast_mode=fast_mode,
+            plan=plan,
+        )
+
+    region_resolver.assert_not_called()
+    command_runner.assert_not_called()
+
+
+def test_stale_slice_symlink_to_patient_alignment_is_rejected_before_work(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    input_root = Path(plan.input_path).parent
+    stale_slice = tmp_path / "run" / "output_sliced.bam"
+    stale_slice.symlink_to(plan.input_path)
+    before = _tree_digest(input_root)
+
+    _assert_rejected_before_conversion_work(tmp_path, plan, fast_mode=True)
+
+    assert _tree_digest(input_root) == before
+    assert stale_slice.is_symlink()
+
+
+def test_stale_r1_hardlink_to_patient_index_is_rejected_before_work(tmp_path: Path) -> None:
+    initial_plan = _plan(tmp_path, "bam")
+    source_index = Path(initial_plan.input_path).with_suffix(".bam.bai")
+    source_index.write_bytes(b"patient-index")
+    plan = replace(initial_plan, index_path=str(source_index))
+    stale_r1 = tmp_path / "run" / "output_R1.fastq.gz"
+    stale_r1.hardlink_to(source_index)
+    before = _tree_digest(source_index.parent)
+
+    _assert_rejected_before_conversion_work(tmp_path, plan, fast_mode=True)
+
+    assert _tree_digest(source_index.parent) == before
+    assert stale_r1.stat().st_ino == source_index.stat().st_ino
+
+
+@pytest.mark.parametrize(
+    ("stale_name", "file_format", "fast_mode"),
+    [
+        ("output_sliced.bam.bai", "bam", True),
+        ("output_sliced.bam.csi", "bam", True),
+        ("output_sliced.bai", "bam", True),
+        ("output_sliced.csi", "bam", True),
+        ("output_unmapped.bam", "bam", False),
+        ("output_sliced_unmapped.bam", "bam", False),
+        ("output_R2.fastq.gz", "bam", True),
+        ("output_other.fastq.gz", "bam", True),
+        ("output_single.fastq.gz", "bam", True),
+        ("output_slice.log", "bam", True),
+        ("output_filter.log", "cram", False),
+        ("output_merge.log", "bam", False),
+        ("output_index.log", "bam", False),
+        ("output_sort_fastq.log", "bam", True),
+    ],
+)
+def test_stale_index_and_log_symlinks_are_rejected_before_work(
+    tmp_path: Path,
+    stale_name: str,
+    file_format: str,
+    fast_mode: bool,
+) -> None:
+    plan = _plan(tmp_path, file_format)
+    protected = Path(plan.input_path)
+    stale_path = tmp_path / "run" / stale_name
+    stale_path.symlink_to(protected)
+    before = _tree_digest(protected.parent)
+
+    _assert_rejected_before_conversion_work(tmp_path, plan, fast_mode=fast_mode)
+
+    assert _tree_digest(protected.parent) == before
+    assert stale_path.is_symlink()
+
+
+def test_stale_non_regular_derived_destination_is_rejected_before_work(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    stale_unmapped = tmp_path / "run" / "output_unmapped.bam"
+    stale_unmapped.mkdir()
+
+    _assert_rejected_before_conversion_work(tmp_path, plan, fast_mode=False)
+
+    assert stale_unmapped.is_dir()
+
+
+def test_derived_hardlink_to_the_plan_view_is_reported_as_a_protected_alias(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    view = Path(plan.view_path)
+    view.write_bytes(b"proven-view")
+    stale_r2 = tmp_path / "run" / "output_R2.fastq.gz"
+    stale_r2.hardlink_to(view)
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=True,
+        error_match="aliases protected input",
+    )
+
+
+def test_multiply_linked_derived_artifact_is_rejected_even_when_unrelated_to_the_plan(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    unrelated = tmp_path / "unrelated-artifact"
+    unrelated.write_bytes(b"unrelated")
+    stale_other = tmp_path / "run" / "output_other.fastq.gz"
+    stale_other.hardlink_to(unrelated)
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=True,
+        error_match="multiple hard links",
+    )
+
+    assert unrelated.read_bytes() == b"unrelated"
+
+
+def test_single_link_regular_derived_artifacts_remain_replaceable(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "bam")
+    run_dir = tmp_path / "run"
+    (run_dir / "output_sliced.bam").write_bytes(b"stale-slice")
+    (run_dir / "output_R1.fastq.gz").write_bytes(b"stale-fastq")
+
+    commands, _ = _run_conversion(tmp_path, plan, fast_mode=True)
+
+    assert len(commands) == 2

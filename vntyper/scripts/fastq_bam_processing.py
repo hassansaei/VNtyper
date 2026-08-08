@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_target_io import validate_alignment_conversion_destinations
 from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
     build_cram_unmapped_filter_command,
@@ -110,8 +111,10 @@ def process_bam_to_fastq(
         tuple: Paths to the generated FASTQ files (R1, R2, other, single).
 
     Raises:
+        ValueError: If any derived output path is unsafe to overwrite.
         RuntimeError: If any step in the processing fails.
     """
+    validate_alignment_conversion_destinations(output, output_name, plan)
     samtools_path = config["tools"]["samtools"]
 
     if bed_file:

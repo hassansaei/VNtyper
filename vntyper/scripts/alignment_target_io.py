@@ -9,7 +9,7 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
-from vntyper.scripts.alignment_contract import index_candidate_names
+from vntyper.scripts.alignment_contract import AlignmentPlan, index_candidate_names
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,79 @@ def _protected_alignment_paths(input_path: str | Path, file_format: str) -> tupl
         if os.path.lexists(candidate)
     )
     return tuple(paths)
+
+
+def _alignment_plan_protected_paths(plan: AlignmentPlan) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for alignment_path in (plan.input_path, plan.view_path):
+        alignment = _absolute(alignment_path)
+        paths.extend((alignment, alignment.resolve(strict=False)))
+        for source in (alignment, alignment.resolve(strict=False)):
+            paths.extend(_absolute(candidate) for candidate in index_candidate_names(str(source), plan.file_format))
+    index = _absolute(plan.index_path)
+    paths.extend((index, index.resolve(strict=False)))
+    return tuple(dict.fromkeys(paths))
+
+
+def _validate_owned_destination(destination: Path, protected_paths: tuple[Path, ...]) -> None:
+    destination_absolute = _absolute(destination)
+    if os.path.lexists(destination):
+        destination_stat = os.lstat(destination)
+        if stat.S_ISLNK(destination_stat.st_mode):
+            _reject(f"Unsafe derived alignment-conversion destination is a symlink: {destination}")
+        if not stat.S_ISREG(destination_stat.st_mode):
+            _reject(f"Unsafe derived alignment-conversion destination is not a regular file: {destination}")
+    else:
+        destination_stat = None
+
+    for protected in protected_paths:
+        if destination_absolute == protected or _same_file(destination, protected):
+            _reject(f"Unsafe derived alignment-conversion destination aliases protected input: {destination}")
+
+    if destination_stat is not None and destination_stat.st_nlink > 1:
+        _reject(f"Unsafe derived alignment-conversion destination has multiple hard links: {destination}")
+
+
+def validate_alignment_conversion_destinations(
+    output: str | Path,
+    output_name: str,
+    plan: AlignmentPlan,
+) -> None:
+    """Validate every file path owned by alignment-to-FASTQ conversion.
+
+    Existing single-link regular files are replaceable run artifacts. Symlinks,
+    non-regular entries, multiply linked files, and aliases of the proven plan are
+    rejected without modifying any destination.
+
+    Args:
+        output: Conversion-stage output directory.
+        output_name: Base name used for every derived artifact.
+        plan: Proven alignment inputs and index that destinations must not alias.
+
+    Raises:
+        ValueError: If an output root or derived destination is unsafe.
+    """
+    output_root = Path(output)
+    validate_alignment_output_root(output_root, plan.input_path, plan.file_format)
+    sliced_bam = output_root / f"{output_name}_sliced.bam"
+    destinations = [
+        sliced_bam,
+        output_root / f"{output_name}_unmapped.bam",
+        output_root / f"{output_name}_sliced_unmapped.bam",
+        output_root / f"{output_name}_R1.fastq.gz",
+        output_root / f"{output_name}_R2.fastq.gz",
+        output_root / f"{output_name}_other.fastq.gz",
+        output_root / f"{output_name}_single.fastq.gz",
+        output_root / f"{output_name}_slice.log",
+        output_root / f"{output_name}_filter.log",
+        output_root / f"{output_name}_merge.log",
+        output_root / f"{output_name}_index.log",
+        output_root / f"{output_name}_sort_fastq.log",
+    ]
+    destinations.extend(Path(candidate) for candidate in index_candidate_names(str(sliced_bam), "bam"))
+    protected_paths = _alignment_plan_protected_paths(plan)
+    for destination in destinations:
+        _validate_owned_destination(destination, protected_paths)
 
 
 def validate_alignment_output_root(
