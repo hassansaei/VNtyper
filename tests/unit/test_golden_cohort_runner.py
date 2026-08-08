@@ -32,6 +32,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from golden_cohort import runner  # noqa: E402
 
+from vntyper.scripts.cli_parser import build_parser  # noqa: E402
+
 
 def _load_gate_entry_point():
     """Import ``scripts/golden_cohort_gate.py`` as a module without running it.
@@ -233,6 +235,20 @@ def test_a_cram_case_launches_with_a_complete_per_case_scan_config(tmp_path: Pat
     assert effective_mode == "indexed"
     assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == "indexed"
     assert argv[argv.index("--config-path") + 1] == str(config_path)
+
+
+def test_a_cram_case_places_global_config_before_pipeline_and_current_cli_accepts_it(tmp_path: Path) -> None:
+    """Generated CRAM argv must obey the CLI's top-level-only config option contract."""
+    config_path = tmp_path / "case-config.json"
+    case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
+    del case["bam"]
+
+    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8, config_path=config_path)
+    parsed = build_parser().parse_args(argv)
+
+    assert argv[:3] == ["--config-path", str(config_path), "pipeline"]
+    assert parsed.command == "pipeline"
+    assert parsed.config_path == config_path
 
 
 def test_a_cram_case_adds_a_missing_cram_section_to_its_complete_config_copy(tmp_path: Path) -> None:

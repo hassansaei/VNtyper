@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from golden_cohort import HARNESS_VERSION, admissibility, launcher
+from golden_cohort import HARNESS_VERSION, admissibility, launcher, read_set_commands
 from golden_cohort.artifacts import read_json
 
 logger = logging.getLogger(__name__)
@@ -94,25 +94,26 @@ def pipeline_argv(
         raise ValueError(msg)
     alignment_flag, alignment_key = ALIGNMENT_FLAGS[alignment_kind]
 
-    argv = [
-        "pipeline",
-        alignment_flag,
-        case[alignment_key],
-        "--reference-assembly",
-        case["assembly"],
-        "--output-dir",
-        str(output_dir),
-        "--threads",
-        str(advntr_threads if case.get("advntr") else threads),
-    ]
+    argv = ["--config-path", str(config_path)] if config_path is not None else []
+    argv.extend(
+        [
+            "pipeline",
+            alignment_flag,
+            case[alignment_key],
+            "--reference-assembly",
+            case["assembly"],
+            "--output-dir",
+            str(output_dir),
+            "--threads",
+            str(advntr_threads if case.get("advntr") else threads),
+        ]
+    )
     if case.get("fast_mode", True):
         argv.append("--fast-mode")
     if case.get("advntr"):
         argv.extend(["--extra-modules", "advntr"])
         if case.get("advntr_max_coverage"):
             argv.extend(["--advntr-max-coverage", str(case["advntr_max_coverage"])])
-    if config_path is not None:
-        argv.extend(["--config-path", str(config_path)])
     return argv
 
 
@@ -278,8 +279,36 @@ def _run_one(
         "seconds": round(time.monotonic() - started, 2),
         "effective_unmapped_scan": case.get("effective_unmapped_scan"),
         "case_config_path": case.get("case_config_path"),
+        "unmapped_read_set": None,
     }
+
+    read_set_problem = ""
+    if case.get("alignment_kind", "bam") == "cram" and exit_code == 0:
+        try:
+            raw_config_path = case.get("case_config_path")
+            if not isinstance(raw_config_path, str) or not raw_config_path:
+                raise ValueError("the successful CRAM case has no complete case_config_path")
+            case_config = json.loads(Path(raw_config_path).read_text(encoding="utf-8"))
+            tools = case_config.get("tools")
+            samtools_path = tools.get("samtools") if isinstance(tools, dict) else None
+            if not isinstance(samtools_path, str) or not samtools_path:
+                raise ValueError(f"the complete case config at {raw_config_path} has no tools.samtools string")
+
+            record["unmapped_read_set"] = read_set_commands.collect_read_set_evidence(
+                output_dir / "fastq_bam_processing" / "output_unmapped.bam",
+                samtools_path,
+                cwd=tree,
+                temporary_parent=log_dir,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            read_set_problem = f"could not collect CRAM read-set evidence: {exc}"
+            logger.error(f"[{side}] {case_id}: {read_set_problem}")
+
     record.update(admissibility.check_case(case, record, output_dir))
+    if read_set_problem:
+        record["expectation_problems"].append(read_set_problem)
+        record["expectation_met"] = False
     (log_dir / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
     status = "ABORTED" if aborted else f"exit {exit_code}"
