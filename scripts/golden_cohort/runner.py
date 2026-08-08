@@ -283,11 +283,12 @@ def _run_one(
     }
 
     read_set_problem = ""
-    if case.get("alignment_kind", "bam") == "cram" and exit_code == 0:
+    unmapped_bam = output_dir / "fastq_bam_processing" / "output_unmapped.bam"
+    if case.get("alignment_kind", "bam") == "cram" and unmapped_bam.is_file():
         try:
             raw_config_path = case.get("case_config_path")
             if not isinstance(raw_config_path, str) or not raw_config_path:
-                raise ValueError("the successful CRAM case has no complete case_config_path")
+                raise ValueError("the CRAM case with an unmapped BAM has no complete case_config_path")
             case_config = json.loads(Path(raw_config_path).read_text(encoding="utf-8"))
             tools = case_config.get("tools")
             samtools_path = tools.get("samtools") if isinstance(tools, dict) else None
@@ -295,7 +296,7 @@ def _run_one(
                 raise ValueError(f"the complete case config at {raw_config_path} has no tools.samtools string")
 
             record["unmapped_read_set"] = read_set_commands.collect_read_set_evidence(
-                output_dir / "fastq_bam_processing" / "output_unmapped.bam",
+                unmapped_bam,
                 samtools_path,
                 cwd=tree,
                 temporary_parent=log_dir,

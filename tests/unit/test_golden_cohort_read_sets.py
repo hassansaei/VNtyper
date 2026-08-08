@@ -143,8 +143,97 @@ def test_a_successful_cram_case_records_unmapped_read_set_evidence(tmp_path: Pat
     assert json.loads((log_dir / "result.json").read_text())["unmapped_read_set"] == record["unmapped_read_set"]
 
 
-def test_a_successful_cram_case_fails_closed_when_read_set_evidence_cannot_be_collected(tmp_path: Path) -> None:
-    """A zero-exit CRAM run cannot be admissible when its samtools evidence command fails."""
+def test_a_nonzero_cram_case_with_an_unmapped_bam_still_records_read_set_evidence(tmp_path: Path) -> None:
+    """A later fail-closed routing exit must not erase the extraction evidence already written."""
+    tree = tmp_path / "tree"
+    output_dir = tmp_path / "out"
+    log_dir = tmp_path / "logs"
+    config_path = log_dir / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"tools": {"samtools": "/case/samtools"}}), encoding="utf-8")
+    unmapped_bam = output_dir / "fastq_bam_processing" / "output_unmapped.bam"
+    unmapped_bam.parent.mkdir(parents=True)
+    unmapped_bam.touch()
+    case = _case("7a61_stream_cram", config_path)
+    case["expect_exit"] = "nonzero"
+    pipeline_result = mock.Mock(
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n", stderr="mixed layout", returncode=1
+    )
+    evidence = {
+        "count": 622_690,
+        "sorted_read_name_sha256": "a" * 64,
+    }
+
+    with (
+        mock.patch.object(read_set_commands, "collect_read_set_evidence", return_value=evidence) as collect,
+        mock.patch.object(runner.subprocess, "run", return_value=pipeline_result),
+        mock.patch.object(runner.time, "monotonic", side_effect=[100.0, 102.345]),
+    ):
+        record = runner._run_one(
+            case=case,
+            argv=["--config-path", str(config_path), "pipeline", "--cram", str(case["cram"])],
+            tree=tree,
+            side="after",
+            marker="vntyper.scripts.cram_preflight",
+            expect_marker=True,
+            output_dir=output_dir,
+            log_dir=log_dir,
+            timeout=60,
+        )
+
+    collect.assert_called_once_with(
+        unmapped_bam,
+        "/case/samtools",
+        cwd=tree,
+        temporary_parent=log_dir,
+        timeout=60,
+    )
+    assert record["unmapped_read_set"] == evidence
+    assert record["exit_code"] == 1
+    assert record["seconds"] == 2.34
+    assert record["expectation_met"] is True
+    assert record["expectation_problems"] == []
+
+
+def test_a_cram_preflight_failure_without_an_unmapped_bam_preserves_the_original_expectation(tmp_path: Path) -> None:
+    """No extraction artefact means no evidence diagnostic may mask the pipeline's exit failure."""
+    tree = tmp_path / "tree"
+    output_dir = tmp_path / "out"
+    log_dir = tmp_path / "logs"
+    config_path = log_dir / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"tools": {"samtools": "/case/samtools"}}), encoding="utf-8")
+    case = _case("cram_preflight_failure", config_path)
+    pipeline_result = mock.Mock(
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n", stderr="missing reference", returncode=1
+    )
+
+    with (
+        mock.patch.object(read_set_commands, "collect_read_set_evidence") as collect,
+        mock.patch.object(runner.subprocess, "run", return_value=pipeline_result),
+        mock.patch.object(runner.time, "monotonic", side_effect=[200.0, 203.456]),
+    ):
+        record = runner._run_one(
+            case=case,
+            argv=["--config-path", str(config_path), "pipeline", "--cram", str(case["cram"])],
+            tree=tree,
+            side="after",
+            marker="vntyper.scripts.cram_preflight",
+            expect_marker=True,
+            output_dir=output_dir,
+            log_dir=log_dir,
+            timeout=60,
+        )
+
+    collect.assert_not_called()
+    assert record["unmapped_read_set"] is None
+    assert record["seconds"] == 3.46
+    assert record["expectation_met"] is False
+    assert record["expectation_problems"] == ["expected exit 0, got 1"]
+
+
+def test_an_expected_nonzero_cram_case_fails_closed_when_its_existing_bam_cannot_be_evidenced(tmp_path: Path) -> None:
+    """Evidence failure must make an otherwise expected routing exit inadmissible."""
     tree = tmp_path / "tree"
     output_dir = tmp_path / "out"
     log_dir = tmp_path / "logs"
@@ -155,7 +244,10 @@ def test_a_successful_cram_case_fails_closed_when_read_set_evidence_cannot_be_co
     unmapped_bam.parent.mkdir(parents=True)
     unmapped_bam.touch()
     case = _case("b178_stream_cram", config_path)
-    pipeline_result = mock.Mock(stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n", stderr="", returncode=0)
+    case["expect_exit"] = "nonzero"
+    pipeline_result = mock.Mock(
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n", stderr="mixed layout", returncode=1
+    )
     failed_count = mock.Mock(stdout="", stderr="cannot decode", returncode=7)
 
     with mock.patch.object(read_set_commands.subprocess, "run", side_effect=[pipeline_result, failed_count]):
@@ -172,6 +264,8 @@ def test_a_successful_cram_case_fails_closed_when_read_set_evidence_cannot_be_co
         )
 
     assert record["unmapped_read_set"] is None
+    assert record["exit_code"] == 1
+    assert record["exit_problem"] == ""
     assert record["expectation_met"] is False
     assert record["expectation_problems"] == [
         "could not collect CRAM read-set evidence: samtools read-set command exited 7: cannot decode"
