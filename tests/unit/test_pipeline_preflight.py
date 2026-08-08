@@ -148,8 +148,8 @@ def test_cram_plan_drives_conversion_and_reference_aware_coverage(tmp_path: Path
     assert coverage["reference_path"] == reference
 
 
-def test_explicit_cram_reference_reaches_preflight_as_the_cli_candidate(tmp_path: Path) -> None:
-    """Dropping this value would let config or htslib outrank the CLI flag.
+def test_pipeline_threads_the_explicit_cram_reference_to_preflight(tmp_path: Path) -> None:
+    """The parser value must survive pipeline orchestration without being dropped.
 
     Args:
         tmp_path: Pytest temporary directory.

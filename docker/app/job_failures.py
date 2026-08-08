@@ -29,14 +29,21 @@ def read_preflight_failure(output_dir: str | Path) -> dict[str, str] | None:
     Returns:
         The code and public message, or ``None`` for an absent or invalid artifact.
     """
-    artifact = Path(output_dir) / PREFLIGHT_ERROR_FILENAME
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    common_flags = getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    directory_flags = os.O_RDONLY | common_flags | getattr(os, "O_DIRECTORY", 0)
     try:
-        descriptor = os.open(artifact, flags)
+        directory_descriptor = os.open(output_dir, directory_flags)
     except OSError:
         return None
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        descriptor = os.open(PREFLIGHT_ERROR_FILENAME, os.O_RDONLY | common_flags, dir_fd=directory_descriptor)
+    except OSError:
+        return None
+    finally:
+        os.close(directory_descriptor)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             return None
         with os.fdopen(descriptor, encoding="utf-8") as artifact_file:
             descriptor = -1

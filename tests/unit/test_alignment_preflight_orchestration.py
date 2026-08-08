@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 from unittest.mock import patch
 
@@ -128,6 +129,54 @@ def test_a_cram_plan_uses_configured_candidate_order_and_idxstats_evidence(tmp_p
     assert plan.reference_source == "config_bwa_reference"
     assert plan.uncovered_contigs == ()
     assert plan.unmapped_scan == "indexed"
+
+
+def test_default_policy_probes_the_cli_reference_before_configured_candidates(tmp_path: Path) -> None:
+    """The real orchestrator must issue the CLI ``-T`` probe first by default."""
+    input_dir = tmp_path / "input"
+    output = tmp_path / "output"
+    input_dir.mkdir()
+    alignment = input_dir / "sample.cram"
+    alignment.write_bytes(b"CRAM")
+    (input_dir / "sample.cram.crai").write_bytes(b"CRAI")
+    cli_reference = tmp_path / "cli reference.fa"
+    cram_reference = tmp_path / "configured-cram.fa"
+    bwa_reference = tmp_path / "configured-bwa.fa"
+    for reference in (cli_reference, cram_reference, bwa_reference):
+        reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    config = {
+        "reference_data": {
+            "cram_reference_hg19": str(cram_reference),
+            "bwa_reference_hg19": str(bwa_reference),
+        }
+    }
+    reference_probes: list[str] = []
+
+    def commands(command: str, log_file: str, cwd: str | None = None) -> tuple[bool, str]:
+        del log_file, cwd
+        if " idxstats " in f" {command} ":
+            return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
+        reference_probes.append(command)
+        return str(cram_reference) in shlex.split(command), "decode result"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=commands):
+        plan = run_preflight(
+            str(alignment),
+            str(output),
+            "sample",
+            "cram",
+            config,
+            1,
+            region="chr1:1-2",
+            reference_fasta=str(cli_reference),
+            header_contigs=("chr1",),
+        )
+
+    assert [shlex.split(command)[shlex.split(command).index("-T") + 1] for command in reference_probes] == [
+        str(cli_reference),
+        str(cram_reference),
+    ]
+    assert plan.reference_source == "config_cram_reference"
 
 
 def test_a_bam_plan_probes_the_index_without_reference_or_idxstats_resolution(tmp_path: Path) -> None:

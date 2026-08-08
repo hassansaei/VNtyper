@@ -12,6 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import NoReturn
 
+from vntyper.scripts import preflight_error_io as error_io
 from vntyper.scripts.alignment_contract import (
     FORMAT_BAM,
     FORMAT_CRAM,
@@ -35,7 +36,6 @@ from vntyper.scripts.command_builders import (
     build_samtools_index_command,
 )
 from vntyper.scripts.idxstats_parsing import choose_scan
-from vntyper.scripts.preflight_error_io import public_reference_error_payload, write_preflight_error
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
 
 logger = logging.getLogger(__name__)
@@ -419,7 +419,7 @@ def resolve_reference(
     header_contigs: Iterable[str],
     m5: str | None,
     *,
-    error_output_dir: str | Path | None = None,
+    failure_context: error_io.PreflightErrorContext | None = None,
 ) -> tuple[str | None, str, tuple[str, ...]]:
     """Probe explicit CRAM references before one final htslib-resolved candidate.
 
@@ -434,7 +434,7 @@ def resolve_reference(
         output_name: Base name for probe logs.
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
-        error_output_dir: Run output root for the curated failure artifact.
+        failure_context: Boundary diagnostics receiving structured candidate details.
 
     Returns:
         The winning path, source, and uncovered header contigs. An htslib-resolved
@@ -502,11 +502,8 @@ def resolve_reference(
     contigs = tuple(header_contigs)
     target_contig = _target_contig(region, bed_file, contigs)
     message = unresolvable_reference_message(view_path, target_contig, m5, attempts)
-    public_payload = public_reference_error_payload(target_contig, m5, attempts)
-    try:
-        write_preflight_error(error_output_dir if error_output_dir is not None else output_dir, public_payload)
-    except (OSError, ValueError) as error:
-        logger.error(f"Unable to write preflight error artifact safely: {error}")
+    if failure_context is not None:
+        failure_context.payload = error_io.public_reference_error_payload(target_contig, m5, attempts)
     _reject(message)
 
 
@@ -579,71 +576,74 @@ def run_preflight(
         RuntimeError: If an indexed BAM cannot retrieve the requested target.
         ValueError: If format, scan, candidate policy, target, or reference is invalid.
     """
-    bai_only = file_format == FORMAT_BAM and not fast_mode
-    candidates = (
-        ordered_reference_candidates(config, reference_assembly, reference_fasta) if file_format == FORMAT_CRAM else ()
-    )
-    _validate_preflight_logs(
-        in_path,
-        output_dir,
-        output_name,
-        file_format,
-        candidates,
-        bai_only=bai_only,
-    )
-    view_path, index_path = build_alignment_view(
-        in_path,
-        output_dir,
-        output_name,
-        file_format,
-        config,
-        threads,
-        bai_only=bai_only,
-    )
-    contigs = tuple(header_contigs)
-    if file_format == FORMAT_CRAM:
-        unmapped_scan = choose_unmapped_scan(view_path, config, threads, output_dir, output_name)
-        reference_path, reference_source, uncovered_contigs = resolve_reference(
-            view_path,
-            candidates,
-            region,
-            bed_file,
-            config,
-            threads,
+    failure_context = error_io.PreflightErrorContext(error_output_dir if error_output_dir is not None else output_dir)
+    with error_io.persist_preflight_failure(failure_context):
+        bai_only = file_format == FORMAT_BAM and not fast_mode
+        candidates = (
+            ordered_reference_candidates(config, reference_assembly, reference_fasta)
+            if file_format == FORMAT_CRAM
+            else ()
+        )
+        _validate_preflight_logs(
+            in_path,
             output_dir,
             output_name,
-            contigs,
-            m5,
-            error_output_dir=error_output_dir,
+            file_format,
+            candidates,
+            bai_only=bai_only,
         )
-    else:
-        command = build_cram_reference_probe_command(
-            samtools_path=config.get("tools", {}).get("samtools", "samtools"),
-            in_bam=view_path,
-            region=region,
-            bed_file=bed_file,
-            reference_path=None,
-            threads=threads,
+        view_path, index_path = build_alignment_view(
+            in_path,
+            output_dir,
+            output_name,
+            file_format,
+            config,
+            threads,
+            bai_only=bai_only,
         )
-        log_file = str(Path(output_dir) / f"{output_name}_alignment_probe.log")
-        exit_ok, output = capture_command(command, log_file)
-        if not exit_ok:
-            reason = output.strip() or "probe exited non-zero"
-            message = f"BAM preflight probe failed: {reason}"
-            logger.error(message)
-            raise RuntimeError(message)
-        unmapped_scan = "indexed"
-        reference_path = None
-        reference_source = "not-required"
-        uncovered_contigs = ()
+        if file_format == FORMAT_CRAM:
+            unmapped_scan = choose_unmapped_scan(view_path, config, threads, output_dir, output_name)
+            reference_path, reference_source, uncovered_contigs = resolve_reference(
+                view_path,
+                candidates,
+                region,
+                bed_file,
+                config,
+                threads,
+                output_dir,
+                output_name,
+                tuple(header_contigs),
+                m5,
+                failure_context=failure_context,
+            )
+        else:
+            command = build_cram_reference_probe_command(
+                samtools_path=config.get("tools", {}).get("samtools", "samtools"),
+                in_bam=view_path,
+                region=region,
+                bed_file=bed_file,
+                reference_path=None,
+                threads=threads,
+            )
+            log_file = str(Path(output_dir) / f"{output_name}_alignment_probe.log")
+            exit_ok, output = capture_command(command, log_file)
+            if not exit_ok:
+                reason = output.strip() or "probe exited non-zero"
+                message = f"BAM preflight probe failed: {reason}"
+                logger.error(message)
+                raise RuntimeError(message)
+            unmapped_scan = "indexed"
+            reference_path = None
+            reference_source = "not-required"
+            uncovered_contigs = ()
 
-    return AlignmentPlan(
-        input_path=in_path,
-        view_path=view_path,
-        file_format=file_format,
-        index_path=index_path,
-        reference_path=reference_path,
-        reference_source=reference_source,
-        uncovered_contigs=uncovered_contigs,
-        unmapped_scan=unmapped_scan,
-    )
+        return AlignmentPlan(
+            input_path=in_path,
+            view_path=view_path,
+            file_format=file_format,
+            index_path=index_path,
+            reference_path=reference_path,
+            reference_source=reference_source,
+            uncovered_contigs=uncovered_contigs,
+            unmapped_scan=unmapped_scan,
+        )
