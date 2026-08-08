@@ -63,6 +63,7 @@ PIPELINE_STAGE_ATTRS = (
     "validate_fastq_file",
     "get_region_string_with_fallback",
     "process_bam_to_fastq",
+    "route_converted_fastqs",
     "process_fastq",
     "align_and_sort_fastq",
     "extract_bam_header",
@@ -266,6 +267,7 @@ def run_pipeline_under_harness(
         stages["get_region_string_with_fallback"].return_value = "chr1:155158000-155163000"
         stages["run_preflight"].side_effect = _alignment_plan
         stages["process_bam_to_fastq"].return_value = _fastq_pair(output_dir, basename)
+        stages["route_converted_fastqs"].return_value = _fastq_pair(output_dir, basename)[:2]
         stages["align_and_sort_fastq"].return_value = str(
             output_dir / "alignment_processing" / f"{basename}_sorted.bam"
         )

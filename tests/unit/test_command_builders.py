@@ -150,6 +150,31 @@ def test_the_fastp_command_omits_both_optional_flags_when_disabled():
     assert "--dedup" not in command
 
 
+def test_the_fastp_command_uses_its_single_input_form_when_mate_two_is_absent():
+    command = build_fastp_command(
+        fastp_path=FASTP,
+        threads=4,
+        fastq_1="/data/single.fq.gz",
+        fastq_2=None,
+        output="/out",
+        output_name="output",
+        compression_level=6,
+        qualified_quality_phred=20,
+        dup_calc_accuracy=3,
+        length_required=50,
+        disable_adapter_trimming=False,
+        deduplication=False,
+    )
+
+    assert command == (
+        "fastp --thread 4 --in1 /data/single.fq.gz --out1 /out/output_R1.fastq.gz "
+        "--compression 6 --qualified_quality_phred 20 --dup_calc_accuracy 3 "
+        "--length_required 50 --html /out/output.html --json /out/output.json "
+    )
+    assert "--in2" not in command
+    assert "--out2" not in command
+
+
 @pytest.mark.parametrize(
     ("disable_adapter_trimming", "deduplication", "expected_suffix"),
     [
@@ -616,6 +641,25 @@ def test_the_bwa_align_sort_command_is_pinned_with_pipefail():
         "samtools view -@ 4 -b | "
         "samtools sort -@ 4 -o /out/output_sorted.bam"
     )
+
+
+def test_the_bwa_align_sort_command_accepts_one_fastq_without_a_none_operand():
+    command = build_bwa_align_sort_command(
+        bwa_path=BWA,
+        samtools_path=SAMTOOLS,
+        threads=4,
+        reference="/ref/ref.fa",
+        fastq1="/data/single.fq.gz",
+        fastq2=None,
+        sorted_bam="/out/output_sorted.bam",
+    )
+
+    assert command == (
+        "set -o pipefail; bwa mem -t 4 /ref/ref.fa /data/single.fq.gz | "
+        "samtools view -@ 4 -b | "
+        "samtools sort -@ 4 -o /out/output_sorted.bam"
+    )
+    assert "None" not in command
 
 
 @pytest.mark.parametrize(

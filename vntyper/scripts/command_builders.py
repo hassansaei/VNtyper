@@ -132,7 +132,7 @@ def build_fastp_command(
     fastp_path: str,
     threads: int,
     fastq_1: str | Path,
-    fastq_2: str | Path,
+    fastq_2: str | Path | None,
     output: str | Path,
     output_name: str,
     compression_level: int,
@@ -143,13 +143,13 @@ def build_fastp_command(
     deduplication: bool,
 ) -> str:
     """
-    Build the fastp quality-control command for a pair of FASTQ files.
+    Build the fastp quality-control command for one or two FASTQ files.
 
     Args:
         fastp_path (str): fastp invocation from ``config["tools"]["fastp"]``.
         threads (int): Thread count.
         fastq_1 (str | Path): Input R1.
-        fastq_2 (str | Path): Input R2.
+        fastq_2 (str | Path | None): Optional input R2.
         output (str | Path): Output directory.
         output_name (str): Base name for every produced file.
         compression_level (int): gzip compression level for the outputs.
@@ -169,14 +169,20 @@ def build_fastp_command(
         pre-extraction code so the refactor is byte-identical; bash ignores it.
     """
     out_1 = f"{output}/{output_name}_R1.fastq.gz"
-    out_2 = f"{output}/{output_name}_R2.fastq.gz"
     html = f"{output}/{output_name}.html"
     json_report = f"{output}/{output_name}.json"
 
+    input_fragment = f"--in1 {quote_path(fastq_1)} "
+    output_fragment = f"--out1 {quote_path(out_1)} "
+    if fastq_2 is not None:
+        out_2 = f"{output}/{output_name}_R2.fastq.gz"
+        input_fragment += f"--in2 {quote_path(fastq_2)} "
+        output_fragment += f"--out2 {quote_path(out_2)} "
+
     command = (
         f"{fastp_path} --thread {quote_path(threads)} "
-        f"--in1 {quote_path(fastq_1)} --in2 {quote_path(fastq_2)} "
-        f"--out1 {quote_path(out_1)} --out2 {quote_path(out_2)} "
+        f"{input_fragment}"
+        f"{output_fragment}"
         f"--compression {quote_path(compression_level)} "
         f"--qualified_quality_phred {quote_path(qualified_quality_phred)} "
         f"--dup_calc_accuracy {quote_path(dup_calc_accuracy)} "
@@ -526,7 +532,7 @@ def build_bwa_align_sort_command(
     threads: int,
     reference: str | Path,
     fastq1: str | Path,
-    fastq2: str | Path,
+    fastq2: str | Path | None,
     sorted_bam: str | Path,
 ) -> str:
     """
@@ -538,7 +544,7 @@ def build_bwa_align_sort_command(
         threads (int): Thread count for all three stages.
         reference (str | Path): Reference FASTA, already BWA-indexed.
         fastq1 (str | Path): Input R1.
-        fastq2 (str | Path): Input R2.
+        fastq2 (str | Path | None): Optional input R2.
         sorted_bam (str | Path): Output coordinate-sorted BAM.
 
     Returns:
@@ -549,10 +555,14 @@ def build_bwa_align_sort_command(
         that aborts part-way still lets ``samtools sort`` write a valid,
         **incomplete** BAM and exit 0.
     """
+    fastq_inputs = quote_path(fastq1)
+    if fastq2 is not None:
+        fastq_inputs += f" {quote_path(fastq2)}"
+
     return (
         f"{PIPEFAIL_PREFIX}"
         f"{bwa_path} mem -t {quote_path(threads)} {quote_path(reference)} "
-        f"{quote_path(fastq1)} {quote_path(fastq2)} | "
+        f"{fastq_inputs} | "
         f"{samtools_path} view -@ {quote_path(threads)} -b | "
         f"{samtools_path} sort -@ {quote_path(threads)} -o {quote_path(sorted_bam)}"
     )

@@ -37,6 +37,7 @@ from vntyper.scripts.pipeline_alignment import build_alignment_preflight_kwargs,
 # behaviour change - it rejects inputs that previously ran to completion - is a
 # single revertible commit (AGENTS.md rule 3: pipeline.py is over the size limit).
 from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
+from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)
@@ -150,7 +151,7 @@ def run_pipeline(
     logger.info("Pipeline execution started.")
 
     input_type = None
-    if fastq1 and fastq2:
+    if fastq1:
         input_type = "FASTQ"
     elif bam:
         input_type = "BAM"
@@ -163,7 +164,8 @@ def run_pipeline(
     input_files = {}
     if input_type == "FASTQ":
         input_files["fastq1"] = os.path.basename(fastq1)
-        input_files["fastq2"] = os.path.basename(fastq2)
+        if fastq2:
+            input_files["fastq2"] = os.path.basename(fastq2)
     elif input_type == "BAM":
         input_files["bam"] = os.path.basename(bam)
     elif input_type == "CRAM":
@@ -182,13 +184,10 @@ def run_pipeline(
             logger.error("Multiple input types provided. Provide only one: FASTQ, BAM, or CRAM.")
             raise ValueError("Provide either BAM, CRAM, or FASTQ files, not multiples.")
 
-        if not bam and not cram and (not fastq1 or not fastq2):
-            logger.error(
-                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing."
-            )
-            raise ValueError(
-                "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing."
-            )
+        if not bam and not cram and not fastq1:
+            msg = "When not providing BAM/CRAM, --fastq1 must be specified; --fastq2 is optional."
+            logger.error(msg)
+            raise ValueError(msg)
 
         # Validation owns a run-local log, but stage directories wait until preflight passes.
         if input_type in ["BAM", "CRAM"]:
@@ -201,10 +200,11 @@ def run_pipeline(
             validate_bam_file(cram, cwd=project_root, log_dir=output_dir)
         elif input_type == "FASTQ":
             validate_fastq_file(fastq1)
-            validate_fastq_file(fastq2)
+            if fastq2:
+                validate_fastq_file(fastq2)
         else:
-            logger.error("Incomplete FASTQ inputs provided.")
-            raise ValueError("Both FASTQ files must be provided for paired-end sequencing.")
+            logger.error("No supported input was provided.")
+            raise ValueError("No supported input was provided.")
 
         # BAM and CRAM share one path here; FASTQ has no header of its own and is
         # deliberately not guarded (see pipeline_guards for why).
@@ -263,20 +263,27 @@ def run_pipeline(
                 if bam is None or str(bam).strip().lower() == "none":
                     logger.error("Invalid BAM input (None).")
                     raise ValueError("Invalid BAM file input.")
+            else:  # CRAM branch
+                if cram is None or str(cram).strip().lower() == "none":
+                    logger.error("Invalid CRAM input (None).")
+                    raise ValueError("Invalid CRAM file input.")
 
-                fastq1, fastq2, _, _ = process_bam_to_fastq(
-                    output=dirs["fastq_bam_processing"],
-                    output_name="output",
-                    threads=threads,
-                    config=config,
-                    plan=alignment_plan,
-                    reference_assembly=reference_assembly,
-                    fast_mode=fast_mode,
-                    delete_intermediates=delete_intermediates,
-                    keep_intermediates=keep_intermediates,
-                    bed_file=bed_file_path,
-                )
-                conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
+            produced_fastqs = process_bam_to_fastq(
+                output=dirs["fastq_bam_processing"],
+                output_name="output",
+                threads=threads,
+                config=config,
+                plan=alignment_plan,
+                reference_assembly=reference_assembly,
+                fast_mode=fast_mode,
+                delete_intermediates=delete_intermediates,
+                keep_intermediates=keep_intermediates,
+                bed_file=bed_file_path,
+            )
+            fastq1, fastq2 = route_converted_fastqs(produced_fastqs, config)
+            conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
+
+            if input_type == "BAM":
                 header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
                 # Reuse the header the guard already read: one samtools invocation, not
                 # two. If the guard could not read it, re-read here so that a samtools
@@ -294,38 +301,17 @@ def run_pipeline(
                     header_parse_end,
                     write_summary_path=summary_file_path,
                 )
-            else:  # CRAM branch
-                if cram is None or str(cram).strip().lower() == "none":
-                    logger.error("Invalid CRAM input (None).")
-                    raise ValueError("Invalid CRAM file input.")
-
-                fastq1, fastq2, _, _ = process_bam_to_fastq(
-                    output=dirs["fastq_bam_processing"],
-                    output_name="output",
-                    threads=threads,
-                    config=config,
-                    plan=alignment_plan,
-                    reference_assembly=reference_assembly,
-                    fast_mode=fast_mode,
-                    delete_intermediates=delete_intermediates,
-                    keep_intermediates=keep_intermediates,
-                    bed_file=bed_file_path,
-                )
-                conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
             conversion_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
                 f"{input_type} to FASTQ Conversion",
-                str(Path(dirs["fastq_bam_processing"]) / "output_R1.fastq.gz"),
+                str(fastq1),
                 "fastq",
                 conversion_command,
                 conversion_start,
                 conversion_end,
                 write_summary_path=summary_file_path,
             )
-            if not fastq1 or not fastq2:
-                logger.error("Failed to generate FASTQ files from input. Exiting.")
-                raise ValueError("Failed to generate FASTQ files from input.")
 
         elif input_type == "FASTQ":
             # --- SHARK Filtering Module ---
@@ -362,6 +348,7 @@ def run_pipeline(
                 )
             logger.info("Starting FASTQ quality control.")
             qc_start = datetime.now(timezone.utc).replace(tzinfo=None)
+            paired_fastq_input = fastq2 is not None
             process_fastq(
                 fastq1,
                 fastq2,
@@ -383,7 +370,7 @@ def run_pipeline(
             )
             logger.info("FASTQ quality control completed.")
             fastq1 = os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz")
-            fastq2 = os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz")
+            fastq2 = os.path.join(dirs["fastq_bam_processing"], "output_R2.fastq.gz") if paired_fastq_input else None
             logger.info("Starting FASTQ alignment.")
             align_start = datetime.now(timezone.utc).replace(tzinfo=None)
             sorted_bam = align_and_sort_fastq(
@@ -429,7 +416,7 @@ def run_pipeline(
             )
             logger.info("Starting BAM to FASTQ conversion (Post-alignment).")
             conv2_start = datetime.now(timezone.utc).replace(tzinfo=None)
-            fastq1, fastq2, _, _ = process_bam_to_fastq(
+            produced_fastqs = process_bam_to_fastq(
                 output=dirs["fastq_bam_processing"],
                 output_name="output",
                 threads=threads,
@@ -441,20 +428,19 @@ def run_pipeline(
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
             )
+            fastq1, fastq2 = route_converted_fastqs(produced_fastqs, config)
             conv2_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
                 "BAM to FASTQ Conversion (Post-alignment)",
-                os.path.join(dirs["fastq_bam_processing"], "output_R1.fastq.gz"),
+                str(fastq1),
                 "fastq",
                 "process_bam_to_fastq(plan=post_alignment_plan, ...)",
                 conv2_start,
                 conv2_end,
                 write_summary_path=summary_file_path,
             )
-            if not fastq1 or not fastq2:
-                logger.error("Failed to generate FASTQ files from BAM. Exiting.")
-                raise ValueError("Failed to generate FASTQ files from BAM.")  # --- Coverage Calculation ---
+            # --- Coverage Calculation ---
         logger.info("Calculating mean coverage over the VNTR region.")
         if alignment_plan is None:
             raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
@@ -494,7 +480,7 @@ def run_pipeline(
         reference_vntr = config["reference_data"]["muc1_reference_vntr"]
 
         kestrel_start = datetime.now(timezone.utc).replace(tzinfo=None)
-        if fastq1 and fastq2:
+        if fastq1:
             run_kestrel(
                 vcf_path=Path(vcf_out),
                 output_dir=Path(dirs["kestrel"]),
@@ -508,8 +494,8 @@ def run_pipeline(
                 cwd=project_root,
             )
         else:
-            logger.error("FASTQ files required for Kestrel genotyping not provided.")
-            raise ValueError("FASTQ files required for Kestrel genotyping not provided.")
+            logger.error("FASTQ input required for Kestrel genotyping not provided.")
+            raise ValueError("FASTQ input required for Kestrel genotyping not provided.")
         kestrel_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
             summary,

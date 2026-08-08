@@ -41,11 +41,11 @@ logger = logging.getLogger(__name__)
 
 def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     """
-    Process FASTQ files using fastp for quality control.
+    Process one or two FASTQ files using fastp for quality control.
 
     Args:
         fastq_1 (str or Path): Path to the first FASTQ file.
-        fastq_2 (str or Path): Path to the second FASTQ file.
+        fastq_2 (str or Path or None): Optional path to the second FASTQ file.
         threads (int): Number of threads to use.
         output (str or Path): Output directory.
         output_name (str): Base name for the output files.

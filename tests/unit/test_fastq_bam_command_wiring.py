@@ -136,6 +136,18 @@ def test_process_fastq_raises_when_the_command_fails(tmp_path):
         fastq_bam_processing.process_fastq("/data/in_R1.fq.gz", "/data/in_R2.fq.gz", 4, str(tmp_path), "output", CONFIG)
 
 
+def test_process_fastq_emits_the_single_input_fastp_form(tmp_path):
+    recorder = _Recorder()
+
+    with patch.object(fastq_bam_processing, "run_command", recorder):
+        fastq_bam_processing.process_fastq("/data/single.fq.gz", None, 4, str(tmp_path), "output", CONFIG)
+
+    assert "--in1 /data/single.fq.gz" in recorder.commands[0]
+    assert "--out1" in recorder.commands[0]
+    assert "--in2" not in recorder.commands[0]
+    assert "--out2" not in recorder.commands[0]
+
+
 # ---------------------------------------------------------------------------
 # process_bam_to_fastq - one assertion per branch
 # ---------------------------------------------------------------------------
@@ -675,3 +687,36 @@ def test_align_and_sort_emits_the_pinned_pipeline_with_pipefail(tmp_path):
         f"samtools sort -@ 4 -o {sorted_bam}",
         f"samtools index {sorted_bam}",
     ]
+
+
+def test_align_and_sort_emits_the_single_input_bwa_form(tmp_path):
+    reference = tmp_path / "ref.fa"
+    reference.touch()
+    for ext in (".amb", ".ann", ".bwt", ".pac", ".sa"):
+        (tmp_path / f"ref.fa{ext}").touch()
+    sorted_bam = tmp_path / "out" / "output_sorted.bam"
+    recorder = _Recorder()
+
+    def run_and_create(command, log_file, critical=False, cwd=None):
+        recorder(command, log_file, critical, cwd)
+        sorted_bam.parent.mkdir(parents=True, exist_ok=True)
+        sorted_bam.touch()
+        sorted_bam.with_suffix(".bam.bai").touch()
+        return True
+
+    with patch.object(alignment_processing, "run_command", run_and_create):
+        result = alignment_processing.align_and_sort_fastq(
+            fastq1=Path("/data/single.fq.gz"),
+            fastq2=None,
+            reference=reference,
+            output_dir=tmp_path / "out",
+            output_name="output",
+            threads=4,
+            config=CONFIG,
+        )
+
+    assert result == str(sorted_bam)
+    assert recorder.commands[0] == (
+        f"set -o pipefail; bwa mem -t 4 {reference} /data/single.fq.gz | "
+        f"samtools view -@ 4 -b | samtools sort -@ 4 -o {sorted_bam}"
+    )

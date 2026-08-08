@@ -53,7 +53,7 @@ def check_bwa_index(reference: Path) -> bool:
 
 def align_and_sort_fastq(
     fastq1: Path,
-    fastq2: Path,
+    fastq2: Path | None,
     reference: Path,
     output_dir: Path,
     output_name: str,
@@ -65,13 +65,13 @@ def align_and_sort_fastq(
 
     This function performs the following steps:
     1. Checks for the existence of BWA index files for the reference genome.
-    2. Aligns paired-end FASTQ files to the reference genome using BWA MEM.
+    2. Aligns one or two FASTQ files to the reference genome using BWA MEM.
     3. Pipes the alignment output to Samtools for conversion to BAM format and sorting.
     4. Indexes the resulting sorted BAM file.
 
     Args:
         fastq1 (Path): Path to the first FASTQ file.
-        fastq2 (Path): Path to the second FASTQ file.
+        fastq2 (Path | None): Optional path to the second FASTQ file.
         reference (Path): Path to the reference genome in FASTA format.
         output_dir (Path): Directory where output files will be saved.
         output_name (str): Base name for the output files.

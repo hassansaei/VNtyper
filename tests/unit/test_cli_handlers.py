@@ -106,6 +106,14 @@ def test_the_pipeline_basename_is_accepted_explicitly(tmp_path: Path) -> None:
     assert stub.call_count == 1
 
 
+def test_a_single_fastq_is_forwarded_without_a_paired_end_usage_error(tmp_path: Path) -> None:
+    stub = _run_handler(["pipeline", "-o", str(tmp_path), "--fastq1", "single.fastq.gz"])
+
+    assert stub.call_count == 1
+    assert stub.call_args.kwargs["fastq1"] == "single.fastq.gz"
+    assert stub.call_args.kwargs["fastq2"] is None
+
+
 def test_an_output_name_the_pipeline_cannot_honour_is_refused(tmp_path: Path, caplog) -> None:
     """The defect: ``-n mysample`` used to be resolved, dropped and forgotten.
 

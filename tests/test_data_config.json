@@ -691,6 +691,14 @@
     "extract_to": "tests/data",
     "md5sum": "fdd5958d58c733cdca452f3287898964"
   },
+  "derived_fixtures": [
+    {
+      "name": "example_b178_hg19_single_end",
+      "kind": "single_end_bam",
+      "source_bam": "tests/data/example_b178_hg19_subset.bam",
+      "output_bam": "tests/data/derived/single_end/example_b178_hg19_single_end.bam"
+    }
+  ],
   "unit_tests": {},
   "integration_tests": {
     "bam_tests": [
@@ -923,6 +931,33 @@
             "tolerance_percentage": 5
           },
           "Confidence": "Negative"
+        },
+        "check_igv_report": false
+      }
+    ],
+    "single_end_bam_tests": [
+      {
+        "test_name": "example_b178_hg19_single_end",
+        "fixture_name": "example_b178_hg19_single_end",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7110,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.05869074492099323,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
         },
         "check_igv_report": false
       }
