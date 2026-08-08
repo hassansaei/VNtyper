@@ -6,8 +6,9 @@ second index that nothing else knows about. A BAI has two spellings, `<file>.bai
 `<stem>.bai`; the pipeline used to reconstruct only the first, so the `sample.bai` that the
 upload endpoint and the worker both deliberately accept was invisible to it.
 
-**It is not htslib's resolution order and does not claim to be.** htslib tries CSI, in both
-spellings, before BAI. The returned path goes straight into
+**`resolve_bam_index` is deliberately not htslib's resolution order and does not claim to
+be.** htslib tries CSI, in both spellings, before BAI, while `resolve_any_index` follows
+the format-aware candidate contract. The BAI-only returned path goes straight into
 `extract_unmapped_from_offset.get_last_chunk_end`, which parses the BAI container itself
 and rejects anything else, so ignoring a CSI is the correct behaviour rather than a missing
 feature - and is pinned below in both directions: the resolution ignores it, and the reader
@@ -76,6 +77,12 @@ def test_no_supported_index_resolves_to_none(tmp_path: Path) -> None:
     cram.write_bytes(b"CRAM\x02")
 
     assert resolve_any_index(cram, "cram") is None
+
+
+def test_unknown_alignment_format_fails_closed() -> None:
+    """General resolution delegates unsupported-format rejection to the contract."""
+    with pytest.raises(ValueError, match="unknown alignment format: sam"):
+        resolve_any_index("sample.sam", "sam")
 
 
 def test_an_alternate_index_name_is_found_and_no_second_index_is_built(tmp_path: Path) -> None:

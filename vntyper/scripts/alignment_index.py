@@ -9,9 +9,11 @@ Where an alignment's index already is, decided without running samtools.
 one into the run's *output* directory when there is not - the input directory holds
 patient data and is routinely mounted read-only (#162, #210). Only the second half of
 that needs a subprocess. The first half is a pure question about filenames: which of the
-two names a **BAI** can carry, ``<file>.bai`` or ``<stem>.bai``, exists on disk. CSI is
-deliberately out of scope - see :func:`resolve_bam_index` for why the offset extractor
-downstream makes that the correct answer rather than a gap.
+two names an index can carry, in the format-specific order from
+:func:`alignment_contract.index_candidate_names`, exists on disk. BAM CSI is supported
+by :func:`resolve_any_index`; CSI is deliberately out of scope for
+:func:`resolve_bam_index`, because the offset extractor downstream parses BAI bytes
+directly and makes that the correct answer rather than a gap.
 
 That question lived in ``fastq_bam_processing.py``, where every other function shells out
 through ``run_command``, so it could only be exercised by driving a stage that runs
