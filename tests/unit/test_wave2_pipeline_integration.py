@@ -98,3 +98,28 @@ def test_merged_pipeline_guards_still_stop_conflicts_and_single_end_shark_before
     assert "SHARK requires paired-end FASTQ input" in str(shark.error)
     assert all(not stage.called for stage in conflict.stages.values())
     assert all(not stage.called for stage in shark.stages.values())
+
+
+def test_only_fastq_input_requires_a_bwa_reference(tmp_path: Path) -> None:
+    """A no-ref CRAM must reach terminal preflight while FASTQ still needs BWA."""
+    cram = tmp_path / "no-ref.cram"
+    cram.touch()
+    cram_run = run_pipeline_under_harness(
+        tmp_path / "cram",
+        bam=None,
+        cram=str(cram),
+        bwa_reference=None,
+    )
+    fastq_run = run_pipeline_under_harness(
+        tmp_path / "fastq",
+        bam=None,
+        fastq1="/reads/single.fastq.gz",
+        bwa_reference=None,
+        expect_failure=True,
+    )
+
+    assert cram_run.error is None
+    assert cram_run.call("run_preflight")
+    assert isinstance(fastq_run.error, ValueError)
+    assert str(fastq_run.error) == "BWA reference not provided or determined from configuration."
+    assert all(not stage.called for stage in fastq_run.stages.values())

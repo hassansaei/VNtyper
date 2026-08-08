@@ -140,10 +140,6 @@ def run_pipeline(
         project_root = str(Path(__file__).parent.parent.parent)
         logger.warning(f"Could not determine current working directory ({e}), using fallback: {project_root}")
 
-    if not bwa_reference:
-        logger.error("BWA reference not provided or determined from configuration.")
-        raise ValueError("BWA reference not provided or determined from configuration.")
-
     logger.debug(f"BWA reference set to: {bwa_reference}")
     logger.debug(f"Output directory set to: {output_dir}")
 
@@ -172,6 +168,9 @@ def run_pipeline(
         msg = "When not providing BAM/CRAM, --fastq1 must be specified; --fastq2 is optional."
         logger.error(msg)
         raise ValueError(msg)
+    if input_type == "FASTQ" and not bwa_reference:
+        logger.error("BWA reference not provided or determined from configuration.")
+        raise ValueError("BWA reference not provided or determined from configuration.")
     if input_type == "FASTQ" and not fastq2 and "shark" in extra_modules:
         msg = "SHARK requires paired-end FASTQ input; provide --fastq2 or remove the shark module."
         logger.error(msg)
