@@ -634,8 +634,6 @@ def run_pipeline(
 
         if archive_results:
             logger.info("Archiving the results folder.")
-            close_alignment_plan(alignment_plan, preserve_primary=False)
-            alignment_plan = None
             formats = {"zip": "zip", "tar.gz": "gztar"}
             if archive_format not in formats:
                 raise ValueError(f"Unsupported archive format: {archive_format}")

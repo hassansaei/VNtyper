@@ -145,7 +145,7 @@ def test_alignment_binding_is_released_after_coverage_and_before_archiving(tmp_p
         return str(tmp_path / "out.zip")
 
     try:
-        with mock.patch.object(pipeline.shutil, "make_archive", side_effect=observe_archive):
+        with mock.patch.object(pipeline, "create_safe_archive", side_effect=observe_archive):
             harness = run_pipeline_under_harness(
                 out,
                 archive_results=True,

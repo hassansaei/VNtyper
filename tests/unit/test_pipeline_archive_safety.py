@@ -40,9 +40,13 @@ def test_cli_releases_the_h1_owned_view_before_archiving(tmp_path: Path, archive
             reference_source="test",
             uncovered_contigs=(),
             unmapped_scan="indexed",
+            close_calls=0,
         )
 
         def close() -> None:
+            plan.close_calls += 1
+            if not os.path.lexists(view):
+                return
             assert os.readlink(view) == str(patient)
             view.unlink()
 
@@ -59,6 +63,7 @@ def test_cli_releases_the_h1_owned_view_before_archiving(tmp_path: Path, archive
 
     assert harness.error is None
     assert plans and not Path(plans[0].view_path).exists()
+    assert plans[0].close_calls == 2  # final coverage plus the outer idempotent fallback
     archive = Path(f"{output_dir}{suffix}")
     assert PATIENT_BYTES not in archive.read_bytes()
     if archive_format == "zip":
