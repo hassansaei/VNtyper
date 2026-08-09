@@ -731,8 +731,9 @@ read-name digest of it.
 - [ ] **Step 5:** `superpowers:requesting-code-review`, then address findings.
 - [x] **Step 6:** bump `vntyper/version.py`, `CITATION.cff` and
       `docs/about/changelog.md` to **2.0.10** — patch only, all three files (trap 12).
-- [ ] **Step 7:** one PR against `main` whose body carries `Closes #213`, `Closes #225`,
-      `Closes #209`, `Closes #178`, `Closes #165`, `Closes #161`.
+- [x] **Step 7:** PR [#230](https://github.com/hassansaei/VNtyper/pull/230) against
+      `main`; its body carries `Closes #213`, `Closes #225`, `Closes #209`,
+      `Closes #178`, `Closes #165`, `Closes #161`.
 - [ ] **Step 8:** after merge, release with
       `gh release create v2.0.10 --target main` — **never push a `v*` tag** (it publishes
       to PyPI immediately and irreversibly).
