@@ -747,6 +747,44 @@ def test_post_publish_alias_cleanup_does_not_follow_target_or_mask_the_individua
     assert patient.read_bytes() == PATIENT_BYTES
 
 
+def test_post_publish_hardlink_cleanup_removes_only_the_individual_public_name(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """A hard-linked public alias is revoked without changing its external name."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    external = tmp_path / "external-patient.bam"
+    external.write_bytes(PATIENT_BYTES)
+    external_inode = external.stat().st_ino
+    primary = RuntimeError("completed state unavailable")
+
+    def fail_completed(*args, **kwargs):
+        if args == ("usage:job-1", "status", "completed"):
+            archive = Path(f"{output_dir}.zip")
+            archive.unlink()
+            archive.hardlink_to(external)
+            raise primary
+        return None
+
+    redis_mocks.usage.hset.side_effect = fail_completed
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert raised.value is primary
+    assert not Path(f"{output_dir}.zip").exists()
+    assert external.read_bytes() == PATIENT_BYTES
+    assert external.stat().st_ino == external_inode
+
+
 def test_worker_archive_refuses_a_real_symlink_without_reading_or_deleting_its_target(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
@@ -1397,6 +1435,46 @@ def test_cohort_post_publish_alias_cleanup_does_not_follow_target_or_mask_the_pr
     public_archive = tmp_path / "analysis.zip"
     assert not public_archive.exists() and not public_archive.is_symlink()
     assert patient.read_bytes() == PATIENT_BYTES
+
+
+def test_cohort_post_publish_hardlink_cleanup_removes_only_the_public_name(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    """A cohort hard-link alias is revoked without changing its external name."""
+    from app import tasks
+
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+    output_dir = tmp_path / "analysis"
+    external = tmp_path / "external-patient.bam"
+    external.write_bytes(PATIENT_BYTES)
+    external_inode = external.stat().st_ino
+
+    def write_cohort_result(*args, **kwargs):
+        (output_dir / "cohort_result.tsv").write_bytes(b"complete cohort result")
+
+    monkeypatch.setattr(tasks.subprocess, "run", write_cohort_result)
+    primary = RuntimeError("completed state unavailable")
+
+    def fail_completed(*args, **kwargs):
+        if args == ("usage:analysis", "status", "completed"):
+            archive = Path(f"{output_dir}.zip")
+            archive.unlink()
+            archive.hardlink_to(external)
+            raise primary
+        return None
+
+    redis_mocks.usage.hset.side_effect = fail_completed
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
+
+    assert raised.value is primary
+    assert not Path(f"{output_dir}.zip").exists()
+    assert external.read_bytes() == PATIENT_BYTES
+    assert external.stat().st_ino == external_inode
 
 
 def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(

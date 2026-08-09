@@ -237,6 +237,60 @@ def clear_stale_archive(
             logger.error(f"Stale archive cleanup failed and parent descriptor cleanup also failed: {cleanup_error}")
 
 
+def revoke_public_archive(
+    base_name: str | Path,
+    archive_format: str,
+    *,
+    protected_paths: Iterable[str | Path] = (),
+) -> None:
+    """Unlink only a failed archive's public name without following aliases.
+
+    Unlike archive creation and quarantine, revocation may safely remove one
+    directory entry for a multiply linked regular file: every other name for
+    that inode remains intact.
+
+    Args:
+        base_name: Public archive path without its suffix.
+        archive_format: ``zip`` or ``gztar``.
+        protected_paths: Paths whose exact directory entry must not be removed.
+
+    Raises:
+        ValueError: If the public name is itself a protected path or changes
+            before removal.
+        OSError: If the parent or destination cannot be safely inspected.
+    """
+    destination = _archive_path(base_name, archive_format)
+    destination_absolute = _absolute(destination)
+    if any(destination_absolute == _absolute(protected_path) for protected_path in protected_paths):
+        _reject(f"Unsafe public archive revocation targets protected input: {destination}")
+
+    parent_descriptor, parent_metadata = _open_parent(destination)
+    primary_failure: BaseException | None = None
+    try:
+        try:
+            expected_metadata = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            expected_metadata = None
+        _require_current_parent(destination, parent_metadata)
+        if expected_metadata is not None and not _unlink_if_same(
+            parent_descriptor,
+            destination.name,
+            expected_metadata,
+        ):
+            _reject(f"Public archive changed during revocation: {destination.name}")
+        _require_current_parent(destination, parent_metadata)
+    except BaseException as error:
+        primary_failure = error
+        raise
+    finally:
+        try:
+            os.close(parent_descriptor)
+        except Exception as cleanup_error:
+            if primary_failure is None:
+                raise
+            logger.error(f"Archive revocation failed and parent descriptor cleanup also failed: {cleanup_error}")
+
+
 def quarantine_archive(
     base_name: str | Path,
     archive_format: str,

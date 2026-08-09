@@ -9,7 +9,12 @@ from datetime import datetime, timedelta, timezone
 import redis
 from celery.utils.log import get_task_logger
 
-from vntyper.scripts.archive_safety import clear_stale_archive, create_safe_archive, quarantine_archive
+from vntyper.scripts.archive_safety import (
+    clear_stale_archive,
+    create_safe_archive,
+    quarantine_archive,
+    revoke_public_archive,
+)
 
 from .archive_delivery import snapshot_owned_archives
 from .celery_app import celery_app
@@ -406,7 +411,7 @@ def run_vntyper_job(
             except Exception as quarantine_error:
                 logger.error(f"Error quarantining failed job's public archive: {quarantine_error}")
                 try:
-                    clear_stale_archive(
+                    revoke_public_archive(
                         output_dir,
                         "zip",
                         protected_paths=(bam_path, index_path) if index_path else (bam_path,),
@@ -611,7 +616,7 @@ def run_cohort_analysis_job(
             except Exception as quarantine_error:
                 logger.error(f"Error quarantining failed cohort archive: {quarantine_error}")
                 try:
-                    clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
+                    revoke_public_archive(output_dir, "zip", protected_paths=zip_paths)
                     archive_published = False
                 except Exception as rollback_error:
                     logger.error(f"Error removing failed cohort archive: {rollback_error}")
