@@ -391,6 +391,42 @@ def test_reference_probes_use_the_runs_region_or_bed_target(tmp_path: Path) -> N
     assert "chr9:90-99" not in commands[1]
 
 
+def test_reference_winner_must_also_decode_the_independent_coverage_region(tmp_path: Path) -> None:
+    """The slice proof cannot authorize a reference that the later depth consumer rejects."""
+    target_only = _reference(tmp_path / "target-only.fa")
+    full = _reference(tmp_path / "full.fa")
+    commands: list[str] = []
+
+    def decode(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        commands.append(command)
+        if " depth " in f" {command} " and str(target_only) in command:
+            return False, "Unable to fetch reference chr2"
+        return True, "decoded"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=decode):
+        reference, source, _ = resolve_reference(
+            "/run/view.cram",
+            (("cli", str(target_only)), ("config_cram_reference", str(full))),
+            "chr1:1-2",
+            None,
+            {},
+            2,
+            str(tmp_path),
+            "sample",
+            ("chr1", "chr2"),
+            "target-checksum",
+            coverage_region="chr2:30-40",
+        )
+
+    assert (reference, source) == (str(full), "config_cram_reference")
+    assert len(commands) == 4
+    assert all(" -P " in f" {commands[position]} " for position in (0, 2))
+    for position, expected_reference in ((1, target_only), (3, full)):
+        assert " depth -a " in f" {commands[position]} "
+        assert "-r chr2:30-40" in commands[position]
+        assert f"--reference {expected_reference}" in commands[position]
+
+
 def test_known_fai_differences_are_returned_as_uncovered_contigs(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

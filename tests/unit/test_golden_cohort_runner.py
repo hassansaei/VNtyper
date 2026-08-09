@@ -318,6 +318,33 @@ def test_the_harness_environment_override_beats_a_cram_cases_mode(tmp_path: Path
     assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == override
 
 
+@pytest.mark.parametrize("declared_mode", ["indexed", "stream"])
+def test_the_harness_override_cannot_collapse_declared_a178_scan_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    declared_mode: str,
+) -> None:
+    """The indexed and stream evidence cases must remain distinct measurements."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case = _case(
+        f"indexed_safe_{declared_mode}_cram",
+        alignment_kind="cram",
+        cram="/data/x.cram",
+        unmapped_scan=declared_mode,
+        cram_evidence_expectation={"indexed_authorized": True},
+    )
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", "stream" if declared_mode == "indexed" else "indexed")
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+    assert effective_mode == declared_mode
+    assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == declared_mode
+
+
 def test_an_invalid_harness_scan_override_is_refused_before_launch(tmp_path: Path, monkeypatch) -> None:
     """A typo must not become a silently auto-selected scan."""
     tree = tmp_path / "tree"

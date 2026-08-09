@@ -331,7 +331,8 @@ fast mode and direct slice consumers.
 
 **Files:** create `vntyper/scripts/alignment_preflight.py`,
 `vntyper/scripts/reference_resolution.py`, `vntyper/scripts/reference_uri_policy.py`,
-`vntyper/scripts/preflight_input_io.py`,
+`vntyper/scripts/preflight_input_io.py`, `vntyper/scripts/alignment_preflight_logs.py`,
+`vntyper/scripts/reference_resolution_environment.py`,
 focused alignment-preflight unit modules, `tests/unit/test_reference_resolution.py`,
 `tests/unit/test_reference_uri_policy.py`, `tests/unit/test_ref_path_is_pinned.py`, and
 `tests/unit/test_preflight_input_reads.py`;
@@ -341,7 +342,7 @@ modify `vntyper/scripts/pipeline_alignment.py`, `vntyper/config.json`
 - `build_alignment_view(in_path, output_dir, output_name, file_format, config, threads) -> tuple[str, str]`
   → `(view_path, index_path)`
 - `choose_unmapped_scan(view_path, config, threads, output_dir, output_name, *, file_format) -> str`
-- `resolve_reference(view_path, candidates, region, bed_file, config, threads, output_dir, output_name, header_contigs, m5) -> tuple[str | None, str, tuple[str, ...]]`
+- `resolve_reference(view_path, candidates, region, bed_file, config, threads, output_dir, output_name, header_contigs, m5, *, coverage_region=None) -> tuple[str | None, str, tuple[str, ...]]`
 - `pin_reference_resolution(config) -> str | None` and
   `restore_reference_resolution(previous: str | None) -> None`
 - `run_preflight(...) -> AlignmentPlan`
@@ -399,18 +400,21 @@ def test_the_no_reference_candidate_is_last_and_is_recorded_as_htslib_resolved(s
 def test_the_first_candidate_that_decodes_wins(self): ...
 def test_no_candidate_decoding_raises_naming_every_one_with_its_reason(self): ...
 def test_the_probe_uses_the_runs_own_region_and_bed_not_a_hardcoded_one(self): ...
+def test_the_winner_also_decodes_the_independent_coverage_region(self): ...
 def test_stream_mode_additionally_proves_a_complete_whole_file_decode(self): ...
+def test_fast_mode_skips_scan_policy_idxstats_and_whole_stream_probe(self): ...
 def test_every_reference_probe_has_a_bounded_process_group_deadline(self): ...
 def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplog): ...
 ```
 
-- [ ] **Step 5:** write and run the failing tests for `REF_PATH` in
+- [ ] **Step 5:** write and run the failing tests for CRAM-only `REF_PATH` in
       `tests/unit/test_ref_path_is_pinned.py`: an unset `REF_PATH` is pinned to a
       local-only value; an operator's `http://` value is overridden by default; the
       override is skipped when `allow_ambient_reference_resolution` is true; and
       **`restore_reference_resolution` puts back the previous value, including "unset"**
       (spec §4.5 — `run_pipeline` is called in-process by tests). Pin the warning contract:
       the opt-in may block later stages even though every reference probe remains bounded.
+      Assert BAM and FASTQ neither validate nor mutate this policy.
       Add pure URI-policy tests for local/relative/`file://` values, anchored remote
       schemes with and without `//`, every duplicate `UR` field, colon-separated
       `REF_PATH`, strict boolean waiver validation and path-free contig/scheme rejection.
@@ -442,7 +446,8 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
       (P3) and `True` in fast mode; the non-fast slice passes
       `exclude_unmapped=True` so complete recovery is merged as a disjoint union, while
       fast mode passes `False`; **coverage runs against the view with the plan's
-      reference**; the input tree is byte-identical afterwards for both formats. A real
+      reference and the exact independently preflighted coverage region**; the input tree
+      is byte-identical afterwards for both formats. A real
       nonempty all-unplaced BAM selects indexed and preserves its exact five-QNAME
       multiset (§3.20).
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement:

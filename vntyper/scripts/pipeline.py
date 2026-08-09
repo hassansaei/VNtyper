@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from vntyper.scripts.alignment_preflight import (
-    pin_reference_resolution,
+    pin_reference_resolution as pin_reference_resolution,
+)
+from vntyper.scripts.alignment_preflight import (
     restore_reference_resolution,
     run_preflight,
 )
@@ -214,6 +216,7 @@ def run_pipeline(
 
         alignment_header = None
         alignment_plan = None
+        vntr_region = None
         if input_type in ["BAM", "CRAM"]:
             input_alignment = bam if input_type == "BAM" else cram
             prepared = prepare_input_alignment_preflight(
@@ -230,9 +233,10 @@ def run_pipeline(
             )
             alignment_header = prepared.alignment_header
             bed_file_path = prepared.bed_file
+            vntr_region = prepared.coverage_region
             alignment_plan = prepared.plan
             previous_ref_path = prepared.previous_ref_path
-            reference_resolution_pinned = True
+            reference_resolution_pinned = input_type == "CRAM"
         else:
             validate_fastq_pipeline_destinations(output_dir, fastq1, fastq2, bed_file, bwa_reference, config)
             bed_file_path = prepare_alignment_target(
@@ -245,8 +249,6 @@ def run_pipeline(
                 bed_file=bed_file,
                 custom_regions=custom_regions,
             )
-            previous_ref_path = pin_reference_resolution(config)
-            reference_resolution_pinned = True
 
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
@@ -445,12 +447,10 @@ def run_pipeline(
         if alignment_plan is None:
             raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
         input_bam = Path(alignment_plan.view_path)
-
-        # Use dynamic region resolution with fallback to legacy format
-        vntr_region = get_region_string_with_fallback(
-            bam_file=str(input_bam), reference_assembly=reference_assembly, region_type="vntr_region", config=config
-        )
-
+        if vntr_region is None:
+            vntr_region = get_region_string_with_fallback(
+                bam_file=str(input_bam), reference_assembly=reference_assembly, region_type="vntr_region", config=config
+            )
         cov_start = datetime.now(timezone.utc).replace(tzinfo=None)
         calculate_vntr_coverage(
             bam_file=str(input_bam),

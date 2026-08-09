@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -83,12 +84,83 @@ def test_owned_alignment_preflight_boundary_immediately_follows_validation_and_p
         )
 
     assert harness.error is None
-    assert events[:7] == ["validate", "pin", "header", "region", "preflight", "tools", "process"]
+    assert events[:7] == ["validate", "header", "region", "region", "preflight", "tools", "process"]
     preflight_kwargs = harness.kwargs("run_preflight")
     process_kwargs = harness.kwargs("process_bam_to_fastq")
     assert preflight_kwargs["bed_file"] == process_kwargs["bed_file"]
     assert preflight_kwargs["region"] is None
     assert process_kwargs["plan"] is plan
+
+
+def test_coverage_region_is_resolved_once_before_preflight_and_reused_by_the_consumer(tmp_path: Path) -> None:
+    """The later depth stage must consume the exact region whose reference was proven."""
+    out = tmp_path / "out"
+    events: list[str] = []
+
+    def resolve_region(*args: object, **kwargs: object) -> str:
+        del args
+        region_type = str(kwargs["region_type"])
+        events.append(region_type)
+        return "chr1:10-20" if region_type == "bam_region" else "chr2:30-40"
+
+    def record(event: str) -> object:
+        events.append(event)
+        return mock.DEFAULT
+
+    harness = run_pipeline_under_harness(
+        out,
+        stage_side_effects={
+            "get_region_string_with_fallback": resolve_region,
+            "run_preflight": lambda *args, **kwargs: record("preflight"),
+            "get_tool_versions": lambda *args, **kwargs: record("tools"),
+        },
+    )
+
+    assert harness.error is None
+    assert events == ["bam_region", "vntr_region", "preflight", "tools"]
+    assert harness.kwargs("run_preflight")["coverage_region"] == "chr2:30-40"
+    assert harness.kwargs("calculate_vntr_coverage")["region"] == "chr2:30-40"
+
+
+@pytest.mark.parametrize("input_type", ["BAM", "FASTQ"])
+def test_non_cram_runs_neither_read_nor_mutate_cram_ref_path_policy(
+    input_type: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CRAM-only environment policy cannot abort unrelated input modes."""
+    out = tmp_path / "output"
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    selected: dict[str, Any]
+    if input_type == "BAM":
+        alignment = inputs / "input.bam"
+        alignment.write_bytes(b"BAM")
+        selected = {"bam": str(alignment)}
+    else:
+        fastq = inputs / "input.fastq.gz"
+        fastq.write_bytes(b"FASTQ")
+        selected = {"bam": None, "fastq1": str(fastq)}
+    config = deepcopy(MINIMAL_CONFIG)
+    config["cram"] = {
+        "allow_ambient_reference_resolution": "false",
+        "local_ref_path": "https://refget.invalid/%s",
+    }
+    original = "https://operator.invalid/%s"
+    monkeypatch.setenv("REF_PATH", original)
+    real_pin = pipeline.pin_reference_resolution
+    real_restore = pipeline.restore_reference_resolution
+
+    with (
+        mock.patch.object(pipeline, "pin_reference_resolution", wraps=real_pin) as pin,
+        mock.patch.object(pipeline, "restore_reference_resolution", wraps=real_restore) as restore,
+    ):
+        harness = run_pipeline_under_harness(out, config=config, expect_failure=True, **selected)
+
+    assert harness.error is None
+    pin.assert_not_called()
+    restore.assert_not_called()
+    assert os.environ["REF_PATH"] == original
 
 
 @pytest.mark.parametrize("failure", [ValueError("target resolution failed"), KeyboardInterrupt("interrupted")])
@@ -104,6 +176,9 @@ def test_alignment_boundary_restores_ref_path_when_target_preparation_fails(
     observed_ref_paths: list[str | None] = []
     monkeypatch.setenv("REF_PATH", original)
     config = {**MINIMAL_CONFIG, "cram": {"local_ref_path": pinned}}
+    cram = tmp_path / "patient-input" / "input.cram"
+    cram.parent.mkdir()
+    cram.touch()
     out.mkdir(parents=True)
     artifact = out / "preflight_error.json"
     artifact.write_text('{"code":"stale"}\n', encoding="utf-8")
@@ -116,6 +191,8 @@ def test_alignment_boundary_restores_ref_path_when_target_preparation_fails(
     harness = run_pipeline_under_harness(
         out,
         config=config,
+        bam=None,
+        cram=str(cram),
         expect_failure=True,
         stage_side_effects={"get_region_string_with_fallback": fail_target_resolution},
     )
@@ -309,7 +386,10 @@ def test_ref_path_is_pinned_through_the_run_and_restored_exactly(
     else:
         monkeypatch.setenv("REF_PATH", initial_ref_path)
     config = {**MINIMAL_CONFIG, "cram": {"local_ref_path": pinned}}
-    plan = _plan(out, "bam")
+    cram = tmp_path / "patient-input" / "input.cram"
+    cram.parent.mkdir()
+    cram.touch()
+    plan = _plan(out, "cram", reference_path="/refs/hg19.fa")
 
     def observe_pin(*args, **kwargs):
         assert os.environ["REF_PATH"] == pinned
@@ -325,6 +405,8 @@ def test_ref_path_is_pinned_through_the_run_and_restored_exactly(
     harness = run_pipeline_under_harness(
         out,
         config=config,
+        bam=None,
+        cram=str(cram),
         expect_failure=outcome != "return",
         stage_side_effects=stage_side_effects,
     )

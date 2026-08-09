@@ -192,9 +192,11 @@ def get_region_string_with_fallback(bam_file: str, reference_assembly: str, regi
         )
 
     except (KeyError, ValueError) as e:
-        from vntyper.scripts.chromosome_utils import NAMING_CONVENTION_ERROR_PREFIX
+        from vntyper.scripts.chromosome_utils import NAMING_CONVENTION_ERROR_PREFIX, NAMING_POLICY_ERROR_PREFIXES
 
-        if isinstance(e, ValueError) and str(e).startswith(NAMING_CONVENTION_ERROR_PREFIX):
+        if isinstance(e, ValueError) and str(e).startswith(
+            (NAMING_CONVENTION_ERROR_PREFIX, *NAMING_POLICY_ERROR_PREFIXES)
+        ):
             raise
         logger.warning(f"Dynamic region resolution failed: {e}. Falling back to legacy config lookup.")
 

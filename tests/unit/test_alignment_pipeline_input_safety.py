@@ -35,6 +35,10 @@ def test_input_guard_leaves_invalid_reference_policy_to_persisted_preflight_owne
         mock.patch("vntyper.scripts.pipeline_alignment.enforce_header_reference_policy"),
         mock.patch("vntyper.scripts.pipeline_alignment.enforce_declared_assembly"),
         mock.patch("vntyper.scripts.pipeline_alignment.prepare_alignment_target", return_value=bed),
+        mock.patch(
+            "vntyper.scripts.pipeline_alignment.get_region_string_with_fallback",
+            return_value="chr1:1-2",
+        ),
         pytest.raises(ValueError, match="terminal htslib_resolved"),
     ):
         prepare_input_alignment_preflight(

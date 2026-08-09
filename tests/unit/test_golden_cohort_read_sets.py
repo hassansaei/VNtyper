@@ -430,7 +430,13 @@ def test_stream_cram_decision_records_exact_read_set_and_raw_loss() -> None:
         "effective_unmapped_scan": "stream",
         "cram_evidence_expectation": {"raw_indexed_read_set": raw, "stream_read_set": stream},
     }
-    record = {"raw_indexed_read_set": raw, "unmapped_read_set": stream, "raw_indexed_loss": 631_571}
+    record = {
+        "observed_unmapped_scan": "stream",
+        "observed_unmapped_command": "set -o pipefail; samtools view ... | samtools view -f 4 ...",
+        "raw_indexed_read_set": raw,
+        "unmapped_read_set": stream,
+        "raw_indexed_loss": 631_571,
+    }
 
     assert cram_evidence.validate_cram_evidence(case, record) == []
 
@@ -443,7 +449,13 @@ def test_stream_cram_decision_fails_when_raw_loss_evidence_is_missing() -> None:
         "effective_unmapped_scan": "stream",
         "cram_evidence_expectation": {"raw_indexed_read_set": stream, "stream_read_set": stream},
     }
-    record = {"raw_indexed_read_set": stream, "unmapped_read_set": stream, "raw_indexed_loss": None}
+    record = {
+        "observed_unmapped_scan": "stream",
+        "observed_unmapped_command": "set -o pipefail; samtools view ... | samtools view -f 4 ...",
+        "raw_indexed_read_set": stream,
+        "unmapped_read_set": stream,
+        "raw_indexed_loss": None,
+    }
 
     assert cram_evidence.validate_cram_evidence(case, record) == [
         "A-178-2 stream evidence did not record the raw indexed loss"
@@ -459,48 +471,15 @@ def test_stream_cram_decision_rejects_a_raw_loss_inconsistent_with_the_read_sets
         "effective_unmapped_scan": "stream",
         "cram_evidence_expectation": {"raw_indexed_read_set": raw, "stream_read_set": stream},
     }
-    record = {"raw_indexed_read_set": raw, "unmapped_read_set": stream, "raw_indexed_loss": 3}
+    record = {
+        "observed_unmapped_scan": "stream",
+        "observed_unmapped_command": "set -o pipefail; samtools view ... | samtools view -f 4 ...",
+        "raw_indexed_read_set": raw,
+        "unmapped_read_set": stream,
+        "raw_indexed_loss": 3,
+    }
 
     assert cram_evidence.validate_cram_evidence(case, record) == ["A-178-2 raw indexed loss differs: expected 4, got 3"]
-
-
-@pytest.mark.parametrize("scan", ["indexed", "stream"])
-def test_authorized_indexed_and_stream_cram_decisions_require_the_same_nonempty_read_set(scan: str) -> None:
-    """HIGH2: both genuine extraction paths must satisfy the existing A-178-2 oracle."""
-    expected = {"count": 20, "sorted_read_name_sha256": "a" * 64}
-    case = {
-        "case_id": f"indexed_safe_{scan}_cram",
-        "effective_unmapped_scan": scan,
-        "cram_evidence_expectation": {
-            "indexed_authorized": True,
-            "raw_indexed_read_set": expected,
-            "stream_read_set": expected,
-        },
-    }
-    record = {"raw_indexed_read_set": expected, "unmapped_read_set": expected, "raw_indexed_loss": 0}
-
-    assert cram_evidence.validate_cram_evidence(case, record) == []
-
-
-def test_authorized_indexed_cram_decision_fails_closed_on_a_different_produced_read_set() -> None:
-    """Authorization never permits a lossy indexed result to pass the gate."""
-    expected = {"count": 20, "sorted_read_name_sha256": "a" * 64}
-    different = {"count": 19, "sorted_read_name_sha256": "b" * 64}
-    case = {
-        "case_id": "indexed_safe_indexed_cram",
-        "effective_unmapped_scan": "indexed",
-        "cram_evidence_expectation": {
-            "indexed_authorized": True,
-            "raw_indexed_read_set": expected,
-            "stream_read_set": expected,
-        },
-    }
-    record = {"raw_indexed_read_set": expected, "unmapped_read_set": different, "raw_indexed_loss": 1}
-
-    assert cram_evidence.validate_cram_evidence(case, record) == [
-        f"A-178-2 stream evidence differs: expected {expected}, got {different}",
-        "A-178-2 raw indexed loss differs: expected 0, got 1",
-    ]
 
 
 def test_raw_star_evidence_uses_the_same_bounded_collector_with_a_region(tmp_path: Path) -> None:

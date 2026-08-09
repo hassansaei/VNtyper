@@ -38,6 +38,7 @@ class AlignmentPreflightKwargs(TypedDict):
     threads: int
     region: None
     bed_file: Path
+    coverage_region: str | None
     reference_assembly: str
     reference_fasta: str | None
     header_contigs: tuple[str, ...]
@@ -53,6 +54,7 @@ class PreparedAlignmentPreflight:
 
     alignment_header: str | None
     bed_file: Path
+    coverage_region: str
     plan: AlignmentPlan
     previous_ref_path: str | None
 
@@ -199,6 +201,7 @@ def build_alignment_preflight_kwargs(
     config: dict,
     threads: int,
     bed_file: Path,
+    coverage_region: str | None = None,
     reference_assembly: str,
     fast_mode: bool,
     alignment_header: str | None = None,
@@ -215,6 +218,7 @@ def build_alignment_preflight_kwargs(
         config: Pipeline configuration.
         threads: Samtools thread count.
         bed_file: Exact BED later used for the real slice.
+        coverage_region: Independently resolved region used by the later depth consumer.
         reference_assembly: Declared input assembly.
         fast_mode: Whether downstream processing permits any htslib index.
         alignment_header: Header already read by the assembly guard, if available.
@@ -246,6 +250,7 @@ def build_alignment_preflight_kwargs(
         "threads": threads,
         "region": None,
         "bed_file": bed_file,
+        "coverage_region": coverage_region,
         "reference_assembly": reference_assembly,
         "reference_fasta": str(reference_fasta) if reference_fasta is not None else None,
         "header_contigs": header_contigs,
@@ -293,18 +298,27 @@ def prepare_input_alignment_preflight(
     if input_type not in {"BAM", "CRAM"}:
         raise ValueError(f"Alignment preflight requires BAM or CRAM input, got: {input_type}")
     input_path = str(in_path)
+    is_cram = input_type == "CRAM"
     failure_context = error_io.PreflightErrorContext(output_dir)
     with error_io.persist_preflight_failure(failure_context):
-        failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
-        previous_ref_path = pin_reference_resolution(config)
+        previous_ref_path = None
+        if is_cram:
+            failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
+            previous_ref_path = pin_reference_resolution(config)
         try:
             failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
             alignment_header = read_alignment_header(input_path, config)
             if input_type == "CRAM":
+                if alignment_header is None:
+                    message = (
+                        "CRAM header could not be read; reference URI policy and declared assembly cannot be proven."
+                    )
+                    logger.error(message)
+                    raise ValueError(message)
                 failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
                 try:
                     enforce_header_reference_policy(
-                        alignment_header or "",
+                        alignment_header,
                         allow_ambient=allow_ambient_reference_resolution(config),
                     )
                 except ValueError as error:
@@ -323,6 +337,12 @@ def prepare_input_alignment_preflight(
                 bed_file=bed_file,
                 custom_regions=custom_regions,
             )
+            coverage_region = get_region_string_with_fallback(
+                bam_file=input_path,
+                reference_assembly=reference_assembly,
+                region_type="vntr_region",
+                config=config,
+            )
             plan = run_preflight(
                 **build_alignment_preflight_kwargs(
                     in_path=input_path,
@@ -332,6 +352,7 @@ def prepare_input_alignment_preflight(
                     config=config,
                     threads=threads,
                     bed_file=exact_bed,
+                    coverage_region=coverage_region,
                     reference_assembly=reference_assembly,
                     fast_mode=fast_mode,
                     alignment_header=alignment_header,
@@ -341,6 +362,7 @@ def prepare_input_alignment_preflight(
                 failure_context=failure_context,
             )
         except BaseException:
-            restore_reference_resolution(previous_ref_path)
+            if is_cram:
+                restore_reference_resolution(previous_ref_path)
             raise
-    return PreparedAlignmentPreflight(alignment_header, exact_bed, plan, previous_ref_path)
+    return PreparedAlignmentPreflight(alignment_header, exact_bed, coverage_region, plan, previous_ref_path)

@@ -137,7 +137,8 @@ def materialize_case_config(tree: Path, case: dict[str, Any], config_dir: Path) 
         return None, None
 
     configured = case.get("unmapped_scan", "auto")
-    override = os.environ.get(CRAM_SCAN_OVERRIDE_ENV)
+    declared_evidence_case = case.get("cram_evidence_expectation") is not None and configured in {"indexed", "stream"}
+    override = None if declared_evidence_case else os.environ.get(CRAM_SCAN_OVERRIDE_ENV)
     effective = override if override is not None else configured
     if effective not in VALID_CRAM_SCAN_MODES:
         msg = (
@@ -279,6 +280,9 @@ def _run_one(
         "timed_out": timed_out,
         "seconds": round(time.monotonic() - started, 2),
         "effective_unmapped_scan": case.get("effective_unmapped_scan"),
+        "observed_unmapped_scan": None,
+        "observed_unmapped_command": None,
+        "scan_observation_problems": [],
         "case_config_path": case.get("case_config_path"),
         "unmapped_read_set": None,
         "raw_indexed_read_set": None,
@@ -290,6 +294,14 @@ def _run_one(
     unmapped_bam = output_dir / "fastq_bam_processing" / "output_unmapped.bam"
     is_cram = case.get("alignment_kind", "bam") == "cram"
     needs_raw_evidence = case.get("cram_evidence_expectation") is not None
+    if is_cram and needs_raw_evidence:
+        observed_scan, observed_command, observation_problems = cram_evidence.observe_unmapped_scan(
+            commands_log,
+            unmapped_bam,
+        )
+        record["observed_unmapped_scan"] = observed_scan
+        record["observed_unmapped_command"] = observed_command
+        record["scan_observation_problems"] = observation_problems
     if is_cram and (unmapped_bam.is_file() or needs_raw_evidence):
         try:
             raw_config_path = case.get("case_config_path")

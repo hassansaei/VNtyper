@@ -15,14 +15,16 @@ carry the variant.
 Three rules, and the third is the one that keeps the guard safe to add:
 
 1. A **decided disagreement** between two known builds stops the run.
-2. **Undetermined** - unreadable header, unknown declared name, no chr1, a chr1 length
-   matching neither build - warns and continues. It is neither a pass nor a failure,
-   and treating it as a failure would reject inputs that are perfectly fine.
-3. The header read itself is **non-fatal here**. ``extract_bam_header`` runs samtools
+2. **Undetermined** - unknown declared name, no chr1, a chr1 length matching neither
+   build - warns and continues. It is neither a pass nor a failure, and treating it as
+   a failure would reject inputs that are perfectly fine.
+3. The header read itself is **non-fatal in this legacy assembly helper**. ``extract_bam_header`` runs samtools
    with ``check=True``, so a CRAM whose reference cannot be resolved raises
    ``CalledProcessError`` - which is neither ``KeyError`` nor ``ValueError``, and so is
-   not caught by ``get_region_string_with_fallback``. A guard that turned an unreadable
-   header into a crash would be worse than the defect it closes.
+   not caught by ``get_region_string_with_fallback``. Milestone-4's owned CRAM boundary
+   separately requires the header, because URI and reference policy cannot be proved
+   without it; BAM retains this older undetermined behavior and later header consumers
+   still fail if the header is genuinely required.
 
 FASTQ input is deliberately **not** guarded. A FASTQ has no header until it has been
 aligned, and the header it then has describes the reference that was indexed for BWA,

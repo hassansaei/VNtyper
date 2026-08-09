@@ -584,12 +584,13 @@ or NFS kernel operation; §4.5 states that limit explicitly rather than calling
 ### 4.1 The seam
 
 One owned alignment-preflight boundary, invoked immediately after `validate_bam_file` and
-before any header or region is resolved or any stage runs. The boundary pins `REF_PATH`,
-reads and guards the header, resolves/materialises the exact BED target, then calls the I/O
-proof and returns both that target and a frozen `AlignmentPlan`. Every ordinary failure in
-the boundary shares one curated-error context; `REF_PATH` is restored even for
-`BaseException`. `process_bam_to_fastq` consumes the plan instead of rediscovering its
-contents.
+before any header or region is resolved or any stage runs. For CRAM, the boundary pins
+`REF_PATH`; BAM and FASTQ never read or mutate that CRAM-only policy. The boundary reads
+and guards the header, resolves/materialises the exact BED target, independently resolves
+the later coverage region, then calls the I/O proof and returns the target, coverage
+region and a frozen `AlignmentPlan`. Every ordinary failure in the boundary shares one
+curated-error context; a CRAM's `REF_PATH` is restored even for `BaseException`.
+`process_bam_to_fastq` consumes the plan instead of rediscovering its contents.
 
 `fastq_bam_processing.py` is 649 LOC against a ~650 guideline, and AGENTS.md rule 3 says
 to extract the region under change rather than grow the file. So the decisions go into
@@ -601,17 +602,19 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | `reference_resolution.py` | pure | validated ordered candidate mapping and known or unavailable FASTA contig coverage |
 | `reference_uri_policy.py` | pure | remote-scheme detection and path-free CRAM header-URI policy |
 | `read_layout.py` | pure | the `paired`/`single`/`mixed`/`empty` verdict from counts, and which FASTQ paths feed downstream |
+| `alignment_preflight_logs.py` | pure | every log destination reachable for a format, candidate count and fast/normal mode |
 | `alignment_preflight.py` | I/O | runs samtools: build the alignment view, resolve or build the index, choose the scan from `idxstats`, probe-decode each reference candidate. **It does not compute the read layout** — §4.4 explains why that cannot be known before conversion. |
 | `preflight_command_io.py` | I/O | atomic captured logs and optional process-group deadline/termination for reference probes |
+| `reference_resolution_environment.py` | environment I/O | CRAM-only `REF_PATH` pin/restore policy |
 | `pipeline_alignment.py` | boundary | owns header/assembly/target preparation and the shared curated-error/`REF_PATH` lifetime before returning BED + `AlignmentPlan` |
 
-The four pure modules are unit-testable with no filesystem and are held to the ~100%
+The five pure modules are unit-testable with no filesystem and are held to the ~100%
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
 `cohort_rules.py`) already meet.
 
 `fastq_bam_processing.py` measured **649 lines** at the design point, not the 612 in
 AGENTS.md's older snapshot table. It was therefore already at the ~650 guideline before
-this milestone added a line, so the changes were net-negative: the final file is 628
+this milestone added a line, so the changes were net-negative: the final file is 632
 lines, with index/reference decisions in preflight and command construction in helpers.
 
 ### 4.1a The run-local alignment view
@@ -662,6 +665,17 @@ samtools view -P -T <candidate.fa> <view.cram> <region|-L bed> -o /dev/null
 
 (The `-T` is not optional in that line: without it the reference path is read as a second
 input alignment.)
+
+The same candidate must also complete the later coverage consumer's exact decode shape
+against the independently resolved VNTR coverage region:
+
+```
+samtools depth -a --reference <candidate.fa> -r <coverage-region> <view.cram> -o /dev/null
+```
+
+The resolved coverage region is frozen with the boundary result and reused by the real
+coverage stage. A reference that decodes the slice target but fails on that region cannot
+win.
 
 When the run has a BED file — `--bed`, `--custom-regions`, or the predefined regions
 `pipeline.py` writes — the probe uses that BED, not a region string. A BED naming contigs
@@ -760,6 +774,10 @@ Config-driven: both `bam.unmapped_scan` and `cram.unmapped_scan` are `auto` (def
 `indexed` or `stream`. Indexed BAM and CRAM plans use the same literal-`'*'` htslib fetch;
 BAM passes no reference. Stream plans perform the complete flag-4 stream.
 
+Fast mode never consumes recovered unmapped reads, so it does not read or validate this
+scan policy, run `idxstats`, or authorize a whole-file stream probe. Its plan records
+`unmapped_scan="not-required"`; normal mode retains the evidence-driven policy above.
+
 **The explicit values cannot be used to discard reads.** `indexed` forced on a file whose
 `idxstats` says reads would be lost **raises**, naming the count; it does not warn and
 continue. An earlier draft allowed it to proceed "for reproducing a historical run", which
@@ -839,12 +857,12 @@ it resolves to the same file as this run's input** (`os.path.samefile`); otherwi
 it. A stale view pointing at a different alignment would silently genotype the wrong
 sample, which is the worst failure this repository can have.
 
-**`REF_PATH` is saved and restored.** Pinning mutates `os.environ`, which is
+**A CRAM's `REF_PATH` is saved and restored.** Pinning mutates `os.environ`, which is
 process-global and outlives a single `run_pipeline` call — and `run_pipeline` is imported
 and called in-process by tests and by anything embedding VNtyper as a library. The
 contract: capture the previous value (including "unset"), set the pinned one, and restore
-it in a `finally`. Without that, one CRAM run silently reconfigures every later run in the
-same process.
+it in a `finally`. BAM and FASTQ do not inspect this CRAM-only policy. Without that, one
+CRAM run silently reconfigures every later run in the same process.
 
 **Every run-local index is fresh.** The candidate-name contract enumerates both spellings
 of BAI, CSI and CRAI so the outer output-safety boundary can protect every existing
@@ -1173,7 +1191,8 @@ sets them to the shipped values.
 
 ## 7. Acceptance criteria
 
-Each is a command whose output decides it. None is satisfied by reading code.
+Every gating criterion is decided by executable evidence rather than by reading code.
+A-178-4 is the one explicit external, non-gating evidence request.
 
 | ID | Criterion | Decided by |
 | --- | --- | --- |
@@ -1266,6 +1285,7 @@ PR.**
 | 3b | independent remote-header follow-up | 1 | 0 | 0 | 1 accepted and fixed (§3.21, A-178-5) |
 | 3c | final diff follow-up | 2 | 4 | 3 | 2 HIGH accepted and fixed; MED/LOW dispositions are detailed below |
 | 3d | final diff follow-up | 3 | 3 | 2 | 3 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
+| 3e | final diff at `bfefbdc` | 2 | 4 | 2 | 2 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
 
 ### Round 3a — disposition
 
@@ -1341,6 +1361,26 @@ reproduced default-mode network paths are nevertheless removed and observable. O
 finding added default-mode single-end integration beside the explicit-fast case. The
 remaining LOW finding correctly requires A-PERF-1 to be rerun on the actual final
 behavioral revision before the concluding no-HIGH review.
+
+Round 3e accepted both HIGH findings. An exception while reading a CRAM header became
+`None`, allowing URI and assembly policy to continue without the evidence they require;
+the owned CRAM boundary now rejects that path before target, probe or stage work while
+retaining the legacy BAM helper's compatibility. Reference authorization also proved the
+slice and selected unmapped scan but not the independently resolved VNTR coverage region;
+each candidate now runs the exact depth-consumer shape, and the proven region is reused by
+the real coverage stage.
+
+All four MED findings were accepted. Fast mode no longer reads or validates an unmapped
+scan it never consumes, runs `idxstats`, or performs a whole-file stream probe. CRAM-only
+`REF_PATH` policy no longer aborts or mutates BAM and FASTQ runs. Malformed chromosome
+naming policy is re-raised instead of being replaced by legacy coordinates. Finally, the
+golden harness derives indexed/stream mode from the bounded launcher command record rather
+than trusting the configured label, and declared A-178-2 cases cannot be collapsed by an
+environment override. The accepted LOW finding clears a previous web attempt's curated
+artifact and Redis diagnosis before retry without following symlinks. The remaining LOW
+claim was rebutted: A-178-4 is explicitly external and non-gating, while A-ALL-1 names
+executable final commands; §7 now states that exception precisely. These fixes still need
+the mandatory concluding no-HIGH review.
 
 ### Wave 3 gate evidence before round 3
 

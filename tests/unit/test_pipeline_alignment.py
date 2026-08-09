@@ -356,6 +356,7 @@ def test_build_alignment_preflight_kwargs_pins_exact_bed_and_header_contigs(
         "threads": 7,
         "region": None,
         "bed_file": bed,
+        "coverage_region": None,
         "reference_assembly": "hg38",
         "reference_fasta": str(reference),
         "header_contigs": () if alignment_header is None else ("chr1", "chr2"),
@@ -563,6 +564,10 @@ def test_outer_boundary_preserves_the_inner_structured_reference_payload(tmp_pat
     with (
         mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value="@SQ\tSN:chr1\n"),
         mock.patch("vntyper.scripts.pipeline_alignment.enforce_declared_assembly"),
+        mock.patch(
+            "vntyper.scripts.pipeline_alignment.get_region_string_with_fallback",
+            return_value="chr1:10-20",
+        ),
         mock.patch("vntyper.scripts.pipeline_alignment.run_preflight", side_effect=fail_with_structured_payload),
         pytest.raises(RuntimeError, match="private probe detail"),
     ):

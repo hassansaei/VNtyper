@@ -10,8 +10,30 @@ from unittest.mock import patch
 import pytest
 
 from vntyper.scripts.alignment_preflight import choose_unmapped_scan, run_preflight
+from vntyper.scripts.alignment_preflight_logs import preflight_log_paths
 
 pytestmark = pytest.mark.unit
+
+
+def test_fast_cram_preflight_logs_include_only_the_probes_that_can_run(tmp_path: Path) -> None:
+    """Destination validation must mirror fast mode's target and coverage probes exactly."""
+    paths = preflight_log_paths(
+        tmp_path,
+        "sample",
+        "cram",
+        candidate_count=2,
+        fast_mode=True,
+        coverage_region="chr2:30-40",
+    )
+
+    assert paths == (
+        tmp_path / "sample_reference_probe_1.log",
+        tmp_path / "sample_reference_probe_2.log",
+        tmp_path / "sample_reference_probe_3.log",
+        tmp_path / "sample_reference_coverage_probe_1.log",
+        tmp_path / "sample_reference_coverage_probe_2.log",
+        tmp_path / "sample_reference_coverage_probe_3.log",
+    )
 
 
 def test_clean_idxstats_selects_the_indexed_scan(tmp_path: Path) -> None:
@@ -301,6 +323,82 @@ def test_a_bam_plan_records_stream_when_idxstats_reports_placed_unmapped(tmp_pat
         )
 
     assert plan.unmapped_scan == "stream"
+
+
+@pytest.mark.parametrize("file_format", ["bam", "cram"])
+def test_fast_mode_ignores_an_unused_invalid_unmapped_scan(file_format: str, tmp_path: Path) -> None:
+    """Historical target-only mode cannot be rejected by a scan it never consumes."""
+    input_dir = tmp_path / "input"
+    output = tmp_path / "output"
+    input_dir.mkdir()
+    alignment = input_dir / f"sample.{file_format}"
+    alignment.write_bytes(file_format.upper().encode())
+    reference = tmp_path / "reference.fa" if file_format == "cram" else None
+    if reference is not None:
+        reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    commands: list[str] = []
+
+    def successful_target(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        commands.append(command)
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"INDEX")
+        return True, "decoded"
+
+    config = {file_format: {"unmapped_scan": "not-a-real-scan"}}
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=successful_target):
+        plan = run_preflight(
+            str(alignment),
+            str(output),
+            "sample",
+            file_format,
+            config,
+            2,
+            region="chr1:1-2",
+            reference_fasta=str(reference) if reference is not None else None,
+            fast_mode=True,
+        )
+
+    assert plan.unmapped_scan == "not-required"
+    assert not any(" idxstats " in f" {command} " for command in commands)
+
+
+def test_fast_cram_mode_does_not_whole_stream_probe_an_unused_stream_scan(tmp_path: Path) -> None:
+    """Fast CRAM proves its target but never decodes the whole file for skipped recovery."""
+    input_dir = tmp_path / "input"
+    output = tmp_path / "output"
+    input_dir.mkdir()
+    alignment = input_dir / "sample.cram"
+    alignment.write_bytes(b"CRAM")
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    commands: list[str] = []
+
+    def successful_target(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        commands.append(command)
+        arguments = shlex.split(command)
+        if arguments[1] == "index":
+            Path(arguments[arguments.index("-o") + 1]).write_bytes(b"INDEX")
+        return True, "decoded"
+
+    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=successful_target):
+        plan = run_preflight(
+            str(alignment),
+            str(output),
+            "sample",
+            "cram",
+            {"cram": {"unmapped_scan": "stream"}},
+            2,
+            region="chr1:1-2",
+            reference_fasta=str(reference),
+            fast_mode=True,
+        )
+
+    assert plan.unmapped_scan == "not-required"
+    reference_commands = [command for command in commands if " view " in f" {command} "]
+    assert len(reference_commands) == 1
+    assert " -P " in f" {reference_commands[0]} "
+    assert " -h " not in f" {reference_commands[0]} "
 
 
 def test_a_bam_whose_index_cannot_retrieve_the_target_fails_preflight(tmp_path: Path) -> None:

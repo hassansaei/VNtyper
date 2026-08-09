@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import stat
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,25 @@ _MAX_ARTIFACT_BYTES = 64 * 1024
 
 def _message_is_public(message: str) -> bool:
     return bool(message.strip()) and "/" not in message and "\\" not in message
+
+
+def clear_preflight_failure(output_dir: str | Path) -> None:
+    """Remove one prior-attempt artifact without following directory aliases.
+
+    Args:
+        output_dir: Per-job pipeline output directory.
+    """
+    common_flags = getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_flags = os.O_RDONLY | common_flags | getattr(os, "O_DIRECTORY", 0)
+    try:
+        directory_descriptor = os.open(output_dir, directory_flags)
+    except FileNotFoundError:
+        return
+    try:
+        with suppress(FileNotFoundError):
+            os.unlink(PREFLIGHT_ERROR_FILENAME, dir_fd=directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
 
 
 def read_preflight_failure(output_dir: str | Path) -> dict[str, str] | None:

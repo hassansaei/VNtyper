@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shlex
+from pathlib import Path
 from typing import Any
 
 MAX_GUARD_COUNT_DIGITS = 20
+MAX_COMMAND_LOG_BYTES = 1024 * 1024
 GUARD_MESSAGE_PATTERN = (
     rf"idxstats reports ([0-9]{{1,{MAX_GUARD_COUNT_DIGITS}}}) placed-unmapped reads; using stream scan"
 )
@@ -17,6 +21,71 @@ PLACED_UNMAPPED_GUARD_PATTERNS: tuple[re.Pattern[str], ...] = (
         rf"vntyper\.scripts\.idxstats_parsing - ERROR - {GUARD_MESSAGE_PATTERN}"
     ),
 )
+
+
+def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | None, str | None, list[str]]:
+    """Read the bounded command record and identify the executed CRAM scan.
+
+    Args:
+        commands_log: JSONL written by the launcher's ``Popen`` recorder.
+        output_bam: Exact unmapped BAM destination owned by the conversion.
+
+    Returns:
+        Observed mode, its exact command, and fail-closed diagnostic problems.
+    """
+    try:
+        with commands_log.open("rb") as handle:
+            raw = handle.read(MAX_COMMAND_LOG_BYTES + 1)
+    except OSError:
+        return None, None, ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
+    if len(raw) > MAX_COMMAND_LOG_BYTES:
+        return None, None, [f"A-178-2 command log exceeds {MAX_COMMAND_LOG_BYTES} bytes"]
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeError:
+        return None, None, ["A-178-2 command log is not valid UTF-8"]
+
+    target = str(output_bam)
+    observed: list[tuple[str, str]] = []
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            return None, None, [f"A-178-2 command log is malformed at line {line_number}"]
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"command", "shell"}
+            or not isinstance(entry["command"], str)
+            or type(entry["shell"]) is not bool
+        ):
+            return None, None, [f"A-178-2 command log is malformed at line {line_number}"]
+        if not entry["shell"]:
+            continue
+        command = entry["command"]
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return None, None, [f"A-178-2 command log is malformed at line {line_number}"]
+        writes_target = any(tokens[index : index + 2] == ["-o", target] for index in range(len(tokens) - 1))
+        filters_unmapped = any(tokens[index : index + 2] == ["-f", "4"] for index in range(len(tokens) - 1))
+        if not writes_target or not filters_unmapped:
+            continue
+        if tokens.count("|") == 1 and tokens[:3] == ["set", "-o", "pipefail;"] and "*" not in tokens:
+            observed.append(("stream", command))
+        elif "|" not in tokens and "*" in tokens and "set" not in tokens:
+            observed.append(("indexed", command))
+
+    modes = sorted({mode for mode, _command in observed})
+    if not modes:
+        return None, None, ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
+    if len(modes) > 1:
+        return None, None, [f"A-178-2 observed contradictory CRAM unmapped-extraction modes: {', '.join(modes)}"]
+    commands = list(dict.fromkeys(command for _mode, command in observed))
+    if len(commands) != 1:
+        return None, None, [f"A-178-2 observed multiple distinct {modes[0]} unmapped-extraction commands"]
+    return modes[0], commands[0], []
 
 
 def parse_placed_unmapped_guard_count(stderr: str) -> int | None:
@@ -60,12 +129,20 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
     if actual_raw != expected_raw:
         problems.append(f"A-178-2 raw indexed evidence differs: expected {expected_raw}, got {actual_raw}")
 
-    scan = case.get("effective_unmapped_scan")
+    observation_problems = record.get("scan_observation_problems")
+    if not isinstance(observation_problems, list) or not all(
+        isinstance(problem, str) for problem in observation_problems
+    ):
+        observation_problems = []
+    scan = record.get("observed_unmapped_scan")
+    command = record.get("observed_unmapped_command")
     actual_stream = record.get("unmapped_read_set")
     expected_stream = expectation.get("stream_read_set")
     if expectation.get("indexed_authorized") is True:
-        if scan not in {"indexed", "stream"}:
-            problems.append(f"A-178-2 evidence has unsupported effective scan mode {scan!r}")
+        if scan not in {"indexed", "stream"} or not isinstance(command, str) or not command:
+            problems.extend(
+                observation_problems or ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
+            )
             return problems
         if actual_stream != expected_stream:
             problems.append(f"A-178-2 stream evidence differs: expected {expected_stream}, got {actual_stream}")
@@ -81,9 +158,16 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
                     problems.append(f"A-178-2 raw indexed loss differs: expected {expected_loss}, got {actual_loss}")
         return problems
 
-    if scan == "indexed":
+    configured_scan = case.get("effective_unmapped_scan")
+    if scan is None and configured_scan == "indexed":
         expected_guard_count = expectation.get("placed_unmapped_guard_count")
         actual_guard_count = record.get("placed_unmapped_guard_count")
+        nonzero_observation_problems = [
+            problem
+            for problem in observation_problems
+            if problem != "A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"
+        ]
+        problems.extend(nonzero_observation_problems)
         if type(expected_guard_count) is not int or expected_guard_count <= 0:
             problems.append(f"A-178-2 indexed guard expectation is missing or malformed: {expected_guard_count}")
         elif actual_guard_count != expected_guard_count:
@@ -94,8 +178,10 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
             problems.append("A-178-2 indexed rejection produced an unmapped BAM instead of failing before work")
         return problems
 
-    if scan != "stream":
-        problems.append(f"A-178-2 evidence has unsupported effective scan mode {scan!r}")
+    if scan != "stream" or not isinstance(command, str) or not command:
+        problems.extend(
+            observation_problems or ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
+        )
         return problems
 
     if actual_stream != expected_stream:

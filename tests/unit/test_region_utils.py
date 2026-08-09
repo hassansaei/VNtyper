@@ -246,6 +246,29 @@ class TestGetRegionStringWithFallback:
         with pytest.raises(ValueError, match="Ambiguous or unclassifiable chromosome naming convention"):
             get_region_string_with_fallback("ambiguous.bam", "hg19", "bam_region", config)
 
+    @pytest.mark.parametrize(
+        "assembly_detection",
+        [
+            {"naming_convention_threshold": "0.5"},
+            {"primary_contig_patterns": ["[", r"^NC_\d+$", r"^\d+$"]},
+        ],
+        ids=["invalid-threshold", "invalid-pattern"],
+    )
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    def test_invalid_naming_policy_is_not_swallowed_by_legacy_fallback(self, mock_extract, assembly_detection):
+        """Malformed policy must fail rather than silently select legacy coordinates."""
+        mock_extract.return_value = "@SQ\tSN:chr1\tLN:100\n"
+        config = {
+            "assembly_detection": assembly_detection,
+            "bam_processing": {
+                "assemblies": {"GRCh37": {"bam_region_coords": "1-10", "chromosome": 1}},
+                "bam_region_hg19": "chr1:1-10",
+            },
+        }
+
+        with pytest.raises(ValueError, match="Invalid (naming_convention_threshold|primary_contig_patterns)"):
+            get_region_string_with_fallback("sample.bam", "hg19", "bam_region", config)
+
 
 class TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain:
     """

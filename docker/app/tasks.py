@@ -12,7 +12,7 @@ from celery.utils.log import get_task_logger
 from .celery_app import celery_app
 from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
-from .job_failures import read_preflight_failure
+from .job_failures import clear_preflight_failure, read_preflight_failure
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -265,6 +265,9 @@ def run_vntyper_job(
     # own on the way.
     index_path = resolve_index_path(bam_path, index_path)
     try:
+        job_key = f"usage:{job_id}"
+        redis_usage_client.hdel(job_key, "code", "message")
+        clear_preflight_failure(output_dir)
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
         # Generate a unique hash for the user

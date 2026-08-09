@@ -303,20 +303,12 @@ def test_a_mismatched_cram_stops_too(tmp_path: Path) -> None:
     assert not harness.stages["process_bam_to_fastq"].called
 
 
-def test_an_unreadable_cram_header_does_not_stop_the_pipeline_at_the_guard(tmp_path: Path) -> None:
-    """The guard must not turn an unreadable header into a refusal.
+def test_an_unreadable_cram_header_stops_before_target_or_stage_work(tmp_path: Path) -> None:
+    """A missing CRAM header cannot bypass URI and assembly safety checks.
 
-    ``extract_bam_header`` runs samtools with ``check=True``, so a CRAM whose reference
-    cannot be found raises ``CalledProcessError`` - neither ``KeyError`` nor
-    ``ValueError``, so the existing region fallback does not catch it. The guard has to
-    swallow it and reach an `undetermined` verdict rather than a `mismatch`.
-
-    **What this proves, and what it does not.** Every stage is a recorder in this
-    harness: region resolution, BAM-to-FASTQ conversion and Kestrel itself are all
-    stubbed. Reaching ``run_kestrel`` therefore shows only that nothing between the
-    header read and Kestrel raised or exited - it is not evidence that a real CRAM with
-    an unresolvable reference produces a genotype. That question belongs to the
-    integration tier, which has no such fixture.
+    The low-level assembly guard retains its legacy undetermined verdict for an absent
+    header, but milestone-4's owned CRAM boundary requires the header before it can
+    inspect every ``@SQ UR`` or reconcile the declared coordinate system.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -330,9 +322,15 @@ def test_an_unreadable_cram_header_does_not_stop_the_pipeline_at_the_guard(tmp_p
         cram=str(cram),
         header_error=subprocess.CalledProcessError(1, "samtools view -H"),
         reference_assembly="hg19",
+        expect_failure=True,
     )
 
-    assert harness.stages["run_kestrel"].called
+    assert isinstance(harness.error, SystemExit)
+    assert not harness.stages["get_region_string_with_fallback"].called
+    assert not harness.stages["run_preflight"].called
+    assert not harness.stages["run_kestrel"].called
+    artifact = tmp_path / "run-output" / "out" / "preflight_error.json"
+    assert artifact.exists()
 
 
 def test_the_header_is_read_once_for_a_bam(tmp_path: Path) -> None:

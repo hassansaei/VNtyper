@@ -100,8 +100,11 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   - `reference_uri_policy.py` — typed, path-free remote-scheme detection with distinct
     parsers for colon-separated `REF_PATH` and complete CRAM header `UR` values, plus
     strict validation of the ambient-resolution boolean.
-  All nine are fully annotated and at or near 100% branch coverage. Put new pure logic
-  there rather than back in the file it came from.
+  - `alignment_preflight_logs.py` — pure planning of every command-log destination
+    reachable by a format, candidate count and fast/normal preflight mode.
+  `reference_resolution_environment.py` separately owns CRAM-only process-environment
+  pin/restore I/O. All ten pure modules are fully annotated and at or near 100% branch
+  coverage. Put new pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs

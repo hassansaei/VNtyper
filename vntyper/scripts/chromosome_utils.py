@@ -36,6 +36,7 @@ CHR1_LENGTHS = {
 CHR1_NAMES = frozenset({"chr1", "1"})
 NCBI_CHR1_PATTERN = re.compile(r"^nc_0*1(\.\d+)?$")
 NAMING_CONVENTION_ERROR_PREFIX = "Ambiguous or unclassifiable chromosome naming convention"
+NAMING_POLICY_ERROR_PREFIXES = ("Invalid naming_convention_threshold", "Invalid primary_contig_patterns")
 
 
 def is_chr1_name(contig_name: str) -> bool:

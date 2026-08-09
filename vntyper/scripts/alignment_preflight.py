@@ -29,9 +29,11 @@ from vntyper.scripts.alignment_index_provenance import (
     _remove_stale_view_indexes,
     generated_index_is_owned,
 )
+from vntyper.scripts.alignment_preflight_logs import preflight_log_paths
 from vntyper.scripts.command_builders import (
     build_cram_reference_probe_command,
     build_cram_stream_reference_probe_command,
+    build_samtools_depth_command,
     build_samtools_idxstats_command,
     build_samtools_index_command,
 )
@@ -52,7 +54,12 @@ from vntyper.scripts.preflight_input_io import (
     try_read_bounded_regular_text,
 )
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
-from vntyper.scripts.reference_uri_policy import allow_ambient_reference_resolution, ref_path_remote_scheme
+from vntyper.scripts.reference_resolution_environment import (
+    pin_reference_resolution as pin_reference_resolution,
+)
+from vntyper.scripts.reference_resolution_environment import (
+    restore_reference_resolution as restore_reference_resolution,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,34 +247,6 @@ def choose_unmapped_scan(
     return scan
 
 
-def pin_reference_resolution(config: dict) -> str | None:
-    """Pin htslib reference lookup to local paths unless ambient lookup is allowed.
-
-    Args:
-        config: Pipeline configuration. Missing CRAM keys use shipped defaults.
-
-    Returns:
-        The prior ``REF_PATH``, including ``None``; restore it in a ``finally``.
-
-    Raises:
-        ValueError: If the supposedly local ``REF_PATH`` contains a remote URL.
-    """
-    previous = os.environ.get("REF_PATH")
-    cram_config = config.get("cram", {})
-    if allow_ambient_reference_resolution(config):
-        logger.warning("Ambient CRAM reference resolution is enabled and may block on a network endpoint.")
-        return previous
-    local_ref_path = cram_config.get("local_ref_path", "%2s/%2s/%s")
-    if ref_path_remote_scheme(local_ref_path) is not None:
-        message = (
-            "cram.local_ref_path must not contain a remote URL when ambient reference resolution is disabled: "
-            f"{local_ref_path}"
-        )
-        _reject(message)
-    os.environ["REF_PATH"] = local_ref_path
-    return previous
-
-
 def _reference_probe_timeout_seconds(config: dict) -> float:
     """Return a validated reference-probe deadline no greater than 120 seconds."""
     configured = config.get("cram", {}).get("reference_probe_timeout_seconds", _MAX_REFERENCE_PROBE_TIMEOUT_SECONDS)
@@ -280,18 +259,6 @@ def _reference_probe_timeout_seconds(config: dict) -> float:
     ):
         _reject("cram.reference_probe_timeout_seconds must be a finite number greater than 0 and at most 120")
     return float(configured)
-
-
-def restore_reference_resolution(previous: str | None) -> None:
-    """Restore the ``REF_PATH`` value captured before a run.
-
-    Args:
-        previous: Original ``REF_PATH`` value, or ``None`` when it was unset.
-    """
-    if previous is None:
-        os.environ.pop("REF_PATH", None)
-    else:
-        os.environ["REF_PATH"] = previous
 
 
 def _reference_contigs(reference_path: str, max_bytes: int) -> set[str] | None:
@@ -343,6 +310,7 @@ def resolve_reference(
     header_contigs: Iterable[str],
     m5: str | None,
     *,
+    coverage_region: str | None = None,
     header_m5s: Iterable[tuple[str, str]] = (),
     unmapped_scan: str = "indexed",
     failure_context: error_io.PreflightErrorContext | None = None,
@@ -360,6 +328,7 @@ def resolve_reference(
         output_name: Base name for probe logs.
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
+        coverage_region: Independently resolved region used by the later depth consumer.
         header_m5s: Header contig and M5 pairs used to diagnose a later
             whole-file stream failure.
         unmapped_scan: Downstream CRAM unmapped-read scan. Stream mode requires
@@ -394,6 +363,23 @@ def resolve_reference(
             target_log,
             timeout_seconds=timeout_seconds,
         )
+        if not exit_ok:
+            return exit_ok, probe_output
+        if coverage_region is not None:
+            coverage_command = build_samtools_depth_command(
+                samtools_path=samtools_path,
+                threads=threads,
+                region=coverage_region,
+                bam_file=view_path,
+                coverage_output="/dev/null",
+                reference_path=reference_path,
+            )
+            coverage_log = str(Path(output_dir) / f"{output_name}_reference_coverage_probe_{position}.log")
+            exit_ok, probe_output = capture_command(
+                coverage_command,
+                coverage_log,
+                timeout_seconds=timeout_seconds,
+            )
         if not exit_ok or unmapped_scan != "stream":
             return exit_ok, probe_output
         stream_command = build_cram_stream_reference_probe_command(
@@ -472,6 +458,8 @@ def _validate_preflight_logs(
     candidates: tuple[tuple[str, str | None], ...],
     *,
     bai_only: bool,
+    fast_mode: bool,
+    coverage_region: str | None,
 ) -> None:
     output, _ = _safe_output_paths(output_dir, output_name, file_format)
     existing_index = (
@@ -480,21 +468,14 @@ def _validate_preflight_logs(
         else resolve_any_index(in_path, file_format)
     )
     protected_paths: tuple[str | Path, ...] = (in_path, existing_index) if existing_index is not None else (in_path,)
-    if file_format == FORMAT_CRAM:
-        log_paths = [output / f"{output_name}_idxstats.log"]
-        log_paths.extend(
-            output / f"{output_name}_reference_probe_{position}.log" for position in range(1, len(candidates) + 2)
-        )
-        log_paths.extend(
-            output / f"{output_name}_reference_stream_probe_{position}.log"
-            for position in range(1, len(candidates) + 2)
-        )
-    else:
-        log_paths = [
-            output / f"{output_name}_idxstats.log",
-            output / f"{output_name}_alignment_probe.log",
-        ]
-    for log_path in log_paths:
+    for log_path in preflight_log_paths(
+        output,
+        output_name,
+        file_format,
+        candidate_count=len(candidates),
+        fast_mode=fast_mode,
+        coverage_region=coverage_region,
+    ):
         _validate_log_entry(log_path, protected_paths)
 
 
@@ -508,6 +489,7 @@ def run_preflight(
     *,
     region: str | None = None,
     bed_file: str | Path | None = None,
+    coverage_region: str | None = None,
     reference_assembly: str = "hg19",
     reference_fasta: str | None = None,
     header_contigs: Iterable[str] = (),
@@ -528,6 +510,7 @@ def run_preflight(
         threads: Thread count for samtools commands.
         region: This run's target region when no BED file is used.
         bed_file: This run's BED target. It takes precedence over ``region``.
+        coverage_region: Independently resolved region used by the later depth consumer.
         reference_assembly: Assembly suffix for configured reference paths.
         reference_fasta: Explicit CLI or web reference candidate.
         header_contigs: Contigs declared by the alignment header.
@@ -569,7 +552,16 @@ def run_preflight(
         if file_format == FORMAT_CRAM:
             _reference_probe_timeout_seconds(config)
         failure_context.phase = error_io.OUTPUT_SAFETY_FAILURE
-        _validate_preflight_logs(in_path, output_dir, output_name, file_format, candidates, bai_only=bai_only)
+        _validate_preflight_logs(
+            in_path,
+            output_dir,
+            output_name,
+            file_format,
+            candidates,
+            bai_only=bai_only,
+            fast_mode=fast_mode,
+            coverage_region=coverage_region,
+        )
         failure_context.phase = error_io.VIEW_INDEX_FAILURE
         view_path, index_path = build_alignment_view(
             in_path,
@@ -580,15 +572,17 @@ def run_preflight(
             threads,
             bai_only=bai_only,
         )
-        failure_context.phase = error_io.SCAN_SELECTION_FAILURE
-        unmapped_scan = choose_unmapped_scan(
-            view_path,
-            config,
-            threads,
-            output_dir,
-            output_name,
-            file_format=file_format,
-        )
+        unmapped_scan = "not-required"
+        if not fast_mode:
+            failure_context.phase = error_io.SCAN_SELECTION_FAILURE
+            unmapped_scan = choose_unmapped_scan(
+                view_path,
+                config,
+                threads,
+                output_dir,
+                output_name,
+                file_format=file_format,
+            )
         if file_format == FORMAT_CRAM:
             failure_context.phase = error_io.REFERENCE_PROBE_FAILURE
             reference_path, reference_source, uncovered_contigs = resolve_reference(
@@ -602,6 +596,7 @@ def run_preflight(
                 output_name,
                 tuple(header_contigs),
                 m5,
+                coverage_region=coverage_region,
                 header_m5s=header_m5s,
                 unmapped_scan=unmapped_scan,
                 failure_context=failure_context,
