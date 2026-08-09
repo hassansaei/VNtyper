@@ -1029,22 +1029,23 @@ is worse than the faster arm's *worst*. If P1/P2 fall inside the noise band they
 anyway — they are strictly less work — but the spec will say so rather than claim a win it
 did not measure.
 
-### Wave 3 measurement (2026-08-08)
+### Wave 3 measurement (2026-08-09)
 
 The host was otherwise idle; the six final runs used one harness job, four pipeline
-threads and alternated `ddf49a1` (2.0.9) with `06c74d0` (the clean round-3 candidate).
+threads and alternated `ddf49a1` (2.0.9) with `d3c0265` (the clean final candidate).
 Every counted side verified its package marker, exact revision and all 18 expectations.
 
 | Arm | Runs (s) | Median | Range |
 | --- | --- | --- | --- |
-| 2.0.9 baseline | 88.92, 88.57, 87.53 | 88.57 | 87.53–88.92 |
-| milestone | 85.52, 86.51, 86.80 | 86.51 | 85.52–86.80 |
+| 2.0.9 baseline | 90.86, 90.67, 140.61 | 90.86 | 90.67–140.61 |
+| milestone | 88.38, 133.18, 89.27 | 89.27 | 88.38–133.18 |
 
-The ranges do not overlap: the milestone arm's worst run is 0.73 s faster than the
-baseline arm's best. On the work both revisions can complete, A-PERF-1 is a measured win,
-not merely “inside noise.” The separate whole-50 run found 32 explicit mixed-layout
-failures on the milestone arm; the baseline completed those cases only by discarding the
-stranded FASTQ, so they are exit-bar evidence rather than performance samples.
+The ranges overlap during a shared slow interval, so A-PERF-1 records **no measured
+regression** rather than claiming a win: the slower baseline arm's best run (90.67 s)
+does not exceed the faster milestone arm's worst run (133.18 s). The separate whole-50
+run found 32 explicit mixed-layout failures on the milestone arm; the baseline completed
+those cases only by discarding the stranded FASTQ, so they are exit-bar evidence rather
+than performance samples.
 
 The forced CRAM measurement also corrected two impossible premises in the original
 A-178-2 wording. Both declared golden CRAM sources have non-zero placed-unmapped counts,
@@ -1243,9 +1244,10 @@ distinction remain unchanged.
 ### Wave 3 gate evidence before round 3
 
 `make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. The final BAM timing
-result is the non-overlapping 87.53–88.92 s baseline versus 85.52–86.80 s milestone range in
-§5b. The full base matrix also exposed 32 inputs whose previously ignored single FASTQ is
-now named and rejected. Forced indexed CRAM runs were rejected by the placed-unmapped
+result is the overlapping 90.67–140.61 s baseline versus 88.38–133.18 s milestone range in
+§5b, which meets the predeclared no-regression rule without claiming a speedup. The full
+base matrix also exposed 32 inputs whose previously ignored single FASTQ is now named and
+rejected. Forced indexed CRAM runs were rejected by the placed-unmapped
 guard, whose causal `idxstats` column-four counts are 11,571 and 329. The initial flag-12
 stream evidence (622,690 and 4,478 records) was superseded by
 the corrected flag-4 whole-stream evidence (634,261 and 4,807 records); raw indexed
