@@ -346,7 +346,9 @@ def test_default_mode_rejects_a_remote_header_uri_before_network_or_probe_work(
         "candidates": [],
     }
     assert not (output / "custom_regions.bed").exists()
-    assert not (output / "fastq_bam_processing").exists()
+    preflight_dir = output / "fastq_bam_processing"
+    assert preflight_dir.is_dir()
+    assert list(preflight_dir.iterdir()) == []
     assert not (output / "kestrel").exists()
     assert not (output / "coverage").exists()
     assert not (output / "pipeline_summary.json").exists()
