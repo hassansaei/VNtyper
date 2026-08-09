@@ -26,7 +26,7 @@ SUPERPOWERS — use these skills, do not skip:
 Also read superpowers/skills/using-superpowers/references/codex-tools.md for the harness
 adaptation.
 
-STATE: Wave 0 (#213) is DONE and merged on this branch (commits 2d81519, 312a2d0).
+STATE: Wave 0 (#213) is DONE and merged on this branch (commits 18ae985, 949c9de).
 Start at Wave 1, Task 1. Remaining: #225, #209, #178, #165, #161.
 
 ORDER (the plan's waves; the dependencies are real):

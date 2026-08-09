@@ -1215,6 +1215,8 @@ The host was otherwise idle; the six final runs used one harness job, four pipel
 threads and alternated `ddf49a1` (2.0.9) with `3083ed9` (the then-current behavioral
 candidate, now historical after H1/H2/H3). Every counted side verified its package marker, exact revision and all 18
 expectations. The host was a 32-logical-CPU AMD Ryzen 9 9950X with one logged-in user.
+Published-history commit `53964b9` has identical runtime trees; only the ignored generated
+agent report was removed. The original hash remains because the harness recorded it.
 The raw one/five/fifteen-minute load averages at each alternating launch were baseline
 `3.34/3.30/2.34`, milestone `4.87/3.96/2.67`, baseline `5.91/4.51/2.97`, milestone
 `5.69/4.53/3.11`, baseline `4.17/4.44/3.21`, milestone `4.29/4.38/3.30`; the values include
@@ -1236,6 +1238,11 @@ evidence rather than performance samples.
 
 The final integrated tree was clean at `388f157ccc5ca90d334a143dd0d0eed5603e4fda`;
 the baseline worktree was clean at `ddf49a18ecdc208b98248a3563b128a2b2da765f`.
+Before publication, the ignored generated agent report was purged from the unpublished
+branch history. The measured runtime tree (`vntyper/`, `docker/`, and `scripts/`) is
+byte-identical at published-history commit
+`470fdd6590392cf090dc841c8f2b73b3cf05b9ef`. The original hash remains here because it
+is the revision the measurement harness recorded.
 The same 18-case intersection ran with one harness job and four pipeline threads,
 alternating baseline/candidate. Every one of the 108 case executions exited 0 and each
 arm verified its exact package marker and revision. The host had 32 logical CPUs and one
@@ -1396,9 +1403,10 @@ other.
 
 * Whole-genome reference download in `install-references`. The contract makes a reference
   supplyable and provable; shipping 3 GB is a separate decision.
-* `REF_CACHE` population by `M5` digest. Considered — it would make the contract
-  naming-independent without a probe — but the probe already achieves that outcome and
-  costs one samtools call instead of a cache builder.
+* Persistent or downloaded whole-genome `REF_CACHE` population. Final hardening does
+  build a run-local, lifetime-bound M5 cache from already supplied local references or
+  already populated cache entries. It does not download reference data, persist a cache,
+  or replace the bounded samtools proof.
 * A web form field for the CRAM reference. The worker reads the configured key; a UI for
   it is a separate change to `docker/app/`.
 * #210's second BAM index and #188, both already filed.
@@ -1429,8 +1437,8 @@ PR.**
 | 3b | independent remote-header follow-up | 1 | 0 | 0 | 1 accepted and fixed (§3.21, A-178-5) |
 | 3c | final diff follow-up | 2 | 4 | 3 | 2 HIGH accepted and fixed; MED/LOW dispositions are detailed below |
 | 3d | final diff follow-up | 3 | 3 | 2 | 3 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
-| 3e | final diff at `bfefbdc` | 2 | 4 | 2 | 2 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
-| 3f | final diff at `dfdbfff` | 3 | 1 | 2 | 3 HIGH and the MED accepted and fixed; one LOW corrected the ownership prose, and A-PERF-1 remains pending |
+| 3e | final diff at `bfefbdc` (published `7a23115`) | 2 | 4 | 2 | 2 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
+| 3f | final diff at `dfdbfff` (published `96052e3`) | 3 | 1 | 2 | 3 HIGH and the MED accepted and fixed; one LOW corrected the ownership prose, and A-PERF-1 remains pending |
 | H1 | descriptor-binding/lifetime follow-up | accepted | tracked | tracked | opened regular FD, procfd view with verified hardlink fallback, final-consumer lifetime, exact cleanup and primary-outcome preservation |
 | H2 | output/log ownership follow-up | accepted | tracked | tracked | exclusive regular-file destinations, alias refusal, CLI log ownership and trailing-separator archive-base normalization |
 | H3 | archive traversal/lifecycle follow-up | accepted | tracked | tracked | reports-before-archive, view removal before traversal, `O_NOFOLLOW` descriptor anchoring, unsafe-entry refusal and web rollback/quarantine handling |

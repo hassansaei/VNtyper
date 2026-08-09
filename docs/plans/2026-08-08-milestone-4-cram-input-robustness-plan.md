@@ -119,7 +119,7 @@ make format && make test-unit
 
 ## Wave 0 — #213 (COMPLETE)
 
-Landed in `2d81519` and `312a2d0`. Six `conda run` sites: four in `docker/entrypoint.sh`,
+Landed in `18ae985` and `949c9de`. Six `conda run` sites: four in `docker/entrypoint.sh`,
 two in `docker/app/tasks.py` (`build_vntyper_command` and the inline cohort launcher).
 `tests/unit/web/test_conda_run_streams_output.py` scans both files as source text.
 `make check-all` green, 2846 unit tests.
