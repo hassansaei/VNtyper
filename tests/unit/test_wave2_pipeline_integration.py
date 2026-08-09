@@ -11,8 +11,15 @@ import pytest
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import cli_handlers
 from vntyper.scripts.cli_parser import build_parser
+from vntyper.scripts.pipeline_inputs import resolve_pipeline_input
 
 pytestmark = pytest.mark.unit
+
+
+def test_extracted_input_contract_preserves_the_missing_input_diagnostic() -> None:
+    """The focused input module retains the orchestrator's curated failure path."""
+    with pytest.raises(ValueError, match="No input files provided"):
+        resolve_pipeline_input(None, None, None, None, None, [])
 
 
 def test_cli_reference_and_single_fastq_values_survive_one_handler_contract(tmp_path: Path) -> None:

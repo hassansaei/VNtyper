@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -105,11 +106,12 @@ def validate_pipeline_log_destination(
     args: argparse.Namespace,
     config: dict[str, Any],
 ) -> None:
-    """Reject a pipeline log that aliases operator-owned input state.
+    """Reject a pipeline log without exclusive regular-file ownership.
 
     This check must run before the log parent is created or ``FileHandler`` opens
-    the destination. It covers paths that do not exist yet because an application
-    log created under an index candidate name would itself corrupt that input state.
+    the destination. Missing paths and single-link regular rerun logs are safe.
+    Existing symlinks, non-regular entries, multiply linked files, and aliases of
+    operator input state are rejected.
 
     Args:
         log_file: Explicit or default application-log destination.
@@ -117,9 +119,17 @@ def validate_pipeline_log_destination(
         config: Loaded pipeline configuration used to select BWA sidecars.
 
     Raises:
-        ValueError: If the log is lexically or physically an operator input.
+        ValueError: If the log entry is unsafe or aliases an operator input.
     """
     log_path = Path(log_file)
+    if os.path.lexists(log_path):
+        metadata = os.lstat(log_path)
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError(f"Pipeline log file must not be a symlink: {log_path}")
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"Pipeline log file must be a regular file: {log_path}")
+        if metadata.st_nlink > 1:
+            raise ValueError(f"Pipeline log file has multiple hard links: {log_path}")
     log_variants = (_absolute(log_path), _absolute(log_path).resolve(strict=False))
     for protected in _pipeline_operator_paths(args, config):
         protected_absolute = _absolute(protected)

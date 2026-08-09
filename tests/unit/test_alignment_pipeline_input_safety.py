@@ -272,3 +272,66 @@ def test_alignment_mode_rejects_unknown_output_hardlink_to_operator_input(
 
     with pytest.raises(ValueError, match="output-tree entry aliases protected input"):
         protect_alignment_inputs(output, alignment, "cram", bed, reference, MINIMAL_CONFIG, "hg19")
+
+
+@pytest.mark.parametrize("input_mode", ["bam", "fastq"])
+@pytest.mark.parametrize("output_route", ["direct", "symlinked"])
+@pytest.mark.parametrize("artifact_name", ["pipeline_summary.json", "coverage/coverage_summary.tsv"])
+def test_unrelated_output_hardlink_is_rejected_before_mkdir_or_pipeline_work(
+    tmp_path: Path,
+    input_mode: str,
+    output_route: str,
+    artifact_name: str,
+) -> None:
+    """Every later output entry needs exclusive ownership, not only input non-aliasing."""
+    actual_output = tmp_path / "actual-output"
+    actual_output.mkdir()
+    artifact = actual_output / artifact_name
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    external = tmp_path / "unrelated-external-artifact"
+    external.write_bytes(b"unrelated-external-bytes")
+    artifact.hardlink_to(external)
+    protected_inode = external.stat().st_ino
+    protected_bytes = external.read_bytes()
+    output = actual_output
+    if output_route == "symlinked":
+        output = tmp_path / "output-link"
+        output.symlink_to(actual_output, target_is_directory=True)
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    if input_mode == "bam":
+        alignment = inputs / "input.bam"
+        alignment.write_bytes(b"operator-bam")
+        input_kwargs: dict[str, Any] = {"bam": str(alignment)}
+    else:
+        fastq = inputs / "reads.fastq.gz"
+        reference = inputs / "reference.fa"
+        fastq.write_bytes(b"operator-fastq")
+        reference.write_bytes(b"operator-reference")
+        input_kwargs = {"fastq1": str(fastq), "bwa_reference": str(reference)}
+
+    with (
+        mock.patch.object(Path, "mkdir", autospec=True) as mkdir,
+        mock.patch.object(
+            pipeline_module,
+            "create_output_directories",
+            wraps=pipeline_module.create_output_directories,
+        ) as create_dirs,
+    ):
+        harness = run_pipeline_under_harness(
+            output,
+            create_output_dir=False,
+            expect_failure=True,
+            **input_kwargs,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert external.stat().st_ino == protected_inode
+    assert artifact.stat().st_ino == protected_inode
+    assert external.read_bytes() == protected_bytes
+    mkdir.assert_not_called()
+    create_dirs.assert_not_called()
+    for stage in harness.stages.values():
+        stage.assert_not_called()

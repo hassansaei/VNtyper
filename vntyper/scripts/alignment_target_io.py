@@ -215,6 +215,8 @@ def _validate_existing_output_tree(
                     _reject(f"Unsafe pipeline output tree contains a non-regular entry: {path}")
                 if any(_same_file(path, protected) for protected in protected_paths):
                     _reject(f"Pipeline output-tree entry aliases protected input: {path}")
+                if entry.stat(follow_symlinks=False).st_nlink > 1:
+                    _reject(f"Unsafe pipeline output tree contains a file with multiple hard links: {path}")
 
 
 def protect_alignment_inputs(
@@ -229,8 +231,9 @@ def protect_alignment_inputs(
     """Protect alignment-mode inputs before any pipeline-owned write.
 
     The output tree is checked before validation logs, target preparation, preflight,
-    or stage-directory creation. Existing regular rerun artifacts are accepted, as is
-    the exact run-local preflight view symlink back to the selected alignment.
+    or stage-directory creation. Existing single-link regular rerun artifacts are
+    accepted, as is the exact run-local preflight view symlink back to the selected
+    alignment.
 
     Args:
         output: Pipeline output root.
@@ -344,8 +347,9 @@ def validate_fastq_pipeline_destinations(
 
     The validation runs once before stage-directory creation or any external tool,
     covering destinations owned by fastp, BWA, alignment preflight, and post-alignment
-    conversion. A normal preflight view symlink from a previous run remains replaceable
-    only when it targets that run's sorted BAM.
+    conversion. Existing regular files must have one link. A normal preflight view
+    symlink from a previous run remains replaceable only when it targets that run's
+    sorted BAM.
 
     Args:
         output: Pipeline output root.

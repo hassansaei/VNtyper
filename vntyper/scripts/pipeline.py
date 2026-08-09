@@ -14,7 +14,6 @@ from vntyper.scripts.alignment_preflight import (
     run_preflight,
 )
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
-from vntyper.scripts.alignment_target_io import protect_alignment_inputs, validate_fastq_pipeline_destinations
 from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
@@ -40,6 +39,7 @@ from vntyper.scripts.pipeline_alignment import (
 )
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
+from vntyper.scripts.pipeline_inputs import protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -149,62 +149,25 @@ def run_pipeline(
     overall_start = timeit.default_timer()
     logger.info("Pipeline execution started.")
 
-    supplied_groups = [
-        input_type
-        for input_type, supplied in (
-            ("FASTQ", fastq1 is not None or fastq2 is not None),
-            ("BAM", bam is not None),
-            ("CRAM", cram is not None),
-        )
-        if supplied
-    ]
-    if len(supplied_groups) > 1:
-        msg = "Provide either BAM, CRAM, or FASTQ files, not multiples."
-        logger.error(msg)
-        raise ValueError(msg)
-    if not supplied_groups:
-        msg = "No input files provided."
-        logger.error(msg)
-        raise ValueError(msg)
-    input_type = supplied_groups[0]
-    if input_type == "FASTQ" and not fastq1:
-        msg = "When not providing BAM/CRAM, --fastq1 must be specified; --fastq2 is optional."
-        logger.error(msg)
-        raise ValueError(msg)
-    if input_type == "FASTQ" and not bwa_reference:
-        logger.error("BWA reference not provided or determined from configuration.")
-        raise ValueError("BWA reference not provided or determined from configuration.")
-    if input_type == "FASTQ" and not fastq2 and "shark" in extra_modules:
-        msg = "SHARK requires paired-end FASTQ input; provide --fastq2 or remove the shark module."
-        logger.error(msg)
-        raise ValueError(msg)
-
-    input_files = {}
-    if input_type == "FASTQ":
-        input_files["fastq1"] = os.path.basename(fastq1)
-        if fastq2:
-            input_files["fastq2"] = os.path.basename(fastq2)
-    elif input_type == "BAM":
-        input_files["bam"] = os.path.basename(bam)
-    elif input_type == "CRAM":
-        input_files["cram"] = os.path.basename(cram)
+    input_type, input_files = resolve_pipeline_input(fastq1, fastq2, bam, cram, bwa_reference, extra_modules)
     previous_ref_path = None
     reference_resolution_pinned = False
     alignment_plan = None
     primary_outcome_is_active = False
     try:
-        # Validation owns a run-local log, but stage directories wait until preflight passes.
-        if input_type in ["BAM", "CRAM"]:
-            input_alignment = bam if input_type == "BAM" else cram
-            protect_alignment_inputs(
-                output_dir,
-                input_alignment,
-                input_type.lower(),
-                bed_file,
-                reference_fasta,
-                config,
-                reference_assembly,
-            )
+        protect_pipeline_input_ownership(
+            output_dir,
+            input_type,
+            fastq1,
+            fastq2,
+            bam,
+            cram,
+            bed_file,
+            reference_fasta,
+            bwa_reference,
+            config,
+            reference_assembly,
+        )
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "BAM":
             validate_bam_file(bam, cwd=project_root, log_dir=output_dir)
@@ -241,7 +204,6 @@ def run_pipeline(
             previous_ref_path = prepared.previous_ref_path
             reference_resolution_pinned = input_type == "CRAM"
         else:
-            validate_fastq_pipeline_destinations(output_dir, fastq1, fastq2, bed_file, bwa_reference, config)
             bed_file_path = prepare_alignment_target(
                 input_type=input_type,
                 bam=bam,
