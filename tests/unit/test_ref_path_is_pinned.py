@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -18,6 +19,7 @@ def test_an_unset_ref_path_is_pinned_to_the_shipped_local_only_default(monkeypat
 
     assert previous is None
     assert os.environ["REF_PATH"] == "%2s/%2s/%s"
+    restore_reference_resolution(previous)
 
 
 def test_an_operators_network_ref_path_is_overridden_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -28,6 +30,7 @@ def test_an_operators_network_ref_path_is_overridden_by_default(monkeypatch: pyt
 
     assert previous == "http://blackhole.invalid/%s"
     assert os.environ["REF_PATH"] == "/local/cache/%2s/%2s/%s"
+    restore_reference_resolution(previous)
 
 
 def test_the_override_is_skipped_when_ambient_resolution_is_explicitly_allowed(
@@ -43,6 +46,7 @@ def test_the_override_is_skipped_when_ambient_resolution_is_explicitly_allowed(
     assert previous == ambient
     assert os.environ["REF_PATH"] == ambient
     assert "block" in caplog.text.lower()
+    restore_reference_resolution(previous)
 
 
 @pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None])
@@ -92,3 +96,86 @@ def test_restore_puts_back_the_previous_value_including_unset(
         assert "REF_PATH" not in os.environ
     else:
         assert os.environ["REF_PATH"] == previous
+
+
+def test_overlapping_threads_cannot_reopen_ambient_reference_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second CRAM scope waits until the first has restored process-global REF_PATH."""
+    ambient = "http://ambient.example/%s"
+    monkeypatch.setenv("REF_PATH", ambient)
+    first_pinned = threading.Event()
+    release_first = threading.Event()
+    second_attempting = threading.Event()
+    second_pinned = threading.Event()
+    failures: list[BaseException] = []
+    observations: list[tuple[str | None, str]] = []
+
+    def first_scope() -> None:
+        try:
+            previous = pin_reference_resolution({"cram": {"local_ref_path": "/cache/first/%s"}})
+            first_pinned.set()
+            assert release_first.wait(timeout=2)
+            restore_reference_resolution(previous)
+        except BaseException as error:
+            failures.append(error)
+
+    def second_scope() -> None:
+        try:
+            assert first_pinned.wait(timeout=2)
+            second_attempting.set()
+            previous = pin_reference_resolution({"cram": {"local_ref_path": "/cache/second/%s"}})
+            observations.append((previous, os.environ["REF_PATH"]))
+            second_pinned.set()
+            restore_reference_resolution(previous)
+        except BaseException as error:
+            failures.append(error)
+
+    first = threading.Thread(target=first_scope)
+    second = threading.Thread(target=second_scope)
+    first.start()
+    second.start()
+    try:
+        assert first_pinned.wait(timeout=2)
+        assert second_attempting.wait(timeout=2)
+        assert not second_pinned.wait(timeout=0.1), "the second CRAM scope mutated REF_PATH while the first was active"
+        assert os.environ["REF_PATH"] == "/cache/first/%s"
+        release_first.set()
+        assert second_pinned.wait(timeout=2)
+    finally:
+        release_first.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert failures == []
+    assert observations == [(ambient, "/cache/second/%s")]
+    assert os.environ["REF_PATH"] == ambient
+
+
+def test_an_invalid_scope_does_not_block_the_next_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validation failures release the process-global REF_PATH scope lock."""
+    ambient = "/operator/original/%s"
+    monkeypatch.setenv("REF_PATH", ambient)
+
+    with pytest.raises(ValueError, match="allow_ambient_reference_resolution must be true or false"):
+        pin_reference_resolution({"cram": {"allow_ambient_reference_resolution": "false"}})
+
+    finished = threading.Event()
+    failures: list[BaseException] = []
+
+    def valid_scope() -> None:
+        try:
+            previous = pin_reference_resolution({"cram": {"local_ref_path": "/cache/valid/%s"}})
+            assert os.environ["REF_PATH"] == "/cache/valid/%s"
+            restore_reference_resolution(previous)
+            finished.set()
+        except BaseException as error:
+            failures.append(error)
+
+    worker = threading.Thread(target=valid_scope)
+    worker.start()
+    worker.join(timeout=2)
+
+    assert finished.is_set()
+    assert not worker.is_alive()
+    assert failures == []
+    assert os.environ["REF_PATH"] == ambient
