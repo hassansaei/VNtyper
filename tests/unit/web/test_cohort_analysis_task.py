@@ -18,6 +18,7 @@ imports before this module, so `app.tasks` is importable here.
 """
 
 import os
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,9 @@ def test_cohort_analysis_still_removes_its_own_scratch_file(cohort_analysis_task
     )
 
     assert not (output_dir / "cohort_input.txt").exists()
+    with zipfile.ZipFile(f"{output_dir}.zip") as archive:
+        assert "cohort_input.txt" not in archive.namelist()
+        assert str(zip_path).encode() not in Path(f"{output_dir}.zip").read_bytes()
 
 
 def test_cohort_analysis_surfaces_a_setup_failure(cohort_analysis_task, monkeypatch, tmp_path: Path) -> None:

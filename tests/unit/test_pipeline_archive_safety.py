@@ -1,46 +1,121 @@
 """Archive safety at the completed CLI pipeline boundary."""
 
+import os
+import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tests.support.pipeline_harness import run_pipeline_under_harness
+from vntyper.scripts import pipeline as pipeline_module
 
 pytestmark = pytest.mark.unit
 
 PATIENT_BYTES = b"patient-alignment-bytes-that-must-never-enter-an-archive"
 
 
-def test_cli_archive_refuses_a_run_local_alignment_symlink_before_install(tmp_path: Path, caplog) -> None:
-    """A live preflight view must fail the completed run rather than leak its target.
+@pytest.mark.parametrize(
+    ("archive_format", "suffix"),
+    [pytest.param("zip", ".zip", id="zip"), pytest.param("tar.gz", ".tar.gz", id="tar")],
+)
+def test_cli_releases_the_h1_owned_view_before_archiving(tmp_path: Path, archive_format: str, suffix: str) -> None:
+    """The combined H1/H3 boundary closes the exact view before ZIP or tar."""
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    output_dir = tmp_path / "results"
+    plans: list[SimpleNamespace] = []
+
+    def owned_plan(*args, **kwargs):
+        del args
+        view = output_dir / f"input.{kwargs['file_format']}"
+        view.symlink_to(patient)
+        plan = SimpleNamespace(
+            input_path=str(patient),
+            view_path=str(view),
+            file_format=kwargs["file_format"],
+            index_path=f"{view}.bai",
+            reference_path=None,
+            reference_source="test",
+            uncovered_contigs=(),
+            unmapped_scan="indexed",
+        )
+
+        def close() -> None:
+            assert os.readlink(view) == str(patient)
+            view.unlink()
+
+        plan.close = close
+        plans.append(plan)
+        return plan
+
+    harness = run_pipeline_under_harness(
+        output_dir,
+        archive_results=True,
+        archive_format=archive_format,
+        stage_side_effects={"run_preflight": owned_plan},
+    )
+
+    assert harness.error is None
+    assert plans and not Path(plans[0].view_path).exists()
+    archive = Path(f"{output_dir}{suffix}")
+    assert PATIENT_BYTES not in archive.read_bytes()
+    if archive_format == "zip":
+        with zipfile.ZipFile(archive) as zip_package:
+            assert "input.bam" not in zip_package.namelist()
+    else:
+        with tarfile.open(archive, "r:gz") as tar_package:
+            assert "./input.bam" not in tar_package.getnames()
+
+
+def test_cli_archive_runs_after_all_final_summary_formats_are_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The direct CLI archive owns the complete, final result tree.
 
     Args:
         tmp_path: Scratch directory standing in for the input and output trees.
-        caplog: Pytest log capture.
     """
-    patient_alignment = tmp_path / "patient" / "patient.bam"
-    patient_alignment.parent.mkdir()
-    patient_alignment.write_bytes(PATIENT_BYTES)
     output_dir = tmp_path / "results"
 
-    def leave_alignment_view(*args, **kwargs) -> None:
+    def assert_final_outputs(base_name, archive_format, root_dir, **kwargs) -> str:
+        del base_name, archive_format, root_dir, kwargs
+        assert (output_dir / "pipeline_summary.json").exists()
+        assert (output_dir / "pipeline_summary.csv").exists()
+        assert (output_dir / "pipeline_summary.tsv").exists()
+        return str(output_dir) + ".zip"
+
+    monkeypatch.setattr(pipeline_module, "create_safe_archive", assert_final_outputs)
+    harness = run_pipeline_under_harness(
+        output_dir,
+        archive_results=True,
+        summary_formats=["csv", "tsv"],
+    )
+
+    assert harness.error is None
+
+
+def test_cli_malicious_result_symlink_fails_with_completed_outcome_one(tmp_path: Path) -> None:
+    """An alias not owned by H1 still fails the CLI without exposing patient bytes."""
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    output_dir = tmp_path / "results"
+
+    def add_malicious_alias(*args, **kwargs) -> None:
         del args, kwargs
-        (output_dir / "alignment_view.bam").symlink_to(patient_alignment)
+        (output_dir / "malicious.bam").symlink_to(patient)
 
     harness = run_pipeline_under_harness(
         output_dir,
         archive_results=True,
         expect_failure=True,
-        stage_side_effects={"generate_summary_report": leave_alignment_view},
+        stage_side_effects={"generate_summary_report": add_malicious_alias},
     )
 
-    assert isinstance(harness.error, SystemExit)
-    assert harness.error.code == 1
-    assert not Path(f"{output_dir}.zip").exists(), "an unsafe archive must never be installed"
-    assert (output_dir / "alignment_view.bam").is_symlink(), "failure must retain the diagnosable result tree"
-    assert patient_alignment.read_bytes() == PATIENT_BYTES
-    assert "Pipeline finished successfully." not in caplog.messages
+    assert isinstance(harness.error, SystemExit) and harness.error.code == 1
+    assert not Path(f"{output_dir}.zip").exists()
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 def test_cli_archive_still_packages_regular_results(tmp_path: Path) -> None:

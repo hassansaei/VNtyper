@@ -790,7 +790,6 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
         "hg38",
         "--fast-mode",
         "--keep-intermediates",
-        "--archive-results",
         "--extra-modules",
         "advntr",
         "--advntr-max-coverage",
@@ -798,6 +797,29 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
     ]
     assert not output_dir.exists(), "a successful archive removes the original results directory"
     assert Path(f"{output_dir}.zip").exists(), "a successful archive leaves the zip behind"
+
+
+def test_failed_retry_removes_stale_public_archive_without_following_its_target(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A stale symlink disappears before the subprocess while its patient target is untouched."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    stale = Path(f"{output_dir}.zip")
+    stale.symlink_to(patient)
+    pipeline_error = subprocess.CalledProcessError(1, ["vntyper", "pipeline"])
+    _subprocess_stub(monkeypatch, tasks, pipeline_error=pipeline_error)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert not stale.exists() and not stale.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -1112,14 +1134,13 @@ def test_cohort_analysis_skips_retention_extension_when_no_cohort_id_is_given(
     retention_spy.assert_not_called()
 
 
-def test_cohort_analysis_logs_but_does_not_raise_when_deleting_its_scratch_file_fails(
+def test_cohort_analysis_fails_before_archiving_when_deleting_its_scratch_file_fails(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A filesystem error removing the task's own `cohort_input.txt` scratch
-    file is logged, not raised.
+    """A path-bearing scratch file must never be packaged when cleanup fails.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -1135,11 +1156,15 @@ def test_cohort_analysis_logs_but_does_not_raise_when_deleting_its_scratch_file_
     monkeypatch.setattr(tasks.os, "remove", MagicMock(side_effect=OSError("permission denied")))
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
-    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis"))
+    with pytest.raises(OSError, match="permission denied"):
+        _invoke_cohort_job(
+            tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis")
+        )
 
     input_file = tmp_path / "analysis" / "cohort_input.txt"
     assert input_file.exists(), "the removal genuinely failed; the scratch file is still there"
-    assert f"Error deleting cohort input file {input_file}: permission denied" in caplog.text
+    assert not (tmp_path / "analysis.zip").exists()
+    assert "permission denied" in caplog.text
 
 
 def test_cohort_analysis_logs_but_does_not_raise_when_removing_the_empty_output_dir_fails(

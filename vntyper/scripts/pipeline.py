@@ -613,26 +613,6 @@ def run_pipeline(
         )
         logger.info(f"Summary report generated: {report_file}")
 
-        if archive_results:
-            logger.info("Archiving the results folder.")
-            if archive_format == "zip":
-                fmt = "zip"
-            elif archive_format == "tar.gz":
-                fmt = "gztar"
-            else:
-                logger.error(f"Unsupported archive format: {archive_format}")
-                raise ValueError(f"Unsupported archive format: {archive_format}")
-
-            archive_name = archive_base_name(output_dir)
-            try:
-                archive_path = create_safe_archive(archive_name, fmt, output_dir)
-                logger.info(f"Results folder archived at: {archive_path}")
-            except Exception as exc:
-                logger.error(f"Failed to archive results folder: {exc}")
-                raise
-
-        logger.info("Pipeline finished successfully.")
-
         # Mark pipeline end in summary
         end_summary(summary)
 
@@ -651,6 +631,26 @@ def run_pipeline(
                 tsv_path = os.path.join(output_dir, "pipeline_summary.tsv")
                 convert_summary_to_tsv(summary, tsv_path)
                 logger.info(f"Pipeline summary TSV written to: {tsv_path}")
+
+        if archive_results:
+            logger.info("Archiving the results folder.")
+            close_alignment_plan(alignment_plan, preserve_primary=False)
+            alignment_plan = None
+            formats = {"zip": "zip", "tar.gz": "gztar"}
+            if archive_format not in formats:
+                raise ValueError(f"Unsupported archive format: {archive_format}")
+            protected_inputs = tuple(
+                path for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference) if path
+            )
+            archive_path = create_safe_archive(
+                archive_base_name(output_dir),
+                formats[archive_format],
+                output_dir,
+                protected_paths=protected_inputs,
+            )
+            logger.info(f"Results folder archived at: {archive_path}")
+
+        logger.info("Pipeline finished successfully.")
 
     except Exception:
         primary_outcome_is_active = True

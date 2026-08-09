@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import redis
 from celery.utils.log import get_task_logger
 
-from vntyper.scripts.archive_safety import create_safe_archive
+from vntyper.scripts.archive_safety import clear_stale_archive, create_safe_archive
 
 from .celery_app import celery_app
 from .cohorts import cohort_key, extend_cohort_retention
@@ -286,6 +286,11 @@ def run_vntyper_job(
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
+        if archive_results:
+            clear_stale_archive(
+                output_dir, "zip", protected_paths=(bam_path, index_path) if index_path else (bam_path,)
+            )
+
         # Build the base command for VNtyper
         command = build_vntyper_command(
             alignment_path=bam_path,
@@ -294,7 +299,7 @@ def run_vntyper_job(
             reference_assembly=reference_assembly,
             fast_mode=fast_mode,
             keep_intermediates=keep_intermediates,
-            archive_results=archive_results,
+            archive_results=False,
             advntr_mode=advntr_mode,
         )
 
@@ -332,7 +337,12 @@ def run_vntyper_job(
         # Optionally, archive results
         if archive_results:
             try:
-                create_safe_archive(output_dir, "zip", output_dir)
+                create_safe_archive(
+                    output_dir,
+                    "zip",
+                    output_dir,
+                    protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                )
                 shutil.rmtree(output_dir)
                 logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
@@ -526,6 +536,7 @@ def run_cohort_analysis_job(
     redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
     try:
+        clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
         # 1) Create directory, input file listing all .zip files
         os.makedirs(output_dir, exist_ok=True)
         input_file = os.path.join(output_dir, "cohort_input.txt")
@@ -552,9 +563,12 @@ def run_cohort_analysis_job(
         subprocess.run(command, check=True)
         logger.info("Joint cohort analysis completed.")
 
+        os.remove(input_file)
+        input_file = None
+
         # 3) Zip the results
         try:
-            create_safe_archive(output_dir, "zip", output_dir)
+            create_safe_archive(output_dir, "zip", output_dir, protected_paths=zip_paths)
             logger.info(f"Zipped results to {output_dir}.zip")
         except Exception as e:
             logger.error(f"Error zipping results for cohort analysis: {e}")
