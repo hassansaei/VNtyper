@@ -8,9 +8,10 @@ import logging
 import os
 import re
 import stat
-from collections.abc import Callable, Iterable
-from contextlib import suppress
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import unquote, urlsplit
 
 from vntyper.scripts.reference_binding import _InodeView
@@ -198,16 +199,22 @@ class PrivateReferenceCache:
                 if self._bind_source(source, digest):
                     break
 
-    def _open_fasta(self, path: str):  # type: ignore[no-untyped-def]
+    @contextmanager
+    def _open_fasta(self, path: str) -> Iterator[BinaryIO | gzip.GzipFile]:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             os.close(descriptor)
             raise OSError("local CRAM header reference is not a regular file")
         raw = os.fdopen(descriptor, "rb")
-        if path.lower().endswith((".gz", ".bgz", ".bgzf")):
-            return gzip.GzipFile(fileobj=raw)
-        return raw
+        try:
+            if path.lower().endswith((".gz", ".bgz", ".bgzf")):
+                with gzip.GzipFile(fileobj=raw) as fasta:
+                    yield fasta
+            else:
+                yield raw
+        finally:
+            raw.close()
 
     def _materialize_one_fasta(self, path: str, expected: dict[str, str]) -> None:
         active_contig: str | None = None

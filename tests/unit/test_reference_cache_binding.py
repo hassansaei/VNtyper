@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import os
 from pathlib import Path
@@ -26,6 +27,19 @@ def _digest(sequence: str) -> str:
 
 def _cache_entry(root: Path, digest: str) -> Path:
     return root / digest[:2] / digest[2:4] / digest[4:]
+
+
+def test_compressed_header_reference_closes_its_underlying_descriptor(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.fa.gz"
+    with gzip.open(reference, "wb") as handle:
+        handle.write(b">chr1\nACGT\n")
+    cache = object.__new__(PrivateReferenceCache)
+    before = set(os.listdir("/proc/self/fd"))
+
+    with cache._open_fasta(str(reference)) as handle:
+        assert handle.read() == b">chr1\nACGT\n"
+
+    assert set(os.listdir("/proc/self/fd")) == before
 
 
 def test_cache_entry_path_consumes_digest_progressively() -> None:
