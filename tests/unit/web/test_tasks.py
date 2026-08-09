@@ -605,14 +605,14 @@ def test_partial_result_cleanup_quarantines_one_complete_archive(
         assert archive.read("result.txt") == b"complete result"
 
 
-def test_archive_rollback_failure_is_logged_without_masking_result_cleanup_failure(
+def test_quarantine_failure_preserves_complete_public_archive_after_partial_result_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     no_email_task: MagicMock,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The directory cleanup error remains primary when archive rollback also fails."""
+    """A failed quarantine cannot delete the only complete result representation."""
     from app import tasks
 
     bam_path, _ = _make_job_input(tmp_path)
@@ -620,7 +620,13 @@ def test_archive_rollback_failure_is_logged_without_masking_result_cleanup_failu
     output_dir = tmp_path / "output" / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"result data")
-    monkeypatch.setattr(tasks.shutil, "rmtree", MagicMock(side_effect=OSError("result directory busy")))
+
+    def partially_remove_then_fail(path: str) -> None:
+        assert Path(path) == output_dir
+        (output_dir / "result.txt").unlink()
+        raise OSError("result directory busy")
+
+    monkeypatch.setattr(tasks.shutil, "rmtree", partially_remove_then_fail)
     monkeypatch.setattr(tasks, "quarantine_archive", MagicMock(side_effect=OSError("rollback denied")))
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
@@ -628,6 +634,10 @@ def test_archive_rollback_failure_is_logged_without_masking_result_cleanup_failu
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
 
     assert "rollback denied" in caplog.text
+    public_archive = Path(f"{output_dir}.zip")
+    assert public_archive.exists()
+    with zipfile.ZipFile(public_archive) as archive:
+        assert archive.read("result.txt") == b"result data"
 
 
 @pytest.mark.parametrize("fatal_step", ["completed", "cohort", "email"])

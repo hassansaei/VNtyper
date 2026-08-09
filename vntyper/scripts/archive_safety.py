@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 _ARCHIVE_SUFFIXES = {"zip": ".zip", "gztar": ".tar.gz"}
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE_FLAGS = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 _DirectoryWriter = Callable[[str, os.stat_result], None]
 _FileWriter = Callable[[str, int, os.stat_result], None]
 

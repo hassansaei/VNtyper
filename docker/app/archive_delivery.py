@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import stat
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from starlette.responses import FileResponse
 logger = logging.getLogger(__name__)
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE_FLAGS = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
 def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
@@ -135,10 +136,14 @@ def write_owned_zip_member(archive: zipfile.ZipFile, path: str | Path, arcname: 
     except (OSError, ValueError) as error:
         raise ValueError(f"Missing or unsafe cohort member archive: {path}") from error
     try:
-        with os.fdopen(os.dup(descriptor), "rb") as source, archive.open(arcname, "w", force_zip64=True) as target:
-            shutil.copyfileobj(source, target)
-        if os.fstat(descriptor).st_nlink != 1:
-            raise ValueError(f"Unsafe result archive gained another hard link while being read: {path}")
+        with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as staged:
+            with os.fdopen(os.dup(descriptor), "rb") as source:
+                shutil.copyfileobj(source, staged)
+            if os.fstat(descriptor).st_nlink != 1:
+                raise ValueError(f"Unsafe result archive gained another hard link while being read: {path}")
+            staged.seek(0)
+            with archive.open(arcname, "w", force_zip64=True) as target:
+                shutil.copyfileobj(staged, target)
     finally:
         os.close(descriptor)
 

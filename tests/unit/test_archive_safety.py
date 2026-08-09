@@ -296,6 +296,34 @@ def test_replacement_between_metadata_check_and_open_never_archives_external_byt
     assert patient.read_bytes() == PATIENT_BYTES
 
 
+def test_fifo_replacement_before_source_open_is_nonblocking_and_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A regular source replaced by a FIFO cannot hang before descriptor validation."""
+    root = tmp_path / "results"
+    root.mkdir()
+    result = root / "result.txt"
+    result.write_bytes(b"safe result")
+    original_open = archive_safety.os.open
+    replaced = False
+
+    def replace_with_fifo_before_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if str(path) == result.name and kwargs.get("dir_fd") is not None and not replaced:
+            assert flags & os.O_NONBLOCK
+            replaced = True
+            result.unlink()
+            os.mkfifo(result)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(archive_safety.os, "open", replace_with_fifo_before_open)
+
+    with pytest.raises(ValueError, match="unsupported filesystem entry 'result.txt'"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+
+
 def test_temporary_cleanup_failure_is_logged_without_masking_primary_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

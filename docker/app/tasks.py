@@ -336,7 +336,6 @@ def run_vntyper_job(
                 send_email_task.delay(to_email=email, subject=subject, content=content)
             raise
 
-        # Optionally, archive results
         if archive_results:
             create_safe_archive(
                 output_dir,
@@ -349,16 +348,17 @@ def run_vntyper_job(
                 shutil.rmtree(output_dir)
                 logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
+                archive_published = False
                 try:
                     quarantine_path = quarantine_archive(
                         output_dir,
                         "zip",
                         protected_paths=(bam_path, index_path) if index_path else (bam_path,),
                     )
-                    archive_published = False
                     logger.error(f"Result cleanup failed; preserved complete archive at {quarantine_path}: {e}")
                 except Exception as rollback_error:
                     logger.error(f"Error quarantining failed job's public archive: {rollback_error}")
+                    archive_published = os.path.islink(f"{output_dir}.zip")
                 raise
 
         # Update usage data on success

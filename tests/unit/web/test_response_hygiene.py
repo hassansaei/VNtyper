@@ -157,6 +157,30 @@ def test_individual_download_rejects_a_hard_link_to_external_bytes(client, tmp_p
     assert patient.read_bytes() == PATIENT_PAYLOAD
 
 
+def test_individual_download_opens_a_fifo_nonblocking_before_rejecting_it(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A final-component FIFO swap cannot block the API worker before ``fstat``."""
+    from app import archive_delivery
+
+    job_id = "b7c41d90-2e58-4a63-9f07-15c8de3b6a24"
+    fifo = tmp_path / "output" / f"{job_id}.zip"
+    os.mkfifo(fifo)
+    original_open = archive_delivery.os.open
+
+    def require_nonblocking(path, flags, *args, **kwargs):
+        if str(path) == fifo.name:
+            assert flags & os.O_NONBLOCK
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(archive_delivery.os, "open", require_nonblocking)
+
+    response = client.get(f"/download/{job_id}/")
+
+    assert response.status_code == 404
+    assert fifo.exists()
+
+
 # ---------------------------------------------------------------------------
 # /cohort-download/ cleans up after itself
 # ---------------------------------------------------------------------------
@@ -257,6 +281,64 @@ def test_cohort_download_does_not_package_a_hard_linked_external_member(client, 
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert archive.namelist() == []
     assert patient.read_bytes() == PATIENT_PAYLOAD
+
+
+def test_cohort_download_discards_a_member_that_gains_a_hard_link_during_copy(
+    client, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Post-copy ownership validation happens before a ZIP member is committed."""
+    from app import archive_delivery
+
+    cohort_id = _cohort_with_one_result(client, fake_redis, tmp_path)
+    member = tmp_path / "output" / "job-a.zip"
+    external_alias = tmp_path / "external-alias.zip"
+    original_copy = archive_delivery.shutil.copyfileobj
+    linked = False
+
+    def copy_then_link(source, target, *args, **kwargs):
+        nonlocal linked
+        result = original_copy(source, target, *args, **kwargs)
+        if not linked:
+            linked = True
+            os.link(member, external_alias)
+        return result
+
+    monkeypatch.setattr(archive_delivery.shutil, "copyfileobj", copy_then_link)
+
+    response = client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == []
+    assert external_alias.read_bytes() == RESULT_PAYLOAD
+
+
+def test_cohort_download_opens_a_fifo_nonblocking_before_skipping_it(
+    client, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A FIFO member is rejected without waiting for a writer."""
+    from app import archive_delivery
+
+    response = client.post("/create-cohort/", data={"alias": "study", "passphrase": GOOD_PASSPHRASE})
+    cohort_id = response.json()["cohort_id"]
+    fake_redis.sadd(f"{COHORT_KEY_PREFIX}{cohort_id}:jobs", "job-a")
+    fifo = tmp_path / "output" / "job-a.zip"
+    os.mkfifo(fifo)
+    original_open = archive_delivery.os.open
+
+    def require_nonblocking(path, flags, *args, **kwargs):
+        if str(path) == fifo.name:
+            assert flags & os.O_NONBLOCK
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(archive_delivery.os, "open", require_nonblocking)
+
+    response = client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == []
+    assert fifo.exists()
 
 
 def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_built(
