@@ -413,8 +413,9 @@ def build_indexed_safe_fixture(fixture_root: Path) -> IndexedSafeFixture:
     with pysam_any.AlignmentFile(
         str(cram), "wc", header=header, format_options=[option.encode() for option in CRAM_WRITE_OPTIONS]
     ) as output:
-        for number in range(20):
-            output.write(_segment(f"mapped-{number}", flag=0, reference_id=0, reference_start=number * 100))
+        for number in range(10):
+            output.write(_segment(f"mapped-{number}", flag=65, reference_id=0, reference_start=number * 200))
+            output.write(_segment(f"mapped-{number}", flag=129, reference_id=0, reference_start=number * 200 + 100))
         for number in range(10):
             output.write(_segment(f"unplaced-{number}", flag=77, reference_id=-1, reference_start=-1))
             output.write(_segment(f"unplaced-{number}", flag=141, reference_id=-1, reference_start=-1))

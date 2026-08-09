@@ -517,6 +517,22 @@ def test_indexed_safe_fixture_has_nonempty_identical_indexed_and_stream_record_s
     assert digest == "16a0efa7785630c3d80716d9a386ddaa24f4933b5671f4ecd221b42a8dffe740"
 
 
+def test_indexed_safe_fixture_mapped_records_are_matching_read_pairs(tmp_path: Path, monkeypatch) -> None:
+    """Mapped records must not add a single-end FASTQ beside the unmapped pairs."""
+    monkeypatch.setenv("PATH", str(tmp_path / "no-samtools"))
+    fixture = cram_fixtures.build_indexed_safe_fixture(tmp_path)
+
+    mapped_records = [
+        (fields[0], int(fields[1]))
+        for record in pysam_any.view(str(fixture.cram), "chr1").splitlines()
+        if (fields := record.split("\t"))
+    ]
+
+    assert [name for name, _flag in mapped_records[::2]] == [f"mapped-{number}" for number in range(10)]
+    assert mapped_records[::2] == [(f"mapped-{number}", 65) for number in range(10)]
+    assert mapped_records[1::2] == [(f"mapped-{number}", 129) for number in range(10)]
+
+
 def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_path: Path, monkeypatch) -> None:
     """``make cram-fixtures`` must make the #209, A-SCAN-1 and A-178-2 fixtures available."""
     data_root = tmp_path / "data"
