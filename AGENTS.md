@@ -181,7 +181,7 @@ Three thresholds enforce this, and they are deliberately different:
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. The fresh milestone-4 gate measured **86.11% branch-inclusive across 4,297 unit
+against. The fresh milestone-4 gate measured **86.14% branch-inclusive across 4,303 unit
 tests**. Historically, the #171-#212 suite measured 81.70% after the floor moved from the
 earlier 80.24%; statement-only coverage at that earlier branch-coverage rollout was
 80.77%.
