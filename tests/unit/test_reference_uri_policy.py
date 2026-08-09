@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from vntyper.scripts import reference_uri_policy
@@ -119,3 +121,48 @@ def test_default_header_policy_rejects_remote_uri_without_disclosing_its_path() 
     assert "file-scheme reference" in message
     assert uri not in message
     assert "/private/reference.fa" not in message
+
+
+def test_local_header_reference_paths_resolve_against_the_input_and_deduplicate(tmp_path: Path) -> None:
+    """Local UR spellings become one ordered filesystem candidate per lexical path."""
+    input_cram = tmp_path / "patient" / "input.cram"
+    relative_reference = input_cram.parent / "reference one.fa"
+    absolute_reference = tmp_path / "reference two.fa"
+    header = (
+        "@SQ\tSN:chr1\tUR:reference one.fa\tLN:100\n"
+        f"@SQ\tSN:chr2\tUR:{relative_reference.as_uri()}\tLN:100\n"
+        f"@SQ\tSN:chr3\tUR:{absolute_reference.as_uri()}\tLN:100\n"
+        "@SQ\tSN:chr4\tUR:https://reference.invalid/remote.fa\tLN:100\n"
+    )
+
+    assert reference_uri_policy.local_header_reference_paths(header, input_cram) == (
+        str(relative_reference),
+        str(absolute_reference),
+    )
+
+
+def test_bare_header_reference_percent_sequences_remain_literal(tmp_path: Path) -> None:
+    """Percent decoding applies only to file URIs, never ordinary filesystem names."""
+    input_cram = tmp_path / "input.cram"
+
+    assert reference_uri_policy.local_header_reference_paths("@SQ\tSN:chr1\tUR:ref%20one.fa\n", input_cram) == (
+        str(tmp_path / "ref%20one.fa"),
+    )
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "file://reference-host/reference.fa",
+        "file:///reference.fa?version=1",
+        "file:///reference.fa#fragment",
+        "file:///reference%00.fa",
+        "file:",
+    ],
+)
+def test_ambiguous_or_nonlocal_file_header_uris_are_rejected(tmp_path: Path, uri: str) -> None:
+    """A file URI must identify one unambiguous local filesystem path."""
+    with pytest.raises(ValueError, match="Invalid local CRAM header reference URI") as raised:
+        reference_uri_policy.local_header_reference_paths(f"@SQ\tSN:chr1\tUR:{uri}\n", tmp_path / "input.cram")
+
+    assert uri not in str(raised.value)

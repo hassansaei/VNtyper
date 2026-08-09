@@ -7,7 +7,6 @@ import math
 import os
 import secrets
 import stat
-import tempfile
 from contextlib import suppress
 from pathlib import Path
 
@@ -286,7 +285,11 @@ class ReferenceBinding:
         self._sidecars: dict[str, _InodeView] = {}
         suffixes = "".join(Path(input_path).suffixes) or ".fa"
         try:
-            directory = Path(tempfile.mkdtemp(prefix=f".{output_name}_reference_{position}.", dir=output_dir))
+            directory = Path(output_dir) / f".{output_name}_reference_{position}"
+            try:
+                os.mkdir(directory, mode=0o700)
+            except FileExistsError as error:
+                raise RuntimeError(f"reserved CRAM reference directory already exists: {directory}") from error
             self._directory = directory
             directory_stat = os.stat(directory, follow_symlinks=False)
             self._directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
@@ -297,8 +300,13 @@ class ReferenceBinding:
                 if regular_file_unavailable_reason(source, description=f"reference FASTA {suffix} index") is None:
                     destination = Path(f"{self.consumer_path}{suffix}")
                     self._sidecars[suffix] = _InodeView(source, destination)
-        except BaseException:
-            self._close_after_failed_construction()
+        except BaseException as primary_error:
+            try:
+                self._close_after_failed_construction()
+            except Exception as cleanup_error:
+                message = f"{primary_error}; incomplete CRAM reference namespace cleanup: {cleanup_error}"
+                logger.error(message)
+                raise RuntimeError(message) from cleanup_error
             raise
 
     @property
@@ -338,16 +346,7 @@ class ReferenceBinding:
         self._directory_identity = None
 
     def _close_after_failed_construction(self) -> None:
-        for binding in reversed(tuple(self._sidecars.values())):
-            with suppress(Exception):
-                binding.close()
-        self._sidecars.clear()
-        if self._reference is not None:
-            with suppress(Exception):
-                self._reference.close()
-            self._reference = None
-        with suppress(Exception):
-            self._remove_directory()
+        self.close()
 
     def close(self) -> None:
         """Remove retained sidecars and reference view, then their private directory."""

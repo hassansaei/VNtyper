@@ -4,11 +4,13 @@ import tarfile
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
 from tests.support.pipeline_harness import run_pipeline_under_harness
 from vntyper.scripts import pipeline as pipeline_module
+from vntyper.scripts.alignment_preflight import resolve_reference
 
 pytestmark = pytest.mark.unit
 
@@ -143,3 +145,51 @@ def test_cli_archive_still_packages_regular_results(tmp_path: Path) -> None:
     archive_path = Path(f"{output_dir}.zip")
     with zipfile.ZipFile(archive_path) as archive:
         assert archive.read("result.txt") == result_bytes
+
+
+def test_reference_binding_collision_aborts_before_foreign_bytes_can_be_archived(tmp_path: Path) -> None:
+    """A swallowed binding collision must never reach ambient success or archive publication."""
+    output_dir = tmp_path / "results"
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    collisions: list[Path] = []
+
+    def fail_preflight(*args: object, **kwargs: object) -> object:
+        del args
+
+        def collide(_source: str, destination: str | Path, *_args: object, **_kwargs: object) -> None:
+            path = Path(destination)
+            path.write_bytes(PATIENT_BYTES)
+            collisions.append(path)
+            raise FileExistsError("simulated path collision")
+
+        with (
+            mock.patch("vntyper.scripts.reference_binding.os.symlink", side_effect=collide),
+            mock.patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "ambient decoded")),
+        ):
+            return resolve_reference(
+                str(kwargs["bound_view_path"]),
+                (("header_ur", str(reference)),),
+                "chr1:1-4",
+                None,
+                {},
+                1,
+                str(kwargs["output_dir"]),
+                str(kwargs["output_name"]),
+                ("chr1",),
+                "abc",
+            )
+
+    with mock.patch.object(pipeline_module, "create_safe_archive") as archive:
+        harness = run_pipeline_under_harness(
+            output_dir,
+            archive_results=True,
+            expect_failure=True,
+            stage_side_effects={"run_preflight": fail_preflight},
+        )
+
+    assert isinstance(harness.error, SystemExit) and harness.error.code == 1
+    archive.assert_not_called()
+    assert not Path(f"{output_dir}.zip").exists()
+    assert collisions == [output_dir / "fastq_bam_processing" / ".input_reference_1" / "reference.fa"]
+    assert collisions[0].read_bytes() == PATIENT_BYTES

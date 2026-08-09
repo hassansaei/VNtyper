@@ -23,6 +23,7 @@ from vntyper.scripts.preflight_input_io import configured_preflight_text_limit, 
 from vntyper.scripts.reference_uri_policy import (
     allow_ambient_reference_resolution,
     enforce_header_reference_policy,
+    local_header_reference_paths,
 )
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -43,6 +44,7 @@ class AlignmentPreflightKwargs(TypedDict):
     coverage_region: str | None
     reference_assembly: str
     reference_fasta: str | None
+    header_reference_paths: tuple[str, ...]
     header_contigs: tuple[str, ...]
     m5: str | None
     header_m5s: tuple[tuple[str, str], ...]
@@ -250,6 +252,11 @@ def build_alignment_preflight_kwargs(
     target_contig = _first_active_bed_contig(bed_text)
     header_m5s = _header_m5s(alignment_header) if alignment_header is not None else ()
     target_m5 = dict(header_m5s).get(target_contig) if target_contig is not None else None
+    header_reference_paths = (
+        local_header_reference_paths(alignment_header, in_path)
+        if file_format == "cram" and alignment_header is not None
+        else ()
+    )
     return {
         "in_path": str(in_path),
         "output_dir": str(output_dir),
@@ -262,6 +269,7 @@ def build_alignment_preflight_kwargs(
         "coverage_region": coverage_region,
         "reference_assembly": reference_assembly,
         "reference_fasta": str(reference_fasta) if reference_fasta is not None else None,
+        "header_reference_paths": header_reference_paths,
         "header_contigs": header_contigs,
         "m5": target_m5,
         "header_m5s": header_m5s,

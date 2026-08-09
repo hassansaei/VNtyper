@@ -44,6 +44,70 @@ def test_reference_binding_preserves_a_colliding_run_local_entry(tmp_path: Path)
     assert collided_paths[0].read_bytes() == b"not pipeline-owned"
 
 
+def test_binding_collision_is_fatal_before_an_ambient_probe_can_succeed(tmp_path: Path) -> None:
+    """Infrastructure failure cannot become a successful unbound reference plan."""
+    reference = _reference(tmp_path / "reference.fa")
+    collisions: list[Path] = []
+
+    def collide(_source: str, destination: str | Path, *_args: object, **_kwargs: object) -> None:
+        collision = Path(destination)
+        collision.write_bytes(b"foreign archive payload")
+        collisions.append(collision)
+        raise FileExistsError("simulated path collision")
+
+    with (
+        patch("vntyper.scripts.reference_binding.os.symlink", side_effect=collide),
+        patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "ambient decoded")) as capture,
+        pytest.raises(RuntimeError, match="Unable to retain CRAM reference input"),
+    ):
+        resolve_reference(
+            "/run/view.cram",
+            (("header_ur", str(reference)),),
+            "chr1:1-4",
+            None,
+            {},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1",),
+            "abc",
+        )
+
+    capture.assert_not_called()
+    assert collisions == [tmp_path / ".sample_reference_1" / "reference.fa"]
+    assert collisions[0].read_bytes() == b"foreign archive payload"
+    assert not (tmp_path / "results.zip").exists()
+
+    with pytest.raises(RuntimeError, match="reserved CRAM reference directory already exists"):
+        ReferenceBinding(str(reference), tmp_path, "sample", 1)
+
+
+def test_failed_local_header_ur_decode_cannot_fall_through_to_no_reference_probe(tmp_path: Path) -> None:
+    """A no-T retry must not reopen or index a local header reference path."""
+    reference = _reference(tmp_path / "wrong-reference.fa")
+    outcomes = ((False, "reference mismatch"), (True, "unsafe ambient success"))
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=outcomes) as capture,
+        pytest.raises(ValueError, match="Unable to resolve reference"),
+    ):
+        resolve_reference(
+            "/run/view.cram",
+            (("header_ur", str(reference)),),
+            "chr1:1-4",
+            None,
+            {},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1",),
+            "abc",
+        )
+
+    assert capture.call_count == 1
+    assert " -T " in f" {capture.call_args.args[0]} "
+
+
 def test_preflight_probes_and_retains_the_opened_reference_and_fai_inodes(tmp_path: Path) -> None:
     """Replacing operator paths during the probe cannot switch reference bytes."""
     alignment = tmp_path / "input.cram"

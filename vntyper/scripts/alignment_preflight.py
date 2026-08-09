@@ -65,6 +65,7 @@ from vntyper.scripts.reference_resolution_environment import (
 logger = logging.getLogger(__name__)
 
 HTSLIB_REFERENCE_SOURCE = "htslib-resolved (header UR: or REF_PATH)"
+HEADER_UR_REFERENCE_SOURCE = "header_ur"
 
 
 def _reject(message: str) -> NoReturn:
@@ -365,11 +366,7 @@ def resolve_reference(
         if unavailable_reason is not None:
             attempts.append((source, reference_path, unavailable_reason))
             continue
-        try:
-            reference_binding = ReferenceBinding(reference_path, output_dir, output_name, position)
-        except RuntimeError as error:
-            attempts.append((source, reference_path, str(error)))
-            continue
+        reference_binding = ReferenceBinding(reference_path, output_dir, output_name, position)
         try:
             exit_ok, output = probe_candidate(reference_binding.consumer_path, position, reference_binding)
         except BaseException:
@@ -402,6 +399,23 @@ def resolve_reference(
             )
         logger.info(f"Resolved CRAM reference from {source}: {reference_path}")
         return reference_binding.consumer_path, source, uncovered, reference_binding
+    if any(source == HEADER_UR_REFERENCE_SOURCE for source, _reference_path in explicit_candidates):
+        contigs = tuple(header_contigs)
+        target_contig = _target_contig(region, bed_file, contigs, max_text_bytes)
+        failure_contig = next(
+            (
+                parsed
+                for _, _, reason in reversed(attempts)
+                if (parsed := missing_reference_contig(reason, contigs)) is not None
+            ),
+            target_contig,
+        )
+        failure_m5 = dict(header_m5s).get(failure_contig, m5 if failure_contig == target_contig else None)
+        message = unresolvable_reference_message(view_path, failure_contig, failure_m5, attempts)
+        if failure_context is not None:
+            failure_context.payload = error_io.public_reference_error_payload(failure_contig, failure_m5, attempts)
+        _reject(message)
+
     ambient_position = len(explicit_candidates) + 1
     exit_ok, output = probe_candidate(None, ambient_position)
     if exit_ok:
@@ -468,6 +482,7 @@ def run_preflight(
     reference_assembly: str = "hg19",
     reference_fasta: str | None = None,
     header_contigs: Iterable[str] = (),
+    header_reference_paths: Iterable[str] = (),
     m5: str | None = None,
     header_m5s: Iterable[tuple[str, str]] = (),
     fast_mode: bool = False,
@@ -491,6 +506,7 @@ def run_preflight(
         reference_assembly: Assembly suffix for configured reference paths.
         reference_fasta: Explicit CLI or web reference candidate.
         header_contigs: Contigs declared by the alignment header.
+        header_reference_paths: Local FASTA paths parsed from CRAM SQ UR tags.
         m5: Header M5 checksum for the target contig, when available.
         header_m5s: Header contig and M5 pairs for terminal stream diagnostics.
         fast_mode: Whether downstream BAM processing can use any htslib index.
@@ -519,11 +535,12 @@ def run_preflight(
             )
         bai_only = file_format == FORMAT_BAM and not fast_mode
         failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
-        candidates = (
-            ordered_reference_candidates(config, reference_assembly, reference_fasta)
-            if file_format == FORMAT_CRAM
-            else ()
-        )
+        candidates: tuple[tuple[str, str | None], ...] = ()
+        if file_format == FORMAT_CRAM:
+            candidates = (
+                *ordered_reference_candidates(config, reference_assembly, reference_fasta),
+                *((HEADER_UR_REFERENCE_SOURCE, path) for path in header_reference_paths),
+            )
         if file_format == FORMAT_CRAM:
             _reference_probe_timeout_seconds(config)
         failure_context.phase = error_io.OUTPUT_SAFETY_FAILURE

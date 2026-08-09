@@ -60,6 +60,15 @@ def _no_ref_config(tmp_path: Path) -> Path:
     return config
 
 
+def _tree_digest(root: Path) -> dict[str, str]:
+    """Return the relative listing and bytes of every regular file in a tree."""
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
 def _run_cram(
     cram: Path,
     output_dir: Path,
@@ -130,6 +139,21 @@ def _reheader_with_reference_uri(
         subprocess.run(["samtools", "reheader", str(header_path), str(source)], stdout=output_handle, check=True)
 
 
+def _reheader_without_reference_uri(source: Path, destination: Path) -> None:
+    """Remove SQ UR tags so the terminal probe can exercise REF_PATH alone."""
+    header = subprocess.check_output(["samtools", "view", "-H", str(source)], text=True)
+    rewritten = [
+        "\t".join(field for field in line.split("\t") if not field.startswith("UR:"))
+        if line.startswith("@SQ\t")
+        else line
+        for line in header.splitlines()
+    ]
+    header_path = destination.with_suffix(".header.sam")
+    header_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    with destination.open("wb") as output_handle:
+        subprocess.run(["samtools", "reheader", str(header_path), str(source)], stdout=output_handle, check=True)
+
+
 def _assert_no_reference_flags_in_cram_commands(result: subprocess.CompletedProcess[str]) -> None:
     """Require every logged CRAM consumer to use the terminal no-reference form."""
     markers = (
@@ -142,6 +166,38 @@ def _assert_no_reference_flags_in_cram_commands(result: subprocess.CompletedProc
         commands = [line for line in result.stderr.splitlines() if marker in line]
         assert commands, f"No logged CRAM command matched {marker!r}"
         assert all(" -T " not in command and " --reference " not in command for command in commands), commands
+
+
+@pytest.mark.parametrize("read_only", [False, True], ids=["writable", "read-only"])
+def test_local_header_ur_reference_is_bound_without_mutating_its_operator_tree(
+    tmp_path: Path,
+    ensure_test_data: None,
+    read_only: bool,
+) -> None:
+    """A header-only unindexed FASTA succeeds without an operator-side FAI."""
+    fixture = build_reference_dependent_fixture(tmp_path / "patient-input")
+    reference_index = Path(f"{fixture.reference}.fai")
+    reference_index.unlink()
+    operator_root = fixture.reference.parent
+    before = _tree_digest(operator_root)
+    if read_only:
+        fixture.reference.chmod(0o444)
+        operator_root.chmod(0o555)
+
+    try:
+        result = _run_cram(
+            fixture.cram,
+            tmp_path / "run-output",
+            _no_ref_config(tmp_path),
+        )
+    finally:
+        if read_only:
+            operator_root.chmod(0o755)
+            fixture.reference.chmod(0o644)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tree_digest(operator_root) == before
+    assert "Resolved CRAM reference from header_ur" in result.stderr
 
 
 def test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages(
@@ -176,9 +232,10 @@ def test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages(
         "source=cli",
         "source=config_cram_reference",
         "source=config_bwa_reference",
-        "source=htslib-resolved",
+        "source=header_ur",
     ):
         assert source in diagnostic
+    assert "source=htslib-resolved" not in diagnostic
     assert not (output / "kestrel").exists()
     assert not (output / "coverage").exists()
     assert not (output / "pipeline_summary.json").exists()
@@ -252,6 +309,8 @@ def test_a178_1_blackhole_reference_probe_exits_within_its_configured_deadline(
 
     server = threading.Thread(target=blackhole, daemon=True)
     server.start()
+    ref_path_cram = fixture.cram.with_name("ref-path.cram")
+    _reheader_without_reference_uri(fixture.cram, ref_path_cram)
     monkeypatch.setenv("REF_PATH", f"http://127.0.0.1:{port}/%s")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     config = _no_ref_config(tmp_path)
@@ -262,7 +321,7 @@ def test_a178_1_blackhole_reference_probe_exits_within_its_configured_deadline(
 
     started = time.monotonic()
     try:
-        result = _run_cram(fixture.cram, tmp_path / "blackhole-output", config)
+        result = _run_cram(ref_path_cram, tmp_path / "blackhole-output", config)
         accepted.wait(timeout=0.25)
     finally:
         elapsed = time.monotonic() - started

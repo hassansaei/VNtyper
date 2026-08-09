@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
-from urllib.parse import quote
+from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
 
 logger = logging.getLogger(__name__)
 
 _HEADER_URI_SCHEME = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*):", re.IGNORECASE)
 _REF_PATH_REMOTE_URI = re.compile(r"(?:^|:)(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://", re.IGNORECASE)
+_INVALID_LOCAL_HEADER_REFERENCE = "Invalid local CRAM header reference URI"
 
 
 @dataclass(frozen=True)
@@ -103,6 +106,58 @@ def first_remote_header_reference(header: str) -> RemoteHeaderReference | None:
                 if scheme is not None:
                     return RemoteHeaderReference(contig=quote(contig, safe="._:-"), scheme=scheme)
     return None
+
+
+def local_header_reference_paths(header: str, input_alignment: str | Path) -> tuple[str, ...]:
+    """Resolve deduplicated local SQ ``UR`` values against the input directory.
+
+    Args:
+        header: SAM header text already read from the owned CRAM boundary.
+        input_alignment: Original operator CRAM path used as the base for relative UR values.
+
+    Returns:
+        Absolute local filesystem candidates in first-occurrence order. Remote
+        schemes are omitted for the separate ambient-reference policy.
+
+    Raises:
+        ValueError: If a file URI is ambiguous or does not name a local path.
+    """
+    base_directory = Path(os.path.abspath(input_alignment)).parent
+    result: list[str] = []
+    seen: set[str] = set()
+    for line in header.splitlines():
+        fields = line.split("\t")
+        if not fields or fields[0] != "@SQ":
+            continue
+        for field in fields[1:]:
+            key, separator, value = field.partition(":")
+            if not separator or key != "UR" or header_reference_scheme(value) is not None:
+                continue
+            scheme_match = _HEADER_URI_SCHEME.match(value)
+            if scheme_match is not None:
+                parsed = urlsplit(value)
+                if (
+                    parsed.scheme.lower() != "file"
+                    or parsed.netloc.lower() not in {"", "localhost"}
+                    or parsed.query
+                    or parsed.fragment
+                ):
+                    raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
+                try:
+                    candidate_value = unquote(parsed.path, errors="strict")
+                except UnicodeDecodeError as error:
+                    raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE) from error
+            else:
+                candidate_value = value
+            if not candidate_value or "\x00" in candidate_value:
+                raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
+            candidate = Path(candidate_value)
+            absolute = str(candidate if candidate.is_absolute() else base_directory / candidate)
+            normalized = os.path.abspath(os.path.normpath(absolute))
+            if normalized not in seen:
+                seen.add(normalized)
+                result.append(normalized)
+    return tuple(result)
 
 
 def enforce_header_reference_policy(header: str, *, allow_ambient: bool) -> None:
