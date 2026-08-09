@@ -87,6 +87,9 @@ class AlignmentBinding:
 
     def _record_view(self, destination: Path, installed_stat: os.stat_result, kind: str) -> None:
         self._view_path = destination
+        # Symlink ctime is defense in depth against inode reuse, not a portable
+        # generation number: coarse filesystems can report the same tick. Entry
+        # type and exact link target remain independent cleanup checks below.
         stable_ctime = installed_stat.st_ctime_ns if kind == "symlink" else None
         self._view_identity = (installed_stat.st_dev, installed_stat.st_ino, stable_ctime)
         self._view_kind = kind
@@ -107,6 +110,11 @@ class AlignmentBinding:
         except OSError:
             with suppress(OSError):
                 os.unlink(temporary)
+            # A successful replace consumes `temporary`, so a failure in the
+            # destination lstat can leave an unrecorded proc symlink. Returning
+            # False deliberately routes through the verified hardlink install,
+            # whose atomic replace self-heals that entry. Do not unlink the
+            # destination here: another actor may already have replaced it.
             return False
         self._record_view(destination, installed_stat, "symlink")
         return True

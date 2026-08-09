@@ -432,6 +432,70 @@ def test_plan_close_never_unlinks_a_replaced_view(tmp_path: Path, replacement_ki
     plan.close()
 
 
+def test_coarse_ctime_still_rejects_a_reused_symlink_with_a_different_target(tmp_path: Path) -> None:
+    """Removing the exact-target check must expose unsafe cleanup on coarse filesystems."""
+    alignment = tmp_path / "patient.bam"
+    alignment.write_bytes(b"patient alignment")
+    replacement_target = tmp_path / "operator.bam"
+    replacement_target.write_bytes(b"operator replacement")
+    view = tmp_path / "input.bam"
+    binding = AlignmentBinding(str(alignment))
+    binding.install_view(view)
+    owned_stat = os.lstat(view)
+    view.unlink()
+    view.symlink_to(replacement_target)
+    replacement_stat = os.lstat(view)
+    reused_coarse_identity = SimpleNamespace(
+        st_dev=owned_stat.st_dev,
+        st_ino=owned_stat.st_ino,
+        st_mode=replacement_stat.st_mode,
+        st_ctime_ns=owned_stat.st_ctime_ns,
+    )
+    real_lstat = os.lstat
+
+    def expose_reused_coarse_identity(path: str | os.PathLike[str]) -> os.stat_result | SimpleNamespace:
+        if Path(path) == view:
+            return reused_coarse_identity
+        return real_lstat(path)
+
+    with (
+        patch("vntyper.scripts.alignment_binding.os.lstat", side_effect=expose_reused_coarse_identity),
+        pytest.raises(RuntimeError, match="owned alignment view was replaced"),
+    ):
+        binding.close()
+
+    assert view.readlink() == replacement_target
+    assert binding.is_open is True
+    view.unlink()
+    binding.close()
+
+
+def test_post_publish_proc_inspection_failure_is_replaced_by_verified_hardlink(tmp_path: Path) -> None:
+    """Returning without fallback would strand an unowned proc symlink at the view path."""
+    alignment = tmp_path / "patient.bam"
+    alignment.write_bytes(b"patient alignment")
+    view = tmp_path / "input.bam"
+    binding = AlignmentBinding(str(alignment))
+    real_lstat = os.lstat
+    destination_inspections = 0
+
+    def fail_first_destination_inspection(path: str | os.PathLike[str]) -> os.stat_result:
+        nonlocal destination_inspections
+        if Path(path) == view:
+            destination_inspections += 1
+            if destination_inspections == 1:
+                raise PermissionError("transient post-publish inspection failure")
+        return real_lstat(path)
+
+    with patch("vntyper.scripts.alignment_binding.os.lstat", side_effect=fail_first_destination_inspection):
+        binding.install_view(view)
+
+    assert view.is_symlink() is False
+    assert view.samefile(alignment)
+    binding.close()
+    assert not os.path.lexists(view)
+
+
 def test_closed_plan_allows_the_same_output_directory_to_pass_the_next_prewrite_guard(tmp_path: Path) -> None:
     """A completed run must not strand a dangling view that rejects a safe rerun."""
     alignment, _, plan = _build_view(tmp_path)
