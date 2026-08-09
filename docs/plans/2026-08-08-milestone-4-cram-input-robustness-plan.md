@@ -26,7 +26,7 @@ pytest, ruff, mypy, Docker + Celery for the web layer.
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
 
 **Status:** H1/H2/H3 and their final follow-ups are integrated and independently reviewed.
-Final A-PERF-1 and the combined no-HIGH review remain unchecked.
+Final A-PERF-1 is recorded; only the combined no-HIGH review remains unchecked.
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
@@ -736,10 +736,11 @@ the view. `close()` deletes only its exact owned view before closing its FD.
       writer behaviour, descriptor-bound delivery/cohort snapshots, and web
       rollback/quarantine failure handling; implement archive creation only after report
       completion. Final H3 publication and descriptor-snapshot re-reviews are clean.
-- [ ] **Close-out:** rerun A-PERF-1 on the final H3 revision, then run and record the
-      combined final-diff adversarial review with no HIGH findings. Preserve the exact web
-      rollback/quarantine diagnostic wording from the final H3 commit if that commit is
-      newer than this document base.
+- [x] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
+      `2a5982e`; record 91.74/92.38/91.30 s versus 88.47/89.86/88.23 s, exact loads and
+      the non-overlapping no-regression verdict in spec §5b.
+- [ ] **Close-out:** run and record the combined final-diff adversarial review with no
+      HIGH findings.
 
 ---
 

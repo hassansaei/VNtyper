@@ -1,9 +1,8 @@
 # Milestone 4 — CRAM and input robustness
 
 **Status:** H1/H2/H3 and the final binding, evidence-mode and archive follow-ups are
-integrated and independently reviewed. The final performance rerun and combined no-HIGH
-verdict remain explicit close-out evidence, not evidence carried forward from an older
-revision.
+integrated and independently reviewed. Final performance is recorded below; the combined
+no-HIGH verdict remains the last explicit close-out item.
 **Branch:** `fix/milestone-4-cram-input-robustness`
 **Closes:** #213, #225, #209, #178, #165, #161
 **Date:** 2026-08-08
@@ -1177,10 +1176,30 @@ whole-50 run found 32 explicit mixed-layout failures on the milestone arm; the b
 completed those cases only by discarding the stranded FASTQ, so they are exit-bar
 evidence rather than performance samples.
 
-**Final-rerun placeholder (required before release):** repeat the same alternating
-three-per-arm A-PERF-1 protocol on the final H1/H2/H3 commit, record both exact revisions,
-all six timings, medians and ranges here, and state whether the predeclared non-overlap
-rule is met. Do not relabel the `3083ed9` result as final evidence.
+### Final H1/H2/H3 measurement at `2a5982e` (2026-08-09)
+
+The final behavioral tree was clean at `2a5982e502a4df238bd7cfaeb6a51a9606f291dc`;
+the baseline worktree was clean at `ddf49a18ecdc208b98248a3563b128a2b2da765f`.
+The same 18-case intersection ran with one harness job and four pipeline threads,
+alternating baseline/candidate. Every one of the 108 case executions exited 0 and each
+arm verified its exact package marker and revision. The host had 32 logical CPUs and one
+logged-in user. Raw one/five/fifteen-minute load averages at launch were baseline
+`1.78/1.83/3.63`, candidate `3.66/2.55/3.72`, baseline `3.73/2.91/3.75`, candidate
+`2.76/3.19/3.73`, baseline `6.45/4.21/4.04`, candidate `4.44/4.10/4.01`; these values
+include load left by the immediately preceding arm.
+
+| Arm | Runs (s) | Median | Range |
+| --- | --- | --- | --- |
+| 2.0.9 baseline `ddf49a1` | 91.74, 92.38, 91.30 | 91.74 | 91.30–92.38 |
+| final candidate `2a5982e` | 88.47, 89.86, 88.23 | 88.47 | 88.23–89.86 |
+
+The ranges do not overlap: the candidate's worst run (89.86 s) is faster than the
+baseline's best run (91.30 s). Under the predeclared rule A-PERF-1 therefore records **no
+regression** and a measured median improvement of 3.27 s (3.6%). Two setup attempts were
+excluded before this complete sequence: one selected a base interpreter without the
+external binaries, and one exhausted the temporary-filesystem quota partway through an
+arm. Neither partial attempt contributes a timing; the rerun used the same environment
+for both revisions and removed each completed scratch tree before the next arm.
 
 The forced CRAM measurement also corrected two impossible premises in the original
 A-178-2 wording. Both declared golden CRAM sources have non-zero placed-unmapped counts,
