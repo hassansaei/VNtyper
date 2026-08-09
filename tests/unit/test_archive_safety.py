@@ -1,0 +1,190 @@
+"""Fail-closed and atomic result archive creation."""
+
+import os
+import tarfile
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from vntyper.scripts import archive_safety
+
+pytestmark = pytest.mark.unit
+
+PATIENT_BYTES = b"patient-alignment-bytes-that-must-never-enter-an-archive"
+
+
+@pytest.mark.parametrize(
+    ("archive_format", "suffix"),
+    [pytest.param("zip", ".zip", id="zip"), pytest.param("gztar", ".tar.gz", id="gztar")],
+)
+def test_regular_result_trees_are_installed_atomically(tmp_path: Path, archive_format: str, suffix: str) -> None:
+    """Both CLI-supported formats preserve ordinary files and nested paths.
+
+    Args:
+        tmp_path: Scratch directory standing in for a result tree.
+        archive_format: The shutil-compatible format name.
+        suffix: The archive suffix that format produces.
+    """
+    root = tmp_path / "results"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    (root / "result.txt").write_bytes(b"top-level")
+    (nested / "details.tsv").write_bytes(b"nested-result")
+
+    archive = archive_safety.create_safe_archive(tmp_path / "download", archive_format, root)
+
+    assert archive == str(tmp_path / f"download{suffix}")
+    if archive_format == "zip":
+        with zipfile.ZipFile(archive) as package:
+            assert package.read("result.txt") == b"top-level"
+            assert package.read("nested/details.tsv") == b"nested-result"
+    else:
+        with tarfile.open(archive, "r:gz") as package:
+            top_level = package.extractfile("./result.txt")
+            nested_result = package.extractfile("./nested/details.tsv")
+            assert top_level is not None and top_level.read() == b"top-level"
+            assert nested_result is not None and nested_result.read() == b"nested-result"
+
+
+@pytest.mark.parametrize("link_target_exists", [True, False], ids=["live", "broken"])
+def test_a_file_symlink_is_rejected_before_any_archive_is_installed(tmp_path: Path, link_target_exists: bool) -> None:
+    """Live and broken aliases are unsafe regardless of target readability.
+
+    Args:
+        tmp_path: Scratch directory standing in for input and output trees.
+        link_target_exists: Whether the symlink target exists.
+    """
+    patient = tmp_path / "patient.bam"
+    if link_target_exists:
+        patient.write_bytes(PATIENT_BYTES)
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "alignment_view.bam").symlink_to(patient)
+
+    with pytest.raises(ValueError, match="symbolic link.*alignment_view\\.bam"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+    if link_target_exists:
+        assert patient.read_bytes() == PATIENT_BYTES
+
+
+def test_a_directory_symlink_is_rejected_without_reading_its_tree(tmp_path: Path) -> None:
+    """A directory alias must not turn an external tree into archive members.
+
+    Args:
+        tmp_path: Scratch directory standing in for input and output trees.
+    """
+    patient_dir = tmp_path / "patient"
+    patient_dir.mkdir()
+    (patient_dir / "patient.cram").write_bytes(PATIENT_BYTES)
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "external").symlink_to(patient_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link.*external"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+    assert (patient_dir / "patient.cram").read_bytes() == PATIENT_BYTES
+
+
+def test_a_hard_link_to_external_patient_bytes_is_rejected(tmp_path: Path) -> None:
+    """A second directory entry is also an external alias, despite being regular.
+
+    Args:
+        tmp_path: Scratch directory standing in for input and output trees.
+    """
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    root = tmp_path / "results"
+    root.mkdir()
+    os.link(patient, root / "alignment_view.bam")
+
+    with pytest.raises(ValueError, match="hard-linked file.*alignment_view\\.bam"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+    assert patient.read_bytes() == PATIENT_BYTES
+
+
+def test_a_fifo_is_rejected_by_metadata_without_opening_it(tmp_path: Path) -> None:
+    """Unsupported special entries must fail immediately rather than block on read.
+
+    Args:
+        tmp_path: Scratch directory standing in for a result tree.
+    """
+    root = tmp_path / "results"
+    root.mkdir()
+    os.mkfifo(root / "stream")
+
+    with pytest.raises(ValueError, match="unsupported filesystem entry.*stream"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+
+
+def test_a_symlinked_result_root_is_rejected(tmp_path: Path) -> None:
+    """Validation begins at the root rather than only checking its descendants.
+
+    Args:
+        tmp_path: Scratch directory standing in for a result tree.
+    """
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "patient.bam").write_bytes(PATIENT_BYTES)
+    root = tmp_path / "results"
+    root.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symbolic link.*result root"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+    assert (external / "patient.bam").read_bytes() == PATIENT_BYTES
+
+
+def test_an_archive_write_failure_leaves_the_previous_destination_and_no_partial_temp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only a complete temporary archive may replace the public destination.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        tmp_path: Scratch directory standing in for a result tree.
+    """
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"new result")
+    destination = tmp_path / "download.zip"
+    destination.write_bytes(b"previous complete archive")
+
+    def fail_after_partial_write(base_name, format, root_dir, base_dir):
+        del format, root_dir, base_dir
+        Path(f"{base_name}.zip").write_bytes(b"partial")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(archive_safety.shutil, "make_archive", fail_after_partial_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert destination.read_bytes() == b"previous complete archive"
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".download.archive-")]
+
+
+def test_unknown_formats_and_non_directory_roots_are_rejected(tmp_path: Path) -> None:
+    """Caller mistakes fail before any archive or temporary directory is created.
+
+    Args:
+        tmp_path: Scratch directory standing in for a result tree.
+    """
+    result_file = tmp_path / "result.txt"
+    result_file.write_bytes(b"result")
+
+    with pytest.raises(ValueError, match="Unsupported archive format: rar"):
+        archive_safety.create_safe_archive(tmp_path / "download", "rar", tmp_path)
+    with pytest.raises(ValueError, match="not a directory"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", result_file)
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["result.txt"]

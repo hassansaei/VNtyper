@@ -44,6 +44,12 @@ VERSION_MODULE = REPO_ROOT / "vntyper" / "version.py"
 CITATION = REPO_ROOT / "CITATION.cff"
 CHANGELOG = REPO_ROOT / "docs" / "about" / "changelog.md"
 
+# The application Dockerfile installs this repository's package before it copies
+# ``docker/app`` into the image. Imports from it are first-party, not requirements-web
+# dependencies; treating them as third-party would forbid the web service from sharing
+# code with the CLI package that is guaranteed to be present beside it.
+DOCKER_FIRST_PARTY_MODULES = {"vntyper"}
+
 
 def _read(path: Path) -> str:
     """Return a file's text, skipping the test if it is absent.
@@ -388,10 +394,9 @@ def optional_dependencies(extra: str) -> list[str]:
 def docker_app_third_party_imports() -> dict[str, list[str]]:
     """Return the third-party modules imported anywhere under ``docker/app``.
 
-    Relative imports are the service's own modules and are skipped; anything in
-    ``sys.stdlib_module_names`` comes with the interpreter. What is left has to be
-    installed by something, and ``requirements-web.txt`` is the only thing that
-    installs anything into the image for this service.
+    Relative imports and the application image's installed first-party package are
+    skipped; anything in ``sys.stdlib_module_names`` comes with the interpreter. What
+    is left has to be installed by ``requirements-web.txt``.
 
     Returns:
         dict[str, list[str]]: Top-level module name -> the files importing it.
@@ -408,10 +413,15 @@ def docker_app_third_party_imports() -> dict[str, list[str]]:
                 continue
             for name in names:
                 top = name.split(".")[0]
-                if top not in sys.stdlib_module_names:
+                if top not in sys.stdlib_module_names and top not in DOCKER_FIRST_PARTY_MODULES:
                     found.setdefault(top, set()).add(path.name)
     assert found, "no imports found under docker/app - has the layout changed?"
     return {module: sorted(files) for module, files in found.items()}
+
+
+def test_the_web_import_scan_does_not_misclassify_the_installed_vntyper_package() -> None:
+    """The application image installs this repository before copying ``docker/app``."""
+    assert "vntyper" not in docker_app_third_party_imports()
 
 
 @pytest.mark.parametrize("extra", ["web", "dev"])

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 import redis
 from celery.utils.log import get_task_logger
 
+from vntyper.scripts.archive_safety import create_safe_archive
+
 from .celery_app import celery_app
 from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
@@ -330,7 +332,7 @@ def run_vntyper_job(
         # Optionally, archive results
         if archive_results:
             try:
-                shutil.make_archive(output_dir, "zip", output_dir)
+                create_safe_archive(output_dir, "zip", output_dir)
                 shutil.rmtree(output_dir)
                 logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
@@ -552,7 +554,7 @@ def run_cohort_analysis_job(
 
         # 3) Zip the results
         try:
-            shutil.make_archive(output_dir, "zip", output_dir)
+            create_safe_archive(output_dir, "zip", output_dir)
             logger.info(f"Zipped results to {output_dir}.zip")
         except Exception as e:
             logger.error(f"Error zipping results for cohort analysis: {e}")

@@ -42,6 +42,7 @@ pytestmark = pytest.mark.unit
 
 BAM_BYTES = b"alignment-bytes"
 INDEX_BYTES = b"index-bytes"
+PATIENT_BYTES = b"patient-alignment-bytes-that-must-never-enter-an-archive"
 
 
 # ---------------------------------------------------------------------------
@@ -507,9 +508,9 @@ def test_pipeline_failure_without_an_email_sends_no_notification(
 def test_archive_failure_is_marked_failed_and_the_directory_is_left_in_place(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """A `shutil.make_archive` failure fails the job without removing `output_dir`.
+    """An archive creation failure fails the job without removing `output_dir`.
 
-    `shutil.rmtree(output_dir)` runs immediately after `make_archive` in the
+    `shutil.rmtree(output_dir)` runs immediately after the archive helper in the
     same `try`; if the archive step itself fails, the results directory must
     still be there afterwards -- otherwise a failed archive attempt loses
     the very results it was trying to package.
@@ -527,12 +528,45 @@ def test_archive_failure_is_marked_failed_and_the_directory_is_left_in_place(
     output_dir = tmp_path / "output" / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"result data")
-    monkeypatch.setattr(tasks.shutil, "make_archive", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(tasks, "create_safe_archive", MagicMock(side_effect=OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
 
     assert output_dir.exists(), "a failed archive attempt must not remove the results it could not package"
+    assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
+
+
+def test_worker_archive_refuses_a_real_symlink_without_reading_or_deleting_its_target(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """The worker's second archive pass must fail closed on an alignment view.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked `send_email_task`.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    patient_alignment = tmp_path / "patient-source.bam"
+    patient_alignment.write_bytes(PATIENT_BYTES)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    alignment_view = output_dir / "alignment_view.bam"
+    alignment_view.symlink_to(patient_alignment)
+
+    with pytest.raises(ValueError, match="symbolic link.*alignment_view\\.bam"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert output_dir.exists(), "a rejected archive must leave the result tree for diagnosis"
+    assert alignment_view.is_symlink()
+    assert not Path(f"{output_dir}.zip").exists(), "an unsafe archive must never be installed"
+    assert patient_alignment.read_bytes() == PATIENT_BYTES
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
 
 
@@ -1032,7 +1066,7 @@ def test_delete_old_results_removes_data_for_a_cohort_that_has_expired(
 def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
 ) -> None:
-    """A `shutil.make_archive` failure after the `vntyper cohort` subprocess
+    """An archive creation failure after the `vntyper cohort` subprocess
     succeeds still fails the job and updates the usage record.
 
     Args:
@@ -1045,7 +1079,7 @@ def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
     zip_path = tmp_path / "job-a.zip"
     zip_path.write_bytes(b"result data")
     monkeypatch.setattr(tasks.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(tasks.shutil, "make_archive", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(tasks, "create_safe_archive", MagicMock(side_effect=OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
         _invoke_cohort_job(

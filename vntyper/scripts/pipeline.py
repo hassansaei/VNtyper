@@ -1,6 +1,5 @@
 import logging
 import os
-import shutil
 import sys
 import timeit
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ from vntyper.scripts.alignment_preflight import (
     run_preflight,
 )
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
+from vntyper.scripts.archive_safety import create_safe_archive
 from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
@@ -625,15 +625,11 @@ def run_pipeline(
 
             archive_name = archive_base_name(output_dir)
             try:
-                archive_path = shutil.make_archive(
-                    base_name=archive_name,
-                    format=fmt,
-                    root_dir=output_dir,
-                    base_dir=".",
-                )
+                archive_path = create_safe_archive(archive_name, fmt, output_dir)
                 logger.info(f"Results folder archived at: {archive_path}")
             except Exception as exc:
                 logger.error(f"Failed to archive results folder: {exc}")
+                raise
 
         logger.info("Pipeline finished successfully.")
 
