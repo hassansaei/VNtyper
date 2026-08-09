@@ -729,6 +729,12 @@ def test_post_publish_rollback_failure_does_not_mask_the_individual_primary_erro
 
     assert raised.value is primary
     assert "rollback denied" in caplog.text
+    public_archive = Path(f"{output_dir}.zip")
+    assert not public_archive.exists()
+    quarantines = list(output_dir.parent.glob(".job-1.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("result.txt") == b"result data"
 
 
 def test_worker_archive_refuses_a_real_symlink_without_reading_or_deleting_its_target(
@@ -1332,6 +1338,56 @@ def test_cohort_completed_state_failure_removes_the_public_archive(
     assert not (tmp_path / "analysis.zip").exists()
     assert zip_path.read_bytes() == b"result data"
     assert ("usage:analysis", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+
+
+def test_cohort_post_publish_removal_failure_quarantines_the_complete_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed public unlink hides the cohort archive without masking its failure."""
+    from app import tasks
+
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+    output_dir = tmp_path / "analysis"
+
+    def write_cohort_result(*args, **kwargs):
+        (output_dir / "cohort_result.tsv").write_bytes(b"complete cohort result")
+
+    monkeypatch.setattr(tasks.subprocess, "run", write_cohort_result)
+    primary = RuntimeError("completed state unavailable")
+
+    def fail_completed(*args, **kwargs):
+        if args == ("usage:analysis", "status", "completed"):
+            raise primary
+        return None
+
+    redis_mocks.usage.hset.side_effect = fail_completed
+    real_clear = tasks.clear_stale_archive
+    clear_calls = 0
+
+    def fail_rollback(*args, **kwargs):
+        nonlocal clear_calls
+        clear_calls += 1
+        if clear_calls == 2:
+            raise OSError("rollback denied")
+        return real_clear(*args, **kwargs)
+
+    monkeypatch.setattr(tasks, "clear_stale_archive", fail_rollback)
+    caplog.set_level(logging.ERROR, logger="app.tasks")
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
+
+    assert raised.value is primary
+    assert "rollback denied" in caplog.text
+    assert not (tmp_path / "analysis.zip").exists()
+    quarantines = list(tmp_path.glob(".analysis.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("cohort_result.tsv") == b"complete cohort result"
 
 
 def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(

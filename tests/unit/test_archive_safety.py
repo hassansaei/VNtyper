@@ -267,6 +267,56 @@ def test_stale_cleanup_preserves_a_protected_lexical_destination(tmp_path: Path)
     assert destination.read_bytes() == PATIENT_BYTES
 
 
+@pytest.mark.parametrize("initially_present", [False, True], ids=["appears", "is-replaced"])
+def test_stale_cleanup_never_moves_a_destination_changed_after_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, initially_present: bool
+) -> None:
+    """A newly inserted filename belongs to the concurrent writer."""
+    destination = tmp_path / "download.zip"
+    if initially_present:
+        destination.write_bytes(b"old stale result")
+    original_validate = archive_safety._validate_destination
+
+    def validate_then_insert(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        if destination.exists():
+            destination.unlink()
+        destination.write_bytes(PATIENT_BYTES)
+        return result
+
+    monkeypatch.setattr(archive_safety, "_validate_destination", validate_then_insert)
+
+    with pytest.raises(ValueError, match="changed after validation"):
+        archive_safety.clear_stale_archive(tmp_path / "download", "zip")
+
+    assert destination.read_bytes() == PATIENT_BYTES
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["download.zip"]
+
+
+def test_archive_creation_never_cleans_a_destination_that_appears_after_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Initial cleanup refuses a new public entry instead of treating it as stale."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"result")
+    destination = tmp_path / "download.zip"
+    original_validate = archive_safety._validate_destination
+
+    def validate_then_insert(*args, **kwargs):
+        result = original_validate(*args, **kwargs)
+        destination.write_bytes(PATIENT_BYTES)
+        return result
+
+    monkeypatch.setattr(archive_safety, "_validate_destination", validate_then_insert)
+
+    with pytest.raises(ValueError, match="changed after validation"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert destination.read_bytes() == PATIENT_BYTES
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".download")]
+
+
 def test_replacement_between_metadata_check_and_open_never_archives_external_bytes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -412,8 +462,10 @@ def test_stale_clear_rechecks_parent_after_the_anchored_operation(
     patient.write_bytes(PATIENT_BYTES)
     original_clear = archive_safety._clear_stale_at
 
-    def clear_then_swap(parent_descriptor: int, destination_name: str) -> None:
-        original_clear(parent_descriptor, destination_name)
+    def clear_then_swap(
+        parent_descriptor: int, destination_name: str, expected_metadata: os.stat_result | None
+    ) -> None:
+        original_clear(parent_descriptor, destination_name, expected_metadata)
         public_parent.rename(original_parent)
         public_parent.mkdir()
         os.link(patient, public_parent / destination_name)
@@ -521,6 +573,38 @@ def test_post_install_temporary_unlink_failure_rolls_back_public_archive(
 
     assert not (tmp_path / "download.zip").exists()
     assert not [path for path in tmp_path.iterdir() if path.name.startswith(".download")]
+
+
+def test_archive_return_refuses_a_public_name_replaced_after_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The returned filename must still name the exact completed archive inode."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"result")
+    destination = tmp_path / "download.zip"
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    original_unlink = archive_safety.os.unlink
+    replaced = False
+
+    def replace_public_after_temporary_unlink(path, *args, **kwargs):
+        nonlocal replaced
+        result = original_unlink(path, *args, **kwargs)
+        if str(path).startswith(".download.zip.archive-") and not replaced:
+            replaced = True
+            destination.unlink()
+            os.link(patient, destination)
+        return result
+
+    monkeypatch.setattr(archive_safety.os, "unlink", replace_public_after_temporary_unlink)
+
+    with pytest.raises(ValueError, match="changed after install"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert os.path.samefile(destination, patient)
+    assert destination.read_bytes() == PATIENT_BYTES
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 def test_concurrent_protected_destination_insertion_is_never_replaced(

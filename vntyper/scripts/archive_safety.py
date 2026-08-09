@@ -54,7 +54,7 @@ def _validate_destination(
     *,
     allow_existing_symlink: bool,
     parent_descriptor: int,
-) -> None:
+) -> os.stat_result | None:
     destination_absolute = _absolute(destination)
     destination_resolved = destination_absolute.resolve(strict=False)
     if root is not None:
@@ -95,11 +95,51 @@ def _validate_destination(
     if metadata is not None and stat.S_ISREG(metadata.st_mode) and metadata.st_nlink > 1:
         _reject(f"Unsafe archive destination has multiple hard links: {destination}")
 
+    return metadata
 
-def _clear_stale_at(parent_descriptor: int, destination_name: str) -> None:
+
+def _require_destination_identity(
+    parent_descriptor: int,
+    destination_name: str,
+    expected: os.stat_result | None,
+    phase: str,
+) -> os.stat_result | None:
+    """Require a public filename to retain its previously observed identity."""
     try:
-        previous_metadata = os.stat(destination_name, dir_fd=parent_descriptor, follow_symlinks=False)
+        current = os.stat(destination_name, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError:
+        current = None
+    if expected is None and current is None:
+        return None
+    if expected is None or current is None or not _same_identity(expected, current):
+        _reject(f"Archive destination changed {phase}: {destination_name}")
+    return current
+
+
+def _unlink_if_same(parent_descriptor: int, destination_name: str, expected: os.stat_result) -> bool:
+    """Unlink a public name only while it still denotes the expected inode."""
+    try:
+        current = os.stat(destination_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if not _same_identity(expected, current):
+        return False
+    os.unlink(destination_name, dir_fd=parent_descriptor)
+    return True
+
+
+def _clear_stale_at(
+    parent_descriptor: int,
+    destination_name: str,
+    expected_metadata: os.stat_result | None,
+) -> None:
+    previous_metadata = _require_destination_identity(
+        parent_descriptor,
+        destination_name,
+        expected_metadata,
+        "after validation",
+    )
+    if previous_metadata is None:
         return
     quarantine_name = f".{destination_name}.stale-{secrets.token_hex(8)}"
     os.rename(
@@ -175,7 +215,7 @@ def clear_stale_archive(
     parent_descriptor, parent_metadata = _open_parent(destination)
     primary_failure: BaseException | None = None
     try:
-        _validate_destination(
+        destination_metadata = _validate_destination(
             destination,
             None,
             protected_paths,
@@ -183,7 +223,7 @@ def clear_stale_archive(
             parent_descriptor=parent_descriptor,
         )
         _require_current_parent(destination, parent_metadata)
-        _clear_stale_at(parent_descriptor, destination.name)
+        _clear_stale_at(parent_descriptor, destination.name, destination_metadata)
         _require_current_parent(destination, parent_metadata)
     except BaseException as error:
         primary_failure = error
@@ -366,16 +406,17 @@ def create_safe_archive(
         _reject(f"Archive root is not a directory: {root}")
     parent_descriptor = -1
     temporary_name: str | None = None
+    completed_metadata: os.stat_result | None = None
     try:
         parent_descriptor, parent_metadata = _open_parent(archive_path)
-        _validate_destination(
+        destination_metadata = _validate_destination(
             archive_path,
             root,
             protected_paths,
             allow_existing_symlink=False,
             parent_descriptor=parent_descriptor,
         )
-        _clear_stale_at(parent_descriptor, archive_path.name)
+        _clear_stale_at(parent_descriptor, archive_path.name, destination_metadata)
         _require_current_parent(archive_path, parent_metadata)
 
         temporary_descriptor = -1
@@ -407,6 +448,7 @@ def create_safe_archive(
                     _write_tar(temporary_archive, root_descriptor)
                 temporary_archive.flush()
                 os.fsync(temporary_archive.fileno())
+                completed_metadata = os.fstat(temporary_archive.fileno())
             except BaseException as error:
                 write_failure = error
                 raise
@@ -428,14 +470,28 @@ def create_safe_archive(
             dst_dir_fd=parent_descriptor,
             follow_symlinks=False,
         )
+        if completed_metadata is None:
+            raise RuntimeError("Completed archive identity was lost before install.")
         try:
             _require_current_parent(archive_path, parent_metadata)
+            _require_destination_identity(
+                parent_descriptor,
+                archive_path.name,
+                completed_metadata,
+                "during install",
+            )
             os.unlink(temporary_name, dir_fd=parent_descriptor)
             temporary_name = None
             _require_current_parent(archive_path, parent_metadata)
+            _require_destination_identity(
+                parent_descriptor,
+                archive_path.name,
+                completed_metadata,
+                "after install",
+            )
         except Exception:
             try:
-                os.unlink(archive_path.name, dir_fd=parent_descriptor)
+                _unlink_if_same(parent_descriptor, archive_path.name, completed_metadata)
             except Exception as rollback_error:
                 logger.error(
                     f"Temporary archive cleanup failed and public archive rollback also failed: {rollback_error}"
