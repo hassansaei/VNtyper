@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from vntyper.scripts import preflight_error_io as error_io
+from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import (
     FORMAT_BAM,
     FORMAT_CRAM,
@@ -121,7 +122,7 @@ def build_alignment_view(
     threads: int,
     *,
     bai_only: bool = False,
-) -> tuple[str, str]:
+) -> tuple[str, str, AlignmentBinding]:
     """Create a run-local alignment symlink and a freshly built co-located index.
 
     Supplied indexes are enumerated only as protected patient inputs. BAI, CRAI,
@@ -139,7 +140,7 @@ def build_alignment_view(
         bai_only: Use the legacy BAI-only BAM preflight/protection contract.
 
     Returns:
-        The alignment view path and its co-located index path.
+        The alignment view path, its co-located index path, and descriptor binding.
 
     Raises:
         RuntimeError: If samtools cannot build a missing index or does not create it.
@@ -168,12 +169,13 @@ def build_alignment_view(
         )
     log_file = output / f"{output_name}_index.log"
     _validate_log_entry(log_file, protected_paths)
-    output.mkdir(parents=True, exist_ok=True)
-    _atomic_symlink(in_path, view_path)
-    _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
-    samtools_path = config.get("tools", {}).get("samtools", "samtools")
+    binding = AlignmentBinding(in_path)
     temporary_index: Path | None = None
     try:
+        output.mkdir(parents=True, exist_ok=True)
+        _atomic_symlink(binding.view_target, view_path)
+        _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
+        samtools_path = config.get("tools", {}).get("samtools", "samtools")
         descriptor, temporary_name = tempfile.mkstemp(
             dir=output,
             prefix=f".{view_index.name}.",
@@ -198,14 +200,18 @@ def build_alignment_view(
         )
         temporary_index = None
     except OSError as error:
+        binding.close()
         message = missing_index_message(in_path, file_format, input_index_candidates)
         logger.error(message)
         raise RuntimeError(message) from error
+    except BaseException:
+        binding.close()
+        raise
     finally:
         if temporary_index is not None:
             with suppress(OSError):
                 os.unlink(temporary_index)
-    return str(view_path), str(view_index)
+    return str(view_path), str(view_index), binding
 
 
 def choose_unmapped_scan(
@@ -563,7 +569,7 @@ def run_preflight(
             coverage_region=coverage_region,
         )
         failure_context.phase = error_io.VIEW_INDEX_FAILURE
-        view_path, index_path = build_alignment_view(
+        view_path, index_path, binding = build_alignment_view(
             in_path,
             output_dir,
             output_name,
@@ -572,61 +578,66 @@ def run_preflight(
             threads,
             bai_only=bai_only,
         )
-        unmapped_scan = "not-required"
-        if not fast_mode:
-            failure_context.phase = error_io.SCAN_SELECTION_FAILURE
-            unmapped_scan = choose_unmapped_scan(
-                view_path,
-                config,
-                threads,
-                output_dir,
-                output_name,
-                file_format=file_format,
-            )
-        if file_format == FORMAT_CRAM:
-            failure_context.phase = error_io.REFERENCE_PROBE_FAILURE
-            reference_path, reference_source, uncovered_contigs = resolve_reference(
-                view_path,
-                candidates,
-                region,
-                bed_file,
-                config,
-                threads,
-                output_dir,
-                output_name,
-                tuple(header_contigs),
-                m5,
-                coverage_region=coverage_region,
-                header_m5s=header_m5s,
-                unmapped_scan=unmapped_scan,
-                failure_context=failure_context,
-            )
-        else:
-            failure_context.phase = error_io.BAM_PROBE_FAILURE
-            command = build_cram_reference_probe_command(
-                samtools_path=config.get("tools", {}).get("samtools", "samtools"),
-                in_bam=view_path,
-                region=region,
-                bed_file=bed_file,
-                reference_path=None,
-                threads=threads,
-            )
-            log_file = str(Path(output_dir) / f"{output_name}_alignment_probe.log")
-            exit_ok, output = capture_command(command, log_file)
-            if not exit_ok:
-                reason = output.strip() or "probe exited non-zero"
-                message = f"BAM preflight probe failed: {reason}"
-                logger.error(message)
-                raise RuntimeError(message)
-            reference_path, reference_source, uncovered_contigs = None, "not-required", ()
+        try:
+            unmapped_scan = "not-required"
+            if not fast_mode:
+                failure_context.phase = error_io.SCAN_SELECTION_FAILURE
+                unmapped_scan = choose_unmapped_scan(
+                    view_path,
+                    config,
+                    threads,
+                    output_dir,
+                    output_name,
+                    file_format=file_format,
+                )
+            if file_format == FORMAT_CRAM:
+                failure_context.phase = error_io.REFERENCE_PROBE_FAILURE
+                reference_path, reference_source, uncovered_contigs = resolve_reference(
+                    view_path,
+                    candidates,
+                    region,
+                    bed_file,
+                    config,
+                    threads,
+                    output_dir,
+                    output_name,
+                    tuple(header_contigs),
+                    m5,
+                    coverage_region=coverage_region,
+                    header_m5s=header_m5s,
+                    unmapped_scan=unmapped_scan,
+                    failure_context=failure_context,
+                )
+            else:
+                failure_context.phase = error_io.BAM_PROBE_FAILURE
+                command = build_cram_reference_probe_command(
+                    samtools_path=config.get("tools", {}).get("samtools", "samtools"),
+                    in_bam=view_path,
+                    region=region,
+                    bed_file=bed_file,
+                    reference_path=None,
+                    threads=threads,
+                )
+                log_file = str(Path(output_dir) / f"{output_name}_alignment_probe.log")
+                exit_ok, output = capture_command(command, log_file)
+                if not exit_ok:
+                    reason = output.strip() or "probe exited non-zero"
+                    message = f"BAM preflight probe failed: {reason}"
+                    logger.error(message)
+                    raise RuntimeError(message)
+                reference_path, reference_source, uncovered_contigs = None, "not-required", ()
 
-        return AlignmentPlan(
-            input_path=in_path,
-            view_path=view_path,
-            file_format=file_format,
-            index_path=index_path,
-            reference_path=reference_path,
-            reference_source=reference_source,
-            uncovered_contigs=uncovered_contigs,
-            unmapped_scan=unmapped_scan,
-        )
+            return AlignmentPlan(
+                input_path=in_path,
+                view_path=view_path,
+                file_format=file_format,
+                index_path=index_path,
+                reference_path=reference_path,
+                reference_source=reference_source,
+                uncovered_contigs=uncovered_contigs,
+                unmapped_scan=unmapped_scan,
+                binding=binding,
+            )
+        except BaseException:
+            binding.close()
+            raise

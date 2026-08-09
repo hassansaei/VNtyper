@@ -150,6 +150,7 @@ def test_alignment_plan_is_frozen_and_has_no_layout_field() -> None:
         "reference_source",
         "uncovered_contigs",
         "unmapped_scan",
+        "binding",
     }
     field_name = "index_path"
     with pytest.raises(FrozenInstanceError):

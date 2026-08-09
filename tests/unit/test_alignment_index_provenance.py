@@ -183,7 +183,9 @@ def test_a_local_build_records_regular_output_contained_provenance(tmp_path: Pat
     output = tmp_path / "output"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, generated_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+        _, generated_index, binding = build_alignment_view(
+            str(cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     provenance = _provenance(generated_index)
     assert provenance.parent == output
@@ -222,7 +224,7 @@ def test_stale_generated_index_provenance_fails_closed(tmp_path: Path) -> None:
     output = tmp_path / "output"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        view_path, generated_index = build_alignment_view(
+        view_path, generated_index, binding = build_alignment_view(
             str(cram), str(output), "sample", "cram", _config(), threads=2
         )
 
@@ -274,7 +276,9 @@ def test_generated_cram_index_is_rebuilt_when_a_source_crai_appears(tmp_path: Pa
     cram = _alignment(input_dir, "cram", b"patient alignment")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, generated_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+        _, generated_index, binding = build_alignment_view(
+            str(cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert Path(generated_index).is_file()
     assert not Path(generated_index).is_symlink()
@@ -282,7 +286,9 @@ def test_generated_cram_index_is_rebuilt_when_a_source_crai_appears(tmp_path: Pa
     source_crai.write_bytes(b"patient source index")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        view_path, selected_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+        view_path, selected_index, binding = build_alignment_view(
+            str(cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert Path(view_path).samefile(cram)
     assert Path(selected_index).is_file()
@@ -299,14 +305,16 @@ def test_generated_cram_index_is_rebuilt_for_a_different_input_with_source_csi(t
     second_cram = _alignment(tmp_path / "second", "cram", b"second patient alignment")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, stale_crai = build_alignment_view(str(first_cram), str(output), "sample", "cram", _config(), threads=2)
+        _, stale_crai, binding = build_alignment_view(
+            str(first_cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     stale_provenance = _provenance(stale_crai)
     source_csi = Path(f"{second_cram}.csi")
     source_csi.write_bytes(b"second patient source index")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        view_path, selected_index = build_alignment_view(
+        view_path, selected_index, binding = build_alignment_view(
             str(second_cram), str(output), "sample", "cram", _config(), threads=2
         )
 
@@ -335,7 +343,7 @@ def test_generated_bam_index_is_rebuilt_even_when_an_accepted_source_index_appea
     bam = _alignment(input_dir, "bam", b"patient alignment")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, generated_index = build_alignment_view(
+        _, generated_index, binding = build_alignment_view(
             str(bam), str(output), "sample", "bam", _config(), threads=2, bai_only=bai_only
         )
 
@@ -344,7 +352,7 @@ def test_generated_bam_index_is_rebuilt_even_when_an_accepted_source_index_appea
     source_index.write_bytes(b"patient source index")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        view_path, selected_index = build_alignment_view(
+        view_path, selected_index, binding = build_alignment_view(
             str(bam), str(output), "sample", "bam", _config(), threads=2, bai_only=bai_only
         )
 
@@ -363,12 +371,12 @@ def test_nonfast_bam_rerun_ignores_new_source_csi_and_rebuilds_owned_bai(tmp_pat
     output = tmp_path / "output"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, first_index = build_alignment_view(
+        _, first_index, binding = build_alignment_view(
             str(bam), str(output), "sample", "bam", _config(), threads=2, bai_only=True
         )
         source_csi = Path(f"{bam}.csi")
         source_csi.write_bytes(b"patient source CSI")
-        view_path, second_index = build_alignment_view(
+        view_path, second_index, binding = build_alignment_view(
             str(bam), str(output), "sample", "bam", _config(), threads=2, bai_only=True
         )
 
@@ -421,7 +429,9 @@ def test_first_provenance_install_cleanup_failure_leaves_no_final_pair_and_rerun
     assert not os.path.lexists(provenance)
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, recovered_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+        _, recovered_index, binding = build_alignment_view(
+            str(cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert Path(recovered_index) == view_index
     assert generated_index_is_owned(recovered_index, (cram,)) is True
@@ -448,7 +458,9 @@ def test_provenance_update_failure_restores_the_old_pair_and_rerun_recovers(tmp_
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_numbered_index):
-        _, generated_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+        _, generated_index, binding = build_alignment_view(
+            str(cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     index = Path(generated_index)
     provenance = _provenance(index)
@@ -479,7 +491,9 @@ def test_provenance_update_failure_restores_the_old_pair_and_rerun_recovers(tmp_
     assert generated_index_is_owned(index, (cram,)) is True
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_numbered_index):
-        _, recovered_index = build_alignment_view(str(cram), str(output), "sample", "cram", _config(), threads=2)
+        _, recovered_index, binding = build_alignment_view(
+            str(cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     assert recovered_index == generated_index
     assert index.read_bytes() == b"generated index 3"
@@ -493,7 +507,9 @@ def test_rebuild_tombstone_cleanup_failure_keeps_the_new_owned_index(tmp_path: P
     output = tmp_path / "output"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index):
-        _, generated_index = build_alignment_view(str(first_cram), str(output), "sample", "cram", _config(), threads=2)
+        _, generated_index, binding = build_alignment_view(
+            str(first_cram), str(output), "sample", "cram", _config(), threads=2
+        )
 
     stale_index = Path(generated_index)
     stale_provenance = _provenance(stale_index)
@@ -519,7 +535,7 @@ def test_rebuild_tombstone_cleanup_failure_keeps_the_new_owned_index(tmp_path: P
         patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=_build_index),
         patch("vntyper.scripts.alignment_index_provenance.os.unlink", side_effect=fail_stale_index_unlink),
     ):
-        view_path, rebuilt_index = build_alignment_view(
+        view_path, rebuilt_index, binding = build_alignment_view(
             str(second_cram), str(output), "sample", "cram", _config(), threads=2
         )
 

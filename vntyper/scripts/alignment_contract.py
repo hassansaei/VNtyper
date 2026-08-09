@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from vntyper.scripts.alignment_binding import AlignmentBinding
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,12 @@ class AlignmentPlan:
     reference_source: str
     uncovered_contigs: tuple[str, ...]
     unmapped_scan: str
+    binding: AlignmentBinding | None = field(default=None, repr=False, compare=False)
+
+    def close(self) -> None:
+        """Release the run-local alignment descriptor after its final consumer."""
+        if self.binding is not None:
+            self.binding.close()
 
 
 def missing_index_message(in_path: str, file_format: str, tried: Iterable[str]) -> str:

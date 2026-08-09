@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.preflight_error_io import PreflightErrorContext, persist_preflight_failure
 
@@ -119,6 +120,7 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     output_name = "../private-view" if failure == "unsafe_output" else "sample"
     config: dict = {}
     command_results: list[tuple[bool, str]] = []
+    binding: AlignmentBinding | None = None
     if failure == "candidate_policy":
         config = {"cram": {"reference_candidate_order": ["cli"]}}
     elif failure == "scan_policy":
@@ -144,8 +146,12 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
         if failure in {"scan_policy", "forced_indexed", "bam_probe", "reference"}:
             view = work_dir / f"sample.{file_format}"
             index = Path(f"{view}.{'bai' if file_format == 'bam' else 'crai'}")
+            binding = AlignmentBinding(str(alignment))
             stack.enter_context(
-                patch("vntyper.scripts.alignment_preflight.build_alignment_view", return_value=(str(view), str(index)))
+                patch(
+                    "vntyper.scripts.alignment_preflight.build_alignment_view",
+                    return_value=(str(view), str(index), binding),
+                )
             )
         if command_results:
             stack.enter_context(
@@ -174,6 +180,8 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     serialized = json.dumps(payload)
     assert "/private/" not in serialized
     assert "\\private\\" not in serialized
+    if binding is not None:
+        assert binding.is_open is False
 
 
 @pytest.mark.parametrize(
@@ -256,6 +264,7 @@ def test_an_unexpected_reference_probe_exception_uses_the_reference_phase_payloa
     run_root.mkdir()
     alignment = _alignment(tmp_path, "cram")
     original = RuntimeError("unexpected reference probe /private/worker failure")
+    binding = AlignmentBinding(str(alignment))
 
     with (
         patch(
@@ -263,6 +272,7 @@ def test_an_unexpected_reference_probe_exception_uses_the_reference_phase_payloa
             return_value=(
                 str(run_root / "alignment" / "sample.cram"),
                 str(run_root / "alignment" / "sample.cram.crai"),
+                binding,
             ),
         ),
         patch(
@@ -284,6 +294,7 @@ def test_an_unexpected_reference_probe_exception_uses_the_reference_phase_payloa
         )
 
     assert raised.value is original
+    assert binding.is_open is False
     assert _artifact(run_root) == {
         "code": "reference_unresolved",
         "message": "CRAM reference preflight could not prove the requested target; verify the reference FASTA and "

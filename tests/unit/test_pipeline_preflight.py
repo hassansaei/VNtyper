@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -13,6 +14,7 @@ import pytest
 
 from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import pipeline, pipeline_alignment
+from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import AlignmentPlan
 
 pytestmark = pytest.mark.unit
@@ -120,6 +122,34 @@ def test_coverage_region_is_resolved_once_before_preflight_and_reused_by_the_con
     assert events == ["bam_region", "vntr_region", "preflight", "tools"]
     assert harness.kwargs("run_preflight")["coverage_region"] == "chr2:30-40"
     assert harness.kwargs("calculate_vntr_coverage")["region"] == "chr2:30-40"
+
+
+def test_alignment_binding_is_released_after_coverage_and_before_archiving(tmp_path: Path) -> None:
+    """The descriptor lives through its final alignment consumer but never enters an archive."""
+    out = tmp_path / "out"
+    alignment = tmp_path / "patient.bam"
+    alignment.write_bytes(b"patient alignment")
+    binding = AlignmentBinding(str(alignment))
+    plan = replace(_plan(out, "bam"), binding=binding)
+    open_state_at_archive: list[bool] = []
+
+    def observe_archive(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        open_state_at_archive.append(binding.is_open)
+        return str(tmp_path / "out.zip")
+
+    try:
+        with mock.patch.object(pipeline.shutil, "make_archive", side_effect=observe_archive):
+            harness = run_pipeline_under_harness(
+                out,
+                archive_results=True,
+                stage_side_effects={"run_preflight": lambda *args, **kwargs: plan},
+            )
+    finally:
+        binding.close()
+
+    assert harness.error is None
+    assert open_state_at_archive == [False]
 
 
 @pytest.mark.parametrize("input_type", ["BAM", "FASTQ"])

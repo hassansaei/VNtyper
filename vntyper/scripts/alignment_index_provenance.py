@@ -40,7 +40,7 @@ def _same_file(left: str | Path, right: str | Path) -> bool:
 def _atomic_symlink(target: str | Path, link_path: str | Path) -> None:
     target_absolute = os.path.abspath(target)
     destination = Path(link_path)
-    if destination.is_symlink() and _same_file(destination, target_absolute):
+    if destination.is_symlink() and os.readlink(destination) == target_absolute:
         return
     for _ in range(100):
         temporary = destination.parent / f".{destination.name}.{secrets.token_hex(8)}.tmp"

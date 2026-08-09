@@ -285,6 +285,61 @@ def test_a_wrong_sample_source_bai_is_ignored_before_real_bam_slice(
     assert _tree_digest(input_root) == before
 
 
+def test_atomic_bam_replacement_after_preflight_slices_the_bound_original(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    """A fresh BAI and later real slice must consume the same opened BAM inode."""
+    repository = Path(__file__).parents[2]
+    original = repository / "tests/data/example_b178_hg19_subset.bam"
+    replacement_source = repository / "tests/data/example_40cf_hg38_subset.bam"
+    original_digest = hashlib.sha256(original.read_bytes()).hexdigest()
+    replacement_digest = hashlib.sha256(replacement_source.read_bytes()).hexdigest()
+    input_root = tmp_path / "patient-input"
+    output_root = tmp_path / "run"
+    input_root.mkdir()
+    output_root.mkdir()
+    alignment = input_root / "sample.bam"
+    replacement = input_root / "replacement.bam"
+    shutil.copyfile(original, alignment)
+    shutil.copyfile(replacement_source, replacement)
+    plan = run_preflight(
+        str(alignment),
+        str(output_root),
+        "input",
+        "bam",
+        {"tools": {"samtools": "samtools"}, "bam": {"unmapped_scan": "auto"}},
+        2,
+        region="chr1:155158000-155163000",
+    )
+    replacement.replace(alignment)
+    slice_path = output_root / "slice.bam"
+    command = build_samtools_slice_command(
+        samtools_path="samtools",
+        in_bam=plan.view_path,
+        output_bam=slice_path,
+        region="chr1:155158000-155163000",
+        threads=2,
+    )
+
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        plan.close()
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert int(subprocess.check_output(["samtools", "view", "-c", str(slice_path)], text=True)) == 29736
+    assert hashlib.sha256(alignment.read_bytes()).hexdigest() == replacement_digest
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == original_digest
+
+
 @pytest.mark.parametrize("file_format", ["bam", "cram"])
 def test_single_end_and_placed_unmapped_reads_survive_the_complete_scan(
     tmp_path: Path,

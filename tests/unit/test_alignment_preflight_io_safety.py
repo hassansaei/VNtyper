@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,7 +54,7 @@ def test_an_existing_source_index_is_rebuilt_from_the_alignment_before_use(tmp_p
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_current_index) as capture:
-        view_path, view_index = build_alignment_view(
+        view_path, view_index, binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=3
         )
 
@@ -63,6 +64,80 @@ def test_an_existing_source_index_is_rebuilt_from_the_alignment_before_use(tmp_p
     assert not Path(view_index).is_symlink()
     assert source_index.read_bytes() == b"valid index for a different sample"
     assert "-@ 3" in capture.call_args.args[0]
+    binding.close()
+
+
+@pytest.mark.parametrize("input_kind", ["regular", "symlink"])
+def test_atomic_input_replacement_after_preflight_cannot_change_the_view_bytes(tmp_path: Path, input_kind: str) -> None:
+    """A later consumer must see the bytes whose run-local index was built."""
+    alignment, _ = _indexed_cram(tmp_path / "input")
+    original_bytes = alignment.read_bytes()
+    input_path = alignment
+    if input_kind == "symlink":
+        input_path = tmp_path / "input-link.cram"
+        input_path.symlink_to(alignment)
+    output = tmp_path / "output"
+
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=_write_successful_index,
+    ):
+        view_path, index_path, binding = build_alignment_view(
+            str(input_path), str(output), "sample", "cram", _config(), threads=1
+        )
+
+    replacement = tmp_path / "replacement.cram"
+    replacement.write_bytes(b"different alignment at the same input pathname")
+    replacement.replace(alignment)
+
+    assert alignment.read_bytes() == b"different alignment at the same input pathname"
+    consumer_bytes = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import sys; sys.stdout.buffer.write(Path(sys.argv[1]).read_bytes())",
+            view_path,
+        ]
+    )
+    assert consumer_bytes == original_bytes
+    assert Path(index_path).read_bytes() == b"current index"
+    assert binding.is_open is True
+    binding.close()
+    assert binding.is_open is False
+    with pytest.raises(FileNotFoundError):
+        Path(view_path).read_bytes()
+
+
+def test_an_input_that_cannot_be_descriptor_bound_refuses_before_index_work(tmp_path: Path) -> None:
+    """An unavailable immutable pathname binding must fail before preflight commands."""
+    alignment, _ = _indexed_cram(tmp_path / "input")
+    output = tmp_path / "output"
+    real_open = os.open
+
+    def reject_alignment_open(
+        path: str | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if os.fspath(path) == str(alignment):
+            raise OSError("descriptor binding unavailable")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    with (
+        patch("os.open", side_effect=reject_alignment_open),
+        patch(
+            "vntyper.scripts.alignment_preflight.capture_command",
+            side_effect=_write_successful_index,
+        ) as capture,
+        pytest.raises(RuntimeError, match="stable run-local alignment binding"),
+    ):
+        build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
+
+    capture.assert_not_called()
+    assert alignment.read_bytes() == b"patient alignment"
+    assert not os.path.lexists(output / "sample.cram")
 
 
 def test_an_output_name_cannot_traverse_an_in_output_symlink_component(tmp_path: Path) -> None:
@@ -162,10 +237,13 @@ def test_a_dangling_view_link_is_atomically_replaced_without_unlinking_the_final
         ),
         patch("vntyper.scripts.alignment_preflight.os.unlink", side_effect=reject_blind_view_unlink),
     ):
-        view_path, _ = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
+        view_path, _, binding = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=1
+        )
 
     assert Path(view_path).is_symlink()
     assert Path(view_path).samefile(alignment)
+    binding.close()
 
 
 @pytest.mark.parametrize("entry_kind", ["file", "directory"])
@@ -322,13 +400,16 @@ def test_an_existing_cram_csi_is_ignored_and_a_trusted_crai_is_built(tmp_path: P
         "vntyper.scripts.alignment_preflight.capture_command",
         side_effect=_write_successful_index,
     ) as capture:
-        _, index_path = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
+        _, index_path, binding = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=1
+        )
 
     assert Path(index_path) == output / "sample.cram.crai"
     assert Path(index_path).read_bytes() == b"current index"
     assert not Path(index_path).is_symlink()
     assert source_csi.read_bytes() == b"CSI\x01"
     capture.assert_called_once()
+    binding.close()
 
 
 def test_a_stale_cram_csi_cannot_override_the_selected_crai(tmp_path: Path) -> None:
@@ -345,11 +426,14 @@ def test_a_stale_cram_csi_cannot_override_the_selected_crai(tmp_path: Path) -> N
         "vntyper.scripts.alignment_preflight.capture_command",
         side_effect=_write_successful_index,
     ):
-        _, index_path = build_alignment_view(str(alignment), str(output), "sample", "cram", _config(), threads=1)
+        _, index_path, binding = build_alignment_view(
+            str(alignment), str(output), "sample", "cram", _config(), threads=1
+        )
 
     assert Path(index_path).read_bytes() == b"current index"
     assert source_crai.read_bytes() == b"patient index"
     assert not os.path.lexists(stale_view_csi)
+    binding.close()
 
 
 def test_an_existing_index_is_protected_while_the_view_index_is_rebuilt(tmp_path: Path) -> None:
@@ -361,7 +445,7 @@ def test_an_existing_index_is_protected_while_the_view_index_is_rebuilt(tmp_path
         "vntyper.scripts.alignment_preflight.capture_command",
         side_effect=_write_successful_index,
     ) as capture:
-        view_path, index_path = build_alignment_view(
+        view_path, index_path, binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=4
         )
 
@@ -370,6 +454,7 @@ def test_an_existing_index_is_protected_while_the_view_index_is_rebuilt(tmp_path
     assert not Path(index_path).is_symlink()
     assert source_index.read_bytes() == b"patient index"
     capture.assert_called_once()
+    binding.close()
 
 
 def test_a_missing_index_is_built_beside_the_view_and_never_beside_the_input(tmp_path: Path) -> None:
@@ -396,12 +481,15 @@ def test_a_missing_index_is_built_beside_the_view_and_never_beside_the_input(tmp
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_index):
-        _, index_path = build_alignment_view(str(alignment), str(output), "sample", "bam", _config(), threads=3)
+        _, index_path, binding = build_alignment_view(
+            str(alignment), str(output), "sample", "bam", _config(), threads=3
+        )
 
     assert Path(index_path) == output / "sample.bam.bai"
     assert Path(index_path).read_bytes() == b"current index"
     assert not (input_dir / "sample.bam.bai").exists()
     assert not (input_dir / "sample.bai").exists()
+    binding.close()
 
 
 def test_a_locally_built_index_is_safely_rebuilt_on_a_same_input_rerun(tmp_path: Path) -> None:
@@ -428,10 +516,10 @@ def test_a_locally_built_index_is_safely_rebuilt_on_a_same_input_rerun(tmp_path:
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_index):
-        first_view, first_index = build_alignment_view(
+        first_view, first_index, first_binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=2
         )
-        second_view, second_index = build_alignment_view(
+        second_view, second_index, second_binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=2
         )
 
@@ -444,6 +532,9 @@ def test_a_locally_built_index_is_safely_rebuilt_on_a_same_input_rerun(tmp_path:
     assert alignment.read_bytes() == b"patient alignment"
     assert not (input_dir / "sample.cram.crai").exists()
     assert not (input_dir / "sample.crai").exists()
+    first_binding.close()
+    assert Path(second_view).read_bytes() == b"patient alignment"
+    second_binding.close()
 
 
 def test_a_local_index_is_safely_replaced_when_a_different_input_reuses_the_output(tmp_path: Path) -> None:
@@ -474,8 +565,10 @@ def test_a_local_index_is_safely_replaced_when_a_different_input_reuses_the_outp
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_index):
-        build_alignment_view(str(first_alignment), str(output), "sample", "cram", _config(), threads=2)
-        view_path, index_path = build_alignment_view(
+        _, _, first_binding = build_alignment_view(
+            str(first_alignment), str(output), "sample", "cram", _config(), threads=2
+        )
+        view_path, index_path, second_binding = build_alignment_view(
             str(second_alignment), str(output), "sample", "cram", _config(), threads=2
         )
 
@@ -487,6 +580,9 @@ def test_a_local_index_is_safely_replaced_when_a_different_input_reuses_the_outp
     assert second_alignment.read_bytes() == b"second patient alignment"
     assert not tuple(first_dir.glob("*.crai"))
     assert not tuple(second_dir.glob("*.crai"))
+    first_binding.close()
+    assert Path(view_path).read_bytes() == b"second patient alignment"
+    second_binding.close()
 
 
 @pytest.mark.parametrize("command_succeeds", [False, True])
@@ -530,13 +626,14 @@ def test_a_view_already_pointing_at_the_same_input_gets_a_fresh_index(tmp_path: 
         "vntyper.scripts.alignment_preflight.capture_command",
         side_effect=_write_successful_index,
     ):
-        view_path, index_path = build_alignment_view(
+        view_path, index_path, binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=2
         )
 
     assert Path(view_path).samefile(alignment)
     assert Path(index_path).read_bytes() == b"current index"
     assert source_index.read_bytes() == b"patient index"
+    binding.close()
 
 
 @pytest.mark.parametrize(

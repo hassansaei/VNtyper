@@ -38,6 +38,7 @@ from vntyper.scripts.pipeline_alignment import (
     prepare_alignment_target,
     prepare_input_alignment_preflight,
 )
+from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -188,6 +189,7 @@ def run_pipeline(
         input_files["cram"] = os.path.basename(cram)
     previous_ref_path = None
     reference_resolution_pinned = False
+    alignment_plan = None
     try:
         # Validation owns a run-local log, but stage directories wait until preflight passes.
         if input_type in ["BAM", "CRAM"]:
@@ -215,7 +217,6 @@ def run_pipeline(
             raise ValueError("No supported input was provided.")
 
         alignment_header = None
-        alignment_plan = None
         vntr_region = None
         if input_type in ["BAM", "CRAM"]:
             input_alignment = bam if input_type == "BAM" else cram
@@ -446,20 +447,16 @@ def run_pipeline(
         logger.info("Calculating mean coverage over the VNTR region.")
         if alignment_plan is None:
             raise RuntimeError("Alignment preflight did not produce a plan for coverage.")
-        input_bam = Path(alignment_plan.view_path)
-        if vntr_region is None:
-            vntr_region = get_region_string_with_fallback(
-                bam_file=str(input_bam), reference_assembly=reference_assembly, region_type="vntr_region", config=config
-            )
         cov_start = datetime.now(timezone.utc).replace(tzinfo=None)
-        calculate_vntr_coverage(
-            bam_file=str(input_bam),
+        vntr_region = calculate_alignment_coverage(
+            plan=alignment_plan,
             region=vntr_region,
+            reference_assembly=reference_assembly,
             threads=threads,
             config=config,
             output_dir=dirs["coverage"],
-            output_name="coverage",
-            reference_path=alignment_plan.reference_path,
+            coverage_calculator=calculate_vntr_coverage,
+            region_resolver=get_region_string_with_fallback,
         )
         cov_end = datetime.now(timezone.utc).replace(tzinfo=None)
         record_step(
@@ -697,6 +694,8 @@ def run_pipeline(
         logger.exception("An error occurred")
         sys.exit(1)
     finally:
+        if alignment_plan is not None:
+            alignment_plan.close()
         if reference_resolution_pinned:
             restore_reference_resolution(previous_ref_path)
 
