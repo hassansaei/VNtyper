@@ -519,6 +519,8 @@ def test_a_locally_built_index_is_safely_rebuilt_on_a_same_input_rerun(tmp_path:
         first_view, first_index, first_binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=2
         )
+        first_binding.close()
+        assert not os.path.lexists(first_view)
         second_view, second_index, second_binding = build_alignment_view(
             str(alignment), str(output), "sample", "cram", _config(), threads=2
         )
@@ -532,7 +534,6 @@ def test_a_locally_built_index_is_safely_rebuilt_on_a_same_input_rerun(tmp_path:
     assert alignment.read_bytes() == b"patient alignment"
     assert not (input_dir / "sample.cram.crai").exists()
     assert not (input_dir / "sample.crai").exists()
-    first_binding.close()
     assert Path(second_view).read_bytes() == b"patient alignment"
     second_binding.close()
 
@@ -568,6 +569,7 @@ def test_a_local_index_is_safely_replaced_when_a_different_input_reuses_the_outp
         _, _, first_binding = build_alignment_view(
             str(first_alignment), str(output), "sample", "cram", _config(), threads=2
         )
+        first_binding.close()
         view_path, index_path, second_binding = build_alignment_view(
             str(second_alignment), str(output), "sample", "cram", _config(), threads=2
         )
@@ -580,7 +582,6 @@ def test_a_local_index_is_safely_replaced_when_a_different_input_reuses_the_outp
     assert second_alignment.read_bytes() == b"second patient alignment"
     assert not tuple(first_dir.glob("*.crai"))
     assert not tuple(second_dir.glob("*.crai"))
-    first_binding.close()
     assert Path(view_path).read_bytes() == b"second patient alignment"
     second_binding.close()
 

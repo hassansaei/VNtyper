@@ -125,17 +125,23 @@ def test_coverage_region_is_resolved_once_before_preflight_and_reused_by_the_con
 
 
 def test_alignment_binding_is_released_after_coverage_and_before_archiving(tmp_path: Path) -> None:
-    """The descriptor lives through its final alignment consumer but never enters an archive."""
+    """The descriptor and exact owned view are gone before archiving can reuse the FD."""
     out = tmp_path / "out"
-    alignment = tmp_path / "patient.bam"
+    input_dir = tmp_path / "patient-input"
+    input_dir.mkdir()
+    alignment = input_dir / "patient.bam"
     alignment.write_bytes(b"patient alignment")
     binding = AlignmentBinding(str(alignment))
-    plan = replace(_plan(out, "bam"), binding=binding)
+    plan = replace(_plan(out, "bam"), input_path=str(alignment), binding=binding)
+    Path(plan.view_path).parent.mkdir(parents=True)
+    binding.install_view(plan.view_path)
     open_state_at_archive: list[bool] = []
+    view_state_at_archive: list[bool] = []
 
     def observe_archive(*args: object, **kwargs: object) -> str:
         del args, kwargs
         open_state_at_archive.append(binding.is_open)
+        view_state_at_archive.append(os.path.lexists(plan.view_path))
         return str(tmp_path / "out.zip")
 
     try:
@@ -144,12 +150,14 @@ def test_alignment_binding_is_released_after_coverage_and_before_archiving(tmp_p
                 out,
                 archive_results=True,
                 stage_side_effects={"run_preflight": lambda *args, **kwargs: plan},
+                bam=str(alignment),
             )
     finally:
         binding.close()
 
     assert harness.error is None
     assert open_state_at_archive == [False]
+    assert view_state_at_archive == [False]
 
 
 @pytest.mark.parametrize("input_type", ["BAM", "FASTQ"])

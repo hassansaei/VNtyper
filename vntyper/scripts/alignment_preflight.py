@@ -25,7 +25,6 @@ from vntyper.scripts.alignment_contract import (
 )
 from vntyper.scripts.alignment_index import resolve_any_index, resolve_bam_index
 from vntyper.scripts.alignment_index_provenance import (
-    _atomic_symlink,
     _install_generated_index,
     _remove_stale_view_indexes,
     generated_index_is_owned,
@@ -173,7 +172,7 @@ def build_alignment_view(
     temporary_index: Path | None = None
     try:
         output.mkdir(parents=True, exist_ok=True)
-        _atomic_symlink(binding.view_target, view_path)
+        binding.install_view(view_path)
         _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
         samtools_path = config.get("tools", {}).get("samtools", "samtools")
         descriptor, temporary_name = tempfile.mkstemp(
