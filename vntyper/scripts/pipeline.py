@@ -167,6 +167,8 @@ def run_pipeline(
             bwa_reference,
             config,
             reference_assembly,
+            archive_results,
+            archive_format,
         )
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "BAM":

@@ -85,6 +85,72 @@ def reference_index_paths(reference: str | Path) -> tuple[Path, ...]:
     )
 
 
+def alignment_operator_paths(
+    input_path: str | Path,
+    file_format: str,
+    bed_file: str | Path | None,
+    reference_fasta: str | Path | None,
+    config: dict,
+    reference_assembly: str,
+) -> tuple[str | Path, ...]:
+    """Enumerate alignment-mode paths that remain operator owned.
+
+    Args:
+        input_path: Selected BAM or CRAM.
+        file_format: Alignment format, ``bam`` or ``cram``.
+        bed_file: Optional operator-provided BED.
+        reference_fasta: Optional explicit CRAM reference.
+        config: Pipeline configuration containing CRAM reference candidates.
+        reference_assembly: Assembly label selecting exact or family references.
+
+    Returns:
+        The alignment, existing index candidates, BED, references, and reference
+        sidecars protected by the pre-write boundary.
+    """
+    protected: list[str | Path] = list(_protected_alignment_paths(input_path, file_format))
+    if bed_file is not None:
+        protected.append(bed_file)
+    references: list[str | Path] = [reference_fasta] if reference_fasta is not None else []
+    if file_format == "cram":
+        references.extend(
+            value
+            for _source, value in configured_reference_candidates(config, reference_assembly)
+            if isinstance(value, str)
+        )
+    for reference_input in references:
+        reference = Path(reference_input)
+        protected.extend((reference, *reference_index_paths(reference)))
+    return tuple(dict.fromkeys(protected))
+
+
+def fastq_operator_paths(
+    fastq_1: str | Path,
+    fastq_2: str | Path | None,
+    bed_file: str | Path | None,
+    bwa_reference: str | Path,
+    config: dict,
+) -> tuple[str | Path, ...]:
+    """Enumerate direct-FASTQ paths that remain operator owned.
+
+    Args:
+        fastq_1: First FASTQ input.
+        fastq_2: Optional second FASTQ input.
+        bed_file: Optional operator-provided BED.
+        bwa_reference: BWA reference FASTA.
+        config: Pipeline configuration containing optional BWA index suffixes.
+
+    Returns:
+        FASTQs, BED, BWA reference, and every canonical or configured sidecar.
+    """
+    reference = Path(bwa_reference)
+    protected: list[str | Path] = [fastq_1, reference, *bwa_index_paths(reference, config)]
+    if fastq_2 is not None:
+        protected.append(fastq_2)
+    if bed_file is not None:
+        protected.append(bed_file)
+    return tuple(dict.fromkeys(protected))
+
+
 def _alignment_plan_protected_paths(
     plan: AlignmentPlan,
     additional_paths: tuple[str | Path, ...],
@@ -109,15 +175,14 @@ def _validate_owned_destination(
     protected_paths: tuple[Path, ...],
     *,
     description: str = "derived alignment-conversion",
-    allowed_symlink_target: Path | None = None,
+    allow_symlink: bool = False,
 ) -> None:
     destination_absolute = _absolute(destination)
     if os.path.lexists(destination):
         destination_stat = os.lstat(destination)
-        if stat.S_ISLNK(destination_stat.st_mode) and (
-            allowed_symlink_target is None
-            or destination.resolve(strict=False) != _absolute(allowed_symlink_target).resolve(strict=False)
-        ):
+        if stat.S_ISLNK(destination_stat.st_mode):
+            if allow_symlink:
+                return
             _reject(f"Unsafe {description} destination is a symlink: {destination}")
         if not stat.S_ISREG(destination_stat.st_mode) and not stat.S_ISLNK(destination_stat.st_mode):
             _reject(f"Unsafe {description} destination is not a regular file: {destination}")
@@ -186,7 +251,7 @@ def _validate_existing_output_tree(
     output_root: Path,
     protected_paths: tuple[Path, ...],
     *,
-    allowed_file_symlinks: dict[Path, Path],
+    allowed_file_symlink_paths: set[Path],
 ) -> None:
     if not os.path.lexists(output_root):
         return
@@ -200,14 +265,11 @@ def _validate_existing_output_tree(
             for entry in entries:
                 path = Path(entry.path)
                 if entry.is_symlink():
+                    if _absolute(path) in allowed_file_symlink_paths:
+                        continue
                     if entry.is_dir(follow_symlinks=True):
                         _reject(f"Unsafe pipeline output tree contains a symlink directory: {path}")
-                    allowed_target = allowed_file_symlinks.get(_absolute(path))
-                    if allowed_target is None or path.resolve(strict=False) != _absolute(allowed_target).resolve(
-                        strict=False
-                    ):
-                        _reject(f"Unsafe pipeline output tree contains an unsafe file symlink: {path}")
-                    continue
+                    _reject(f"Unsafe pipeline output tree contains an unsafe file symlink: {path}")
                 if entry.is_dir(follow_symlinks=False):
                     pending.append(path)
                     continue
@@ -232,8 +294,9 @@ def protect_alignment_inputs(
 
     The output tree is checked before validation logs, target preparation, preflight,
     or stage-directory creation. Existing single-link regular rerun artifacts are
-    accepted, as is the exact run-local preflight view symlink back to the selected
-    alignment.
+    accepted, as is the exact run-local preflight view symlink. Its builder performs
+    the next ownership check and atomically replaces that entry regardless of its
+    pre-existing target.
 
     Args:
         output: Pipeline output root.
@@ -249,33 +312,20 @@ def protect_alignment_inputs(
     """
     output_root = Path(output)
     validate_alignment_output_root(output_root, input_path, file_format)
-    protected_inputs: tuple[str | Path, ...] = _protected_alignment_paths(input_path, file_format)
-    if bed_file is not None:
-        protected_inputs = (*protected_inputs, bed_file)
-    explicit_reference = str(reference_fasta) if reference_fasta is not None else None
-    references: tuple[str | Path, ...] = (explicit_reference,) if explicit_reference is not None else ()
-    if file_format == "cram":
-        references = (
-            *references,
-            *(
-                value
-                for _source, value in configured_reference_candidates(config, reference_assembly)
-                if isinstance(value, str)
-            ),
-        )
-    for reference_input in references:
-        reference = Path(reference_input)
-        protected_inputs = (
-            *protected_inputs,
-            reference,
-            *reference_index_paths(reference),
-        )
+    protected_inputs = alignment_operator_paths(
+        input_path,
+        file_format,
+        bed_file,
+        reference_fasta,
+        config,
+        reference_assembly,
+    )
     protected_paths = _validate_operator_inputs_outside_output(output_root, protected_inputs)
     preflight_view = output_root / "fastq_bam_processing" / f"input.{file_format}"
     _validate_existing_output_tree(
         output_root,
         protected_paths,
-        allowed_file_symlinks={_absolute(preflight_view): Path(input_path)},
+        allowed_file_symlink_paths={_absolute(preflight_view)},
     )
 
 
@@ -347,9 +397,9 @@ def validate_fastq_pipeline_destinations(
 
     The validation runs once before stage-directory creation or any external tool,
     covering destinations owned by fastp, BWA, alignment preflight, and post-alignment
-    conversion. Existing regular files must have one link. A normal preflight view
-    symlink from a previous run remains replaceable only when it targets that run's
-    sorted BAM.
+    conversion. Existing regular files must have one link. The exact post-alignment
+    view symlink remains replaceable regardless of its pre-existing target because
+    its builder revalidates and atomically replaces it before stage reads begin.
 
     Args:
         output: Pipeline output root.
@@ -367,17 +417,12 @@ def validate_fastq_pipeline_destinations(
     alignment_output = output_root / "alignment_processing"
     sorted_bam = alignment_output / "output_sorted.bam"
     post_alignment = fastq_output / "post_alignment.bam"
-    reference = Path(bwa_reference)
-    protected_inputs: tuple[str | Path, ...] = (fastq_1, reference, *bwa_index_paths(reference, config))
-    if fastq_2 is not None:
-        protected_inputs = (*protected_inputs, fastq_2)
-    if bed_file is not None:
-        protected_inputs = (*protected_inputs, bed_file)
+    protected_inputs = fastq_operator_paths(fastq_1, fastq_2, bed_file, bwa_reference, config)
     protected_paths = _validate_operator_inputs_outside_output(output_root, protected_inputs)
     _validate_existing_output_tree(
         output_root,
         protected_paths,
-        allowed_file_symlinks={_absolute(post_alignment): sorted_bam},
+        allowed_file_symlink_paths={_absolute(post_alignment)},
     )
     destinations = [
         *_fastq_processing_destinations(fastq_output, "output", paired=fastq_2 is not None),
@@ -393,12 +438,11 @@ def validate_fastq_pipeline_destinations(
         *_alignment_conversion_destinations(fastq_output, "output"),
     ]
     for destination in dict.fromkeys(destinations):
-        allowed_target = sorted_bam if destination == post_alignment else None
         _validate_owned_destination(
             destination,
             protected_paths,
             description="direct-FASTQ pipeline",
-            allowed_symlink_target=allowed_target,
+            allow_symlink=destination == post_alignment,
         )
 
 
