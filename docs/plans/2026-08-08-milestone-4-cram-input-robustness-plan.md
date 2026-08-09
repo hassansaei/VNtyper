@@ -28,7 +28,7 @@ pytest, ruff, mypy, Docker + Celery for the web layer.
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
 
 **Status:** H1/H2/H3 and their final follow-ups are integrated and independently reviewed.
-The final BAM-path A-PERF-1 rerun is recorded; the combined no-HIGH review remains unchecked.
+The final BAM-path A-PERF-1 rerun and the combined no-HIGH actual-PR review are recorded.
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
@@ -726,9 +726,12 @@ read-name digest of it.
 - [x] **Step 1:** `make check-all`
 - [x] **Step 2:** `make patch-coverage` — must be ≥ 80%
 - [x] **Step 3:** `make ci-local` **only if** `.github/workflows/` was touched — not applicable; the final diff does not touch workflow files.
-- [ ] **Step 4:** Codex adversarial gate on the final **diff** (spec §10, concluding round). Loop
+- [x] **Step 4:** Codex adversarial gate on the final **diff** (spec §10, concluding round). Loop
       until no HIGH survives; record the verdict.
-- [ ] **Step 5:** `superpowers:requesting-code-review`, then address findings.
+- [x] **Step 5:** `superpowers:requesting-code-review`, then address findings. The actual
+      PR also received two maximum-effort Claude Opus 5 passes: the first requested one
+      HIGH and one MEDIUM correction, and the second approved pushed head `318a984` with
+      no remaining Critical, High or Medium finding.
 - [x] **Step 6:** bump `vntyper/version.py`, `CITATION.cff` and
       `docs/about/changelog.md` to **2.0.10** — patch only, all three files (trap 12).
 - [x] **Step 7:** PR [#230](https://github.com/hassansaei/VNtyper/pull/230) against
@@ -778,8 +781,8 @@ only exact owned fallback entries before closing the index and alignment FDs.
       `stat`/`lstat` checks around view installation and cleanup. Archive identity
       hardening runs only with `--archive-results`, which this timing arm did not enable.
       Those assessments do not relabel the measured hash as final `HEAD`.
-- [ ] **Close-out:** run and record the combined final-diff adversarial review with no
-      HIGH findings.
+- [x] **Close-out:** the combined final-diff adversarial review and actual-PR Claude Opus
+      5 re-review are recorded in spec §10; no Critical, High or Medium finding remains.
 
 ---
 

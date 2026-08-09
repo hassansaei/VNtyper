@@ -1577,6 +1577,28 @@ through the child process and passes descriptor-bound member paths, so replacing
 directory pathname cannot change the bytes consumed. Independent final H3 review found no
 remaining Critical or Important issue in this scope.
 
+### Actual PR #230 — Claude Opus 5 adversarial review
+
+The first maximum-effort review of the pushed PR at `b3d0192` requested changes for one
+HIGH and one MEDIUM. The HIGH found that header-URI confinement rejected a well-formed
+external candidate before an explicit or configured reference could be tried, and also
+rejected the repository's absolute same-directory fixture URI. Canonical references inside
+the CRAM directory now remain candidates; canonical escapes are omitted without being
+opened, so trusted candidates remain reachable; malformed URI syntax still fails closed.
+The MEDIUM found that A-PERF-1's provenance omitted later alignment and archive identity
+hardening. Section 5b and its plan/changelog summaries now name those changes and explain
+their timing scope without relabelling the measured revision.
+
+The second maximum-effort review examined the actual pushed head `318a984` and returned
+**APPROVE**, with no remaining Critical, High or Medium finding. It independently checked
+the absolute and contained-parent URI fixtures, explicit-reference fallback, malformed-URI
+refusal, A-PERF-1 provenance, filesystem-identity fallback tests, and successful-path
+`REF_PATH` restoration. Three LOW observations remain deliberately non-gating: an omitted
+header candidate has no contig-only debug log, one parser docstring describes file-URI
+errors more narrowly than its NUL check, and `UR:.` can reach a harmless failed directory
+probe. None permits an external path to be opened, weakens fail-closed routing, or changes
+the no-read-drop invariant.
+
 ### Round 3f — disposition
 
 The concluding diff review accepted three HIGH findings. Alignment binding had occurred
