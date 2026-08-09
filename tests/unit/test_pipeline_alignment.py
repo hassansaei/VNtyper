@@ -541,6 +541,65 @@ def test_input_alignment_binding_precedes_validation_and_survives_source_replace
         prepared.plan.close()
 
 
+def test_owned_cram_boundary_drops_an_out_of_tree_header_uri_and_keeps_the_cli_reference(tmp_path: Path) -> None:
+    """An untrusted header path cannot block the explicit reference at the owned pipeline boundary."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    source = tmp_path / "upload" / "sample.cram"
+    source.parent.mkdir()
+    source.write_bytes(b"owned CRAM")
+    outside_reference = tmp_path / "private" / "header-reference.fa"
+    explicit_reference = tmp_path / "operator-reference.fa"
+    explicit_reference.write_text(">chr1\nAAAA\n", encoding="ascii")
+    header = f"@SQ\tSN:chr1\tM5:digest\tLN:100\tUR:{outside_reference.as_uri()}\n"
+
+    def finish_preflight(**kwargs: object) -> AlignmentPlan:
+        binding = kwargs["binding"]
+        assert isinstance(binding, AlignmentBinding)
+        assert kwargs["reference_fasta"] == str(explicit_reference)
+        assert kwargs["header_reference_paths"] == ()
+        assert kwargs["header_references"] == ()
+        return AlignmentPlan(
+            input_path=str(source),
+            view_path=str(kwargs["bound_view_path"]),
+            file_format="cram",
+            index_path=f"{kwargs['bound_view_path']}.crai",
+            reference_path=str(explicit_reference),
+            reference_source="cli",
+            uncovered_contigs=(),
+            unmapped_scan="indexed",
+            binding=binding,
+        )
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value=header),
+        mock.patch("vntyper.scripts.pipeline_alignment.enforce_declared_assembly"),
+        mock.patch(
+            "vntyper.scripts.pipeline_alignment.get_region_string_with_fallback",
+            return_value="chr1:10-20",
+        ),
+        mock.patch("vntyper.scripts.pipeline_alignment.run_preflight", side_effect=finish_preflight),
+    ):
+        prepared = prepare_input_alignment_preflight(
+            in_path=source,
+            input_type="CRAM",
+            output_dir=output,
+            config={},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions="chr1:10-20",
+            reference_fasta=explicit_reference,
+            fast_mode=True,
+        )
+
+    try:
+        assert prepared.plan.reference_source == "cli"
+        assert prepared.plan.reference_path == str(explicit_reference)
+    finally:
+        prepared.plan.close()
+
+
 def test_cram_quickcheck_failure_uses_the_alignment_validation_phase_and_releases_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

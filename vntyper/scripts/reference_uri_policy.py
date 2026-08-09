@@ -137,8 +137,8 @@ def local_header_references(header: str, input_alignment: str | Path) -> tuple[L
         input_alignment: Original operator CRAM path used as the base for relative UR values.
 
     Returns:
-        Local reference records in first-occurrence order. Remote schemes are
-        omitted for the separate ambient-reference policy.
+        Confined local reference records in first-occurrence order. Remote schemes
+        and well-formed paths outside the input directory are omitted.
 
     Raises:
         ValueError: If a file URI is ambiguous or does not name a local path.
@@ -176,11 +176,9 @@ def local_header_references(header: str, input_alignment: str | Path) -> tuple[L
             if not candidate_value or "\x00" in candidate_value:
                 raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
             candidate = Path(candidate_value)
-            if ".." in candidate.parts or (candidate.is_absolute() and scheme_match is None):
-                raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
             normalized_path = (candidate if candidate.is_absolute() else base_directory / candidate).resolve()
             if not normalized_path.is_relative_to(base_directory):
-                raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
+                continue
             normalized = str(normalized_path)
             identity = (contig, m5, normalized)
             if identity not in seen:

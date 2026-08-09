@@ -163,9 +163,9 @@ def test_local_header_reference_paths_resolve_against_the_input_and_deduplicate(
 
 @pytest.mark.parametrize(
     "uri_kind",
-    ["absolute-outside", "absolute-same-directory", "parent-outside", "parent-same-directory", "symlink"],
+    ["absolute-outside", "parent-outside", "symlink"],
 )
-def test_local_header_references_reject_paths_outside_the_input_directory_without_disclosure(
+def test_local_header_references_drop_untrusted_paths_without_disclosure(
     tmp_path: Path,
     uri_kind: str,
 ) -> None:
@@ -174,26 +174,51 @@ def test_local_header_references_reject_paths_outside_the_input_directory_withou
     input_cram = input_directory / "input.cram"
     outside = tmp_path / "operator-secret.fa"
     outside.write_text(">chr1\nAAAA\n", encoding="ascii")
-    same_directory = input_directory / "reference.fa"
-    same_directory.write_text(">chr1\nAAAA\n", encoding="ascii")
     if uri_kind == "absolute-outside":
         uri = str(outside)
-    elif uri_kind == "absolute-same-directory":
-        uri = str(same_directory)
     elif uri_kind == "parent-outside":
         uri = "../operator-secret.fa"
-    elif uri_kind == "parent-same-directory":
-        uri = "../upload/reference.fa"
     else:
         escape = input_directory / "escape.fa"
         escape.symlink_to(outside)
         uri = escape.name
 
-    with pytest.raises(ValueError, match="Invalid local CRAM header reference URI") as raised:
-        reference_uri_policy.local_header_references(f"@SQ\tSN:chr1\tM5:digest\tUR:{uri}\n", input_cram)
+    references = reference_uri_policy.local_header_references(
+        f"@SQ\tSN:chr1\tM5:digest\tUR:{uri}\n",
+        input_cram,
+    )
 
-    assert uri not in str(raised.value)
-    assert str(outside) not in str(raised.value)
+    assert references == ()
+
+
+@pytest.mark.parametrize("uri_kind", ["absolute", "parent-traversal"])
+def test_local_header_references_accept_paths_that_canonically_stay_in_the_input_directory(
+    tmp_path: Path,
+    uri_kind: str,
+) -> None:
+    """Lexical shape cannot reject a reference whose canonical target remains confined."""
+    input_directory = tmp_path / "upload"
+    input_directory.mkdir()
+    input_cram = input_directory / "input.cram"
+    reference = input_directory / "reference.fa"
+    uri = str(reference) if uri_kind == "absolute" else "../upload/reference.fa"
+
+    assert reference_uri_policy.local_header_references(
+        f"@SQ\tSN:chr1\tM5:digest\tUR:{uri}\n",
+        input_cram,
+    ) == (reference_uri_policy.LocalHeaderReference("chr1", "digest", str(reference)),)
+
+
+def test_local_header_references_accept_a_same_directory_absolute_file_uri(tmp_path: Path) -> None:
+    """A canonical file URI inside the owned input directory remains a usable candidate."""
+    input_cram = tmp_path / "upload" / "input.cram"
+    input_cram.parent.mkdir()
+    reference = input_cram.parent / "reference.fa"
+
+    assert reference_uri_policy.local_header_references(
+        f"@SQ\tSN:chr1\tM5:digest\tUR:{reference.as_uri()}\n",
+        input_cram,
+    ) == (reference_uri_policy.LocalHeaderReference("chr1", "digest", str(reference)),)
 
 
 def test_local_header_references_preserve_each_sq_contig_digest_association(tmp_path: Path) -> None:
@@ -223,6 +248,7 @@ def test_bare_header_reference_percent_sequences_remain_literal(tmp_path: Path) 
         "file:///reference.fa#fragment",
         "file:///reference%00.fa",
         "file:",
+        "reference\x00.fa",
     ],
 )
 def test_ambiguous_or_nonlocal_file_header_uris_are_rejected(tmp_path: Path, uri: str) -> None:
