@@ -254,6 +254,84 @@ def test_unindexed_read_only_alignment_uses_a_run_local_index_for_real_slice(
     assert _tree_digest(input_root) == before
 
 
+def test_unindexed_read_only_reference_uses_a_run_local_index_for_every_consumer(
+    tmp_path: Path,
+    ensure_test_data: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unindexed operator FASTA stays unchanged while probe and slice decode it."""
+    repository = Path(__file__).parents[2]
+    fixture_root = repository / "tests/data/cram/reference-dependent"
+    operator_root = tmp_path / "operator-reference"
+    output_root = tmp_path / "run"
+    operator_root.mkdir()
+    output_root.mkdir()
+    reference = operator_root / "reference.fa"
+    alignment = tmp_path / "input.cram"
+    shutil.copyfile(fixture_root / "reference.fa", reference)
+    shutil.copyfile(fixture_root / "reference-dependent.cram", alignment)
+    before = _tree_digest(operator_root)
+    reference.chmod(0o444)
+    operator_root.chmod(0o555)
+    monkeypatch.setenv("REF_PATH", str(tmp_path / "no-reference-cache" / "%2s/%2s/%s"))
+    config = {
+        "tools": {"samtools": "samtools"},
+        "cram": {
+            "allow_ambient_reference_resolution": False,
+            "local_ref_path": str(tmp_path / "no-reference-cache" / "%2s/%2s/%s"),
+            "reference_probe_timeout_seconds": 10,
+            "unmapped_scan": "auto",
+            "reference_candidate_order": ["cli", "htslib_resolved"],
+        },
+    }
+
+    plan: AlignmentPlan | None = None
+    try:
+        plan = run_preflight(
+            str(alignment),
+            str(output_root),
+            "input",
+            "cram",
+            config,
+            2,
+            region="chr1:1-10000",
+            reference_fasta=str(reference),
+            header_contigs=("chr1",),
+        )
+        slice_path = output_root / "slice.bam"
+        command = build_samtools_slice_command(
+            samtools_path="samtools",
+            in_bam=plan.view_path,
+            index_path=plan.stable_index_path,
+            output_bam=slice_path,
+            region="chr1:1-10000",
+            reference_path=plan.reference_path,
+            threads=2,
+        )
+        completed = subprocess.run(
+            command,
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert int(subprocess.check_output(["samtools", "view", "-c", str(slice_path)], text=True)) == 50
+        assert plan.reference_source == "cli"
+        assert plan.reference_path is not None
+        assert plan.reference_path != str(reference)
+        assert Path(plan.reference_path).is_symlink()
+        assert Path(f"{plan.reference_path}.fai").is_symlink()
+    finally:
+        if plan is not None:
+            plan.close()
+        operator_root.chmod(0o755)
+        reference.chmod(0o644)
+
+    assert _tree_digest(operator_root) == before
+
+
 def test_a_wrong_sample_source_bai_is_ignored_before_real_bam_slice(
     tmp_path: Path,
     ensure_test_data: None,

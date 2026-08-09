@@ -12,8 +12,12 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from vntyper.scripts.alignment_binding import AlignmentBinding
+
+if TYPE_CHECKING:
+    from vntyper.scripts.reference_binding import ReferenceBinding
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,7 @@ class AlignmentPlan:
     uncovered_contigs: tuple[str, ...]
     unmapped_scan: str
     binding: AlignmentBinding | None = field(default=None, repr=False, compare=False)
+    reference_binding: ReferenceBinding | None = field(default=None, repr=False, compare=False)
 
     @property
     def stable_index_path(self) -> str:
@@ -105,8 +110,22 @@ class AlignmentPlan:
 
     def close(self) -> None:
         """Release the run-local alignment descriptor after its final consumer."""
+        failure: Exception | None = None
+        if self.reference_binding is not None:
+            try:
+                self.reference_binding.close()
+            except Exception as error:
+                failure = error
         if self.binding is not None:
-            self.binding.close()
+            try:
+                self.binding.close()
+            except Exception as error:
+                if failure is None:
+                    failure = error
+                else:
+                    logger.error(f"Additional alignment-plan cleanup failure: {error}")
+        if failure is not None:
+            raise failure
 
 
 def missing_index_message(in_path: str, file_format: str, tried: Iterable[str]) -> str:

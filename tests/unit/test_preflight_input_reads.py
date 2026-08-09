@@ -167,7 +167,7 @@ def test_oversized_fai_keeps_the_successful_probe_but_skips_coverage_inference(
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")),
         caplog.at_level("WARNING"),
     ):
-        resolved, source, uncovered = alignment_preflight.resolve_reference(
+        resolved, source, uncovered, _binding = alignment_preflight.resolve_reference(
             "/run/view.cram",
             (("cli", str(reference)),),
             "chr1:1-2",
@@ -180,8 +180,12 @@ def test_oversized_fai_keeps_the_successful_probe_but_skips_coverage_inference(
             "abc",
         )
 
-    assert (resolved, source, uncovered) == (str(reference), "cli", ())
+    assert resolved is not None
+    assert Path(resolved).read_bytes() == reference.read_bytes()
+    assert (source, uncovered) == ("cli", ())
     assert "coverage unavailable" in caplog.text.lower()
+    assert _binding is not None
+    _binding.close()
     assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 

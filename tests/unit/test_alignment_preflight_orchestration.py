@@ -214,10 +214,13 @@ def test_a_cram_plan_uses_configured_candidate_order_and_idxstats_evidence(tmp_p
         )
 
     assert Path(plan.view_path).samefile(alignment)
-    assert plan.reference_path == str(bwa_reference)
+    assert plan.reference_path is not None
+    assert plan.reference_path != str(bwa_reference)
+    assert Path(plan.reference_path).read_bytes() == bwa_reference.read_bytes()
     assert plan.reference_source == "config_bwa_reference"
     assert plan.uncovered_contigs == ()
     assert plan.unmapped_scan == "indexed"
+    plan.close()
 
 
 def test_default_policy_probes_the_cli_reference_before_configured_candidates(tmp_path: Path) -> None:
@@ -231,15 +234,16 @@ def test_default_policy_probes_the_cli_reference_before_configured_candidates(tm
     cli_reference = tmp_path / "cli reference.fa"
     cram_reference = tmp_path / "configured-cram.fa"
     bwa_reference = tmp_path / "configured-bwa.fa"
-    for reference in (cli_reference, cram_reference, bwa_reference):
-        reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    cli_reference.write_text(">chr1\nAAAA\n", encoding="utf-8")
+    cram_reference.write_text(">chr1\nCCCC\n", encoding="utf-8")
+    bwa_reference.write_text(">chr1\nGGGG\n", encoding="utf-8")
     config = {
         "reference_data": {
             "cram_reference_hg19": str(cram_reference),
             "bwa_reference_hg19": str(bwa_reference),
         }
     }
-    reference_probes: list[str] = []
+    reference_probes: list[bytes] = []
 
     def commands(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
         arguments = shlex.split(command)
@@ -250,8 +254,10 @@ def test_default_policy_probes_the_cli_reference_before_configured_candidates(tm
             return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
         if arguments[1:5] == ["view", "-c", "-f", "4"]:
             return True, "2\n"
-        reference_probes.append(command)
-        return str(cram_reference) in shlex.split(command), "decode result"
+        candidate = Path(arguments[arguments.index("-T") + 1])
+        candidate_bytes = candidate.read_bytes()
+        reference_probes.append(candidate_bytes)
+        return candidate_bytes == b">chr1\nCCCC\n", "decode result"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=commands):
         plan = run_preflight(
@@ -266,11 +272,14 @@ def test_default_policy_probes_the_cli_reference_before_configured_candidates(tm
             header_contigs=("chr1",),
         )
 
-    assert [shlex.split(command)[shlex.split(command).index("-T") + 1] for command in reference_probes] == [
-        str(cli_reference),
-        str(cram_reference),
+    assert reference_probes == [
+        b">chr1\nAAAA\n",
+        b">chr1\nCCCC\n",
     ]
     assert plan.reference_source == "config_cram_reference"
+    assert plan.reference_path is not None
+    assert Path(plan.reference_path).read_bytes() == b">chr1\nCCCC\n"
+    plan.close()
 
 
 def test_a_bam_plan_builds_an_index_selects_a_scan_and_probes_the_target(tmp_path: Path) -> None:

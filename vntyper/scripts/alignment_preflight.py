@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import tempfile
 from collections.abc import Iterable
@@ -49,9 +48,12 @@ from vntyper.scripts.preflight_command_io import (
 from vntyper.scripts.preflight_input_io import (
     configured_preflight_text_limit,
     read_bounded_regular_text,
-    regular_file_unavailable_reason,
-    try_read_bounded_regular_text,
 )
+from vntyper.scripts.reference_binding import ReferenceBinding
+from vntyper.scripts.reference_binding import reference_contigs as _reference_contigs
+from vntyper.scripts.reference_binding import reference_probe_timeout_seconds as _reference_probe_timeout_seconds
+from vntyper.scripts.reference_binding import reference_unavailable_reason as _reference_unavailable_reason
+from vntyper.scripts.reference_binding import target_contig as _target_contig
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
 from vntyper.scripts.reference_resolution_environment import (
     pin_reference_resolution as pin_reference_resolution,
@@ -63,7 +65,6 @@ from vntyper.scripts.reference_resolution_environment import (
 logger = logging.getLogger(__name__)
 
 HTSLIB_REFERENCE_SOURCE = "htslib-resolved (header UR: or REF_PATH)"
-_MAX_REFERENCE_PROBE_TIMEOUT_SECONDS = 120.0
 
 
 def _reject(message: str) -> NoReturn:
@@ -252,57 +253,6 @@ def choose_unmapped_scan(
     )
 
 
-def _reference_probe_timeout_seconds(config: dict) -> float:
-    """Return a validated reference-probe deadline no greater than 120 seconds."""
-    configured = config.get("cram", {}).get("reference_probe_timeout_seconds", _MAX_REFERENCE_PROBE_TIMEOUT_SECONDS)
-    if (
-        isinstance(configured, bool)
-        or not isinstance(configured, (int, float))
-        or not math.isfinite(configured)
-        or configured <= 0
-        or configured > _MAX_REFERENCE_PROBE_TIMEOUT_SECONDS
-    ):
-        _reject("cram.reference_probe_timeout_seconds must be a finite number greater than 0 and at most 120")
-    return float(configured)
-
-
-def _reference_contigs(reference_path: str, max_bytes: int) -> set[str] | None:
-    fai_path = Path(f"{reference_path}.fai")
-    index_text, reason = try_read_bounded_regular_text(
-        fai_path,
-        max_bytes=max_bytes,
-        description="reference FASTA index",
-    )
-    if reason is not None or index_text is None:
-        return None
-    return {line.split("\t", 1)[0] for line in index_text.splitlines() if line.strip()}
-
-
-def _reference_unavailable_reason(reference_path: str) -> str | None:
-    return regular_file_unavailable_reason(reference_path, description="reference FASTA")
-
-
-def _target_contig(
-    region: str | None,
-    bed_file: str | Path | None,
-    header_contigs: tuple[str, ...],
-    max_bytes: int,
-) -> str:
-    if bed_file is not None:
-        bed_text = read_bounded_regular_text(
-            bed_file,
-            max_bytes=max_bytes,
-            description="alignment target BED",
-        )
-        for line in bed_text.splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#"):
-                return stripped.split(maxsplit=1)[0]
-    elif region:
-        return region.split(":", 1)[0]
-    return header_contigs[0] if header_contigs else "unknown"
-
-
 def resolve_reference(
     view_path: str,
     candidates: Iterable[tuple[str, str | None]],
@@ -319,7 +269,7 @@ def resolve_reference(
     header_m5s: Iterable[tuple[str, str]] = (),
     unmapped_scan: str = "indexed",
     failure_context: error_io.PreflightErrorContext | None = None,
-) -> tuple[str | None, str, tuple[str, ...]]:
+) -> tuple[str | None, str, tuple[str, ...], ReferenceBinding | None]:
     """Probe explicit CRAM references before one final htslib-resolved candidate.
 
     Args:
@@ -341,8 +291,9 @@ def resolve_reference(
         failure_context: Boundary diagnostics receiving structured candidate details.
 
     Returns:
-        The winning path, source, and uncovered header contigs. An htslib-resolved
-        winner has path ``None`` because the no-``-T`` probe cannot identify it.
+        The winning run-local path, source, uncovered header contigs, and retained
+        reference binding. An htslib-resolved winner has path and binding ``None``
+        because the no-``-T`` probe cannot identify its backing file.
 
     Raises:
         ValueError: If no candidate decodes the selected target.
@@ -353,7 +304,11 @@ def resolve_reference(
     attempts: list[ReferenceAttempt] = []
     explicit_candidates = list(candidates)
 
-    def probe_candidate(reference_path: str | None, position: int) -> tuple[bool, str]:
+    def probe_candidate(
+        reference_path: str | None,
+        position: int,
+        reference_binding: ReferenceBinding | None = None,
+    ) -> tuple[bool, str]:
         target_command = build_cram_reference_probe_command(
             samtools_path=samtools_path,
             in_bam=view_path,
@@ -368,6 +323,8 @@ def resolve_reference(
             target_log,
             timeout_seconds=timeout_seconds,
         )
+        if reference_binding is not None:
+            reference_binding.bind_generated_sidecars()
         if not exit_ok:
             return exit_ok, probe_output
         if coverage_region is not None:
@@ -408,14 +365,27 @@ def resolve_reference(
         if unavailable_reason is not None:
             attempts.append((source, reference_path, unavailable_reason))
             continue
-        exit_ok, output = probe_candidate(reference_path, position)
+        try:
+            reference_binding = ReferenceBinding(reference_path, output_dir, output_name, position)
+        except RuntimeError as error:
+            attempts.append((source, reference_path, str(error)))
+            continue
+        try:
+            exit_ok, output = probe_candidate(reference_binding.consumer_path, position, reference_binding)
+        except BaseException:
+            try:
+                reference_binding.close()
+            except Exception:
+                logger.exception("Reference binding cleanup failed while preserving the primary probe outcome.")
+            raise
         if not exit_ok:
             attempts.append((source, reference_path, output.strip() or "probe exited non-zero"))
+            reference_binding.close()
             continue
 
         uncovered_decision = uncovered_reference_contigs(
             header_contigs,
-            _reference_contigs(reference_path, max_text_bytes),
+            _reference_contigs(reference_binding.consumer_path, max_text_bytes),
         )
         uncovered: tuple[str, ...]
         if uncovered_decision is None:
@@ -431,12 +401,12 @@ def resolve_reference(
                 f"Resolved CRAM reference from {source}, but it does not cover header contigs: {', '.join(uncovered)}"
             )
         logger.info(f"Resolved CRAM reference from {source}: {reference_path}")
-        return reference_path, source, uncovered
+        return reference_binding.consumer_path, source, uncovered, reference_binding
     ambient_position = len(explicit_candidates) + 1
     exit_ok, output = probe_candidate(None, ambient_position)
     if exit_ok:
         logger.info(f"Resolved CRAM reference through {HTSLIB_REFERENCE_SOURCE}")
-        return None, HTSLIB_REFERENCE_SOURCE, ()
+        return None, HTSLIB_REFERENCE_SOURCE, (), None
     attempts.append((HTSLIB_REFERENCE_SOURCE, None, output.strip() or "probe exited non-zero"))
     contigs = tuple(header_contigs)
     target_contig = _target_contig(region, bed_file, contigs, max_text_bytes)
@@ -579,6 +549,7 @@ def run_preflight(
             binding=binding,
             bound_view_path=bound_view_path,
         )
+        reference_binding: ReferenceBinding | None = None
         try:
             unmapped_scan = "not-required"
             if not fast_mode:
@@ -593,7 +564,7 @@ def run_preflight(
                 )
             if file_format == FORMAT_CRAM:
                 failure_context.phase = error_io.REFERENCE_PROBE_FAILURE
-                reference_path, reference_source, uncovered_contigs = resolve_reference(
+                reference_path, reference_source, uncovered_contigs, reference_binding = resolve_reference(
                     view_path,
                     candidates,
                     region,
@@ -638,7 +609,16 @@ def run_preflight(
                 uncovered_contigs=uncovered_contigs,
                 unmapped_scan=unmapped_scan,
                 binding=binding,
+                reference_binding=reference_binding,
             )
         except BaseException:
-            binding.close()
+            if reference_binding is not None:
+                try:
+                    reference_binding.close()
+                except Exception:
+                    logger.exception("Reference binding cleanup failed while preserving the primary preflight outcome.")
+            try:
+                binding.close()
+            except Exception:
+                logger.exception("Alignment binding cleanup failed while preserving the primary preflight outcome.")
             raise

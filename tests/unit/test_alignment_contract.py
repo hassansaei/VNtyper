@@ -1,9 +1,13 @@
 """Tests for the pure alignment preflight contract."""
 
-from dataclasses import FrozenInstanceError, fields
+import logging
+from dataclasses import FrozenInstanceError, fields, replace
+from typing import cast
+from unittest.mock import Mock
 
 import pytest
 
+from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import (
     FORMAT_BAM,
     FORMAT_CRAM,
@@ -15,6 +19,7 @@ from vntyper.scripts.alignment_contract import (
     preflight_error_payload,
     unresolvable_reference_message,
 )
+from vntyper.scripts.reference_binding import ReferenceBinding
 
 pytestmark = pytest.mark.unit
 
@@ -151,10 +156,35 @@ def test_alignment_plan_is_frozen_and_has_no_layout_field() -> None:
         "uncovered_contigs",
         "unmapped_scan",
         "binding",
+        "reference_binding",
     }
     field_name = "index_path"
     with pytest.raises(FrozenInstanceError):
         setattr(plan, field_name, "/other/index.bai")
+
+
+def test_plan_close_attempts_both_bindings_and_preserves_the_first_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A reference cleanup failure cannot skip alignment cleanup or be replaced by it."""
+    reference_binding = Mock(spec=ReferenceBinding)
+    reference_failure = RuntimeError("reference cleanup failed")
+    reference_binding.close.side_effect = reference_failure
+    alignment_binding = Mock(spec=AlignmentBinding)
+    alignment_binding.close.side_effect = RuntimeError("alignment cleanup failed")
+    plan = replace(
+        _plan(),
+        binding=cast(AlignmentBinding, alignment_binding),
+        reference_binding=cast(ReferenceBinding, reference_binding),
+    )
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError) as raised:
+        plan.close()
+
+    assert raised.value is reference_failure
+    reference_binding.close.assert_called_once_with()
+    alignment_binding.close.assert_called_once_with()
+    assert "Additional alignment-plan cleanup failure: alignment cleanup failed" in caplog.text
 
 
 def test_the_plan_exposes_a_reference_path_not_a_preformatted_shell_fragment():

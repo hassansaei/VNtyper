@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,7 +32,7 @@ def test_a_nonexistent_explicit_fasta_is_not_probed_and_the_next_candidate_can_w
     usable = _reference(tmp_path / "usable.fa")
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")) as capture:
-        reference, source, _ = resolve_reference(
+        reference, source, _, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(missing)), ("config_cram_reference", str(usable))),
             "chr1:1-2",
@@ -44,9 +45,12 @@ def test_a_nonexistent_explicit_fasta_is_not_probed_and_the_next_candidate_can_w
             "abc",
         )
 
-    assert reference == str(usable)
+    assert reference is not None
+    assert Path(reference).read_bytes() == usable.read_bytes()
     assert source == "config_cram_reference"
     assert capture.call_count == 1
+    assert _binding is not None
+    _binding.close()
 
 
 def test_an_unreadable_explicit_fasta_is_named_and_skipped_before_the_probe(tmp_path: Path) -> None:
@@ -64,7 +68,7 @@ def test_an_unreadable_explicit_fasta_is_named_and_skipped_before_the_probe(tmp_
         patch("vntyper.scripts.preflight_input_io.os.open", side_effect=deny_one_path),
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")) as capture,
     ):
-        reference, source, _ = resolve_reference(
+        reference, source, _, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(unreadable)), ("config_cram_reference", str(usable))),
             "chr1:1-2",
@@ -77,9 +81,12 @@ def test_an_unreadable_explicit_fasta_is_named_and_skipped_before_the_probe(tmp_
             "abc",
         )
 
-    assert reference == str(usable)
+    assert reference is not None
+    assert Path(reference).read_bytes() == usable.read_bytes()
     assert source == "config_cram_reference"
     assert capture.call_count == 1
+    assert _binding is not None
+    _binding.close()
 
 
 def test_missing_and_unreadable_fastas_are_named_in_the_final_diagnostic(tmp_path: Path) -> None:
@@ -128,7 +135,7 @@ def test_a_missing_fai_warns_that_coverage_is_unavailable_but_does_not_reject_a_
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")),
         caplog.at_level("WARNING"),
     ):
-        resolved, source, uncovered = resolve_reference(
+        resolved, source, uncovered, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(reference)),),
             "chr1:1-2",
@@ -141,8 +148,12 @@ def test_a_missing_fai_warns_that_coverage_is_unavailable_but_does_not_reject_a_
             "abc",
         )
 
-    assert (resolved, source, uncovered) == (str(reference), "cli", ())
+    assert resolved is not None
+    assert Path(resolved).read_bytes() == reference.read_bytes()
+    assert (source, uncovered) == ("cli", ())
     assert "coverage unavailable" in caplog.text.lower()
+    assert _binding is not None
+    _binding.close()
 
 
 def test_an_unreadable_fai_warns_that_coverage_is_unavailable_but_keeps_the_probe_winner(
@@ -164,7 +175,7 @@ def test_an_unreadable_fai_warns_that_coverage_is_unavailable_but_keeps_the_prob
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")),
         caplog.at_level("WARNING"),
     ):
-        resolved, source, uncovered = resolve_reference(
+        resolved, source, uncovered, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(reference)),),
             "chr1:1-2",
@@ -177,8 +188,12 @@ def test_an_unreadable_fai_warns_that_coverage_is_unavailable_but_keeps_the_prob
             "abc",
         )
 
-    assert (resolved, source, uncovered) == (str(reference), "cli", ())
+    assert resolved is not None
+    assert Path(resolved).read_bytes() == reference.read_bytes()
+    assert (source, uncovered) == ("cli", ())
     assert "coverage unavailable" in caplog.text.lower()
+    assert _binding is not None
+    _binding.close()
 
 
 @pytest.mark.parametrize(
@@ -235,7 +250,7 @@ def test_explicit_candidates_are_probed_in_order_before_one_no_reference_probe(t
 
     candidates = tuple(zip(("cli", "config_cram_reference", "config_bwa_reference"), map(str, references), strict=True))
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=fail_until_ambient):
-        reference, source, _ = resolve_reference(
+        reference, source, _, _binding = resolve_reference(
             "/run/view.cram",
             candidates,
             "chr1:1-2",
@@ -261,7 +276,7 @@ def test_the_first_explicit_candidate_that_decodes_wins(tmp_path: Path) -> None:
     outcomes = [(False, "wrong digest"), (True, "decoded")]
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=outcomes) as capture:
-        reference, source, _ = resolve_reference(
+        reference, source, _, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(first)), ("config_cram_reference", str(second))),
             "chr1:1-2",
@@ -274,8 +289,12 @@ def test_the_first_explicit_candidate_that_decodes_wins(tmp_path: Path) -> None:
             None,
         )
 
-    assert (reference, source) == (str(second), "config_cram_reference")
+    assert reference is not None
+    assert Path(reference).read_bytes() == second.read_bytes()
+    assert source == "config_cram_reference"
     assert capture.call_count == 2
+    assert _binding is not None
+    _binding.close()
 
 
 def test_a_total_decode_failure_names_every_candidate_and_reason(tmp_path: Path) -> None:
@@ -395,16 +414,24 @@ def test_reference_winner_must_also_decode_the_independent_coverage_region(tmp_p
     """The slice proof cannot authorize a reference that the later depth consumer rejects."""
     target_only = _reference(tmp_path / "target-only.fa")
     full = _reference(tmp_path / "full.fa")
+    target_only.write_text(">chr1\nAAAA\n", encoding="utf-8")
+    full.write_text(">chr1\nCCCC\n", encoding="utf-8")
     commands: list[str] = []
+    depth_reference_bytes: list[bytes] = []
 
     def decode(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
         commands.append(command)
-        if " depth " in f" {command} " and str(target_only) in command:
-            return False, "Unable to fetch reference chr2"
+        if " depth " in f" {command} ":
+            arguments = shlex.split(command)
+            candidate = Path(arguments[arguments.index("--reference") + 1])
+            candidate_bytes = candidate.read_bytes()
+            depth_reference_bytes.append(candidate_bytes)
+            if candidate_bytes == b">chr1\nAAAA\n":
+                return False, "Unable to fetch reference chr2"
         return True, "decoded"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=decode):
-        reference, source, _ = resolve_reference(
+        reference, source, _, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(target_only)), ("config_cram_reference", str(full))),
             "chr1:1-2",
@@ -418,13 +445,17 @@ def test_reference_winner_must_also_decode_the_independent_coverage_region(tmp_p
             coverage_region="chr2:30-40",
         )
 
-    assert (reference, source) == (str(full), "config_cram_reference")
+    assert reference is not None
+    assert Path(reference).read_bytes() == b">chr1\nCCCC\n"
+    assert source == "config_cram_reference"
     assert len(commands) == 4
     assert all(" -P " in f" {commands[position]} " for position in (0, 2))
-    for position, expected_reference in ((1, target_only), (3, full)):
+    for position in (1, 3):
         assert " depth -a " in f" {commands[position]} "
         assert "-r chr2:30-40" in commands[position]
-        assert f"--reference {expected_reference}" in commands[position]
+    assert depth_reference_bytes == [b">chr1\nAAAA\n", b">chr1\nCCCC\n"]
+    assert _binding is not None
+    _binding.close()
 
 
 def test_known_fai_differences_are_returned_as_uncovered_contigs(
@@ -438,7 +469,7 @@ def test_known_fai_differences_are_returned_as_uncovered_contigs(
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")),
         caplog.at_level("WARNING"),
     ):
-        _, _, uncovered = resolve_reference(
+        _, _, uncovered, _binding = resolve_reference(
             "/run/view.cram",
             (("config_bwa_reference", str(reference)),),
             "chr1:1-2",
@@ -453,12 +484,16 @@ def test_known_fai_differences_are_returned_as_uncovered_contigs(
 
     assert uncovered == ("chr2",)
     assert "chr2" in caplog.text
+    assert _binding is not None
+    _binding.close()
 
 
 def test_stream_mode_rejects_a_target_only_winner_and_tries_the_next_candidate(tmp_path: Path) -> None:
     """A candidate must decode both the target and the later whole-file stream."""
     target_only = _reference(tmp_path / "target-only.fa")
     full = _reference(tmp_path / "full.fa")
+    target_only.write_text(">chr1\nAAAA\n", encoding="utf-8")
+    full.write_text(">chr1\nCCCC\n", encoding="utf-8")
     commands: list[str] = []
 
     def decode(command: str, log_file: str, cwd: str | None = None, **kwargs: object) -> tuple[bool, str]:
@@ -466,12 +501,14 @@ def test_stream_mode_rejects_a_target_only_winner_and_tries_the_next_candidate(t
         commands.append(command)
         if " -P " in f" {command} ":
             return True, "target decoded"
-        if str(target_only) in command:
+        arguments = shlex.split(command)
+        candidate = Path(arguments[arguments.index("-T") + 1])
+        if candidate.read_bytes() == b">chr1\nAAAA\n":
             return False, "Unable to fetch reference chr2"
         return True, "whole file decoded"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=decode):
-        reference, source, _ = resolve_reference(
+        reference, source, _, _binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(target_only)), ("config_cram_reference", str(full))),
             "chr1:1-2",
@@ -485,12 +522,16 @@ def test_stream_mode_rejects_a_target_only_winner_and_tries_the_next_candidate(t
             unmapped_scan="stream",
         )
 
-    assert (reference, source) == (str(full), "config_cram_reference")
+    assert reference is not None
+    assert Path(reference).read_bytes() == b">chr1\nCCCC\n"
+    assert source == "config_cram_reference"
     assert len(commands) == 4
     assert " -P " in f" {commands[0]} "
     assert " -P " not in f" {commands[1]} "
     assert " -P " in f" {commands[2]} "
     assert " -P " not in f" {commands[3]} "
+    assert _binding is not None
+    _binding.close()
 
 
 def test_terminal_stream_failure_names_the_later_missing_contig_and_its_m5(tmp_path: Path) -> None:
