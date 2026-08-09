@@ -634,10 +634,13 @@ samtools call uses the view's path. A supplied index is enumerated and protected
 mutation, but it is never used to authorise a run: §3.15 measured a valid wrong-sample BAI
 returning an empty slice with exit 0.
 
-This costs one symlink and one index build, writes nothing to the input tree (the
+This costs one run-local view and one index build, writes nothing to the input tree (the
 milestone-3 invariant), and makes co-location the normal case rather than a special case,
-so no builder needs an index argument and `idxstats` works. The index is installed
-atomically with run-local provenance, so reruns replace only artifacts VNtyper owns.
+so no builder needs an index argument and `idxstats` works. Each index and provenance file
+is installed with an atomic rename or exclusive link, and ordinary exceptions roll back
+the pair. A process death between the two filesystem operations can leave an incomplete
+pair; the next run fails closed and names that ownership inconsistency rather than
+guessing that an unproven regular index belongs to VNtyper.
 
 ### 4.2 The reference contract — proof, not inference
 
@@ -1191,14 +1194,16 @@ sets them to the shipped values.
 
 ## 7. Acceptance criteria
 
-Every gating criterion is decided by executable evidence rather than by reading code.
+Every runtime-outcome gating criterion is decided by executable evidence rather than by
+reading code. A-ALL-1 also includes the repository's task-by-task TDD/review audit, which
+is intentionally a review obligation rather than something line coverage can infer.
 A-178-4 is the one explicit external, non-gating evidence request.
 
 | ID | Criterion | Decided by |
 | --- | --- | --- |
 | A-213-1 | Every `conda run` that launches a long-running child carries `--no-capture-output`, in `docker/entrypoint.sh` **and** `docker/app/tasks.py`. | source assertion in the unit tier |
 | A-213-2 | The image, run through its entrypoint, emits output before the process exits. | docker tier |
-| A-225-1 | An unindexed BAM and an unindexed CRAM both complete a region slice, with the built index never written beside the input. | integration, read-only input mount |
+| A-225-1 | An unindexed BAM and an unindexed CRAM both complete a region slice, with the built index never written beside the input. | integration, chmod read-only BAM+CRAM tree; Docker read-only BAM mount |
 | A-225-2 | The slice is performed through a path whose index htslib can actually find — proven by a run whose input directory contains **no** index at any point. | integration |
 | A-225-3 | After a real run over a read-only input tree, its file set and bytes are identical, for BAM and CRAM. | integration, `test_read_only_alignment_preflight.py` |
 | A-225-4 | A structurally valid BAI from a different sample cannot authorise an empty successful slice; the view rebuild returns the measured 29,736-record target. | integration |
@@ -1228,10 +1233,10 @@ A-178-4 is the one explicit external, non-gating evidence request.
 | A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair in both default and explicit fast mode. | integration, derived fixture |
 | A-161-2 | A run that produces a non-empty FASTQ nothing consumes fails, naming the file and its read count. | unit |
 | A-161-3 | `--fastq1` without `--fastq2` is accepted and genotyped rather than rejected at argument parsing. | unit + integration |
-| A-PERF-1 | Golden-cohort wall-clock does not regress on BAM cases that complete on both revisions: three alternating runs per arm on an idle host, median and range reported; fail-closed mixed-layout cases are reported separately and accepted only with their stable causal diagnostic, never timed as if an early refusal were completed work. A regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
+| A-PERF-1 | Golden-cohort wall-clock does not regress on BAM cases that complete on both revisions: three alternating runs per arm on an idle host, median and range reported; fail-closed mixed-layout cases are reported separately and accepted only with their stable causal diagnostic, never timed as if an early refusal were completed work. A regression is called only when the slower arm's best is worse than the faster arm's worst. | golden cohort |
 | A-PERF-2 | A default (non-fast) BAM run builds the sliced BAM's index **once**, counted from the stage logs. | integration |
 | A-WEB-1 | A preflight failure reaches the job status as its own message, not the generic text `main.py:605` substitutes. | web tier |
-| A-ALL-1 | `make check-all` passes; `make patch-coverage` ≥ 80%; the coverage floor is not lowered; every function modified by this milestone gains a unit test for the behaviour that changed (AGENTS.md rule 1). | full gate |
+| A-ALL-1 | `make check-all` passes; `make patch-coverage` ≥ 80%; the coverage floor is not lowered; every function modified by this milestone gains a unit test for the behaviour that changed (AGENTS.md rule 1). | full gate + task TDD reports and final review audit |
 
 ## 8. Dependency order
 

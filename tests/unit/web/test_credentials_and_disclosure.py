@@ -501,9 +501,9 @@ def test_remote_header_policy_failure_survives_artifact_redis_status_transport(
     output = tmp_path / "pipeline-output"
     output.mkdir()
     remote_uri = "http://127.0.0.1:8765/private/reference.fa"
-    header = f"@SQ\tSN:chr7\tLN:100\tUR:{remote_uri}\n"
+    header = f"@SQ\tSN:chr7/alt\tLN:100\tUR:{remote_uri}\n"
     expected_message = (
-        "Remote CRAM header reference is disabled by policy: contig=chr7, scheme=http. Replace the @SQ UR with "
+        "Remote CRAM header reference is disabled by policy: contig=chr7%2Falt, scheme=http. Replace the @SQ UR with "
         "a local path, relative path, or file-scheme reference, or set "
         "cram.allow_ambient_reference_resolution=true to accept "
         "network access."

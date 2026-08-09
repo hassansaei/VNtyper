@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ def first_remote_header_reference(header: str) -> RemoteHeaderReference | None:
             if separator and key == "UR":
                 scheme = header_reference_scheme(value)
                 if scheme is not None:
-                    return RemoteHeaderReference(contig=contig, scheme=scheme)
+                    return RemoteHeaderReference(contig=quote(contig, safe="._:-"), scheme=scheme)
     return None
 
 

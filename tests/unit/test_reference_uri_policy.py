@@ -46,6 +46,15 @@ def test_first_remote_header_reference_reports_the_sq_contig_and_normalised_sche
     assert first_remote_header_reference(header) == RemoteHeaderReference(contig="chr2", scheme="https")
 
 
+def test_remote_header_reference_percent_encodes_path_like_contig_characters() -> None:
+    header = "@SQ\tSN:chr1/alt\\patch\tLN:10\tUR:https://reference.invalid/ref.fa\n"
+
+    assert first_remote_header_reference(header) == RemoteHeaderReference(
+        contig="chr1%2Falt%5Cpatch",
+        scheme="https",
+    )
+
+
 def test_every_duplicate_ur_field_is_inspected_instead_of_the_last_one_winning() -> None:
     """A trailing local UR cannot hide an earlier remote reference on the same SQ line."""
     header = "@SQ\tSN:chr7\tLN:100\tUR:http://refget.example/private.fa\tUR:file:///local/reference.fa\n"

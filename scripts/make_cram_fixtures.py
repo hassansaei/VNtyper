@@ -86,7 +86,7 @@ class Fixture:
     source_bam: Path
     cram: Path
     records: int
-    unmapped_pairs: int
+    unmapped_reads: int
     #: Digest of the decoded record stream, identical for the BAM and the CRAM.
     record_digest: str
     source_bytes: int
@@ -97,7 +97,7 @@ class Fixture:
             "source_bam": str(self.source_bam),
             "cram": str(self.cram),
             "records": self.records,
-            "unmapped_pairs": self.unmapped_pairs,
+            "unmapped_reads": self.unmapped_reads,
             "record_digest": self.record_digest,
             "source_bytes": self.source_bytes,
             "cram_bytes": self.cram_bytes,
@@ -244,12 +244,12 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
             f"{bam_digest[:16]}, {cram_records} decoded records digest {cram_digest[:16]}"
         )
 
-    # -f 12 is the flag combination the pipeline's unmapped-read scan uses; record it so a
-    # gate case can assert the CRAM presents the same unmapped set the BAM does.
-    unmapped = int(_run([samtools, "view", "-c", "-f", "12", str(cram)]).strip())
+    # The pipeline recovers every flag-4 read, including single-end and placed-unmapped
+    # records, so the fixture evidence must use the same inclusive predicate.
+    unmapped = int(_run([samtools, "view", "-c", "-f", "4", str(cram)]).strip())
 
     logger.info(
-        "%s -> %s  (%d records, %d unmapped pairs, %.1f%% of BAM size)",
+        "%s -> %s  (%d records, %d unmapped reads, %.1f%% of BAM size)",
         relative,
         cram.relative_to(fixture_root),
         bam_records,
@@ -260,7 +260,7 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
         source_bam=bam,
         cram=cram,
         records=bam_records,
-        unmapped_pairs=unmapped,
+        unmapped_reads=unmapped,
         record_digest=bam_digest,
         source_bytes=bam.stat().st_size,
         cram_bytes=cram.stat().st_size,

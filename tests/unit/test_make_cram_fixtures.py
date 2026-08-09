@@ -203,7 +203,9 @@ def test_a_faithful_conversion_is_recorded_with_its_evidence(tmp_path: Path, mon
     assert fixture.records == 7
     assert fixture.record_digest == "deadbeef"
     # The digest is the evidence; it must be the one shared by both sides.
-    assert fixture.unmapped_pairs == 7
+    assert fixture.unmapped_reads == 7
+    count_command = next(command for command in fake.commands if "-c" in command)
+    assert count_command[count_command.index("-f") + 1] == "4"
 
 
 def test_the_encoding_options_are_passed_to_samtools(tmp_path: Path, monkeypatch) -> None:
@@ -238,7 +240,7 @@ def test_the_manifest_records_what_was_derived_and_what_was_skipped(tmp_path: Pa
                 source_bam=Path("tests/data/s.bam"),
                 cram=Path("tests/data/cram/s.cram"),
                 records=7,
-                unmapped_pairs=2,
+                unmapped_reads=2,
                 record_digest="abc",
                 source_bytes=100,
                 cram_bytes=70,
@@ -577,7 +579,7 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
         source_bam=source,
         cram=tmp_path / "cram" / "good.cram",
         records=1,
-        unmapped_pairs=0,
+        unmapped_reads=0,
         record_digest="digest",
         source_bytes=3,
         cram_bytes=2,

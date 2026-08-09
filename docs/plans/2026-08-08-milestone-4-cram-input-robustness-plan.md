@@ -632,7 +632,7 @@ route every produced FASTQ or fail naming it.
       exit 1 is not evidence.
 - [ ] **Step 2:** `make cram-fixtures` (never `--allow-matrix-drift`).
 - [ ] **Step 3:** three runs on the branch. Report median and range per arm. A regression
-      is called only when the slower arm's *best* run beats the faster arm's *worst*
+      is called only when the slower arm's *best* run is worse than the faster arm's *worst*
       (spec §5b).
 - [ ] **Step 4:** prove A-178-2 — when preflight authorises both strategies, indexed and
       stream must produce the **same read set**, not merely the same genotype. When
