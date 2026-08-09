@@ -24,7 +24,7 @@ def _source_bam(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 1000}]}
     with pysam.AlignmentFile(str(path), "wb", header=header) as handle:
-        for index, flag in enumerate((75, 155)):
+        for index, flag in enumerate((107, 187)):
             read = pysam.AlignedSegment()
             read.query_name = f"read-{index}"
             read.query_sequence = "ACGT"
@@ -351,12 +351,13 @@ def test_derivation_clears_pairing_flags_without_dropping_or_rewriting_reads(tmp
     assert [read.query_name for read in after] == [read.query_name for read in before]
     assert [read.query_sequence for read in after] == [read.query_sequence for read in before]
     assert [read.reference_start for read in after] == [read.reference_start for read in before]
-    assert [read.flag for read in before] == [75, 155]
+    assert [read.flag for read in before] == [107, 187]
     assert [read.flag for read in after] == [0, 16]
     for read in after:
         assert read.is_paired is False
         assert read.is_proper_pair is False
         assert read.mate_is_unmapped is False
+        assert read.mate_is_reverse is False
         assert read.is_read1 is False
         assert read.is_read2 is False
 

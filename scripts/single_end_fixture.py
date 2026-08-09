@@ -198,6 +198,7 @@ def derive_single_end_bam(spec: SingleEndFixture) -> int:
                 read.is_read2 = False
                 read.is_proper_pair = False
                 read.mate_is_unmapped = False
+                read.mate_is_reverse = False
                 output.write(read)
                 records += 1
         pysam.samtools.index("-o", str(temporary_index), str(temporary_bam))
