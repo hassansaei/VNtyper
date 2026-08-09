@@ -144,6 +144,10 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
                 observation_problems or ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
             )
             return problems
+        configured_scan = case.get("effective_unmapped_scan")
+        if scan != configured_scan:
+            problems.append(f"A-178-2 observed {scan} extraction, but declared {configured_scan}")
+            return problems
         if actual_stream != expected_stream:
             problems.append(f"A-178-2 stream evidence differs: expected {expected_stream}, got {actual_stream}")
         actual_loss = record.get("raw_indexed_loss")
@@ -159,7 +163,7 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
         return problems
 
     configured_scan = case.get("effective_unmapped_scan")
-    if scan is None and configured_scan == "indexed":
+    if configured_scan == "indexed":
         expected_guard_count = expectation.get("placed_unmapped_guard_count")
         actual_guard_count = record.get("placed_unmapped_guard_count")
         nonzero_observation_problems = [
@@ -168,9 +172,19 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
             if problem != "A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"
         ]
         problems.extend(nonzero_observation_problems)
+        if record.get("exit_code") != 1:
+            problems.append(f"A-178-2 indexed rejection exit differs: expected 1, got {record.get('exit_code')}")
+        if scan is not None:
+            problems.append(
+                f"A-178-2 indexed rejection observed a {scan} unmapped-extraction command instead of failing before work"
+            )
+        if command is not None:
+            problems.append(
+                "A-178-2 indexed rejection executed an unmapped-extraction command instead of failing before work"
+            )
         if type(expected_guard_count) is not int or expected_guard_count <= 0:
             problems.append(f"A-178-2 indexed guard expectation is missing or malformed: {expected_guard_count}")
-        elif actual_guard_count != expected_guard_count:
+        elif type(actual_guard_count) is not int or actual_guard_count != expected_guard_count:
             problems.append(
                 f"A-178-2 indexed guard count differs: expected {expected_guard_count}, got {actual_guard_count}"
             )
@@ -182,6 +196,9 @@ def validate_cram_evidence(case: dict[str, Any], record: dict[str, Any]) -> list
         problems.extend(
             observation_problems or ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
         )
+        return problems
+    if configured_scan in {"indexed", "stream"} and scan != configured_scan:
+        problems.append(f"A-178-2 observed {scan} extraction, but declared {configured_scan}")
         return problems
 
     if actual_stream != expected_stream:

@@ -437,9 +437,9 @@ def test_pipeline_artifact_reader_retains_the_causal_guard_count(tmp_path: Path)
     assert parsed["placed_unmapped_guard_count"] == 11_571
 
 
-def test_causal_guard_evidence_bumps_the_harness_minor_version() -> None:
-    """Adding a measured comparison field is the semantic-change rule in __init__.py."""
-    assert HARNESS_VERSION == "1.3.0"
+def test_evidence_validation_changes_bump_the_harness_minor_version() -> None:
+    """Tightening which CRAM runs can earn attestation changes the instrument."""
+    assert HARNESS_VERSION == "1.4.0"
 
 
 def test_two_sides_that_both_produced_nothing_are_not_identical(tmp_path: Path) -> None:

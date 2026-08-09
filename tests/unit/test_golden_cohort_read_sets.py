@@ -330,6 +330,7 @@ def test_forced_indexed_decision_rejects_missing_or_wrong_guard_count(
         },
     }
     record = {
+        "exit_code": 1,
         "raw_indexed_read_set": raw,
         "unmapped_read_set": None,
         "raw_indexed_loss": None,
@@ -354,6 +355,7 @@ def test_forced_indexed_decision_rejects_a_boolean_guard_declaration() -> None:
         },
     }
     record = {
+        "exit_code": 1,
         "raw_indexed_read_set": raw,
         "unmapped_read_set": None,
         "raw_indexed_loss": None,
@@ -362,6 +364,32 @@ def test_forced_indexed_decision_rejects_a_boolean_guard_declaration() -> None:
 
     assert cram_evidence.validate_cram_evidence(case, record) == [
         "A-178-2 indexed guard expectation is missing or malformed: True"
+    ]
+
+
+@pytest.mark.parametrize("exit_code", [0, 2])
+def test_forced_indexed_decision_requires_the_guard_to_cause_exit_one(exit_code: int) -> None:
+    """The stable guard is evidence only when it produces the declared refusal exit."""
+    raw = {"count": 4_478, "sorted_read_name_sha256": "a" * 64}
+    case = {
+        "case_id": "b178_indexed_cram",
+        "effective_unmapped_scan": "indexed",
+        "cram_evidence_expectation": {
+            "placed_unmapped_guard_count": 329,
+            "raw_indexed_read_set": raw,
+            "stream_read_set": {"count": 4_807, "sorted_read_name_sha256": "b" * 64},
+        },
+    }
+    record = {
+        "exit_code": exit_code,
+        "raw_indexed_read_set": raw,
+        "unmapped_read_set": None,
+        "raw_indexed_loss": None,
+        "placed_unmapped_guard_count": 329,
+    }
+
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        f"A-178-2 indexed rejection exit differs: expected 1, got {exit_code}"
     ]
 
 

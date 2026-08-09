@@ -104,24 +104,120 @@ def test_authorized_scan_decisions_require_the_same_nonempty_read_set(scan: str)
     assert cram_evidence.validate_cram_evidence(case, record) == []
 
 
-def test_decision_uses_the_observed_command_mode_instead_of_the_configured_mode() -> None:
-    """A config value cannot attest which extraction command actually ran."""
+def test_forced_indexed_decision_rejects_an_observed_stream_command() -> None:
+    """A stream extraction cannot satisfy the required forced-indexed rejection."""
     raw = {"count": 10, "sorted_read_name_sha256": "a" * 64}
     stream = {"count": 14, "sorted_read_name_sha256": "b" * 64}
     case = {
         "case_id": "b178_indexed_cram",
         "effective_unmapped_scan": "indexed",
-        "cram_evidence_expectation": {"raw_indexed_read_set": raw, "stream_read_set": stream},
+        "cram_evidence_expectation": {
+            "placed_unmapped_guard_count": 329,
+            "raw_indexed_read_set": raw,
+            "stream_read_set": stream,
+        },
     }
     record = {
+        "exit_code": 1,
         "observed_unmapped_scan": "stream",
         "observed_unmapped_command": "set -o pipefail; samtools view ... | samtools view -f 4 ...",
         "raw_indexed_read_set": raw,
         "unmapped_read_set": stream,
         "raw_indexed_loss": 4,
+        "placed_unmapped_guard_count": 329,
     }
 
-    assert cram_evidence.validate_cram_evidence(case, record) == []
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        "A-178-2 indexed rejection observed a stream unmapped-extraction command instead of failing before work",
+        "A-178-2 indexed rejection executed an unmapped-extraction command instead of failing before work",
+        "A-178-2 indexed rejection produced an unmapped BAM instead of failing before work",
+    ]
+
+
+@pytest.mark.parametrize(("declared", "observed"), [("indexed", "stream"), ("stream", "indexed")])
+def test_authorized_scan_decision_rejects_an_observed_mode_different_from_its_declaration(
+    declared: str,
+    observed: str,
+) -> None:
+    """The two authorized arms are distinct measurements, not interchangeable labels."""
+    expected = {"count": 20, "sorted_read_name_sha256": "a" * 64}
+    case = {
+        "case_id": f"indexed_safe_{declared}_cram",
+        "effective_unmapped_scan": declared,
+        "cram_evidence_expectation": {
+            "indexed_authorized": True,
+            "raw_indexed_read_set": expected,
+            "stream_read_set": expected,
+        },
+    }
+    record = {
+        "observed_unmapped_scan": observed,
+        "observed_unmapped_command": f"observed {observed} extraction command",
+        "raw_indexed_read_set": expected,
+        "unmapped_read_set": expected,
+        "raw_indexed_loss": 0,
+    }
+
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        f"A-178-2 observed {observed} extraction, but declared {declared}"
+    ]
+
+
+def test_runner_rejects_an_authorized_case_when_the_observed_mode_differs_from_its_declaration(tmp_path: Path) -> None:
+    """The observer's mismatch must reach the runner's admissibility result."""
+    tree = tmp_path / "tree"
+    output_dir = tmp_path / "out"
+    log_dir = tmp_path / "logs"
+    config_path = log_dir / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"tools": {"samtools": "/case/samtools"}}), encoding="utf-8")
+    unmapped_bam = output_dir / "fastq_bam_processing" / "output_unmapped.bam"
+    unmapped_bam.parent.mkdir(parents=True)
+    unmapped_bam.touch()
+    expected = {"count": 20, "sorted_read_name_sha256": "a" * 64}
+    case = {
+        "case_id": "indexed_safe_indexed_cram",
+        "alignment_kind": "cram",
+        "cram": str(tmp_path / "input.cram"),
+        "expect_exit": "zero",
+        "required_artifacts": [],
+        "case_config_path": str(config_path),
+        "effective_unmapped_scan": "indexed",
+        "cram_evidence_expectation": {
+            "indexed_authorized": True,
+            "raw_indexed_read_set": expected,
+            "stream_read_set": expected,
+        },
+    }
+    pipeline_result = mock.Mock(
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n",
+        stderr="",
+        returncode=0,
+    )
+
+    with (
+        mock.patch.object(runner.subprocess, "run", return_value=pipeline_result),
+        mock.patch.object(
+            cram_evidence,
+            "observe_unmapped_scan",
+            return_value=("stream", "observed stream extraction command", []),
+        ),
+        mock.patch.object(read_set_commands, "collect_read_set_evidence", return_value=expected),
+    ):
+        record = runner._run_one(
+            case=case,
+            argv=["pipeline", "--cram", str(case["cram"])],
+            tree=tree,
+            side="after",
+            marker="vntyper.scripts.alignment_contract",
+            expect_marker=True,
+            output_dir=output_dir,
+            log_dir=log_dir,
+            timeout=60,
+        )
+
+    assert record["expectation_met"] is False
+    assert record["expectation_problems"] == ["A-178-2 observed stream extraction, but declared indexed"]
 
 
 def test_decision_fails_closed_without_an_observed_extraction_command() -> None:

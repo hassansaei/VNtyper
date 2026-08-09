@@ -38,4 +38,7 @@ from __future__ import annotations
 #:
 #: 1.3.0 adds the parsed placed-unmapped guard count to the comparison surface, so a
 #: forced-indexed exit remains causally attributable in the rendered gate result.
-HARNESS_VERSION = "1.3.0"
+#:
+#: 1.4.0 requires the observed extraction mode to match the declared forced mode and
+#: makes an unsafe forced-indexed attestation prove its causal exit-before-work shape.
+HARNESS_VERSION = "1.4.0"
