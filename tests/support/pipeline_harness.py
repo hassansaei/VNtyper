@@ -185,6 +185,7 @@ def _alignment_plan(*args: Any, **kwargs: Any) -> AlignmentPlan:
 def run_pipeline_under_harness(
     output_dir: Path,
     *,
+    pipeline_output_dir: str | Path | None = None,
     create_output_dir: bool = True,
     config: dict[str, Any] | None = None,
     extra_modules: list[str] | None = None,
@@ -198,6 +199,9 @@ def run_pipeline_under_harness(
 
     Args:
         output_dir: Directory the pipeline writes into; use ``tmp_path``.
+        pipeline_output_dir: Optional raw output argument passed to the pipeline.
+            This preserves caller spelling such as a trailing path separator while
+            ``output_dir`` remains the canonical path used by the harness.
         create_output_dir: Create the output root before invoking the pipeline.
         config: Configuration mapping. Defaults to :data:`MINIMAL_CONFIG`.
         extra_modules: ``--extra-modules`` list as ``run_pipeline`` receives it.
@@ -227,7 +231,7 @@ def run_pipeline_under_harness(
 
     kwargs: dict[str, Any] = {
         "bwa_reference": "/refs/hg19.fa",
-        "output_dir": output_dir,
+        "output_dir": output_dir if pipeline_output_dir is None else pipeline_output_dir,
         "extra_modules": extra_modules or [],
         "module_args": {"advntr": {}},
         "config": resolved_config,

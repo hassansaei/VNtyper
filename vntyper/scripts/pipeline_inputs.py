@@ -34,6 +34,18 @@ def _is_within(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
+def archive_base_name(output_dir: str | Path) -> str:
+    """Return the normalized suffix-free base name for a result archive.
+
+    Args:
+        output_dir: Pipeline output root, possibly ending in path separators.
+
+    Returns:
+        The output root without syntactically redundant trailing separators.
+    """
+    return str(Path(output_dir))
+
+
 def _validate_archive_destination(
     output_dir: str | Path,
     archive_format: str,
@@ -62,7 +74,7 @@ def _validate_archive_destination(
         logger.error(message)
         raise ValueError(message) from None
 
-    destination = Path(f"{output_dir}{suffix}")
+    destination = Path(f"{archive_base_name(output_dir)}{suffix}")
     destination_absolute = _absolute(destination)
     destination_variants = (destination_absolute, destination_absolute.resolve(strict=False))
     for operator_path in operator_paths:

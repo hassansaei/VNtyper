@@ -39,7 +39,7 @@ from vntyper.scripts.pipeline_alignment import (
 )
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
-from vntyper.scripts.pipeline_inputs import protect_pipeline_input_ownership, resolve_pipeline_input
+from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -623,7 +623,7 @@ def run_pipeline(
                 logger.error(f"Unsupported archive format: {archive_format}")
                 raise ValueError(f"Unsupported archive format: {archive_format}")
 
-            archive_name = f"{output_dir}"
+            archive_name = archive_base_name(output_dir)
             try:
                 archive_path = shutil.make_archive(
                     base_name=archive_name,

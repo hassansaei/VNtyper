@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -175,6 +176,65 @@ def test_lexically_exact_archive_input_collision_fails_before_work(
         stage.assert_not_called()
 
 
+def test_trailing_output_separator_still_guards_sibling_archive_before_work(tmp_path: Path) -> None:
+    """Archive ownership uses the normalized output name, never an in-directory dotfile."""
+    output = tmp_path / "results"
+    archive = _write_operator_file(tmp_path / "results.zip")
+    reference = _write_operator_file(tmp_path / "reference.fa")
+    original_inode = archive.stat().st_ino
+
+    with mock.patch.object(Path, "mkdir", autospec=True) as mkdir:
+        harness = run_pipeline_under_harness(
+            output,
+            pipeline_output_dir=f"{output}{os.sep}",
+            create_output_dir=False,
+            fastq1=str(archive),
+            bwa_reference=str(reference),
+            archive_results=True,
+            archive_format="zip",
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert archive.stat().st_ino == original_inode
+    assert archive.read_bytes() == OPERATOR_BYTES
+    mkdir.assert_not_called()
+    for stage in harness.stages.values():
+        stage.assert_not_called()
+
+
+def test_unsupported_archive_format_fails_before_directory_or_stage_work(tmp_path: Path) -> None:
+    """Archive-format validation is part of the pre-write pipeline boundary."""
+    fastq = _write_operator_file(tmp_path / "reads.fastq.gz")
+    reference = _write_operator_file(tmp_path / "reference.fa")
+    output = tmp_path / "results"
+
+    with (
+        mock.patch.object(Path, "mkdir", autospec=True) as mkdir,
+        mock.patch.object(
+            pipeline_module, "create_output_directories", wraps=pipeline_module.create_output_directories
+        ) as create_dirs,
+    ):
+        harness = run_pipeline_under_harness(
+            output,
+            create_output_dir=False,
+            fastq1=str(fastq),
+            bwa_reference=str(reference),
+            archive_results=True,
+            archive_format="unsupported",
+            expect_failure=True,
+        )
+
+    assert isinstance(harness.error, SystemExit)
+    assert harness.error.code == 1
+    assert not output.exists()
+    mkdir.assert_not_called()
+    create_dirs.assert_not_called()
+    for stage in harness.stages.values():
+        stage.assert_not_called()
+
+
 @pytest.mark.parametrize("archive_format, suffix", [("zip", ".zip"), ("tar.gz", ".tar.gz")])
 def test_archive_resolving_into_patient_tree_fails_before_work(
     tmp_path: Path,
@@ -231,3 +291,23 @@ def test_fastq_inputs_and_archive_can_share_a_safe_sibling_directory(
     assert harness.error is None
     assert Path(f"{output}{suffix}").is_file()
     assert fastq.read_bytes() == OPERATOR_BYTES
+
+
+def test_trailing_output_separator_writes_sibling_archive_not_dotfile(tmp_path: Path) -> None:
+    """The writer and its ownership guard derive the same normalized destination."""
+    fastq = _write_operator_file(tmp_path / "reads.fastq.gz")
+    reference = _write_operator_file(tmp_path / "reference.fa")
+    output = tmp_path / "results"
+
+    harness = run_pipeline_under_harness(
+        output,
+        pipeline_output_dir=f"{output}{os.sep}",
+        fastq1=str(fastq),
+        bwa_reference=str(reference),
+        archive_results=True,
+        archive_format="zip",
+    )
+
+    assert harness.error is None
+    assert (tmp_path / "results.zip").is_file()
+    assert not (output / ".zip").exists()
