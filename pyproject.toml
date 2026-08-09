@@ -376,15 +376,16 @@ show_missing = true
 # `make test-unit-cov` prints instead: scripts/coverage_gate.py reports the precise
 # figure and states the exact line to paste here.
 #
-# 80 is BRANCH-INCLUSIVE. `branch = true` above was enabled in #196, which raised this
-# floor from 70 to the 74.22% that run measured; splitting cohort_summary.py into five
+# The historical 80 floor was BRANCH-INCLUSIVE. `branch = true` above was enabled in
+# #196, which raised the floor from 70 to the 74.22% that run measured; splitting
+# cohort_summary.py into five
 # focused modules (Task 22 of the #181-#197 follow-ups) took the same suite to 79.02%,
 # and the fixes and tests of the gated phase took it to 80.24%. The floor moved with
 # each. It has never been lowered to admit a measurement.
 #
-# 80.24% also MEETS the project target below for the first time. The target stays a
-# warning rather than becoming the floor: they measure the same number for different
-# purposes, and collapsing them would leave no headroom above the gate.
+# 80.24% also met the then-current project target for the first time. The target remains
+# a warning while the floor is a gate: they measure the same figure for different
+# purposes and must not be collapsed into one setting.
 # Statement-only coverage of the same suite is 80.77%, so the two are not
 # interchangeable and deleting `branch = true` would RAISE the reported total past this
 # floor while covering strictly less. tests/unit/test_coverage_gate.py pins both.

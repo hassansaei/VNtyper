@@ -196,8 +196,9 @@ a warning and keeps its headroom above the gate. Do not collapse them.
 point — measured: three untested lines moved it 0.03. It has never once failed a PR for
 shipping untested code, and it cannot. `make patch-coverage` runs `diff-cover` over the
 lines your branch changed and fails below 80%, so an untested new function fails its own
-PR regardless of what the repo total is doing. It is also how the 80% target is reached:
-every PR lands at ≥80%, so the average climbs on its own.
+PR regardless of what the repo total is doing. The patch bar remains independently fixed
+at 80%; making every PR meet it helps the whole-repository average climb toward the
+current 86% target.
 
 It scores against the **merge base**, so commits landing on `main` while your PR is open
 are never charged to you. A PR that only deletes code, only touches docs, or changes no

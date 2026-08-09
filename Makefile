@@ -234,11 +234,11 @@ coverage-report:
 # can add a hundred untested lines and still not drop it a single point - which is why
 # AGENTS.md rule 1 ("touch a file, add tests for it") was unenforceable in CI. This gate
 # scores only the changed lines, so an untested new function fails its own PR no matter
-# what the repo total is doing. It is also the only realistic route to the 80% target:
-# every PR from here lands at >= 80%, so the average climbs on its own.
+# what the repo total is doing. Keeping every PR at >= 80% is also how the
+# whole-repository average continues climbing toward its current 86% target.
 #
 # Deliberately NOT a ratchet and deliberately NOT the same number as the floor: this is
-# a fixed bar on new work, set at the project's COVERAGE_TARGET.
+# an independently fixed 80% bar on new work.
 #
 # diff-cover's default `...` range notation scores against the MERGE BASE, not the tip of
 # the base branch, so commits landing on main while a PR is open are never charged to that
