@@ -47,6 +47,7 @@ def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | N
 
     target = str(output_bam)
     observed: list[tuple[str, str]] = []
+    target_referenced = False
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -61,9 +62,10 @@ def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | N
             or type(entry["shell"]) is not bool
         ):
             return None, None, [f"A-178-2 command log is malformed at line {line_number}"]
+        command = entry["command"]
+        target_referenced = target_referenced or target in command
         if not entry["shell"]:
             continue
-        command = entry["command"]
         try:
             tokens = shlex.split(command)
         except ValueError:
@@ -79,6 +81,12 @@ def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | N
 
     modes = sorted({mode for mode, _command in observed})
     if not modes:
+        if target_referenced:
+            return (
+                None,
+                None,
+                ["A-178-2 command log references the unmapped BAM but no recognized extraction mode was observed"],
+            )
         return None, None, ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"]
     if len(modes) > 1:
         return None, None, [f"A-178-2 observed contradictory CRAM unmapped-extraction modes: {', '.join(modes)}"]

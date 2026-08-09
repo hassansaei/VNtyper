@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from golden_cohort import runner  # noqa: E402
+from golden_cohort.cram_cases import CRAM_READ_SET_EXPECTATIONS  # noqa: E402
 
 from vntyper.scripts.cli_parser import build_parser  # noqa: E402
 
@@ -343,6 +344,70 @@ def test_the_harness_override_cannot_collapse_declared_a178_scan_cases(
 
     assert effective_mode == declared_mode
     assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == declared_mode
+
+
+@pytest.mark.parametrize(
+    ("source_id", "case_prefix"),
+    [("7a61_hg38_ensembl_bwa", "7a61_hg38_ensembl"), ("b178_hg19_subset", "b178_hg19")],
+)
+@pytest.mark.parametrize("declared_mode", ["indexed", "stream"])
+def test_runner_preserves_side_wrapped_a178_scan_declarations_before_applying_an_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_id: str,
+    case_prefix: str,
+    declared_mode: str,
+) -> None:
+    """The real lossy CRAM cases cannot be collapsed before their after-side policy is selected."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case_id = f"{case_prefix}_{declared_mode}_cram"
+    case = _case(
+        case_id,
+        alignment_kind="cram",
+        cram=f"/data/{source_id}.cram",
+        unmapped_scan=declared_mode,
+        side_expectations={
+            "before": {"expect_exit": "zero", "required_artifacts": []},
+            "after": {
+                "expect_exit": "nonzero",
+                "required_artifacts": [],
+                "cram_evidence_expectation": CRAM_READ_SET_EXPECTATIONS[source_id],
+            },
+        },
+    )
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", "stream" if declared_mode == "indexed" else "indexed")
+    captured: dict[str, object] = {}
+
+    def fake_run_one(*, case: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        captured.update(case)
+        return _ok_record(str(case["case_id"]))
+
+    with (
+        mock.patch.object(runner, "_run_one", side_effect=fake_run_one),
+        mock.patch.object(runner.admissibility, "describe_tree", return_value=CLEAN_REVISION),
+    ):
+        runner.run_side(
+            matrix=_matrix([case]),
+            tree=tree,
+            run_root=tmp_path / "run",
+            side="after",
+            marker="vntyper.scripts.alignment_contract",
+            expect_marker=True,
+            threads=4,
+            advntr_threads=8,
+            jobs=1,
+            timeout=60,
+            skip_cohort=True,
+        )
+
+    assert captured["cram_evidence_expectation"] == CRAM_READ_SET_EXPECTATIONS[source_id]
+    assert captured["effective_unmapped_scan"] == declared_mode
+    case_config = json.loads(Path(str(captured["case_config_path"])).read_text())
+    assert case_config["cram"]["unmapped_scan"] == declared_mode
 
 
 def test_an_invalid_harness_scan_override_is_refused_before_launch(tmp_path: Path, monkeypatch) -> None:

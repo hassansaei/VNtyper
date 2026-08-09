@@ -400,8 +400,8 @@ def run_side(
     def launch_case(case: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         output_dir = cases_root / case["case_id"]
         log_dir = logs_root / case["case_id"]
-        config_path, effective_scan = materialize_case_config(tree, case, log_dir)
         runtime_case = materialize_side_expectation(case, side)
+        config_path, effective_scan = materialize_case_config(tree, runtime_case, log_dir)
         runtime_case["effective_unmapped_scan"] = effective_scan
         runtime_case["case_config_path"] = str(config_path) if config_path is not None else None
         argv = pipeline_argv(

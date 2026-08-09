@@ -295,6 +295,24 @@ def test_command_log_rejects_contradictory_extraction_modes(tmp_path: Path) -> N
     assert problems == ["A-178-2 observed contradictory CRAM unmapped-extraction modes: indexed, stream"]
 
 
+def test_command_log_rejects_an_unknown_command_that_references_the_unmapped_bam(tmp_path: Path) -> None:
+    """An unrecognized extraction mutation is not equivalent to proof that no extraction ran."""
+    target = "/run/fastq_bam_processing/output_unmapped.bam"
+    commands_log = tmp_path / "commands.jsonl"
+    commands_log.write_text(
+        json.dumps({"command": f"samtools view --write-index input.cram >{target}", "shell": True}) + "\n",
+        encoding="utf-8",
+    )
+
+    mode, observed_command, problems = cram_evidence.observe_unmapped_scan(commands_log, Path(target))
+
+    assert mode is None
+    assert observed_command is None
+    assert problems == [
+        "A-178-2 command log references the unmapped BAM but no recognized extraction mode was observed"
+    ]
+
+
 @pytest.mark.parametrize(
     ("content", "expected_problem"),
     [
