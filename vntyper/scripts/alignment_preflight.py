@@ -45,6 +45,12 @@ from vntyper.scripts.preflight_command_io import (
 from vntyper.scripts.preflight_command_io import (
     validate_log_entry as _validate_log_entry,
 )
+from vntyper.scripts.preflight_input_io import (
+    configured_preflight_text_limit,
+    read_bounded_regular_text,
+    regular_file_unavailable_reason,
+    try_read_bounded_regular_text,
+)
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
 from vntyper.scripts.reference_uri_policy import allow_ambient_reference_resolution, ref_path_remote_scheme
 
@@ -288,42 +294,38 @@ def restore_reference_resolution(previous: str | None) -> None:
         os.environ["REF_PATH"] = previous
 
 
-def _reference_contigs(reference_path: str) -> set[str] | None:
+def _reference_contigs(reference_path: str, max_bytes: int) -> set[str] | None:
     fai_path = Path(f"{reference_path}.fai")
-    try:
-        if fai_path.is_file():
-            with fai_path.open() as index_handle:
-                return {line.split("\t", 1)[0] for line in index_handle if line.strip()}
-    except OSError:
+    index_text, reason = try_read_bounded_regular_text(
+        fai_path,
+        max_bytes=max_bytes,
+        description="reference FASTA index",
+    )
+    if reason is not None or index_text is None:
         return None
-    return None
+    return {line.split("\t", 1)[0] for line in index_text.splitlines() if line.strip()}
 
 
 def _reference_unavailable_reason(reference_path: str) -> str | None:
-    try:
-        with open(reference_path, "rb") as reference_handle:
-            reference_handle.read(1)
-    except FileNotFoundError:
-        return "reference FASTA not found"
-    except OSError as error:
-        return f"reference FASTA unreadable: {error}"
-    return None
+    return regular_file_unavailable_reason(reference_path, description="reference FASTA")
 
 
 def _target_contig(
     region: str | None,
     bed_file: str | Path | None,
     header_contigs: tuple[str, ...],
+    max_bytes: int,
 ) -> str:
     if bed_file is not None:
-        try:
-            with open(bed_file) as bed_handle:
-                for line in bed_handle:
-                    stripped = line.strip()
-                    if stripped and not stripped.startswith("#"):
-                        return stripped.split(maxsplit=1)[0]
-        except OSError:
-            pass
+        bed_text = read_bounded_regular_text(
+            bed_file,
+            max_bytes=max_bytes,
+            description="alignment target BED",
+        )
+        for line in bed_text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                return stripped.split(maxsplit=1)[0]
     elif region:
         return region.split(":", 1)[0]
     return header_contigs[0] if header_contigs else "unknown"
@@ -373,6 +375,7 @@ def resolve_reference(
     """
     samtools_path = config.get("tools", {}).get("samtools", "samtools")
     timeout_seconds = _reference_probe_timeout_seconds(config)
+    max_text_bytes = configured_preflight_text_limit(config)
     attempts: list[ReferenceAttempt] = []
     explicit_candidates = list(candidates)
 
@@ -419,7 +422,10 @@ def resolve_reference(
             attempts.append((source, reference_path, output.strip() or "probe exited non-zero"))
             continue
 
-        uncovered_decision = uncovered_reference_contigs(header_contigs, _reference_contigs(reference_path))
+        uncovered_decision = uncovered_reference_contigs(
+            header_contigs,
+            _reference_contigs(reference_path, max_text_bytes),
+        )
         uncovered: tuple[str, ...]
         if uncovered_decision is None:
             uncovered = ()
@@ -442,7 +448,7 @@ def resolve_reference(
         return None, HTSLIB_REFERENCE_SOURCE, ()
     attempts.append((HTSLIB_REFERENCE_SOURCE, None, output.strip() or "probe exited non-zero"))
     contigs = tuple(header_contigs)
-    target_contig = _target_contig(region, bed_file, contigs)
+    target_contig = _target_contig(region, bed_file, contigs, max_text_bytes)
     failure_contig = next(
         (
             parsed
@@ -546,6 +552,13 @@ def run_preflight(
         )
     persistence = error_io.persist_preflight_failure(failure_context) if owns_failure_context else nullcontext()
     with persistence:
+        max_text_bytes = configured_preflight_text_limit(config)
+        if bed_file is not None:
+            read_bounded_regular_text(
+                bed_file,
+                max_bytes=max_text_bytes,
+                description="alignment target BED",
+            )
         bai_only = file_format == FORMAT_BAM and not fast_mode
         failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
         candidates = (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import builtins
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,15 +53,15 @@ def test_an_unreadable_explicit_fasta_is_named_and_skipped_before_the_probe(tmp_
     """An unreadable candidate cannot win merely because a command double says success."""
     unreadable = _reference(tmp_path / "unreadable.fa")
     usable = _reference(tmp_path / "usable.fa")
-    real_open = builtins.open
+    real_open = os.open
 
-    def deny_one_path(path: str | Path, *args, **kwargs):
+    def deny_one_path(path: str | Path, flags: int):
         if Path(path) == unreadable:
             raise PermissionError("permission denied")
-        return real_open(path, *args, **kwargs)
+        return real_open(path, flags)
 
     with (
-        patch("vntyper.scripts.alignment_preflight.open", side_effect=deny_one_path),
+        patch("vntyper.scripts.preflight_input_io.os.open", side_effect=deny_one_path),
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")) as capture,
     ):
         reference, source, _ = resolve_reference(
@@ -86,15 +86,15 @@ def test_missing_and_unreadable_fastas_are_named_in_the_final_diagnostic(tmp_pat
     """Operator diagnostics distinguish local file failures from decode failures."""
     missing = tmp_path / "missing.fa"
     unreadable = _reference(tmp_path / "unreadable.fa")
-    real_open = builtins.open
+    real_open = os.open
 
-    def deny_one_path(path: str | Path, *args, **kwargs):
+    def deny_one_path(path: str | Path, flags: int):
         if Path(path) == unreadable:
             raise PermissionError("permission denied")
-        return real_open(path, *args, **kwargs)
+        return real_open(path, flags)
 
     with (
-        patch("vntyper.scripts.alignment_preflight.open", side_effect=deny_one_path),
+        patch("vntyper.scripts.preflight_input_io.os.open", side_effect=deny_one_path),
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(False, "ambient failed")) as capture,
         pytest.raises(ValueError) as error,
     ):
@@ -152,15 +152,15 @@ def test_an_unreadable_fai_warns_that_coverage_is_unavailable_but_keeps_the_prob
     reference = _reference(tmp_path / "reference.fa")
     fai = Path(f"{reference}.fai")
     fai.write_text("chr1\t4\t6\t4\t5\n")
-    real_path_open = Path.open
+    real_open = os.open
 
-    def deny_fai(path: Path, *args, **kwargs):
-        if path == fai:
+    def deny_fai(path: str | Path, flags: int):
+        if Path(path) == fai:
             raise PermissionError("permission denied")
-        return real_path_open(path, *args, **kwargs)
+        return real_open(path, flags)
 
     with (
-        patch("pathlib.Path.open", autospec=True, side_effect=deny_fai),
+        patch("vntyper.scripts.preflight_input_io.os.open", side_effect=deny_fai),
         patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, "decoded")),
         caplog.at_level("WARNING"),
     ):

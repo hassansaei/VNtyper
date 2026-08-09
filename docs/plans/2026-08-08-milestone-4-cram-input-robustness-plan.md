@@ -4,9 +4,10 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps
 > use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give VNtyper an input contract, so a BAM or CRAM run either succeeds or fails
-before any stage does work, naming exactly what is missing, and no input is ever silently
-discarded.
+**Goal:** Give VNtyper an input contract, so a BAM or CRAM run proves every prerequisite
+before any processing stage does work, naming exactly what is missing, and no input is
+ever silently discarded. The produced-read layout is necessarily decided after lossless
+conversion and before any FASTQ consumer, because the four output files are its evidence.
 
 **Architecture:** An owned alignment-preflight boundary runs first in `run_pipeline`. It
 resolves the exact target internally, materialises a *run-local alignment view* (a symlink
@@ -330,8 +331,10 @@ fast mode and direct slice consumers.
 
 **Files:** create `vntyper/scripts/alignment_preflight.py`,
 `vntyper/scripts/reference_resolution.py`, `vntyper/scripts/reference_uri_policy.py`,
+`vntyper/scripts/preflight_input_io.py`,
 focused alignment-preflight unit modules, `tests/unit/test_reference_resolution.py`,
-`tests/unit/test_reference_uri_policy.py`, and `tests/unit/test_ref_path_is_pinned.py`;
+`tests/unit/test_reference_uri_policy.py`, `tests/unit/test_ref_path_is_pinned.py`, and
+`tests/unit/test_preflight_input_reads.py`;
 modify `vntyper/scripts/pipeline_alignment.py`, `vntyper/config.json`
 
 **Interfaces produced:**
@@ -358,6 +361,7 @@ modify `vntyper/scripts/pipeline_alignment.py`, `vntyper/config.json`
 `cram.allow_ambient_reference_resolution` (false), `cram.local_ref_path`
 (`"%2s/%2s/%s"`), `cram.reference_probe_timeout_seconds` (120), `cram.unmapped_scan` (`"auto"`),
 `cram.reference_candidate_order`, `reference_data.cram_reference_hg19`/`_hg38` (null),
+`utils.preflight_text_max_bytes` (1048576),
 `assembly_detection.naming_convention_threshold` (0.5) and `primary_contig_patterns`.
 There is **no** `read_layout` block.
 
@@ -419,7 +423,9 @@ def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplo
       listener backlog and asserts no connection, captured command or stage artifact;
       retain the ambient A-178-1 blackhole test unchanged.
 - [ ] **Step 6:** implement, then run the focused URI, REF_PATH, boundary and real CRAM
-      integration suites → PASS.
+      integration suites → PASS. Pre-probe reference/BED/FAI reads reject FIFOs without
+      waiting and apply the configured text-byte bound; do not describe `O_NONBLOCK` as a
+      timeout for a stalled regular file on FUSE or NFS (spec §4.5, A-INPUT-1).
 - [ ] **Step 7:** commit — `feat(preflight): prove the index, the scan and the reference
       before any stage runs`.
 

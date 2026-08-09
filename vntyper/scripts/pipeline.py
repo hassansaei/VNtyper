@@ -12,7 +12,7 @@ from vntyper.scripts.alignment_preflight import (
     run_preflight,
 )
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
-from vntyper.scripts.alignment_target_io import validate_alignment_output_root, validate_fastq_pipeline_destinations
+from vntyper.scripts.alignment_target_io import protect_alignment_inputs, validate_fastq_pipeline_destinations
 from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
@@ -190,7 +190,15 @@ def run_pipeline(
         # Validation owns a run-local log, but stage directories wait until preflight passes.
         if input_type in ["BAM", "CRAM"]:
             input_alignment = bam if input_type == "BAM" else cram
-            validate_alignment_output_root(output_dir, input_alignment, input_type.lower())
+            protect_alignment_inputs(
+                output_dir,
+                input_alignment,
+                input_type.lower(),
+                bed_file,
+                reference_fasta,
+                config,
+                reference_assembly,
+            )
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if input_type == "BAM":
             validate_bam_file(bam, cwd=project_root, log_dir=output_dir)

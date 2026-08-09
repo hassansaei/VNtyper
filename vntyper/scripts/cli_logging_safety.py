@@ -1,0 +1,130 @@
+"""Pre-open ownership checks for the pipeline's application log."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+from typing import Any
+
+from vntyper.scripts.alignment_contract import index_candidate_names
+from vntyper.scripts.alignment_target_io import bwa_index_paths, reference_index_paths
+from vntyper.scripts.reference_registry import get_coordinate_system
+from vntyper.scripts.reference_resolution import configured_reference_candidates
+
+
+def _absolute(path: str | Path) -> Path:
+    return Path(os.path.abspath(path))
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _alignment_input_trees(args: argparse.Namespace) -> tuple[Path, ...]:
+    trees: list[Path] = []
+    for attribute in ("bam", "cram"):
+        value = getattr(args, attribute, None)
+        if value is None:
+            continue
+        absolute = _absolute(value)
+        trees.extend((absolute.parent, absolute.resolve(strict=False).parent))
+    return tuple(dict.fromkeys(trees))
+
+
+def _selected_bwa_reference(args: argparse.Namespace, config: dict[str, Any]) -> Path | None:
+    assembly = args.reference_assembly or config.get("default_values", {}).get("reference_assembly", "hg19")
+    try:
+        coordinate_system = get_coordinate_system(assembly)
+    except ValueError:
+        coordinate_system = "GRCh37"
+    ucsc_assembly = {"GRCh37": "hg19", "GRCh38": "hg38"}.get(coordinate_system, "hg19")
+    reference = config.get("reference_data", {}).get(f"bwa_reference_{ucsc_assembly}")
+    return Path(reference) if isinstance(reference, str) and reference else None
+
+
+def _pipeline_operator_paths(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for attribute in ("fastq1", "fastq2", "bed_file"):
+        value = getattr(args, attribute, None)
+        if value is not None:
+            paths.append(Path(value))
+
+    explicit_reference = getattr(args, "reference_fasta", None)
+    if explicit_reference is not None:
+        reference = Path(explicit_reference)
+        paths.extend((reference, *reference_index_paths(reference)))
+
+    for attribute, file_format in (("bam", "bam"), ("cram", "cram")):
+        value = getattr(args, attribute, None)
+        if value is None:
+            continue
+        alignment = Path(value)
+        paths.append(alignment)
+        paths.extend(Path(candidate) for candidate in index_candidate_names(str(alignment), file_format))
+
+    if getattr(args, "cram", None) is not None:
+        assembly = args.reference_assembly or config.get("default_values", {}).get("reference_assembly", "hg19")
+        try:
+            candidates = configured_reference_candidates(config, assembly)
+        except (AttributeError, TypeError, ValueError):
+            reference_data = config.get("reference_data", {})
+            candidates = (
+                tuple(
+                    (key, value)
+                    for key, value in reference_data.items()
+                    if isinstance(key, str)
+                    and key.startswith(("cram_reference_", "bwa_reference_"))
+                    and isinstance(value, str)
+                )
+                if isinstance(reference_data, dict)
+                else ()
+            )
+        for _source, path in candidates:
+            if isinstance(path, str):
+                reference = Path(path)
+                paths.extend((reference, *reference_index_paths(reference)))
+
+    if getattr(args, "fastq1", None) is not None or getattr(args, "fastq2", None) is not None:
+        bwa_reference = _selected_bwa_reference(args, config)
+        if bwa_reference is not None:
+            paths.append(bwa_reference)
+            paths.extend(bwa_index_paths(bwa_reference, config))
+    return tuple(dict.fromkeys(paths))
+
+
+def validate_pipeline_log_destination(
+    log_file: str | Path,
+    args: argparse.Namespace,
+    config: dict[str, Any],
+) -> None:
+    """Reject a pipeline log that aliases operator-owned input state.
+
+    This check must run before the log parent is created or ``FileHandler`` opens
+    the destination. It covers paths that do not exist yet because an application
+    log created under an index candidate name would itself corrupt that input state.
+
+    Args:
+        log_file: Explicit or default application-log destination.
+        args: Parsed pipeline arguments.
+        config: Loaded pipeline configuration used to select BWA sidecars.
+
+    Raises:
+        ValueError: If the log is lexically or physically an operator input.
+    """
+    log_path = Path(log_file)
+    log_variants = (_absolute(log_path), _absolute(log_path).resolve(strict=False))
+    for protected in _pipeline_operator_paths(args, config):
+        protected_absolute = _absolute(protected)
+        protected_variants = (protected_absolute, protected_absolute.resolve(strict=False))
+        if any(log_variant in protected_variants for log_variant in log_variants) or _same_file(log_path, protected):
+            raise ValueError(f"Pipeline log file aliases operator-owned input: {log_path}")
+    if any(_is_within(log_variant, tree) for log_variant in log_variants for tree in _alignment_input_trees(args)):
+        raise ValueError(f"Pipeline log file is inside an operator-owned input tree: {log_path}")

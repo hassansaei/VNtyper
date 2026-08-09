@@ -64,7 +64,7 @@ def _subcommand_choices() -> set[str]:
 # Smallest argv that parses for each subcommand. Directory-valued options are
 # formatted in with tmp_path so that nothing is written outside the test.
 MINIMAL_ARGV: dict[str, list[str]] = {
-    "pipeline": ["pipeline", "-o", "{tmp}", "--bam", "{tmp}/in.bam"],
+    "pipeline": ["pipeline", "-o", "{tmp}/outputs", "--bam", "{tmp}/inputs/in.bam"],
     "report": ["report", "-o", "{tmp}"],
     "cohort": ["cohort", "-i", "{tmp}", "-o", "{tmp}"],
     "install-references": ["install-references", "-d", "{tmp}"],
@@ -164,9 +164,20 @@ def test_the_handler_receives_the_resolved_log_file(tmp_path, monkeypatch) -> No
         seen["log_level_value"] = log_level_value
 
     monkeypatch.setitem(cli.HANDLERS, "pipeline", _record)
-    cli.main(["--log-level", "WARNING", "pipeline", "-o", str(tmp_path), "--bam", str(tmp_path / "in.bam")])
+    output_dir = tmp_path / "outputs"
+    cli.main(
+        [
+            "--log-level",
+            "WARNING",
+            "pipeline",
+            "-o",
+            str(output_dir),
+            "--bam",
+            str(tmp_path / "inputs" / "in.bam"),
+        ]
+    )
 
-    assert seen["log_file_str"] == str(tmp_path / "pipeline.log")
+    assert seen["log_file_str"] == str(output_dir / "pipeline.log")
     assert seen["log_level_value"] == logging.WARNING
 
 
@@ -271,7 +282,17 @@ def test_the_default_output_name_still_dispatches(tmp_path, monkeypatch) -> None
     called = []
     monkeypatch.setitem(cli.HANDLERS, "pipeline", lambda *a, **k: called.append(True))
 
-    cli.main(["pipeline", "--bam", str(tmp_path / "x.bam"), "-o", str(tmp_path / "out"), "--output-name", "output"])
+    cli.main(
+        [
+            "pipeline",
+            "--bam",
+            str(tmp_path / "inputs" / "x.bam"),
+            "-o",
+            str(tmp_path / "outputs"),
+            "--output-name",
+            "output",
+        ]
+    )
 
     assert called == [True]
 

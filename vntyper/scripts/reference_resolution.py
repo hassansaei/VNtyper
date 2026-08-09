@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Set
+from typing import Any
 
 from vntyper.scripts.reference_registry import get_coordinate_system, get_reference_source, list_assemblies
 
@@ -12,6 +13,43 @@ logger = logging.getLogger(__name__)
 _DEFAULT_REFERENCE_ORDER = ("cli", "config_cram_reference", "config_bwa_reference", "htslib_resolved")
 _EXPLICIT_REFERENCE_SOURCES = {"cli", "config_cram_reference", "config_bwa_reference"}
 _TERMINAL_REFERENCE_SOURCE = "htslib_resolved"
+
+
+def configured_reference_candidates(
+    config: dict,
+    reference_assembly: str,
+) -> tuple[tuple[str, Any], ...]:
+    """Map configured CRAM reference sources without validating probe policy.
+
+    Exact assembly-label keys take precedence even when their value is null;
+    otherwise the matching UCSC-family key supplies the fallback.
+
+    Args:
+        config: Pipeline configuration containing reference paths.
+        reference_assembly: Supported assembly label used for exact and family
+            lookups.
+
+    Returns:
+        The raw configured CRAM and BWA reference-source values in stable order.
+        Callers that interpret them as paths must require strings.
+    """
+    reference_data = config.get("reference_data", {})
+    coordinate_system = get_coordinate_system(reference_assembly)
+    family_assembly = next(
+        assembly
+        for assembly in list_assemblies()
+        if get_coordinate_system(assembly) == coordinate_system and get_reference_source(assembly) == "ucsc"
+    )
+    values: list[tuple[str, Any]] = []
+    for source, prefix in (
+        ("config_cram_reference", "cram_reference"),
+        ("config_bwa_reference", "bwa_reference"),
+    ):
+        exact_key = f"{prefix}_{reference_assembly}"
+        family_key = f"{prefix}_{family_assembly}"
+        value = reference_data[exact_key] if exact_key in reference_data else reference_data.get(family_key)
+        values.append((source, value))
+    return tuple(values)
 
 
 def ordered_reference_candidates(
@@ -61,28 +99,7 @@ def ordered_reference_candidates(
         logger.error(message)
         raise ValueError(message)
 
-    reference_data = config.get("reference_data", {})
-    coordinate_system = get_coordinate_system(reference_assembly)
-    family_assembly = next(
-        assembly
-        for assembly in list_assemblies()
-        if get_coordinate_system(assembly) == coordinate_system and get_reference_source(assembly) == "ucsc"
-    )
-    cram_key = f"cram_reference_{reference_assembly}"
-    bwa_key = f"bwa_reference_{reference_assembly}"
-    values = {
-        "cli": reference_fasta,
-        "config_cram_reference": (
-            reference_data[cram_key]
-            if cram_key in reference_data
-            else reference_data.get(f"cram_reference_{family_assembly}")
-        ),
-        "config_bwa_reference": (
-            reference_data[bwa_key]
-            if bwa_key in reference_data
-            else reference_data.get(f"bwa_reference_{family_assembly}")
-        ),
-    }
+    values = {"cli": reference_fasta, **dict(configured_reference_candidates(config, reference_assembly))}
     return tuple((source, values[source]) for source in explicit_order)
 
 

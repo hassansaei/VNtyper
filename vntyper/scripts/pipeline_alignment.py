@@ -17,6 +17,7 @@ from vntyper.scripts.alignment_preflight import (
 from vntyper.scripts.alignment_target_io import install_generated_bed
 from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
 from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
+from vntyper.scripts.preflight_input_io import configured_preflight_text_limit, read_bounded_regular_text
 from vntyper.scripts.reference_uri_policy import (
     allow_ambient_reference_resolution,
     enforce_header_reference_policy,
@@ -142,6 +143,11 @@ def prepare_alignment_target(
         if not bed_file_path.exists():
             logger.error(f"Provided BED file does not exist: {bed_file_path}")
             raise FileNotFoundError(f"BED file not found: {bed_file_path}")
+        read_bounded_regular_text(
+            bed_file_path,
+            max_bytes=configured_preflight_text_limit(config),
+            description="alignment target BED",
+        )
         logger.info(f"Using provided BED file: {bed_file_path}")
         return bed_file_path
 
@@ -223,7 +229,12 @@ def build_alignment_preflight_kwargs(
         if alignment_header is not None
         else ()
     )
-    target_contig = _first_active_bed_contig(bed_file.read_text(encoding="utf-8"))
+    bed_text = read_bounded_regular_text(
+        bed_file,
+        max_bytes=configured_preflight_text_limit(config),
+        description="alignment target BED",
+    )
+    target_contig = _first_active_bed_contig(bed_text)
     header_m5s = _header_m5s(alignment_header) if alignment_header is not None else ()
     target_m5 = dict(header_m5s).get(target_contig) if target_contig is not None else None
     return {

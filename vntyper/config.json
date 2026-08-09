@@ -139,7 +139,8 @@
     "template_dir": "vntyper/templates"
   },
   "utils": {
-    "fastq_validation_lines": 4
+    "fastq_validation_lines": 4,
+    "preflight_text_max_bytes": 1048576
   },
   "cross_match": {
     "match_logic": "Kestrel_Allele_Change == Advntr_Allele_Change and Kestrel_Variant_Type.lower() == Advntr_Variant_Type.lower()"

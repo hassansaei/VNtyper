@@ -10,6 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from vntyper.scripts.alignment_contract import AlignmentPlan, index_candidate_names
+from vntyper.scripts.reference_resolution import configured_reference_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,24 @@ def bwa_index_paths(reference: str | Path, config: dict) -> tuple[Path, ...]:
     extensions = tuple(dict.fromkeys((*BWA_INDEX_EXTENSIONS, *configured)))
     reference_path = Path(reference)
     return tuple(reference_path.with_name(reference_path.name + extension) for extension in extensions)
+
+
+def reference_index_paths(reference: str | Path) -> tuple[Path, ...]:
+    """Return the FASTA sidecars protected with a CRAM reference.
+
+    Args:
+        reference: Reference FASTA path.
+
+    Returns:
+        The samtools/htslib FASTA index, compressed FASTA index, and sequence
+        dictionary paths derived from ``reference``.
+    """
+    reference_path = Path(reference)
+    return (
+        Path(f"{reference_path}.fai"),
+        Path(f"{reference_path}.gzi"),
+        reference_path.with_suffix(".dict"),
+    )
 
 
 def _alignment_plan_protected_paths(
@@ -196,6 +215,65 @@ def _validate_existing_output_tree(
                     _reject(f"Unsafe pipeline output tree contains a non-regular entry: {path}")
                 if any(_same_file(path, protected) for protected in protected_paths):
                     _reject(f"Pipeline output-tree entry aliases protected input: {path}")
+
+
+def protect_alignment_inputs(
+    output: str | Path,
+    input_path: str | Path,
+    file_format: str,
+    bed_file: str | Path | None,
+    reference_fasta: str | Path | None,
+    config: dict,
+    reference_assembly: str,
+) -> None:
+    """Protect alignment-mode inputs before any pipeline-owned write.
+
+    The output tree is checked before validation logs, target preparation, preflight,
+    or stage-directory creation. Existing regular rerun artifacts are accepted, as is
+    the exact run-local preflight view symlink back to the selected alignment.
+
+    Args:
+        output: Pipeline output root.
+        input_path: Operator-owned BAM or CRAM.
+        file_format: Alignment format, ``bam`` or ``cram``.
+        bed_file: Operator-provided BED, when present.
+        reference_fasta: Operator-provided CRAM reference, when present.
+        config: Pipeline configuration containing CRAM reference candidates.
+        reference_assembly: Assembly label selecting exact or family reference keys.
+
+    Raises:
+        ValueError: If an operator input or existing output-tree entry is unsafe.
+    """
+    output_root = Path(output)
+    validate_alignment_output_root(output_root, input_path, file_format)
+    protected_inputs: tuple[str | Path, ...] = _protected_alignment_paths(input_path, file_format)
+    if bed_file is not None:
+        protected_inputs = (*protected_inputs, bed_file)
+    explicit_reference = str(reference_fasta) if reference_fasta is not None else None
+    references: tuple[str | Path, ...] = (explicit_reference,) if explicit_reference is not None else ()
+    if file_format == "cram":
+        references = (
+            *references,
+            *(
+                value
+                for _source, value in configured_reference_candidates(config, reference_assembly)
+                if isinstance(value, str)
+            ),
+        )
+    for reference_input in references:
+        reference = Path(reference_input)
+        protected_inputs = (
+            *protected_inputs,
+            reference,
+            *reference_index_paths(reference),
+        )
+    protected_paths = _validate_operator_inputs_outside_output(output_root, protected_inputs)
+    preflight_view = output_root / "fastq_bam_processing" / f"input.{file_format}"
+    _validate_existing_output_tree(
+        output_root,
+        protected_paths,
+        allowed_file_symlinks={_absolute(preflight_view): Path(input_path)},
+    )
 
 
 def validate_alignment_conversion_destinations(

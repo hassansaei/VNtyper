@@ -9,12 +9,15 @@
 
 ## 1. The exit bar
 
-A default-mode CRAM run either succeeds, or fails with a message naming exactly what is
-missing, **before any stage does work**. No input is ever silently discarded. Every
-operator-selectable behaviour this spec adds is config-driven; there is no threshold,
-contig name, reference path or scan strategy that can be changed only by editing Python.
-The literal fallback on each `.get` deliberately mirrors the shipped configuration, as
-§6 requires for whole-file replacement configs.
+A default-mode CRAM run either proves every prerequisite or fails with a message naming
+exactly what is missing, **before any processing stage does work**. A produced-FASTQ layout
+can only be known after lossless alignment conversion (§4.4); an unusable layout therefore
+fails immediately after that conversion and before any consumer stage, naming every file
+and record count. No input is ever silently discarded. Every operator-selectable behaviour
+this spec adds is config-driven; there is no threshold, contig name, reference path or scan
+strategy that can be changed only by editing Python. The literal fallback on each `.get`
+deliberately mirrors the shipped configuration, as §6 requires for whole-file replacement
+configs.
 
 `--fast-mode` is an explicit CLI opt-in to the historical target-slice path, which skips
 unmapped-read recovery for speed. It is outside normal mode's complete-recovery promise;
@@ -25,14 +28,17 @@ escape hatch from the normal-mode no-read-drop rules.
 points differ and the difference is not something this milestone can paper over:
 
 * **CLI** — after the format validator accepts the input, the preflight is the first
-  pipeline operation, so a bad input fails in under a second with the message on stderr.
-  This is "at submission" in every sense a CLI user means.
+  pipeline operation, so a missing prerequisite fails in under a second with the message
+  on stderr. This is "at submission" in every sense a CLI user means. A read-layout
+  refusal is necessarily later because its evidence is the four FASTQs conversion writes.
 * **Web** — `docker/app/main.py` stores the upload, enqueues a Celery task and returns
   *Job submitted* before any worker looks at the file (`main.py:463`, `:494`, `:547`), so
   no check VNtyper adds inside `run_pipeline` can make the HTTP response name the problem.
   The honest scope is therefore: the preflight runs first in the worker, and the
-  **message it raises is surfaced in the job status** instead of the generic text
-  `main.py:605` substitutes today.
+  **curated, path-free diagnosis for its failure phase is surfaced in the job status**
+  instead of the generic text `main.py:605` substitutes today. Terminal reference failure
+  retains the contig, M5 and candidate details; other phases use stable remediation text
+  rather than exposing raw exception prose from the worker.
 
   "Surfaced" needs a mechanism, because there is currently no path for one.
   `run_pipeline` converts every exception into `SystemExit(1)` (`pipeline.py:721`), the
@@ -43,9 +49,9 @@ points differ and the difference is not something this milestone can paper over:
   client":
 
   1. The preflight writes `preflight_error.json` into the run's output directory before
-     raising — `{"code": ..., "message": ..., "candidates": [...]}` — built from the same
-     `alignment_contract` helpers that compose the CLI message, and containing only values
-     VNtyper itself composed.
+     raising — `{"code": ..., "message": ..., "candidates": [...]}` — built from stable
+     failure-phase metadata (and the shared `alignment_contract` helpers for terminal
+     reference failure), containing only values VNtyper itself composed.
   2. The worker reads that file when the pipeline exits non-zero and stores `code` and
      `message` on the job's Redis hash.
   3. The status endpoint returns that stored message when present, and its existing
@@ -143,7 +149,9 @@ REF_PATH="/nonexistent/%2s/%2s/%s" timeout 25 samtools view -h out.cram
 exit=1   # fails immediately, naming the reference it could not open
 ```
 
-A local-only `REF_PATH` fails fast. A network `REF_PATH` blocks indefinitely.
+The measured nonexistent local-only `REF_PATH` fails fast. The measured HTTP `REF_PATH`
+blocks indefinitely; this comparison does not make a claim about a regular path stalled
+inside a FUSE or NFS filesystem (§4.5).
 
 ### 3.3 `-T` makes ambient resolution unreachable
 
@@ -551,6 +559,26 @@ and `file:` header values remain accepted. Only the actual boolean
 `allow_ambient_reference_resolution=true` is a waiver; strings, numbers and null fail
 before header work.
 
+### 3.22 Pre-probe local reads can precede the samtools deadline
+
+The final-diff review supplied FIFOs as the explicit counterexample. Against the prior
+code, opening a reference candidate in `_reference_unavailable_reason` and reading an
+operator BED in `build_alignment_preflight_kwargs` both remained alive at the test's
+2.00 s outer deadline and had to be terminated; neither had reached `capture_command`, so
+the 120 s reference-probe deadline did not govern them. The corrected descriptor path
+returns both refusals in 0.08 s in isolated spawned processes.
+
+The review's narrower `.fai` FIFO assertion did not reproduce: `Path.is_file()` returned
+`False` in 0.01 s because a FIFO is not regular. The valid finding there was instead the
+unbounded iteration of a regular `.fai`, and the BED boundary likewise used an unbounded
+`read_text`. The five shipped FASTA indexes are 23–12,079 bytes; the configurable
+1,048,576-byte default is more than 86 times the largest shipped file. Oversized optional
+FAI metadata now produces only the existing coverage-unavailable warning after a
+successful decode probe, while an oversized required BED is rejected before view/index
+or probe work. This measurement says nothing about a regular file stalled inside a FUSE
+or NFS kernel operation; §4.5 states that limit explicitly rather than calling
+`O_NONBLOCK` a general timeout.
+
 ## 4. Design
 
 ### 4.1 The seam
@@ -788,6 +816,19 @@ than reusing it. The contract: exit status 0; every line exactly four tab-separa
 fields; counts parse as non-negative integers; exactly one terminal `*` row. **Anything
 else selects the stream scan**, logged with the offending line. An unparsable table must
 never be read as "column 4 summed to zero", which is the reading that loses reads.
+
+**Operator-controlled pre-probe text is regular and bounded.** Reference availability,
+optional `.fai` coverage metadata and the exact BED target are inspected before a probe.
+A FIFO in any of those positions can wait forever for a writer before the measured
+samtools deadline even begins. Opens therefore use nonblocking descriptor flags and
+validate the opened object as a regular file; BED and `.fai` reads are additionally
+bounded by `utils.preflight_text_max_bytes`. Oversized BED input fails before view/index
+or probe work, while oversized optional `.fai` metadata disables only the coverage hint;
+the successful decode probe remains authoritative. This is not a general filesystem
+timeout: `O_NONBLOCK` prevents FIFO/device blocking but does not impose an elapsed
+deadline on a stalled regular file on FUSE or NFS. §3.17 and A-178-1 bound the measured
+samtools reference-probe process, and §9 still leaves arbitrary filesystem availability
+and general stage timeouts out of scope.
 
 **The alignment view is created exclusively, and never reused blindly.**
 `create_output_directories` reuses an existing output directory silently (`utils.py:128`),
@@ -1103,6 +1144,11 @@ Every behaviour above is reachable from configuration. New keys:
   "cram_reference_hg19": null,
   "cram_reference_hg38": null
 },
+"utils": {
+  // §4.5. Bounds operator-controlled BED and optional FAI reads before a probe.
+  // Replacement configs use this shipped one-MiB default when the key is absent.
+  "preflight_text_max_bytes": 1048576
+},
 "assembly_detection": {
   // §5 #165. The threshold was inline; the primary set is what the denominator is
   // computed over, so both belong here.
@@ -1148,13 +1194,14 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-SCAN-4 | A nonempty one-SQ BAM containing five all-unplaced flag-4 records selects indexed recovery and completes with the exact five-record sorted-QNAME multiset in recovery and final BAMs. | integration, purpose-built fixture |
 | A-VIEW-1 | A view symlink left by a previous run pointing at a *different* alignment is replaced, not reused. | unit |
 | A-VIEW-2 | `REF_PATH` holds its original value (including unset) after `run_pipeline` returns and after it raises. | unit |
+| A-INPUT-1 | A FIFO supplied as a reference or BED is rejected without waiting for a writer; BED and optional FAI text reads obey the shipped configurable byte bound before probe work. This does not claim a timeout for stalled regular-file kernel I/O. | unit |
 | A-165-2 | A header split exactly 50/50 between two conventions returns `unknown`, not the first one checked. | unit |
 | A-165-3 | The public chromosome resolver and the pipeline target boundary reject 50/50 and zero-classifiable headers with a `ValueError` naming the unresolved convention; neither constructs nor falls back to a target. | unit |
 | A-165-4 | Sequential calls observe both a naming-policy mutation and a same-path file replacement without manual cache invalidation. | unit |
 | A-161-4 | R1 and R2 with unequal record counts are reported as `mixed` and the run fails, rather than being genotyped as a pair. | unit |
 | A-178-3 | `auto` selects `stream` on an alignment containing a placed read-unmapped record, and `indexed` on one without, for BAM and CRAM. | unit + purpose-built fixture |
 | A-165-1 | The issue's 93-contig header returns `ucsc`; a genuinely ambiguous header still returns `unknown`; a header with no classifiable contig returns `unknown` and does not divide by zero. | unit |
-| A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. | integration, derived fixture |
+| A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair in both default and explicit fast mode. | integration, derived fixture |
 | A-161-2 | A run that produces a non-empty FASTQ nothing consumes fails, naming the file and its read count. | unit |
 | A-161-3 | `--fastq1` without `--fastq2` is accepted and genotyped rather than rejected at argument parsing. | unit + integration |
 | A-PERF-1 | Golden-cohort wall-clock does not regress on BAM cases that complete on both revisions: three alternating runs per arm on an idle host, median and range reported; fail-closed mixed-layout cases are reported separately and accepted only with their stable causal diagnostic, never timed as if an early refusal were completed work. A regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
@@ -1213,6 +1260,7 @@ PR.**
 | 3a | final diff | 2 | 6 | 3 | 2 accepted and fixed; MED/LOW dispositions are detailed below |
 | 3b | independent remote-header follow-up | 1 | 0 | 0 | 1 accepted and fixed (§3.21, A-178-5) |
 | 3c | final diff follow-up | 2 | 4 | 3 | 2 HIGH accepted and fixed; MED/LOW dispositions are detailed below |
+| 3d | final diff follow-up | 3 | 3 | 2 | 3 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
 
 ### Round 3a — disposition
 
@@ -1267,6 +1315,27 @@ transport correctly rejected as path-like; the public wording now says `file-sch
 the reviewed policy failure reaches job status without weakening the transport's path
 guard. These fixes have not yet been promoted to a no-HIGH final verdict; the mandatory
 final-diff rerun remains the next review row.
+
+Round 3d accepted three further HIGH findings. The pre-write ownership boundary now
+protects alignment, FASTQ, BED, selected reference and index/sidecar inputs against
+lexical, resolved, symlink and hard-link aliases across all later pipeline outputs. The
+CLI applies the same exact-alias protection to its log before parent creation or
+`FileHandler` setup, while reserving whole-parent patient-tree refusal for BAM/CRAM so a
+normal FASTQ/BED/reference sibling-output layout remains valid. Reference/FAI/BED text
+inspection now rejects non-regular inputs and applies the configurable bound described in
+§3.22 before a probe. A receiving-review follow-up also aligned the pre-write guard with
+exact assembly-label/null reference precedence; unused family fallbacks are not protected
+as if the probe could select them.
+
+Two MED findings were accepted as prose precision: layout can only be known after
+lossless conversion, and web transport intentionally exposes stable path-free phase
+remediation rather than arbitrary raw worker exceptions. The proposed requirement to
+prove the #178 reporter's exact original mechanism was rebutted: §3.2 already labels that
+mechanism unproven and A-178-4 remains an external, non-gating evidence request; the
+reproduced default-mode network paths are nevertheless removed and observable. One LOW
+finding added default-mode single-end integration beside the explicit-fast case. The
+remaining LOW finding correctly requires A-PERF-1 to be rerun on the actual final
+behavioral revision before the concluding no-HIGH review.
 
 ### Wave 3 gate evidence before round 3
 
