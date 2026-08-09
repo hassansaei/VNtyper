@@ -28,7 +28,7 @@ pytest, ruff, mypy, Docker + Celery for the web layer.
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
 
 **Status:** H1/H2/H3 and their final follow-ups are integrated and independently reviewed.
-The final-candidate A-PERF-1 rerun and combined no-HIGH review remain unchecked.
+The final-candidate A-PERF-1 rerun is recorded; the combined no-HIGH review remains unchecked.
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
@@ -158,7 +158,7 @@ Wave 2 until `make check-all` is green on the tip of Wave 1.
 **`AlignmentPlan` has no `layout` field.** Layout cannot be known before conversion
 (spec §4.4); putting it here is the circular dependency Codex round 1 found.
 
-- [ ] **Step 1: write the failing tests.** Cover: both index spellings per suffix; CSI
+- [x] **Step 1: write the failing tests.** Cover: both index spellings per suffix; CSI
       included for BAM and excluded under `bai_only=True`; CRAM never offers `.bai`;
       an unknown format raises `ValueError` matching `"unknown alignment format"`;
       `missing_index_message` contains the path, every supplied name inspected and the
@@ -179,14 +179,14 @@ def test_the_error_payload_carries_no_absolute_worker_paths_beyond_the_input():
     assert set(payload) == {"code", "message", "candidates"}
 ```
 
-- [ ] **Step 2:** `pytest tests/unit/test_alignment_contract.py -v` → FAIL
+- [x] **Step 2:** `pytest tests/unit/test_alignment_contract.py -v` → FAIL
       (`ModuleNotFoundError`).
-- [ ] **Step 3:** implement. `AlignmentPlan` carries only `reference_path`; command
+- [x] **Step 3:** implement. `AlignmentPlan` carries only `reference_path`; command
       builders receive that path and own quoting and option construction (§5 #209).
-- [ ] **Step 4:** `pytest tests/unit/test_alignment_contract.py -v` → PASS.
-- [ ] **Step 5:** `pytest ... --cov=vntyper.scripts.alignment_contract --cov-branch
+- [x] **Step 4:** `pytest tests/unit/test_alignment_contract.py -v` → PASS.
+- [x] **Step 5:** `pytest ... --cov=vntyper.scripts.alignment_contract --cov-branch
       --cov-report=term-missing` → 100%. Add tests, never delete lines, to reach it.
-- [ ] **Step 6:** commit — `feat(preflight): add the alignment contract and its messages`.
+- [x] **Step 6:** commit — `feat(preflight): add the alignment contract and its messages`.
 
 ### Task 2: `idxstats_parsing.py` — fail-closed scan selection
 
@@ -206,7 +206,7 @@ def test_the_error_payload_carries_no_absolute_worker_paths_beyond_the_input():
 Spec §4.5: **anything not well-formed selects `stream`.** An unparsable table must never
 read as "column 4 summed to zero".
 
-- [ ] **Step 1: write the failing tests.**
+- [x] **Step 1: write the failing tests.**
 
 ```python
 GOOD = "chr1\t20000\t600\t50\n*\t0\t0\t80\n"
@@ -259,8 +259,8 @@ class TestChooseScan:
         assert choose_scan("stream", GOOD, exit_ok=True)[0] == SCAN_STREAM
 ```
 
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** run → PASS.
-- [ ] **Step 5:** 100% branch coverage on the module. **Step 6:** commit.
+- [x] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** run → PASS.
+- [x] **Step 5:** 100% branch coverage on the module. **Step 6:** commit.
 
 ### Task 3: `resolve_any_index`
 
@@ -277,12 +277,12 @@ preflight/protection contract, and
 recovery no longer consumes its result through the optional offset parser (§3.20);
 widening preflight index policy is a separate change.
 
-- [ ] **Step 1: write the failing tests** — `.cram.crai` and `.crai` both found, file
+- [x] **Step 1: write the failing tests** — `.cram.crai` and `.crai` both found, file
       spelling wins; CRAM CSI is found only after both CRAI spellings, while a `.bai`
       beside a CRAM is not an index for it; for BAM a `.csi` is found by
       `resolve_any_index` but still **not** by `resolve_bam_index`; `None` when nothing
       exists.
-- [ ] **Step 2:** run → FAIL (`ImportError`). **Step 3:** implement. **Step 4:** run the
+- [x] **Step 2:** run → FAIL (`ImportError`). **Step 3:** implement. **Step 4:** run the
       whole file → PASS, every pre-existing test unchanged. **Step 5:** commit.
 
 ### Task 4: command-builder changes (P1–P4 and the new forms)
@@ -314,7 +314,7 @@ build_samtools_depth_command(*, samtools_path, threads, region, bam_file,
                              index_path=None) -> str   # signature change
 ```
 
-- [ ] **Step 1: write the failing tests.** The four that matter most:
+- [x] **Step 1: write the failing tests.** The four that matter most:
 
 ```python
 def test_the_probe_never_combines_P_with_c_because_samtools_rejects_that():
@@ -354,12 +354,12 @@ pipe; `build_samtools_idxstats_command` carries no `-T` (spec §3.13: idxstats n
 reference). `exclude_unmapped=True` emits `-F 4`; the default remains byte-identical for
 fast mode and direct slice consumers.
 
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement.
-- [ ] **Step 4:** `pytest tests/unit/test_command_builders.py tests/unit/test_nonfast_slice_union.py -v` → PASS. Where a
+- [x] **Step 2:** run → FAIL. **Step 3:** implement.
+- [x] **Step 4:** `pytest tests/unit/test_command_builders.py tests/unit/test_nonfast_slice_union.py -v` → PASS. Where a
       pre-existing test compares a command string literally, fix the *expectation* only
       where `_thread_flag`/`_reference_flag` legitimately changed it; never pad the
       builder to match a stale string.
-- [ ] **Step 5:** commit — `perf(samtools): thread the slice and index, and give every CRAM
+- [x] **Step 5:** commit — `perf(samtools): thread the slice and index, and give every CRAM
       command its reference`.
 
 ### Task 5: `alignment_preflight.py`
@@ -409,7 +409,7 @@ guarantee. `true` is an informed operator opt-in that may block later samtools s
 only reference probes remain bounded by `reference_probe_timeout_seconds`. Task 5 does
 not add a general stage timeout (spec §9).
 
-- [ ] **Step 1: write the failing tests for the view** (spec §4.5):
+- [x] **Step 1: write the failing tests for the view** (spec §4.5):
 
 ```python
 class TestAlignmentView:
@@ -422,11 +422,11 @@ class TestAlignmentView:
     def test_close_removes_only_the_exact_owned_view_before_releasing_the_descriptor(self, tmp_path): ...
 ```
 
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement `AlignmentBinding` and
+- [x] **Step 2:** run → FAIL. **Step 3:** implement `AlignmentBinding` and
       `build_alignment_view`: open the regular input first, atomically publish the procfd
       view, then fall back only to a same-filesystem hardlink whose identity matches the
       opened descriptor. Do not restore the superseded pathname-reuse design.
-- [ ] **Step 4:** write and run the failing tests for `choose_unmapped_scan` for both BAM
+- [x] **Step 4:** write and run the failing tests for `choose_unmapped_scan` for both BAM
       and CRAM (delegates to
       `idxstats_parsing.choose_scan`, feeding it `capture_command`'s output and exit) and
       for `resolve_reference`:
@@ -446,7 +446,7 @@ def test_every_reference_probe_has_a_bounded_process_group_deadline(self): ...
 def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplog): ...
 ```
 
-- [ ] **Step 5:** write and run the failing tests for CRAM-only `REF_PATH` in
+- [x] **Step 5:** write and run the failing tests for CRAM-only `REF_PATH` in
       `tests/unit/test_ref_path_is_pinned.py`: an unset `REF_PATH` is pinned to a
       local-only value; an operator's `http://` value is overridden by default; the
       override is skipped when `allow_ambient_reference_resolution` is true; and
@@ -468,11 +468,11 @@ def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplo
       bypasses localhost proxies in both environment-variable spellings, waits for the
       listener backlog and asserts no connection, captured command or stage artifact;
       retain the ambient A-178-1 blackhole test unchanged.
-- [ ] **Step 6:** implement, then run the focused URI, REF_PATH, boundary and real CRAM
+- [x] **Step 6:** implement, then run the focused URI, REF_PATH, boundary and real CRAM
       integration suites → PASS. Pre-probe reference/BED/FAI reads reject FIFOs without
       waiting and apply the configured text-byte bound; do not describe `O_NONBLOCK` as a
       timeout for a stalled regular file on FUSE or NFS (spec §4.5, A-INPUT-1).
-- [ ] **Step 7:** commit — `feat(preflight): prove the index, the scan and the reference
+- [x] **Step 7:** commit — `feat(preflight): prove the index, the scan and the reference
       before any stage runs`.
 
 ### Task 6: wire the plan into the pipeline
@@ -482,7 +482,7 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
 `tests/unit/test_input_tree_is_never_written.py` and
 `tests/integration/test_read_only_alignment_preflight.py`
 
-- [ ] **Step 1: write the failing tests** — the slice runs against `plan.view_path`, not
+- [x] **Step 1: write the failing tests** — the slice runs against `plan.view_path`, not
       `in_bam`; the slice carries `-T` when the plan has a reference; the CRAM unmapped
       command is chosen by `plan.unmapped_scan`; `index_output=False` in non-fast mode
       (P3) and `True` in fast mode; the non-fast slice passes
@@ -492,7 +492,7 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
       is byte-identical afterwards for both formats. A real
       nonempty all-unplaced BAM selects indexed and preserves its exact five-QNAME
       multiset (§3.20).
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement:
+- [x] **Step 2:** run → FAIL. **Step 3:** implement:
       replace the `file_format="bam"` parameter with `plan: AlignmentPlan`; delete the
       inline `resolve_bam_index` block (lines ~167-177); route every post-preflight
       random-access builder through the plan helpers and `plan.stable_index_path`, while
@@ -515,10 +515,10 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
       wrong-sample BAI after preflight: the bound `-X` slice and depth results must remain
       29,736 records and 5,001 rows, while removing `-X` reproduces the silent zero-record
       result.
-- [ ] **Step 4:** run the three suites → PASS.
-- [ ] **Step 5:** `wc -l vntyper/scripts/fastq_bam_processing.py` → **must be < 649**.
+- [x] **Step 4:** run the three suites → PASS.
+- [x] **Step 5:** `wc -l vntyper/scripts/fastq_bam_processing.py` → **must be < 649**.
       If not, extract the CRAM branch into a helper rather than accepting it.
-- [ ] **Step 6:** standard block, then commit.
+- [x] **Step 6:** standard block, then commit.
 
 ---
 
@@ -529,24 +529,24 @@ Branch each from the tip of Wave 1, created with `superpowers:using-git-worktree
 
 ### Task 7: finish #209 + #178 (CLI surface, web transport, fixtures)
 
-- [ ] **Step 1:** add `--reference-fasta` to `cli_parser.py` beside `--cram`; thread it
+- [x] **Step 1:** add `--reference-fasta` to `cli_parser.py` beside `--cram`; thread it
       through `cli_handlers.handle_pipeline` into `run_pipeline`. Test that it reaches the
       preflight's candidate list first.
-- [ ] **Step 2:** write the failing test for `preflight_error.json`: the preflight writes
+- [x] **Step 2:** write the failing test for `preflight_error.json`: the preflight writes
       it into the output directory *before* raising, and its payload has exactly
       `code`, `message`, `candidates`.
-- [ ] **Step 3:** write the failing tests in `tests/unit/web/` for the transport — the
+- [x] **Step 3:** write the failing tests in `tests/unit/web/` for the transport — the
       worker reads the file when the pipeline exits non-zero and stores `code`/`message`
       on the job hash; the status endpoint returns that message when present and its
       existing generic text otherwise; **and the response contains no absolute worker
       path** (the endpoint is unauthenticated and its genericity is a deliberate no-leak
       property).
-- [ ] **Step 4:** implement; run → PASS.
-- [ ] **Step 5:** build the reference-dependent CRAM fixture (Task 10) and add the
+- [x] **Step 4:** implement; run → PASS.
+- [x] **Step 5:** build the reference-dependent CRAM fixture (Task 10) and add the
       integration tests for A-209-1/2/3. **The fixture's `UR:` target must be renamed in
       the test**, or a resolvable `UR:` silently rescues the candidate that should fail
       (spec §3.10).
-- [ ] **Step 6:** standard block; commit `Closes #209` and `Closes #178`.
+- [x] **Step 6:** standard block; commit `Closes #209` and `Closes #178`.
 
 ### Task 8: `detect_naming_convention` (#165)
 
@@ -554,7 +554,7 @@ Branch each from the tip of Wave 1, created with `superpowers:using-git-worktree
 `vntyper/config.json`; test `tests/unit/test_chromosome_utils.py`,
 `tests/unit/test_region_utils.py`
 
-- [ ] **Step 1: write the failing tests.**
+- [x] **Step 1: write the failing tests.**
 
 ```python
 def test_the_issues_own_93_contig_header_resolves_to_ucsc(self):
@@ -584,17 +584,17 @@ raise a `ValueError` naming the unresolved convention; an unambiguous header sti
 resolves; mutating the naming policy and replacing a file at the same path are both
 observed on the next call.
 
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement: denominator = contigs matching *some*
+- [x] **Step 2:** run → FAIL. **Step 3:** implement: denominator = contigs matching *some*
       convention; return `unknown` when that is zero; a convention wins on a **strict
       majority with no tie**; threshold from config with the 0.5 default. The public
       resolver raises before target construction when the result is `unknown`, the legacy
       wrapper preserves that refusal, and the path-only chromosome cache is removed.
-- [ ] **Step 4:** run `test_chromosome_utils.py`, `test_assembly_guard.py`,
+- [x] **Step 4:** run `test_chromosome_utils.py`, `test_assembly_guard.py`,
       `test_region_utils.py`, `test_builders.py`. `test_builders.py:263-268` asserts an
       `unknown` result — decide whether that header is *genuinely* ambiguous or was only
       ambiguous because of the bug, and if the latter, change it deliberately and say so
       in the commit message.
-- [ ] **Step 5:** standard block; commit `Closes #165`.
+- [x] **Step 5:** standard block; commit `Closes #165`.
 
 ### Task 9: single-end support (#161)
 
@@ -608,7 +608,7 @@ modify `pipeline.py`, `alignment_processing.py`, `kestrel_genotyping.py`,
 - `route_fastqs(layout, paths, counts) -> tuple[tuple[str, ...], tuple[str, ...]]` →
   `(consumed, stranded_nonempty)`
 
-- [ ] **Step 1: write the failing tests for `read_layout`.**
+- [x] **Step 1: write the failing tests for `read_layout`.**
 
 ```python
 def test_r1_and_r2_populated_is_paired(self):
@@ -633,17 +633,17 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
     assert stranded == ("other.gz",)
 ```
 
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement `read_layout.py`.
-- [ ] **Step 4:** extract `construct_kestrel_command` into `vntyper/scripts/kestrel_command.py`
+- [x] **Step 2:** run → FAIL. **Step 3:** implement `read_layout.py`.
+- [x] **Step 4:** extract `construct_kestrel_command` into `vntyper/scripts/kestrel_command.py`
       without behavioural change, re-export it from `kestrel_genotyping` so existing
       imports keep working, and confirm the final module is 865 lines. The extraction is
       the bounded responsibility split required by AGENTS.md rule 3, not a Kestrel-design
       change.
-- [ ] **Step 5:** write failing tests for the single-input command forms — fastp with no
+- [x] **Step 5:** write failing tests for the single-input command forms — fastp with no
       `--in2`/`--out2`; bwa with one FASTQ; Kestrel with one FASTQ; Kestrel still raising
       when `fastq_1` is absent. Change the guard from `if not fastq_1 or not fastq_2` to
       `if not fastq_1`, and `fastq2` to `Path | None` in `align_and_sort_fastq`.
-- [ ] **Step 6:** wire routing into `pipeline.py`: replace both
+- [x] **Step 6:** wire routing into `pipeline.py`: replace both
       `fastq1, fastq2, _, _ = process_bam_to_fastq(...)` bindings with the four-value form
       plus `classify_layout`/`route_fastqs`; raise naming the file and its record count
       when anything is stranded; log the layout.
@@ -651,25 +651,25 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
 unmapped-read recovery and retains the historical target slice. This is not a
 `read_layout` tolerance or configuration escape hatch; normal-mode conversion must still
 route every produced FASTQ or fail naming it.
-- [ ] **Step 7:** allow `--fastq1` without `--fastq2` in `cli_handlers.py:227`.
-- [ ] **Step 8:** derive the single-end fixture with pysam, clearing `is_paired`,
+- [x] **Step 7:** allow `--fastq1` without `--fastq2` in `cli_handlers.py:227`.
+- [x] **Step 8:** derive the single-end fixture with pysam, clearing `is_paired`,
       `is_read1`, `is_read2`, `is_proper_pair` and `mate_is_unmapped`; register it in
       `tests/test_data_config.json`; add the integration test for A-161-1.
-- [ ] **Step 9:** standard block; commit `Closes #161`.
+- [x] **Step 9:** standard block; commit `Closes #161`.
 
 ### Task 10: fixture deriver and the golden-cohort matrix
 
-- [ ] **Step 1:** failing test — with no `--all`, the deriver selects only the samples
+- [x] **Step 1:** failing test — with no `--all`, the deriver selects only the samples
       declared in `tests/test_data_config.json`; with `--all`, every discovered sample.
-- [ ] **Step 2:** implement the flag and the declared-only default.
-- [ ] **Step 3:** add `build_reference_dependent_fixture` (its own docstring already
+- [x] **Step 2:** implement the flag and the declared-only default.
+- [x] **Step 3:** add `build_reference_dependent_fixture` (its own docstring already
       describes it) producing a reference-compressed CRAM plus a copy of its reference —
       #209's path cannot be tested without one.
-- [ ] **Step 4:** add a CRAM fixture containing **placed** read-unmapped records, for A-SCAN-1.
-- [ ] **Step 5:** extend `scripts/golden_cohort/matrix.py` so the CRAM cases cover both
+- [x] **Step 4:** add a CRAM fixture containing **placed** read-unmapped records, for A-SCAN-1.
+- [x] **Step 5:** extend `scripts/golden_cohort/matrix.py` so the CRAM cases cover both
       scan modes; the current matrix declares only two CRAM cases (`matrix.py:126`,
       `:143`), so deriving more fixtures does not by itself run them.
-- [ ] **Step 6:** commit.
+- [x] **Step 6:** commit.
 
 ---
 
@@ -677,17 +677,17 @@ route every produced FASTQ or fail naming it.
 
 ### Task 11: golden cohort and the performance measurement
 
-- [ ] **Step 1:** baseline — three runs on `main`, alternating with the branch, on an idle
+- [x] **Step 1:** baseline — three runs on `main`, alternating with the branch, on an idle
       host, through the harness's `run` subcommand. Time the BAM cases that complete on
       both revisions; separately record every case the new no-discard rule refuses so an
       early failure is never compared with completed genotyping. Each declared
       mixed-layout refusal must contain the stable causal routing diagnostic; an unrelated
       exit 1 is not evidence.
-- [ ] **Step 2:** `make cram-fixtures` (never `--allow-matrix-drift`).
-- [ ] **Step 3:** three runs on the branch. Report median and range per arm. A regression
+- [x] **Step 2:** `make cram-fixtures` (never `--allow-matrix-drift`).
+- [x] **Step 3:** three runs on the branch. Report median and range per arm. A regression
       is called only when the slower arm's *best* run is worse than the faster arm's *worst*
       (spec §5b).
-- [ ] **Step 4:** prove A-178-2 — when preflight authorises both strategies, indexed and
+- [x] **Step 4:** prove A-178-2 — when preflight authorises both strategies, indexed and
       stream must produce the **same read set**, not merely the same genotype. When
       placed-unmapped evidence or the exact literal-`'*'`/terminal-`*` count comparison
       rejects indexed, preserve that rejection and record the stream read set plus a raw
@@ -719,17 +719,17 @@ stream partner must record the complete expected read set and the declared raw l
 Plus, per CRAM sample, compare `samtools view -c` on the unmapped BAM and a sorted
 read-name digest of it.
 
-- [ ] **Step 5:** record both wall-clocks and the read-set result in spec §5b and §10.
+- [x] **Step 5:** record both wall-clocks and the read-set result in spec §5b and §10.
 
 ### Task 12: full gate, review, PR, release
 
-- [ ] **Step 1:** `make check-all`
-- [ ] **Step 2:** `make patch-coverage` — must be ≥ 80%
-- [ ] **Step 3:** `make ci-local` **only if** `.github/workflows/` was touched
+- [x] **Step 1:** `make check-all`
+- [x] **Step 2:** `make patch-coverage` — must be ≥ 80%
+- [x] **Step 3:** `make ci-local` **only if** `.github/workflows/` was touched — not applicable; the final diff does not touch workflow files.
 - [ ] **Step 4:** Codex adversarial gate on the final **diff** (spec §10, concluding round). Loop
       until no HIGH survives; record the verdict.
 - [ ] **Step 5:** `superpowers:requesting-code-review`, then address findings.
-- [ ] **Step 6:** bump `vntyper/version.py`, `CITATION.cff` and
+- [x] **Step 6:** bump `vntyper/version.py`, `CITATION.cff` and
       `docs/about/changelog.md` to **2.0.10** — patch only, all three files (trap 12).
 - [ ] **Step 7:** one PR against `main` whose body carries `Closes #213`, `Closes #225`,
       `Closes #209`, `Closes #178`, `Closes #165`, `Closes #161`.
@@ -768,10 +768,9 @@ only exact owned fallback entries before closing the index and alignment FDs.
       writer behaviour, descriptor-bound delivery/cohort snapshots, and web
       rollback/quarantine failure handling; implement archive creation only after report
       completion. Final H3 publication and descriptor-snapshot re-reviews are clean.
-- [ ] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
-      `2a5982e`; record 91.74/92.38/91.30 s versus 88.47/89.86/88.23 s, exact loads and
-      the non-overlapping no-regression verdict in spec §5b. Rerun against the actual
-      final behavioral revision before checking this item.
+- [x] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
+      `388f157`; record 90.00/91.13/90.03 s versus 87.83/87.49/87.52 s, exact loads and
+      the non-overlapping no-regression verdict in spec §5b.
 - [ ] **Close-out:** run and record the combined final-diff adversarial review with no
       HIGH findings.
 
