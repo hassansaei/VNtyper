@@ -25,6 +25,8 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
     - Sorted and indexed (`.cram.crai` must exist)
     - Aligned to a supported reference assembly
     - The original reference FASTA must be accessible (CRAM files are reference-dependent)
+    - A local reference named by the CRAM header must resolve inside the directory containing
+      the CRAM. For a reference elsewhere, pass `--reference-fasta` or configure it explicitly.
     - Validated with `samtools quickcheck`
 
 === "FASTQ"

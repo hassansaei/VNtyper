@@ -1248,10 +1248,14 @@ branch history. The measured runtime tree (`vntyper/`, `docker/`, and `scripts/`
 byte-identical at published-history commit
 `470fdd6590392cf090dc841c8f2b73b3cf05b9ef`. The original hash remains here because it
 is the revision the measurement harness recorded.
-Every later executable change is confined to CRAM reference resolution, while the only
-later `scripts/` change clears an undefined mate flag in the single-end fixture generator.
-Those paths are outside this 18-case BAM timing arm, so the measurement remains its final
-BAM-path result rather than being relabelled as a run of code the harness did not execute.
+Later CRAM-reference changes and the single-end fixture-generator change are outside this
+18-case BAM timing arm. Two later ownership fixes require a narrower account. The
+`alignment_binding.py` identity hardening is on the BAM path, but adds only a fixed, tiny
+number of `stat`/`lstat` metadata checks around view installation and cleanup; it is
+timing-neutral by inspection, not by a new timing run. The `archive_safety.py` identity
+check runs only when `--archive-results` is enabled, and this harness arm did not enable
+that flag. The table therefore remains evidence for the explicitly measured revision's
+BAM-path performance; it is not relabelled as a measurement of final `HEAD`.
 The same 18-case intersection ran with one harness job and four pipeline threads,
 alternating baseline/candidate. Every one of the 108 case executions exited 0 and each
 arm verified its exact package marker and revision. The host had 32 logical CPUs and one

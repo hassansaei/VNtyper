@@ -60,9 +60,12 @@ On the 18 golden-cohort BAM cases that both 2.0.9 and the measured milestone can
 complete without discarding reads, three alternating runs measured medians of 90.03 s and
 87.52 s, respectively. The non-overlapping ranges (90.00–91.13 vs 87.49–87.83 s) record a
 2.8% median improvement under the predeclared rule. The harness recorded candidate
-`388f157`; its published-history runtime-tree equivalent is `470fdd6`. Later changes touch
-only CRAM reference resolution or the single-end fixture generator, outside this measured
-BAM arm.
+`388f157`; its published-history runtime-tree equivalent is `470fdd6`. Later CRAM-reference
+and single-end fixture changes are outside this measured BAM arm. Subsequent
+alignment-binding identity hardening adds only a fixed, tiny number of metadata checks and
+is timing-neutral by inspection; archive identity hardening runs only under
+`--archive-results`, which the timing harness did not enable. This does not relabel the
+measured hash as final `HEAD`.
 
 ## 2.0.9
 

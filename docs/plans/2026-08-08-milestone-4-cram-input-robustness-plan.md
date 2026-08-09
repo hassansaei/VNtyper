@@ -772,8 +772,12 @@ only exact owned fallback entries before closing the index and alignment FDs.
 - [x] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
       `388f157`; record 90.00/91.13/90.03 s versus 87.83/87.49/87.52 s, exact loads and
       the non-overlapping no-regression verdict in spec §5b. The published-history
-      runtime-tree equivalent is `470fdd6`; later executable changes are CRAM-reference-only,
-      and the later fixture-generator change is outside the measured BAM arm.
+      runtime-tree equivalent is `470fdd6`. Later CRAM-reference and fixture-generator
+      changes are outside the measured BAM arm. The later alignment-binding identity
+      hardening is timing-neutral by inspection: it adds only a fixed, tiny number of
+      `stat`/`lstat` checks around view installation and cleanup. Archive identity
+      hardening runs only with `--archive-results`, which this timing arm did not enable.
+      Those assessments do not relabel the measured hash as final `HEAD`.
 - [ ] **Close-out:** run and record the combined final-diff adversarial review with no
       HIGH findings.
 
