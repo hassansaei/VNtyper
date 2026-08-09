@@ -12,6 +12,7 @@ from vntyper.scripts.reference_uri_policy import (
     enforce_header_reference_policy,
     first_remote_header_reference,
     ref_path_remote_scheme,
+    remote_ref_path_suffix,
 )
 
 pytestmark = pytest.mark.unit
@@ -35,6 +36,11 @@ def test_ref_path_remote_scheme_distinguishes_network_and_local_search_entries(
 ) -> None:
     """A non-file URI scheme is the only shape governed by the network waiver."""
     assert ref_path_remote_scheme(value) == expected
+
+
+def test_remote_ref_path_suffix_removes_local_cache_entries_before_ambient_lookup() -> None:
+    assert remote_ref_path_suffix("/operator/%s:https://refget.example/%s") == "https://refget.example/%s"
+    assert remote_ref_path_suffix("/operator/%s") is None
 
 
 def test_first_remote_header_reference_reports_the_sq_contig_and_normalised_scheme() -> None:
@@ -138,6 +144,16 @@ def test_local_header_reference_paths_resolve_against_the_input_and_deduplicate(
     assert reference_uri_policy.local_header_reference_paths(header, input_cram) == (
         str(relative_reference),
         str(absolute_reference),
+    )
+
+
+def test_local_header_references_preserve_each_sq_contig_digest_association(tmp_path: Path) -> None:
+    """Per-contig local FASTAs remain associated with the M5 they can populate."""
+    header = "@SQ\tSN:chr1\tM5:first\tUR:chr1.fa\n@SQ\tSN:chr2\tM5:second\tUR:chr2.fa\n"
+
+    assert reference_uri_policy.local_header_references(header, tmp_path / "input.cram") == (
+        reference_uri_policy.LocalHeaderReference("chr1", "first", str(tmp_path / "chr1.fa")),
+        reference_uri_policy.LocalHeaderReference("chr2", "second", str(tmp_path / "chr2.fa")),
     )
 
 

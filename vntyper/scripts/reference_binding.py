@@ -306,7 +306,6 @@ class ReferenceBinding:
             except Exception as cleanup_error:
                 message = f"{primary_error}; incomplete CRAM reference namespace cleanup: {cleanup_error}"
                 logger.error(message)
-                raise RuntimeError(message) from cleanup_error
             raise
 
     @property

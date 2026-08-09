@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 from pathlib import Path
@@ -13,6 +14,7 @@ from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.alignment_preflight import resolve_reference, run_preflight
 from vntyper.scripts.reference_binding import ReferenceBinding
+from vntyper.scripts.reference_uri_policy import LocalHeaderReference
 
 pytestmark = pytest.mark.unit
 
@@ -42,6 +44,28 @@ def test_reference_binding_preserves_a_colliding_run_local_entry(tmp_path: Path)
 
     assert len(collided_paths) == 1
     assert collided_paths[0].read_bytes() == b"not pipeline-owned"
+
+
+def test_constructor_cleanup_failure_does_not_replace_a_primary_base_exception(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cleanup diagnostics cannot replace cancellation or interpreter shutdown."""
+    reference = _reference(tmp_path / "reference.fa")
+
+    with (
+        patch("vntyper.scripts.reference_binding._InodeView", side_effect=KeyboardInterrupt("cancelled")),
+        patch.object(
+            ReferenceBinding,
+            "_close_after_failed_construction",
+            side_effect=RuntimeError("cleanup exploded"),
+        ),
+        caplog.at_level("ERROR"),
+        pytest.raises(KeyboardInterrupt, match="cancelled"),
+    ):
+        ReferenceBinding(str(reference), tmp_path, "sample", 1)
+
+    assert "incomplete CRAM reference namespace cleanup: cleanup exploded" in caplog.text
 
 
 def test_binding_collision_is_fatal_before_an_ambient_probe_can_succeed(tmp_path: Path) -> None:
@@ -106,6 +130,42 @@ def test_failed_local_header_ur_decode_cannot_fall_through_to_no_reference_probe
 
     assert capture.call_count == 1
     assert " -T " in f" {capture.call_args.args[0]} "
+
+
+def test_ambient_remote_ref_path_cannot_reopen_a_writable_failed_local_header_uri(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The network waiver does not authorize an unbound local-UR fallback."""
+    (tmp_path / "operator").mkdir()
+    reference = _reference(tmp_path / "operator" / "wrong-reference.fa")
+    before = {path.name: path.read_bytes() for path in reference.parent.iterdir()}
+    required_digest = hashlib.md5(b"AAAA").hexdigest()
+    monkeypatch.setenv("REF_PATH", "https://refget.example/%s")
+
+    with (
+        patch(
+            "vntyper.scripts.alignment_preflight.capture_command", return_value=(False, "reference mismatch")
+        ) as capture,
+        pytest.raises(ValueError, match="Unable to resolve reference"),
+    ):
+        resolve_reference(
+            "/run/view.cram",
+            (("header_ur", str(reference)),),
+            "chr1:1-4",
+            None,
+            {"cram": {"allow_ambient_reference_resolution": True}},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1",),
+            required_digest,
+            header_m5s=(("chr1", required_digest),),
+            header_references=(LocalHeaderReference("chr1", required_digest, str(reference)),),
+        )
+
+    assert capture.call_count == 1
+    assert {path.name: path.read_bytes() for path in reference.parent.iterdir()} == before
 
 
 def test_preflight_probes_and_retains_the_opened_reference_and_fai_inodes(tmp_path: Path) -> None:

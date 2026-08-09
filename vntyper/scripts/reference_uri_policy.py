@@ -24,6 +24,15 @@ class RemoteHeaderReference:
     scheme: str
 
 
+@dataclass(frozen=True)
+class LocalHeaderReference:
+    """One local SQ reference path associated with its contig and digest."""
+
+    contig: str
+    m5: str | None
+    path: str
+
+
 def header_reference_scheme(value: str) -> str | None:
     """Return a non-file scheme anchored at the start of one SAM ``UR`` value.
 
@@ -56,6 +65,14 @@ def ref_path_remote_scheme(value: str) -> str | None:
         if scheme != "file":
             return scheme
     return None
+
+
+def remote_ref_path_suffix(value: str) -> str | None:
+    """Return the remote portion of a REF_PATH without a leading local search entry."""
+    match = _REF_PATH_REMOTE_URI.search(value)
+    if match is None:
+        return None
+    return value[match.start("scheme") :]
 
 
 def allow_ambient_reference_resolution(config: dict) -> bool:
@@ -108,27 +125,30 @@ def first_remote_header_reference(header: str) -> RemoteHeaderReference | None:
     return None
 
 
-def local_header_reference_paths(header: str, input_alignment: str | Path) -> tuple[str, ...]:
-    """Resolve deduplicated local SQ ``UR`` values against the input directory.
+def local_header_references(header: str, input_alignment: str | Path) -> tuple[LocalHeaderReference, ...]:
+    """Resolve local SQ ``UR`` values with their contig and digest identity.
 
     Args:
         header: SAM header text already read from the owned CRAM boundary.
         input_alignment: Original operator CRAM path used as the base for relative UR values.
 
     Returns:
-        Absolute local filesystem candidates in first-occurrence order. Remote
-        schemes are omitted for the separate ambient-reference policy.
+        Local reference records in first-occurrence order. Remote schemes are
+        omitted for the separate ambient-reference policy.
 
     Raises:
         ValueError: If a file URI is ambiguous or does not name a local path.
     """
     base_directory = Path(os.path.abspath(input_alignment)).parent
-    result: list[str] = []
-    seen: set[str] = set()
+    result: list[LocalHeaderReference] = []
+    seen: set[tuple[str, str | None, str]] = set()
     for line in header.splitlines():
         fields = line.split("\t")
         if not fields or fields[0] != "@SQ":
             continue
+        tags = {key: value for field in fields[1:] for key, separator, value in (field.partition(":"),) if separator}
+        contig = tags.get("SN", "unknown")
+        m5 = tags.get("M5")
         for field in fields[1:]:
             key, separator, value = field.partition(":")
             if not separator or key != "UR" or header_reference_scheme(value) is not None:
@@ -154,9 +174,29 @@ def local_header_reference_paths(header: str, input_alignment: str | Path) -> tu
             candidate = Path(candidate_value)
             absolute = str(candidate if candidate.is_absolute() else base_directory / candidate)
             normalized = os.path.abspath(os.path.normpath(absolute))
-            if normalized not in seen:
-                seen.add(normalized)
-                result.append(normalized)
+            identity = (contig, m5, normalized)
+            if identity not in seen:
+                seen.add(identity)
+                result.append(LocalHeaderReference(contig=contig, m5=m5, path=normalized))
+    return tuple(result)
+
+
+def local_header_reference_paths(header: str, input_alignment: str | Path) -> tuple[str, ...]:
+    """Return deduplicated local SQ reference paths in header order.
+
+    Args:
+        header: SAM header text already read from a CRAM input.
+        input_alignment: Original operator CRAM path used as the base for relative UR values.
+
+    Returns:
+        Absolute local filesystem candidates in first-occurrence order.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for reference in local_header_references(header, input_alignment):
+        if reference.path not in seen:
+            seen.add(reference.path)
+            result.append(reference.path)
     return tuple(result)
 
 

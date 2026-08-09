@@ -7,7 +7,11 @@ import threading
 
 import pytest
 
-from vntyper.scripts.alignment_preflight import pin_reference_resolution, restore_reference_resolution
+from vntyper.scripts.reference_resolution_environment import (
+    activate_private_reference_cache,
+    pin_reference_resolution,
+    restore_reference_resolution,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -30,6 +34,38 @@ def test_an_operators_network_ref_path_is_overridden_by_default(monkeypatch: pyt
 
     assert previous == "http://blackhole.invalid/%s"
     assert os.environ["REF_PATH"] == "/local/cache/%2s/%2s/%s"
+    restore_reference_resolution(previous)
+
+
+def test_default_scope_hides_ref_cache_then_restores_it_after_private_activation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither probes nor later consumers can escape the complete private cache."""
+    monkeypatch.setenv("REF_PATH", "/operator/path/%s")
+    monkeypatch.setenv("REF_CACHE", "/operator/cache/%s")
+
+    previous = pin_reference_resolution({"cram": {"local_ref_path": "/configured/%s"}})
+    assert "REF_CACHE" not in os.environ
+    activate_private_reference_cache("/run/private/%2s/%2s/%s")
+    assert os.environ["REF_PATH"] == "/run/private/%2s/%2s/%s"
+    assert os.environ["REF_CACHE"] == "/run/private/%2s/%2s/%s"
+    restore_reference_resolution(previous)
+
+    assert os.environ["REF_PATH"] == "/operator/path/%s"
+    assert os.environ["REF_CACHE"] == "/operator/cache/%s"
+
+
+def test_private_cache_can_preserve_remote_ref_path_for_nonlocal_header_contigs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambient = "https://refget.example/%s"
+    monkeypatch.setenv("REF_PATH", ambient)
+
+    previous = pin_reference_resolution({"cram": {"allow_ambient_reference_resolution": True}})
+    activate_private_reference_cache("/run/private/%2s/%2s/%s", remote_reference_path=ambient)
+
+    assert os.environ["REF_CACHE"] == "/run/private/%2s/%2s/%s"
+    assert os.environ["REF_PATH"] == ambient
     restore_reference_resolution(previous)
 
 

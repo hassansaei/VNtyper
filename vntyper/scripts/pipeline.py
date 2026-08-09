@@ -5,13 +5,7 @@ import timeit
 from datetime import datetime, timezone
 from pathlib import Path
 
-from vntyper.scripts.alignment_preflight import (
-    pin_reference_resolution as pin_reference_resolution,
-)
-from vntyper.scripts.alignment_preflight import (
-    restore_reference_resolution,
-    run_preflight,
-)
+from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
 from vntyper.scripts.archive_safety import create_safe_archive
 from vntyper.scripts.artifact_names import select_best_vcf_file
@@ -41,6 +35,8 @@ from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
+from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
+from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 # Import our new summary functions (including end_summary and CSV/TSV conversion functions)

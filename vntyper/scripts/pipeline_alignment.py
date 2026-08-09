@@ -11,19 +11,18 @@ from typing import TypedDict
 from vntyper.scripts import preflight_error_io as error_io
 from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import AlignmentPlan, preflight_error_payload
-from vntyper.scripts.alignment_preflight import (
-    pin_reference_resolution,
-    restore_reference_resolution,
-    run_preflight,
-)
+from vntyper.scripts.alignment_preflight import run_preflight
 from vntyper.scripts.alignment_target_io import install_generated_bed
 from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
 from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
 from vntyper.scripts.preflight_input_io import configured_preflight_text_limit, read_bounded_regular_text
+from vntyper.scripts.reference_resolution_environment import pin_reference_resolution, restore_reference_resolution
 from vntyper.scripts.reference_uri_policy import (
+    LocalHeaderReference,
     allow_ambient_reference_resolution,
     enforce_header_reference_policy,
     local_header_reference_paths,
+    local_header_references,
 )
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
@@ -45,6 +44,7 @@ class AlignmentPreflightKwargs(TypedDict):
     reference_assembly: str
     reference_fasta: str | None
     header_reference_paths: tuple[str, ...]
+    header_references: tuple[LocalHeaderReference, ...]
     header_contigs: tuple[str, ...]
     m5: str | None
     header_m5s: tuple[tuple[str, str], ...]
@@ -257,6 +257,11 @@ def build_alignment_preflight_kwargs(
         if file_format == "cram" and alignment_header is not None
         else ()
     )
+    header_references = (
+        local_header_references(alignment_header, in_path)
+        if file_format == "cram" and alignment_header is not None
+        else ()
+    )
     return {
         "in_path": str(in_path),
         "output_dir": str(output_dir),
@@ -270,6 +275,7 @@ def build_alignment_preflight_kwargs(
         "reference_assembly": reference_assembly,
         "reference_fasta": str(reference_fasta) if reference_fasta is not None else None,
         "header_reference_paths": header_reference_paths,
+        "header_references": header_references,
         "header_contigs": header_contigs,
         "m5": target_m5,
         "header_m5s": header_m5s,

@@ -12,12 +12,9 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from vntyper.scripts.alignment_binding import AlignmentBinding
-
-if TYPE_CHECKING:
-    from vntyper.scripts.reference_binding import ReferenceBinding
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +26,13 @@ INDEX_SUFFIXES: dict[str, tuple[str, ...]] = {
 }
 
 ReferenceAttempt = tuple[str, str | None, str]
+
+
+class ReferenceLifetime(Protocol):
+    """Cleanup contract shared by explicit references and private M5 caches."""
+
+    def close(self) -> None:
+        """Release the retained reference namespace."""
 
 
 def missing_reference_contig(diagnostic: str, known_contigs: Iterable[str]) -> str | None:
@@ -99,7 +103,7 @@ class AlignmentPlan:
     uncovered_contigs: tuple[str, ...]
     unmapped_scan: str
     binding: AlignmentBinding | None = field(default=None, repr=False, compare=False)
-    reference_binding: ReferenceBinding | None = field(default=None, repr=False, compare=False)
+    reference_binding: ReferenceLifetime | None = field(default=None, repr=False, compare=False)
 
     @property
     def stable_index_path(self) -> str:
@@ -170,6 +174,27 @@ def unresolvable_reference_message(
         for source, path, reason in attempts
     )
     return f"Unable to resolve reference for {in_path}: contig={contig}, M5={checksum}. Candidates: {details}"
+
+
+def unresolvable_reference_details(
+    in_path: str,
+    target_contig: str,
+    target_m5: str | None,
+    header_contigs: tuple[str, ...],
+    header_m5s: Iterable[tuple[str, str]],
+    attempts: tuple[ReferenceAttempt, ...],
+) -> tuple[str, str | None, str]:
+    """Select the most specific failed contig and build its diagnostic."""
+    failure_contig = next(
+        (
+            parsed
+            for _, _, reason in reversed(attempts)
+            if (parsed := missing_reference_contig(reason, header_contigs)) is not None
+        ),
+        target_contig,
+    )
+    failure_m5 = dict(header_m5s).get(failure_contig, target_m5 if failure_contig == target_contig else None)
+    return failure_contig, failure_m5, unresolvable_reference_message(in_path, failure_contig, failure_m5, attempts)
 
 
 def preflight_error_payload(code: str, message: str, attempts: Iterable[ReferenceAttempt]) -> dict:
