@@ -539,7 +539,6 @@ def run_cohort_analysis_job(
     # got as far as naming its scratch file, and must not mask the original
     # failure with a NameError of its own.
     input_file = None
-    snapshot_dir = None
     archive_published = False
     logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
@@ -564,35 +563,34 @@ def run_cohort_analysis_job(
         # 1) Create directory, input file listing all .zip files
         os.makedirs(output_dir, exist_ok=True)
         snapshot_dir = os.path.join(output_dir, ".cohort-members")
-        snapshot_paths = snapshot_owned_archives(zip_paths, snapshot_dir)
-        input_file = os.path.join(output_dir, "cohort_input.txt")
-        with open(input_file, "w") as f:
-            f.writelines(f"{zpath}\n" for zpath in snapshot_paths)
+        with snapshot_owned_archives(zip_paths, snapshot_dir) as snapshots:
+            cohort_input_file = os.path.join(output_dir, "cohort_input.txt")
+            input_file = cohort_input_file
+            with open(cohort_input_file, "w") as f:
+                f.writelines(f"{zpath}\n" for zpath in snapshots.paths)
 
-        # 2) Run the "vntyper cohort" command
-        command = [
-            "conda",
-            "run",
-            # Same reason as build_vntyper_command: without this, conda buffers the child
-            # until it exits, so a cohort analysis logs nothing while it runs (#213).
-            "--no-capture-output",
-            "-n",
-            "vntyper",
-            "vntyper",
-            "cohort",
-            "--input-file",
-            input_file,
-            "-o",
-            output_dir,
-        ]
-        logger.info(f"Running command: {' '.join(command)}")
-        subprocess.run(command, check=True)
-        logger.info("Joint cohort analysis completed.")
+            # 2) Run the "vntyper cohort" command
+            command = [
+                "conda",
+                "run",
+                # Same reason as build_vntyper_command: without this, conda buffers the child
+                # until it exits, so a cohort analysis logs nothing while it runs (#213).
+                "--no-capture-output",
+                "-n",
+                "vntyper",
+                "vntyper",
+                "cohort",
+                "--input-file",
+                cohort_input_file,
+                "-o",
+                output_dir,
+            ]
+            logger.info(f"Running command: {' '.join(command)}")
+            subprocess.run(command, check=True)
+            logger.info("Joint cohort analysis completed.")
 
-        os.remove(input_file)
+        os.remove(cohort_input_file)
         input_file = None
-        shutil.rmtree(snapshot_dir)
-        snapshot_dir = None
 
         # 3) Zip the results
         create_safe_archive(output_dir, "zip", output_dir, protected_paths=zip_paths)
@@ -640,12 +638,6 @@ def run_cohort_analysis_job(
                 )
             except Exception as e:
                 logger.error(f"Error extending retention for cohort {cohort_id}: {e}")
-
-        if snapshot_dir:
-            try:
-                shutil.rmtree(snapshot_dir)
-            except Exception as e:
-                logger.error(f"Error deleting cohort member snapshots {snapshot_dir}: {e}")
 
         # Delete the listing file this task wrote for itself. That file is the
         # only thing here the task owns; the .zip paths it names are the

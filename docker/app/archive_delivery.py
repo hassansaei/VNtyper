@@ -9,6 +9,7 @@ import stat
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Literal
 
 from starlette.responses import FileResponse
 
@@ -63,6 +64,96 @@ def _unlink_if_same(path: Path, expected: os.stat_result) -> None:
             os.unlink(path.name, dir_fd=parent_descriptor)
     finally:
         os.close(parent_descriptor)
+
+
+def _close_snapshot_directory(
+    directory: Path,
+    parent_descriptor: int,
+    directory_descriptor: int,
+    directory_metadata: os.stat_result,
+    names: tuple[str, ...],
+) -> None:
+    """Remove bound snapshot members and close their directory descriptors."""
+    cleanup_failure: BaseException | None = None
+
+    def record_failure(error: BaseException) -> None:
+        nonlocal cleanup_failure
+        if cleanup_failure is None:
+            cleanup_failure = error
+        else:
+            logger.error(f"Multiple cohort snapshot cleanup operations failed: {error}")
+
+    for name in names:
+        try:
+            os.unlink(name, dir_fd=directory_descriptor)
+        except FileNotFoundError:
+            pass
+        except BaseException as error:
+            record_failure(error)
+
+    try:
+        current = os.stat(directory.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if not _same_identity(directory_metadata, current):
+            raise ValueError(f"Cohort member snapshot directory changed during analysis: {directory}")
+        os.rmdir(directory.name, dir_fd=parent_descriptor)
+    except BaseException as error:
+        record_failure(error)
+
+    for descriptor in (directory_descriptor, parent_descriptor):
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            record_failure(error)
+
+    if cleanup_failure is not None:
+        raise cleanup_failure
+
+
+class OwnedArchiveSnapshots:
+    """Task-owned archive copies kept reachable through an open directory."""
+
+    def __init__(
+        self,
+        directory: Path,
+        parent_descriptor: int,
+        directory_descriptor: int,
+        directory_metadata: os.stat_result,
+        names: tuple[str, ...],
+    ) -> None:
+        self.paths = tuple(f"/proc/{os.getpid()}/fd/{directory_descriptor}/{name}" for name in names)
+        self._directory = directory
+        self._parent_descriptor = parent_descriptor
+        self._directory_descriptor = directory_descriptor
+        self._directory_metadata = directory_metadata
+        self._names = names
+        self._closed = False
+
+    def __enter__(self) -> OwnedArchiveSnapshots:
+        """Keep the snapshots alive for the surrounding operation."""
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> Literal[False]:
+        """Release snapshots without replacing an error from their consumer."""
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc_value is None:
+                raise
+            logger.error(f"Cohort subprocess failed and snapshot cleanup also failed: {cleanup_error}")
+        return False
+
+    def close(self) -> None:
+        """Delete the bound copies and close their anchoring descriptors."""
+        if self._closed:
+            return
+        self._closed = True
+        _close_snapshot_directory(
+            self._directory,
+            self._parent_descriptor,
+            self._directory_descriptor,
+            self._directory_metadata,
+            self._names,
+        )
 
 
 class OwnedFileResponse(FileResponse):
@@ -148,21 +239,24 @@ def write_owned_zip_member(archive: zipfile.ZipFile, path: str | Path, arcname: 
         os.close(descriptor)
 
 
-def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> list[str]:
-    """Copy member archives from bound descriptors into task-owned files.
+def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> OwnedArchiveSnapshots:
+    """Copy member archives and return the owner of their anchored lifetime.
 
     Args:
         paths: Member archive paths supplied to the cohort task.
         snapshot_dir: Newly created private directory for the copies.
 
     Returns:
-        Paths of the task-owned snapshots, in input order.
+        Owner exposing descriptor-bound paths in input order.
     """
     directory = Path(snapshot_dir)
     directory.mkdir(mode=0o700)
-    directory_descriptor = os.open(directory, _DIRECTORY_FLAGS)
-    snapshots: list[str] = []
+    parent_descriptor = os.open(directory.parent, _DIRECTORY_FLAGS)
+    directory_descriptor = -1
+    names: list[str] = []
     try:
+        directory_descriptor = os.open(directory.name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor)
+        directory_metadata = os.fstat(directory_descriptor)
         for path in paths:
             source_descriptor, _ = open_owned_regular(path)
             name = Path(path).name
@@ -174,6 +268,7 @@ def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> list[
                     0o600,
                     dir_fd=directory_descriptor,
                 )
+                names.append(name)
                 with (
                     os.fdopen(os.dup(source_descriptor), "rb") as source,
                     os.fdopen(os.dup(target_descriptor), "wb") as target,
@@ -181,14 +276,29 @@ def snapshot_owned_archives(paths: list[str], snapshot_dir: str | Path) -> list[
                     shutil.copyfileobj(source, target)
                 if os.fstat(source_descriptor).st_nlink != 1:
                     raise ValueError(f"Unsafe result archive gained another hard link while being read: {path}")
-                snapshots.append(str(directory / name))
             finally:
                 if target_descriptor >= 0:
                     os.close(target_descriptor)
                 os.close(source_descriptor)
     except BaseException:
-        shutil.rmtree(directory)
+        if directory_descriptor >= 0:
+            try:
+                _close_snapshot_directory(
+                    directory,
+                    parent_descriptor,
+                    directory_descriptor,
+                    os.fstat(directory_descriptor),
+                    tuple(names),
+                )
+            except BaseException as cleanup_error:
+                logger.error(f"Snapshot creation failed and cleanup also failed: {cleanup_error}")
+        else:
+            os.close(parent_descriptor)
         raise
-    finally:
-        os.close(directory_descriptor)
-    return snapshots
+    return OwnedArchiveSnapshots(
+        directory,
+        parent_descriptor,
+        directory_descriptor,
+        directory_metadata,
+        tuple(names),
+    )

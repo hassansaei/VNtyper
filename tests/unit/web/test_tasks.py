@@ -30,6 +30,7 @@ import inspect
 import json
 import logging
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -1419,6 +1420,108 @@ def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(
     assert consumed_names == ["job-a.zip"]
     assert member.is_symlink()
     assert patient.read_bytes() == PATIENT_BYTES
+
+
+def test_cohort_analysis_consumes_the_copied_bytes_when_snapshot_directory_name_is_replaced(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """The cohort child reopens snapshots through the directory inode, not its old name."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    output_dir = tmp_path / "analysis"
+    snapshot_dir = output_dir / ".cohort-members"
+    displaced_snapshot_dir = output_dir / ".cohort-members-displaced"
+    consumed = tmp_path / "consumed.bin"
+    real_subprocess_run = subprocess.run
+
+    def replace_snapshot_directory_before_child_opens_input(command, *args, **kwargs):
+        snapshot_dir.rename(displaced_snapshot_dir)
+        snapshot_dir.mkdir()
+        (snapshot_dir / member.name).write_bytes(PATIENT_BYTES)
+        input_file = Path(command[command.index("--input-file") + 1])
+        reader = (
+            "from pathlib import Path; import sys; "
+            "listed = Path(sys.argv[1]).read_text().strip(); "
+            "Path(sys.argv[2]).write_bytes(Path(listed).read_bytes())"
+        )
+        real_subprocess_run([sys.executable, "-c", reader, str(input_file), str(consumed)], check=True)
+
+    monkeypatch.setattr(tasks.subprocess, "run", replace_snapshot_directory_before_child_opens_input)
+
+    with pytest.raises(ValueError, match="snapshot directory changed"):
+        _invoke_cohort_job(
+            tasks,
+            cohort_id="cohort-1",
+            zip_paths=[str(member)],
+            output_dir=str(output_dir),
+        )
+
+    assert consumed.read_bytes() == b"original member archive"
+    assert not (displaced_snapshot_dir / member.name).exists()
+    assert (snapshot_dir / member.name).read_bytes() == PATIENT_BYTES
+    assert not Path(f"{output_dir}.zip").exists()
+
+
+def test_cohort_snapshot_cleanup_never_masks_the_subprocess_failure_after_directory_replacement(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A replaced snapshot name is secondary when the cohort child already failed."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    output_dir = tmp_path / "analysis"
+    snapshot_dir = output_dir / ".cohort-members"
+    displaced_snapshot_dir = output_dir / ".cohort-members-displaced"
+    primary_failure = subprocess.CalledProcessError(9, ["vntyper", "cohort"])
+
+    def replace_snapshot_directory_then_fail(command, *args, **kwargs):
+        snapshot_dir.rename(displaced_snapshot_dir)
+        snapshot_dir.mkdir()
+        (snapshot_dir / member.name).write_bytes(PATIENT_BYTES)
+        raise primary_failure
+
+    monkeypatch.setattr(tasks.subprocess, "run", replace_snapshot_directory_then_fail)
+    caplog.set_level(logging.ERROR, logger="app.archive_delivery")
+
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _invoke_cohort_job(
+            tasks,
+            cohort_id="cohort-1",
+            zip_paths=[str(member)],
+            output_dir=str(output_dir),
+        )
+
+    assert raised.value is primary_failure
+    assert not (displaced_snapshot_dir / member.name).exists()
+    assert (snapshot_dir / member.name).read_bytes() == PATIENT_BYTES
+    assert "snapshot directory changed" in caplog.text
+
+
+def test_cohort_snapshot_copy_failure_removes_the_partial_task_owned_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed copy leaves neither its partial bytes nor its private directory behind."""
+    from app import archive_delivery
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    snapshot_dir = tmp_path / ".cohort-members"
+    primary_failure = OSError("snapshot copy failed")
+
+    def copy_part_then_fail(source, target, *args, **kwargs):
+        target.write(source.read(5))
+        raise primary_failure
+
+    monkeypatch.setattr(archive_delivery.shutil, "copyfileobj", copy_part_then_fail)
+
+    with pytest.raises(OSError) as raised:
+        archive_delivery.snapshot_owned_archives([str(member)], snapshot_dir)
+
+    assert raised.value is primary_failure
+    assert not snapshot_dir.exists()
 
 
 def test_cohort_analysis_skips_retention_extension_when_no_cohort_id_is_given(
