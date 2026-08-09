@@ -10,18 +10,21 @@ ever silently discarded. The produced-read layout is necessarily decided after l
 conversion and before any FASTQ consumer, because the four output files are its evidence.
 
 **Architecture:** An owned alignment-preflight boundary runs first in `run_pipeline`. It
-resolves the exact target internally, materialises a *run-local alignment view* (a symlink
-to the input plus a freshly built co-located index, both inside the output directory),
-chooses the unmapped-scan strategy from `samtools idxstats`, and proves a reference by
-decoding every consumer shape the selected scan will use. It returns the target and a frozen
-`AlignmentPlan`. Read layout is **not** part of that plan — it is decided after conversion,
-from the FASTQs that were actually written. Decisions live in pure modules; only the
-preflight shells out.
+opens the regular alignment and materialises a run-local view of that exact inode (an
+atomic procfd view, with verified same-filesystem hardlink fallback), then builds the
+co-located fresh index, chooses the unmapped scan from `samtools idxstats`, and proves the
+reference for every consumer shape. It returns the target and frozen `AlignmentPlan` whose
+binding remains alive through coverage and is released by `AlignmentPlan.close()`. Read
+layout is **not** part of that plan — it is decided after conversion, from the FASTQs that
+were actually written. Decisions live in pure modules; only the preflight shells out.
 
 **Tech Stack:** Python 3.10+ (floor; CI matrix 3.10–3.13), samtools 1.20 / htslib 1.23,
 pytest, ruff, mypy, Docker + Celery for the web layer.
 
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
+
+**Status:** implemented through H3; this plan records the final interfaces and remaining
+close-out evidence (final A-PERF-1 rerun and combined no-HIGH review).
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
@@ -56,9 +59,10 @@ From AGENTS.md. Every task's requirements implicitly include these.
 - **`run_command` runs one string under bash with `shell=True`** (trap 9). Quoting happens
   only in `command_builders.py`, via `quote_path`. Tool invocations are *not* quoted
   (`config["tools"]` holds command prefixes); paths, regions and sample names *are*.
-- **Keep files under ~650 LOC.** `fastq_bam_processing.py` is **649** and
-  `kestrel_genotyping.py` is **936** — both are at or over the limit before this milestone
-  adds a line, so changes to them must be net-negative or extract.
+- **Keep files under ~650 LOC.** Re-measured final implementation values are
+  `fastq_bam_processing.py` **632**, `pipeline.py` **669**,
+  `kestrel_genotyping.py` **865**, and `alignment_preflight.py` **642** lines. Further
+  edits to the two over-limit files extract the touched responsibility rather than grow it.
 - **Touch a file, add tests for it**, including for functions you only modify.
 - **If you touch `.github/workflows/`, run `make ci-local`,** not just `make check-all`.
 - **Never claim tests pass without showing the command output.**
@@ -79,17 +83,23 @@ make format && make test-unit
 | File | Status | Responsibility |
 | --- | --- | --- |
 | `vntyper/scripts/alignment_contract.py` | create | `AlignmentPlan`; index names per format; the text of every failure message; the `preflight_error.json` payload. Pure. |
+| `vntyper/scripts/alignment_binding.py` | create | Opened-inode binding; procfd view, verified hardlink fallback, exact owned-view cleanup and FD lifetime. |
 | `vntyper/scripts/reference_resolution.py` | create | Validated ordered reference candidates; known or unavailable FASTA contig coverage. Pure. |
 | `vntyper/scripts/idxstats_parsing.py` | create | Parse an `idxstats` table and decide the scan. Fails closed. Pure. |
 | `vntyper/scripts/read_layout.py` | create | The layout verdict from FASTQ record counts, and which files are consumed vs stranded. Pure. |
 | `vntyper/scripts/alignment_preflight.py` | create | Orchestrate the view, fresh index, scan choice and reference proof; pin `REF_PATH`. |
 | `vntyper/scripts/preflight_command_io.py` | create | The one captured-command executor: atomic logs plus optional process-group deadline, kill and reap. |
-| `vntyper/scripts/kestrel_command.py` | create | `construct_kestrel_command`, extracted from the 936-line `kestrel_genotyping.py` per AGENTS.md rule 3. |
+| `vntyper/scripts/kestrel_command.py` | create | `construct_kestrel_command`, extracted without behavioural change from `kestrel_genotyping.py` and re-exported for existing callers; final source is 865 lines. |
 | `vntyper/scripts/alignment_index.py` | modify | Add `resolve_any_index`; `resolve_bam_index` unchanged. |
 | `vntyper/scripts/command_builders.py` | modify | Thread slice + index; optional slice indexing; indexed unplaced fetch; reference probe; `reference_path` (quoted here) on slice, filter, probe and **depth**. |
 | `vntyper/scripts/fastq_bam_processing.py` | modify | Consume `AlignmentPlan`. Must end **below** 649 lines. |
 | `vntyper/scripts/chromosome_utils.py` | modify | Classified-only denominator, strict majority, config threshold. |
 | `vntyper/scripts/pipeline.py` | modify | Call the preflight; route the layout; give coverage the reference and the view. |
+| `vntyper/scripts/pipeline_cleanup.py` | create | Close plans without replacing an active primary pipeline outcome. |
+| `vntyper/scripts/pipeline_coverage.py` | create | The final coverage consumer; closes the plan after it returns. |
+| `vntyper/scripts/pipeline_inputs.py` | create | Input selection, output/archive ownership and trailing-separator normalization. |
+| `vntyper/scripts/cli_logging_safety.py` | create | Exclusive regular-file/alias checks before a pipeline log is opened. |
+| `vntyper/scripts/archive_safety.py` | create | Shared CLI/web descriptor-anchored archive creation and stale-archive cleanup. |
 | `vntyper/scripts/alignment_processing.py` | modify | `align_and_sort_fastq` accepts a single FASTQ. |
 | `vntyper/scripts/cli_parser.py`, `cli_handlers.py` | modify | `--reference-fasta`; allow `--fastq1` without `--fastq2`. |
 | `docker/app/tasks.py`, `docker/app/main.py` | modify | Read `preflight_error.json`; surface its message in job status. |
@@ -126,7 +136,9 @@ Wave 2 until `make check-all` is green on the tip of Wave 1.
   — `<file>.<suffix>` then `<stem>.<suffix>` for each suffix in order.
 - `AlignmentPlan` frozen dataclass: `input_path: str`, `view_path: str`,
   `file_format: str`, `index_path: str`, `reference_path: str | None`,
-  `reference_source: str`, `uncovered_contigs: tuple[str, ...]`, `unmapped_scan: str`
+  `reference_source: str`, `uncovered_contigs: tuple[str, ...]`, `unmapped_scan: str`,
+  `binding: AlignmentBinding | None`; `close() -> None` removes the owned view then
+  releases the descriptor exactly once.
 - `missing_index_message(in_path, file_format, tried) -> str` — final round-3 wording
   names failure to build the fresh run-local index; it does not tell users to create a
   supplied index the implementation deliberately will not trust.
@@ -330,6 +342,7 @@ fast mode and direct slice consumers.
 ### Task 5: `alignment_preflight.py`
 
 **Files:** create `vntyper/scripts/alignment_preflight.py`,
+`vntyper/scripts/alignment_binding.py`,
 `vntyper/scripts/reference_resolution.py`, `vntyper/scripts/reference_uri_policy.py`,
 `vntyper/scripts/preflight_input_io.py`, `vntyper/scripts/alignment_preflight_logs.py`,
 `vntyper/scripts/reference_resolution_environment.py`,
@@ -339,8 +352,10 @@ focused alignment-preflight unit modules, `tests/unit/test_reference_resolution.
 modify `vntyper/scripts/pipeline_alignment.py`, `vntyper/config.json`
 
 **Interfaces produced:**
-- `build_alignment_view(in_path, output_dir, output_name, file_format, config, threads) -> tuple[str, str]`
-  → `(view_path, index_path)`
+- `build_alignment_view(in_path, output_dir, output_name, file_format, config, threads,
+  *, bai_only=False) -> tuple[str, str, AlignmentBinding]` → `(view_path, index_path,
+  binding)`; it opens the input, publishes a procfd view or verified same-filesystem
+  hardlink fallback, and returns the still-open binding to the plan.
 - `choose_unmapped_scan(view_path, config, threads, output_dir, output_name, *, file_format) -> str`
 - `resolve_reference(view_path, candidates, region, bed_file, config, threads, output_dir, output_name, header_contigs, m5, *, coverage_region=None) -> tuple[str | None, str, tuple[str, ...]]`
 - `pin_reference_resolution(config) -> str | None` and
@@ -379,14 +394,15 @@ class TestAlignmentView:
     def test_the_index_is_built_beside_the_view_never_beside_the_input(self, tmp_path): ...
     def test_a_valid_wrong_sample_index_cannot_authorise_an_empty_slice(self, tmp_path): ...
     def test_the_input_directory_is_untouched_even_when_it_is_read_only(self, tmp_path): ...
-    def test_a_stale_view_pointing_at_a_different_alignment_is_replaced(self, tmp_path):
-        """spec 4.5: --keep-intermediates makes reruns normal, and a view left pointing at
-        another sample would genotype the wrong one."""
-    def test_a_view_already_pointing_at_this_same_input_is_reused(self, tmp_path): ...
+    def test_the_procfd_view_identifies_the_opened_input_after_path_replacement(self, tmp_path): ...
+    def test_procfs_failure_uses_only_a_verified_same_filesystem_hardlink(self, tmp_path): ...
+    def test_close_removes_only_the_exact_owned_view_before_releasing_the_descriptor(self, tmp_path): ...
 ```
 
-- [ ] **Step 2:** run → FAIL. **Step 3:** implement `build_alignment_view` using
-      `os.symlink`, `FileExistsError`, `os.readlink` and `os.path.samefile`.
+- [ ] **Step 2:** run → FAIL. **Step 3:** implement `AlignmentBinding` and
+      `build_alignment_view`: open the regular input first, atomically publish the procfd
+      view, then fall back only to a same-filesystem hardlink whose identity matches the
+      opened descriptor. Do not restore the superseded pathname-reuse design.
 - [ ] **Step 4:** write and run the failing tests for `choose_unmapped_scan` for both BAM
       and CRAM (delegates to
       `idxstats_parsing.choose_scan`, feeding it `capture_command`'s output and exit) and
@@ -411,8 +427,9 @@ def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplo
       `tests/unit/test_ref_path_is_pinned.py`: an unset `REF_PATH` is pinned to a
       local-only value; an operator's `http://` value is overridden by default; the
       override is skipped when `allow_ambient_reference_resolution` is true; and
-      **`restore_reference_resolution` puts back the previous value, including "unset"**
-      (spec §4.5 — `run_pipeline` is called in-process by tests). Pin the warning contract:
+      **`restore_reference_resolution` puts back the previous value, including "unset", in
+      nested CRAM scopes and after `BaseException`** (spec §4.5 — `run_pipeline` is called
+      in-process by tests). Pin the warning contract:
       the opt-in may block later stages even though every reference probe remains bounded.
       Assert BAM and FASTQ neither validate nor mutate this policy.
       Add pure URI-policy tests for local/relative/`file://` values, anchored remote
@@ -458,7 +475,11 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
       boundary before header/region resolution; the boundary resolves and materialises the
       exact BED internally, calls `run_preflight`, and returns both BED and plan. Pass the
       plan to both call sites, and change
-      `input_bam = Path(cram)` at `:468` to the view plus the plan's reference.
+      `input_bam = Path(cram)` at `:468` to the view plus the plan's reference. Route
+      cleanup through `close_alignment_plan(plan, preserve_primary=...)`, so a cleanup
+      failure is observable on a successful run but never replaces a primary failure.
+      Use `calculate_alignment_coverage(...)` as the final consumer: it consumes the
+      plan's view/reference and calls `plan.close()` only after coverage returns.
       Pass `exclude_unmapped=not fast_mode` to the slice builder. For indexed BAM and
       CRAM plans, call `build_cram_unmapped_indexed_command` (BAM has
       `reference_path=None`); remove only the production import/call of the optional BAI
@@ -583,9 +604,10 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
 
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement `read_layout.py`.
 - [ ] **Step 4:** extract `construct_kestrel_command` into `vntyper/scripts/kestrel_command.py`
-      unchanged, re-export it from `kestrel_genotyping` so existing imports keep working,
-      and confirm `wc -l vntyper/scripts/kestrel_genotyping.py` dropped. AGENTS.md rule 3
-      requires the extraction because that file is 936 lines and this task edits it.
+      without behavioural change, re-export it from `kestrel_genotyping` so existing
+      imports keep working, and confirm the final module is 865 lines. The extraction is
+      the bounded responsibility split required by AGENTS.md rule 3, not a Kestrel-design
+      change.
 - [ ] **Step 5:** write failing tests for the single-input command forms — fastp with no
       `--in2`/`--out2`; bwa with one FASTQ; Kestrel with one FASTQ; Kestrel still raising
       when `fastq_1` is absent. Change the guard from `if not fastq_1 or not fastq_2` to
@@ -693,6 +715,38 @@ read-name digest of it.
       `gh release create v2.0.10 --target main` — **never push a `v*` tag** (it publishes
       to PyPI immediately and irreversibly).
 
+### Final H1/H2/H3 reconciliation: binding, ownership and archival
+
+**Files:** modify `vntyper/scripts/alignment_binding.py`, `alignment_contract.py`,
+`pipeline.py`, `pipeline_cleanup.py`, `pipeline_coverage.py`, `pipeline_inputs.py`,
+`cli_logging_safety.py`, `archive_safety.py`, `docker/app/tasks.py`; tests in
+`tests/unit/test_alignment_binding_lifecycle.py`, `test_pipeline_coverage.py`,
+`test_pipeline_archive_destination_ownership.py`, `test_cli_logging_safety.py`,
+`test_archive_safety.py`, and web archive-task tests.
+
+**Interfaces and lifetime:** `AlignmentPlan.binding: AlignmentBinding | None` and
+`AlignmentPlan.close() -> None`; `build_alignment_view(in_path, ...) -> (view_path,
+index_path, binding)`; `close_alignment_plan(plan, *, preserve_primary: bool) -> None`; and
+`calculate_alignment_coverage(plan=..., ...) -> str`. The binding opens the regular input,
+installs a procfd view or verified hardlink fallback, and lives until coverage has consumed
+the view. `close()` deletes only its exact owned view before closing its FD.
+
+- [x] **H1:** test path replacement after input open, procfs fallback identity, exact
+      owned-view removal, cleanup failure with and without a primary failure, and nested
+      `REF_PATH` restoration; implement the binding/lifetime boundary and primary-outcome
+      preservation.
+- [x] **H2:** test exclusive regular-file ownership for outputs and logs, alias rejection,
+      patient-tree scope, and `archive_base_name()` trailing-separator normalization;
+      implement the shared pipeline/CLI ownership checks before every writer opens a path.
+- [x] **H3:** test reports-before-archive, view removal before traversal, descriptor
+      anchoring with `O_NOFOLLOW`, symlink/hardlink/special-entry refusal, CLI/web shared
+      writer behaviour, and web rollback/quarantine failure handling; implement archive
+      creation only after report completion.
+- [ ] **Close-out:** rerun A-PERF-1 on the final H3 revision, then run and record the
+      combined final-diff adversarial review with no HIGH findings. Preserve the exact web
+      rollback/quarantine diagnostic wording from the final H3 commit if that commit is
+      newer than this document base.
+
 ---
 
 ## Self-review
@@ -703,6 +757,10 @@ read-name digest of it.
 §5 #213 → Wave 0 (done). §5 #225 → Tasks 1, 3, 5, 6. §5 #209 → Tasks 4, 5, 7.
 §5 #178 → Tasks 2, 4, 5, 6, 11. §5 #165 → Task 8. §5 #161 → Task 9.
 §5b P1-P3 → Task 4; P4 → Tasks 2, 4, 6. §6 config → Task 5 step 1. §7 → Tasks 11, 12.
+§4.1a's binding/lifetime and §4.5 cleanup/`REF_PATH` semantics → Final H1. §4.6 output,
+log and archive ownership → Final H2/H3. A-VIEW-1/2 → Final H1; A-OWN-1 and
+A-ARCHIVE-1/2 → Final H2/H3; the historical `3083ed9` timing and final-rerun placeholder
+→ Final close-out.
 
 **Placeholder scan.** Tasks 5-10 give complete test code for the decisions and prose for
 the wiring. That is deliberate and bounded: the wiring's exact shape depends on what Wave 1

@@ -1,6 +1,8 @@
 # Milestone 4 — CRAM and input robustness
 
-**Status:** spec, awaiting adversarial review
+**Status:** implemented through H3; final documentation reconciliation committed after the
+H1/H2/H3 fixes. A final performance rerun and the concluding no-HIGH review remain
+explicit close-out evidence, not unrecorded implementation work.
 **Branch:** `fix/milestone-4-cram-input-robustness`
 **Closes:** #213, #225, #209, #178, #165, #161
 **Date:** 2026-08-08
@@ -338,9 +340,12 @@ assumption. When it is non-zero the run falls back to the whole-file stream scan
 automatically. §4.3(b) is rewritten around this.
 
 
-### 3.12 The run-local alignment view works, measured end to end
+### 3.12 Historical pathname-symlink view measurement (superseded)
 
-§4.1a is a new mechanism, so it was measured before being specified rather than after.
+This was the original pathname-symlink experiment. It established the co-location
+requirement, but it is **superseded** by the descriptor-bound view in §4.1a: a pathname
+can be replaced after validation, so a symlink to its name cannot bind the consumer to the
+opened input. The results below are retained only as historical evidence for co-location.
 Setup: an input directory made **read-only** (`chmod -w`) containing a CRAM with no index,
 and an output directory holding a symlink to it.
 
@@ -598,7 +603,8 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 
 | Module | Kind | Owns |
 | --- | --- | --- |
-| `alignment_contract.py` | pure | what each format requires; the `AlignmentPlan` dataclass; the text of every failure message |
+| `alignment_contract.py` | contract | what each format requires; the `AlignmentPlan` dataclass, including its lifetime-owned `binding` and `close()`; the text of every failure message |
+| `alignment_binding.py` | I/O lifetime | opens the regular alignment once; installs the procfd view or verified hardlink fallback; removes the exact owned view before releasing its FD |
 | `reference_resolution.py` | pure | validated ordered candidate mapping and known or unavailable FASTA contig coverage |
 | `reference_uri_policy.py` | pure | remote-scheme detection and path-free CRAM header-URI policy |
 | `read_layout.py` | pure | the `paired`/`single`/`mixed`/`empty` verdict from counts, and which FASTQ paths feed downstream |
@@ -607,6 +613,11 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | `preflight_command_io.py` | I/O | atomic captured logs and optional process-group deadline/termination for reference probes |
 | `reference_resolution_environment.py` | environment I/O | CRAM-only `REF_PATH` pin/restore policy |
 | `pipeline_alignment.py` | boundary | owns header/assembly/target preparation and the shared curated-error/`REF_PATH` lifetime before returning BED + `AlignmentPlan` |
+| `pipeline_cleanup.py` | outcome I/O | closes an `AlignmentPlan` while preserving an already-active primary failure |
+| `pipeline_coverage.py` | consumer boundary | uses the proven view/reference for coverage and closes the plan only after coverage returns |
+| `pipeline_inputs.py` | ownership policy | selects inputs and rejects archive destinations that alias protected input or patient trees; normalizes trailing output separators |
+| `cli_logging_safety.py` | ownership policy | validates that a pipeline log is an exclusively owned regular file before parent creation or `FileHandler` setup |
+| `archive_safety.py` | archive I/O | creates/clears archives through descriptor-anchored paths, refusing aliases and unsafe source entries |
 
 The five pure modules are unit-testable with no filesystem and are held to the ~100%
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
@@ -628,19 +639,26 @@ before. Two mechanisms can fix that, and only one of them works everywhere:
   (measured: `idxstats: invalid option -- 'X'`).
 * Make the alignment and its index co-located somewhere writable.
 
-So the preflight materialises a **run-local alignment view** inside the output directory:
-a symlink to the input alignment, plus a freshly built index beside it. Every subsequent
-samtools call uses the view's path. A supplied index is enumerated and protected from
-mutation, but it is never used to authorise a run: §3.15 measured a valid wrong-sample BAI
-returning an empty slice with exit 0.
+So preflight first opens the input as a regular file and holds that FD in an
+`AlignmentBinding`. It publishes a run-local view of **that opened inode**: normally a
+procfd symlink (`/proc/<pid>/fd/<fd>`), atomically installed at the owned view pathname;
+when procfs is unavailable, it uses a verified same-filesystem hardlink to the already-open
+inode. The binding verifies the installed type and device/inode identity. Every subsequent
+samtools call uses the view path and the binding remains open through the final consumer.
+A supplied index is enumerated and protected from mutation, but it is never used to
+authorise a run: §3.15 measured a valid wrong-sample BAI returning an empty slice with
+exit 0.
 
 This costs one run-local view and one index build, writes nothing to the input tree (the
 milestone-3 invariant), and makes co-location the normal case rather than a special case,
 so no builder needs an index argument and `idxstats` works. Each index and provenance file
-is installed with an atomic rename or exclusive link, and ordinary exceptions roll back
-the pair. A process death between the two filesystem operations can leave an incomplete
-pair; the next run fails closed and names that ownership inconsistency rather than
-guessing that an unproven regular index belongs to VNtyper.
+is installed with an atomic rename or exclusive link. The view is removed only after the
+final consumer (coverage) has returned; `AlignmentPlan.close()` removes exactly the owned
+view and then releases the descriptor. If cleanup detects replacement or fails while a
+pipeline failure is already active, it logs the cleanup failure and preserves the primary
+outcome; otherwise the cleanup failure is raised. A process death between index/provenance
+operations can leave an incomplete pair; the next run fails closed and names that ownership
+inconsistency rather than guessing that an unproven regular index belongs to VNtyper.
 
 ### 4.2 The reference contract — proof, not inference
 
@@ -851,20 +869,19 @@ deadline on a stalled regular file on FUSE or NFS. §3.17 and A-178-1 bound the 
 samtools reference-probe process, and §9 still leaves arbitrary filesystem availability
 and general stage timeouts out of scope.
 
-**The alignment view is created exclusively, and never reused blindly.**
-`create_output_directories` reuses an existing output directory silently (`utils.py:128`),
-and `--keep-intermediates` makes reruns normal, so a view from a previous run can already
-be present. The contract: create the symlink with `os.symlink` and catch `FileExistsError`;
-on collision, read the existing link's target with `os.readlink` and accept it **only if
-it resolves to the same file as this run's input** (`os.path.samefile`); otherwise replace
-it. A stale view pointing at a different alignment would silently genotype the wrong
-sample, which is the worst failure this repository can have.
+**The alignment binding owns a non-reusable view.** The historical pathname symlink
+collision/reuse design is superseded. The binding opens the regular input before it makes
+any view, publishes an atomic procfd view or verified same-filesystem hardlink, records the
+exact view identity, and refuses to remove an entry that has been replaced. Its descriptor
+is intentionally alive until coverage, the final alignment consumer, finishes. No stale
+view is accepted as evidence for a new run.
 
-**A CRAM's `REF_PATH` is saved and restored.** Pinning mutates `os.environ`, which is
+**A CRAM's `REF_PATH` scope nests and restores.** Pinning mutates `os.environ`, which is
 process-global and outlives a single `run_pipeline` call — and `run_pipeline` is imported
 and called in-process by tests and by anything embedding VNtyper as a library. The
-contract: capture the previous value (including "unset"), set the pinned one, and restore
-it in a `finally`. BAM and FASTQ do not inspect this CRAM-only policy. Without that, one
+contract: every CRAM scope captures its own previous value (including "unset"), sets the
+pinned value, and restores that exact value in `finally`, including nested calls and a
+`BaseException`. BAM and FASTQ do not inspect this CRAM-only policy. Without that, one
 CRAM run silently reconfigures every later run in the same process.
 
 **Every run-local index is fresh.** The candidate-name contract enumerates both spellings
@@ -878,6 +895,34 @@ BAI for BAM and CRAI for CRAM from the run-local view on every run, installs it 
 and consumes only that artifact. Indexed recovery lets htslib discover the co-located
 index, removing separate
 “reuse” and “build” correctness paths.
+
+### 4.6 H2/H3 ownership and archive contracts
+
+Every pipeline output, preflight log and CLI log is a pipeline-owned **exclusive regular
+file** before any writer opens it: symlinks, special files and multiply linked regular
+files are refused, and lexical, resolved and same-inode aliases of operator inputs are
+refused. This applies before parent creation or `FileHandler` construction. Alignment
+inputs additionally protect their containing patient trees; FASTQ, BED and reference
+siblings remain valid layouts. `pipeline_inputs.archive_base_name()` normalizes syntactic
+trailing separators before deriving `<output>.zip` or `<output>.tar.gz`, so the archive
+destination cannot change with a trailing slash.
+
+Reports are generated before an optional archive is created. The descriptor-bound
+alignment view is removed before archive traversal, so neither a procfd symlink nor a
+hardlink view can appear in a result archive. The shared `archive_safety.py` writer is
+used by CLI and web paths: it anchors the destination parent, result root, each directory
+and every source file with `O_NOFOLLOW` descriptors; streams bytes from the already-open
+file descriptors; and refuses symlinks, hardlinks and all special files. Public archive
+replacement is exclusive and atomic; stale archives are quarantined and then removed only
+after identity checks. A failure while producing an archive never turns a completed report
+into a successful archive claim.
+
+The web task applies the same writer and destination checks. On a failed web archive it
+attempts rollback of the public archive and retains/logs a quarantine if safe removal is
+not possible; it must not follow an attacker-controlled alias. **Parent reconciliation
+note:** preserve the precise rollback/quarantine wording from the final H3 commit if that
+commit lands after this documentation base; this paragraph states the contract, not a
+replacement for the final failure-path diagnostic text.
 
 ## 5. Per-issue changes
 
@@ -1096,11 +1141,11 @@ is worse than the faster arm's *worst*. If P1/P2 fall inside the noise band they
 anyway — they are strictly less work — but the spec will say so rather than claim a win it
 did not measure.
 
-### Wave 3 measurement (2026-08-09)
+### Historical Wave 3 measurement at `3083ed9` (2026-08-09)
 
 The host was otherwise idle; the six final runs used one harness job, four pipeline
-threads and alternated `ddf49a1` (2.0.9) with `3083ed9` (the clean final behavioral
-candidate). Every counted side verified its package marker, exact revision and all 18
+threads and alternated `ddf49a1` (2.0.9) with `3083ed9` (the then-current behavioral
+candidate, now historical after H1/H2/H3). Every counted side verified its package marker, exact revision and all 18
 expectations. The host was a 32-logical-CPU AMD Ryzen 9 9950X with one logged-in user.
 The raw one/five/fifteen-minute load averages at each alternating launch were baseline
 `3.34/3.30/2.34`, milestone `4.87/3.96/2.67`, baseline `5.91/4.51/2.97`, milestone
@@ -1110,14 +1155,19 @@ the immediately preceding four-thread arm rather than hiding that residual load.
 | Arm | Runs (s) | Median | Range |
 | --- | --- | --- | --- |
 | 2.0.9 baseline | 88.79, 90.02, 88.89 | 88.89 | 88.79–90.02 |
-| milestone | 87.10, 86.05, 87.23 | 87.10 | 86.05–87.23 |
+| `3083ed9` candidate (historical) | 87.10, 86.05, 87.23 | 87.10 | 86.05–87.23 |
 
-The ranges do not overlap, so A-PERF-1 records a **measured improvement** under its
+The ranges do not overlap, so `3083ed9` recorded a **historical measured improvement** under its
 predeclared rule: the slower baseline arm's best run (88.79 s) exceeds the faster
 milestone arm's worst run (87.23 s). The median difference is 1.79 s (2.0%). The separate
 whole-50 run found 32 explicit mixed-layout failures on the milestone arm; the baseline
 completed those cases only by discarding the stranded FASTQ, so they are exit-bar
 evidence rather than performance samples.
+
+**Final-rerun placeholder (required before release):** repeat the same alternating
+three-per-arm A-PERF-1 protocol on the final H1/H2/H3 commit, record both exact revisions,
+all six timings, medians and ranges here, and state whether the predeclared non-overlap
+rule is met. Do not relabel the `3083ed9` result as final evidence.
 
 The forced CRAM measurement also corrected two impossible premises in the original
 A-178-2 wording. Both declared golden CRAM sources have non-zero placed-unmapped counts,
@@ -1221,8 +1271,11 @@ A-178-4 is the one explicit external, non-gating evidence request.
 | A-SCAN-2 | A malformed, empty or non-zero-exit `idxstats` selects `stream`, never `indexed`. | unit |
 | A-SCAN-3 | In non-fast mode the target slice excludes flag 4 before merging with complete recovery; on the registered `b178` single-end fixture the merged BAM has exactly the source's 4,807-record sorted-QNAME multiset, not the duplicated 5,136-record set. Fast mode remains unchanged. | unit + integration |
 | A-SCAN-4 | A nonempty one-SQ BAM containing five all-unplaced flag-4 records selects indexed recovery and completes with the exact five-record sorted-QNAME multiset in recovery and final BAMs. | integration, purpose-built fixture |
-| A-VIEW-1 | A view symlink left by a previous run pointing at a *different* alignment is replaced, not reused. | unit |
-| A-VIEW-2 | `REF_PATH` holds its original value (including unset) after `run_pipeline` returns and after it raises. | unit |
+| A-VIEW-1 | Preflight consumes only the inode opened for this run: it installs an atomically published procfd view, or a verified same-filesystem hardlink fallback, and rejects an unsafe/replaced owned view rather than reusing pathname state. The binding survives through coverage and removes that exact view before closing its FD. | unit + lifecycle integration |
+| A-VIEW-2 | `REF_PATH` holds its original value (including unset) after normal return, a raised `BaseException`, and nested CRAM scopes; cleanup failure never replaces an already-active pipeline outcome. | unit |
+| A-OWN-1 | Output and log destinations are exclusive regular files and do not lexically, resolvedly or by inode alias operator input; symlinks, hardlinks and special entries are refused before writers create/open them. | unit |
+| A-ARCHIVE-1 | The archive base is invariant under trailing output separators; reports precede archiving; the bound view is removed before traversal; and CLI and web use the same descriptor-anchored archive writer. | unit + web tier |
+| A-ARCHIVE-2 | Archive traversal uses `O_NOFOLLOW` descriptors and rejects symlink, hardlink and special-file entries without reading through them. Failed public-archive cleanup rolls back when safe or leaves a named quarantine. | unit + web tier |
 | A-INPUT-1 | A FIFO supplied as a reference or BED is rejected without waiting for a writer; BED and optional FAI text reads obey the shipped configurable byte bound before probe work. This does not claim a timeout for stalled regular-file kernel I/O. | unit |
 | A-165-2 | A header split exactly 50/50 between two conventions returns `unknown`, not the first one checked. | unit |
 | A-165-3 | The public chromosome resolver and the pipeline target boundary reject 50/50 and zero-classifiable headers with a `ValueError` naming the unresolved convention; neither constructs nor falls back to a target. | unit |
@@ -1291,6 +1344,10 @@ PR.**
 | 3c | final diff follow-up | 2 | 4 | 3 | 2 HIGH accepted and fixed; MED/LOW dispositions are detailed below |
 | 3d | final diff follow-up | 3 | 3 | 2 | 3 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
 | 3e | final diff at `bfefbdc` | 2 | 4 | 2 | 2 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
+| H1 | descriptor-binding/lifetime follow-up | accepted | tracked | tracked | opened regular FD, procfd view with verified hardlink fallback, final-consumer lifetime, exact cleanup and primary-outcome preservation |
+| H2 | output/log ownership follow-up | accepted | tracked | tracked | exclusive regular-file destinations, alias refusal, CLI log ownership and trailing-separator archive-base normalization |
+| H3 | archive traversal/lifecycle follow-up | accepted | tracked | tracked | reports-before-archive, view removal before traversal, `O_NOFOLLOW` descriptor anchoring, unsafe-entry refusal and web rollback/quarantine handling |
+| combined | H1/H2/H3 final-diff rerun | pending | — | — | rerun after the final merged H3 commit; record final performance evidence and no-HIGH verdict |
 
 ### Round 3a — disposition
 
@@ -1387,6 +1444,25 @@ claim was rebutted: A-178-4 is explicitly external and non-gating, while A-ALL-1
 executable final commands; §7 now states that exception precisely. These fixes still need
 the mandatory concluding no-HIGH review.
 
+### H1/H2/H3 dispositions
+
+H1 replaced the pathname trust boundary with `AlignmentBinding`: the view represents the
+already-open regular inode, retains its FD through coverage, and cleans up the exact owned
+entry before descriptor release. Its cleanup helper logs a cleanup error without replacing
+an active primary pipeline outcome; nested CRAM `REF_PATH` scopes restore in LIFO order.
+
+H2 accepted the ownership finding for every output and pipeline-log writer. Destinations
+must be exclusive regular files and must not alias an operator input by lexical path,
+resolved path or inode; patient-tree exclusion remains alignment-specific. It also fixed
+the archive base to be independent of trailing separators.
+
+H3 accepted the archive-order and traversal findings. Reporting precedes archiving, the
+view is gone before traversal, and the shared CLI/web writer anchors parent/root/children
+with `O_NOFOLLOW` descriptors and rejects symlink, hardlink and special entries. Web
+failure handling rolls back the public archive when safe and otherwise retains a quarantine
+with a diagnostic. The exact post-H3 diagnostic wording is a parent-level reconcile item
+if the final H3 commit is later than this documentation base.
+
 ### Wave 3 gate evidence before round 3
 
 `make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. The final BAM timing
@@ -1418,10 +1494,10 @@ are removed: a forced `indexed` scan now raises rather than dropping reads, and
 are one candidate tried last rather than two with the no-reference one first, which had let
 `UR:` outrank an explicit `--reference-fasta` and had recorded an externally-decoded CRAM
 as reference-free (§4.2). New §4.5 states the contracts the new mechanisms need: `idxstats`
-parsing fails closed, the view symlink is created exclusively and validated against
-`os.path.samefile` on collision, `REF_PATH` is restored in a `finally`, and supplied
-indexes are protected but never consumed: every mode builds a fresh BAI or CRAI beside
-the run-local view. #165 gains a
+parsing fails closed, the historical pathname view has been superseded by a descriptor-bound
+procfd/hardlink view, `REF_PATH` is restored in a nested `finally`, and supplied indexes
+are protected but never consumed: every mode builds a fresh BAI or CRAI beside the
+run-local view. #165 gains a
 tie rule; #161 defines `mixed` as rejected and adds R1/R2 count parity. `AGENTS.md`'s docs
 rule is actually corrected this time — round 2 was right that the previous entry claimed an
 edit that had not been made.
