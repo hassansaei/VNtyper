@@ -150,19 +150,50 @@ def test_default_header_policy_rejects_remote_uri_without_disclosing_its_path() 
 def test_local_header_reference_paths_resolve_against_the_input_and_deduplicate(tmp_path: Path) -> None:
     """Local UR spellings become one ordered filesystem candidate per lexical path."""
     input_cram = tmp_path / "patient" / "input.cram"
+    input_cram.parent.mkdir()
     relative_reference = input_cram.parent / "reference one.fa"
-    absolute_reference = tmp_path / "reference two.fa"
     header = (
         "@SQ\tSN:chr1\tUR:reference one.fa\tLN:100\n"
         f"@SQ\tSN:chr2\tUR:{relative_reference.as_uri()}\tLN:100\n"
-        f"@SQ\tSN:chr3\tUR:{absolute_reference.as_uri()}\tLN:100\n"
-        "@SQ\tSN:chr4\tUR:https://reference.invalid/remote.fa\tLN:100\n"
+        "@SQ\tSN:chr3\tUR:https://reference.invalid/remote.fa\tLN:100\n"
     )
 
-    assert reference_uri_policy.local_header_reference_paths(header, input_cram) == (
-        str(relative_reference),
-        str(absolute_reference),
-    )
+    assert reference_uri_policy.local_header_reference_paths(header, input_cram) == (str(relative_reference),)
+
+
+@pytest.mark.parametrize(
+    "uri_kind",
+    ["absolute-outside", "absolute-same-directory", "parent-outside", "parent-same-directory", "symlink"],
+)
+def test_local_header_references_reject_paths_outside_the_input_directory_without_disclosure(
+    tmp_path: Path,
+    uri_kind: str,
+) -> None:
+    input_directory = tmp_path / "upload"
+    input_directory.mkdir()
+    input_cram = input_directory / "input.cram"
+    outside = tmp_path / "operator-secret.fa"
+    outside.write_text(">chr1\nAAAA\n", encoding="ascii")
+    same_directory = input_directory / "reference.fa"
+    same_directory.write_text(">chr1\nAAAA\n", encoding="ascii")
+    if uri_kind == "absolute-outside":
+        uri = str(outside)
+    elif uri_kind == "absolute-same-directory":
+        uri = str(same_directory)
+    elif uri_kind == "parent-outside":
+        uri = "../operator-secret.fa"
+    elif uri_kind == "parent-same-directory":
+        uri = "../upload/reference.fa"
+    else:
+        escape = input_directory / "escape.fa"
+        escape.symlink_to(outside)
+        uri = escape.name
+
+    with pytest.raises(ValueError, match="Invalid local CRAM header reference URI") as raised:
+        reference_uri_policy.local_header_references(f"@SQ\tSN:chr1\tM5:digest\tUR:{uri}\n", input_cram)
+
+    assert uri not in str(raised.value)
+    assert str(outside) not in str(raised.value)
 
 
 def test_local_header_references_preserve_each_sq_contig_digest_association(tmp_path: Path) -> None:

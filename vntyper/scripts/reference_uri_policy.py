@@ -143,7 +143,7 @@ def local_header_references(header: str, input_alignment: str | Path) -> tuple[L
     Raises:
         ValueError: If a file URI is ambiguous or does not name a local path.
     """
-    base_directory = Path(os.path.abspath(input_alignment)).parent
+    base_directory = Path(os.path.abspath(input_alignment)).parent.resolve()
     result: list[LocalHeaderReference] = []
     seen: set[tuple[str, str | None, str]] = set()
     for line in header.splitlines():
@@ -176,8 +176,12 @@ def local_header_references(header: str, input_alignment: str | Path) -> tuple[L
             if not candidate_value or "\x00" in candidate_value:
                 raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
             candidate = Path(candidate_value)
-            absolute = str(candidate if candidate.is_absolute() else base_directory / candidate)
-            normalized = os.path.abspath(os.path.normpath(absolute))
+            if ".." in candidate.parts or (candidate.is_absolute() and scheme_match is None):
+                raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
+            normalized_path = (candidate if candidate.is_absolute() else base_directory / candidate).resolve()
+            if not normalized_path.is_relative_to(base_directory):
+                raise ValueError(_INVALID_LOCAL_HEADER_REFERENCE)
+            normalized = str(normalized_path)
             identity = (contig, m5, normalized)
             if identity not in seen:
                 seen.add(identity)
