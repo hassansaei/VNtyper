@@ -1,7 +1,7 @@
 # Milestone 4 — CRAM and input robustness
 
 **Status:** H1/H2/H3 and the final binding, evidence-mode and archive follow-ups are
-integrated and independently reviewed. The final-candidate performance rerun is recorded;
+integrated and independently reviewed. The final BAM-path performance rerun is recorded;
 the combined no-HIGH verdict remains the explicit close-out item.
 **Branch:** `fix/milestone-4-cram-input-robustness`
 **Closes:** #213, #225, #209, #178, #165, #161
@@ -798,11 +798,15 @@ fixtures are unaffected. Passing `-T` to a reference-free CRAM is harmless, so n
 lost by trying the explicit candidates first.
 
 **The `UR:` caveat is load-bearing for anyone testing this.** §3.10: a `UR:` target that
-still exists on disk silently rescues a candidate that would otherwise fail, because
-htslib falls back to it. Under the default policy, a resolvable local/relative/`file://`
-`UR:` *is* a working reference, and it is candidate 4; remote schemes require the ambient
-waiver (§4.3). A test asserting that candidate 3 fails must therefore delete or rename a
-local `UR:` target first. Two measurements in §3 were wrong until this was noticed.
+still exists on disk can rescue a candidate that would otherwise fail, because htslib
+falls back to it. Header-derived local references are accepted only when their canonical
+path remains inside the input CRAM's directory; absolute bare paths, parent traversal and
+symlink escapes fail before the file is opened. External operator references must use
+`--reference-fasta` or a configured reference key. A same-directory relative or `file://`
+`UR:` remains a working reference; remote schemes require the ambient waiver (§4.3). A
+test asserting that the earlier configured candidate fails must therefore delete or
+rename an accepted local `UR:` target first. Two measurements in §3 were wrong until this
+was noticed.
 
 ### 4.3 Making the default-mode network hang unreachable
 
@@ -815,7 +819,8 @@ that `REF_PATH` does not govern (§3.21), the owned boundary also rejects every 
 URI scheme immediately after reading the header and before assembly, target, probe or
 stage work. It examines every `UR` tag separately and recognises an anchored URI scheme
 without requiring `//`; the diagnostic and curated artifact name the contig and scheme
-without the URI path. Local, relative and `file:` values remain accepted. The setting is
+without the URI path. Same-directory relative and `file:` values remain accepted under
+the confinement rule above. The setting is
 validated as an actual boolean at every read; JSON strings, numbers and null fail closed.
 Setting the option to boolean `true` honours both an operator's deliberately configured
 refget server and remote header UR values, and logs a warning.
@@ -1234,7 +1239,7 @@ whole-50 run found 32 explicit mixed-layout failures on the milestone arm; the b
 completed those cases only by discarding the stranded FASTQ, so they are exit-bar
 evidence rather than performance samples.
 
-### Final integrated measurement at `388f157` (2026-08-09)
+### Final BAM-path integrated measurement at `388f157` (2026-08-09)
 
 The final integrated tree was clean at `388f157ccc5ca90d334a143dd0d0eed5603e4fda`;
 the baseline worktree was clean at `ddf49a18ecdc208b98248a3563b128a2b2da765f`.
@@ -1243,6 +1248,10 @@ branch history. The measured runtime tree (`vntyper/`, `docker/`, and `scripts/`
 byte-identical at published-history commit
 `470fdd6590392cf090dc841c8f2b73b3cf05b9ef`. The original hash remains here because it
 is the revision the measurement harness recorded.
+Every later executable change is confined to CRAM reference resolution, while the only
+later `scripts/` change clears an undefined mate flag in the single-end fixture generator.
+Those paths are outside this 18-case BAM timing arm, so the measurement remains its final
+BAM-path result rather than being relabelled as a run of code the harness did not execute.
 The same 18-case intersection ran with one harness job and four pipeline threads,
 alternating baseline/candidate. Every one of the 108 case executions exited 0 and each
 arm verified its exact package marker and revision. The host had 32 logical CPUs and one
@@ -1254,7 +1263,7 @@ include load left by the immediately preceding arm.
 | Arm | Runs (s) | Median | Range |
 | --- | --- | --- | --- |
 | 2.0.9 baseline `ddf49a1` | 90.00, 91.13, 90.03 | 90.03 | 90.00–91.13 |
-| final candidate `388f157` | 87.83, 87.49, 87.52 | 87.52 | 87.49–87.83 |
+| measured candidate `388f157` | 87.83, 87.49, 87.52 | 87.52 | 87.49–87.83 |
 
 The ranges do not overlap: the candidate's worst run (87.83 s) is faster than the
 baseline's best run (90.00 s). Under the predeclared rule A-PERF-1 therefore records **no
@@ -1275,7 +1284,9 @@ equal read set would contradict A-SCAN-1 and reopen silent loss.
 
 ## 6. Config surface
 
-Every behaviour above is reachable from configuration. New keys:
+The policy choices below are reachable from configuration. The no-read-drop rule in
+§4.4 is deliberately not: a mixed produced-FASTQ layout always fails, and there is no
+configuration escape hatch that may discard the stranded reads. New keys:
 
 ```jsonc
 "bam": {
@@ -1577,8 +1588,9 @@ indexed evidence requires exit 1, its exact guard count, no extraction command a
 The accepted MED made coverage cleanup failure-aware so it cannot replace the coverage
 error being handled. One LOW corrected §4.6/A-OWN-1: captured preflight logs safely
 atomically replace an unrelated stale final entry rather than claiming every such entry is
-refused. The other LOW is the still-pending final A-PERF-1 rerun; it is not carried forward
-from an earlier behavioral revision.
+refused. The other LOW required a fresh A-PERF-1 rerun rather than carrying evidence
+forward from an earlier behavioral revision; that rerun is now complete and recorded in
+§5b.
 
 ### Historical Wave 3 gate evidence before final-diff follow-ups
 

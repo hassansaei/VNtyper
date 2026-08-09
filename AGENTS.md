@@ -181,7 +181,10 @@ Three thresholds enforce this, and they are deliberately different:
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. Measured on the same suite: **81.70% branch-inclusive** (was 80.24% before #171-#212 raised it; 80.77% statement-only at that earlier measurement).
+against. The fresh milestone-4 gate measured **86.11% branch-inclusive across 4,297 unit
+tests**. Historically, the #171-#212 suite measured 81.70% after the floor moved from the
+earlier 80.24%; statement-only coverage at that earlier branch-coverage rollout was
+80.77%.
 So deleting `branch = true` *raises* the reported total while covering strictly less —
 the ratchet cannot catch that regression, because the number moves the wrong way, and
 `tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing

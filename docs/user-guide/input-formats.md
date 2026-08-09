@@ -5,7 +5,7 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 === "BAM"
 
     ```bash
-    vntyper pipeline --bam sample.bam -o results/
+    vntyper pipeline --bam inputs/sample.bam -o results/sample/
     ```
 
     Requirements:
@@ -17,7 +17,7 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 === "CRAM"
 
     ```bash
-    vntyper pipeline --cram sample.cram -o results/
+    vntyper pipeline --cram inputs/sample.cram -o results/sample/
     ```
 
     Requirements:
@@ -43,6 +43,13 @@ VNtyper 2 accepts BAM, CRAM, or paired-end FASTQ files as input. Provide exactly
 !!! note "SHARK module requires FASTQ input"
     The SHARK filtering module (`--extra-modules shark`) only works with FASTQ input.
     With BAM or CRAM input, the SHARK module is silently skipped even if specified.
+
+!!! important "Keep alignment inputs and outputs in separate trees"
+    For BAM or CRAM input, the output root must stay outside the directory containing the
+    alignment and all descendants of that directory. A BAM at `sample.bam` and output at
+    `results/` are both under the same current-directory input tree and the run is rejected.
+    Use a layout such as `inputs/sample.bam` and `results/sample/`, as shown above, or put
+    the output root elsewhere.
 
 ## Input Validation
 

@@ -33,7 +33,7 @@ When using FASTQ input, both `--fastq1` and `--fastq2` are required.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `-o, --output-dir` | path | `out` | Output directory for the results |
+| `-o, --output-dir` | path | `out` | Output directory for the results. For BAM/CRAM input it must stay outside the directory containing the alignment and all descendants of that directory |
 | `-n, --output-name` | string | `output` | Base name for the output files. **Fixed at `output`**: any other value is rejected. The report generator, the `report` subcommand and the Kestrel stage each name their files from that literal and take no basename argument, so moving only the stages that accept one would leave the report reading files nothing wrote — which VNtyper reports as a negative genotype rather than an error. Use `--output-dir` to separate runs. |
 | `-s, --sample-name` | string | (from input filename) | Sample name for labeling results. If not provided, defaults to the input BAM or FASTQ filename stem |
 
@@ -75,10 +75,13 @@ The `shark` module is not supported in BAM/CRAM mode; use FASTQ mode or remove t
 
 ## Examples
 
+The BAM examples use separate `inputs/` and `results/` trees. An output directory beside
+the BAM itself would still be inside the protected patient input tree and is rejected.
+
 Run the pipeline with a BAM file using default settings:
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/
+vntyper pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
 Run with paired FASTQ files and hg38 reference:
@@ -91,20 +94,20 @@ vntyper pipeline --fastq1 R1.fastq.gz --fastq2 R2.fastq.gz \
 Enable fast mode with multiple threads and archive results:
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ --threads 8 \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ --threads 8 \
     --fast-mode --archive-results --archive-format tar.gz
 ```
 
 Run with the adVNTR module and coverage cap:
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --extra-modules advntr --advntr-max-coverage 300
 ```
 
 Generate additional summary formats and clean up intermediate files:
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --summary-formats csv,tsv --delete-intermediates
 ```

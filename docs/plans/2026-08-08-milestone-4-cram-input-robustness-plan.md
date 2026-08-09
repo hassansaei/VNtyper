@@ -28,7 +28,7 @@ pytest, ruff, mypy, Docker + Celery for the web layer.
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
 
 **Status:** H1/H2/H3 and their final follow-ups are integrated and independently reviewed.
-The final-candidate A-PERF-1 rerun is recorded; the combined no-HIGH review remains unchecked.
+The final BAM-path A-PERF-1 rerun is recorded; the combined no-HIGH review remains unchecked.
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
@@ -771,7 +771,9 @@ only exact owned fallback entries before closing the index and alignment FDs.
       completion. Final H3 publication and descriptor-snapshot re-reviews are clean.
 - [x] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
       `388f157`; record 90.00/91.13/90.03 s versus 87.83/87.49/87.52 s, exact loads and
-      the non-overlapping no-regression verdict in spec §5b.
+      the non-overlapping no-regression verdict in spec §5b. The published-history
+      runtime-tree equivalent is `470fdd6`; later executable changes are CRAM-reference-only,
+      and the later fixture-generator change is outside the measured BAM arm.
 - [ ] **Close-out:** run and record the combined final-diff adversarial review with no
       HIGH findings.
 
@@ -787,8 +789,8 @@ only exact owned fallback entries before closing the index and alignment FDs.
 §5b P1-P3 → Task 4; P4 → Tasks 2, 4, 6. §6 config → Task 5 step 1. §7 → Tasks 11, 12.
 §4.1a's binding/lifetime and §4.5 cleanup/`REF_PATH` semantics → Final H1. §4.6 output,
 log and archive ownership → Final H2/H3. A-VIEW-1/2 → Final H1; A-OWN-1 and
-A-ARCHIVE-1/2 → Final H2/H3; the historical `3083ed9` timing and final-rerun placeholder
-→ Final close-out.
+A-ARCHIVE-1/2 → Final H2/H3; the historical `3083ed9` timing and completed BAM-path
+rerun → Final close-out.
 
 **Placeholder scan.** Tasks 5-10 give complete test code for the decisions and prose for
 the wiring. That is deliberate and bounded: the wiring's exact shape depends on what Wave 1
