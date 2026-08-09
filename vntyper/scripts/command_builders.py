@@ -60,8 +60,11 @@ Functions:
 from __future__ import annotations
 
 import logging
-import shlex
 from pathlib import Path
+
+from vntyper.scripts.samtools_command_fragments import customized_index_input, quote_path
+from vntyper.scripts.samtools_command_fragments import reference_flag as _reference_flag
+from vntyper.scripts.samtools_command_fragments import thread_flag as _thread_flag
 
 logger = logging.getLogger(__name__)
 
@@ -72,62 +75,6 @@ logger = logging.getLogger(__name__)
 #: the caller happily carries on with a FASTQ holding a fraction of the reads.
 #: ``pipefail`` makes the pipeline exit non-zero if any stage does.
 PIPEFAIL_PREFIX = "set -o pipefail; "
-
-
-def quote_path(value: str | Path | int) -> str:
-    """
-    Quote a user-supplied value for safe interpolation into a shell command.
-
-    Use this for anything that originates outside ``config.json``'s ``tools``
-    section: input and output paths, region strings, sample names, thread counts.
-
-    Args:
-        value (str | Path | int): The value to interpolate.
-
-    Returns:
-        str: The value, shell-quoted if it needs it and unchanged if it does not.
-        ``shlex.quote`` leaves anything matching ``[\\w@%+=:,./-]*`` alone, which
-        covers ordinary POSIX paths and every region string this pipeline builds.
-
-    Examples:
-        >>> quote_path("/data/sample.bam")
-        '/data/sample.bam'
-        >>> quote_path("/data/patient sample.bam")
-        "'/data/patient sample.bam'"
-        >>> quote_path("chr1:155158000-155163000")
-        'chr1:155158000-155163000'
-    """
-    return shlex.quote(str(value))
-
-
-def _thread_flag(threads: int) -> str:
-    """Return the optional samtools thread flag.
-
-    Args:
-        threads: Requested thread count.
-
-    Returns:
-        The trailing-space-terminated ``-@`` fragment when more than one thread
-        was requested; otherwise an empty string.
-    """
-    if threads <= 1:
-        return ""
-    return f"-@ {quote_path(threads)} "
-
-
-def _reference_flag(reference_path: str | Path | None) -> str:
-    """Return the optional, shell-quoted samtools reference flag.
-
-    Args:
-        reference_path: Reference FASTA path, if one was resolved.
-
-    Returns:
-        The trailing-space-terminated ``-T`` fragment, or an empty string when
-        no reference was provided.
-    """
-    if reference_path is None:
-        return ""
-    return f"-T {quote_path(reference_path)} "
 
 
 def build_fastp_command(
@@ -210,6 +157,7 @@ def build_samtools_slice_command(
     region: str | None = None,
     bed_file: str | Path | None = None,
     reference_path: str | Path | None = None,
+    index_path: str | Path | None = None,
     threads: int = 1,
     index_output: bool = True,
     exclude_unmapped: bool = False,
@@ -227,6 +175,7 @@ def build_samtools_slice_command(
         region (str | None): Region string such as ``chr1:155158000-155163000``.
         bed_file (str | Path | None): BED file passed as ``-L``.
         reference_path (str | Path | None): Reference FASTA for CRAM decoding.
+        index_path (str | Path | None): Exact custom index passed with ``-X``.
         threads (int): Thread count for view and index.
         index_output (bool): Whether to append indexing of the resulting slice.
         exclude_unmapped (bool): Exclude flag-4 reads recovered separately for a
@@ -250,9 +199,10 @@ def build_samtools_slice_command(
         raise ValueError(message)
 
     exclude_flag = "-F 4 " if exclude_unmapped else ""
+    indexed_input = customized_index_input(in_bam, index_path)
     command = (
         f"{samtools_path} view -P -b {exclude_flag}{_thread_flag(threads)}{_reference_flag(reference_path)}"
-        f"{quote_path(in_bam)} {target} -o {quote_path(output_bam)}"
+        f"{indexed_input} {target} -o {quote_path(output_bam)}"
     )
     if not index_output:
         return command
@@ -351,6 +301,7 @@ def build_cram_unmapped_indexed_command(
     unmapped_bam: str | Path,
     threads: int,
     reference_path: str | Path | None = None,
+    index_path: str | Path | None = None,
 ) -> str:
     """Build the indexed alignment command for unplaced unmapped reads.
 
@@ -360,14 +311,16 @@ def build_cram_unmapped_indexed_command(
         unmapped_bam: Destination BAM for read-unmapped records.
         threads: Thread count for samtools.
         reference_path: Reference FASTA for CRAM decoding.
+        index_path: Exact custom index passed with ``-X``.
 
     Returns:
         A single ``samtools view`` command that requests literal ``'*'`` reads
         whose read-unmapped bit is set, including unpaired reads.
     """
+    indexed_input = customized_index_input(in_bam, index_path)
     return (
         f"{samtools_path} view -b -f 4 {_thread_flag(threads)}{_reference_flag(reference_path)}"
-        f"{quote_path(in_bam)} {quote_path('*')} -o {quote_path(unmapped_bam)}"
+        f"{indexed_input} {quote_path('*')} -o {quote_path(unmapped_bam)}"
     )
 
 
@@ -539,6 +492,7 @@ def build_samtools_depth_command(
     bam_file: str | Path,
     coverage_output: str | Path,
     reference_path: str | Path | None = None,
+    index_path: str | Path | None = None,
 ) -> str:
     """
     Build the per-base depth command for a region, redirected to a file.
@@ -550,6 +504,7 @@ def build_samtools_depth_command(
         bam_file (str | Path): The BAM to measure.
         coverage_output (str | Path): Where the depth table is written.
         reference_path (str | Path | None): Reference FASTA for CRAM decoding.
+        index_path (str | Path | None): Exact custom index passed with ``-X``.
 
     Returns:
         str: The complete command.
@@ -564,9 +519,10 @@ def build_samtools_depth_command(
         (#171).
     """
     reference_flag = "" if reference_path is None else f"--reference {quote_path(reference_path)} "
+    indexed_input = customized_index_input(bam_file, index_path)
     return (
         f"{samtools_path} depth -a {_thread_flag(threads)}{reference_flag}-r {quote_path(region)} "
-        f"{quote_path(bam_file)} > {quote_path(coverage_output)}"
+        f"{indexed_input} > {quote_path(coverage_output)}"
     )
 
 

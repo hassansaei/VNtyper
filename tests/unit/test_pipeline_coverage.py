@@ -1,6 +1,7 @@
 """Resource-lifetime tests for the extracted alignment coverage boundary."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,6 +10,40 @@ from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 
 pytestmark = pytest.mark.unit
+
+
+def test_coverage_receives_the_descriptor_bound_index_path() -> None:
+    """The final htslib consumer must not receive the replaceable public index path."""
+    binding = MagicMock(spec=AlignmentBinding)
+    binding.index_view_path = "/proc/123/fd/12"
+    plan = AlignmentPlan(
+        input_path="/input/patient.cram",
+        view_path="/run/input.cram",
+        file_format="cram",
+        index_path="/run/input.cram.crai",
+        reference_path="/reference.fa",
+        reference_source="test",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+        binding=binding,
+    )
+    received: list[object] = []
+
+    def record_coverage(**kwargs: object) -> None:
+        received.append(kwargs["index_path"])
+
+    calculate_alignment_coverage(
+        plan=plan,
+        region="chr1:10-20",
+        reference_assembly="hg19",
+        threads=2,
+        config={},
+        output_dir="/coverage",
+        coverage_calculator=record_coverage,
+        region_resolver=lambda **kwargs: "unused",
+    )
+
+    assert received == ["/proc/123/fd/12"]
 
 
 def test_coverage_failure_still_releases_the_alignment_binding(tmp_path: Path) -> None:

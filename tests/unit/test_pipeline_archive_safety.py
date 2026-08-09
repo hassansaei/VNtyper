@@ -35,6 +35,7 @@ def test_cli_releases_the_h1_owned_view_before_archiving(tmp_path: Path, archive
             view_path=str(view),
             file_format=kwargs["file_format"],
             index_path=f"{view}.bai",
+            stable_index_path=f"{view}.bai",
             reference_path=None,
             reference_source="test",
             uncovered_contigs=(),

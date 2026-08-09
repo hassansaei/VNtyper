@@ -157,7 +157,8 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"-o {tmp_path}/output_sliced.bam && "
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
@@ -177,8 +178,9 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b -F 4 -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam",
-        f"samtools view -b -f 4 -@ 4 /data/sample.bam '*' -o {tmp_path}/output_unmapped.bam",
+        f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"-o {tmp_path}/output_sliced.bam",
+        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
@@ -194,7 +196,7 @@ def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert [command for command in commands if "-f 4" in command] == [
-        f"samtools view -b -f 4 -@ 4 /data/sample.bam '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
     ]
 
 
@@ -264,8 +266,8 @@ def test_an_existing_index_beside_the_input_is_reused_rather_than_rebuilt(tmp_pa
     )
 
 
-def test_indexed_bam_recovery_uses_the_plan_view_without_a_reference(tmp_path):
-    """The htslib fetch consumes the proven view and discovers its co-located BAI."""
+def test_indexed_bam_recovery_uses_the_plan_view_and_exact_index_without_a_reference(tmp_path):
+    """The htslib fetch consumes the proven view and its retained exact BAI."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     in_bam = input_dir / "sample.bam"
@@ -298,14 +300,15 @@ def test_indexed_bam_recovery_uses_the_plan_view_without_a_reference(tmp_path):
         )
 
     (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
-    assert unmapped_command == (f"samtools view -b -f 4 -@ 4 {plan.view_path} '*' -o {tmp_path}/output_unmapped.bam")
-    assert plan.index_path not in unmapped_command
+    assert unmapped_command == (
+        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
+    )
     assert " -T " not in unmapped_command
 
 
 @pytest.mark.parametrize("index_path", ["sample.bam.bai", "sample.bai", None])
-def test_indexed_bam_recovery_never_embeds_an_index_operand(tmp_path, index_path):
-    """The proven index is co-located; htslib discovers it from the view path."""
+def test_indexed_bam_recovery_uses_the_plan_index_operand(tmp_path, index_path):
+    """Manual plans still pass their declared index explicitly to htslib."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -341,7 +344,7 @@ def test_indexed_bam_recovery_never_embeds_an_index_operand(tmp_path, index_path
 
     (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
     asserted_index = input_dir / index_path if index_path is not None else output_dir / "proven.bai"
-    assert str(asserted_index) not in unmapped_command
+    assert f"-X {in_bam} {asserted_index}" in unmapped_command
     assert in_bam.as_posix() in unmapped_command
 
 
@@ -546,7 +549,8 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b -@ 4 /data/sample.bam -L {bed} -o {tmp_path}/output_sliced.bam && "
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} "
+        f"-o {tmp_path}/output_sliced.bam && "
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam"
     )
     assert REGION not in commands[0]

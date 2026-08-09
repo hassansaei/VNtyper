@@ -108,6 +108,7 @@ def test_slice_uses_the_view_reference_threads_and_mode_specific_indexing(
     assert plan.input_path not in slice_command
     assert f"-T '{plan.reference_path}'" in slice_command
     assert "-@ 4" in slice_command
+    assert f"-X {plan.view_path} {plan.index_path}" in slice_command
     assert ("&& samtools index" in slice_command) is expects_index
 
 
@@ -119,9 +120,9 @@ def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path:
     assert plan.view_path in commands[0]
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert unmapped_command == (
-        f"samtools view -b -f 4 -@ 4 {plan.view_path} '*' -o {tmp_path / 'run' / 'output_unmapped.bam'}"
+        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' "
+        f"-o {tmp_path / 'run' / 'output_unmapped.bam'}"
     )
-    assert plan.index_path not in unmapped_command
 
 
 def test_bam_with_placed_unmapped_evidence_uses_the_complete_stream_scan(tmp_path: Path) -> None:
@@ -154,6 +155,7 @@ def test_cram_unmapped_command_is_selected_by_the_proven_plan(
     assert unexpected_fragment not in unmapped_command
     assert plan.view_path in unmapped_command
     assert f"-T '{plan.reference_path}'" in unmapped_command
+    assert (" -X " in unmapped_command) is (scan == "indexed")
 
 
 def test_coverage_passes_the_proven_reference_to_samtools_depth(tmp_path: Path) -> None:
@@ -166,6 +168,7 @@ def test_coverage_passes_the_proven_reference_to_samtools_depth(tmp_path: Path) 
         return True
 
     reference_path = tmp_path / "reference genome.fa"
+    index_path = "/proc/123/fd/15"
     with patch.object(fastq_bam_processing, "run_command", run_depth):
         fastq_bam_processing.calculate_vntr_coverage(
             bam_file=str(tmp_path / "run" / "input.cram"),
@@ -175,10 +178,12 @@ def test_coverage_passes_the_proven_reference_to_samtools_depth(tmp_path: Path) 
             output_dir=str(tmp_path),
             output_name="cov",
             reference_path=str(reference_path),
+            index_path=index_path,
         )
 
     assert seen == [
-        f"samtools depth -a -@ 4 --reference '{reference_path}' -r {REGION} {tmp_path}/run/input.cram > {depth_file}"
+        f"samtools depth -a -@ 4 --reference '{reference_path}' -r {REGION} "
+        f"-X {tmp_path}/run/input.cram {index_path} > {depth_file}"
     ]
 
 

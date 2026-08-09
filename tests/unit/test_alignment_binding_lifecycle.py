@@ -6,25 +6,33 @@ import errno
 import gc
 import os
 import shlex
+from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from vntyper.scripts import alignment_preflight, fastq_bam_processing
 from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_index_binding import AlignmentIndexBinding
 from vntyper.scripts.alignment_preflight import build_alignment_view
 from vntyper.scripts.alignment_target_io import protect_alignment_inputs
 
 pytestmark = pytest.mark.unit
 
 
-def _build_view(tmp_path: Path, *, input_symlink: bool = False) -> tuple[Path, Path, AlignmentPlan]:
+def _build_view(
+    tmp_path: Path,
+    *,
+    input_symlink: bool = False,
+    file_format: str = "bam",
+) -> tuple[Path, Path, AlignmentPlan]:
     """Build one mocked-index BAM view through the production binding seam."""
     input_dir = tmp_path / "patient-input"
-    input_dir.mkdir()
-    alignment = input_dir / "sample.bam"
+    input_dir.mkdir(exist_ok=True)
+    alignment = input_dir / f"sample.{file_format}"
     alignment.write_bytes(b"original alignment")
     input_path = alignment
     if input_symlink:
@@ -42,7 +50,7 @@ def _build_view(tmp_path: Path, *, input_symlink: bool = False) -> tuple[Path, P
             str(input_path),
             str(stage_dir),
             "input",
-            "bam",
+            file_format,
             {"tools": {"samtools": "samtools"}},
             threads=1,
         )
@@ -50,7 +58,7 @@ def _build_view(tmp_path: Path, *, input_symlink: bool = False) -> tuple[Path, P
     plan = AlignmentPlan(
         input_path=str(input_path),
         view_path=view_path,
-        file_format="bam",
+        file_format=file_format,
         index_path=index_path,
         reference_path=None,
         reference_source="not-required",
@@ -77,7 +85,7 @@ _REAL_STAT = os.stat
 
 
 def test_plan_close_removes_the_exact_owned_view_before_closing_its_descriptor(tmp_path: Path) -> None:
-    """Closing a plan must not leave a proc path that a reused FD can retarget."""
+    """Index and alignment views disappear before their respective descriptors close."""
     alignment, _, plan = _build_view(tmp_path)
     view = Path(plan.view_path)
     index = Path(plan.index_path)
@@ -91,10 +99,288 @@ def test_plan_close_removes_the_exact_owned_view_before_closing_its_descriptor(t
     with patch("vntyper.scripts.alignment_binding.os.close", side_effect=observe_close):
         plan.close()
 
-    assert close_observations == [True]
+    assert close_observations == [False, True]
     assert not os.path.lexists(view)
     assert index.read_bytes() == b"fresh index"
     assert alignment.read_bytes() == b"original alignment"
+
+
+def test_conversion_uses_the_bound_fresh_index_after_the_public_index_is_replaced(tmp_path: Path) -> None:
+    """Removing `-X` must reproduce the accepted wrong-index empty-slice regression."""
+    _, _, plan = _build_view(tmp_path)
+    public_index = Path(plan.index_path)
+    replacement = public_index.with_name("wrong-sample.bai")
+    replacement.write_bytes(b"valid index from another sample")
+    replacement.replace(public_index)
+    bed = tmp_path / "target.bed"
+    bed.write_text("chr1\t0\t10\n", encoding="utf-8")
+    commands: list[str] = []
+
+    def record(command: str, *_args: object, **_kwargs: object) -> bool:
+        commands.append(command)
+        return True
+
+    try:
+        with patch.object(fastq_bam_processing, "run_command", side_effect=record):
+            fastq_bam_processing.process_bam_to_fastq(
+                output=tmp_path / "conversion",
+                output_name="output",
+                threads=1,
+                config={"tools": {"samtools": "samtools"}},
+                plan=plan,
+                fast_mode=True,
+                bed_file=bed,
+            )
+
+        slice_tokens = shlex.split(commands[0].split("&&", maxsplit=1)[0])
+        custom_index_position = slice_tokens.index("-X")
+        assert slice_tokens[custom_index_position + 1] == plan.view_path
+        bound_index = Path(slice_tokens[custom_index_position + 2])
+        assert bound_index != public_index
+        assert bound_index.read_bytes() == b"fresh index"
+        assert public_index.read_bytes() == b"valid index from another sample"
+    finally:
+        plan.close()
+
+
+@pytest.mark.parametrize("file_format", ["bam", "cram"])
+def test_proc_index_binding_retains_fresh_bai_and_crai_bytes(tmp_path: Path, file_format: str) -> None:
+    """Both generated index formats remain descriptor-bound after publication."""
+    _, _, plan = _build_view(tmp_path, file_format=file_format)
+    replacement = Path(plan.index_path).with_name(f"replacement.{file_format}.index")
+    replacement.write_bytes(b"other alignment index")
+    replacement.replace(plan.index_path)
+
+    try:
+        assert plan.stable_index_path.startswith("/proc/")
+        assert Path(plan.stable_index_path).read_bytes() == b"fresh index"
+        assert Path(plan.index_path).read_bytes() == b"other alignment index"
+    finally:
+        plan.close()
+
+
+def test_index_descriptor_is_open_before_the_public_index_can_be_replaced(tmp_path: Path) -> None:
+    """Binding after publication would retain replacement bytes instead of generated bytes."""
+    real_install = alignment_preflight._install_generated_index
+
+    def install_then_replace(
+        temporary_index: str | Path,
+        index_path: str | Path,
+        protected_paths: Iterable[str | Path],
+        *,
+        replace_owned: bool,
+    ) -> None:
+        real_install(temporary_index, index_path, protected_paths, replace_owned=replace_owned)
+        published = Path(index_path)
+        replacement = published.with_name("replacement-after-publication.bai")
+        replacement.write_bytes(b"replacement after publication")
+        replacement.replace(published)
+
+    with patch.object(alignment_preflight, "_install_generated_index", side_effect=install_then_replace):
+        _, _, plan = _build_view(tmp_path)
+
+    try:
+        assert Path(plan.stable_index_path).read_bytes() == b"fresh index"
+        assert Path(plan.index_path).read_bytes() == b"replacement after publication"
+    finally:
+        plan.close()
+
+
+def test_alignment_binding_refuses_to_replace_an_owned_index_descriptor(tmp_path: Path) -> None:
+    """A second bind cannot silently discard the exact generated index."""
+    _, _, plan = _build_view(tmp_path)
+    replacement = tmp_path / "second.bai"
+    replacement.write_bytes(b"second index")
+    binding = plan.binding
+    assert binding is not None
+
+    try:
+        with pytest.raises(RuntimeError, match="already owns a generated-index descriptor"):
+            binding.bind_index(replacement, tmp_path / ".second.bai.bound")
+        assert Path(plan.stable_index_path).read_bytes() == b"fresh index"
+    finally:
+        plan.close()
+
+
+def test_index_proc_unavailable_uses_and_cleans_a_verified_hardlink(tmp_path: Path) -> None:
+    """The portable fallback keeps the original bytes and leaves no archiveable view."""
+    with patch("vntyper.scripts.alignment_index_binding.os.stat", side_effect=_hide_proc_descriptor):
+        _, _, plan = _build_view(tmp_path)
+    bound_index = Path(plan.stable_index_path)
+    replacement = Path(plan.index_path).with_name("replacement.bai")
+    replacement.write_bytes(b"other alignment index")
+    replacement.replace(plan.index_path)
+
+    assert bound_index.read_bytes() == b"fresh index"
+    assert bound_index != Path(plan.index_path)
+    plan.close()
+    assert not os.path.lexists(bound_index)
+    assert Path(plan.index_path).read_bytes() == b"other alignment index"
+
+
+def test_index_proc_identity_mismatch_uses_the_verified_hardlink(tmp_path: Path) -> None:
+    """A descriptor filesystem with the wrong identity is treated as unavailable."""
+    index = tmp_path / "fresh.bai"
+    fallback = tmp_path / ".fresh.bai.bound"
+    other = tmp_path / "other.bai"
+    index.write_bytes(b"fresh index")
+    other.write_bytes(b"other index")
+    wrong_stat = other.stat()
+
+    with patch("vntyper.scripts.alignment_index_binding.os.stat", return_value=wrong_stat):
+        binding = AlignmentIndexBinding(index, fallback)
+
+    assert binding.consumer_path == str(fallback)
+    assert fallback.read_bytes() == b"fresh index"
+    binding.close()
+    assert not fallback.exists()
+
+
+def test_index_fallback_link_collision_never_removes_the_colliding_entry(tmp_path: Path) -> None:
+    """A link-creation race must not unlink an entry the binding did not create."""
+    index = tmp_path / "fresh.bai"
+    fallback = tmp_path / ".fresh.bai.bound"
+    index.write_bytes(b"fresh index")
+
+    def collide_then_fail(*_args: object, **_kwargs: object) -> None:
+        fallback.write_bytes(b"other entry")
+        raise FileExistsError("binding collision")
+
+    with (
+        patch("vntyper.scripts.alignment_index_binding.os.stat", side_effect=_hide_proc_descriptor),
+        patch("vntyper.scripts.alignment_index_binding.os.link", side_effect=collide_then_fail),
+        pytest.raises(RuntimeError, match="binding collision"),
+    ):
+        AlignmentIndexBinding(index, fallback)
+
+    assert fallback.read_bytes() == b"other entry"
+
+
+def test_replaced_index_fallback_is_preserved_and_keeps_both_bindings_open(tmp_path: Path) -> None:
+    """Cleanup refusal preserves replacement bytes and prevents descriptor reuse."""
+    with patch("vntyper.scripts.alignment_index_binding.os.stat", side_effect=_hide_proc_descriptor):
+        _, _, plan = _build_view(tmp_path)
+    bound_index = Path(plan.stable_index_path)
+    bound_index.unlink()
+    bound_index.write_bytes(b"replacement entry")
+    binding = plan.binding
+    assert binding is not None
+
+    with pytest.raises(RuntimeError, match="generated-index binding because it was replaced"):
+        plan.close()
+
+    assert bound_index.read_bytes() == b"replacement entry"
+    assert binding.is_open is True
+    bound_index.unlink()
+    plan.close()
+    assert binding.is_open is False
+
+
+def test_clean_hardlink_fallback_rerun_rebuilds_without_a_stale_binding(tmp_path: Path) -> None:
+    """A normal close removes the deterministic fallback so the next run can bind it."""
+    stat_target = "vntyper.scripts.alignment_index_binding.os.stat"
+    with patch(stat_target, side_effect=_hide_proc_descriptor):
+        _, _, first = _build_view(tmp_path)
+    fallback = Path(first.stable_index_path)
+    first.close()
+    assert not os.path.lexists(fallback)
+
+    with patch(stat_target, side_effect=_hide_proc_descriptor):
+        _, _, second = _build_view(tmp_path)
+    try:
+        assert Path(second.stable_index_path).read_bytes() == b"fresh index"
+    finally:
+        second.close()
+
+
+def test_index_binding_failure_removes_the_alignment_view_and_temporary_index(tmp_path: Path) -> None:
+    """Failure before index publication closes the outer alignment binding exactly once."""
+    alignment = tmp_path / "sample.bam"
+    alignment.write_bytes(b"alignment")
+    output = tmp_path / "run"
+
+    def build_index(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
+        arguments = shlex.split(command)
+        Path(arguments[arguments.index("-o") + 1]).write_bytes(b"fresh index")
+        return True, ""
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=build_index),
+        patch.object(AlignmentBinding, "bind_index", side_effect=RuntimeError("index bind failed")),
+        pytest.raises(RuntimeError, match="index bind failed"),
+    ):
+        build_alignment_view(
+            str(alignment),
+            str(output),
+            "input",
+            "bam",
+            {"tools": {"samtools": "samtools"}},
+            threads=1,
+        )
+
+    assert not os.path.lexists(output / "input.bam")
+    assert not os.path.lexists(output / "input.bam.bai")
+    assert not tuple(output.glob("*.tmp"))
+
+
+def test_nonregular_index_binding_closes_its_rejected_descriptor(tmp_path: Path) -> None:
+    """A directory cannot be retained as an index, and its descriptor must not leak."""
+    index_directory = tmp_path / "index-directory"
+    index_directory.mkdir()
+    closed: list[int] = []
+    real_close = os.close
+
+    def record_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    with (
+        patch("vntyper.scripts.alignment_index_binding.os.close", side_effect=record_close),
+        pytest.raises(RuntimeError, match="not a regular file"),
+    ):
+        AlignmentIndexBinding(index_directory, tmp_path / ".bound")
+
+    assert len(closed) == 1
+
+
+def test_missing_hardlink_fallback_still_releases_the_index_descriptor(tmp_path: Path) -> None:
+    """Already-absent owned fallback cleanup is idempotent and closes the FD."""
+    index = tmp_path / "fresh.bai"
+    fallback = tmp_path / ".fresh.bai.bound"
+    index.write_bytes(b"fresh index")
+    with patch("vntyper.scripts.alignment_index_binding.os.stat", side_effect=_hide_proc_descriptor):
+        binding = AlignmentIndexBinding(index, fallback)
+    fallback.unlink()
+
+    binding.close()
+    binding.close()
+
+    assert binding.is_open is False
+
+
+def test_index_fallback_unlink_failure_keeps_the_descriptor_open(tmp_path: Path) -> None:
+    """A fallback that cannot be removed must remain backed by its retained FD."""
+    index = tmp_path / "fresh.bai"
+    fallback = tmp_path / ".fresh.bai.bound"
+    index.write_bytes(b"fresh index")
+    with patch("vntyper.scripts.alignment_index_binding.os.stat", side_effect=_hide_proc_descriptor):
+        binding = AlignmentIndexBinding(index, fallback)
+    real_unlink = os.unlink
+
+    def fail_fallback_unlink(path: str | os.PathLike[str]) -> None:
+        if Path(path) == fallback:
+            raise PermissionError("fallback locked")
+        real_unlink(path)
+
+    with (
+        patch("vntyper.scripts.alignment_index_binding.os.unlink", side_effect=fail_fallback_unlink),
+        pytest.raises(RuntimeError, match="before release"),
+    ):
+        binding.close()
+
+    assert binding.is_open is True
+    binding.close()
+    assert binding.is_open is False
 
 
 @pytest.mark.parametrize("replacement_kind", ["file", "different-symlink", "same-target-symlink"])

@@ -96,6 +96,13 @@ class AlignmentPlan:
     unmapped_scan: str
     binding: AlignmentBinding | None = field(default=None, repr=False, compare=False)
 
+    @property
+    def stable_index_path(self) -> str:
+        """Return the exact retained index view, or the legacy path for manual plans."""
+        if self.binding is not None and self.binding.index_view_path is not None:
+            return self.binding.index_view_path
+        return self.index_path
+
     def close(self) -> None:
         """Release the run-local alignment descriptor after its final consumer."""
         if self.binding is not None:

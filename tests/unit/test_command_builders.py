@@ -332,6 +332,22 @@ def test_slice_carries_threads_and_can_skip_indexing():
     assert " index " not in command
 
 
+def test_slice_uses_the_exact_custom_index_operand() -> None:
+    """Dropping ``-X`` would make htslib rediscover a replaced public index path."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.bam",
+        index_path="/proc/123/fd/9",
+        output_bam="/o/s.bam",
+        region="chr1:1-2",
+        index_output=False,
+    )
+
+    tokens = shlex.split(command)
+    position = tokens.index("-X")
+    assert tokens[position + 1 : position + 3] == ["/o/view.bam", "/proc/123/fd/9"]
+
+
 def test_slice_indexes_by_default():
     """Ordinary conversion keeps creating the index expected by downstream stages."""
     command = build_samtools_slice_command(
@@ -412,6 +428,21 @@ def test_the_indexed_unmapped_fetch_uses_star_without_a_pipe():
     assert "'*'" in command
     assert "-f 4" in command
     assert "|" not in command
+
+
+def test_the_indexed_unmapped_fetch_uses_the_exact_custom_index() -> None:
+    """Literal-star retrieval must not fall back to index discovery by basename."""
+    command = command_builders.build_cram_unmapped_indexed_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        index_path="/proc/123/fd/10",
+        unmapped_bam="/o/unmapped.bam",
+        threads=4,
+    )
+
+    tokens = shlex.split(command)
+    position = tokens.index("-X")
+    assert tokens[position + 1 : position + 3] == ["/o/view.cram", "/proc/123/fd/10"]
 
 
 @pytest.mark.parametrize(
@@ -541,6 +572,22 @@ def test_the_depth_command_requests_every_position_in_the_region():
     )
     assert "-a" in shlex.split(command.split(">")[0])
     assert PIPEFAIL_PREFIX not in command, "a single command with a redirect already reports its own exit status"
+
+
+def test_depth_uses_the_exact_custom_index_operand() -> None:
+    """Coverage must retain the same index bytes as conversion through its final read."""
+    command = build_samtools_depth_command(
+        samtools_path=SAMTOOLS,
+        threads=4,
+        region="chr1:1-2",
+        bam_file="/o/view.cram",
+        index_path="/proc/123/fd/11",
+        coverage_output="/o/depth.txt",
+    )
+
+    tokens = shlex.split(command.split(">", maxsplit=1)[0])
+    position = tokens.index("-X")
+    assert tokens[position + 1 : position + 3] == ["/o/view.cram", "/proc/123/fd/11"]
 
 
 # ---------------------------------------------------------------------------

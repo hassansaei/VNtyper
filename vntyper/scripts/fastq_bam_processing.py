@@ -8,6 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from vntyper.scripts.alignment_consumer_commands import build_plan_slice_command, build_plan_unmapped_command
 from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.alignment_target_io import (
     remove_validated_slice_indexes,
@@ -16,13 +17,10 @@ from vntyper.scripts.alignment_target_io import (
 )
 from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
-    build_cram_unmapped_filter_command,
-    build_cram_unmapped_indexed_command,
     build_fastp_command,
     build_samtools_depth_command,
     build_samtools_index_command,
     build_samtools_merge_command,
-    build_samtools_slice_command,
 )
 from vntyper.scripts.coverage_qc import evaluate_coverage_qc
 from vntyper.scripts.coverage_stats import (
@@ -137,16 +135,14 @@ def process_bam_to_fastq(
 
     final_bam = Path(output) / f"{output_name}_sliced.bam"
 
-    command_slice = build_samtools_slice_command(
+    command_slice = build_plan_slice_command(
         samtools_path=samtools_path,
-        in_bam=plan.view_path,
+        plan=plan,
         output_bam=final_bam,
         region=None if bed_file else bam_region,
         bed_file=bed_file,
-        reference_path=plan.reference_path,
         threads=threads,
-        index_output=fast_mode,
-        exclude_unmapped=not fast_mode,
+        fast_mode=fast_mode,
     )
     log_file_slice = Path(output) / f"{output_name}_slice.log"
     logger.info(f"Executing region slicing with command: {command_slice}")
@@ -161,17 +157,11 @@ def process_bam_to_fastq(
     if not fast_mode:
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
-        unmapped_builder = (
-            build_cram_unmapped_indexed_command
-            if plan.unmapped_scan == "indexed"
-            else build_cram_unmapped_filter_command
-        )
-        command_filter = unmapped_builder(
+        command_filter = build_plan_unmapped_command(
             samtools_path=samtools_path,
-            in_bam=plan.view_path,
-            unmapped_bam=unmapped_bam,
+            plan=plan,
+            output_bam=unmapped_bam,
             threads=threads,
-            reference_path=plan.reference_path,
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logger.info(f"Executing filtering with command: {command_filter}")
@@ -274,6 +264,7 @@ def calculate_vntr_coverage(
     output_name,
     summary_filename=None,
     reference_path=None,
+    index_path=None,
 ):
     """
     Calculate the coverage over the VNTR region using samtools depth and write a TSV summary.
@@ -288,6 +279,7 @@ def calculate_vntr_coverage(
         summary_filename (str or Path, optional): File name for the TSV coverage summary.
             Defaults to "<output_name>_summary.tsv" in output_dir.
         reference_path (str or Path, optional): Proven reference FASTA for CRAM decoding.
+        index_path (str or Path, optional): Exact retained BAI or CRAI for custom-index depth.
 
     Returns:
         dict: Exactly the keys in :data:`~vntyper.scripts.coverage_stats.COVERAGE_COLUMNS`
@@ -313,6 +305,7 @@ def calculate_vntr_coverage(
         bam_file=bam_file,
         coverage_output=coverage_output,
         reference_path=reference_path,
+        index_path=index_path,
     )
     logger.info(f"Calculating VNTR coverage with command: {depth_command}")
     success = run_command(

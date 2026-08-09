@@ -123,9 +123,7 @@ def build_alignment_view(
     binding: AlignmentBinding | None = None,
     bound_view_path: str | Path | None = None,
 ) -> tuple[str, str, AlignmentBinding]:
-    """Create a run-local alignment symlink and a freshly built co-located index.
-
-    Supplied indexes are protected but never trusted; the run-local index is rebuilt.
+    """Create a bound run-local alignment and freshly built co-located index.
 
     Args:
         in_path: Input BAM or CRAM path.
@@ -195,6 +193,7 @@ def build_alignment_view(
         exit_ok, _ = capture_command(command, str(log_file), protected_paths=protected_paths)
         if not exit_ok or temporary_index.stat().st_size == 0:
             raise OSError("samtools did not create a non-empty index")
+        binding.bind_index(temporary_index, output / f".{view_index.name}.bound")
         _install_generated_index(
             temporary_index,
             view_index,

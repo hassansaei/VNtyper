@@ -16,7 +16,11 @@ import pytest
 
 from vntyper.scripts.alignment_contract import AlignmentPlan, index_candidate_names
 from vntyper.scripts.alignment_preflight import run_preflight
-from vntyper.scripts.command_builders import build_cram_unmapped_filter_command, build_samtools_slice_command
+from vntyper.scripts.command_builders import (
+    build_cram_unmapped_filter_command,
+    build_samtools_depth_command,
+    build_samtools_slice_command,
+)
 from vntyper.scripts.fastq_bam_processing import process_bam_to_fastq
 
 pytestmark = pytest.mark.integration
@@ -88,6 +92,7 @@ def test_indexed_bam_recovery_handles_a_nonempty_all_unplaced_alignment(tmp_path
         keep_intermediates=True,
         bed_file=bed,
     )
+    plan.close()
 
     recovered = conversion_root / "output_unmapped.bam"
     final_bam = conversion_root / "output_sliced.bam"
@@ -203,6 +208,7 @@ def test_unindexed_read_only_alignment_uses_a_run_local_index_for_real_slice(
         },
     }
 
+    plan: AlignmentPlan | None = None
     try:
         plan = run_preflight(
             str(alignment),
@@ -219,6 +225,7 @@ def test_unindexed_read_only_alignment_uses_a_run_local_index_for_real_slice(
         command = build_samtools_slice_command(
             samtools_path="samtools",
             in_bam=plan.view_path,
+            index_path=plan.stable_index_path,
             output_bam=slice_path,
             region=region,
             reference_path=plan.reference_path,
@@ -233,9 +240,12 @@ def test_unindexed_read_only_alignment_uses_a_run_local_index_for_real_slice(
             check=False,
         )
     finally:
+        if plan is not None:
+            plan.close()
         input_root.chmod(0o755)
         alignment.chmod(0o644)
 
+    assert plan is not None
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert int(subprocess.check_output(["samtools", "view", "-c", str(slice_path)], text=True)) > 0
     assert Path(plan.index_path).is_file()
@@ -278,12 +288,71 @@ def test_a_wrong_sample_source_bai_is_ignored_before_real_bam_slice(
         threads=2,
     )
     completed = subprocess.run(command, shell=True, executable="/bin/bash", check=False)
+    plan.close()
 
     assert completed.returncode == 0
     assert int(subprocess.check_output(["samtools", "view", "-c", str(slice_path)], text=True)) == 29736
     assert not Path(plan.index_path).is_symlink()
     assert supplied_index.samefile(input_root / "sample.bam.bai")
     assert _tree_digest(input_root) == before
+
+
+def test_atomic_bai_replacement_after_preflight_still_slices_the_proven_index_inode(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    """Post-preflight pathname replacement must not reopen a wrong valid BAI."""
+    repository = Path(__file__).parents[2]
+    input_root = tmp_path / "patient-input"
+    preflight_root = tmp_path / "preflight"
+    conversion_root = tmp_path / "conversion"
+    input_root.mkdir()
+    preflight_root.mkdir()
+    conversion_root.mkdir()
+    alignment = input_root / "sample.bam"
+    shutil.copyfile(repository / "tests/data/example_b178_hg19_subset.bam", alignment)
+    plan = run_preflight(
+        str(alignment),
+        str(preflight_root),
+        "input",
+        "bam",
+        {"tools": {"samtools": "samtools"}, "bam": {"unmapped_scan": "auto"}},
+        2,
+        region="chr1:155158000-155163000",
+    )
+    wrong_index = tmp_path / "wrong-40cf.bai"
+    shutil.copyfile(repository / "tests/data/example_40cf_hg38_subset.bam.bai", wrong_index)
+    wrong_index.replace(plan.index_path)
+    bed = tmp_path / "target.bed"
+    bed.write_text("chr1\t155157999\t155163000\n", encoding="utf-8")
+
+    try:
+        process_bam_to_fastq(
+            output=conversion_root,
+            output_name="output",
+            threads=2,
+            config={"tools": {"samtools": "samtools"}},
+            plan=plan,
+            fast_mode=True,
+            keep_intermediates=True,
+            bed_file=bed,
+        )
+        depth_output = tmp_path / "depth.tsv"
+        depth_command = build_samtools_depth_command(
+            samtools_path="samtools",
+            threads=2,
+            region="chr1:155158000-155163000",
+            bam_file=plan.view_path,
+            index_path=plan.stable_index_path,
+            coverage_output=depth_output,
+        )
+        subprocess.run(depth_command, shell=True, executable="/bin/bash", check=True)
+    finally:
+        plan.close()
+
+    sliced = conversion_root / "output_sliced.bam"
+    assert int(subprocess.check_output(["samtools", "view", "-c", str(sliced)], text=True)) == 29_736
+    assert len(depth_output.read_text(encoding="utf-8").splitlines()) == 5_001
 
 
 def test_atomic_bam_replacement_after_preflight_slices_the_bound_original(
@@ -398,6 +467,7 @@ def test_single_end_and_placed_unmapped_reads_survive_the_complete_scan(
         text=True,
         check=False,
     )
+    plan.close()
 
     expected = int(subprocess.check_output(["samtools", "view", "-c", "-f", "4", str(source_bam)], text=True))
     recovered = int(subprocess.check_output(["samtools", "view", "-c", str(output)], text=True))

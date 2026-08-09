@@ -51,6 +51,7 @@ def calculate_alignment_coverage(
             output_dir=output_dir,
             output_name="coverage",
             reference_path=plan.reference_path,
+            index_path=plan.stable_index_path,
         )
     except BaseException:
         primary_failure = True

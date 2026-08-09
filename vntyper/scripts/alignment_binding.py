@@ -9,6 +9,8 @@ import stat
 from contextlib import suppress
 from pathlib import Path
 
+from vntyper.scripts.alignment_index_binding import AlignmentIndexBinding
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,7 @@ class AlignmentBinding:
         self._view_path: Path | None = None
         self._view_identity: tuple[int, int] | None = None
         self._view_kind: str | None = None
+        self._index_binding: AlignmentIndexBinding | None = None
         self.input_path = input_path
         try:
             descriptor = os.open(input_path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
@@ -53,6 +56,25 @@ class AlignmentBinding:
     def view_path(self) -> str | None:
         """Return the installed run-local view path, when present."""
         return str(self._view_path) if self._view_path is not None else None
+
+    @property
+    def index_view_path(self) -> str | None:
+        """Return the descriptor-bound index path given to child processes."""
+        return self._index_binding.consumer_path if self._index_binding is not None else None
+
+    def bind_index(self, index_path: str | Path, fallback_path: str | Path) -> None:
+        """Retain the fresh generated index inode for this binding's lifetime.
+
+        Args:
+            index_path: Fresh temporary index before its atomic publication.
+            fallback_path: Reserved same-filesystem hardlink path for systems without procfs.
+
+        Raises:
+            RuntimeError: If an index is already bound or the new index cannot be retained.
+        """
+        if self._index_binding is not None:
+            raise RuntimeError("Alignment binding already owns a generated-index descriptor.")
+        self._index_binding = AlignmentIndexBinding(index_path, fallback_path)
 
     def _temporary_view_path(self, destination: Path) -> Path:
         for _ in range(100):
@@ -181,7 +203,10 @@ class AlignmentBinding:
             os.close(descriptor)
 
     def close(self) -> None:
-        """Remove the exact owned view, then release the descriptor exactly once."""
+        """Release index ownership, then the exact alignment view and descriptor."""
+        if self._index_binding is not None:
+            self._index_binding.close()
+            self._index_binding = None
         self._remove_owned_view()
         self._close_descriptor()
 
