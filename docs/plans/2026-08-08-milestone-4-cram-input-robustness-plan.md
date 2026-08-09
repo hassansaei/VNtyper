@@ -11,20 +11,22 @@ conversion and before any FASTQ consumer, because the four output files are its 
 
 **Architecture:** An owned alignment-preflight boundary runs first in `run_pipeline`. It
 opens the regular alignment and materialises a run-local view of that exact inode (an
-atomic procfd view, with verified same-filesystem hardlink fallback), then builds the
-co-located fresh index, chooses the unmapped scan from `samtools idxstats`, and proves the
-reference for every consumer shape. It returns the target and frozen `AlignmentPlan` whose
-binding remains alive through coverage and is released by `AlignmentPlan.close()`. Read
-layout is **not** part of that plan — it is decided after conversion, from the FASTQs that
-were actually written. Decisions live in pure modules; only the preflight shells out.
+atomic procfd view, with verified same-filesystem hardlink fallback) before quickcheck,
+header, target or coverage-region reads. An operator BED is likewise copied byte-exactly
+into a pipeline-owned file before proof. The boundary then builds the co-located fresh
+index, chooses the unmapped scan from `samtools idxstats`, and proves the reference for
+every consumer shape. It returns the target and frozen `AlignmentPlan` whose binding
+remains alive through coverage and is released by `AlignmentPlan.close()`. Read layout is
+**not** part of that plan — it is decided after conversion, from the FASTQs that were
+actually written. Decisions live in pure modules; only the preflight shells out.
 
 **Tech Stack:** Python 3.10+ (floor; CI matrix 3.10–3.13), samtools 1.20 / htslib 1.23,
 pytest, ruff, mypy, Docker + Celery for the web layer.
 
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
 
-**Status:** implemented through H3; this plan records the final interfaces and remaining
-close-out evidence (final A-PERF-1 rerun and combined no-HIGH review).
+**Status:** H1/H2/H3 and their final follow-ups are integrated and independently reviewed.
+Final A-PERF-1 and the combined no-HIGH review remain unchecked.
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
@@ -60,8 +62,8 @@ From AGENTS.md. Every task's requirements implicitly include these.
   only in `command_builders.py`, via `quote_path`. Tool invocations are *not* quoted
   (`config["tools"]` holds command prefixes); paths, regions and sample names *are*.
 - **Keep files under ~650 LOC.** Re-measured final implementation values are
-  `fastq_bam_processing.py` **632**, `pipeline.py` **669**,
-  `kestrel_genotyping.py` **865**, and `alignment_preflight.py` **642** lines. Further
+  `fastq_bam_processing.py` **632**, `pipeline.py` **665**,
+  `kestrel_genotyping.py` **865**, and `alignment_preflight.py` **649** lines. Further
   edits to the two over-limit files extract the touched responsibility rather than grow it.
 - **Touch a file, add tests for it**, including for functions you only modify.
 - **If you touch `.github/workflows/`, run `make ci-local`,** not just `make check-all`.
@@ -82,7 +84,7 @@ make format && make test-unit
 
 | File | Status | Responsibility |
 | --- | --- | --- |
-| `vntyper/scripts/alignment_contract.py` | create | `AlignmentPlan`; index names per format; the text of every failure message; the `preflight_error.json` payload. Pure. |
+| `vntyper/scripts/alignment_contract.py` | create | `AlignmentPlan`, including the lifetime-owned binding; index names per format; failure messages and the `preflight_error.json` payload. Contract module, not pure. |
 | `vntyper/scripts/alignment_binding.py` | create | Opened-inode binding; procfd view, verified hardlink fallback, exact owned-view cleanup and FD lifetime. |
 | `vntyper/scripts/reference_resolution.py` | create | Validated ordered reference candidates; known or unavailable FASTA contig coverage. Pure. |
 | `vntyper/scripts/idxstats_parsing.py` | create | Parse an `idxstats` table and decide the scan. Fails closed. Pure. |
@@ -100,6 +102,7 @@ make format && make test-unit
 | `vntyper/scripts/pipeline_inputs.py` | create | Input selection, output/archive ownership and trailing-separator normalization. |
 | `vntyper/scripts/cli_logging_safety.py` | create | Exclusive regular-file/alias checks before a pipeline log is opened. |
 | `vntyper/scripts/archive_safety.py` | create | Shared CLI/web descriptor-anchored archive creation and stale-archive cleanup. |
+| `docker/app/archive_delivery.py` | create | Descriptor-bound individual/cohort downloads and worker-owned cohort-input snapshots. |
 | `vntyper/scripts/alignment_processing.py` | modify | `align_and_sort_fastq` accepts a single FASTQ. |
 | `vntyper/scripts/cli_parser.py`, `cli_handlers.py` | modify | `--reference-fasta`; allow `--fastq1` without `--fastq2`. |
 | `docker/app/tasks.py`, `docker/app/main.py` | modify | Read `preflight_error.json`; surface its message in job status. |
@@ -110,7 +113,7 @@ make format && make test-unit
 
 ## Wave 0 — #213 (COMPLETE)
 
-Landed in `2d81519` and `312a2d0`. Five `conda run` sites: four in `docker/entrypoint.sh`,
+Landed in `2d81519` and `312a2d0`. Six `conda run` sites: four in `docker/entrypoint.sh`,
 two in `docker/app/tasks.py` (`build_vntyper_command` and the inline cohort launcher).
 `tests/unit/web/test_conda_run_streams_output.py` scans both files as source text.
 `make check-all` green, 2846 unit tests.
@@ -665,34 +668,24 @@ route every produced FASTQ or fail naming it.
       preflight exit is not evidence for A-178-2:
 
 ```bash
-for mode in indexed stream; do
-  VNTYPER_CRAM_UNMAPPED_SCAN=$mode python scripts/golden_cohort_gate.py run \
-    --side after --tree "$PWD" --data-dir "$PWD/tests/data" \
-    --run-root "/tmp/$mode" --marker vntyper.scripts.alignment_contract \
-    --expect-marker present --no-probes --no-cohort --case _cram
-  test $? -le 1  # exit 1 is the required result when indexed is rejected
-done
-python - <<'PY'
-import json
-
-indexed, stream = (json.load(open(f"/tmp/{mode}/side.json")) for mode in ("indexed", "stream"))
-expected_guard_counts = {
-    "7a61_hg38_ensembl_indexed_cram": 11_571,
-    "7a61_hg38_ensembl_stream_cram": 11_571,
-    "b178_hg19_indexed_cram": 329,
-    "b178_hg19_stream_cram": 329,
-}
-for case_id, stream_result in stream["pipeline_results"].items():
-    indexed_result = indexed["pipeline_results"][case_id]
-    if indexed_result["unmapped_read_set"] is None:
-        assert indexed_result["exit_code"] == 1
-        assert indexed_result["placed_unmapped_guard_count"] == expected_guard_counts[case_id]
-        assert stream_result["unmapped_read_set"] is not None
-    else:
-        assert indexed_result["unmapped_read_set"] == stream_result["unmapped_read_set"]
-print("every CRAM either matched exactly or rejected unsafe indexed extraction")
-PY
+python scripts/golden_cohort_gate.py run \
+  --side after --tree "$PWD" --data-dir "$PWD/tests/data" \
+  --run-root /tmp/m4-final-cram-evidence \
+  --marker vntyper.scripts.alignment_contract --expect-marker present \
+  --no-probes --no-cohort \
+  --case indexed_safe_indexed_cram \
+  --case indexed_safe_stream_cram \
+  --case 7a61_hg38_ensembl_indexed_cram \
+  --case 7a61_hg38_ensembl_stream_cram \
+  --case b178_hg19_indexed_cram \
+  --case b178_hg19_stream_cram
 ```
+
+The harness must exit zero. Each result must record
+`effective_unmapped_scan == observed_unmapped_scan`. The indexed-safe pair must both
+succeed with the same declared read set. Each lossy forced-indexed case must exit 1 with
+its exact declared guard count, no observed extraction command and no unmapped BAM; its
+stream partner must record the complete expected read set and the declared raw loss.
 
 Plus, per CRAM sample, compare `samtools view -c` on the unmapped BAM and a sorted
 read-name digest of it.
@@ -704,7 +697,7 @@ read-name digest of it.
 - [ ] **Step 1:** `make check-all`
 - [ ] **Step 2:** `make patch-coverage` — must be ≥ 80%
 - [ ] **Step 3:** `make ci-local` **only if** `.github/workflows/` was touched
-- [ ] **Step 4:** Codex adversarial gate on the final **diff** (spec §10, round 3). Loop
+- [ ] **Step 4:** Codex adversarial gate on the final **diff** (spec §10, concluding round). Loop
       until no HIGH survives; record the verdict.
 - [ ] **Step 5:** `superpowers:requesting-code-review`, then address findings.
 - [ ] **Step 6:** bump `vntyper/version.py`, `CITATION.cff` and
@@ -722,7 +715,7 @@ read-name digest of it.
 `cli_logging_safety.py`, `archive_safety.py`, `docker/app/tasks.py`; tests in
 `tests/unit/test_alignment_binding_lifecycle.py`, `test_pipeline_coverage.py`,
 `test_pipeline_archive_destination_ownership.py`, `test_cli_logging_safety.py`,
-`test_archive_safety.py`, and web archive-task tests.
+`test_archive_safety.py`, `tests/unit/web/test_response_hygiene.py`, and web archive-task tests.
 
 **Interfaces and lifetime:** `AlignmentPlan.binding: AlignmentBinding | None` and
 `AlignmentPlan.close() -> None`; `build_alignment_view(in_path, ...) -> (view_path,
@@ -740,8 +733,9 @@ the view. `close()` deletes only its exact owned view before closing its FD.
       implement the shared pipeline/CLI ownership checks before every writer opens a path.
 - [x] **H3:** test reports-before-archive, view removal before traversal, descriptor
       anchoring with `O_NOFOLLOW`, symlink/hardlink/special-entry refusal, CLI/web shared
-      writer behaviour, and web rollback/quarantine failure handling; implement archive
-      creation only after report completion.
+      writer behaviour, descriptor-bound delivery/cohort snapshots, and web
+      rollback/quarantine failure handling; implement archive creation only after report
+      completion. Final H3 publication and descriptor-snapshot re-reviews are clean.
 - [ ] **Close-out:** rerun A-PERF-1 on the final H3 revision, then run and record the
       combined final-diff adversarial review with no HIGH findings. Preserve the exact web
       rollback/quarantine diagnostic wording from the final H3 commit if that commit is

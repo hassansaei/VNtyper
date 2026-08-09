@@ -1,8 +1,9 @@
 # Milestone 4 — CRAM and input robustness
 
-**Status:** implemented through H3; final documentation reconciliation committed after the
-H1/H2/H3 fixes. A final performance rerun and the concluding no-HIGH review remain
-explicit close-out evidence, not unrecorded implementation work.
+**Status:** H1/H2/H3 and the final binding, evidence-mode and archive follow-ups are
+integrated and independently reviewed. The final performance rerun and combined no-HIGH
+verdict remain explicit close-out evidence, not evidence carried forward from an older
+revision.
 **Branch:** `fix/milestone-4-cram-input-robustness`
 **Closes:** #213, #225, #209, #178, #165, #161
 **Date:** 2026-08-08
@@ -43,9 +44,10 @@ points differ and the difference is not something this milestone can paper over:
   rather than exposing raw exception prose from the worker.
 
   "Surfaced" needs a mechanism, because there is currently no path for one.
-  `run_pipeline` converts every exception into `SystemExit(1)` (`pipeline.py:721`), the
-  worker runs the CLI with `subprocess.run` and does not capture stderr (`tasks.py:317`),
-  and the status endpoint substitutes generic text **deliberately** — it is
+  `run_pipeline` converts ordinary body exceptions into `SystemExit(1)`, preserves an
+  already-active `SystemExit` or `BaseException`, and prevents cleanup failure from masking
+  that primary outcome. The worker runs the CLI with `subprocess.run` and does not capture
+  stderr, and the status endpoint substitutes generic text **deliberately** — it is
   unauthenticated, and raw exception text would leak absolute paths and full samtools
   command lines. So the transport is neither "print the exception" nor "return it to the
   client":
@@ -132,8 +134,8 @@ exit.
 
 **This is a proven hang mechanism on this stack. It is not proof that it is #178's
 mechanism**, and the spec previously overstated that. `run_pipeline` calls
-`create_output_directories` at `pipeline.py:161`, before validation and before any CRAM is
-touched, and `cli.py:139` creates the log directory earlier still — so a hang anywhere
+`create_output_directories` only after the pre-write ownership boundary (`pipeline.py:173`),
+and `cli.py:147-161` validates the log entry before setup — so a hang anywhere
 inside `process_bam_to_fastq` would leave an output directory and a `pipeline.log` behind.
 The reporter states that *no* output directory was generated, which points at something
 before that line rather than at the reference fetch.
@@ -588,14 +590,18 @@ or NFS kernel operation; §4.5 states that limit explicitly rather than calling
 
 ### 4.1 The seam
 
-One owned alignment-preflight boundary, invoked immediately after `validate_bam_file` and
-before any header or region is resolved or any stage runs. For CRAM, the boundary pins
-`REF_PATH`; BAM and FASTQ never read or mutate that CRAM-only policy. The boundary reads
-and guards the header, resolves/materialises the exact BED target, independently resolves
-the later coverage region, then calls the I/O proof and returns the target, coverage
-region and a frozen `AlignmentPlan`. Every ordinary failure in the boundary shares one
-curated-error context; a CRAM's `REF_PATH` is restored even for `BaseException`.
-`process_bam_to_fastq` consumes the plan instead of rediscovering its contents.
+One owned alignment-preflight boundary is the first BAM/CRAM operation. It opens and
+publishes the run-local view **before** quickcheck, header/URI/assembly inspection, target
+resolution or coverage-region resolution. For CRAM, the boundary pins `REF_PATH`; BAM
+and FASTQ never read or mutate that CRAM-only policy. Quickcheck and every later alignment
+consumer therefore see the same opened inode. The boundary reads and guards the header,
+resolves/materialises the exact BED target, independently resolves the later coverage
+region, then calls the I/O proof and returns the target, coverage region and a frozen
+`AlignmentPlan`. An operator BED is bounded-read once and byte-for-byte installed as the
+pipeline-owned `operator_regions.bed`; probes and the real slice use only that owned copy.
+Every ordinary failure in the boundary shares one curated-error context; a CRAM's
+`REF_PATH` is restored even for `BaseException`. `process_bam_to_fastq` consumes the plan
+instead of rediscovering its contents.
 
 `fastq_bam_processing.py` is 649 LOC against a ~650 guideline, and AGENTS.md rule 3 says
 to extract the region under change rather than grow the file. So the decisions go into
@@ -607,17 +613,19 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | `alignment_binding.py` | I/O lifetime | opens the regular alignment once; installs the procfd view or verified hardlink fallback; removes the exact owned view before releasing its FD |
 | `reference_resolution.py` | pure | validated ordered candidate mapping and known or unavailable FASTA contig coverage |
 | `reference_uri_policy.py` | pure | remote-scheme detection and path-free CRAM header-URI policy |
+| `idxstats_parsing.py` | pure | parse captured `idxstats` text and fail closed to a lossless scan decision |
 | `read_layout.py` | pure | the `paired`/`single`/`mixed`/`empty` verdict from counts, and which FASTQ paths feed downstream |
 | `alignment_preflight_logs.py` | pure | every log destination reachable for a format, candidate count and fast/normal mode |
 | `alignment_preflight.py` | I/O | runs samtools: build the alignment view, resolve or build the index, choose the scan from `idxstats`, probe-decode each reference candidate. **It does not compute the read layout** — §4.4 explains why that cannot be known before conversion. |
 | `preflight_command_io.py` | I/O | atomic captured logs and optional process-group deadline/termination for reference probes |
 | `reference_resolution_environment.py` | environment I/O | CRAM-only `REF_PATH` pin/restore policy |
-| `pipeline_alignment.py` | boundary | owns header/assembly/target preparation and the shared curated-error/`REF_PATH` lifetime before returning BED + `AlignmentPlan` |
+| `pipeline_alignment.py` | boundary | binds the alignment before quickcheck/header work; owns assembly/target/coverage preparation, operator-BED materialisation and the shared curated-error/`REF_PATH` lifetime before returning BED + `AlignmentPlan` |
 | `pipeline_cleanup.py` | outcome I/O | closes an `AlignmentPlan` while preserving an already-active primary failure |
 | `pipeline_coverage.py` | consumer boundary | uses the proven view/reference for coverage and closes the plan only after coverage returns |
 | `pipeline_inputs.py` | ownership policy | selects inputs and rejects archive destinations that alias protected input or patient trees; normalizes trailing output separators |
 | `cli_logging_safety.py` | ownership policy | validates that a pipeline log is an exclusively owned regular file before parent creation or `FileHandler` setup |
 | `archive_safety.py` | archive I/O | creates/clears archives through descriptor-anchored paths, refusing aliases and unsafe source entries |
+| `docker/app/archive_delivery.py` | web delivery I/O | opens completed archives through trusted descriptors, streams bound files, and snapshots cohort inputs before worker consumption |
 
 The five pure modules are unit-testable with no filesystem and are held to the ~100%
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
@@ -639,8 +647,9 @@ before. Two mechanisms can fix that, and only one of them works everywhere:
   (measured: `idxstats: invalid option -- 'X'`).
 * Make the alignment and its index co-located somewhere writable.
 
-So preflight first opens the input as a regular file and holds that FD in an
-`AlignmentBinding`. It publishes a run-local view of **that opened inode**: normally a
+So the owned boundary first opens the input as a regular file and holds that FD in an
+`AlignmentBinding`, before quickcheck or any header/target read. It publishes a run-local
+view of **that opened inode**: normally a
 procfd symlink (`/proc/<pid>/fd/<fd>`), atomically installed at the owned view pathname;
 when procfs is unavailable, it uses a verified same-filesystem hardlink to the already-open
 inode. The binding verifies the installed type and device/inode identity. Every subsequent
@@ -898,14 +907,17 @@ index, removing separate
 
 ### 4.6 H2/H3 ownership and archive contracts
 
-Every pipeline output, preflight log and CLI log is a pipeline-owned **exclusive regular
-file** before any writer opens it: symlinks, special files and multiply linked regular
-files are refused, and lexical, resolved and same-inode aliases of operator inputs are
-refused. This applies before parent creation or `FileHandler` construction. Alignment
-inputs additionally protect their containing patient trees; FASTQ, BED and reference
-siblings remain valid layouts. `pipeline_inputs.archive_base_name()` normalizes syntactic
-trailing separators before deriving `<output>.zip` or `<output>.tar.gz`, so the archive
-destination cannot change with a trailing slash.
+Every pipeline output and CLI log is a pipeline-owned **exclusive regular file** before
+any writer opens it: symlinks, special files and multiply linked regular files are
+refused, and lexical, resolved and same-inode aliases of operator inputs are refused.
+This applies before parent creation or `FileHandler` construction. Captured preflight
+command logs have a narrower atomic-writer contract: a protected-input alias or directory
+is refused without following it, while an unrelated stale final symlink or special entry
+may be atomically replaced rather than opened. Alignment inputs additionally protect
+their containing patient trees; FASTQ, BED and reference siblings remain valid layouts.
+`pipeline_inputs.archive_base_name()` normalizes syntactic trailing separators before
+deriving `<output>.zip` or `<output>.tar.gz`, so the archive destination cannot change
+with a trailing slash.
 
 Reports are generated before an optional archive is created. The descriptor-bound
 alignment view is removed before archive traversal, so neither a procfd symlink nor a
@@ -1049,8 +1061,9 @@ replacement for the final failure-path diagnostic text.
   which is every single-end read — and both `pipeline.py` call sites discard that path
   with `_`. Downstream, `align_and_sort_fastq` and `construct_kestrel_command` require
   two FASTQs.
-* **Change:** single-end becomes a supported layout. Preflight determines it from flag
-  counts; `read_layout` decides which FASTQs feed downstream; `process_fastq`,
+* **Change:** single-end becomes a supported layout. After lossless conversion writes all
+  four outputs, `read_layout` classifies their exact record counts and decides which FASTQs
+  feed downstream; `process_fastq`,
   `align_and_sort_fastq` and `construct_kestrel_command` accept a single FASTQ.
   `mixed` — R1/R2 **and** `other`/`single` all non-empty — is **rejected**, naming every
   file and its record count. It is not coerced and not silently half-processed: VNtyper
@@ -1084,8 +1097,8 @@ rules and four measured wins.
 1. **The BAM preflight performs only the work the no-loss proof requires.** It builds one
    fresh run-local BAI (§3.15), reads `idxstats` to select the safe unmapped strategy, and
    performs one indexed target probe. It still skips reference resolution entirely. The
-   fresh build supersedes the earlier no-subprocess premise; §5b's final timings are
-   remeasured after round 3 rather than extrapolated from it.
+   fresh build supersedes the earlier no-subprocess premise; §5b's historical timings are
+   retained by revision and the actual final timings are rerun rather than extrapolated.
 2. **Read layout is decided from the FASTQs the conversion already wrote**, by reading
    their sizes and, only for a non-empty one, its record count. It is not a second pass
    over the input and not a pass over the slice — §4.4 explains why the slice is the wrong
@@ -1260,7 +1273,7 @@ A-178-4 is the one explicit external, non-gating evidence request.
 | A-209-1 | A reference-dependent CRAM with its reference removed **and its `UR:` target renamed** is rejected before any stage runs, with a message naming the contig, its `M5` and every candidate tried. | integration |
 | A-209-2 | The same CRAM with `--reference-fasta` pointed at its reference runs to completion. | integration |
 | A-209-3 | A `no_ref=1` CRAM runs to completion with no reference supplied, and its commands carry no `-T`. | unit + golden cohort |
-| A-209-4 | The reference probe uses the same flags (`-P`) and the same region *or BED* as the slice it authorises. A `-P`-less probe must fail this test. | unit |
+| A-209-4 | The reference probe uses the same flags (`-P`) and the same region *or BED* as the slice it authorises. A supplied BED is copied byte-for-byte into a pipeline-owned file before proof, and replacing its source pathname cannot change the probe or slice. A `-P`-less probe must fail this test. | unit + integration |
 | A-209-5 | Coverage (`samtools depth`) on a reference-dependent CRAM carries the same reference the slice used. | unit + integration |
 | A-209-6 | A reference path containing a space or a shell metacharacter is quoted, not executed. | unit |
 | A-178-1 | With ambient resolution explicitly enabled, a 0.25 s probe deadline and `REF_PATH` pointed at an endpoint that accepts TCP and never responds, the CRAM run reports that 0.25 s timeout and exits within the test's 5 s outer bound. The assertion is limited to the bounded probe; it does not claim later opt-in stages have a general timeout. | integration |
@@ -1271,9 +1284,9 @@ A-178-4 is the one explicit external, non-gating evidence request.
 | A-SCAN-2 | A malformed, empty or non-zero-exit `idxstats` selects `stream`, never `indexed`. | unit |
 | A-SCAN-3 | In non-fast mode the target slice excludes flag 4 before merging with complete recovery; on the registered `b178` single-end fixture the merged BAM has exactly the source's 4,807-record sorted-QNAME multiset, not the duplicated 5,136-record set. Fast mode remains unchanged. | unit + integration |
 | A-SCAN-4 | A nonempty one-SQ BAM containing five all-unplaced flag-4 records selects indexed recovery and completes with the exact five-record sorted-QNAME multiset in recovery and final BAMs. | integration, purpose-built fixture |
-| A-VIEW-1 | Preflight consumes only the inode opened for this run: it installs an atomically published procfd view, or a verified same-filesystem hardlink fallback, and rejects an unsafe/replaced owned view rather than reusing pathname state. The binding survives through coverage and removes that exact view before closing its FD. | unit + lifecycle integration |
+| A-VIEW-1 | The owned boundary opens the alignment before quickcheck, header/URI/assembly, target or coverage-region reads. Every proof and processing consumer uses the atomically published procfd view, or verified same-filesystem hardlink fallback, of that exact inode. The binding survives through coverage and removes that exact view before closing its FD. | unit + lifecycle integration |
 | A-VIEW-2 | `REF_PATH` holds its original value (including unset) after normal return, a raised `BaseException`, and nested CRAM scopes; cleanup failure never replaces an already-active pipeline outcome. | unit |
-| A-OWN-1 | Output and log destinations are exclusive regular files and do not lexically, resolvedly or by inode alias operator input; symlinks, hardlinks and special entries are refused before writers create/open them. | unit |
+| A-OWN-1 | Pipeline outputs and CLI logs are exclusive regular files and do not lexically, resolvedly or by inode alias operator input; symlinks, hardlinks and special entries are refused before writers create/open them. Captured preflight logs refuse protected aliases and directories without following them, and atomically replace an unrelated stale final entry. | unit |
 | A-ARCHIVE-1 | The archive base is invariant under trailing output separators; reports precede archiving; the bound view is removed before traversal; and CLI and web use the same descriptor-anchored archive writer. | unit + web tier |
 | A-ARCHIVE-2 | Archive traversal uses `O_NOFOLLOW` descriptors and rejects symlink, hardlink and special-file entries without reading through them. Failed public-archive cleanup rolls back when safe or leaves a named quarantine. | unit + web tier |
 | A-INPUT-1 | A FIFO supplied as a reference or BED is rejected without waiting for a writer; BED and optional FAI text reads obey the shipped configurable byte bound before probe work. This does not claim a timeout for stalled regular-file kernel I/O. | unit |
@@ -1325,9 +1338,9 @@ other.
   a separate issue. An operator who sets `allow_ambient_reference_resolution=true`
   accepts that those later calls may block; the opt-in does not turn the probe deadline
   into a stage-wide timeout.
-* Extracting `construct_kestrel_command` out of the 936-line `kestrel_genotyping.py`.
-  AGENTS.md rule 3 asks for it and this milestone touches that function; the extraction is
-  included in #161's task, but a wider split of that module is not.
+* A wider split of `kestrel_genotyping.py`. The touched `construct_kestrel_command` region
+  was extracted for #161 as required by AGENTS.md rule 3, leaving the measured final file at
+  865 lines; further unrelated decomposition remains out of scope.
 
 ## 10. Adversarial review
 
@@ -1344,6 +1357,7 @@ PR.**
 | 3c | final diff follow-up | 2 | 4 | 3 | 2 HIGH accepted and fixed; MED/LOW dispositions are detailed below |
 | 3d | final diff follow-up | 3 | 3 | 2 | 3 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
 | 3e | final diff at `bfefbdc` | 2 | 4 | 2 | 2 HIGH accepted and fixed; mandatory no-HIGH rerun remains pending |
+| 3f | final diff at `dfdbfff` | 3 | 1 | 2 | 3 HIGH and the MED accepted and fixed; one LOW corrected the ownership prose, and A-PERF-1 remains pending |
 | H1 | descriptor-binding/lifetime follow-up | accepted | tracked | tracked | opened regular FD, procfd view with verified hardlink fallback, final-consumer lifetime, exact cleanup and primary-outcome preservation |
 | H2 | output/log ownership follow-up | accepted | tracked | tracked | exclusive regular-file destinations, alias refusal, CLI log ownership and trailing-separator archive-base normalization |
 | H3 | archive traversal/lifecycle follow-up | accepted | tracked | tracked | reports-before-archive, view removal before traversal, `O_NOFOLLOW` descriptor anchoring, unsafe-entry refusal and web rollback/quarantine handling |
@@ -1458,16 +1472,40 @@ the archive base to be independent of trailing separators.
 
 H3 accepted the archive-order and traversal findings. Reporting precedes archiving, the
 view is gone before traversal, and the shared CLI/web writer anchors parent/root/children
-with `O_NOFOLLOW` descriptors and rejects symlink, hardlink and special entries. Web
-failure handling rolls back the public archive when safe and otherwise retains a quarantine
-with a diagnostic. The exact post-H3 diagnostic wording is a parent-level reconcile item
-if the final H3 commit is later than this documentation base.
+with `O_NOFOLLOW` descriptors and rejects symlink, hardlink and special entries. It binds
+the destination identity across stale cleanup, install and return, and refuses success if
+the public name no longer identifies the installed archive. Web failure handling rolls
+back the public archive when safe and otherwise retains a private quarantine while
+preserving the primary error. Cohort analysis holds the snapshot directory descriptor
+through the child process and passes descriptor-bound member paths, so replacing the
+directory pathname cannot change the bytes consumed. Independent final H3 review found no
+remaining Critical or Important issue in this scope.
 
-### Wave 3 gate evidence before round 3
+### Round 3f — disposition
 
-`make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. The final BAM timing
-result is the non-overlapping 90.58–91.12 s baseline versus 87.64–88.27 s milestone range
-in §5b, a 3.1% median improvement under the predeclared rule. The full base matrix also
+The concluding diff review accepted three HIGH findings. Alignment binding had occurred
+inside preflight after quickcheck/header/target work; it now precedes every alignment read
+and the full lifetime uses that view. Operator BED validation had returned the mutable
+source pathname; its exact bytes are now installed as `operator_regions.bed` before proof
+and only that owned path reaches the real slice. Finally, the CRAM evidence gate trusted
+an effective label that an environment override could collapse; side-specific declarations
+are now materialised before case config, observed mode must equal the declared effective
+mode, and an unrecognised command touching the unmapped BAM fails closed. Unsafe forced
+indexed evidence requires exit 1, its exact guard count, no extraction command and no BAM.
+
+The accepted MED made coverage cleanup failure-aware so it cannot replace the coverage
+error being handled. One LOW corrected §4.6/A-OWN-1: captured preflight logs safely
+atomically replace an unrelated stale final entry rather than claiming every such entry is
+refused. The other LOW is the still-pending final A-PERF-1 rerun; it is not carried forward
+from an earlier behavioral revision.
+
+### Historical Wave 3 gate evidence before final-diff follow-ups
+
+`make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. An earlier behavioral
+candidate measured a non-overlapping 90.58–91.12 s baseline versus 87.64–88.27 s milestone
+range, a 3.1% median improvement under the predeclared rule. It was superseded by the
+revision-labelled `3083ed9` measurement in §5b and neither result is final H1/H2/H3
+evidence. The full base matrix also
 exposed 32 inputs whose previously ignored single FASTQ is now named and rejected. Forced
 indexed CRAM runs were rejected by the placed-unmapped
 guard, whose causal `idxstats` column-four counts are 11,571 and 329. The initial flag-12
@@ -1486,8 +1524,9 @@ findings recorded as "only appears resolved" were that same staleness seen from 
 angles. The plan is regenerated from this spec rather than patched.
 
 Substantive changes: the web error transport now has a mechanism instead of a promise
-(`preflight_error.json` -> Redis -> status endpoint, §1), because `run_pipeline` flattens
-every exception to `SystemExit(1)` and the status endpoint's genericity is a deliberate
+(`preflight_error.json` -> Redis -> status endpoint, §1), because ordinary pipeline
+exceptions become completed outcome 1 while `SystemExit` and `BaseException` remain
+primary, and the status endpoint's genericity is a deliberate
 no-leak property rather than an oversight. Both "historical reproduction" escape hatches
 are removed: a forced `indexed` scan now raises rather than dropping reads, and
 `fail_on_unconsumed_reads` does not exist (§4.3(b), §6). "No reference" and "header `UR:`"
