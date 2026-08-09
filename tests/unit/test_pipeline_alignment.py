@@ -409,6 +409,7 @@ def test_build_alignment_preflight_kwargs_pins_exact_bed_and_header_contigs(
         "reference_fasta": str(reference),
         "header_reference_paths": (),
         "header_references": (),
+        "has_remote_header_reference": False,
         "header_contigs": () if alignment_header is None else ("chr1", "chr2"),
         "m5": None,
         "header_m5s": (),

@@ -266,6 +266,7 @@ def resolve_reference(
     coverage_region: str | None = None,
     header_m5s: Iterable[tuple[str, str]] = (),
     header_references: Iterable[uri_policy.LocalHeaderReference] = (),
+    has_remote_header_reference: bool = False,
     unmapped_scan: str = "indexed",
     failure_context: error_io.PreflightErrorContext | None = None,
 ) -> tuple[str | None, str, tuple[str, ...], ReferenceLifetime | None]:
@@ -285,6 +286,7 @@ def resolve_reference(
         coverage_region: Independently resolved region used by the later depth consumer.
         header_m5s: Header contig and M5 pairs used to diagnose a later whole-file stream failure.
         header_references: Local SQ reference records available for private-cache binding.
+        has_remote_header_reference: Whether a remote SQ URI passed the ambient policy.
         unmapped_scan: Downstream scan; stream mode also proves a whole-file decode from the same candidate.
         failure_context: Boundary diagnostics receiving structured candidate details.
 
@@ -395,20 +397,15 @@ def resolve_reference(
             )
         logger.info(f"Resolved CRAM reference from {source}: {reference_path}")
         return reference_binding.consumer_path, source, uncovered, reference_binding
-    has_local_header_candidate = any(
-        source == HEADER_UR_REFERENCE_SOURCE for source, _reference_path in explicit_candidates
-    )
+    has_local_header_candidate = any(source == HEADER_UR_REFERENCE_SOURCE for source, _path in explicit_candidates)
     local_header_references = tuple(header_references)
     if has_local_header_candidate and local_header_references:
-        configured_pattern = os.environ.get("REF_PATH", config.get("cram", {}).get("local_ref_path", "%2s/%2s/%s"))
-        ambient_resolution = uri_policy.allow_ambient_reference_resolution(config)
-        remote_reference_path = uri_policy.remote_ref_path_suffix(configured_pattern) if ambient_resolution else None
         private_cache, reason = probe_private_reference_cache(
             header_contigs=tuple(header_contigs),
             header_m5s=header_m5s,
-            configured_pattern=configured_pattern,
             header_references=local_header_references,
-            remote_reference_path=remote_reference_path,
+            config=config,
+            has_remote_header_reference=has_remote_header_reference,
             output_dir=output_dir,
             output_name=output_name,
             position=len(explicit_candidates) + 1,
@@ -490,6 +487,7 @@ def run_preflight(
     header_contigs: Iterable[str] = (),
     header_reference_paths: Iterable[str] = (),
     header_references: Iterable[uri_policy.LocalHeaderReference] = (),
+    has_remote_header_reference: bool = False,
     m5: str | None = None,
     header_m5s: Iterable[tuple[str, str]] = (),
     fast_mode: bool = False,
@@ -515,6 +513,7 @@ def run_preflight(
         header_contigs: Contigs declared by the alignment header.
         header_reference_paths: Local FASTA paths parsed from CRAM SQ UR tags.
         header_references: Local SQ reference records used for safe M5-cache fallback.
+        has_remote_header_reference: Whether a remote SQ URI passed the ambient policy.
         m5: Header M5 checksum for the target contig, when available.
         header_m5s: Header contig and M5 pairs for terminal stream diagnostics.
         fast_mode: Whether downstream BAM processing can use any htslib index.
@@ -603,6 +602,7 @@ def run_preflight(
                     coverage_region=coverage_region,
                     header_m5s=header_m5s,
                     header_references=header_references,
+                    has_remote_header_reference=has_remote_header_reference,
                     unmapped_scan=unmapped_scan,
                     failure_context=failure_context,
                 )

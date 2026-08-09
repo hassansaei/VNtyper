@@ -15,7 +15,11 @@ from urllib.parse import unquote, urlsplit
 
 from vntyper.scripts.reference_binding import _InodeView
 from vntyper.scripts.reference_resolution_environment import activate_private_reference_cache
-from vntyper.scripts.reference_uri_policy import LocalHeaderReference
+from vntyper.scripts.reference_uri_policy import (
+    LocalHeaderReference,
+    allow_ambient_reference_resolution,
+    remote_ref_path_suffix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -313,9 +317,9 @@ def probe_private_reference_cache(
     *,
     header_contigs: tuple[str, ...],
     header_m5s: Iterable[tuple[str, str]],
-    configured_pattern: str,
     header_references: tuple[LocalHeaderReference, ...],
-    remote_reference_path: str | None,
+    config: dict,
+    has_remote_header_reference: bool,
     output_dir: str,
     output_name: str,
     position: int,
@@ -326,10 +330,13 @@ def probe_private_reference_cache(
     Returns:
         A retained cache on success, otherwise a path-safe failure reason.
     """
-    if remote_reference_path is None:
-        unique_names = header_contigs
-    else:
+    configured_pattern = os.environ.get("REF_PATH", config.get("cram", {}).get("local_ref_path", "%2s/%2s/%s"))
+    ambient_resolution = allow_ambient_reference_resolution(config)
+    remote_reference_path = remote_ref_path_suffix(configured_pattern) if ambient_resolution else None
+    if ambient_resolution and (remote_reference_path is not None or has_remote_header_reference):
         unique_names = tuple(dict.fromkeys(reference.contig for reference in header_references))
+    else:
+        unique_names = header_contigs
     checksum_by_contig = dict(header_m5s)
     missing_m5 = next((contig for contig in unique_names if contig not in checksum_by_contig), None)
     if missing_m5 is not None:

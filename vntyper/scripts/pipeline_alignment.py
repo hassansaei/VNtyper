@@ -21,6 +21,7 @@ from vntyper.scripts.reference_uri_policy import (
     LocalHeaderReference,
     allow_ambient_reference_resolution,
     enforce_header_reference_policy,
+    first_remote_header_reference,
     local_header_reference_paths,
     local_header_references,
 )
@@ -45,6 +46,7 @@ class AlignmentPreflightKwargs(TypedDict):
     reference_fasta: str | None
     header_reference_paths: tuple[str, ...]
     header_references: tuple[LocalHeaderReference, ...]
+    has_remote_header_reference: bool
     header_contigs: tuple[str, ...]
     m5: str | None
     header_m5s: tuple[tuple[str, str], ...]
@@ -262,6 +264,11 @@ def build_alignment_preflight_kwargs(
         if file_format == "cram" and alignment_header is not None
         else ()
     )
+    has_remote_header_reference = (
+        first_remote_header_reference(alignment_header) is not None
+        if file_format == "cram" and alignment_header is not None
+        else False
+    )
     return {
         "in_path": str(in_path),
         "output_dir": str(output_dir),
@@ -276,6 +283,7 @@ def build_alignment_preflight_kwargs(
         "reference_fasta": str(reference_fasta) if reference_fasta is not None else None,
         "header_reference_paths": header_reference_paths,
         "header_references": header_references,
+        "has_remote_header_reference": has_remote_header_reference,
         "header_contigs": header_contigs,
         "m5": target_m5,
         "header_m5s": header_m5s,

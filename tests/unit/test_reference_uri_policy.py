@@ -43,6 +43,18 @@ def test_remote_ref_path_suffix_removes_local_cache_entries_before_ambient_looku
     assert remote_ref_path_suffix("/operator/%s") is None
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["https://refget.example/%s:/operator/%s", "/first/%s:https://refget.example/%s:/last/%s"],
+)
+def test_remote_ref_path_suffix_rejects_trailing_local_entries_without_exposing_them(value: str) -> None:
+    with pytest.raises(ValueError, match="cannot retain a local entry") as raised:
+        remote_ref_path_suffix(value)
+
+    assert "/operator/" not in str(raised.value)
+    assert "/last/" not in str(raised.value)
+
+
 def test_first_remote_header_reference_reports_the_sq_contig_and_normalised_scheme() -> None:
     """Tag order and unrelated header lines cannot hide a remote SQ reference."""
     header = (

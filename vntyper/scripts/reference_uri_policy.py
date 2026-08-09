@@ -68,11 +68,15 @@ def ref_path_remote_scheme(value: str) -> str | None:
 
 
 def remote_ref_path_suffix(value: str) -> str | None:
-    """Return the remote portion of a REF_PATH without a leading local search entry."""
+    """Return a remote REF_PATH suffix without any local search entry."""
     match = _REF_PATH_REMOTE_URI.search(value)
     if match is None:
         return None
-    return value[match.start("scheme") :]
+    remote = value[match.start("scheme") :]
+    scheme_separator = remote.find("://")
+    if re.search(r":(?=/)", remote[scheme_separator + 3 :]):
+        raise ValueError("Ambient REF_PATH cannot retain a local entry after a remote URL")
+    return remote
 
 
 def allow_ambient_reference_resolution(config: dict) -> bool:

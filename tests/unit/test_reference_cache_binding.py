@@ -98,9 +98,9 @@ def test_local_cache_entry_precedes_remote_ambient_fallback_in_the_retained_envi
         binding, reason = probe_private_reference_cache(
             header_contigs=("chr1",),
             header_m5s=(("chr1", digest),),
-            configured_pattern=ambient,
             header_references=(LocalHeaderReference("chr1", digest, str(tmp_path / "stale.fa")),),
-            remote_reference_path="https://refget.example/%s",
+            config={"cram": {"allow_ambient_reference_resolution": True}},
+            has_remote_header_reference=False,
             output_dir=str(tmp_path),
             output_name="input",
             position=4,
@@ -148,9 +148,9 @@ def test_default_mode_binds_all_header_cache_entries_against_later_path_replacem
         binding, reason = probe_private_reference_cache(
             header_contigs=("chr1", "chr2"),
             header_m5s=tuple((contig, _digest(sequence)) for contig, sequence in sequences.items()),
-            configured_pattern=configured,
             header_references=(LocalHeaderReference("chr1", _digest("AAAA"), str(tmp_path / "chr1.fa")),),
-            remote_reference_path=None,
+            config={"cram": {"local_ref_path": configured}},
+            has_remote_header_reference=False,
             output_dir=str(tmp_path),
             output_name="input",
             position=4,
@@ -166,6 +166,30 @@ def test_default_mode_binds_all_header_cache_entries_against_later_path_replacem
         restore_reference_resolution(previous)
 
     assert not (tmp_path / ".input_reference_cache").exists()
+
+
+def test_ambient_remote_header_contig_does_not_require_a_local_cache_entry(tmp_path: Path) -> None:
+    sequence = "AAAA"
+    digest = _digest(sequence)
+    local_reference = tmp_path / "chr1.fa"
+    local_reference.write_text(f">chr1\n{sequence}\n", encoding="ascii")
+
+    with patch("vntyper.scripts.reference_cache_binding.activate_private_reference_cache"):
+        binding, reason = probe_private_reference_cache(
+            header_contigs=("chr1", "chr2"),
+            header_m5s=(("chr1", digest), ("chr2", _digest("CCCC"))),
+            header_references=(LocalHeaderReference("chr1", digest, str(local_reference)),),
+            config={"cram": {"allow_ambient_reference_resolution": True}},
+            has_remote_header_reference=True,
+            output_dir=str(tmp_path),
+            output_name="input",
+            position=4,
+            probe=Mock(return_value=(True, "")),
+        )
+
+    assert reason is None
+    assert binding is not None
+    binding.close()
 
 
 def test_digest_read_failure_cleans_the_immediately_tracked_entry(tmp_path: Path) -> None:
@@ -248,9 +272,9 @@ def test_private_probe_requires_m5_for_every_header_contig_without_running_a_com
     binding, reason = probe_private_reference_cache(
         header_contigs=("chr1", "chr2"),
         header_m5s=(("chr1", _digest("AAAA")),),
-        configured_pattern=str(tmp_path / "%2s" / "%2s" / "%s"),
         header_references=(LocalHeaderReference("chr2", None, str(tmp_path / "chr2.fa")),),
-        remote_reference_path=None,
+        config={"cram": {"local_ref_path": str(tmp_path / "%2s" / "%2s" / "%s")}},
+        has_remote_header_reference=False,
         output_dir=str(tmp_path),
         output_name="input",
         position=4,
@@ -279,9 +303,9 @@ def test_private_probe_activation_retains_only_a_successful_complete_cache(
         binding, reason = probe_private_reference_cache(
             header_contigs=("chr1",),
             header_m5s=(("chr1", digest),),
-            configured_pattern=f"{source_root}/%2s/%2s/%s",
             header_references=(LocalHeaderReference("chr1", digest, str(tmp_path / "missing.fa")),),
-            remote_reference_path=None,
+            config={"cram": {"local_ref_path": f"{source_root}/%2s/%2s/%s"}},
+            has_remote_header_reference=False,
             output_dir=str(tmp_path),
             output_name="input",
             position=4,
