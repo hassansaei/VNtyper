@@ -462,6 +462,72 @@ def test_ref_path_is_pinned_through_the_run_and_restored_exactly(
         assert os.environ["REF_PATH"] == initial_ref_path
 
 
+@pytest.mark.parametrize("initial_ref_path", [None, "http://operator.example/%s"])
+@pytest.mark.parametrize("outcome", ["return", "system_exit", "exception"])
+def test_cleanup_failure_never_masks_a_primary_outcome_or_skips_exact_ref_path_restoration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_ref_path: str | None,
+    outcome: str,
+) -> None:
+    """CRAM cleanup failure preserves a primary outcome and always restores REF_PATH."""
+    out = tmp_path / "out"
+    pinned = "/local/cache/%2s/%2s/%s"
+    if initial_ref_path is None:
+        monkeypatch.delenv("REF_PATH", raising=False)
+    else:
+        monkeypatch.setenv("REF_PATH", initial_ref_path)
+    config = {**MINIMAL_CONFIG, "cram": {"local_ref_path": pinned}}
+    cram = tmp_path / "patient-input" / "input.cram"
+    cram.parent.mkdir()
+    cram.touch()
+    binding = AlignmentBinding(str(cram))
+    plan = replace(_plan(out, "cram", reference_path="/refs/hg19.fa"), input_path=str(cram), binding=binding)
+    stage_side_effects: dict[str, Any] = {"run_preflight": lambda *args, **kwargs: plan}
+    if outcome == "system_exit":
+        stage_side_effects["process_bam_to_fastq"] = SystemExit(7)
+    elif outcome == "exception":
+        stage_side_effects["process_bam_to_fastq"] = RuntimeError("stage failed")
+    cleanup_effect: object = (
+        [None, RuntimeError("alignment cleanup failed")]
+        if outcome == "return"
+        else RuntimeError("alignment cleanup failed")
+    )
+
+    try:
+        with mock.patch.object(binding, "close", side_effect=cleanup_effect):
+            harness = run_pipeline_under_harness(
+                out,
+                config=config,
+                bam=None,
+                cram=str(cram),
+                expect_failure=True,
+                stage_side_effects=stage_side_effects,
+            )
+
+        if outcome == "return":
+            assert isinstance(harness.error, RuntimeError)
+            assert str(harness.error) == "alignment cleanup failed"
+        elif outcome == "system_exit":
+            assert isinstance(harness.error, SystemExit)
+            assert harness.error.code == 7
+        else:
+            assert isinstance(harness.error, SystemExit)
+            assert harness.error.code == 1
+            assert isinstance(harness.error.__context__, RuntimeError)
+            assert str(harness.error.__context__) == "stage failed"
+        if initial_ref_path is None:
+            assert "REF_PATH" not in os.environ
+        else:
+            assert os.environ["REF_PATH"] == initial_ref_path
+    finally:
+        binding.close()
+        if initial_ref_path is None:
+            monkeypatch.delenv("REF_PATH", raising=False)
+        else:
+            monkeypatch.setenv("REF_PATH", initial_ref_path)
+
+
 def test_preflight_failure_stops_before_any_processing_stage(tmp_path: Path) -> None:
     out = tmp_path / "out"
 

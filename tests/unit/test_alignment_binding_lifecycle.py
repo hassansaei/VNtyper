@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import errno
+import gc
 import os
 import shlex
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.alignment_preflight import build_alignment_view
 from vntyper.scripts.alignment_target_io import protect_alignment_inputs
@@ -163,6 +166,65 @@ def test_owned_view_unlink_failure_keeps_the_descriptor_open_and_stops_cleanup(t
     assert os.path.lexists(view)
     plan.close()
     assert binding.is_open is False
+
+
+def test_a_binding_rejects_a_second_view_without_leaking_or_replacing_the_first(tmp_path: Path) -> None:
+    """One binding owns exactly one directory entry until explicit close."""
+    alignment = tmp_path / "patient.bam"
+    alignment.write_bytes(b"patient alignment")
+    first_view = tmp_path / "first.bam"
+    second_view = tmp_path / "second.bam"
+    binding = AlignmentBinding(str(alignment))
+    binding.install_view(first_view)
+
+    try:
+        with pytest.raises(RuntimeError, match="already owns an alignment view"):
+            binding.install_view(second_view)
+
+        assert first_view.read_bytes() == b"patient alignment"
+        assert not os.path.lexists(second_view)
+    finally:
+        binding.close()
+        with suppress(OSError):
+            first_view.unlink()
+        with suppress(OSError):
+            second_view.unlink()
+
+
+def test_gc_preserves_the_descriptor_when_a_same_target_replacement_blocks_cleanup(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Finalization must leak safely instead of letting the proc target rebind to a reused FD."""
+    alignment, _, plan = _build_view(tmp_path)
+    view = Path(plan.view_path)
+    binding = plan.binding
+    assert binding is not None
+    target = os.readlink(view)
+    descriptor = int(target.rsplit("/", maxsplit=1)[1])
+    view.unlink()
+    view.symlink_to(target)
+    reuse_candidate = tmp_path / "reuse-candidate.bin"
+    reuse_candidate.write_bytes(b"must never appear through the alignment view")
+    reused_descriptor: int | None = None
+
+    try:
+        del plan
+        del binding
+        gc.collect()
+        reused_descriptor = os.open(reuse_candidate, os.O_RDONLY)
+
+        assert reused_descriptor != descriptor
+        assert view.read_bytes() == alignment.read_bytes()
+        assert "Preserving alignment descriptor" in caplog.text
+    finally:
+        if reused_descriptor is not None:
+            with suppress(OSError):
+                os.close(reused_descriptor)
+        with suppress(OSError):
+            os.close(descriptor)
+        with suppress(OSError):
+            view.unlink()
 
 
 @pytest.mark.parametrize("input_symlink", [False, True])

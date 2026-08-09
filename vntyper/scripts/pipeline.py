@@ -38,6 +38,7 @@ from vntyper.scripts.pipeline_alignment import (
     prepare_alignment_target,
     prepare_input_alignment_preflight,
 )
+from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.region_utils import get_region_string_with_fallback
@@ -694,10 +695,12 @@ def run_pipeline(
         logger.exception("An error occurred")
         sys.exit(1)
     finally:
-        if alignment_plan is not None:
-            alignment_plan.close()
-        if reference_resolution_pinned:
-            restore_reference_resolution(previous_ref_path)
+        primary_outcome_is_active = sys.exc_info()[0] is not None
+        try:
+            close_alignment_plan(alignment_plan, preserve_primary=primary_outcome_is_active)
+        finally:
+            if reference_resolution_pinned:
+                restore_reference_resolution(previous_ref_path)
 
     overall_stop = timeit.default_timer()
     elapsed_time = (overall_stop - overall_start) / 60

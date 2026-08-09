@@ -119,6 +119,10 @@ class AlignmentBinding:
         Raises:
             RuntimeError: If neither a proc descriptor link nor a verified hardlink can be installed.
         """
+        if self._view_path is not None:
+            message = f"Alignment binding already owns an alignment view: {self._view_path}"
+            logger.error(message)
+            raise RuntimeError(message)
         if self._descriptor is None:
             raise RuntimeError("Cannot install an alignment view from a closed descriptor binding.")
         destination = Path(view_path)
@@ -177,8 +181,9 @@ class AlignmentBinding:
         self._close_descriptor()
 
     def __del__(self) -> None:
-        """Avoid leaking a descriptor when a direct caller drops an unclosed plan."""
+        """Finalize safe ownership, preserving the FD when cleanup refusal makes reuse unsafe."""
         try:
             self.close()
-        except Exception:
-            self._close_descriptor()
+        except Exception as error:
+            with suppress(Exception):
+                logger.error(f"Preserving alignment descriptor because safe owned-view cleanup was refused: {error}")

@@ -33,14 +33,14 @@ def calculate_alignment_coverage(
     Returns:
         The exact region consumed by the coverage stage.
     """
-    if region is None:
-        region = region_resolver(
-            bam_file=plan.view_path,
-            reference_assembly=reference_assembly,
-            region_type="vntr_region",
-            config=config,
-        )
     try:
+        if region is None:
+            region = region_resolver(
+                bam_file=plan.view_path,
+                reference_assembly=reference_assembly,
+                region_type="vntr_region",
+                config=config,
+            )
         coverage_calculator(
             bam_file=plan.view_path,
             region=region,

@@ -45,3 +45,46 @@ def test_coverage_failure_still_releases_the_alignment_binding(tmp_path: Path) -
         )
 
     assert binding.is_open is False
+
+
+def test_region_resolution_failure_still_releases_the_alignment_binding(tmp_path: Path) -> None:
+    """The lifetime guard must include fallback region resolution through the plan view."""
+    alignment = tmp_path / "patient.bam"
+    alignment.write_bytes(b"patient alignment")
+    view = tmp_path / "run" / "input.bam"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+    binding.install_view(view)
+    plan = AlignmentPlan(
+        input_path=str(alignment),
+        view_path=str(view),
+        file_format="bam",
+        index_path=f"{view}.bai",
+        reference_path=None,
+        reference_source="not-required",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+        binding=binding,
+    )
+
+    def fail_resolution(**kwargs: object) -> str:
+        del kwargs
+        raise RuntimeError("region resolution failed")
+
+    try:
+        with pytest.raises(RuntimeError, match="region resolution failed"):
+            calculate_alignment_coverage(
+                plan=plan,
+                region=None,
+                reference_assembly="hg19",
+                threads=2,
+                config={},
+                output_dir=str(tmp_path / "coverage"),
+                coverage_calculator=lambda **kwargs: None,
+                region_resolver=fail_resolution,
+            )
+
+        assert binding.is_open is False
+        assert not view.exists()
+    finally:
+        plan.close()
