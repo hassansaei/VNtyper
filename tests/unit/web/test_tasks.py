@@ -537,6 +537,67 @@ def test_archive_failure_is_marked_failed_and_the_directory_is_left_in_place(
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
 
 
+def test_result_directory_cleanup_failure_removes_public_alias_without_following_target(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A failed post-archive cleanup cannot leave a current public download."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    original_rmtree = tasks.shutil.rmtree
+
+    def replace_archive_and_fail(path: str) -> None:
+        if Path(path) != output_dir:
+            original_rmtree(path)
+            return
+        archive = Path(f"{path}.zip")
+        archive.unlink()
+        archive.symlink_to(patient)
+        raise OSError("result directory busy")
+
+    monkeypatch.setattr(tasks.shutil, "rmtree", replace_archive_and_fail)
+
+    with pytest.raises(OSError, match="result directory busy"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    public_archive = Path(f"{output_dir}.zip")
+    assert not public_archive.exists() and not public_archive.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
+    assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
+
+
+def test_archive_rollback_failure_is_logged_without_masking_result_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The directory cleanup error remains primary when archive rollback also fails."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    monkeypatch.setattr(tasks.shutil, "rmtree", MagicMock(side_effect=OSError("result directory busy")))
+    clear_mock = MagicMock(side_effect=[None, OSError("rollback denied")])
+    monkeypatch.setattr(tasks, "clear_stale_archive", clear_mock)
+    caplog.set_level(logging.ERROR, logger="app.tasks")
+
+    with pytest.raises(OSError, match="result directory busy"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert "rollback denied" in caplog.text
+
+
 def test_worker_archive_refuses_a_real_symlink_without_reading_or_deleting_its_target(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:

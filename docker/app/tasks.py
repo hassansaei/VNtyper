@@ -349,6 +349,14 @@ def run_vntyper_job(
                 logger.error(f"Error archiving results: {e}")
                 # Update usage data on failure
                 redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+                try:
+                    clear_stale_archive(
+                        output_dir,
+                        "zip",
+                        protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                    )
+                except Exception as rollback_error:
+                    logger.error(f"Error removing failed job's public archive: {rollback_error}")
                 raise
 
         # Update usage data on success

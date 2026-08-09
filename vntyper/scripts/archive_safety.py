@@ -8,10 +8,10 @@ import secrets
 import shutil
 import stat
 import tarfile
-import tempfile
 import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import BinaryIO
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +35,6 @@ def _is_within(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
-def _same_file(left: Path, right: Path) -> bool:
-    try:
-        return os.path.samefile(left, right)
-    except OSError:
-        return False
-
-
 def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
@@ -60,6 +53,7 @@ def _validate_destination(
     protected_paths: Iterable[str | Path],
     *,
     allow_existing_symlink: bool,
+    parent_descriptor: int,
 ) -> None:
     destination_absolute = _absolute(destination)
     destination_resolved = destination_absolute.resolve(strict=False)
@@ -69,16 +63,31 @@ def _validate_destination(
         if _is_within(destination_absolute, root_absolute) or _is_within(destination_resolved, root_resolved):
             _reject(f"Unsafe archive destination is inside its source tree: {destination}")
 
+    try:
+        metadata = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        metadata = None
+
     for protected_path in protected_paths:
         protected = _absolute(protected_path)
+        same_inode = False
+        if metadata is not None:
+            try:
+                protected_metadata = os.stat(protected)
+            except OSError:
+                pass
+            else:
+                same_inode = _same_identity(metadata, protected_metadata)
         if (
             destination_absolute == protected
-            or destination_resolved == protected.resolve(strict=False)
-            or _same_file(destination, protected)
+            or (
+                destination_resolved == protected.resolve(strict=False)
+                and not (allow_existing_symlink and metadata is not None and stat.S_ISLNK(metadata.st_mode))
+            )
+            or same_inode
         ):
             _reject(f"Unsafe archive destination aliases protected input: {destination}")
 
-    metadata = os.lstat(destination) if os.path.lexists(destination) else None
     if metadata is not None and stat.S_ISLNK(metadata.st_mode) and not allow_existing_symlink:
         _reject(f"Unsafe archive destination is a symbolic link: {destination}")
     if metadata is not None and not stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
@@ -87,19 +96,50 @@ def _validate_destination(
         _reject(f"Unsafe archive destination has multiple hard links: {destination}")
 
 
+def _clear_stale_at(parent_descriptor: int, destination_name: str) -> None:
+    try:
+        previous_metadata = os.stat(destination_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    quarantine_name = f".{destination_name}.stale-{secrets.token_hex(8)}"
+    os.rename(
+        destination_name,
+        quarantine_name,
+        src_dir_fd=parent_descriptor,
+        dst_dir_fd=parent_descriptor,
+    )
+    quarantined_metadata = os.stat(quarantine_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if not _same_identity(previous_metadata, quarantined_metadata):
+        _reject(f"Archive destination changed during stale cleanup; retained quarantine '{quarantine_name}'.")
+    os.unlink(quarantine_name, dir_fd=parent_descriptor)
+
+
+def _open_parent(destination: Path) -> tuple[int, os.stat_result]:
+    expected_metadata = os.stat(destination.parent)
+    descriptor = os.open(destination.parent, _DIRECTORY_FLAGS)
+    opened_metadata = os.fstat(descriptor)
+    if not _same_identity(expected_metadata, opened_metadata):
+        os.close(descriptor)
+        _reject(f"Unsafe archive parent changed while opening: {destination.parent}")
+    return descriptor, opened_metadata
+
+
+def _require_current_parent(destination: Path, expected_metadata: os.stat_result) -> None:
+    try:
+        current_metadata = os.stat(destination.parent)
+    except OSError as error:
+        raise OSError(f"Unsafe archive parent changed before install: {destination.parent}") from error
+    if not _same_identity(expected_metadata, current_metadata):
+        _reject(f"Unsafe archive parent changed before install: {destination.parent}")
+
+
 def clear_stale_archive(
     base_name: str | Path,
     archive_format: str,
     *,
     protected_paths: Iterable[str | Path] = (),
 ) -> None:
-    """Remove one stale public archive entry without following a symlink.
-
-    This is used by the web worker before launching a retry, so a failed
-    subprocess cannot leave an older result downloadable as if it were new.
-    Regular files with multiple links and lexical operator-input collisions are
-    rejected; a symlink entry itself is safe to unlink because its target is
-    never opened or removed.
+    """Remove one stale public archive through a validated parent descriptor.
 
     Args:
         base_name: Public archive path without its suffix.
@@ -107,30 +147,32 @@ def clear_stale_archive(
         protected_paths: Operator-owned paths which must not be unlinked.
 
     Raises:
-        ValueError: If the destination is an unsafe regular-file alias.
-        OSError: If the entry cannot be inspected or removed.
+        ValueError: If the destination aliases protected state.
+        OSError: If the parent or destination cannot be safely inspected.
     """
     destination = _archive_path(base_name, archive_format)
-    _validate_destination(destination, None, protected_paths, allow_existing_symlink=True)
-    if not os.path.lexists(destination):
-        return
-
-    parent_descriptor = os.open(destination.parent, _DIRECTORY_FLAGS)
-    quarantine_name = f".{destination.name}.stale-{secrets.token_hex(8)}"
+    parent_descriptor, parent_metadata = _open_parent(destination)
+    primary_failure: BaseException | None = None
     try:
-        previous_metadata = os.stat(destination.name, dir_fd=parent_descriptor, follow_symlinks=False)
-        os.rename(
-            destination.name,
-            quarantine_name,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
+        _validate_destination(
+            destination,
+            None,
+            protected_paths,
+            allow_existing_symlink=True,
+            parent_descriptor=parent_descriptor,
         )
-        quarantined_metadata = os.stat(quarantine_name, dir_fd=parent_descriptor, follow_symlinks=False)
-        if not _same_identity(previous_metadata, quarantined_metadata):
-            _reject(f"Archive destination changed during stale cleanup; retained quarantine '{quarantine_name}'.")
-        os.unlink(quarantine_name, dir_fd=parent_descriptor)
+        _require_current_parent(destination, parent_metadata)
+        _clear_stale_at(parent_descriptor, destination.name)
+    except BaseException as error:
+        primary_failure = error
+        raise
     finally:
-        os.close(parent_descriptor)
+        try:
+            os.close(parent_descriptor)
+        except Exception as cleanup_error:
+            if primary_failure is None:
+                raise
+            logger.error(f"Stale archive cleanup failed and parent descriptor cleanup also failed: {cleanup_error}")
 
 
 def _archive_directory(
@@ -172,7 +214,7 @@ def _archive_directory(
             os.close(file_descriptor)
 
 
-def _write_zip(temporary_archive: Path, root_descriptor: int) -> None:
+def _write_zip(temporary_archive: BinaryIO, root_descriptor: int) -> None:
     with zipfile.ZipFile(temporary_archive, "x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
 
         def write_directory(relative: str, metadata: os.stat_result) -> None:
@@ -190,8 +232,8 @@ def _write_zip(temporary_archive: Path, root_descriptor: int) -> None:
         _archive_directory(root_descriptor, "", write_directory, write_file)
 
 
-def _write_tar(temporary_archive: Path, root_descriptor: int) -> None:
-    with tarfile.open(temporary_archive, "x:gz", dereference=False) as archive:
+def _write_tar(temporary_archive: BinaryIO, root_descriptor: int) -> None:
+    with tarfile.open(fileobj=temporary_archive, mode="w:gz", dereference=False) as archive:
 
         def populate_info(relative: str, metadata: os.stat_result) -> tarfile.TarInfo:
             info = tarfile.TarInfo(f"./{relative}")
@@ -251,38 +293,95 @@ def create_safe_archive(
         _reject("Refusing to archive unsafe symbolic link used as result root.")
     if not stat.S_ISDIR(root_metadata.st_mode):
         _reject(f"Archive root is not a directory: {root}")
-    _validate_destination(archive_path, root, protected_paths, allow_existing_symlink=False)
-    clear_stale_archive(base_name, archive_format, protected_paths=protected_paths)
-
-    archive_base = Path(base_name)
-    temporary_dir = Path(tempfile.mkdtemp(prefix=f".{archive_base.name}.archive-", dir=str(archive_base.parent)))
-    temporary_archive = temporary_dir / f"payload{_ARCHIVE_SUFFIXES[archive_format]}"
-    root_descriptor = -1
-    primary_failure: BaseException | None = None
+    parent_descriptor = -1
+    temporary_name: str | None = None
     try:
-        root_descriptor = os.open(root, _DIRECTORY_FLAGS)
-        opened_root = os.fstat(root_descriptor)
-        if not stat.S_ISDIR(opened_root.st_mode) or not _same_identity(root_metadata, opened_root):
-            _reject(f"Archive root is not a directory: {root}")
-        if archive_format == "zip":
-            _write_zip(temporary_archive, root_descriptor)
-        else:
-            _write_tar(temporary_archive, root_descriptor)
-        os.replace(temporary_archive, archive_path)
-    except BaseException as error:
-        primary_failure = error
-        raise
-    finally:
-        if root_descriptor >= 0:
-            os.close(root_descriptor)
-        try:
-            shutil.rmtree(temporary_dir)
-        except Exception as cleanup_error:
-            if primary_failure is None:
+        parent_descriptor, parent_metadata = _open_parent(archive_path)
+        _validate_destination(
+            archive_path,
+            root,
+            protected_paths,
+            allow_existing_symlink=False,
+            parent_descriptor=parent_descriptor,
+        )
+        _clear_stale_at(parent_descriptor, archive_path.name)
+
+        temporary_descriptor = -1
+        for _ in range(100):
+            temporary_name = f".{archive_path.name}.archive-{secrets.token_hex(8)}"
+            try:
+                temporary_descriptor = os.open(
+                    temporary_name,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+            except FileExistsError:
+                continue
+            break
+        if temporary_descriptor < 0:
+            raise OSError(f"Unable to allocate temporary archive beside {archive_path}")
+
+        with os.fdopen(temporary_descriptor, "w+b") as temporary_archive:
+            root_descriptor = os.open(root, _DIRECTORY_FLAGS)
+            write_failure: BaseException | None = None
+            try:
+                opened_root = os.fstat(root_descriptor)
+                if not stat.S_ISDIR(opened_root.st_mode) or not _same_identity(root_metadata, opened_root):
+                    _reject(f"Archive root is not a directory: {root}")
+                if archive_format == "zip":
+                    _write_zip(temporary_archive, root_descriptor)
+                else:
+                    _write_tar(temporary_archive, root_descriptor)
+                temporary_archive.flush()
+                os.fsync(temporary_archive.fileno())
+            except BaseException as error:
+                write_failure = error
                 raise
-            logger.error(
-                f"Archive attempt failed and temporary cleanup also failed; retained partial at "
-                f"{temporary_dir}: {cleanup_error}"
-            )
+            finally:
+                try:
+                    os.close(root_descriptor)
+                except Exception as cleanup_error:
+                    if write_failure is None:
+                        raise
+                    logger.error(f"Archive write failed and source descriptor cleanup also failed: {cleanup_error}")
+
+        _require_current_parent(archive_path, parent_metadata)
+        if temporary_name is None:
+            raise RuntimeError("Temporary archive name was lost before install.")
+        os.link(
+            temporary_name,
+            archive_path.name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        try:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+        except Exception:
+            try:
+                os.unlink(archive_path.name, dir_fd=parent_descriptor)
+            except Exception as rollback_error:
+                logger.error(
+                    f"Temporary archive cleanup failed and public archive rollback also failed: {rollback_error}"
+                )
+            raise
+        temporary_name = None
+    finally:
+        if temporary_name is not None and parent_descriptor >= 0:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+            except FileNotFoundError:
+                pass
+            except Exception as cleanup_error:
+                logger.error(
+                    f"Archive attempt failed and temporary cleanup also failed; retained partial "
+                    f"'{temporary_name}': {cleanup_error}"
+                )
+        if parent_descriptor >= 0:
+            try:
+                os.close(parent_descriptor)
+            except Exception as cleanup_error:
+                logger.error(f"Archive parent descriptor cleanup failed: {cleanup_error}")
 
     return str(archive_path)

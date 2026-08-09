@@ -3,6 +3,7 @@
 import logging
 import os
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -189,13 +190,13 @@ def test_an_archive_write_failure_removes_the_stale_destination_and_any_partial_
     destination = tmp_path / "download.zip"
     destination.write_bytes(b"previous complete archive")
 
-    monkeypatch.setattr(archive_safety.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(archive_safety.os, "link", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
         archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
 
     assert not destination.exists()
-    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".download.archive-")]
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".download")]
 
 
 @pytest.mark.parametrize("collision", ["lexical", "resolved", "hardlink"], ids=str)
@@ -231,6 +232,39 @@ def test_archive_destination_is_rejected_inside_its_source_tree(tmp_path: Path) 
         archive_safety.create_safe_archive(root / "download", "zip", root)
 
     assert not (root / "download.zip").exists()
+
+
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "directory", "hardlink"], ids=str)
+def test_unprotected_unsafe_archive_destinations_are_rejected(tmp_path: Path, unsafe_kind: str) -> None:
+    """Destination entry safety does not depend on callers listing a protected path."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"result")
+    destination = tmp_path / "download.zip"
+    external = tmp_path / "external.bin"
+    external.write_bytes(PATIENT_BYTES)
+    if unsafe_kind == "symlink":
+        destination.symlink_to(external)
+    elif unsafe_kind == "directory":
+        destination.mkdir()
+    else:
+        os.link(external, destination)
+
+    with pytest.raises(ValueError, match=f"archive destination.*{'symbolic link|regular file|hard links'}"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert external.read_bytes() == PATIENT_BYTES
+
+
+def test_stale_cleanup_preserves_a_protected_lexical_destination(tmp_path: Path) -> None:
+    """The standalone retry cleanup applies the same protected-path decision."""
+    destination = tmp_path / "download.zip"
+    destination.write_bytes(PATIENT_BYTES)
+
+    with pytest.raises(ValueError, match="archive destination.*protected input"):
+        archive_safety.clear_stale_archive(tmp_path / "download", "zip", protected_paths=(destination,))
+
+    assert destination.read_bytes() == PATIENT_BYTES
 
 
 def test_replacement_between_metadata_check_and_open_never_archives_external_bytes(
@@ -269,17 +303,169 @@ def test_temporary_cleanup_failure_is_logged_without_masking_primary_failure(
     root = tmp_path / "results"
     root.mkdir()
     (root / "result.txt").write_bytes(b"result")
-    monkeypatch.setattr(archive_safety.os, "replace", lambda *args: (_ for _ in ()).throw(OSError("install failed")))
     monkeypatch.setattr(
-        archive_safety.shutil, "rmtree", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("cleanup failed"))
+        archive_safety.os, "link", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("install failed"))
     )
+    original_unlink = archive_safety.os.unlink
+
+    def fail_temporary_cleanup(path, *args, **kwargs):
+        if str(path).startswith(".download.zip.archive-"):
+            raise OSError("cleanup failed")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(archive_safety.os, "unlink", fail_temporary_cleanup)
     caplog.set_level(logging.ERROR, logger="vntyper.scripts.archive_safety")
 
     with pytest.raises(OSError, match="install failed"):
         archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
 
     assert "cleanup failed" in caplog.text
-    assert ".download.archive-" in caplog.text
+    assert ".download.zip.archive-" in caplog.text
+
+
+def test_concurrent_archive_parent_replacement_never_touches_the_attacker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Validation and install must stay on one opened parent directory inode."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"safe result")
+    public_parent = tmp_path / "public"
+    public_parent.mkdir()
+    original_parent = tmp_path / "original-public"
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    original_open = archive_safety.os.open
+    original_mkdtemp = tempfile.mkdtemp
+    replaced = False
+
+    def replace_parent() -> None:
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            public_parent.rename(original_parent)
+            public_parent.mkdir()
+            os.link(patient, public_parent / "download.zip")
+
+    def replace_after_parent_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if Path(path) == public_parent:
+            replace_parent()
+        return descriptor
+
+    def replace_before_path_based_temp(*args, **kwargs):
+        replace_parent()
+        return original_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setattr(archive_safety.os, "open", replace_after_parent_open)
+    monkeypatch.setattr(archive_safety, "tempfile", tempfile, raising=False)
+    monkeypatch.setattr(tempfile, "mkdtemp", replace_before_path_based_temp)
+
+    with pytest.raises((OSError, ValueError), match="archive parent.*changed"):
+        archive_safety.create_safe_archive(public_parent / "download", "zip", root)
+
+    attacker_destination = public_parent / "download.zip"
+    assert os.path.samefile(attacker_destination, patient)
+    assert attacker_destination.read_bytes() == PATIENT_BYTES
+    assert patient.read_bytes() == PATIENT_BYTES
+    assert not (original_parent / "download.zip").exists()
+
+
+def test_descriptor_cleanup_failure_occurs_before_public_archive_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No cleanup that can fail remains after the archive becomes public."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"result")
+    root_descriptor = -1
+    original_open = archive_safety.os.open
+    original_close = archive_safety.os.close
+
+    def record_root_open(path, flags, *args, **kwargs):
+        nonlocal root_descriptor
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if Path(path) == root:
+            root_descriptor = descriptor
+        return descriptor
+
+    def fail_after_root_close(descriptor: int) -> None:
+        original_close(descriptor)
+        if descriptor == root_descriptor:
+            raise OSError("descriptor cleanup failed")
+
+    monkeypatch.setattr(archive_safety.os, "open", record_root_open)
+    monkeypatch.setattr(archive_safety.os, "close", fail_after_root_close)
+
+    with pytest.raises(OSError, match="descriptor cleanup failed"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+
+
+def test_post_install_temporary_unlink_failure_rolls_back_public_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failure after the no-replace link removes the public archive again."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"result")
+    original_unlink = archive_safety.os.unlink
+    failed_once = False
+
+    def fail_first_temporary_unlink(path, *args, **kwargs):
+        nonlocal failed_once
+        if str(path).startswith(".download.zip.archive-") and not failed_once:
+            failed_once = True
+            raise OSError("temporary unlink denied")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(archive_safety.os, "unlink", fail_first_temporary_unlink)
+
+    with pytest.raises(OSError, match="temporary unlink denied"):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root)
+
+    assert not (tmp_path / "download.zip").exists()
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".download")]
+
+
+def test_concurrent_protected_destination_insertion_is_never_replaced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Atomic install must refuse a protected inode inserted after validation."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"result")
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    destination = tmp_path / "download.zip"
+    original_replace = archive_safety.os.replace
+    original_link = archive_safety.os.link
+    inserted = False
+
+    def insert_before_replace(source, target, *args, **kwargs):
+        nonlocal inserted
+        if not inserted and str(target).endswith("download.zip"):
+            inserted = True
+            original_link(patient, destination)
+        return original_replace(source, target, *args, **kwargs)
+
+    def insert_before_noreplace_link(source, target, *args, **kwargs):
+        nonlocal inserted
+        if not inserted and str(target).endswith("download.zip"):
+            inserted = True
+            original_link(patient, destination)
+        return original_link(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(archive_safety.os, "replace", insert_before_replace)
+    monkeypatch.setattr(archive_safety.os, "link", insert_before_noreplace_link)
+
+    with pytest.raises((FileExistsError, ValueError)):
+        archive_safety.create_safe_archive(tmp_path / "download", "zip", root, protected_paths=(patient,))
+
+    assert os.path.samefile(destination, patient)
+    assert destination.read_bytes() == PATIENT_BYTES
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 def test_unknown_formats_and_non_directory_roots_are_rejected(tmp_path: Path) -> None:
