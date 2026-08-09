@@ -1096,22 +1096,22 @@ did not measure.
 ### Wave 3 measurement (2026-08-09)
 
 The host was otherwise idle; the six final runs used one harness job, four pipeline
-threads and alternated `ddf49a1` (2.0.9) with `be49f53` (the clean final behavioral
+threads and alternated `ddf49a1` (2.0.9) with `3083ed9` (the clean final behavioral
 candidate). Every counted side verified its package marker, exact revision and all 18
 expectations. The host was a 32-logical-CPU AMD Ryzen 9 9950X with one logged-in user.
 The raw one/five/fifteen-minute load averages at each alternating launch were baseline
-`1.69/1.43/1.10`, milestone `4.73/2.85/1.66`, baseline `2.92/2.87/1.80`, milestone
-`2.55/2.79/1.88`, baseline `3.22/3.18/2.12`, milestone `4.02/3.68/2.42`; the values include
+`3.34/3.30/2.34`, milestone `4.87/3.96/2.67`, baseline `5.91/4.51/2.97`, milestone
+`5.69/4.53/3.11`, baseline `4.17/4.44/3.21`, milestone `4.29/4.38/3.30`; the values include
 the immediately preceding four-thread arm rather than hiding that residual load.
 
 | Arm | Runs (s) | Median | Range |
 | --- | --- | --- | --- |
-| 2.0.9 baseline | 91.12, 90.58, 90.92 | 90.92 | 90.58–91.12 |
-| milestone | 88.27, 87.64, 88.09 | 88.09 | 87.64–88.27 |
+| 2.0.9 baseline | 88.79, 90.02, 88.89 | 88.89 | 88.79–90.02 |
+| milestone | 87.10, 86.05, 87.23 | 87.10 | 86.05–87.23 |
 
 The ranges do not overlap, so A-PERF-1 records a **measured improvement** under its
-predeclared rule: the slower baseline arm's best run (90.58 s) exceeds the faster
-milestone arm's worst run (88.27 s). The median difference is 2.83 s (3.1%). The separate
+predeclared rule: the slower baseline arm's best run (88.79 s) exceeds the faster
+milestone arm's worst run (87.23 s). The median difference is 1.79 s (2.0%). The separate
 whole-50 run found 32 explicit mixed-layout failures on the milestone arm; the baseline
 completed those cases only by discarding the stranded FASTQ, so they are exit-bar
 evidence rather than performance samples.
