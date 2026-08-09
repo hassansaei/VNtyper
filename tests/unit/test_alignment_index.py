@@ -6,12 +6,12 @@ second index that nothing else knows about. A BAI has two spellings, `<file>.bai
 `<stem>.bai`; the pipeline used to reconstruct only the first, so the `sample.bai` that the
 upload endpoint and the worker both deliberately accept was invisible to it.
 
-**It is not htslib's resolution order and does not claim to be.** htslib tries CSI, in both
-spellings, before BAI. The returned path goes straight into
-`extract_unmapped_from_offset.get_last_chunk_end`, which parses the BAI container itself
-and rejects anything else, so ignoring a CSI is the correct behaviour rather than a missing
-feature - and is pinned below in both directions: the resolution ignores it, and the reader
-downstream would reject it.
+**`resolve_bam_index` is deliberately not htslib's resolution order and does not claim to
+be.** htslib tries CSI, in both spellings, before BAI, while `resolve_any_index` follows
+the format-aware candidate contract. `resolve_bam_index` remains the legacy BAI-only
+preflight/protection contract. The optional legacy offset parser remains independently
+tested but has no production consumer, so ignoring CSI here is a deliberately narrow
+contract rather than htslib parity.
 
 These tests moved here with `resolve_bam_index` when it came out of
 `fastq_bam_processing.py`. What that resolution is *for* - no index is ever written into
@@ -23,9 +23,87 @@ from pathlib import Path
 
 import pytest
 
-from vntyper.scripts.alignment_index import resolve_bam_index
+from vntyper.scripts.alignment_index import resolve_any_index, resolve_bam_index
 
 pytestmark = pytest.mark.unit
+
+
+def test_cram_index_uses_appended_spelling_before_stem_spelling(tmp_path: Path) -> None:
+    """CRAM index resolution returns the first existing CRAI candidate."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    appended = tmp_path / "sample.cram.crai"
+    appended.write_bytes(b"CRAI")
+    stem = tmp_path / "sample.crai"
+    stem.write_bytes(b"CRAI")
+
+    assert resolve_any_index(cram, "cram") == str(appended)
+
+
+def test_cram_index_uses_stem_spelling_when_appended_is_missing(tmp_path: Path) -> None:
+    """A CRAM's stem-based CRAI spelling is found when it is the only candidate."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    stem = tmp_path / "sample.crai"
+    stem.write_bytes(b"CRAI")
+
+    assert resolve_any_index(cram, "cram") == str(stem)
+
+
+@pytest.mark.parametrize("spelling", ["sample.cram.csi", "sample.csi"])
+def test_cram_csi_is_resolved_in_either_supported_spelling(tmp_path: Path, spelling: str) -> None:
+    """Pinned samtools/htslib accepts CRAM CSI when no CRAI is available."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    csi = tmp_path / spelling
+    csi.write_bytes(b"CSI\x01")
+
+    assert resolve_any_index(cram, "cram") == str(csi)
+
+
+def test_cram_crai_precedes_csi_when_both_exist(tmp_path: Path) -> None:
+    """A selected CRAI cannot be overridden by a lower-priority CRAM CSI."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    crai = tmp_path / "sample.cram.crai"
+    crai.write_bytes(b"CRAI")
+    (tmp_path / "sample.cram.csi").write_bytes(b"CSI\x01")
+
+    assert resolve_any_index(cram, "cram") == str(crai)
+
+
+def test_bai_beside_cram_is_not_a_cram_index(tmp_path: Path) -> None:
+    """A BAI next to a CRAM does not satisfy CRAI resolution."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+    (tmp_path / "sample.bai").write_bytes(b"BAI\x01")
+
+    assert resolve_any_index(cram, "cram") is None
+
+
+def test_bam_csi_is_found_by_any_index_but_not_bai_index(tmp_path: Path) -> None:
+    """General resolution accepts CSI while the legacy BAI-only resolver does not."""
+    bam = tmp_path / "sample.bam"
+    bam.write_bytes(b"BAM\x01")
+    csi = tmp_path / "sample.bam.csi"
+    csi.write_bytes(b"CSI\x01")
+
+    assert resolve_any_index(bam, "bam") == str(csi)
+    assert resolve_bam_index(bam) is None
+
+
+def test_no_supported_index_resolves_to_none(tmp_path: Path) -> None:
+    """No existing candidate is reported as unavailable."""
+    cram = tmp_path / "sample.cram"
+    cram.write_bytes(b"CRAM\x02")
+
+    assert resolve_any_index(cram, "cram") is None
+
+
+def test_unknown_alignment_format_fails_closed() -> None:
+    """General resolution delegates unsupported-format rejection to the contract."""
+    with pytest.raises(ValueError, match="unknown alignment format: sam"):
+        resolve_any_index("sample.sam", "sam")
 
 
 def test_an_alternate_index_name_is_found_and_no_second_index_is_built(tmp_path: Path) -> None:
@@ -73,12 +151,10 @@ def test_a_csi_index_is_ignored_and_a_bai_is_built_instead(tmp_path: Path) -> No
 
     htslib resolves CSI before BAI, in both the appended (``sample.bam.csi``) and the
     substituted (``sample.csi``) spelling, so this function is **not** htslib-equivalent
-    and must not claim to be. Reusing a CSI here would be a defect, not a feature: the
-    only consumer of the returned path is
-    ``extract_unmapped_from_offset.get_last_chunk_end``, which parses the BAI container
-    directly and rejects anything whose first four bytes are not ``BAI\\x01``. Returning
-    a CSI would turn a working run into a ``ValueError`` mid-stage; returning None makes
-    the caller build the BAI it needs, into the run's output directory.
+    and must not claim to be. It remains the legacy BAI-only preflight/protection
+    contract; production indexed recovery uses the common htslib literal-``'*'`` fetch.
+    The optional legacy offset parser remains independently tested but has no production
+    consumer.
 
     This test **passes before and after** the docstring correction that accompanies it -
     the behaviour was already right and is what is being pinned. What was wrong, and what
@@ -95,8 +171,8 @@ def test_a_csi_index_is_ignored_and_a_bai_is_built_instead(tmp_path: Path) -> No
     assert resolve_bam_index(bam) is None
 
 
-def test_the_bai_reader_downstream_really_does_reject_a_csi(tmp_path: Path) -> None:
-    """Why BAI-only is the correct behaviour rather than a gap, stated as a test.
+def test_the_optional_legacy_bai_parser_rejects_a_csi(tmp_path: Path) -> None:
+    """The independently tested legacy parser still rejects non-BAI containers.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -119,6 +195,8 @@ def test_the_docstring_does_not_claim_htslib_parity() -> None:
     candidate list to match it - so the text is pinned here rather than left to drift.
     """
     doc = resolve_bam_index.__doc__ or ""
+    normalised_doc = " ".join(doc.split())
 
     assert "the way htslib itself does" not in doc, "the parity claim is false and must not come back"
     assert "CSI" in doc, "the docstring must say which index formats are deliberately not resolved"
+    assert "no production consumer" in normalised_doc, "the retired production-parser data flow must not come back"

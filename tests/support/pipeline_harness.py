@@ -28,6 +28,8 @@ from typing import Any
 from unittest import mock
 
 from vntyper.scripts import pipeline as pipeline_module
+from vntyper.scripts import pipeline_alignment as pipeline_alignment_module
+from vntyper.scripts.alignment_contract import AlignmentPlan
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +56,20 @@ MINIMAL_CONFIG: dict[str, Any] = {
     "paths": {"template_dir": "vntyper/templates"},
 }
 
-#: The stage functions the harness replaces, as attribute names on ``pipeline``.
+#: The stage functions the harness replaces. Header reading is owned by the input
+#: alignment boundary; the remaining attributes live on ``pipeline``.
 PIPELINE_STAGE_ATTRS = (
     "get_tool_versions",
     "validate_bam_file",
     "validate_fastq_file",
     "get_region_string_with_fallback",
     "process_bam_to_fastq",
+    "route_converted_fastqs",
     "process_fastq",
     "align_and_sort_fastq",
     "extract_bam_header",
     "read_alignment_header",
+    "run_preflight",
     "parse_header_pipeline_info",
     "calculate_vntr_coverage",
     "run_kestrel",
@@ -150,9 +155,39 @@ def _fastq_pair(output_dir: Path, basename: str = "output") -> tuple[str, str, s
     )
 
 
+def _alignment_plan(*args: Any, **kwargs: Any) -> AlignmentPlan:
+    """Return the proven plan a stubbed preflight call describes.
+
+    Args:
+        *args: Unused because ``run_pipeline`` calls preflight by keyword.
+        **kwargs: The real ``run_preflight`` keyword arguments.
+
+    Returns:
+        A plan rooted at the requested output directory.
+    """
+    file_format = kwargs["file_format"]
+    output_dir = Path(kwargs["output_dir"])
+    output_name = kwargs["output_name"]
+    view_path = output_dir / f"{output_name}.{file_format}"
+    index_suffix = "bai" if file_format == "bam" else "crai"
+    return AlignmentPlan(
+        input_path=str(kwargs["in_path"]),
+        view_path=str(view_path),
+        file_format=file_format,
+        index_path=f"{view_path}.{index_suffix}",
+        reference_path="/refs/hg19.fa" if file_format == "cram" else None,
+        reference_source="harness",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+        binding=kwargs.get("binding"),
+    )
+
+
 def run_pipeline_under_harness(
     output_dir: Path,
     *,
+    pipeline_output_dir: str | Path | None = None,
+    create_output_dir: bool = True,
     config: dict[str, Any] | None = None,
     extra_modules: list[str] | None = None,
     header: str = "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:249250621\n",
@@ -165,6 +200,10 @@ def run_pipeline_under_harness(
 
     Args:
         output_dir: Directory the pipeline writes into; use ``tmp_path``.
+        pipeline_output_dir: Optional raw output argument passed to the pipeline.
+            This preserves caller spelling such as a trailing path separator while
+            ``output_dir`` remains the canonical path used by the harness.
+        create_output_dir: Create the output root before invoking the pipeline.
         config: Configuration mapping. Defaults to :data:`MINIMAL_CONFIG`.
         extra_modules: ``--extra-modules`` list as ``run_pipeline`` receives it.
         header: The SAM header text the header reads return. Parsed for real by the
@@ -177,7 +216,7 @@ def run_pipeline_under_harness(
             recorder. Return ``unittest.mock.DEFAULT`` to keep the stubbed return
             value; anything else replaces it.
         **run_pipeline_kwargs: Forwarded to ``run_pipeline``; ``bam`` defaults to a
-            BAM inside ``output_dir`` so the common case needs no arguments.
+            BAM in a separate sibling input tree so the common case needs no arguments.
 
     Returns:
         PipelineHarness: The recorded stage calls.
@@ -186,13 +225,14 @@ def run_pipeline_under_harness(
         AssertionError: If ``run_pipeline`` failed and ``expect_failure`` is False.
     """
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if create_output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
     resolved_config = MINIMAL_CONFIG if config is None else config
     basename = "output"
 
     kwargs: dict[str, Any] = {
         "bwa_reference": "/refs/hg19.fa",
-        "output_dir": output_dir,
+        "output_dir": output_dir if pipeline_output_dir is None else pipeline_output_dir,
         "extra_modules": extra_modules or [],
         "module_args": {"advntr": {}},
         "config": resolved_config,
@@ -200,8 +240,10 @@ def run_pipeline_under_harness(
         "sample_name": "sample",
     }
     kwargs.update(run_pipeline_kwargs)
-    if not any(kwargs.get(key) for key in ("bam", "cram", "fastq1")):
-        bam_path = output_dir / "in.bam"
+    if not any(kwargs.get(key) for key in ("bam", "cram", "fastq1", "fastq2")):
+        input_root = output_dir.parent / f"{output_dir.name}_input"
+        input_root.mkdir()
+        bam_path = input_root / "in.bam"
         bam_path.touch()
         kwargs["bam"] = str(bam_path)
 
@@ -216,13 +258,38 @@ def run_pipeline_under_harness(
     stages: dict[str, mock.MagicMock] = {}
     with ExitStack() as stack:
         for attr in PIPELINE_STAGE_ATTRS:
-            stages[attr] = stack.enter_context(mock.patch.object(pipeline_module, attr, autospec=True))
+            owner = pipeline_alignment_module if attr == "read_alignment_header" else pipeline_module
+            stages[attr] = stack.enter_context(mock.patch.object(owner, attr, autospec=True))
+        stack.enter_context(
+            mock.patch.object(
+                pipeline_alignment_module,
+                "get_region_string_with_fallback",
+                stages["get_region_string_with_fallback"],
+            )
+        )
+        stack.enter_context(mock.patch.object(pipeline_alignment_module, "run_preflight", stages["run_preflight"]))
+        stack.enter_context(
+            mock.patch.object(
+                pipeline_alignment_module,
+                "pin_reference_resolution",
+                pipeline_module.pin_reference_resolution,
+            )
+        )
+        stack.enter_context(
+            mock.patch.object(
+                pipeline_alignment_module,
+                "restore_reference_resolution",
+                pipeline_module.restore_reference_resolution,
+            )
+        )
         for attr in ADVNTR_STAGE_ATTRS:
             stages[attr] = stack.enter_context(mock.patch(f"{ADVNTR_MODULE}.{attr}", autospec=True))
 
         stages["get_tool_versions"].return_value = {"samtools": "1.19"}
         stages["get_region_string_with_fallback"].return_value = "chr1:155158000-155163000"
+        stages["run_preflight"].side_effect = _alignment_plan
         stages["process_bam_to_fastq"].return_value = _fastq_pair(output_dir, basename)
+        stages["route_converted_fastqs"].return_value = _fastq_pair(output_dir, basename)[:2]
         stages["align_and_sort_fastq"].return_value = str(
             output_dir / "alignment_processing" / f"{basename}_sorted.bam"
         )

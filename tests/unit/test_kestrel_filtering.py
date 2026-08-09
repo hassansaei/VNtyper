@@ -586,10 +586,10 @@ class TestConstructKestrelCommand:
 
     @pytest.mark.parametrize(
         ("fastq_1", "fastq_2"),
-        [(None, "/in/R2.fastq.gz"), ("/in/R1.fastq.gz", None), (None, None), ("", "/in/R2.fastq.gz")],
+        [(None, "/in/R2.fastq.gz"), (None, None), ("", "/in/R2.fastq.gz")],
     )
     def test_a_missing_fastq_raises_value_error(self, fastq_1, fastq_2):
-        """Either FASTQ missing is a hard error, not a half-built command.
+        """A missing first FASTQ is a hard error, not a half-built command.
 
         Args:
             fastq_1: R1 path, or a falsy placeholder.
@@ -597,6 +597,12 @@ class TestConstructKestrelCommand:
         """
         with pytest.raises(ValueError, match="FASTQ input files are missing or invalid"):
             self._command(fastq_1=fastq_1, fastq_2=fastq_2)
+
+    def test_a_single_fastq_is_emitted_without_a_none_operand(self):
+        command = self._command(fastq_2=None)
+
+        assert "-sSAMPLE1 /in/R1.fastq.gz --hapfmt" in command
+        assert "None" not in command
 
     # -- shell quoting -----------------------------------------------------------------
     #

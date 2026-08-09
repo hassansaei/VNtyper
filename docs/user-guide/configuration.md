@@ -3,7 +3,8 @@
 VNtyper 2 uses two configuration files. To override the default configuration:
 
 ```bash
-vntyper --config-path /path/to/custom/config.json pipeline --bam sample.bam -o results/
+vntyper --config-path /path/to/custom/config.json pipeline \
+    --bam inputs/sample.bam -o results/sample/
 ```
 
 !!! warning "Modifying Thresholds"

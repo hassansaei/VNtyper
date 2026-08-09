@@ -80,6 +80,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
             ASSEMBLY_CHOICES,
             None,
         ),
+        "reference_fasta": (("--reference-fasta",), "_StoreAction", "Path", None, False, None, None),
         "sample_name": (("-s", "--sample-name"), "_StoreAction", "str", None, False, None, None),
         "summary_formats": (("--summary-formats",), "_StoreAction", "str", "", False, None, None),
         "threads": (("--threads",), "_StoreAction", "int", None, False, None, None),

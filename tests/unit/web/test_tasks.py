@@ -27,8 +27,11 @@ imports before this module, so `app.tasks` is importable here.
 """
 
 import inspect
+import json
 import logging
 import subprocess
+import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
@@ -41,6 +44,7 @@ pytestmark = pytest.mark.unit
 
 BAM_BYTES = b"alignment-bytes"
 INDEX_BYTES = b"index-bytes"
+PATIENT_BYTES = b"patient-alignment-bytes-that-must-never-enter-an-archive"
 
 
 # ---------------------------------------------------------------------------
@@ -179,19 +183,13 @@ def _subprocess_stub(
     monkeypatch: pytest.MonkeyPatch,
     tasks,
     *,
-    index_error: Exception | None = None,
     pipeline_error: Exception | None = None,
 ) -> list:
     """Replace `tasks.subprocess.run` with a recorder that can be told to fail.
 
-    Standing in for `samtools index`, it also writes the `.bai` file that
-    command would have produced, so "was an index built" is an assertion
-    about the commands issued rather than a file that appeared by magic.
-
     Args:
         monkeypatch: Standard pytest fixture; restores the patch at teardown.
         tasks: The imported `app.tasks` module.
-        index_error: If given, raised instead of running `samtools index`.
         pipeline_error: If given, raised instead of running `vntyper pipeline`.
 
     Returns:
@@ -201,11 +199,6 @@ def _subprocess_stub(
 
     def _run(command, *args, **kwargs):
         commands.append(list(command))
-        if command[:2] == ["samtools", "index"]:
-            if index_error is not None:
-                raise index_error
-            Path(f"{command[2]}.bai").write_bytes(b"generated-index")
-            return None
         if pipeline_error is not None:
             raise pipeline_error
         return None
@@ -369,33 +362,31 @@ def test_a_failure_before_the_pipeline_even_starts_is_marked_failed_and_cleaned_
 
 
 # ---------------------------------------------------------------------------
-# run_vntyper_job: subprocess exits non-zero
+# run_vntyper_job: pipeline subprocess exits non-zero
 # ---------------------------------------------------------------------------
 
 
-def test_index_generation_failure_stops_the_job_before_the_pipeline_runs(
+def test_missing_index_is_deferred_to_pipeline_preflight_without_writing_beside_upload(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """`samtools index` exiting non-zero fails the job without running the pipeline.
+    """The worker must let pipeline preflight build its run-local index.
 
     Args:
         monkeypatch: Standard pytest fixture.
         redis_mocks: The three mocked Redis clients.
-        no_email_task: The mocked `send_email_task`.
+        no_email_task: The mocked email task.
         tmp_path: Scratch directory standing in for the job tree.
     """
     from app import tasks
 
     bam_path, _ = _make_job_input(tmp_path)
-    index_error = subprocess.CalledProcessError(1, ["samtools", "index", str(bam_path)])
-    commands = _subprocess_stub(monkeypatch, tasks, index_error=index_error)
+    commands = _subprocess_stub(monkeypatch, tasks)
 
-    with pytest.raises(subprocess.CalledProcessError):
-        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, email="user@example.com"))
+    _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
 
-    assert commands == [["samtools", "index", str(bam_path)]], "the pipeline must not run after the index step fails"
-    assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
-    assert no_email_task.delay.call_count == 0, "only a pipeline failure emails; an index failure is not a pipeline run"
+    assert len(commands) == 1
+    assert commands[0][:7] == ["conda", "run", "--no-capture-output", "-n", "vntyper", "vntyper", "pipeline"]
+    assert not any(command[:2] == ["samtools", "index"] for command in commands)
 
 
 def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
@@ -418,8 +409,7 @@ def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
     with pytest.raises(subprocess.CalledProcessError):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, email="user@example.com", cohort_key=None))
 
-    assert commands[0] == ["samtools", "index", str(bam_path)], "the index is still built before the pipeline runs"
-    assert commands[1][:6] == ["conda", "run", "-n", "vntyper", "vntyper", "pipeline"]
+    assert commands[0][:7] == ["conda", "run", "--no-capture-output", "-n", "vntyper", "vntyper", "pipeline"]
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
     no_email_task.delay.assert_called_once()
     email_kwargs = no_email_task.delay.call_args.kwargs
@@ -428,6 +418,44 @@ def test_pipeline_failure_marks_the_job_failed_and_sends_a_failure_email(
     assert "Job ID <strong>job-1</strong>" in email_kwargs["content"]
     assert "Cohort ID" not in email_kwargs["content"]
     assert not bam_path.exists(), "cleanup must still run after a pipeline failure"
+
+
+def test_pipeline_failure_stores_the_curated_preflight_code_and_message(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A nonzero pipeline exit transports its reviewed artifact into the job hash.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked email task.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    artifact = {
+        "code": "reference_unresolved",
+        "message": "Unable to resolve CRAM reference: contig=chr1, M5=digest.",
+        "candidates": [["cli", "full.fa", "probe exited non-zero"]],
+    }
+    pipeline_error = subprocess.CalledProcessError(1, ["vntyper", "pipeline"])
+
+    def _run_pipeline_and_emit_current_artifact(command, *args, **kwargs):
+        (output_dir / "preflight_error.json").write_text(json.dumps(artifact), encoding="utf-8")
+        raise pipeline_error
+
+    monkeypatch.setattr(tasks.subprocess, "run", _run_pipeline_and_emit_current_artifact)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path))
+
+    redis_mocks.usage.hset.assert_any_call(
+        "usage:job-1",
+        mapping={"code": "reference_unresolved", "message": artifact["message"]},
+    )
 
 
 def test_pipeline_failure_email_names_the_cohort_when_one_is_set(
@@ -482,9 +510,9 @@ def test_pipeline_failure_without_an_email_sends_no_notification(
 def test_archive_failure_is_marked_failed_and_the_directory_is_left_in_place(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """A `shutil.make_archive` failure fails the job without removing `output_dir`.
+    """An archive creation failure fails the job without removing `output_dir`.
 
-    `shutil.rmtree(output_dir)` runs immediately after `make_archive` in the
+    `shutil.rmtree(output_dir)` runs immediately after the archive helper in the
     same `try`; if the archive step itself fails, the results directory must
     still be there afterwards -- otherwise a failed archive attempt loses
     the very results it was trying to package.
@@ -502,12 +530,112 @@ def test_archive_failure_is_marked_failed_and_the_directory_is_left_in_place(
     output_dir = tmp_path / "output" / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"result data")
-    monkeypatch.setattr(tasks.shutil, "make_archive", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(tasks, "create_safe_archive", MagicMock(side_effect=OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
 
     assert output_dir.exists(), "a failed archive attempt must not remove the results it could not package"
+    assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
+
+
+def test_result_directory_cleanup_failure_removes_public_alias_without_following_target(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A failed post-archive cleanup cannot leave a current public download."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    original_rmtree = tasks.shutil.rmtree
+
+    def replace_archive_and_fail(path: str) -> None:
+        if Path(path) != output_dir:
+            original_rmtree(path)
+            return
+        archive = Path(f"{path}.zip")
+        archive.unlink()
+        archive.symlink_to(patient)
+        raise OSError("result directory busy")
+
+    monkeypatch.setattr(tasks.shutil, "rmtree", replace_archive_and_fail)
+
+    with pytest.raises(OSError, match="result directory busy"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    public_archive = Path(f"{output_dir}.zip")
+    assert not public_archive.exists() and not public_archive.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
+    assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
+
+
+def test_partial_result_cleanup_quarantines_one_complete_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Partial source deletion cannot destroy both complete representations."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"complete result")
+
+    def partially_remove_then_fail(path: str) -> None:
+        assert Path(path) == output_dir
+        (output_dir / "result.txt").unlink()
+        raise OSError("partial result cleanup")
+
+    monkeypatch.setattr(tasks.shutil, "rmtree", partially_remove_then_fail)
+
+    with pytest.raises(OSError, match="partial result cleanup"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert not Path(f"{output_dir}.zip").exists()
+    quarantines = list(output_dir.parent.glob(".job-1.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("result.txt") == b"complete result"
+
+
+def test_worker_archive_refuses_a_real_symlink_without_reading_or_deleting_its_target(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """The worker's second archive pass must fail closed on an alignment view.
+
+    Args:
+        monkeypatch: Standard pytest fixture.
+        redis_mocks: The three mocked Redis clients.
+        no_email_task: The mocked `send_email_task`.
+        tmp_path: Scratch directory standing in for the job tree.
+    """
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    patient_alignment = tmp_path / "patient-source.bam"
+    patient_alignment.write_bytes(PATIENT_BYTES)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    alignment_view = output_dir / "alignment_view.bam"
+    alignment_view.symlink_to(patient_alignment)
+
+    with pytest.raises(ValueError, match="symbolic link.*alignment_view\\.bam"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert output_dir.exists(), "a rejected archive must leave the result tree for diagnosis"
+    assert alignment_view.is_symlink()
+    assert not Path(f"{output_dir}.zip").exists(), "an unsafe archive must never be installed"
+    assert patient_alignment.read_bytes() == PATIENT_BYTES
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
 
 
@@ -712,10 +840,11 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
         ),
     )
 
-    pipeline_command = commands[1]
+    pipeline_command = commands[0]
     assert pipeline_command == [
         "conda",
         "run",
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",
@@ -730,7 +859,6 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
         "hg38",
         "--fast-mode",
         "--keep-intermediates",
-        "--archive-results",
         "--extra-modules",
         "advntr",
         "--advntr-max-coverage",
@@ -738,6 +866,29 @@ def test_optional_flags_are_all_appended_and_a_successful_archive_replaces_the_d
     ]
     assert not output_dir.exists(), "a successful archive removes the original results directory"
     assert Path(f"{output_dir}.zip").exists(), "a successful archive leaves the zip behind"
+
+
+def test_failed_retry_removes_stale_public_archive_without_following_its_target(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
+) -> None:
+    """A stale symlink disappears before the subprocess while its patient target is untouched."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    stale = Path(f"{output_dir}.zip")
+    stale.symlink_to(patient)
+    pipeline_error = subprocess.CalledProcessError(1, ["vntyper", "pipeline"])
+    _subprocess_stub(monkeypatch, tasks, pipeline_error=pipeline_error)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert not stale.exists() and not stale.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -771,11 +922,10 @@ def test_index_path_none_falls_back_to_the_conventional_bai_name_and_skips_rebui
     assert not conventional_index.exists(), "cleanup must still remove the index it fell back to"
 
 
-def test_index_path_none_still_builds_an_index_when_none_exists(
+def test_index_path_none_defers_a_missing_index_to_pipeline_preflight(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, no_email_task: MagicMock, tmp_path: Path
 ) -> None:
-    """With `index_path=None` and no index on disk, one is generated at the
-    conventional name.
+    """With no uploaded index, the worker still writes nothing beside the input.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -790,8 +940,8 @@ def test_index_path_none_still_builds_an_index_when_none_exists(
 
     _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, index_path=None))
 
-    assert commands[0] == ["samtools", "index", str(bam_path)]
-    assert not Path(f"{bam_path}.bai").exists(), "the generated index is cleaned up like any other job input"
+    assert not any(command[:2] == ["samtools", "index"] for command in commands)
+    assert not Path(f"{bam_path}.bai").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1007,7 +1157,7 @@ def test_delete_old_results_removes_data_for_a_cohort_that_has_expired(
 def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
 ) -> None:
-    """A `shutil.make_archive` failure after the `vntyper cohort` subprocess
+    """An archive creation failure after the `vntyper cohort` subprocess
     succeeds still fails the job and updates the usage record.
 
     Args:
@@ -1020,7 +1170,7 @@ def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
     zip_path = tmp_path / "job-a.zip"
     zip_path.write_bytes(b"result data")
     monkeypatch.setattr(tasks.subprocess, "run", lambda *a, **k: None)
-    monkeypatch.setattr(tasks.shutil, "make_archive", MagicMock(side_effect=OSError("disk full")))
+    monkeypatch.setattr(tasks, "create_safe_archive", MagicMock(side_effect=OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
         _invoke_cohort_job(
@@ -1028,6 +1178,139 @@ def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
         )
 
     assert ("usage:analysis", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
+
+
+def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """The cohort subprocess consumes task-owned bytes, never a later path replacement."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    consumed: list[bytes] = []
+    consumed_names: list[str] = []
+
+    def replace_member_before_consumption(command, *args, **kwargs):
+        member.unlink()
+        member.symlink_to(patient)
+        input_file = Path(command[command.index("--input-file") + 1])
+        listed = Path(input_file.read_text().strip())
+        consumed_names.append(listed.name)
+        consumed.append(listed.read_bytes())
+
+    monkeypatch.setattr(tasks.subprocess, "run", replace_member_before_consumption)
+
+    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(tmp_path / "analysis"))
+
+    assert consumed == [b"original member archive"]
+    assert consumed_names == ["job-a.zip"]
+    assert member.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
+
+
+def test_cohort_analysis_consumes_the_copied_bytes_when_snapshot_directory_name_is_replaced(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """The cohort child reopens snapshots through the directory inode, not its old name."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    output_dir = tmp_path / "analysis"
+    snapshot_dir = output_dir / ".cohort-members"
+    displaced_snapshot_dir = output_dir / ".cohort-members-displaced"
+    consumed = tmp_path / "consumed.bin"
+    real_subprocess_run = subprocess.run
+
+    def replace_snapshot_directory_before_child_opens_input(command, *args, **kwargs):
+        snapshot_dir.rename(displaced_snapshot_dir)
+        snapshot_dir.mkdir()
+        (snapshot_dir / member.name).write_bytes(PATIENT_BYTES)
+        input_file = Path(command[command.index("--input-file") + 1])
+        reader = (
+            "from pathlib import Path; import sys; "
+            "listed = Path(sys.argv[1]).read_text().strip(); "
+            "Path(sys.argv[2]).write_bytes(Path(listed).read_bytes())"
+        )
+        real_subprocess_run([sys.executable, "-c", reader, str(input_file), str(consumed)], check=True)
+
+    monkeypatch.setattr(tasks.subprocess, "run", replace_snapshot_directory_before_child_opens_input)
+
+    with pytest.raises(ValueError, match="snapshot directory changed"):
+        _invoke_cohort_job(
+            tasks,
+            cohort_id="cohort-1",
+            zip_paths=[str(member)],
+            output_dir=str(output_dir),
+        )
+
+    assert consumed.read_bytes() == b"original member archive"
+    assert not (displaced_snapshot_dir / member.name).exists()
+    assert (snapshot_dir / member.name).read_bytes() == PATIENT_BYTES
+    assert not Path(f"{output_dir}.zip").exists()
+
+
+def test_cohort_snapshot_cleanup_never_masks_the_subprocess_failure_after_directory_replacement(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A replaced snapshot name is secondary when the cohort child already failed."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    output_dir = tmp_path / "analysis"
+    snapshot_dir = output_dir / ".cohort-members"
+    displaced_snapshot_dir = output_dir / ".cohort-members-displaced"
+    primary_failure = subprocess.CalledProcessError(9, ["vntyper", "cohort"])
+
+    def replace_snapshot_directory_then_fail(command, *args, **kwargs):
+        snapshot_dir.rename(displaced_snapshot_dir)
+        snapshot_dir.mkdir()
+        (snapshot_dir / member.name).write_bytes(PATIENT_BYTES)
+        raise primary_failure
+
+    monkeypatch.setattr(tasks.subprocess, "run", replace_snapshot_directory_then_fail)
+    caplog.set_level(logging.ERROR, logger="app.archive_delivery")
+
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _invoke_cohort_job(
+            tasks,
+            cohort_id="cohort-1",
+            zip_paths=[str(member)],
+            output_dir=str(output_dir),
+        )
+
+    assert raised.value is primary_failure
+    assert not (displaced_snapshot_dir / member.name).exists()
+    assert (snapshot_dir / member.name).read_bytes() == PATIENT_BYTES
+    assert "snapshot directory changed" in caplog.text
+
+
+def test_cohort_snapshot_copy_failure_removes_the_partial_task_owned_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed copy leaves neither its partial bytes nor its private directory behind."""
+    from app import archive_delivery
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    snapshot_dir = tmp_path / ".cohort-members"
+    primary_failure = OSError("snapshot copy failed")
+
+    def copy_part_then_fail(source, target, *args, **kwargs):
+        target.write(source.read(5))
+        raise primary_failure
+
+    monkeypatch.setattr(archive_delivery.shutil, "copyfileobj", copy_part_then_fail)
+
+    with pytest.raises(OSError) as raised:
+        archive_delivery.snapshot_owned_archives([str(member)], snapshot_dir)
+
+    assert raised.value is primary_failure
+    assert not snapshot_dir.exists()
 
 
 def test_cohort_analysis_skips_retention_extension_when_no_cohort_id_is_given(
@@ -1053,14 +1336,13 @@ def test_cohort_analysis_skips_retention_extension_when_no_cohort_id_is_given(
     retention_spy.assert_not_called()
 
 
-def test_cohort_analysis_logs_but_does_not_raise_when_deleting_its_scratch_file_fails(
+def test_cohort_analysis_fails_before_archiving_when_deleting_its_scratch_file_fails(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A filesystem error removing the task's own `cohort_input.txt` scratch
-    file is logged, not raised.
+    """A path-bearing scratch file must never be packaged when cleanup fails.
 
     Args:
         monkeypatch: Standard pytest fixture.
@@ -1076,11 +1358,15 @@ def test_cohort_analysis_logs_but_does_not_raise_when_deleting_its_scratch_file_
     monkeypatch.setattr(tasks.os, "remove", MagicMock(side_effect=OSError("permission denied")))
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
-    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis"))
+    with pytest.raises(OSError, match="permission denied"):
+        _invoke_cohort_job(
+            tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis")
+        )
 
     input_file = tmp_path / "analysis" / "cohort_input.txt"
     assert input_file.exists(), "the removal genuinely failed; the scratch file is still there"
-    assert f"Error deleting cohort input file {input_file}: permission denied" in caplog.text
+    assert not (tmp_path / "analysis.zip").exists()
+    assert "permission denied" in caplog.text
 
 
 def test_cohort_analysis_logs_but_does_not_raise_when_removing_the_empty_output_dir_fails(

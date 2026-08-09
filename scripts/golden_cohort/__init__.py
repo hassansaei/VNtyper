@@ -35,4 +35,10 @@ from __future__ import annotations
 #: result files that have no direct comparator, and folds a changed provenance banner into
 #: a table's status. Runs recorded under 1.0.0 measured strictly less; the four runs on the
 #: gate page were all produced by 1.0.0.
-HARNESS_VERSION = "1.2.0"
+#:
+#: 1.3.0 adds the parsed placed-unmapped guard count to the comparison surface, so a
+#: forced-indexed exit remains causally attributable in the rendered gate result.
+#:
+#: 1.4.0 requires the observed extraction mode to match the declared forced mode and
+#: makes an unsafe forced-indexed attestation prove its causal exit-before-work shape.
+HARNESS_VERSION = "1.4.0"

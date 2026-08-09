@@ -262,6 +262,10 @@ def read_pipeline_case(output_dir: Path, log_dir: Path, rules: list[Rule]) -> di
 
     return {
         "exit_code": result.get("exit_code"),
+        "unmapped_read_set": result.get("unmapped_read_set"),
+        "raw_indexed_read_set": result.get("raw_indexed_read_set"),
+        "raw_indexed_loss": result.get("raw_indexed_loss"),
+        "placed_unmapped_guard_count": result.get("placed_unmapped_guard_count"),
         "launch_line": normalise.apply(result.get("launch_line") or "", rules),
         "kestrel_result": kestrel,
         "kestrel_pre_result": kestrel_pre,

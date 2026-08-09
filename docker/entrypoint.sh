@@ -155,17 +155,25 @@ main() {
     case "${cmd}" in
         vntyper)
             log_info "Running VNtyper command: $*"
-            exec conda run -n "${CONDA_ENV}" "$@"
+            # --no-capture-output is load-bearing, not cosmetic. Without it conda buffers
+            # all child stdout and stderr until the child exits, so a running pipeline
+            # emits nothing at all in `docker logs` and every "it hangs" report arrives
+            # with no stage log attached (#213). For the long-running services below it
+            # also restores live streaming, for the same reason. The Celery worker
+            # launches the pipeline through a *second* `conda run` in docker/app/tasks.py,
+            # which needs the same flag -- fixing only this file leaves every web job
+            # buffered.
+            exec conda run --no-capture-output -n "${CONDA_ENV}" "$@"
             ;;
 
         celery)
             log_info "Starting Celery: $*"
-            exec conda run -n "${CONDA_ENV}" "$@"
+            exec conda run --no-capture-output -n "${CONDA_ENV}" "$@"
             ;;
 
         beat)
             log_info "Starting Celery Beat..."
-            exec conda run -n "${CONDA_ENV}" celery -A app.celery_app beat \
+            exec conda run --no-capture-output -n "${CONDA_ENV}" celery -A app.celery_app beat \
                 --loglevel=info
             ;;
 
@@ -183,7 +191,7 @@ main() {
         "")
             # Default: Start FastAPI web service
             log_info "Starting FastAPI web service on port 8000..."
-            exec conda run -n "${CONDA_ENV}" uvicorn app.main:app \
+            exec conda run --no-capture-output -n "${CONDA_ENV}" uvicorn app.main:app \
                 --host 0.0.0.0 \
                 --port 8000 \
                 --log-level info

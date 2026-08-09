@@ -31,6 +31,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from golden_cohort import runner  # noqa: E402
+from golden_cohort.cram_cases import CRAM_READ_SET_EXPECTATIONS  # noqa: E402
+
+from vntyper.scripts.cli_parser import build_parser  # noqa: E402
 
 
 def _load_gate_entry_point():
@@ -218,6 +221,209 @@ def test_a_cram_case_is_launched_without_fast_mode(tmp_path: Path) -> None:
     assert "--fast-mode" not in _argv(case, tmp_path)
 
 
+def test_a_cram_case_launches_with_a_complete_per_case_scan_config(tmp_path: Path) -> None:
+    """The case's scan policy must reach VNtyper through replacement-safe config input."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}, "tools": {"samtools": "samtools"}}))
+    case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
+    del case["bam"]
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8, config_path=config_path)
+
+    assert effective_mode == "indexed"
+    assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == "indexed"
+    assert argv[argv.index("--config-path") + 1] == str(config_path)
+
+
+def test_a_cram_case_places_global_config_before_pipeline_and_current_cli_accepts_it(tmp_path: Path) -> None:
+    """Generated CRAM argv must obey the CLI's top-level-only config option contract."""
+    config_path = tmp_path / "case-config.json"
+    case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
+    del case["bam"]
+
+    argv = runner.pipeline_argv(case, tmp_path / "out", threads=4, advntr_threads=8, config_path=config_path)
+    parsed = build_parser().parse_args(argv)
+
+    assert argv[:3] == ["--config-path", str(config_path), "pipeline"]
+    assert parsed.command == "pipeline"
+    assert parsed.config_path == config_path
+
+
+def test_side_expectation_is_materialized_before_admissibility() -> None:
+    """A candidate refusal and a baseline success are both intentional outcomes."""
+    case = {
+        "case_id": "mixed",
+        "expect_exit": "zero",
+        "required_artifacts": ["pipeline_summary.json"],
+        "side_expectations": {
+            "before": {"expect_exit": "zero", "required_artifacts": ["pipeline_summary.json"]},
+            "after": {"expect_exit": "nonzero", "required_artifacts": []},
+        },
+    }
+
+    assert runner.materialize_side_expectation(case, "before") == {
+        **case,
+        "expect_exit": "zero",
+        "required_artifacts": ["pipeline_summary.json"],
+    }
+    assert runner.materialize_side_expectation(case, "after") == {
+        **case,
+        "expect_exit": "nonzero",
+        "required_artifacts": [],
+    }
+
+
+def test_side_expectation_rejects_a_missing_side() -> None:
+    """A malformed differential declaration must not fall back to the legacy default."""
+    case = {
+        "case_id": "mixed",
+        "side_expectations": {"before": {"expect_exit": "zero", "required_artifacts": []}},
+    }
+
+    with pytest.raises(ValueError, match="has no 'after' expectation"):
+        runner.materialize_side_expectation(case, "after")
+
+
+def test_a_cram_case_adds_a_missing_cram_section_to_its_complete_config_copy(tmp_path: Path) -> None:
+    """Older target trees must still receive a replacement-safe complete config."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"tools": {"samtools": "samtools"}}))
+    case = _case("b178_indexed_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="indexed")
+    del case["bam"]
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+    assert effective_mode == "indexed"
+    assert json.loads(config_path.read_text())["cram"] == {"unmapped_scan": "indexed"}
+
+
+@pytest.mark.parametrize("override", ["auto", "indexed", "stream"])
+def test_the_harness_environment_override_beats_a_cram_cases_mode(tmp_path: Path, monkeypatch, override: str) -> None:
+    """Wave 3 can compare one override mode across all CRAM cases without touching product config."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case = _case("b178_stream_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="stream")
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", override)
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+    assert effective_mode == override
+    assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == override
+
+
+@pytest.mark.parametrize("declared_mode", ["indexed", "stream"])
+def test_the_harness_override_cannot_collapse_declared_a178_scan_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    declared_mode: str,
+) -> None:
+    """The indexed and stream evidence cases must remain distinct measurements."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case = _case(
+        f"indexed_safe_{declared_mode}_cram",
+        alignment_kind="cram",
+        cram="/data/x.cram",
+        unmapped_scan=declared_mode,
+        cram_evidence_expectation={"indexed_authorized": True},
+    )
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", "stream" if declared_mode == "indexed" else "indexed")
+
+    config_path, effective_mode = runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+    assert effective_mode == declared_mode
+    assert json.loads(config_path.read_text())["cram"]["unmapped_scan"] == declared_mode
+
+
+@pytest.mark.parametrize(
+    ("source_id", "case_prefix"),
+    [("7a61_hg38_ensembl_bwa", "7a61_hg38_ensembl"), ("b178_hg19_subset", "b178_hg19")],
+)
+@pytest.mark.parametrize("declared_mode", ["indexed", "stream"])
+def test_runner_preserves_side_wrapped_a178_scan_declarations_before_applying_an_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_id: str,
+    case_prefix: str,
+    declared_mode: str,
+) -> None:
+    """The real lossy CRAM cases cannot be collapsed before their after-side policy is selected."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case_id = f"{case_prefix}_{declared_mode}_cram"
+    case = _case(
+        case_id,
+        alignment_kind="cram",
+        cram=f"/data/{source_id}.cram",
+        unmapped_scan=declared_mode,
+        side_expectations={
+            "before": {"expect_exit": "zero", "required_artifacts": []},
+            "after": {
+                "expect_exit": "nonzero",
+                "required_artifacts": [],
+                "cram_evidence_expectation": CRAM_READ_SET_EXPECTATIONS[source_id],
+            },
+        },
+    )
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", "stream" if declared_mode == "indexed" else "indexed")
+    captured: dict[str, object] = {}
+
+    def fake_run_one(*, case: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        captured.update(case)
+        return _ok_record(str(case["case_id"]))
+
+    with (
+        mock.patch.object(runner, "_run_one", side_effect=fake_run_one),
+        mock.patch.object(runner.admissibility, "describe_tree", return_value=CLEAN_REVISION),
+    ):
+        runner.run_side(
+            matrix=_matrix([case]),
+            tree=tree,
+            run_root=tmp_path / "run",
+            side="after",
+            marker="vntyper.scripts.alignment_contract",
+            expect_marker=True,
+            threads=4,
+            advntr_threads=8,
+            jobs=1,
+            timeout=60,
+            skip_cohort=True,
+        )
+
+    assert captured["cram_evidence_expectation"] == CRAM_READ_SET_EXPECTATIONS[source_id]
+    assert captured["effective_unmapped_scan"] == declared_mode
+    case_config = json.loads(Path(str(captured["case_config_path"])).read_text())
+    assert case_config["cram"]["unmapped_scan"] == declared_mode
+
+
+def test_an_invalid_harness_scan_override_is_refused_before_launch(tmp_path: Path, monkeypatch) -> None:
+    """A typo must not become a silently auto-selected scan."""
+    tree = tmp_path / "tree"
+    config = tree / "vntyper" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"cram": {"unmapped_scan": "auto"}}))
+    case = _case("b178_stream_cram", alignment_kind="cram", cram="/data/x.cram", unmapped_scan="stream")
+    del case["bam"]
+    monkeypatch.setenv("VNTYPER_CRAM_UNMAPPED_SCAN", "lossy")
+
+    with pytest.raises(ValueError, match="VNTYPER_CRAM_UNMAPPED_SCAN"):
+        runner.materialize_case_config(tree, case, tmp_path / "logs")
+
+
 def test_an_unrecognised_alignment_kind_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     """Falling back to ``--bam`` would launch a different input from the declared one.
 
@@ -304,6 +510,14 @@ def test_a_side_records_a_failed_revision_lookup_rather_than_losing_the_run(tmp_
     assert record["revision"]["head"] is None
     assert record["revision"]["error"] == "not a git repository"
     assert record["launch_verified"] is True
+
+
+def test_load_side_rejects_a_non_object_record(tmp_path: Path) -> None:
+    """A syntactically valid JSON array cannot masquerade as a side attestation."""
+    (tmp_path / "side.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        runner.load_side(tmp_path)
 
 
 # --------------------------------------------------------------------------------------

@@ -33,7 +33,7 @@ When processing BAM or CRAM input, VNtyper 2 detects the chromosome naming conve
 ## When to Use `--reference-assembly`
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ --reference-assembly hg38
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ --reference-assembly hg38
 ```
 
 Specify this option when:

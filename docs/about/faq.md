@@ -26,7 +26,7 @@ Yes. VNtyper 2 supports both UCSC and NCBI naming conventions. Use the `--refere
 Example:
 
 ```bash
-vntyper pipeline --bam input.bam --reference-assembly hg38 -o output/
+vntyper pipeline --bam inputs/sample.bam --reference-assembly hg38 -o results/sample/
 ```
 
 ## Docker vs local install?

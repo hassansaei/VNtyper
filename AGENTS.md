@@ -92,10 +92,19 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     (`<file>.bai`, then `<stem>.bai`), split out of `fastq_bam_processing.py`, which keeps
     every `run_command`/samtools call including the one that builds a missing index. It is
     **not** htslib's resolution order — htslib tries CSI first, and a CSI is ignored here
-    on purpose, because the only consumer of the path is the BAI-only offset extractor in
-    `extract_unmapped_from_offset.py`. Widening it is a change to that reader first.
-  All eight are fully annotated and at or near 100% branch coverage. Put new pure logic
-  there rather than back in the file it came from.
+    on purpose. Non-fast preflight still uses this BAI-only result while protecting
+    supplied indexes and builds a fresh co-located BAI. Production indexed recovery now
+    lets htslib fetch literal `'*'` reads; it does not call the optional legacy offset
+    extractor in `extract_unmapped_from_offset.py`. Widening the resolver remains a
+    separate preflight-contract change.
+  - `reference_uri_policy.py` — typed, path-free remote-scheme detection with distinct
+    parsers for colon-separated `REF_PATH` and complete CRAM header `UR` values, plus
+    strict validation of the ambient-resolution boolean.
+  - `alignment_preflight_logs.py` — pure planning of every command-log destination
+    reachable by a format, candidate count and fast/normal preflight mode.
+  `reference_resolution_environment.py` separately owns CRAM-only process-environment
+  pin/restore I/O. All ten pure modules are fully annotated and at or near 100% branch
+  coverage. Put new pure logic there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
@@ -165,14 +174,17 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 81** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 86** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
-| **Target: 81%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
+| **Target: 86%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. Measured on the same suite: **81.70% branch-inclusive** (was 80.24% before #171-#212 raised it; 80.77% statement-only at that earlier measurement).
+against. The fresh milestone-4 gate measured **86.14% branch-inclusive across 4,303 unit
+tests**. Historically, the #171-#212 suite measured 81.70% after the floor moved from the
+earlier 80.24%; statement-only coverage at that earlier branch-coverage rollout was
+80.77%.
 So deleting `branch = true` *raises* the reported total while covering strictly less —
 the ratchet cannot catch that regression, because the number moves the wrong way, and
 `tests/unit/test_coverage_gate.py::test_branch_coverage_is_enabled` is the only thing
@@ -187,8 +199,9 @@ a warning and keeps its headroom above the gate. Do not collapse them.
 point — measured: three untested lines moved it 0.03. It has never once failed a PR for
 shipping untested code, and it cannot. `make patch-coverage` runs `diff-cover` over the
 lines your branch changed and fails below 80%, so an untested new function fails its own
-PR regardless of what the repo total is doing. It is also how the 80% target is reached:
-every PR lands at ≥80%, so the average climbs on its own.
+PR regardless of what the repo total is doing. The patch bar remains independently fixed
+at 80%; making every PR meet it helps the whole-repository average climb toward the
+current 86% target.
 
 It scores against the **merge base**, so commits landing on `main` while your PR is open
 are never charged to you. A PR that only deletes code, only touches docs, or changes no
@@ -485,7 +498,18 @@ limit.
 - Never commit into `tests/data/`, `reference/`, `out/`, `download/`, `vntyper.egg-info/`
   or the local `adVNTR/` clone — all are generated or downloaded.
 - Never hand-edit `vntyper/dependencies/kestrel/*.jar` or anything in `vntyper.egg-info/`.
-- Never add a page under `docs/` without registering it in `mkdocs.yml` `nav:` —
-  the docs workflow runs `mkdocs build --strict`, so a dangling nav entry or broken
-  internal link fails CI.
+- Never add a **published** page under `docs/` without registering it in `mkdocs.yml`
+  `nav:`. Two corrections to the older wording of this rule, both measured on
+  mkdocs 1.6.1:
+  - An unregistered page is logged at **INFO** ("The following pages exist in the docs
+    directory, but are not included in the nav configuration"), not WARNING, so it does
+    **not** fail `--strict` on its own. A dangling nav entry or a broken internal link
+    does.
+  - What actually breaks the build on an unregistered page is usually the `macros`
+    plugin, which Jinja-templates every page: prose containing `{#...}` (a list of GitHub
+    issues such as `{#209, #178}` is enough) fails as an unterminated comment.
+  Contributor working documents that are not meant to be published belong in
+  `docs/plans/`, which `mkdocs.yml` lists under `exclude_docs:`. Excluded pages are
+  neither rendered nor templated, so they carry no nav entry and no macro hazard. Add new
+  non-published directories there rather than to `nav:`.
 - Never claim tests pass without showing the command output.

@@ -28,7 +28,9 @@ the machine's shared ``/tmp``.
 imports before this module.
 """
 
+import asyncio
 import io
+import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -48,6 +50,7 @@ QUEUED_JOB_ID = "b7c41d90-2e58-4a63-9f07-15c8de3b6a24"
 
 # Recognisable bytes so the delivered archive can be compared to its source.
 RESULT_PAYLOAD = b"vntyper-result-bytes-for-job-a"
+PATIENT_PAYLOAD = b"patient-bytes-that-must-not-be-served"
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +96,89 @@ def _cohort_with_one_result(client, fake_redis, tmp_path: Path) -> str:
     fake_redis.sadd(f"{COHORT_KEY_PREFIX}{cohort_id}:jobs", "job-a")
     (tmp_path / "output" / "job-a.zip").write_bytes(RESULT_PAYLOAD)
     return cohort_id
+
+
+def _send_response(response) -> bytes:
+    """Run one response as ASGI and return its body bytes."""
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+    asyncio.run(response(scope, receive, send))
+    return b"".join(message.get("body", b"") for message in messages)
+
+
+def test_individual_download_is_bound_before_its_path_is_replaced(web_app, tmp_path: Path) -> None:
+    """A response streams the inode opened by the endpoint, not a later symlink target."""
+    job_id = "b7c41d90-2e58-4a63-9f07-15c8de3b6a24"
+    archive = tmp_path / "output" / f"{job_id}.zip"
+    archive.write_bytes(RESULT_PAYLOAD)
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_PAYLOAD)
+
+    response = web_app.download_result(job_id)
+    archive.unlink()
+    archive.symlink_to(patient)
+
+    assert _send_response(response) == RESULT_PAYLOAD
+    assert archive.is_symlink()
+    assert patient.read_bytes() == PATIENT_PAYLOAD
+
+
+def test_individual_download_rejects_a_hard_link_to_external_bytes(client, tmp_path: Path) -> None:
+    """Existence alone cannot make a multiply-linked external inode downloadable."""
+    job_id = "b7c41d90-2e58-4a63-9f07-15c8de3b6a24"
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_PAYLOAD)
+    os.link(patient, tmp_path / "output" / f"{job_id}.zip")
+
+    response = client.get(f"/download/{job_id}/")
+
+    assert response.status_code == 404
+    assert PATIENT_PAYLOAD not in response.content
+    assert patient.read_bytes() == PATIENT_PAYLOAD
+
+
+def test_individual_download_opens_a_fifo_nonblocking_before_rejecting_it(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A final-component FIFO swap cannot block the API worker before ``fstat``."""
+    from app import archive_delivery
+
+    job_id = "b7c41d90-2e58-4a63-9f07-15c8de3b6a24"
+    fifo = tmp_path / "output" / f"{job_id}.zip"
+    os.mkfifo(fifo)
+    original_open = archive_delivery.os.open
+
+    def require_nonblocking(path, flags, *args, **kwargs):
+        if str(path) == fifo.name:
+            assert flags & os.O_NONBLOCK
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(archive_delivery.os, "open", require_nonblocking)
+
+    response = client.get(f"/download/{job_id}/")
+
+    assert response.status_code == 404
+    assert fifo.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +239,110 @@ def test_cohort_download_still_delivers_the_complete_archive(
     assert sorted(p.name for p in spool.iterdir()) == []
 
 
-def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_built(
+def test_cohort_download_is_bound_before_its_scratch_path_is_replaced(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The cohort response streams its built archive, not a substituted patient alias."""
+    spool = _spool_dir(monkeypatch, tmp_path)
+    cohort_id = _cohort_with_one_result(client, fake_redis, tmp_path)
+    response = web_app.cohort_download(
+        cohort_id=cohort_id,
+        alias=None,
+        passphrase=GOOD_PASSPHRASE,
+        header_passphrase=None,
+    )
+    scratch = next(spool.iterdir())
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_PAYLOAD)
+    scratch.unlink()
+    scratch.symlink_to(patient)
+
+    delivered = _send_response(response)
+
+    with zipfile.ZipFile(io.BytesIO(delivered)) as archive:
+        assert archive.read("job-a.zip") == RESULT_PAYLOAD
+    assert scratch.is_symlink()
+    assert patient.read_bytes() == PATIENT_PAYLOAD
+
+
+def test_cohort_download_does_not_package_a_hard_linked_external_member(client, fake_redis, tmp_path: Path) -> None:
+    """A multiply-linked member is excluded instead of packaging external bytes."""
+    response = client.post("/create-cohort/", data={"alias": "study", "passphrase": GOOD_PASSPHRASE})
+    cohort_id = response.json()["cohort_id"]
+    fake_redis.sadd(f"{COHORT_KEY_PREFIX}{cohort_id}:jobs", "job-a")
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_PAYLOAD)
+    os.link(patient, tmp_path / "output" / "job-a.zip")
+
+    response = client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
+
+    assert response.status_code == 200
+    assert PATIENT_PAYLOAD not in response.content
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == []
+    assert patient.read_bytes() == PATIENT_PAYLOAD
+
+
+def test_cohort_download_discards_a_member_that_gains_a_hard_link_during_copy(
     client, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Post-copy ownership validation happens before a ZIP member is committed."""
+    from app import archive_delivery
+
+    cohort_id = _cohort_with_one_result(client, fake_redis, tmp_path)
+    member = tmp_path / "output" / "job-a.zip"
+    external_alias = tmp_path / "external-alias.zip"
+    original_copy = archive_delivery.shutil.copyfileobj
+    linked = False
+
+    def copy_then_link(source, target, *args, **kwargs):
+        nonlocal linked
+        result = original_copy(source, target, *args, **kwargs)
+        if not linked:
+            linked = True
+            os.link(member, external_alias)
+        return result
+
+    monkeypatch.setattr(archive_delivery.shutil, "copyfileobj", copy_then_link)
+
+    response = client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == []
+    assert external_alias.read_bytes() == RESULT_PAYLOAD
+
+
+def test_cohort_download_opens_a_fifo_nonblocking_before_skipping_it(
+    client, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A FIFO member is rejected without waiting for a writer."""
+    from app import archive_delivery
+
+    response = client.post("/create-cohort/", data={"alias": "study", "passphrase": GOOD_PASSPHRASE})
+    cohort_id = response.json()["cohort_id"]
+    fake_redis.sadd(f"{COHORT_KEY_PREFIX}{cohort_id}:jobs", "job-a")
+    fifo = tmp_path / "output" / "job-a.zip"
+    os.mkfifo(fifo)
+    original_open = archive_delivery.os.open
+
+    def require_nonblocking(path, flags, *args, **kwargs):
+        if str(path) == fifo.name:
+            assert flags & os.O_NONBLOCK
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(archive_delivery.os, "open", require_nonblocking)
+
+    response = client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == []
+    assert fifo.exists()
+
+
+def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_built(
+    client, web_app, fake_redis, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A failure part-way through the build does not strand the scratch file.
 
@@ -166,6 +354,7 @@ def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_bui
 
     Args:
         client: TestClient fixture from conftest.
+        web_app: The patched API module whose archive writer is made to fail.
         fake_redis: The store backing the app's cohort client.
         monkeypatch: Standard pytest fixture, used to redirect `tempfile`.
         tmp_path: The directory the `web_app` fixture configured as the job tree.
@@ -173,23 +362,21 @@ def test_cohort_download_leaves_no_temporary_file_when_the_archive_cannot_be_bui
     spool = _spool_dir(monkeypatch, tmp_path)
     cohort_id = _cohort_with_one_result(client, fake_redis, tmp_path)
 
-    def _member_vanished(self, filename, *args, **kwargs):
-        """Stand in for a member archive that expires mid-build.
+    def _archive_write_failed(*args, **kwargs):
+        """Stand in for destination archive I/O failing mid-build.
 
         Args:
-            self: The `ZipFile` being written.
-            filename: The member path being added.
             *args: Ignored.
             **kwargs: Ignored.
 
         Raises:
-            FileNotFoundError: Always.
+            RuntimeError: Always.
         """
-        raise FileNotFoundError(filename)
+        raise RuntimeError("archive write failed")
 
-    monkeypatch.setattr(zipfile.ZipFile, "write", _member_vanished)
+    monkeypatch.setattr(web_app, "write_owned_zip_member", _archive_write_failed)
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(RuntimeError, match="archive write failed"):
         client.get("/cohort-download/", params={"cohort_id": cohort_id, "passphrase": GOOD_PASSPHRASE})
 
     assert sorted(p.name for p in spool.iterdir()) == []

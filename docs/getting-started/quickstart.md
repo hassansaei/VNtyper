@@ -22,11 +22,14 @@ Analyze a BAM file with the default Kestrel genotyping engine:
 
 ```bash
 vntyper pipeline \
-    --bam sample.bam \
-    -o results/ \
+    --bam inputs/sample.bam \
+    -o results/sample/ \
     --threads 4 \
     --reference-assembly hg38
 ```
+
+For BAM and CRAM input, the output root must be outside the directory containing the
+alignment. The separate `inputs/` and `results/` trees above meet that requirement.
 
 !!! tip "Don't have a BAM file?"
     Download the VNtyper 2 test dataset (~1.1 GB) to try it out:
@@ -54,7 +57,7 @@ Add `--fast-mode` to skip filtering for unmapped and partially mapped reads, spe
 Once the pipeline completes, the output directory contains:
 
 ```
-results/
+results/sample/
   pipeline.log                  # Full pipeline log
   pipeline_summary.json         # Machine-readable summary
   kestrel/
@@ -74,8 +77,8 @@ Create a visual summary report with IGV integration:
 
 ```bash
 vntyper report \
-    -o results/ \
-    --input-dir results/
+    -o results/sample/ \
+    --input-dir results/sample/
 ```
 
 Open the generated HTML file in your browser to review:

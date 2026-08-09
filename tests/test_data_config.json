@@ -691,6 +691,22 @@
     "extract_to": "tests/data",
     "md5sum": "fdd5958d58c733cdca452f3287898964"
   },
+  "derived_fixtures": [
+    {
+      "name": "example_b178_hg19_single_end",
+      "kind": "single_end_bam",
+      "source_bam": "tests/data/example_b178_hg19_subset.bam",
+      "output_bam": "tests/data/derived/single_end/example_b178_hg19_single_end.bam"
+    }
+  ],
+  "purpose_fixtures": {
+    "cram_reference_contract": {
+      "reference_dependent_cram": "tests/data/cram/reference-dependent/reference-dependent.cram",
+      "reference_fasta": "tests/data/cram/reference-dependent/reference.fa",
+      "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram",
+      "indexed_safe_cram": "tests/data/cram/indexed-safe/indexed-safe.cram"
+    }
+  },
   "unit_tests": {},
   "integration_tests": {
     "bam_tests": [
@@ -703,23 +719,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 416,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 7110,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.05869074492099323,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision*"
-        },
-        "check_igv_report": true
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 14690,
+          "r2": 14690,
+          "other": 0,
+          "single": 1
+        }
       },
       {
         "test_name": "example_a5c1_hg19_subset_fast",
@@ -730,23 +736,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 93,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 9883,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.009410098148335525,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision"
-        },
-        "check_igv_report": true
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 20888,
+          "r2": 20888,
+          "other": 0,
+          "single": 3
+        }
       },
       {
         "test_name": "example_66bf_hg19_subset_fast",
@@ -757,23 +753,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 491,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 22647,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.0217,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision*"
-        },
-        "check_igv_report": true
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 19841,
+          "r2": 19841,
+          "other": 0,
+          "single": 3
+        }
       },
       {
         "test_name": "example_7a61_hg19_subset_fast",
@@ -784,17 +770,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": "None",
-          "Estimated_Depth_Variant_ActiveRegion": "None",
-          "Depth_Score": {
-            "value": "None",
-            "tolerance_percentage": 5
-          },
-          "Confidence": "Negative"
-        },
-        "check_igv_report": false
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 2359,
+          "r2": 2359,
+          "other": 0,
+          "single": 8
+        }
       },
       {
         "test_name": "example_dfc3_hg19_subset_fast",
@@ -805,23 +787,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 206,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 19183,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.010855245823892079,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision*"
-        },
-        "check_igv_report": false
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 31596,
+          "r2": 31596,
+          "other": 0,
+          "single": 53
+        }
       },
       {
         "test_name": "example_dfc3_GRCh37_fast",
@@ -832,23 +804,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 206,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 19182,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.010855817875210793,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision*"
-        },
-        "check_igv_report": false
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 31593,
+          "r2": 31593,
+          "other": 0,
+          "single": 2
+        }
       },
       {
         "test_name": "example_dfc3_GRCh38_fast",
@@ -859,23 +821,13 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 206,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 19183,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.010855245823892079,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision*"
-        },
-        "check_igv_report": false
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 31603,
+          "r2": 31603,
+          "other": 0,
+          "single": 2
+        }
       },
       {
         "test_name": "example_dfc3_hg38_ensembl_fast",
@@ -886,27 +838,16 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
-        "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": {
-            "value": 206,
-            "tolerance_percentage": 5
-          },
-          "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 19183,
-            "tolerance_percentage": 5
-          },
-          "Depth_Score": {
-            "value": 0.010855245823892079,
-            "tolerance_percentage": 5
-          },
-          "Confidence": "High_Precision*"
-        },
-        "check_igv_report": false
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 31603,
+          "r2": 31603,
+          "other": 0,
+          "single": 2
+        }
       },
       {
         "test_name": "example_40cf_hg38_subset_fast_gdp_guard",
-        "description": "Guard against GDP inflation (Issue #156): this sample was falsely positive with maxhapstates/maxalignstates > 50 due to motif-specific ALT support inflation. With maxhapstates/maxalignstates=40 it must be Negative.",
         "bam": "tests/data/example_40cf_hg38_subset.bam",
         "reference_assembly": "hg38",
         "cli_options": [
@@ -914,15 +855,62 @@
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_archive": true,
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 3474,
+          "r2": 3474,
+          "other": 0,
+          "single": 93
+        }
+      }
+    ],
+    "single_end_bam_tests": [
+      {
+        "test_name": "example_b178_hg19_single_end",
+        "fixture_name": "example_b178_hg19_single_end",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates"
+        ],
         "kestrel_assertions": {
-          "Estimated_Depth_AlternateVariant": "None",
-          "Estimated_Depth_Variant_ActiveRegion": "None",
-          "Depth_Score": {
-            "value": "None",
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
             "tolerance_percentage": 5
           },
-          "Confidence": "Negative"
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false
+      },
+      {
+        "test_name": "example_b178_hg19_single_end_default",
+        "fixture_name": "example_b178_hg19_single_end",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--keep-intermediates"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
         },
         "check_igv_report": false
       }
@@ -941,17 +929,36 @@
           "--advntr-max-coverage",
           "300"
         ],
-        "expected_vcf": "output_adVNTR_result.tsv",
+        "expected_exit_code": 1,
+        "expected_mixed_fastq_records": {
+          "r1": 20888,
+          "r2": 20888,
+          "other": 0,
+          "single": 3
+        }
+      },
+      {
+        "test_name": "example_b178_hg19_bwa_advntr",
+        "bam": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--extra-modules",
+          "advntr",
+          "--advntr-max-coverage",
+          "300"
+        ],
         "advntr_assertions": {
           "VID": "25561",
-          "State": "I22_2_G_LEN1",
-          "NumberOfSupportingReads": 11,
+          "State": "I22_4_G_LEN1",
+          "NumberOfSupportingReads": 39,
           "MeanCoverage": {
-            "value": 153.986111111,
+            "value": 70.3333333333,
             "tolerance_percentage": 10
           },
           "Pvalue": {
-            "value": 6.78296229901e-07,
+            "value": 5.774455097259999e-59,
             "log10_tolerance": 2
           }
         }
@@ -966,6 +973,15 @@
           "--extra-modules",
           "shark"
         ],
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
+      },
+      {
+        "test_name": "example_6449_hg19_subset_single_fastq",
+        "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+        "reference_assembly": "hg19",
         "expected_files": [
           "summary_report.html",
           "kestrel/kestrel_result.tsv"

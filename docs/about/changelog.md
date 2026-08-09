@@ -2,7 +2,72 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
-## 2.0.9 (Current)
+## 2.0.10 (Current)
+
+Milestone 4, "CRAM and input robustness": closes #213, #225, #209, #178, #165 and
+#161.
+
+**A converted alignment that contains more than one read layout now stops instead of
+discarding one layout.** In the measured golden cohort, 32 of 50 base BAM cases failed
+rather than discard the non-empty single FASTQ produced beside their paired FASTQs.
+VNtyper 2.0.9 silently ignored those reads; 2.0.10 names every produced FASTQ and record
+count and refuses the mixed layout. This no-read-drop rule is a hard invariant, not a
+configuration option. Regenerate the alignment with consistent pairedness and mate flags,
+or provide a homogeneous paired-end or single-end FASTQ input; do not suppress the error
+by discarding the named reads. Pure single-end BAMs and `--fastq1` without `--fastq2` are
+now supported through fastp, BWA and Kestrel.
+
+**BAM and CRAM inputs are preflighted through a run-local alignment view.** Missing
+indexes are built beside that view, where htslib can resolve them, without writing into a
+read-only patient input tree. The alignment and freshly generated index are opened and
+retained for the plan lifetime; post-preflight random-access commands use that exact index
+inode, so replacing the public BAI/CRAI name cannot retarget a slice or depth calculation.
+Existing BAI, CSI and CRAI spellings are protected by format, and every derived
+BAM/FASTQ/log destination is checked before a processing stage starts.
+
+For BAM or CRAM input, the output root must stay outside the directory containing the
+alignment and all of that directory's descendants. A layout such as `sample.bam` beside
+`results/` is therefore rejected: `results/` is still inside the protected patient input
+tree. Put alignments and results under separate roots, for example
+`--bam inputs/sample.bam --output-dir results/sample/`, or choose an output path elsewhere.
+
+**Reference-dependent CRAM fails before processing unless one candidate can decode the
+real `-P` slice shape.** `--reference-fasta`, configured CRAM/BWA references and local
+htslib resolution are tried in configured order; coverage receives the same selected
+reference. Ambient network refget is disabled by default, `REF_PATH` is restored on every
+exit, overlapping in-process CRAM scopes are serialized, and web jobs transport a curated
+preflight code/message without exposing worker paths. Header-derived local references are
+confined to the CRAM's own directory; use `--reference-fasta` or a configured reference
+for an external path.
+
+**Unmapped CRAM extraction is fail-closed.** `auto` uses indexed `'*'` extraction only
+when idxstats proves no placed-unmapped reads and the exact literal-`'*'` flag-4 count
+equals the terminal idxstats count; malformed or unequal evidence selects the stream
+path, and forcing an unsafe indexed path raises instead of losing reads. On a zero-placed
+`7a61` CRAM, whole-file decoding and idxstats each reported 622,690 records while the raw
+indexed fetch returned only 2,690; the count proof refused that 620,000-read loss.
+
+**Archives and web delivery are ownership-bound.** Result archives are built and served
+through descriptor-anchored paths, reject unsafe source aliases, and are quarantined or
+revoked when a later worker status step fails. Cohort inputs are snapshotted through held
+descriptors, so replacing a public path cannot change the bytes a child consumes.
+
+Chromosome naming now votes only across configured primary-contig patterns, requires a
+strict majority and returns `unknown` for ties or zero classified contigs. Threshold and
+pattern configuration is validated rather than accepted partially.
+
+On the 18 golden-cohort BAM cases that both 2.0.9 and the measured milestone candidate can
+complete without discarding reads, three alternating runs measured medians of 90.03 s and
+87.52 s, respectively. The non-overlapping ranges (90.00–91.13 vs 87.49–87.83 s) record a
+2.8% median improvement under the predeclared rule. The harness recorded candidate
+`388f157`; its published-history runtime-tree equivalent is `470fdd6`. Later CRAM-reference
+and single-end fixture changes are outside this measured BAM arm. Subsequent
+alignment-binding identity hardening adds only a fixed, tiny number of metadata checks and
+is timing-neutral by inspection; archive identity hardening runs only under
+`--archive-results`, which the timing harness did not enable. This does not relabel the
+measured hash as final `HEAD`.
+
+## 2.0.9
 
 Milestone 2, "Web service and cohort integrity": closes #216, #207, #206, #205, #201,
 #167 and #162, plus #210 from the CRAM milestone because #162's acceptance criterion

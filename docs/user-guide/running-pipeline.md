@@ -3,15 +3,21 @@
 ## Minimal Run
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/
+vntyper pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
 This uses default settings: hg19 assembly, 4 threads, Kestrel genotyping only.
 
+!!! important "Keep alignment inputs and outputs in separate trees"
+    For BAM or CRAM input, the output root cannot be the directory containing the
+    alignment or any of its descendants. A BAM at `sample.bam` with `-o results/` is
+    rejected because both are rooted in the current directory. Use separate roots such
+    as `inputs/sample.bam` and `results/sample/`, as the examples on this page do.
+
 ## Common Options
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --threads 8 \
     --fast-mode \
     --reference-assembly hg38
@@ -28,7 +34,7 @@ vntyper pipeline --bam sample.bam -o results/ \
 ## With adVNTR Module
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --extra-modules advntr
 ```
 
@@ -51,7 +57,7 @@ Override the default MUC1 VNTR region coordinates:
 === "Inline regions"
 
     ```bash
-    vntyper pipeline --bam sample.bam -o results/ \
+    vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
         --custom-regions chr1:155160500-155162000
     ```
 
@@ -60,7 +66,7 @@ Override the default MUC1 VNTR region coordinates:
 === "BED file"
 
     ```bash
-    vntyper pipeline --bam sample.bam -o results/ \
+    vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
         --bed-file regions.bed
     ```
 
@@ -69,7 +75,7 @@ Override the default MUC1 VNTR region coordinates:
 ## Archiving Results
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --archive-results --archive-format tar.gz
 ```
 
@@ -78,7 +84,7 @@ Creates a compressed archive of the output directory after the pipeline complete
 ## Additional Summary Formats
 
 ```bash
-vntyper pipeline --bam sample.bam -o results/ \
+vntyper pipeline --bam inputs/sample.bam -o results/sample/ \
     --summary-formats csv,tsv
 ```
 
@@ -94,7 +100,8 @@ Generates `pipeline_summary.csv` and/or `pipeline_summary.tsv` alongside the def
 ## Custom Configuration
 
 ```bash
-vntyper --config-path /path/to/custom/config.json pipeline --bam sample.bam -o results/
+vntyper --config-path /path/to/custom/config.json pipeline \
+    --bam inputs/sample.bam -o results/sample/
 ```
 
 Note that `--config-path` is a global option and must appear before the subcommand. See [Configuration](configuration.md) for details.
@@ -102,7 +109,7 @@ Note that `--config-path` is a global option and must appear before the subcomma
 ## Logging
 
 ```bash
-vntyper -l DEBUG pipeline --bam sample.bam -o results/
+vntyper -l DEBUG pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
 Log levels: `DEBUG`, `INFO` (default), `WARNING`, `ERROR`, `CRITICAL`. The pipeline log is automatically written to `<output-dir>/pipeline.log`. Override with `-f /path/to/logfile`.

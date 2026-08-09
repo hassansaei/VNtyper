@@ -79,6 +79,21 @@ def test_the_default_output_name_runs_the_pipeline(tmp_path: Path) -> None:
     assert stub.call_count == 1
 
 
+def test_reference_fasta_is_forwarded_to_the_pipeline(tmp_path: Path) -> None:
+    """The explicit CRAM reference must survive the parser/handler boundary.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+    """
+    reference = tmp_path / "full reference.fa"
+
+    stub = _run_handler(
+        ["pipeline", "-o", str(tmp_path / "out"), "--cram", "in.cram", "--reference-fasta", str(reference)]
+    )
+
+    assert stub.call_args.kwargs["reference_fasta"] == reference
+
+
 def test_the_pipeline_basename_is_accepted_explicitly(tmp_path: Path) -> None:
     """Asking for the basename the pipeline already uses is a no-op, not an error.
 
@@ -89,6 +104,41 @@ def test_the_pipeline_basename_is_accepted_explicitly(tmp_path: Path) -> None:
         ["pipeline", "-o", str(tmp_path), "--bam", "in.bam", "--output-name", PIPELINE_BASENAME],
     )
     assert stub.call_count == 1
+
+
+def test_a_single_fastq_is_forwarded_without_a_paired_end_usage_error(tmp_path: Path) -> None:
+    stub = _run_handler(["pipeline", "-o", str(tmp_path), "--fastq1", "single.fastq.gz"])
+
+    assert stub.call_count == 1
+    assert stub.call_args.kwargs["fastq1"] == "single.fastq.gz"
+    assert stub.call_args.kwargs["fastq2"] is None
+
+
+def test_a_single_fastq_with_shark_is_a_usage_error_before_pipeline_dispatch(tmp_path: Path) -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "pipeline",
+            "-o",
+            str(tmp_path),
+            "--fastq1",
+            "single.fastq.gz",
+            "--extra-modules",
+            "shark",
+        ]
+    )
+
+    with mock.patch.object(cli_handlers, "run_pipeline", autospec=True) as stub, pytest.raises(SystemExit) as excinfo:
+        cli_handlers.handle_pipeline(
+            args,
+            config=MINIMAL_CONFIG,
+            parser=parser,
+            log_level_value=logging.INFO,
+            log_file_str=None,
+        )
+
+    assert excinfo.value.code == 2
+    stub.assert_not_called()
 
 
 def test_an_output_name_the_pipeline_cannot_honour_is_refused(tmp_path: Path, caplog) -> None:

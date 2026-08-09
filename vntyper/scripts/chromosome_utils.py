@@ -16,6 +16,7 @@ Functions:
 from __future__ import annotations
 
 import logging
+import math
 import re
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ CHR1_LENGTHS = {
 # the length is the evidence, and a mislabelled accession must not override it.
 CHR1_NAMES = frozenset({"chr1", "1"})
 NCBI_CHR1_PATTERN = re.compile(r"^nc_0*1(\.\d+)?$")
+NAMING_CONVENTION_ERROR_PREFIX = "Ambiguous or unclassifiable chromosome naming convention"
+NAMING_POLICY_ERROR_PREFIXES = ("Invalid naming_convention_threshold", "Invalid primary_contig_patterns")
 
 
 def is_chr1_name(contig_name: str) -> bool:
@@ -134,7 +137,7 @@ def detect_assembly_from_chr1_length(contigs: list[dict]) -> str | None:
     return None
 
 
-def detect_naming_convention(contig_names: list[str]) -> str:
+def detect_naming_convention(contig_names: list[str], config: dict | None = None) -> str:
     """
     Detect the chromosome naming convention from a list of contig names.
 
@@ -144,10 +147,19 @@ def detect_naming_convention(contig_names: list[str]) -> str:
     - NCBI accessions: NC_000001.XX, NC_000002.XX, ...
 
     Args:
-        contig_names (List[str]): List of contig names from BAM header
+        contig_names (list[str]): List of contig names from BAM header.
+        config (dict | None): Pipeline configuration. ``assembly_detection`` can
+            set ``naming_convention_threshold`` and
+            ``primary_contig_patterns``. Missing values use the shipped defaults.
 
     Returns:
         str: Convention identifier ("ucsc", "ensembl", "ncbi", "unknown")
+
+    Raises:
+        ValueError: If the configured naming-convention threshold is not a
+            finite number from 0 through 1, or if the configured primary
+            patterns are not three nonempty, compilable strings in UCSC, NCBI,
+            ENSEMBL order.
 
     Examples:
         >>> detect_naming_convention(["chr1", "chr2", "chrX"])
@@ -161,40 +173,67 @@ def detect_naming_convention(contig_names: list[str]) -> str:
         logger.warning("Empty contig list provided to detect_naming_convention")
         return "unknown"
 
-    # Count naming patterns
-    ucsc_count = 0
-    ensembl_count = 0
-    ncbi_count = 0
+    assembly_detection = (config or {}).get("assembly_detection", {})
+    threshold = assembly_detection.get("naming_convention_threshold", 0.5)
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not math.isfinite(threshold)
+        or not 0 <= threshold <= 1
+    ):
+        message = "Invalid naming_convention_threshold: expected a finite number from 0 through 1"
+        logger.error(message)
+        raise ValueError(message)
+
+    primary_patterns = assembly_detection.get(
+        "primary_contig_patterns",
+        [r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$", r"^([0-9]+|X|Y|MT?)$"],
+    )
+    conventions = ("ucsc", "ncbi", "ensembl")
+    if not isinstance(primary_patterns, list) or len(primary_patterns) != len(conventions):
+        message = "Invalid primary_contig_patterns: expected three patterns in UCSC, NCBI, ENSEMBL order"
+        logger.error(message)
+        raise ValueError(message)
+
+    compiled_patterns = []
+    for convention, pattern in zip(conventions, primary_patterns, strict=True):
+        if not isinstance(pattern, str) or not pattern:
+            message = f"Invalid primary_contig_patterns: {convention} pattern must be a nonempty string"
+            logger.error(message)
+            raise ValueError(message)
+        try:
+            compiled_patterns.append(re.compile(pattern, re.IGNORECASE))
+        except re.error as error:
+            message = f"Invalid primary_contig_patterns: {convention} pattern cannot be compiled: {error}"
+            logger.error(message)
+            raise ValueError(message) from error
+
+    counts = dict.fromkeys(conventions, 0)
 
     for name in contig_names:
-        # UCSC: starts with "chr" followed by number/letter
-        if re.match(r"^chr[0-9XYM]+$", name, re.IGNORECASE):
-            ucsc_count += 1
-        # NCBI: NC_XXXXXX.YY format
-        elif re.match(r"^NC_\d{6}\.\d+$", name):
-            ncbi_count += 1
-        # ENSEMBL simple numeric: just digits or X, Y, MT
-        elif re.match(r"^([0-9]+|X|Y|MT?)$", name, re.IGNORECASE):
-            ensembl_count += 1
+        for convention, pattern in zip(conventions, compiled_patterns, strict=True):
+            if pattern.match(name):
+                counts[convention] += 1
+                break
 
-    # Determine convention based on majority
-    total = len(contig_names)
-    threshold = 0.5  # At least 50% of contigs should match the pattern
+    classified_total = sum(counts.values())
+    if classified_total == 0:
+        logger.warning("Could not determine naming convention: no contigs matched a configured primary pattern")
+        return "unknown"
 
-    if ucsc_count / total >= threshold:
-        logger.debug(f"Detected UCSC naming convention ({ucsc_count}/{total} contigs)")
-        return "ucsc"
-    elif ncbi_count / total >= threshold:
-        logger.debug(f"Detected NCBI naming convention ({ncbi_count}/{total} contigs)")
-        return "ncbi"
-    elif ensembl_count / total >= threshold:
-        logger.debug(f"Detected ENSEMBL naming convention ({ensembl_count}/{total} contigs)")
-        return "ensembl"
-    else:
+    winning_count = max(counts.values())
+    winners = [convention for convention, count in counts.items() if count == winning_count]
+    if len(winners) != 1 or winning_count * 2 <= classified_total or winning_count / classified_total < threshold:
         logger.warning(
-            f"Could not determine naming convention. UCSC: {ucsc_count}, ENSEMBL: {ensembl_count}, NCBI: {ncbi_count}"
+            "Could not determine naming convention. "
+            f"UCSC: {counts['ucsc']}, ENSEMBL: {counts['ensembl']}, NCBI: {counts['ncbi']}; "
+            f"classified contigs: {classified_total}"
         )
         return "unknown"
+
+    convention = winners[0]
+    logger.debug(f"Detected {convention.upper()} naming convention ({winning_count}/{classified_total} contigs)")
+    return convention
 
 
 def get_chromosome_name_from_bam(
@@ -216,7 +255,8 @@ def get_chromosome_name_from_bam(
         str: The actual chromosome name (e.g., "chr1", "1", "NC_000001.10")
 
     Raises:
-        ValueError: If chromosome cannot be found in BAM header
+        ValueError: If the naming convention is ambiguous or unclassifiable,
+            or if the chromosome cannot be found in the BAM header.
         FileNotFoundError: If BAM file doesn't exist
 
     Examples:
@@ -246,8 +286,15 @@ def get_chromosome_name_from_bam(
     logger.debug(f"Found {len(contig_names)} contigs in BAM header. First 5: {contig_names[:5]}")
 
     # Detect naming convention
-    convention = detect_naming_convention(contig_names)
+    convention = detect_naming_convention(contig_names, config)
     logger.debug(f"Detected naming convention: {convention}")
+    if convention == "unknown":
+        message = (
+            f"{NAMING_CONVENTION_ERROR_PREFIX} in BAM header for {bam_file}; "
+            f"cannot select chromosome {chromosome_number}. Available contigs: {', '.join(contig_names[:10])}..."
+        )
+        logger.error(message)
+        raise ValueError(message)
 
     # Build expected chromosome name based on convention
     chr_name = _build_chromosome_name(chromosome_number, convention, reference_assembly, config)
@@ -334,9 +381,9 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
             return _construct_ncbi_accession(chromosome_number, coord_assembly)
 
     else:
-        # Unknown convention - return ENSEMBL simple numeric format as fallback
-        logger.warning(f"Unknown naming convention '{convention}', using ENSEMBL simple numeric format")
-        return chr_suffix if chromosome_number >= 23 else str(chromosome_number)
+        message = f"Unknown chromosome naming convention: '{convention}'"
+        logger.error(message)
+        raise ValueError(message)
 
 
 def _construct_ncbi_accession(chromosome_number: int, assembly: str) -> str:

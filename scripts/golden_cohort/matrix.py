@@ -49,13 +49,14 @@ Two properties of these cases are load-bearing rather than incidental:
 * a declared CRAM case whose fixture has not been derived is **skipped and logged**, never
   silently dropped from the contract. The count then comes out short, which is an ordinary
   :func:`check_matrix` mismatch and refuses the run unless ``--allow-matrix-drift`` is
-  passed. There is deliberately no "0 or 2 CRAM cases are both fine" rule: a run without
+  passed. There is deliberately no "0 or 6 CRAM cases are both fine" rule: a run without
   them is a reduced run and must not earn an attestation-grade verdict.
 
 What "derived" does and does not mean
 -------------------------------------
 Only the **base cases** are derived. The five non-fast ids, the three adVNTR ids, the two
-CRAM ids and the three probes are hardcoded policy, resolved against the derived set. The
+cohort CRAM ids, the indexed-safe purpose CRAM and the three probes are hardcoded policy,
+with the base-case selections resolved against the derived set. The
 CRAM *fixture paths* are derived from the base case's BAM path, so they cannot drift from
 what ``make_cram_fixtures.py`` wrote, but which cases are chosen is policy like the rest.
 Anything that describes this matrix as "derived" without that qualification is overstating
@@ -64,9 +65,9 @@ it, and the gate page has done exactly that.
 Drift is fatal by default
 -------------------------
 :func:`check_matrix` compares the derivation against the per-group contract the gate page
-records - 50 base, 5 non-fast, 3 adVNTR, 2 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
-for runs 1-5, which is the matrix every result table on that page was measured over; the
-CRAM group is new and no run has taken it yet.) That check used to be advisory in every
+records - 50 base, 5 non-fast, 3 adVNTR, 6 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
+for runs 1-5, which is the matrix every result table on that page was measured over; run 6
+took an earlier, smaller CRAM group.) That check used to be advisory in every
 direction: ``build_matrix`` logged the
 deviations as warnings, ``cmd_matrix`` returned 0 regardless, and the comparison's verdict
 ignored them - so a silently reduced run earned the same ``IDENTICAL`` as a full one, and a
@@ -93,7 +94,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from golden_cohort.admissibility import COHORT_REQUIRED_ARTIFACTS, PIPELINE_REQUIRED_ARTIFACTS
+from golden_cohort.admissibility import PIPELINE_REQUIRED_ARTIFACTS
+from golden_cohort.case_expectations import (
+    declare_mixed_layout_outcome,
+    materialize_side_expectation,
+    without_side_expectations,
+)
+from golden_cohort.cohort_cases import build_cohort_cases
+from golden_cohort.cram_cases import build_cram_cases
 
 logger = logging.getLogger(__name__)
 
@@ -116,23 +124,25 @@ NON_FAST_CASE_IDS: tuple[str, ...] = (
 )
 
 #: Named on the gate page as ``a5c1_hg19_advntr`` / ``b178_hg19_advntr`` /
-#: ``dfc3_hg19_advntr``, all at ``--advntr-max-coverage 300``.
+#: ``dfc3_hg19_advntr``, all at ``--advntr-max-coverage 300``. ``b178`` uses the
+#: measured clean remapped BAM so candidate cohort runs retain a real adVNTR producer.
 ADVNTR_CASE_IDS: tuple[str, ...] = (
     "a5c1_hg19_subset",
-    "b178_hg19_subset",
+    "b178_hg19_bwa",
     "dfc3_hg19_subset",
 )
 
 #: Which base cases repeat from their derived CRAM fixture. Policy, like the two selections
 #: above, and chosen to cover both a call and the write race:
 #:
-#: * ``b178_hg19_subset`` - a known positive (``D-C`` insertion, ``High_Precision*``, not
-#:   flagged, per the gate page's run-1 table), 34,214 records and 4,478 unmapped pairs. It
-#:   is the case that shows a CRAM run still *calls*, not merely that it exits 0.
-#: * ``7a61_hg38_ensembl_bwa`` - 985,731 records and 622,690 unmapped pairs, one of the
+#: * ``b178_hg19_subset`` - a known historical positive (``D-C`` insertion,
+#:   ``High_Precision*``, not flagged, per the gate page's run-1 table), 34,214 records
+#:   and 4,478 flag-12 pairs in the fixture manifest. Corrected flag-4 extraction records
+#:   4,807 reads and exposes the 329 reads an indexed ``'*'`` fetch would lose.
+#: * ``7a61_hg38_ensembl_bwa`` - 985,731 records and 622,690 flag-12 pairs, one of the
 #:   heaviest unmapped loads in the cohort, and so the most exposed to the write race
 #:   ``175011e`` fixed (measured there at 199,797 of 200,000 unmapped reads present when the
-#:   shell returned).
+#:   shell returned). Corrected flag-4 extraction records 634,261 reads.
 #:
 #: It is **not** the single heaviest: ``7a61_hg19_subset`` carries 958,804 unmapped pairs,
 #: and the six remapped ``7a61`` cases tie at 623,792 / 622,690. This pair is kept because it
@@ -163,22 +173,21 @@ PROBE_SPECS: tuple[tuple[str, str, str, str], ...] = (
 #:
 #: Runs 1-5 measured 20 hg19 / 9 hg38 / 8 GRCh38 / 7 GRCh37 / 7 hg19_ensembl /
 #: 7 hg38_ensembl, and run 2's after-side assembly-guard verdict counts are that same
-#: distribution. Adding the CRAM group moves two of them: ``b178_hg19_subset`` takes hg19
-#: from 20 to 21 and ``7a61_hg38_ensembl_bwa`` takes hg38_ensembl from 7 to 8. The gate
-#: page's ``x / 58`` result tables therefore describe the pre-CRAM matrix and are not
-#: restated here.
+#: distribution. Each selected CRAM fixture now runs through both lossless scan strategies,
+#: moving hg19 to 24 and hg38_ensembl to 9. The page's ``x / 58`` result tables therefore
+#: describe the pre-CRAM matrix and are not restated here.
 DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
-    "hg19": 21,
+    "hg19": 24,
     "hg38": 9,
     "GRCh38": 8,
     "GRCh37": 7,
     "hg19_ensembl": 7,
-    "hg38_ensembl": 8,
+    "hg38_ensembl": 9,
 }
 
-#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; the two CRAM
-#: cases take it to 60.
-DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 2, "total": 60, "probes": 3}
+#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; six CRAM
+#: cases cover indexed and stream extraction and take it to 64.
+DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 6, "total": 64, "probes": 3}
 
 
 def _short(sample: str) -> str:
@@ -226,19 +235,21 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
         sample = match.group("sample")
         assembly = match.group("assembly")
         cases.append(
-            {
-                "case_id": f"{_short(sample)}_{assembly}_subset",
-                "kind": "pipeline",
-                "group": "base",
-                "sample": sample,
-                "assembly": assembly,
-                "source": "subset",
-                "bam": str(bam.resolve()),
-                "fast_mode": True,
-                "advntr": False,
-                "expect_exit": "zero",
-                "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-            }
+            declare_mixed_layout_outcome(
+                {
+                    "case_id": f"{_short(sample)}_{assembly}_subset",
+                    "kind": "pipeline",
+                    "group": "base",
+                    "sample": sample,
+                    "assembly": assembly,
+                    "source": "subset",
+                    "bam": str(bam.resolve()),
+                    "fast_mode": True,
+                    "advntr": False,
+                    "expect_exit": "zero",
+                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+                }
+            )
         )
     log.append(f"subset BAMs: {sum(1 for c in cases if c['source'] == 'subset')}")
 
@@ -253,19 +264,21 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 continue
             sample = match.group("sample")
             cases.append(
-                {
-                    "case_id": f"{_short(sample)}_{assembly}_{aligner}",
-                    "kind": "pipeline",
-                    "group": "base",
-                    "sample": sample,
-                    "assembly": assembly,
-                    "source": f"remapped/{aligner}",
-                    "bam": str(bam.resolve()),
-                    "fast_mode": True,
-                    "advntr": False,
-                    "expect_exit": "zero",
-                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-                }
+                declare_mixed_layout_outcome(
+                    {
+                        "case_id": f"{_short(sample)}_{assembly}_{aligner}",
+                        "kind": "pipeline",
+                        "group": "base",
+                        "sample": sample,
+                        "assembly": assembly,
+                        "source": f"remapped/{aligner}",
+                        "bam": str(bam.resolve()),
+                        "fast_mode": True,
+                        "advntr": False,
+                        "expect_exit": "zero",
+                        "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+                    }
+                )
             )
         log.append(f"remapped BAMs: {sum(1 for c in cases if c['source'].startswith('remapped'))}")
     else:
@@ -326,7 +339,7 @@ def apply_policies(
     cases = list(base_cases)
 
     for base in _resolve(non_fast_ids, by_id, "non-fast"):
-        case = dict(base)
+        case = without_side_expectations(base)
         case.update(
             {
                 "case_id": f"{_short(base['sample'])}_{base['assembly']}_nonfast",
@@ -355,110 +368,6 @@ def apply_policies(
     return cases, log
 
 
-def cram_fixture_for(case: dict[str, Any], data_dir: Path, cram_root: Path) -> Path:
-    """Where ``make_cram_fixtures.py`` wrote the CRAM derived from this case's BAM.
-
-    The fixture tree mirrors the source layout with ``.bam`` replaced by ``.cram``, so this
-    reproduces ``derive_cram``'s ``(fixture_root / relative).with_suffix(".cram")`` rather
-    than declaring a second copy of the path that could disagree with it.
-
-    Args:
-        case: A derived base case, whose ``bam`` is an absolute path under ``data_dir``.
-        data_dir: The ``tests/data`` directory the case was derived from.
-        cram_root: The fixture root, normally ``data_dir / "cram"``.
-
-    Returns:
-        Path: The fixture path, which may or may not exist.
-
-    Raises:
-        ValueError: If the case's BAM is not under ``data_dir``, which would mean the case
-            did not come from this derivation and its fixture path cannot be computed.
-    """
-    source = Path(case["bam"])
-    try:
-        relative = source.relative_to(data_dir.resolve())
-    except ValueError:
-        msg = (
-            f"Cannot derive a CRAM fixture path for {case['case_id']}: its BAM {source} is not under "
-            f"the data directory {data_dir}. The fixture tree mirrors the data directory, so a BAM "
-            "from outside it has no mirrored position."
-        )
-        logger.error(msg)
-        raise ValueError(msg) from None
-    return (cram_root / relative).with_suffix(".cram")
-
-
-def build_cram_cases(
-    base_cases: list[dict[str, Any]],
-    *,
-    cram_ids: tuple[str, ...],
-    data_dir: Path,
-    cram_root: Path,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Repeat the declared base cases from their derived CRAM fixtures.
-
-    Each case carries ``alignment_kind="cram"`` and the fixture path under ``cram``, which
-    is what :func:`golden_cohort.runner.pipeline_argv` switches on to emit ``--cram``
-    instead of ``--bam``. The source BAM is kept as ``source_bam`` for provenance, and
-    ``bam`` is removed so that nothing can read it and quietly run the BAM instead.
-
-    Every CRAM case is non-fast on purpose: ``--fast-mode`` skips the unmapped-read
-    extraction, and the CRAM-specific extraction is the code under test.
-
-    A declared case whose fixture is missing is **skipped and logged at error level**. The
-    group then comes out short of :data:`DOCUMENTED_TOTALS`, which :func:`check_matrix`
-    reports as a mismatch and ``build_matrix`` refuses in strict mode - so "the fixtures
-    were never derived" fails the run rather than silently shrinking the matrix.
-
-    Args:
-        base_cases: The derived BAM-by-assembly cases.
-        cram_ids: Which base cases repeat from CRAM.
-        data_dir: The ``tests/data`` directory, used to mirror each BAM's relative path.
-        cram_root: The fixture root, normally ``data_dir / "cram"``.
-
-    Returns:
-        tuple[list[dict], list[str]]: The CRAM cases, and the derivation log lines.
-
-    Raises:
-        ValueError: If a declared id is not in the derived set, via :func:`_resolve`.
-    """
-    by_id = {case["case_id"]: case for case in base_cases}
-    cases: list[dict[str, Any]] = []
-    log: list[str] = []
-    missing: list[str] = []
-
-    for base in _resolve(cram_ids, by_id, "CRAM"):
-        fixture = cram_fixture_for(base, data_dir, cram_root)
-        if not fixture.is_file():
-            missing.append(base["case_id"])
-            log.append(f"skipped (no derived CRAM fixture at {fixture}): {base['case_id']}")
-            logger.error(
-                f"matrix: no CRAM fixture for {base['case_id']} at {fixture}. Run `make cram-fixtures` to "
-                "derive it. This run's CRAM group is short, which the matrix check reports as drift."
-            )
-            continue
-        case = dict(base)
-        case.pop("bam", None)
-        case.update(
-            {
-                "case_id": f"{_short(base['sample'])}_{base['assembly']}_cram",
-                "group": "cram",
-                "alignment_kind": "cram",
-                "cram": str(fixture),
-                "source_bam": base["bam"],
-                # The CRAM unmapped-read extraction only runs when fast mode is off.
-                "fast_mode": False,
-                "repeat_of": base["case_id"],
-            }
-        )
-        cases.append(case)
-
-    log.append(f"CRAM repeats: {len(cases)}/{len(cram_ids)} from {cram_root}")
-    if missing:
-        log.append(f"CRAM fixtures missing for: {', '.join(missing)}")
-    return cases, log
-
-
 def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build the three deliberate-mismatch probes from :data:`PROBE_SPECS`.
 
@@ -478,7 +387,7 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     probes: list[dict[str, Any]] = []
     for probe_id, base_id, declared, expectation in PROBE_SPECS:
         base = _resolve((base_id,), by_id, f"probe {probe_id}")[0]
-        probe = dict(base)
+        probe = without_side_expectations(base)
         probe.update(
             {
                 "case_id": probe_id,
@@ -493,91 +402,6 @@ def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         probes.append(probe)
     return probes
-
-
-def build_cohort_cases(pipeline_case_ids: list[str]) -> list[dict[str, Any]]:
-    """Build the cohort-mode cases over the per-sample output directories.
-
-    These exist because cohort mode was uncovered by every run of this gate up to and
-    including run 3, which the gate page's "What this gate does not cover" section said in
-    so many words. The page is a growing record, so this docstring deliberately does not
-    quote its current state - an earlier version of this sentence claimed the page still
-    records cohort mode as not covered, which stopped being true the moment run 4 was
-    written up with these four cases in it.
-
-    The flags are read off ``vntyper/scripts/cli_parser.py``: ``-i/--input-dirs`` (or
-    ``--input-file``, one of which is required), ``-o/--output-dir`` (required),
-    ``--summary-file``, ``--summary-formats`` and ``--pseudonymize-samples``.
-
-    Four cases, each covering something the others do not:
-
-    * ``cohort_multi`` - every per-sample directory, all three export formats.
-    * ``cohort_multi_pseudonymized`` - the same inputs with ``--pseudonymize-samples``,
-      which is the only way ``pseudonymization_table.tsv`` is written at all.
-    * ``cohort_single`` - one sample, the smallest cohort the CLI accepts as input.
-    * ``cohort_empty`` - a directory holding no ``pipeline_summary.json``. The CLI cannot
-      be given zero input directories (the group is ``required=True``), so this is the
-      smallest empty case there is; ``aggregate_cohort`` logs an error and **returns**,
-      writing no report and exiting 0.
-
-    Args:
-        pipeline_case_ids: The ids of the per-sample cases that will have run first.
-
-    Returns:
-        list[dict]: The cohort cases, in run order.
-    """
-    single = pipeline_case_ids[:1]
-    return [
-        {
-            "case_id": "cohort_multi",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": list(pipeline_case_ids),
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": None,
-            "expect_exit": "zero",
-            "allow_missing_inputs": False,
-            "required_artifacts": list(COHORT_REQUIRED_ARTIFACTS),
-        },
-        {
-            "case_id": "cohort_multi_pseudonymized",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": list(pipeline_case_ids),
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": "sample_",
-            "expect_exit": "zero",
-            "allow_missing_inputs": False,
-            # The only case that writes it at all, so it is the only case that can require it.
-            "required_artifacts": [*COHORT_REQUIRED_ARTIFACTS, "pseudonymization_table.tsv"],
-        },
-        {
-            "case_id": "cohort_single",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": single,
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": None,
-            "expect_exit": "zero",
-            "allow_missing_inputs": False,
-            "required_artifacts": list(COHORT_REQUIRED_ARTIFACTS),
-        },
-        {
-            "case_id": "cohort_empty",
-            "kind": "cohort",
-            "group": "cohort",
-            "inputs": [],
-            "empty_input_dir": True,
-            "summary_formats": "csv,tsv,json",
-            "pseudonymize": None,
-            "expect_exit": "zero",
-            "allow_missing_inputs": True,
-            # Writes only `cohort.log` and exits 0 by design, so it can require nothing.
-            # This is the one legitimate "exited zero, produced no substantive output" case
-            # in the matrix, and it says so here rather than being an unexplained exemption.
-            "required_artifacts": [],
-        },
-    ]
 
 
 def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -698,6 +522,7 @@ def build_matrix(
         cram_ids=cram_ids,
         data_dir=data_dir,
         cram_root=resolved_cram_root,
+        resolve=_resolve,
     )
     cases.extend(cram_cases)
     log.extend(cram_log)
@@ -715,7 +540,10 @@ def build_matrix(
     cases.sort(key=lambda case: (case["group"], case["case_id"]))
     probes.sort(key=lambda case: case["case_id"])
 
-    cohort_cases = build_cohort_cases([case["case_id"] for case in cases]) if include_cohort else []
+    candidate_output_ids = [
+        case["case_id"] for case in cases if materialize_side_expectation(case, "after").get("expect_exit") == "zero"
+    ]
+    cohort_cases = build_cohort_cases(candidate_output_ids) if include_cohort else []
     check = check_matrix(cases, probes)
     check["skipped"] = bool(case_filter)
     check["strict"] = bool(strict)

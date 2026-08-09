@@ -15,6 +15,7 @@ from vntyper.scripts.cli_handlers import (
     handle_online,
     handle_pipeline,
 )
+from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
 from vntyper.scripts.cli_parser import build_parser
 from vntyper.scripts.cli_report import handle_report
 from vntyper.scripts.utils import setup_logging
@@ -136,13 +137,24 @@ def main(argv: list[str] | None = None) -> None:
         else:
             log_file_value = config.get("cli_defaults", {}).get("log_file", None)
 
-    # Ensure that the log file directory exists
+    log_file_path = None
     if log_file_value:
         log_file_path = Path(log_file_value)
-        log_file_path.parent.mkdir(parents=True, exist_ok=True)
         log_file_str = str(log_file_path)
     else:
         log_file_str = None
+
+    # FileHandler opens its destination immediately. Refuse a pipeline log that
+    # aliases input state before even its parent-directory setup can run.
+    if args.command == "pipeline" and log_file_path is not None:
+        try:
+            validate_pipeline_log_destination(log_file_path, args, config)
+        except ValueError as exc:
+            logger.critical(str(exc))
+            sys.exit(1)
+
+    if log_file_path is not None:
+        log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Setup logging now (only once) with the determined log level and log file.
     # This is the sole place logging is configured; handlers never reconfigure it.

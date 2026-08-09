@@ -50,7 +50,7 @@ confidence-scored variant calls from BAM, CRAM, or FASTQ input.
 ```bash
 pip install git+https://github.com/hassansaei/VNtyper.git
 vntyper install-references -d ./references
-vntyper pipeline --bam sample.bam -o results/
+vntyper pipeline --bam inputs/sample.bam -o results/sample/
 ```
 
 [:octicons-rocket-24: Get started](getting-started/quickstart.md){ .md-button .md-button--primary }

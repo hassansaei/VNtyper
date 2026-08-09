@@ -26,9 +26,10 @@ Why ``no_ref=1``
 The cohort's BAM headers carry no ``M5`` tags, so htslib cannot resolve a reference by
 digest: no ``REF_PATH``/``REF_CACHE`` lookup and no refget request can succeed. A
 conventionally reference-compressed CRAM would therefore need an explicit ``-T`` at read
-time, and ``process_bam_to_fastq`` passes ``cram_ref_option = ""`` unconditionally -- so
-such a CRAM could not be decoded by the pipeline at all. ``no_ref=1`` stores sequences
-verbatim, needs no reference to write or read, and round-trips byte-for-byte.
+time. The pipeline now probes explicit and configured reference candidates before using
+one, but these lossless cohort fixtures deliberately exercise the reference-free path.
+``no_ref=1`` stores sequences verbatim, needs no reference to write or read, and
+round-trips byte-for-byte.
 
 ``embed_ref=2`` was measured and rejected: htslib cannot derive a consensus reference from
 a region subset, warns, falls back to non-ref mode part-way through a container, and the
@@ -47,12 +48,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import logging
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
+
+import pysam
 
 logger = logging.getLogger("cram_fixtures")
 
@@ -62,6 +67,12 @@ CRAM_WRITE_OPTIONS = ("no_ref=1",)
 
 #: Where derived fixtures are written, mirroring the source layout underneath.
 DEFAULT_FIXTURE_ROOT = Path("tests/data/cram")
+DEFAULT_DATA_CONFIG = Path("tests/test_data_config.json")
+
+# Pysam's typed interface exposes ``AlignmentFile`` but not its htslib-command wrappers.
+# Purpose-built fixtures use the latter deliberately so the unit tier never needs PATH's
+# external samtools binary.
+pysam_any: Any = pysam
 
 
 class LossyConversionError(RuntimeError):
@@ -75,7 +86,7 @@ class Fixture:
     source_bam: Path
     cram: Path
     records: int
-    unmapped_pairs: int
+    unmapped_reads: int
     #: Digest of the decoded record stream, identical for the BAM and the CRAM.
     record_digest: str
     source_bytes: int
@@ -86,7 +97,7 @@ class Fixture:
             "source_bam": str(self.source_bam),
             "cram": str(self.cram),
             "records": self.records,
-            "unmapped_pairs": self.unmapped_pairs,
+            "unmapped_reads": self.unmapped_reads,
             "record_digest": self.record_digest,
             "source_bytes": self.source_bytes,
             "cram_bytes": self.cram_bytes,
@@ -107,6 +118,28 @@ class Summary:
     @property
     def total_cram_bytes(self) -> int:
         return sum(f.cram_bytes for f in self.fixtures)
+
+
+@dataclass(frozen=True)
+class ReferenceDependentFixture:
+    """A reference-compressed CRAM and the local reference named by its header."""
+
+    cram: Path
+    reference: Path
+
+
+@dataclass(frozen=True)
+class PlacedFlag12Fixture:
+    """A CRAM whose placed flag-12 records make indexed extraction lossy."""
+
+    cram: Path
+
+
+@dataclass(frozen=True)
+class IndexedSafeFixture:
+    """A CRAM with nonempty unplaced reads and no placed-unmapped records."""
+
+    cram: Path
 
 
 def _run(argv: list[str]) -> str:
@@ -153,6 +186,40 @@ def discover_source_bams(data_root: Path, fixture_root: Path) -> list[Path]:
     return bams
 
 
+def _select_source_bams(discovered: list[Path], *, data_config: Path, data_root: Path, include_all: bool) -> list[Path]:
+    """Import the selection policy in package and direct-script execution modes."""
+    if __package__:
+        from .cram_fixture_selection import select_source_bams as package_selector
+
+        return cast(
+            list[Path],
+            package_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all),
+        )
+    from cram_fixture_selection import select_source_bams as direct_selector
+
+    return cast(
+        list[Path],
+        direct_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all),
+    )
+
+
+def _derive_declared_single_end_fixtures(data_config: Path, repository_root: Path) -> None:
+    """Dispatch every validated Task9 fixture declaration.
+
+    Args:
+        data_config: Manifest containing top-level ``derived_fixtures`` entries.
+        repository_root: Root against which their portable paths are resolved.
+    """
+    payload = json.loads(data_config.read_text())
+    declarations = payload.get("derived_fixtures", [])
+    module_name = f"{__package__}.single_end_fixture" if __package__ else "single_end_fixture"
+    fixture_builder = importlib.import_module(module_name)
+
+    for declaration in declarations:
+        spec = fixture_builder.parse_single_end_fixture(declaration, root=repository_root)
+        fixture_builder.derive_single_end_bam(spec)
+
+
 def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -> Fixture:
     """Convert one BAM to CRAM and verify the conversion lost nothing.
 
@@ -177,12 +244,12 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
             f"{bam_digest[:16]}, {cram_records} decoded records digest {cram_digest[:16]}"
         )
 
-    # -f 12 is the flag combination the pipeline's unmapped-read scan uses; record it so a
-    # gate case can assert the CRAM presents the same unmapped set the BAM does.
-    unmapped = int(_run([samtools, "view", "-c", "-f", "12", str(cram)]).strip())
+    # The pipeline recovers every flag-4 read, including single-end and placed-unmapped
+    # records, so the fixture evidence must use the same inclusive predicate.
+    unmapped = int(_run([samtools, "view", "-c", "-f", "4", str(cram)]).strip())
 
     logger.info(
-        "%s -> %s  (%d records, %d unmapped pairs, %.1f%% of BAM size)",
+        "%s -> %s  (%d records, %d unmapped reads, %.1f%% of BAM size)",
         relative,
         cram.relative_to(fixture_root),
         bam_records,
@@ -193,17 +260,45 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
         source_bam=bam,
         cram=cram,
         records=bam_records,
-        unmapped_pairs=unmapped,
+        unmapped_reads=unmapped,
         record_digest=bam_digest,
         source_bytes=bam.stat().st_size,
         cram_bytes=cram.stat().st_size,
     )
 
 
-def build_fixtures(samtools: str, data_root: Path, fixture_root: Path, limit: int | None = None) -> Summary:
-    """Derive a verified CRAM for every BAM in the cohort."""
+def build_fixtures(
+    samtools: str,
+    data_root: Path,
+    fixture_root: Path,
+    limit: int | None = None,
+    *,
+    data_config: Path = DEFAULT_DATA_CONFIG,
+    include_all: bool = False,
+    repository_root: Path = Path("."),
+) -> Summary:
+    """Derive verified CRAMs for declared BAMs, or every BAM when requested.
+
+    Args:
+        samtools: The samtools executable.
+        data_root: The source ``tests/data`` root.
+        fixture_root: Destination root for derived CRAMs.
+        limit: Optional smoke-test cap after selection.
+        data_config: Manifest defining the normal fixture set.
+        include_all: Derive every discovered source BAM for the golden cohort.
+        repository_root: Root used to resolve portable derived-fixture paths.
+
+    Returns:
+        The derivation summary.
+    """
     summary = Summary()
-    bams = discover_source_bams(data_root, fixture_root)
+    bams = _select_source_bams(
+        discover_source_bams(data_root, fixture_root),
+        data_config=data_config,
+        data_root=data_root,
+        include_all=include_all,
+    )
+    _derive_declared_single_end_fixtures(data_config, repository_root)
     if limit is not None:
         bams = bams[:limit]
     for bam in bams:
@@ -217,6 +312,115 @@ def build_fixtures(samtools: str, data_root: Path, fixture_root: Path, limit: in
             logger.error("skipping %s: %s", bam, exc)
             summary.skipped.append((bam, str(exc)))
     return summary
+
+
+def _write_reference(path: Path, *, length: int) -> str:
+    """Write and index a deterministic single-contig FASTA, returning its sequence."""
+    sequence = "A" * length
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f">chr1\n{sequence}\n")
+    pysam_any.faidx(str(path))
+    return sequence
+
+
+def _segment(name: str, *, flag: int, reference_id: int, reference_start: int) -> pysam.AlignedSegment:
+    """Build one short, deterministic alignment record for a purpose-built fixture."""
+    record = pysam.AlignedSegment()
+    record.query_name = name
+    record.flag = flag
+    record.reference_id = reference_id
+    record.reference_start = reference_start
+    record.mapping_quality = 60
+    record.cigarstring = "100M" if reference_id >= 0 else None
+    record.query_sequence = "A" * 100
+    record.query_qualities = pysam.qualitystring_to_array("I" * 100)
+    return record
+
+
+def build_reference_dependent_fixture(fixture_root: Path) -> ReferenceDependentFixture:
+    """Create a CRAM that needs the copied local FASTA named by its ``UR:`` header.
+
+    The 10 kb/50-read fixture deliberately stores a reference-compressed payload. Tests
+    exercising a missing reference must rename or remove ``reference`` first: htslib may
+    otherwise satisfy a no-``-T`` decode from the header's still-resolvable ``UR:`` path.
+
+    Args:
+        fixture_root: Destination directory for the purpose-built fixture.
+    Returns:
+        The CRAM and the copied reference which its header names.
+    """
+    root = fixture_root / "reference-dependent"
+    reference = root / "reference.fa"
+    sequence = _write_reference(reference, length=10_000)
+    header = {
+        "HD": {"VN": "1.6", "SO": "coordinate"},
+        "SQ": [
+            {"SN": "chr1", "LN": len(sequence), "M5": hashlib.md5(sequence.encode()).hexdigest(), "UR": str(reference)}
+        ],
+    }
+    cram = root / "reference-dependent.cram"
+    with pysam.AlignmentFile(str(cram), "wc", header=header, reference_filename=str(reference)) as output:
+        for number in range(50):
+            output.write(_segment(f"reference-{number}", flag=0, reference_id=0, reference_start=100 + number * 90))
+    pysam_any.index(str(cram))
+    return ReferenceDependentFixture(cram=cram, reference=reference)
+
+
+def build_placed_flag12_fixture(fixture_root: Path) -> PlacedFlag12Fixture:
+    """Create the 130-read fixture proving ``idxstats`` column four detects loss.
+
+    It holds 600 mapped records, 25 placed flag-12 pairs and 40 unplaced flag-12 pairs.
+    ``samtools view -f 12 <cram> '*'`` therefore sees 80 records while a full scan sees
+    130, and ``idxstats`` reports the missing 50 in its fourth ``chr1`` column.
+
+    Args:
+        fixture_root: Destination directory for the purpose-built fixture.
+    Returns:
+        The indexed CRAM fixture.
+    """
+    root = fixture_root / "placed-flag12"
+    root.mkdir(parents=True, exist_ok=True)
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 20_000}]}
+    cram = root / "placed-flag12.cram"
+    with pysam_any.AlignmentFile(
+        str(cram), "wc", header=header, format_options=[option.encode() for option in CRAM_WRITE_OPTIONS]
+    ) as output:
+        for number in range(600):
+            output.write(_segment(f"mapped-{number}", flag=0, reference_id=0, reference_start=number * 20))
+        for number in range(50):
+            output.write(
+                _segment(f"placed-{number // 2}", flag=12, reference_id=0, reference_start=13_000 + number * 10)
+            )
+        for number in range(80):
+            output.write(_segment(f"unplaced-{number // 2}", flag=12, reference_id=-1, reference_start=-1))
+    pysam_any.index(str(cram))
+    return PlacedFlag12Fixture(cram=cram)
+
+
+def build_indexed_safe_fixture(fixture_root: Path) -> IndexedSafeFixture:
+    """Create a nonempty CRAM on which indexed and stream extraction are equivalent.
+
+    Args:
+        fixture_root: Destination directory for the purpose-built fixture.
+
+    Returns:
+        The indexed CRAM fixture.
+    """
+    root = fixture_root / "indexed-safe"
+    root.mkdir(parents=True, exist_ok=True)
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 20_000}]}
+    cram = root / "indexed-safe.cram"
+    with pysam_any.AlignmentFile(
+        str(cram), "wc", header=header, format_options=[option.encode() for option in CRAM_WRITE_OPTIONS]
+    ) as output:
+        for number in range(10):
+            output.write(_segment(f"mapped-{number}", flag=65, reference_id=0, reference_start=number * 200))
+            output.write(_segment(f"mapped-{number}", flag=129, reference_id=0, reference_start=number * 200 + 100))
+        for number in range(10):
+            output.write(_segment(f"unplaced-{number}", flag=77, reference_id=-1, reference_start=-1))
+            output.write(_segment(f"unplaced-{number}", flag=141, reference_id=-1, reference_start=-1))
+    pysam_any.index(str(cram))
+    return IndexedSafeFixture(cram=cram)
 
 
 def write_manifest(summary: Summary, manifest_path: Path) -> None:
@@ -236,9 +440,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data-root", type=Path, default=Path("tests/data"))
     parser.add_argument("--fixture-root", type=Path, default=DEFAULT_FIXTURE_ROOT)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_FIXTURE_ROOT / "manifest.json")
+    parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--samtools", default="samtools")
     parser.add_argument("--limit", type=int, default=None, help="derive only the first N, for a smoke run")
+    parser.add_argument("--data-config", type=Path, default=DEFAULT_DATA_CONFIG)
+    parser.add_argument("--all", action="store_true", help="derive every discovered BAM, for the golden cohort")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
@@ -247,11 +453,25 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("no cohort at %s; run `make download-test-data` first", args.data_root)
         return 2
 
-    summary = build_fixtures(args.samtools, args.data_root, args.fixture_root, args.limit)
-    write_manifest(summary, args.manifest)
+    summary = build_fixtures(
+        args.samtools,
+        args.data_root,
+        args.fixture_root,
+        args.limit,
+        data_config=args.data_config,
+        include_all=args.all,
+    )
+    build_reference_dependent_fixture(args.fixture_root)
+    build_placed_flag12_fixture(args.fixture_root)
+    build_indexed_safe_fixture(args.fixture_root)
+    write_manifest(summary, args.manifest or args.fixture_root / "manifest.json")
 
-    if not summary.fixtures:
-        logger.error("no fixtures derived")
+    if not summary.fixtures or summary.skipped:
+        logger.error(
+            "fixture derivation incomplete: %d verified, %d skipped",
+            len(summary.fixtures),
+            len(summary.skipped),
+        )
         return 1
     logger.info(
         "derived %d verified CRAM fixtures: %.1f MiB from %.1f MiB of BAM (%.0f%%), %d skipped",

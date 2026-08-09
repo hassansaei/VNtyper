@@ -35,6 +35,7 @@ import shlex
 
 import pytest
 
+from vntyper.scripts import command_builders
 from vntyper.scripts.command_builders import (
     PIPEFAIL_PREFIX,
     build_bam_to_fastq_command,
@@ -149,6 +150,31 @@ def test_the_fastp_command_omits_both_optional_flags_when_disabled():
     assert "--dedup" not in command
 
 
+def test_the_fastp_command_uses_its_single_input_form_when_mate_two_is_absent():
+    command = build_fastp_command(
+        fastp_path=FASTP,
+        threads=4,
+        fastq_1="/data/single.fq.gz",
+        fastq_2=None,
+        output="/out",
+        output_name="output",
+        compression_level=6,
+        qualified_quality_phred=20,
+        dup_calc_accuracy=3,
+        length_required=50,
+        disable_adapter_trimming=False,
+        deduplication=False,
+    )
+
+    assert command == (
+        "fastp --thread 4 --in1 /data/single.fq.gz --out1 /out/output_R1.fastq.gz "
+        "--compression 6 --qualified_quality_phred 20 --dup_calc_accuracy 3 "
+        "--length_required 50 --html /out/output.html --json /out/output.json "
+    )
+    assert "--in2" not in command
+    assert "--out2" not in command
+
+
 @pytest.mark.parametrize(
     ("disable_adapter_trimming", "deduplication", "expected_suffix"),
     [
@@ -188,7 +214,7 @@ def test_the_slice_command_with_a_region_is_pinned():
     )
 
     assert command == (
-        "samtools view -P -b  /data/sample.bam chr1:155158000-155163000 -o /out/output_sliced.bam && "
+        "samtools view -P -b /data/sample.bam chr1:155158000-155163000 -o /out/output_sliced.bam && "
         "samtools index /out/output_sliced.bam"
     )
 
@@ -203,7 +229,7 @@ def test_the_slice_command_with_a_bed_file_is_pinned():
     )
 
     assert command == (
-        "samtools view -P -b  /data/sample.bam -L /data/regions.bed -o /out/output_sliced.bam && "
+        "samtools view -P -b /data/sample.bam -L /data/regions.bed -o /out/output_sliced.bam && "
         "samtools index /out/output_sliced.bam"
     )
 
@@ -268,6 +294,248 @@ def test_the_index_output_path_is_the_operand_after_minus_o():
     assert tokens[-1] == "/in/sample.bam"
 
 
+# ---------------------------------------------------------------------------
+# Milestone 4 - CRAM references and bounded unmapped extraction
+# ---------------------------------------------------------------------------
+
+
+def test_thread_flag_omits_samtools_threads_at_one_or_less():
+    """A one-thread command retains the historical syntax without ``-@``."""
+    assert command_builders._thread_flag(1) == ""
+    assert command_builders._thread_flag(0) == ""
+
+
+def test_thread_flag_adds_samtools_threads_above_one():
+    """Multiple threads must reach samtools instead of only the callers' logs."""
+    assert command_builders._thread_flag(8) == "-@ 8 "
+
+
+def test_reference_flag_omits_none_and_quotes_the_path():
+    """The optional reference is absent by default but remains one shell argument when set."""
+    assert command_builders._reference_flag(None) == ""
+    assert command_builders._reference_flag("/r/my genome.fa") == "-T '/r/my genome.fa' "
+
+
+def test_slice_carries_threads_and_can_skip_indexing():
+    """The preflight probe's slice leaves no unwanted index beside its throwaway output."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        output_bam="/o/s.bam",
+        region="chr1:1-2",
+        threads=8,
+        index_output=False,
+    )
+
+    assert "-@ 8" in command
+    assert "&&" not in command
+    assert " index " not in command
+
+
+def test_slice_uses_the_exact_custom_index_operand() -> None:
+    """Dropping ``-X`` would make htslib rediscover a replaced public index path."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.bam",
+        index_path="/proc/123/fd/9",
+        output_bam="/o/s.bam",
+        region="chr1:1-2",
+        index_output=False,
+    )
+
+    tokens = shlex.split(command)
+    position = tokens.index("-X")
+    assert tokens[position + 1 : position + 3] == ["/o/view.bam", "/proc/123/fd/9"]
+
+
+def test_slice_indexes_by_default():
+    """Ordinary conversion keeps creating the index expected by downstream stages."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        output_bam="/o/s.bam",
+        region="chr1:1-2",
+    )
+
+    assert "&& samtools index /o/s.bam" in command
+
+
+def test_index_carries_threads_but_one_thread_preserves_the_old_command():
+    """Indexing is threaded only when doing so can increase parallelism."""
+    threaded = build_samtools_index_command(samtools_path=SAMTOOLS, bam_file="/o/s.bam", threads=8)
+    single_thread = build_samtools_index_command(samtools_path=SAMTOOLS, bam_file="/o/s.bam", threads=1)
+
+    assert threaded == "samtools index -@ 8 /o/s.bam"
+    assert single_thread == "samtools index /o/s.bam"
+
+
+def test_depth_quotes_a_reference_path_with_spaces_and_shell_metacharacters():
+    """Depth uses its supported long reference flag without exposing a shell injection path."""
+    reference = "/r/my genome; touch /tmp/pwned.fa"
+    command = build_samtools_depth_command(
+        samtools_path=SAMTOOLS,
+        threads=4,
+        region="chr1:1-2",
+        bam_file="/o/view.cram",
+        coverage_output="/o/d.txt",
+        reference_path=reference,
+    )
+
+    assert "--reference '/r/my genome; touch /tmp/pwned.fa'" in command
+    assert "-T" not in command
+    tokens = shlex.split(command)
+    assert tokens[tokens.index("--reference") + 1] == reference
+    assert "touch" not in tokens
+
+
+def test_a_reference_path_with_a_space_is_quoted_not_split():
+    """The builder owns shell quoting because its command runs with ``shell=True``."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/v.cram",
+        output_bam="/o/s.bam",
+        region="chr1:1-2",
+        reference_path="/r/my genome.fa",
+    )
+
+    assert "-T '/r/my genome.fa'" in command
+
+
+def test_cram_filter_carries_the_reference_and_omits_threading_at_one():
+    """The whole-file fallback must decode CRAM without adding needless ``-@ 1`` flags."""
+    command = build_cram_unmapped_filter_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=1,
+        reference_path="/r/g.fa",
+    )
+
+    assert "-T /r/g.fa" in command
+    assert "-@" not in command
+
+
+def test_the_indexed_unmapped_fetch_uses_star_without_a_pipe():
+    """The bounded fast path must fetch literal unplaced reads, not stream the CRAM."""
+    command = command_builders.build_cram_unmapped_indexed_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=4,
+        reference_path="/r/g.fa",
+    )
+
+    assert "'*'" in command
+    assert "-f 4" in command
+    assert "|" not in command
+
+
+def test_the_indexed_unmapped_fetch_uses_the_exact_custom_index() -> None:
+    """Literal-star retrieval must not fall back to index discovery by basename."""
+    command = command_builders.build_cram_unmapped_indexed_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        index_path="/proc/123/fd/10",
+        unmapped_bam="/o/unmapped.bam",
+        threads=4,
+    )
+
+    tokens = shlex.split(command)
+    position = tokens.index("-X")
+    assert tokens[position + 1 : position + 3] == ["/o/view.cram", "/proc/123/fd/10"]
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [build_cram_unmapped_filter_command, command_builders.build_cram_unmapped_indexed_command],
+)
+def test_every_unmapped_builder_selects_read_unmapped_flag_four_for_single_end(builder):
+    """Unpaired unmapped reads have flag 4 but not paired-only flag 12."""
+    command = builder(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=2,
+        reference_path="/r/g.fa",
+    )
+
+    assert "-f 4" in command
+    assert "-f 12" not in command
+
+
+def test_the_probe_never_combines_P_with_c_because_samtools_rejects_that():
+    """``samtools view`` rejects the apparently natural ``-P -c`` combination."""
+    probe = command_builders.build_cram_reference_probe_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        region="chr1:1-2",
+        reference_path="/r/g.fa",
+    )
+
+    assert "-P" in probe
+    assert " -c" not in probe, "samtools: The options -P and -c cannot be combined"
+    assert "-b" not in probe, "the probe discards SAM output and need not encode a BAM"
+    assert "-o /dev/null" in probe
+
+
+def test_the_stream_reference_probe_decodes_the_whole_cram_without_a_target():
+    """A target-only probe cannot authorize the later whole-file stream consumer."""
+    probe = command_builders.build_cram_stream_reference_probe_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        reference_path="/r/full genome.fa",
+        threads=4,
+    )
+
+    assert probe == "samtools view -@ 4 -T '/r/full genome.fa' -h /o/view.cram -o /dev/null"
+    assert " -P " not in f" {probe} "
+    assert "chr" not in probe
+
+
+def test_the_probe_has_the_same_shape_as_the_slice_it_authorises():
+    """A passing probe must exercise the flags the subsequent slice will use."""
+    kwargs = {"samtools_path": SAMTOOLS, "in_bam": "/o/view.cram", "reference_path": "/r/g.fa"}
+    probe = command_builders.build_cram_reference_probe_command(bed_file="/o/r.bed", **kwargs)
+    sliced = build_samtools_slice_command(output_bam="/o/s.bam", bed_file="/o/r.bed", **kwargs)
+
+    for flag in ("-P", "-L /o/r.bed", "-T /r/g.fa"):
+        assert flag in probe and flag in sliced
+
+
+def test_the_probe_needs_a_region_or_bed_file():
+    """A reference check without a target would decode the entire alignment."""
+    with pytest.raises(ValueError, match="region"):
+        command_builders.build_cram_reference_probe_command(
+            samtools_path=SAMTOOLS,
+            in_bam="/o/view.cram",
+            reference_path="/r/g.fa",
+        )
+
+
+def test_idxstats_is_threaded_without_a_reference_flag():
+    """Index statistics read index/container metadata and must not try to resolve FASTA."""
+    command = command_builders.build_samtools_idxstats_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        threads=8,
+    )
+
+    assert command == "samtools idxstats -@ 8 /o/view.cram"
+    assert "-T" not in command
+
+
+def test_indexed_unmapped_count_probes_the_exact_literal_star_consumer():
+    """Authorization must count the same flag and region used by indexed recovery."""
+    command = command_builders.build_samtools_unmapped_indexed_count_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        threads=8,
+    )
+
+    assert command == "samtools view -c -f 4 -@ 8 /o/view.cram '*'"
+    assert "-T" not in command
+
+
 def test_the_merge_command_is_pinned():
     command = build_samtools_merge_command(
         samtools_path=SAMTOOLS,
@@ -304,6 +572,22 @@ def test_the_depth_command_requests_every_position_in_the_region():
     )
     assert "-a" in shlex.split(command.split(">")[0])
     assert PIPEFAIL_PREFIX not in command, "a single command with a redirect already reports its own exit status"
+
+
+def test_depth_uses_the_exact_custom_index_operand() -> None:
+    """Coverage must retain the same index bytes as conversion through its final read."""
+    command = build_samtools_depth_command(
+        samtools_path=SAMTOOLS,
+        threads=4,
+        region="chr1:1-2",
+        bam_file="/o/view.cram",
+        index_path="/proc/123/fd/11",
+        coverage_output="/o/depth.txt",
+    )
+
+    tokens = shlex.split(command.split(">", maxsplit=1)[0])
+    position = tokens.index("-X")
+    assert tokens[position + 1 : position + 3] == ["/o/view.cram", "/proc/123/fd/11"]
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +633,8 @@ def test_the_cram_filter_command_is_pinned():
     )
 
     assert command == (
-        "set -o pipefail; samtools view  -@ 4 -h /data/sample.cram | "
-        "samtools view -b -f 12 -@ 4 - -o /out/output_unmapped.bam"
+        "set -o pipefail; samtools view -@ 4 -h /data/sample.cram | "
+        "samtools view -b -f 4 -@ 4 - -o /out/output_unmapped.bam"
     )
 
 
@@ -448,6 +732,25 @@ def test_the_bwa_align_sort_command_is_pinned_with_pipefail():
         "samtools view -@ 4 -b | "
         "samtools sort -@ 4 -o /out/output_sorted.bam"
     )
+
+
+def test_the_bwa_align_sort_command_accepts_one_fastq_without_a_none_operand():
+    command = build_bwa_align_sort_command(
+        bwa_path=BWA,
+        samtools_path=SAMTOOLS,
+        threads=4,
+        reference="/ref/ref.fa",
+        fastq1="/data/single.fq.gz",
+        fastq2=None,
+        sorted_bam="/out/output_sorted.bam",
+    )
+
+    assert command == (
+        "set -o pipefail; bwa mem -t 4 /ref/ref.fa /data/single.fq.gz | "
+        "samtools view -@ 4 -b | "
+        "samtools sort -@ 4 -o /out/output_sorted.bam"
+    )
+    assert "None" not in command
 
 
 @pytest.mark.parametrize(

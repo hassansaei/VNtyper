@@ -154,10 +154,13 @@ def test_a_cram_input_validates_with_the_working_directory(tmp_path: Path, monke
     run_dir.mkdir()
     monkeypatch.chdir(run_dir)
     expected = os.getcwd()
-    cram = tmp_path / "in.cram"
+    patient_dir = tmp_path / "patient"
+    patient_dir.mkdir()
+    cram = patient_dir / "in.cram"
     cram.touch()
 
-    harness = run_pipeline_under_harness(tmp_path / "out", bam=None, cram=str(cram))
+    run_root = tmp_path / "run"
+    harness = run_pipeline_under_harness(run_root / "out", bam=None, cram=str(cram))
 
     assert _cwd_of(harness, "validate_bam_file") == expected
 

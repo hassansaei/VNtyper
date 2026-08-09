@@ -94,10 +94,13 @@ To run the entire pipeline using a BAM file:
 
 ```bash
 vntyper --config-path /path/to/config.json pipeline \
-    --bam /path/to/sample.bam \
-    --output-dir /path/to/output/dir \
+    --bam /data/inputs/sample.bam \
+    --output-dir /data/results/sample/ \
     --threads 4 --fast-mode
 ```
+
+For BAM and CRAM runs, keep the output root outside the directory containing the
+alignment. Separate `inputs/` and `results/` trees satisfy that ownership boundary.
 
 Alternatively, using paired-end FASTQ files:
 

@@ -90,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument("--fastq2", type=str, help="Path to the second FASTQ file.")
     parser_pipeline.add_argument("--bam", type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument("--cram", type=str, help="Path to the CRAM file.")
+    parser_pipeline.add_argument("--reference-fasta", type=Path, help="Path to the reference FASTA for CRAM decoding.")
     parser_pipeline.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
     parser_pipeline.add_argument(
         "--reference-assembly",

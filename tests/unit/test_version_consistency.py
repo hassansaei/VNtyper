@@ -40,6 +40,15 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-tests.yml"
 SMOKE_TEST = REPO_ROOT / "tests" / "docker" / "test_image_structure.py"
 WEB_REQUIREMENTS = REPO_ROOT / "docker" / "requirements-web.txt"
 DOCKER_APP = REPO_ROOT / "docker" / "app"
+VERSION_MODULE = REPO_ROOT / "vntyper" / "version.py"
+CITATION = REPO_ROOT / "CITATION.cff"
+CHANGELOG = REPO_ROOT / "docs" / "about" / "changelog.md"
+
+# The application Dockerfile installs this repository's package before it copies
+# ``docker/app`` into the image. Imports from it are first-party, not requirements-web
+# dependencies; treating them as third-party would forbid the web service from sharing
+# code with the CLI package that is guaranteed to be present beside it.
+DOCKER_FIRST_PARTY_MODULES = {"vntyper"}
 
 
 def _read(path: Path) -> str:
@@ -162,6 +171,29 @@ def test_mypy_python_version_matches_requires_python() -> None:
     match = _search(r'^python_version\s*=\s*"(\d+)\.(\d+)"', _read(PYPROJECT), "mypy python_version")
     assert (int(match.group(1)), int(match.group(2))) == (major, minor), (
         f"mypy targets {match.group(0)} but requires-python is >={major}.{minor}"
+    )
+
+
+def test_release_metadata_matches_the_package_version() -> None:
+    """Citation and changelog release versions must match ``__version__``."""
+    version_tree = ast.parse(_read(VERSION_MODULE))
+    package_version = next(
+        node.value.value
+        for node in version_tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+    citation_version = _search(r'^version:\s*"([^"]+)"', _read(CITATION), "the citation version").group(1)
+    changelog_version = _search(
+        r"^##\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)", _read(CHANGELOG), "the latest changelog version"
+    ).group(1)
+    assert citation_version == package_version, (
+        f"CITATION.cff is {citation_version}, but vntyper/version.py is {package_version}"
+    )
+    assert changelog_version == package_version, (
+        f"docs/about/changelog.md is {changelog_version}, but vntyper/version.py is {package_version}"
     )
 
 
@@ -362,10 +394,9 @@ def optional_dependencies(extra: str) -> list[str]:
 def docker_app_third_party_imports() -> dict[str, list[str]]:
     """Return the third-party modules imported anywhere under ``docker/app``.
 
-    Relative imports are the service's own modules and are skipped; anything in
-    ``sys.stdlib_module_names`` comes with the interpreter. What is left has to be
-    installed by something, and ``requirements-web.txt`` is the only thing that
-    installs anything into the image for this service.
+    Relative imports and the application image's installed first-party package are
+    skipped; anything in ``sys.stdlib_module_names`` comes with the interpreter. What
+    is left has to be installed by ``requirements-web.txt``.
 
     Returns:
         dict[str, list[str]]: Top-level module name -> the files importing it.
@@ -382,10 +413,15 @@ def docker_app_third_party_imports() -> dict[str, list[str]]:
                 continue
             for name in names:
                 top = name.split(".")[0]
-                if top not in sys.stdlib_module_names:
+                if top not in sys.stdlib_module_names and top not in DOCKER_FIRST_PARTY_MODULES:
                     found.setdefault(top, set()).add(path.name)
     assert found, "no imports found under docker/app - has the layout changed?"
     return {module: sorted(files) for module, files in found.items()}
+
+
+def test_the_web_import_scan_does_not_misclassify_the_installed_vntyper_package() -> None:
+    """The application image installs this repository before copying ``docker/app``."""
+    assert "vntyper" not in docker_app_third_party_imports()
 
 
 @pytest.mark.parametrize("extra", ["web", "dev"])

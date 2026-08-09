@@ -38,6 +38,7 @@ INTEGRATION_MODULE = TESTS_ROOT / "integration" / "test_pipeline_integration.py"
 ROOT_CONFTEST = TESTS_ROOT / "conftest.py"
 DATA_UTILS = TESTS_ROOT / "support" / "data_utils.py"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+MAKEFILE = REPO_ROOT / "Makefile"
 
 
 def _parse(path: Path) -> ast.Module:
@@ -536,6 +537,16 @@ def test_a_plain_make_invocation_executes_the_target() -> None:
     """The ordinary case: the guard must still recognise a real invocation."""
     assert _executes_make_target("make test-integration", "test-integration")
     assert _executes_make_target("cd repo && sudo make -j4 test-integration", "test-integration")
+
+
+@pytest.mark.parametrize("target_name", ["test-integration", "test-integration-parallel"])
+def test_the_integration_target_materializes_its_declared_derived_fixtures(target_name: str) -> None:
+    """A clean scheduled run must not depend on ignored CRAM and single-end files."""
+    target = next(
+        line for line in MAKEFILE.read_text(encoding="utf-8").splitlines() if line.startswith(f"{target_name}:")
+    )
+
+    assert target.split()[1:] == ["cram-fixtures"]
 
 
 @pytest.mark.parametrize(

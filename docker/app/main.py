@@ -26,11 +26,12 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from pydantic import BaseModel, Field
 
+from .archive_delivery import OwnedFileResponse, write_owned_zip_member
 from .cohorts import (
     ALIAS_DESCRIPTION,
     COHORT_PASSPHRASE_HEADER,
@@ -43,9 +44,9 @@ from .cohorts import (
 )
 from .config import build_redis_url, get_redis_password, require_redis_password, settings
 from .identifiers import canonical_id
+from .job_failures import stored_preflight_message
 from .job_workspace import job_workspace
 from .request_limits import RequestSizeLimitMiddleware
-from .scratch_response import ScratchFileResponse
 from .tasks import run_cohort_analysis_job, run_vntyper_job
 from .uploads import INDEX_EXTENSIONS, safe_upload_path, save_upload_bounded
 from .utils import MAX_PASSPHRASE_BYTES, client_host
@@ -110,9 +111,6 @@ redis_usage_client = redis.Redis(
 # Global variable to store tool version
 TOOL_VERSION = "unknown"
 
-# Client-facing text for a job that failed. The task's own exception carries the
-# command line and the per-job container paths, which a job-status poller has no
-# use for; it is logged instead of returned.
 JOB_FAILURE_MESSAGE = (
     "The job failed during processing. Quote the job ID when reporting it so the "
     "failure can be looked up in the server logs."
@@ -605,7 +603,8 @@ def get_job_status(job_id: str):
         # Log the task's own exception, return a generic message: the detail is
         # operator-facing, and this endpoint is unauthenticated.
         logger.error(f"Job {job_id} (Task ID: {task_id}) failed: {type(task_result.info).__name__}: {task_result.info}")
-        return JobStatusResponse(job_id=job_id, status="failed", error=JOB_FAILURE_MESSAGE)
+        error = stored_preflight_message(redis_usage_client, job_id) or JOB_FAILURE_MESSAGE
+        return JobStatusResponse(job_id=job_id, status="failed", error=error)
     else:
         return JobStatusResponse(job_id=job_id, status=status.lower())
 
@@ -647,14 +646,17 @@ def download_result(job_id: str):
     # joined onto anything.
     job_id = require_job_id(job_id, detail="File not found")
     zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
-    if os.path.exists(zip_path):
-        logger.info(f"Serving zip file {zip_path}")
-        return FileResponse(
+    try:
+        response = OwnedFileResponse(
             zip_path,
             media_type="application/zip",
             filename=f"{job_id}.zip",
         )
-    logger.warning(f"File not found: {zip_path}")
+    except (FileNotFoundError, OSError, ValueError):
+        logger.warning(f"File not found or unsafe: {zip_path}")
+    else:
+        logger.info(f"Serving zip file {zip_path}")
+        return response
     raise HTTPException(status_code=404, detail="File not found")
 
 
@@ -960,11 +962,14 @@ def cohort_download(
 
     try:
         with zipfile.ZipFile(final_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            # For each job, look for its existing .zip file in the output directory
+            # Each member is bound before reading, so path replacement cannot
+            # redirect bytes into this response.
             for job_id in job_ids:
                 job_zip_path = os.path.join(DEFAULT_OUTPUT_DIR, f"{job_id}.zip")
-                if os.path.exists(job_zip_path):
-                    zf.write(job_zip_path, arcname=os.path.basename(job_zip_path))
+                try:
+                    write_owned_zip_member(zf, job_zip_path, os.path.basename(job_zip_path))
+                except ValueError as error:
+                    logger.warning(f"Skipping missing or unsafe cohort member {job_zip_path}: {error}")
     except BaseException:
         _remove_temp_file(final_zip_path)
         raise
@@ -972,15 +977,13 @@ def cohort_download(
     # Suggest a download filename
     download_name = f"cohort_{response['cohort_id']}.zip"
 
-    # Return the zipped file as a download. The archive is scratch space owned by
-    # this one response, and `ScratchFileResponse` removes it in a `finally`
-    # around the send: the caller receives the complete archive, and the file is
-    # gone afterwards whether the body was delivered or the connection dropped
-    # part-way through it.
-    return ScratchFileResponse(
+    # The response binds the scratch inode before returning and removes that
+    # exact inode after the send, even if the public path is replaced meanwhile.
+    return OwnedFileResponse(
         path=final_zip_path,
         media_type="application/zip",
         filename=download_name,
+        remove_after_send=True,
     )
 
 

@@ -9,9 +9,18 @@ from datetime import datetime, timedelta, timezone
 import redis
 from celery.utils.log import get_task_logger
 
+from vntyper.scripts.archive_safety import (
+    clear_stale_archive,
+    create_safe_archive,
+    quarantine_archive,
+    revoke_public_archive,
+)
+
+from .archive_delivery import snapshot_owned_archives
 from .celery_app import celery_app
 from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
+from .job_failures import clear_preflight_failure, read_preflight_failure
 from .utils import send_email
 
 logger = get_task_logger(__name__)
@@ -72,13 +81,11 @@ def is_cram(alignment_path: str) -> bool:
 
 
 def resolve_index_path(alignment_path: str, index_path: str | None) -> str:
-    """Name the index this job will use.
+    """Name the submitted or conventional index this job will clean up.
 
-    `samtools index` writes `.crai` beside a CRAM and `.bai` beside a BAM, so
-    the fallback has to be chosen by format (#188). Naming `.bai` for a CRAM
-    named a file that is never created: the existence check never found the
-    index the worker had itself just built, and cleanup then removed nothing
-    while the real `.crai` stayed on the volume every job shares.
+    The pipeline now builds missing indexes only in its run-local output view.
+    The fallback still has to be format-aware so cleanup covers conventional
+    index names left by older jobs without inventing a BAM suffix for CRAM.
 
     Args:
         alignment_path: The stored alignment.
@@ -94,16 +101,11 @@ def resolve_index_path(alignment_path: str, index_path: str | None) -> str:
 
 
 def derived_index_paths(alignment_path: str) -> tuple[str, ...]:
-    """Name every index this job's own tooling can put beside its alignment.
+    """Name every conventional index entry cleanup may find beside an alignment.
 
-    The worker is not the only thing that indexes the submission. Non-fast BAM
-    processing in `vntyper/scripts/fastq_bam_processing.py` reconstructs the
-    index name as `f"{in_bam}.bai"` and builds it whenever that exact path is
-    missing -- it never sees an index the client uploaded as `sample.bai`. So a
-    submission that carried `sample.bai` still ends up with `sample.bam.bai`
-    beside it, under a name neither the client nor the worker ever mentioned,
-    and cleanup that removes only the submitted paths leaves it on the volume
-    every job shares.
+    Current pipeline preflight never creates these in the input tree, but jobs
+    may carry either accepted spelling and older workers could have generated
+    one. Cleanup remains deliberately bounded to these exact names.
 
     The names are derived from the alignment rather than discovered, and every
     one of them is joined back onto the alignment's own directory, so this can
@@ -191,6 +193,13 @@ def build_vntyper_command(
     command = [
         "conda",
         "run",
+        # Without this, conda buffers the pipeline's stdout and stderr until it exits, so
+        # a web job that runs for an hour logs nothing until the hour is up and a job that
+        # hangs logs nothing at all (#213). `docker/entrypoint.sh` carries the same flag;
+        # this is the second invocation, and it is the one every *web* job goes through.
+        # It precedes `-n` because `conda run` parses its own options before the
+        # environment selector.
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",
@@ -253,20 +262,21 @@ def run_vntyper_job(
     Sends an email upon job completion or failure if email is provided.
 
     `index_path` is where the submission's own index was stored, when it carried
-    one. The endpoint accepts several index names, so the worker is told which
-    one it got rather than guessing: guessing means rebuilding an index the job
-    was already given, under a different name, and leaving the supplied file on
-    the shared volume afterwards. With no index supplied it falls back to the
-    conventional name beside the alignment, which is also where `samtools index`
-    puts the one it builds.
+    one. The endpoint accepts several index names, so cleanup uses that exact
+    path rather than guessing. Missing-index construction belongs exclusively
+    to pipeline preflight, which builds a run-local index under `output_dir`.
     """
     job_id = os.path.basename(output_dir)
+    archive_published = False
     # Bound before the try block: the cleanup below runs whether or not the task
     # got as far as its first Redis call, and must remove exactly the index this
     # job used -- uploaded or generated -- rather than raise a NameError of its
     # own on the way.
     index_path = resolve_index_path(bam_path, index_path)
     try:
+        job_key = f"usage:{job_id}"
+        redis_usage_client.hdel(job_key, "code", "message")
+        clear_preflight_failure(output_dir)
         logger.info(f"Starting VNtyper job for BAM file: {bam_path}")
 
         # Generate a unique hash for the user
@@ -283,17 +293,10 @@ def run_vntyper_job(
         redis_usage_client.hset(f"usage:{job_id}", mapping=usage_data)
         redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
-        # Ensure the alignment has an index the pipeline can find
-        if not os.path.exists(index_path):
-            logger.info(f"Index not found for {bam_path}. Generating index.")
-            try:
-                subprocess.run(["samtools", "index", bam_path], check=True)
-                logger.info(f"Successfully generated index at {index_path}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Error generating index: {e}")
-                # Update usage data on failure
-                redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
-                raise
+        if archive_results:
+            clear_stale_archive(
+                output_dir, "zip", protected_paths=(bam_path, index_path) if index_path else (bam_path,)
+            )
 
         # Build the base command for VNtyper
         command = build_vntyper_command(
@@ -303,7 +306,7 @@ def run_vntyper_job(
             reference_assembly=reference_assembly,
             fast_mode=fast_mode,
             keep_intermediates=keep_intermediates,
-            archive_results=archive_results,
+            archive_results=False,
             advntr_mode=advntr_mode,
         )
 
@@ -315,6 +318,9 @@ def run_vntyper_job(
             logger.error(f"Error running VNtyper: {e}")
             # Update usage data on failure
             redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+            preflight_failure = read_preflight_failure(output_dir)
+            if preflight_failure is not None:
+                redis_usage_client.hset(f"usage:{job_id}", mapping=preflight_failure)
             # Send failure email if provided
             if email:
                 subject = "VNtyper Job Failed"
@@ -335,26 +341,34 @@ def run_vntyper_job(
                 send_email_task.delay(to_email=email, subject=subject, content=content)
             raise
 
-        # Optionally, archive results
         if archive_results:
+            create_safe_archive(
+                output_dir,
+                "zip",
+                output_dir,
+                protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+            )
+            archive_published = True
             try:
-                shutil.make_archive(output_dir, "zip", output_dir)
                 shutil.rmtree(output_dir)
                 logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
-                logger.error(f"Error archiving results: {e}")
-                # Update usage data on failure
-                redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+                archive_published = False
+                try:
+                    quarantine_path = quarantine_archive(
+                        output_dir,
+                        "zip",
+                        protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                    )
+                    logger.error(f"Result cleanup failed; preserved complete archive at {quarantine_path}: {e}")
+                except Exception as rollback_error:
+                    logger.error(f"Error quarantining failed job's public archive: {rollback_error}")
+                    archive_published = True
                 raise
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
-        # **Removed**: Cohort assignment from the task
-        # if cohort_key:
-        #     redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
-
-        # **Cohort assignment is now handled only upon successful completion**
         if cohort_key:
             redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
             logger.info(f"Assigned job {job_id} to cohort {cohort_key}")
@@ -384,17 +398,34 @@ def run_vntyper_job(
 
     except Exception as e:
         logger.error(f"Error in VNtyper job: {e}")
-        # Update usage data on failure
-        redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        if archive_published:
+            try:
+                quarantine_path = quarantine_archive(
+                    output_dir,
+                    "zip",
+                    protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                )
+                archive_published = False
+                if quarantine_path is not None:
+                    logger.error(f"Preserved failed job's complete archive at {quarantine_path}")
+            except Exception as quarantine_error:
+                logger.error(f"Error quarantining failed job's public archive: {quarantine_error}")
+                try:
+                    revoke_public_archive(
+                        output_dir,
+                        "zip",
+                        protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                    )
+                    archive_published = False
+                except Exception as rollback_error:
+                    logger.error(f"Error removing failed job's public archive: {rollback_error}")
+        try:
+            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        except Exception as status_error:
+            logger.error(f"Error recording failed status for {job_id}: {status_error}")
         raise
     finally:
-        # Patient-derived files come off the shared volume before anything else
-        # in this block, and every bookkeeping call after them is isolated.
-        # Both halves matter: this block used to open with two unguarded Redis
-        # calls, so a broker that became unreachable as the task exited left the
-        # alignment, its index and the whole input directory behind -- and
-        # replaced the pipeline's own exception with a connection error, hiding
-        # why the job failed.
+        # Patient-derived inputs come off the shared volume before bookkeeping.
         remove_job_input_files(bam_path, index_path)
 
         # The per-job input directory holds nothing but this submission's own
@@ -513,6 +544,7 @@ def run_cohort_analysis_job(
     # got as far as naming its scratch file, and must not mask the original
     # failure with a NameError of its own.
     input_file = None
+    archive_published = False
     logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
     # Generate a unique hash for the user
@@ -532,57 +564,85 @@ def run_cohort_analysis_job(
     redis_usage_client.expire(f"usage:{job_id}", settings.USAGE_DATA_RETENTION_SECONDS)
 
     try:
+        clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
         # 1) Create directory, input file listing all .zip files
         os.makedirs(output_dir, exist_ok=True)
-        input_file = os.path.join(output_dir, "cohort_input.txt")
-        with open(input_file, "w") as f:
-            f.writelines(f"{zpath}\n" for zpath in zip_paths)
+        snapshot_dir = os.path.join(output_dir, ".cohort-members")
+        with snapshot_owned_archives(zip_paths, snapshot_dir) as snapshots:
+            cohort_input_file = os.path.join(output_dir, "cohort_input.txt")
+            input_file = cohort_input_file
+            with open(cohort_input_file, "w") as f:
+                f.writelines(f"{zpath}\n" for zpath in snapshots.paths)
 
-        # 2) Run the "vntyper cohort" command
-        command = [
-            "conda",
-            "run",
-            "-n",
-            "vntyper",
-            "vntyper",
-            "cohort",
-            "--input-file",
-            input_file,
-            "-o",
-            output_dir,
-        ]
-        logger.info(f"Running command: {' '.join(command)}")
-        subprocess.run(command, check=True)
-        logger.info("Joint cohort analysis completed.")
+            # 2) Run the "vntyper cohort" command
+            command = [
+                "conda",
+                "run",
+                # Same reason as build_vntyper_command: without this, conda buffers the child
+                # until it exits, so a cohort analysis logs nothing while it runs (#213).
+                "--no-capture-output",
+                "-n",
+                "vntyper",
+                "vntyper",
+                "cohort",
+                "--input-file",
+                cohort_input_file,
+                "-o",
+                output_dir,
+            ]
+            logger.info(f"Running command: {' '.join(command)}")
+            subprocess.run(command, check=True)
+            logger.info("Joint cohort analysis completed.")
+
+        os.remove(cohort_input_file)
+        input_file = None
 
         # 3) Zip the results
-        try:
-            shutil.make_archive(output_dir, "zip", output_dir)
-            logger.info(f"Zipped results to {output_dir}.zip")
-        except Exception as e:
-            logger.error(f"Error zipping results for cohort analysis: {e}")
-            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
-            raise
+        create_safe_archive(output_dir, "zip", output_dir, protected_paths=zip_paths)
+        archive_published = True
+        logger.info(f"Zipped results to {output_dir}.zip")
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
     except Exception as e:
         logger.error(f"Error in joint cohort analysis for {cohort_id}: {e}")
-        redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        if archive_published:
+            try:
+                quarantine_path = quarantine_archive(output_dir, "zip", protected_paths=zip_paths)
+                archive_published = False
+                if quarantine_path is not None:
+                    logger.error(f"Preserved failed cohort's complete archive at {quarantine_path}")
+            except Exception as quarantine_error:
+                logger.error(f"Error quarantining failed cohort archive: {quarantine_error}")
+                try:
+                    revoke_public_archive(output_dir, "zip", protected_paths=zip_paths)
+                    archive_published = False
+                except Exception as rollback_error:
+                    logger.error(f"Error removing failed cohort archive: {rollback_error}")
+        try:
+            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        except Exception as status_error:
+            logger.error(f"Error recording failed status for cohort analysis {job_id}: {status_error}")
         raise
     finally:
         # Remove the task ID from the Redis list
-        redis_client.lrem("vntyper_job_queue", 0, task_id)
-        logger.info(f"Removed cohort analysis task ID {task_id} from queue")
+        try:
+            redis_client.lrem("vntyper_job_queue", 0, task_id)
+            logger.info(f"Removed cohort analysis task ID {task_id} from queue")
+        except Exception as e:
+            logger.error(f"Error removing cohort analysis task ID {task_id} from queue: {e}")
 
         # Extend cohort TTL if necessary
         if cohort_id:
-            extend_cohort_retention(
-                redis_cohort_client,
-                cohort_key(cohort_id),
-                settings.COHORT_RETENTION_DAYS * 86400,
-            )
+            try:
+                extend_cohort_retention(
+                    redis_cohort_client,
+                    cohort_key(cohort_id),
+                    settings.COHORT_RETENTION_DAYS * 86400,
+                )
+            except Exception as e:
+                logger.error(f"Error extending retention for cohort {cohort_id}: {e}")
 
         # Delete the listing file this task wrote for itself. That file is the
         # only thing here the task owns; the .zip paths it names are the

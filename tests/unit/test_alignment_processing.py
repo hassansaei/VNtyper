@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from vntyper.scripts.alignment_processing import align_and_sort_fastq, check_bwa_index
+from vntyper.scripts.alignment_target_io import BWA_INDEX_EXTENSIONS
 
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
@@ -33,6 +34,18 @@ def test_check_bwa_index_all_present(tmp_path, test_config, caplog):
 
     assert result is True, "check_bwa_index should return True when all index files exist."
     assert "Missing BWA index files" not in caplog.text
+
+
+def test_check_bwa_index_uses_the_same_configured_suffixes_as_pipeline_safety(tmp_path):
+    ref_path = tmp_path / "ref.fa"
+    ref_path.touch()
+    (tmp_path / "ref.fa.custom-index").touch()
+    config = {"tool_params": {"bwa_index_extensions": [".custom-index"]}}
+
+    assert check_bwa_index(ref_path, config) is False
+    for extension in BWA_INDEX_EXTENSIONS:
+        (tmp_path / f"ref.fa{extension}").touch()
+    assert check_bwa_index(ref_path, config) is True
 
 
 def test_align_and_sort_fastq_missing_tools(tmp_path, test_config):

@@ -31,6 +31,7 @@ from unittest.mock import patch
 import pytest
 
 from vntyper.scripts import alignment_processing, fastq_bam_processing
+from vntyper.scripts.alignment_contract import AlignmentPlan
 
 # Mark all tests in this module as unit tests
 pytestmark = pytest.mark.unit
@@ -66,21 +67,33 @@ class _Recorder:
 def _run_bam_to_fastq(tmp_path, **overrides):
     """Drive ``process_bam_to_fastq`` with every external effect mocked out."""
     recorder = _Recorder()
+    input_path = overrides.pop("input_path", "/data/sample.bam")
     kwargs = {
-        "in_bam": "/data/sample.bam",
         "output": str(tmp_path),
         "output_name": "output",
         "threads": 4,
         "config": CONFIG,
         "fast_mode": True,
-        "file_format": "bam",
     }
+    file_format = overrides.pop("file_format", "bam")
     kwargs.update(overrides)
+    kwargs.setdefault(
+        "plan",
+        AlignmentPlan(
+            input_path=str(input_path),
+            view_path=str(input_path),
+            file_format=file_format,
+            index_path=f"{input_path}.{'bai' if file_format == 'bam' else 'crai'}",
+            reference_path=None,
+            reference_source="test",
+            uncovered_contigs=(),
+            unmapped_scan="stream" if file_format == "cram" else "indexed",
+        ),
+    )
 
     with (
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset"),
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(**kwargs)
@@ -122,6 +135,18 @@ def test_process_fastq_raises_when_the_command_fails(tmp_path):
         fastq_bam_processing.process_fastq("/data/in_R1.fq.gz", "/data/in_R2.fq.gz", 4, str(tmp_path), "output", CONFIG)
 
 
+def test_process_fastq_emits_the_single_input_fastp_form(tmp_path):
+    recorder = _Recorder()
+
+    with patch.object(fastq_bam_processing, "run_command", recorder):
+        fastq_bam_processing.process_fastq("/data/single.fq.gz", None, 4, str(tmp_path), "output", CONFIG)
+
+    assert "--in1 /data/single.fq.gz" in recorder.commands[0]
+    assert "--out1" in recorder.commands[0]
+    assert "--in2" not in recorder.commands[0]
+    assert "--out2" not in recorder.commands[0]
+
+
 # ---------------------------------------------------------------------------
 # process_bam_to_fastq - one assertion per branch
 # ---------------------------------------------------------------------------
@@ -132,8 +157,9 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b  /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
-        f"samtools index {tmp_path}/output_sliced.bam",
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"-o {tmp_path}/output_sliced.bam && "
+        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -145,32 +171,32 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     """
     The full BAM path, in order.
 
-    The input BAM is indexed first (neither ``/data/sample.bam.bai`` nor
-    ``/data/sample.bai`` exists), unmapped reads are pulled out by the offset
-    extractor rather than by samtools, the slice and the unmapped reads are
-    merged, the merged file is renamed back to ``_sliced.bam`` and re-indexed, and
-    only then converted to FASTQ.
-
-    The second command was ``samtools index /data/sample.bam`` until #210: that
-    wrote ``/data/sample.bam.bai`` into the *input* directory, which holds patient
-    data and is routinely mounted read-only. It now carries ``-o`` and names a
-    destination inside the run's own output directory. The re-index at the fourth
-    position deliberately does **not**: ``output_sliced.bam`` is a file this stage
-    produced in the output directory, so the default destination is already right.
+    Preflight has already proved and supplied the input index. The temporary slice
+    is not indexed because the merge immediately replaces it; the merged BAM is
+    indexed once before conversion.
     """
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b  /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam && "
-        f"samtools index {tmp_path}/output_sliced.bam",
-        f"samtools index -o {tmp_path}/output_input.bam.bai /data/sample.bam",
+        f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"-o {tmp_path}/output_sliced.bam",
+        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
-        f"samtools index {tmp_path}/output_sliced.bam",
+        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
         f"-s {tmp_path}/output_single.fastq.gz",
+    ]
+
+
+def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
+    """A valid all-unplaced BAM has no BAI chunk offset for the custom reader."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    assert [command for command in commands if "-f 4" in command] == [
+        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
     ]
 
 
@@ -197,15 +223,10 @@ def _index_commands_for(commands: list[str], indexed_file: str) -> list[list[str
     return matches
 
 
-def test_the_index_the_bam_path_builds_for_its_input_is_written_to_the_output_directory(tmp_path):
+def test_the_bam_stage_never_rebuilds_the_preflight_index(tmp_path):
     """
-    #162/#210 at the wiring level: the ``-o`` operand, re-parsed as a shell would.
-
-    Asserting that no index command *mentions* the input directory does not work
-    and would fail after the fix as well as before it -- a correct
-    ``samtools index -o <out> <in>`` has to name the input as its operand. What
-    can be asserted is the argument immediately after ``-o``, because that is the
-    only path samtools writes.
+    Preflight owns input index resolution and construction. The conversion stage
+    must not repeat that decision or write beside the patient alignment.
     """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -214,14 +235,10 @@ def test_the_index_the_bam_path_builds_for_its_input_is_written_to_the_output_di
     in_bam = input_dir / "sample.bam"
     in_bam.write_bytes(b"BAM\x01")
 
-    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, in_bam=str(in_bam), output=str(output_dir))
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, input_path=str(in_bam), output=str(output_dir))
 
     index_commands = _index_commands_for(commands, str(in_bam))
-    assert index_commands, "the non-fast BAM path must index its input when no index exists"
-    for tokens in index_commands:
-        assert "-o" in tokens, f"an index command with no -o writes beside its input: {tokens}"
-        destination = Path(tokens[tokens.index("-o") + 1])
-        assert destination.parent == output_dir, f"the index was written outside the output directory: {destination}"
+    assert index_commands == []
 
 
 @pytest.mark.parametrize("index_name", ["sample.bam.bai", "sample.bai"])
@@ -242,103 +259,100 @@ def test_an_existing_index_beside_the_input_is_reused_rather_than_rebuilt(tmp_pa
     in_bam.write_bytes(b"BAM\x01")
     (input_dir / index_name).write_bytes(b"BAI\x01")
 
-    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, in_bam=str(in_bam), output=str(output_dir))
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, input_path=str(in_bam), output=str(output_dir))
 
     assert _index_commands_for(commands, str(in_bam)) == [], (
         f"{index_name} was already there; indexing again writes a file nothing reads"
     )
 
 
-def test_a_failed_index_of_the_input_aborts_the_stage(tmp_path):
-    """
-    Extracting unmapped reads from an index that was never built is not a partial
-    result, it is a wrong one -- the offsets would be read from a missing or
-    truncated file. The stage stops instead.
-    """
+def test_indexed_bam_recovery_uses_the_plan_view_and_exact_index_without_a_reference(tmp_path):
+    """The htslib fetch consumes the proven view and its retained exact BAI."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     in_bam = input_dir / "sample.bam"
     in_bam.write_bytes(b"BAM\x01")
 
-    def _fail_the_index(command, log_file, critical=False, cwd=None):
-        Path(log_file).write_text("")
-        return "index -o" not in command
+    plan = AlignmentPlan(
+        input_path=str(in_bam),
+        view_path=str(tmp_path / "view.bam"),
+        file_format="bam",
+        index_path=str(tmp_path / "view.bam.bai"),
+        reference_path=None,
+        reference_source="not-required",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+    )
 
+    recorder = _Recorder()
     with (
-        patch.object(fastq_bam_processing, "run_command", _fail_the_index),
+        patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset") as extractor,
-        pytest.raises(RuntimeError, match="Indexing BAM file failed"),
+        patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
-            in_bam=str(in_bam),
             output=str(tmp_path),
             output_name="output",
             threads=4,
             config=CONFIG,
+            plan=plan,
             fast_mode=False,
-            file_format="bam",
         )
 
-    extractor.assert_not_called()
+    (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
+    assert unmapped_command == (
+        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
+    )
+    assert " -T " not in unmapped_command
 
 
-@pytest.mark.parametrize(
-    ("existing", "expected_relative_to"),
-    [
-        ("sample.bam.bai", "input"),
-        ("sample.bai", "input"),
-        (None, "output"),
-    ],
-)
-def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_path, existing, expected_relative_to):
-    """
-    Resolving an index and then reading a different one is the silent version of #210.
-
-    ``extract_unmapped_reads_from_offset`` seeks by the offsets in the index it is
-    given, so an index that does not describe the alignment is not a crash - it is
-    a different set of unmapped reads. Whichever index the stage decided on, built
-    or found, is the one that must reach it.
-    """
+@pytest.mark.parametrize("index_path", ["sample.bam.bai", "sample.bai", None])
+def test_indexed_bam_recovery_uses_the_plan_index_operand(tmp_path, index_path):
+    """Manual plans still pass their declared index explicitly to htslib."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     in_bam = input_dir / "sample.bam"
     in_bam.write_bytes(b"BAM\x01")
-    if existing is not None:
-        (input_dir / existing).write_bytes(b"BAI\x01")
+    if index_path is not None:
+        (input_dir / index_path).write_bytes(b"BAI\x01")
 
     recorder = _Recorder()
     with (
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset") as extractor,
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
-            in_bam=str(in_bam),
             output=str(output_dir),
             output_name="output",
             threads=4,
             config=CONFIG,
             fast_mode=False,
-            file_format="bam",
+            plan=AlignmentPlan(
+                input_path=str(in_bam),
+                view_path=str(in_bam),
+                file_format="bam",
+                index_path=str(input_dir / index_path) if index_path is not None else str(output_dir / "proven.bai"),
+                reference_path=None,
+                reference_source="test",
+                uncovered_contigs=(),
+                unmapped_scan="indexed",
+            ),
         )
 
-    bai_file = Path(extractor.call_args.kwargs["bai_file"])
-    if existing is not None:
-        assert bai_file == input_dir / existing
-    else:
-        assert bai_file == output_dir / "output_input.bam.bai"
-    assert bai_file.parent.name == expected_relative_to
+    (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
+    asserted_index = input_dir / index_path if index_path is not None else output_dir / "proven.bai"
+    assert f"-X {in_bam} {asserted_index}" in unmapped_command
+    assert in_bam.as_posix() in unmapped_command
 
 
 # ---------------------------------------------------------------------------
 # The CRAM unmapped-read path
 #
 # This branch used to be
-#     ... | tee >(samtools view -b -f 12 - -o unmapped.bam) > /dev/null
+#     ... | tee >(samtools view -b -f 4 - -o unmapped.bam) > /dev/null
 # and bash does not wait for a ``>(...)`` process substitution: the shell returned
 # as soon as ``tee`` exited, while the substituted samtools was still flushing
 # ``unmapped.bam``. ``process_bam_to_fastq`` runs ``samtools merge`` against that
@@ -365,19 +379,19 @@ def _cram_unmapped_command(tmp_path, **overrides):
         **overrides: Passed through to ``_run_bam_to_fastq``.
 
     Returns:
-        str: The one emitted command containing ``-f 12``.
+        str: The one emitted command containing ``-f 4``.
     """
     config = {**CONFIG, "tools": {**CONFIG["tools"], "samtools": "/envs/vntyper/bin/samtools"}}
     kwargs = {
         "fast_mode": False,
         "file_format": "cram",
-        "in_bam": "/data/sample.cram",
+        "input_path": "/data/sample.cram",
         "config": config,
     }
     kwargs.update(overrides)
 
     commands = _run_bam_to_fastq(tmp_path, **kwargs)
-    filters = [c for c in commands if "-f 12" in c]
+    filters = [c for c in commands if "-f 4" in c]
     assert len(filters) == 1, f"expected exactly one unmapped-read extraction command, got {filters}"
     return filters[0]
 
@@ -386,13 +400,39 @@ def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
     """
     The whole command, byte for byte.
 
-    The double space after ``view`` is the empty ``cram_ref_option`` and is
-    preserved from the pre-extraction code, as it is in every other builder.
+    With no resolved reference yet, the optional ``-T`` fragment is omitted.
     """
     assert _cram_unmapped_command(tmp_path) == (
-        f"set -o pipefail; /envs/vntyper/bin/samtools view  -@ 4 -h /data/sample.cram | "
-        f"/envs/vntyper/bin/samtools view -b -f 12 -@ 4 - -o {tmp_path}/output_unmapped.bam"
+        f"set -o pipefail; /envs/vntyper/bin/samtools view -@ 4 -h /data/sample.cram | "
+        f"/envs/vntyper/bin/samtools view -b -f 4 -@ 4 - -o {tmp_path}/output_unmapped.bam"
     )
+
+
+@pytest.mark.parametrize("scan", ["indexed", "stream"])
+def test_a_no_ref_cram_plan_emits_no_reference_flag_in_any_conversion_command(tmp_path, scan):
+    """A-209-3: the proven no-reference plan must remain byte-free of ``-T``."""
+    input_path = "/data/no-ref.cram"
+    plan = AlignmentPlan(
+        input_path=input_path,
+        view_path=input_path,
+        file_format="cram",
+        index_path=f"{input_path}.crai",
+        reference_path=None,
+        reference_source="htslib-resolved (header UR: or REF_PATH)",
+        uncovered_contigs=(),
+        unmapped_scan=scan,
+    )
+
+    commands = _run_bam_to_fastq(
+        tmp_path,
+        file_format="cram",
+        input_path=input_path,
+        fast_mode=False,
+        plan=plan,
+    )
+
+    assert commands
+    assert all(" -T " not in command for command in commands)
 
 
 def test_the_cram_unmapped_command_has_no_process_substitution(tmp_path):
@@ -415,7 +455,7 @@ def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
     The writing samtools must be a **stage**, which is what makes bash wait for it.
 
     Two stages joined by one ``|``: the reader streams the CRAM, the writer filters
-    flag 12 into the output BAM. Because the writer is in the pipeline, the shell
+    flag 4 into the output BAM. Because the writer is in the pipeline, the shell
     does not return until it has exited, and ``pipefail`` covers its exit status.
     """
     command = _cram_unmapped_command(tmp_path)
@@ -424,7 +464,7 @@ def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
     assert len(stages) == 2, f"expected a two-stage pipeline, got {len(stages)}: {stages}"
     reader, writer = stages
     assert reader.endswith("-h /data/sample.cram"), f"the reader must end at the CRAM input: {reader}"
-    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 12"), f"the writer is not stage two: {writer}"
+    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"the writer is not stage two: {writer}"
     assert writer.endswith(f"- -o {tmp_path}/output_unmapped.bam"), (
         f"the writer must read stdin and write the unmapped BAM: {writer}"
     )
@@ -472,7 +512,7 @@ def test_a_hostile_cram_path_survives_both_stages_of_the_pipe(tmp_path):
     output_dir = tmp_path / "run one"
     output_dir.mkdir()
 
-    command = _cram_unmapped_command(tmp_path, in_bam=hostile_cram, output=str(output_dir))
+    command = _cram_unmapped_command(tmp_path, input_path=hostile_cram, output=str(output_dir))
     tokens = shlex.split(command.removeprefix("set -o pipefail; "))
 
     assert hostile_cram in tokens, f"the input CRAM did not survive as one operand: {command}"
@@ -491,10 +531,10 @@ def test_the_merge_runs_immediately_after_the_cram_unmapped_extraction(tmp_path)
     """
     config = {**CONFIG, "tools": {**CONFIG["tools"], "samtools": "/envs/vntyper/bin/samtools"}}
     commands = _run_bam_to_fastq(
-        tmp_path, fast_mode=False, file_format="cram", in_bam="/data/sample.cram", config=config
+        tmp_path, fast_mode=False, file_format="cram", input_path="/data/sample.cram", config=config
     )
 
-    extraction = next(i for i, c in enumerate(commands) if "-f 12" in c)
+    extraction = next(i for i, c in enumerate(commands) if "-f 4" in c)
     assert commands[extraction + 1] == (
         f"/envs/vntyper/bin/samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam"
@@ -509,8 +549,9 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b  /data/sample.bam -L {bed} -o {tmp_path}/output_sliced.bam && "
-        f"samtools index {tmp_path}/output_sliced.bam"
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} "
+        f"-o {tmp_path}/output_sliced.bam && "
+        f"samtools index -@ 4 {tmp_path}/output_sliced.bam"
     )
     assert REGION not in commands[0]
 
@@ -526,7 +567,7 @@ def test_a_bam_path_with_a_space_survives_every_emitted_command(tmp_path):
     output_dir = tmp_path / "run one"
     output_dir.mkdir()
 
-    commands = _run_bam_to_fastq(tmp_path, in_bam=hostile_bam, fast_mode=False, output=str(output_dir))
+    commands = _run_bam_to_fastq(tmp_path, input_path=hostile_bam, fast_mode=False, output=str(output_dir))
 
     assert commands, "the stage emitted no commands; this test would pass vacuously"
     for command in commands:
@@ -666,5 +707,38 @@ def test_align_and_sort_emits_the_pinned_pipeline_with_pipefail(tmp_path):
         f"set -o pipefail; bwa mem -t 4 {reference} /data/r1.fq.gz /data/r2.fq.gz | "
         f"samtools view -@ 4 -b | "
         f"samtools sort -@ 4 -o {sorted_bam}",
-        f"samtools index {sorted_bam}",
+        f"samtools index -@ 4 {sorted_bam}",
     ]
+
+
+def test_align_and_sort_emits_the_single_input_bwa_form(tmp_path):
+    reference = tmp_path / "ref.fa"
+    reference.touch()
+    for ext in (".amb", ".ann", ".bwt", ".pac", ".sa"):
+        (tmp_path / f"ref.fa{ext}").touch()
+    sorted_bam = tmp_path / "out" / "output_sorted.bam"
+    recorder = _Recorder()
+
+    def run_and_create(command, log_file, critical=False, cwd=None):
+        recorder(command, log_file, critical, cwd)
+        sorted_bam.parent.mkdir(parents=True, exist_ok=True)
+        sorted_bam.touch()
+        sorted_bam.with_suffix(".bam.bai").touch()
+        return True
+
+    with patch.object(alignment_processing, "run_command", run_and_create):
+        result = alignment_processing.align_and_sort_fastq(
+            fastq1=Path("/data/single.fq.gz"),
+            fastq2=None,
+            reference=reference,
+            output_dir=tmp_path / "out",
+            output_name="output",
+            threads=4,
+            config=CONFIG,
+        )
+
+    assert result == str(sorted_bam)
+    assert recorder.commands[0] == (
+        f"set -o pipefail; bwa mem -t 4 {reference} /data/single.fq.gz | "
+        f"samtools view -@ 4 -b | samtools sort -@ 4 -o {sorted_bam}"
+    )

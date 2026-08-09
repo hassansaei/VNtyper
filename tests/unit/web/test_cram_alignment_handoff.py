@@ -159,6 +159,7 @@ def test_every_other_flag_is_unchanged_by_the_extraction() -> None:
     assert command == [
         "conda",
         "run",
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",
@@ -190,6 +191,7 @@ def test_no_optional_flag_is_appended_when_none_was_asked_for() -> None:
     assert command == [
         "conda",
         "run",
+        "--no-capture-output",
         "-n",
         "vntyper",
         "vntyper",
@@ -252,18 +254,15 @@ def test_a_name_the_endpoint_accepts_survives_all_three_layers(
 
 
 # ---------------------------------------------------------------------------
-# 2. The index name the worker falls back to.
+# 2. The conventional index name worker cleanup falls back to.
 # ---------------------------------------------------------------------------
 
 
 def test_a_cram_upload_with_no_index_falls_back_to_the_crai_name() -> None:
-    """``samtools index`` writes ``.crai`` for a CRAM, so the fallback must too.
+    """CRAM cleanup uses the conventional ``.crai`` fallback.
 
-    The fallback used to be ``f"{bam_path}.bai"`` for every format, which for a
-    CRAM names a file that is never created. Two things then go wrong at once:
-    the existence check never finds the index the worker itself just built, and
-    cleanup removes a path that was never there while the real ``.crai`` stays
-    on the volume every job shares.
+    Pipeline preflight builds missing indexes only in the output tree. This
+    fallback keeps cleanup compatible with conventional CRAM index residue.
     """
     assert resolve_index_path("/data/s.cram", None) == "/data/s.cram.crai"
 

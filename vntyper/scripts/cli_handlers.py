@@ -224,12 +224,13 @@ def handle_pipeline(
         logger.debug("Multiple input types detected.")
         sys.exit(1)
 
-    if not args.bam and not args.cram and (args.fastq1 is None or args.fastq2 is None):
-        parser.error(
-            "When not providing BAM/CRAM, both --fastq1 and --fastq2 must be specified for paired-end sequencing."
-        )
-        logger.debug("Missing FASTQ files for paired-end sequencing.")
+    if not args.bam and not args.cram and args.fastq1 is None:
+        parser.error("When not providing BAM/CRAM, --fastq1 must be specified; --fastq2 is optional.")
+        logger.debug("Missing required FASTQ1 input.")
         sys.exit(1)
+
+    if args.fastq1 is not None and args.fastq2 is None and "shark" in flattened_modules:
+        parser.error("SHARK requires paired-end FASTQ input; provide --fastq2 or remove the shark module.")
 
     # Construct module_args_dict for advntr, etc.
     module_args_dict: dict[str, dict[str, Any]] = {}
@@ -309,6 +310,7 @@ def handle_pipeline(
         fastq2=args.fastq2,
         bam=args.bam,
         cram=args.cram,
+        reference_fasta=args.reference_fasta,
         threads=args.threads,
         reference_assembly=args.reference_assembly,
         fast_mode=args.fast_mode,
