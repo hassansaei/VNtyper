@@ -538,6 +538,46 @@ def test_input_alignment_binding_precedes_validation_and_survives_source_replace
         prepared.plan.close()
 
 
+def test_cram_quickcheck_failure_uses_the_alignment_validation_phase_and_releases_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed alignment must not be reported as a reference-policy failure."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    input_path = tmp_path / "patient-input" / "sample.cram"
+    input_path.parent.mkdir()
+    input_path.write_bytes(b"malformed CRAM")
+    original_ref_path = "/operator/original/%s"
+    monkeypatch.setenv("REF_PATH", original_ref_path)
+    original = ValueError("quickcheck rejected malformed CRAM")
+
+    with pytest.raises(ValueError) as raised:
+        prepare_input_alignment_preflight(
+            in_path=input_path,
+            input_type="CRAM",
+            output_dir=output,
+            config={"cram": {"local_ref_path": "/local/cache/%s"}},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+            alignment_validator=mock.Mock(side_effect=original),
+        )
+
+    assert raised.value is original
+    assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8")) == {
+        "code": "alignment_header_invalid",
+        "message": "Alignment preflight rejected the alignment header or declared assembly; verify the input "
+        "and --reference-assembly.",
+        "candidates": [],
+    }
+    assert os.environ["REF_PATH"] == original_ref_path
+    assert not os.path.lexists(output / "fastq_bam_processing" / "input.cram")
+
+
 def test_input_alignment_header_failure_has_a_stable_artifact_and_restores_ref_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -320,15 +320,16 @@ def prepare_input_alignment_preflight(
             failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
             previous_ref_path = pin_reference_resolution(config)
         try:
+            failure_context.phase = error_io.VIEW_INDEX_FAILURE
             file_format = input_type.lower()
             stage_dir = Path(output_dir) / "fastq_bam_processing"
             stage_dir.mkdir(parents=True, exist_ok=True)
             bound_view = stage_dir / f"input.{file_format}"
             binding = AlignmentBinding(input_path)
             binding.install_view(bound_view)
+            failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
             if alignment_validator is not None:
                 alignment_validator(str(bound_view), cwd=validation_cwd, log_dir=str(output_dir))
-            failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
             alignment_header = read_alignment_header(str(bound_view), config)
             if input_type == "CRAM":
                 if alignment_header is None:
