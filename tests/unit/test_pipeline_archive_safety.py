@@ -1,6 +1,5 @@
 """Archive safety at the completed CLI pipeline boundary."""
 
-import os
 import tarfile
 import zipfile
 from pathlib import Path
@@ -29,8 +28,8 @@ def test_cli_releases_the_h1_owned_view_before_archiving(tmp_path: Path, archive
 
     def owned_plan(*args, **kwargs):
         del args
-        view = output_dir / f"input.{kwargs['file_format']}"
-        view.symlink_to(patient)
+        view = Path(kwargs["bound_view_path"])
+        binding = kwargs["binding"]
         plan = SimpleNamespace(
             input_path=str(patient),
             view_path=str(view),
@@ -45,10 +44,7 @@ def test_cli_releases_the_h1_owned_view_before_archiving(tmp_path: Path, archive
 
         def close() -> None:
             plan.close_calls += 1
-            if not os.path.lexists(view):
-                return
-            assert os.readlink(view) == str(patient)
-            view.unlink()
+            binding.close()
 
         plan.close = close
         plans.append(plan)

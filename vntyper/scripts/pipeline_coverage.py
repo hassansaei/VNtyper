@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 
 
 def calculate_alignment_coverage(
@@ -33,6 +34,7 @@ def calculate_alignment_coverage(
     Returns:
         The exact region consumed by the coverage stage.
     """
+    primary_failure = False
     try:
         if region is None:
             region = region_resolver(
@@ -50,6 +52,9 @@ def calculate_alignment_coverage(
             output_name="coverage",
             reference_path=plan.reference_path,
         )
+    except BaseException:
+        primary_failure = True
+        raise
     finally:
-        plan.close()
+        close_alignment_plan(plan, preserve_primary=primary_failure)
     return region

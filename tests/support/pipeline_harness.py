@@ -179,6 +179,7 @@ def _alignment_plan(*args: Any, **kwargs: Any) -> AlignmentPlan:
         reference_source="harness",
         uncovered_contigs=(),
         unmapped_scan="indexed",
+        binding=kwargs.get("binding"),
     )
 
 

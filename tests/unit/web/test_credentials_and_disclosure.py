@@ -500,6 +500,9 @@ def test_remote_header_policy_failure_survives_artifact_redis_status_transport(
     _register_failed_job(fake_redis, web_app, monkeypatch)
     output = tmp_path / "pipeline-output"
     output.mkdir()
+    alignment = tmp_path / "patient-input" / "sample.cram"
+    alignment.parent.mkdir()
+    alignment.touch()
     remote_uri = "http://127.0.0.1:8765/private/reference.fa"
     header = f"@SQ\tSN:chr7/alt\tLN:100\tUR:{remote_uri}\n"
     expected_message = (
@@ -514,7 +517,7 @@ def test_remote_header_policy_failure_survives_artifact_redis_status_transport(
         pytest.raises(ValueError, match="Remote CRAM header reference is disabled") as raised,
     ):
         prepare_input_alignment_preflight(
-            in_path=tmp_path / "patient-input" / "sample.cram",
+            in_path=alignment,
             input_type="CRAM",
             output_dir=output,
             config={"cram": {"local_ref_path": "/local/cache/%s"}},

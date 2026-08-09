@@ -131,29 +131,36 @@ def test_alignment_binding_is_released_after_coverage_and_before_archiving(tmp_p
     input_dir.mkdir()
     alignment = input_dir / "patient.bam"
     alignment.write_bytes(b"patient alignment")
-    binding = AlignmentBinding(str(alignment))
-    plan = replace(_plan(out, "bam"), input_path=str(alignment), binding=binding)
-    Path(plan.view_path).parent.mkdir(parents=True)
-    binding.install_view(plan.view_path)
+    bindings: list[AlignmentBinding] = []
     open_state_at_archive: list[bool] = []
     view_state_at_archive: list[bool] = []
 
+    def return_bound_plan(*args: object, **kwargs: object) -> AlignmentPlan:
+        del args
+        binding = kwargs["binding"]
+        assert isinstance(binding, AlignmentBinding)
+        bindings.append(binding)
+        return replace(
+            _plan(out, "bam"),
+            input_path=str(alignment),
+            view_path=str(kwargs["bound_view_path"]),
+            binding=binding,
+        )
+
     def observe_archive(*args: object, **kwargs: object) -> str:
         del args, kwargs
+        binding = bindings[0]
         open_state_at_archive.append(binding.is_open)
-        view_state_at_archive.append(os.path.lexists(plan.view_path))
+        view_state_at_archive.append(os.path.lexists(binding.view_path or ""))
         return str(tmp_path / "out.zip")
 
-    try:
-        with mock.patch.object(pipeline, "create_safe_archive", side_effect=observe_archive):
-            harness = run_pipeline_under_harness(
-                out,
-                archive_results=True,
-                stage_side_effects={"run_preflight": lambda *args, **kwargs: plan},
-                bam=str(alignment),
-            )
-    finally:
-        binding.close()
+    with mock.patch.object(pipeline, "create_safe_archive", side_effect=observe_archive):
+        harness = run_pipeline_under_harness(
+            out,
+            archive_results=True,
+            stage_side_effects={"run_preflight": return_bound_plan},
+            bam=str(alignment),
+        )
 
     assert harness.error is None
     assert open_state_at_archive == [False]

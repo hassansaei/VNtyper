@@ -370,6 +370,9 @@ def test_an_unreadable_bam_header_still_fails_the_header_parsing_step(tmp_path: 
 
     assert isinstance(harness.error, SystemExit)
     assert harness.stages["extract_bam_header"].called, "the BAM branch did not re-read the header"
+    assert harness.stages["extract_bam_header"].call_args.args[0] == str(
+        harness.output_dir / "fastq_bam_processing" / "input.bam"
+    )
 
 
 def test_fastq_input_is_not_guarded(tmp_path: Path) -> None:

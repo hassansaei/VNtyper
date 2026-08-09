@@ -17,6 +17,9 @@ def test_unreadable_cram_header_cannot_bypass_remote_uri_or_assembly_guards(tmp_
     """CRAM policy cannot proceed when the header needed to enforce it is absent."""
     output = tmp_path / "run-output"
     output.mkdir()
+    alignment = tmp_path / "patient-input" / "sample.cram"
+    alignment.parent.mkdir()
+    alignment.touch()
 
     with (
         mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value=None),
@@ -27,7 +30,7 @@ def test_unreadable_cram_header_cannot_bypass_remote_uri_or_assembly_guards(tmp_
         pytest.raises(ValueError, match="CRAM header could not be read"),
     ):
         prepare_input_alignment_preflight(
-            in_path=tmp_path / "patient-input" / "sample.cram",
+            in_path=alignment,
             input_type="CRAM",
             output_dir=output,
             config={},

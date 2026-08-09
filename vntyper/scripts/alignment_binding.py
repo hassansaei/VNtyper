@@ -49,6 +49,11 @@ class AlignmentBinding:
         """Return whether the bound descriptor is still available to consumers."""
         return self._descriptor is not None
 
+    @property
+    def view_path(self) -> str | None:
+        """Return the installed run-local view path, when present."""
+        return str(self._view_path) if self._view_path is not None else None
+
     def _temporary_view_path(self, destination: Path) -> Path:
         for _ in range(100):
             temporary = destination.parent / f".{destination.name}.{secrets.token_hex(8)}.tmp"

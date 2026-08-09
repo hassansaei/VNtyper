@@ -171,15 +171,11 @@ def run_pipeline(
             archive_format,
         )
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        if input_type == "BAM":
-            validate_bam_file(bam, cwd=project_root, log_dir=output_dir)
-        elif input_type == "CRAM":
-            validate_bam_file(cram, cwd=project_root, log_dir=output_dir)
-        elif input_type == "FASTQ":
+        if input_type == "FASTQ":
             validate_fastq_file(fastq1)
             if fastq2:
                 validate_fastq_file(fastq2)
-        else:
+        elif input_type not in {"BAM", "CRAM"}:
             logger.error("No supported input was provided.")
             raise ValueError("No supported input was provided.")
 
@@ -198,6 +194,8 @@ def run_pipeline(
                 custom_regions=custom_regions,
                 reference_fasta=reference_fasta,
                 fast_mode=fast_mode,
+                alignment_validator=validate_bam_file,
+                validation_cwd=project_root,
             )
             alignment_header = prepared.alignment_header
             bed_file_path = prepared.bed_file
@@ -254,10 +252,8 @@ def run_pipeline(
 
             if input_type == "BAM":
                 header_parse_start = datetime.now(timezone.utc).replace(tzinfo=None)
-                # Reuse the header the guard already read: one samtools invocation, not
-                # two. If the guard could not read it, re-read here so that a samtools
-                # failure still ends the run exactly as it did before the guard existed.
-                header = alignment_header if alignment_header is not None else extract_bam_header(bam, config)
+                # Re-read a failed guard from the same proven alignment view.
+                header = alignment_header or extract_bam_header(alignment_plan.view_path, config)
                 parse_header_pipeline_info(header, Path(dirs["fastq_bam_processing"]), config)
                 header_parse_end = datetime.now(timezone.utc).replace(tzinfo=None)
                 record_step(

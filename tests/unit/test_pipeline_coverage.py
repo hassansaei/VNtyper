@@ -88,3 +88,38 @@ def test_region_resolution_failure_still_releases_the_alignment_binding(tmp_path
         assert not view.exists()
     finally:
         plan.close()
+
+
+def test_coverage_failure_is_not_replaced_by_cleanup_failure(tmp_path: Path) -> None:
+    """The stage diagnostic is primary; binding cleanup is secondary while it propagates."""
+
+    class CleanupFailingPlan(AlignmentPlan):
+        def close(self) -> None:
+            raise RuntimeError("cleanup failure")
+
+    plan = CleanupFailingPlan(
+        input_path="/input/patient.bam",
+        view_path="/run/input.bam",
+        file_format="bam",
+        index_path="/run/input.bam.bai",
+        reference_path=None,
+        reference_source="not-required",
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+    )
+
+    def fail_coverage(**kwargs: object) -> None:
+        del kwargs
+        raise ValueError("primary coverage failure")
+
+    with pytest.raises(ValueError, match="primary coverage failure"):
+        calculate_alignment_coverage(
+            plan=plan,
+            region="chr1:10-20",
+            reference_assembly="hg19",
+            threads=2,
+            config={},
+            output_dir=str(tmp_path / "coverage"),
+            coverage_calculator=fail_coverage,
+            region_resolver=lambda **kwargs: "unused",
+        )

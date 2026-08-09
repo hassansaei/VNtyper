@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
 from vntyper.scripts import preflight_error_io as error_io
+from vntyper.scripts.alignment_binding import AlignmentBinding
 from vntyper.scripts.alignment_contract import AlignmentPlan, preflight_error_payload
 from vntyper.scripts.alignment_preflight import (
     pin_reference_resolution,
@@ -140,18 +142,27 @@ def prepare_alignment_target(
         FileNotFoundError: If an operator-provided BED does not exist.
         ValueError: If a generated target is absent or malformed.
     """
+    input_path = bam if input_type == "BAM" else cram if input_type == "CRAM" else None
+    file_format = input_type.lower() if input_path is not None else None
     if bed_file:
         bed_file_path = Path(bed_file)
         if not bed_file_path.exists():
             logger.error(f"Provided BED file does not exist: {bed_file_path}")
             raise FileNotFoundError(f"BED file not found: {bed_file_path}")
-        read_bounded_regular_text(
+        bed_text = read_bounded_regular_text(
             bed_file_path,
             max_bytes=configured_preflight_text_limit(config),
             description="alignment target BED",
         )
-        logger.info(f"Using provided BED file: {bed_file_path}")
-        return bed_file_path
+        owned_bed_path = Path(output_dir) / "operator_regions.bed"
+        install_generated_bed(
+            owned_bed_path,
+            bed_text,
+            input_path=input_path,
+            file_format=file_format,
+        )
+        logger.info(f"Materialized provided BED file for this run: {owned_bed_path}")
+        return owned_bed_path
 
     if custom_regions:
         bed_file_path = Path(output_dir) / "custom_regions.bed"
@@ -180,8 +191,6 @@ def prepare_alignment_target(
         bed_file_path = Path(output_dir) / f"predefined_regions_{reference_assembly}.bed"
         description = "Predefined regions"
 
-    input_path = bam if input_type == "BAM" else cram if input_type == "CRAM" else None
-    file_format = input_type.lower() if input_path is not None else None
     install_generated_bed(
         bed_file_path,
         format_regions_as_bed(regions),
@@ -273,8 +282,10 @@ def prepare_input_alignment_preflight(
     custom_regions: str | None,
     reference_fasta: str | Path | None,
     fast_mode: bool,
+    alignment_validator: Callable[..., object] | None = None,
+    validation_cwd: str | None = None,
 ) -> PreparedAlignmentPreflight:
-    """Own header, target and proof preparation immediately after validation.
+    """Bind the input, then own validation, header, target and proof preparation.
 
     Args:
         in_path: Validated BAM or CRAM input path.
@@ -287,6 +298,8 @@ def prepare_input_alignment_preflight(
         custom_regions: Operator-provided comma-separated regions, when present.
         reference_fasta: Explicit CRAM reference candidate, when supplied.
         fast_mode: Whether downstream processing permits any htslib index.
+        alignment_validator: Quickcheck-compatible alignment validation callable.
+        validation_cwd: Working directory for the validation subprocess.
 
     Returns:
         The reusable header, exact BED, proven plan, and REF_PATH restoration token.
@@ -302,12 +315,21 @@ def prepare_input_alignment_preflight(
     failure_context = error_io.PreflightErrorContext(output_dir)
     with error_io.persist_preflight_failure(failure_context):
         previous_ref_path = None
+        binding: AlignmentBinding | None = None
         if is_cram:
             failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
             previous_ref_path = pin_reference_resolution(config)
         try:
+            file_format = input_type.lower()
+            stage_dir = Path(output_dir) / "fastq_bam_processing"
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            bound_view = stage_dir / f"input.{file_format}"
+            binding = AlignmentBinding(input_path)
+            binding.install_view(bound_view)
+            if alignment_validator is not None:
+                alignment_validator(str(bound_view), cwd=validation_cwd, log_dir=str(output_dir))
             failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
-            alignment_header = read_alignment_header(input_path, config)
+            alignment_header = read_alignment_header(str(bound_view), config)
             if input_type == "CRAM":
                 if alignment_header is None:
                     message = (
@@ -329,8 +351,8 @@ def prepare_input_alignment_preflight(
             failure_context.phase = error_io.TARGET_PREPARATION_FAILURE
             exact_bed = prepare_alignment_target(
                 input_type=input_type,
-                bam=input_path if input_type == "BAM" else None,
-                cram=input_path if input_type == "CRAM" else None,
+                bam=str(bound_view) if input_type == "BAM" else None,
+                cram=str(bound_view) if input_type == "CRAM" else None,
                 output_dir=output_dir,
                 reference_assembly=reference_assembly,
                 config=config,
@@ -338,7 +360,7 @@ def prepare_input_alignment_preflight(
                 custom_regions=custom_regions,
             )
             coverage_region = get_region_string_with_fallback(
-                bam_file=input_path,
+                bam_file=str(bound_view),
                 reference_assembly=reference_assembly,
                 region_type="vntr_region",
                 config=config,
@@ -360,8 +382,15 @@ def prepare_input_alignment_preflight(
                     error_output_dir=output_dir,
                 ),
                 failure_context=failure_context,
+                binding=binding,
+                bound_view_path=str(bound_view),
             )
         except BaseException:
+            if binding is not None and binding.is_open:
+                try:
+                    binding.close()
+                except Exception:
+                    logger.exception("Alignment binding cleanup failed while preserving preflight failure.")
             if is_cram:
                 restore_reference_resolution(previous_ref_path)
             raise

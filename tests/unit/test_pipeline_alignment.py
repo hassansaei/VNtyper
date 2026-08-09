@@ -8,6 +8,8 @@ from unittest import mock
 
 import pytest
 
+from vntyper.scripts.alignment_binding import AlignmentBinding
+from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.alignment_preflight import resolve_reference
 from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
@@ -39,6 +41,8 @@ def test_format_regions_as_bed_rejects_a_malformed_region() -> None:
 
 def test_prepare_alignment_target_keeps_a_provided_bed_byte_identical(tmp_path: Path) -> None:
     provided = tmp_path / "provided.bed"
+    output = tmp_path / "output"
+    output.mkdir()
     original = b"chr1\t10\t20\n# operator annotation\n"
     provided.write_bytes(original)
 
@@ -46,15 +50,59 @@ def test_prepare_alignment_target_keeps_a_provided_bed_byte_identical(tmp_path: 
         input_type="BAM",
         bam="/input/sample.bam",
         cram=None,
-        output_dir=tmp_path / "output",
+        output_dir=output,
         reference_assembly="hg19",
         config={},
         bed_file=provided,
         custom_regions=None,
     )
 
-    assert result == provided
+    assert result == output / "operator_regions.bed"
+    assert result.read_bytes() == original
     assert provided.read_bytes() == original
+
+
+def test_operator_bed_is_materialized_once_and_rerun_refreshes_only_the_owned_copy(tmp_path: Path) -> None:
+    """Replacing the operator path after target preparation must not retarget later consumers."""
+    output = tmp_path / "output"
+    output.mkdir()
+    provided = tmp_path / "provided.bed"
+    first_bytes = "chr1\t10\t20\r\n# café\r\n".encode()
+    second_bytes = b"chr2\t30\t40\n"
+    provided.write_bytes(first_bytes)
+
+    first_target = prepare_alignment_target(
+        input_type="BAM",
+        bam="/input/sample.bam",
+        cram=None,
+        output_dir=output,
+        reference_assembly="hg19",
+        config={},
+        bed_file=provided,
+        custom_regions=None,
+    )
+    replacement = tmp_path / "replacement.bed"
+    replacement.write_bytes(second_bytes)
+    replacement.replace(provided)
+
+    assert first_target != provided
+    assert first_target.read_bytes() == first_bytes
+    assert provided.read_bytes() == second_bytes
+
+    second_target = prepare_alignment_target(
+        input_type="BAM",
+        bam="/input/sample.bam",
+        cram=None,
+        output_dir=output,
+        reference_assembly="hg19",
+        config={},
+        bed_file=provided,
+        custom_regions=None,
+    )
+
+    assert second_target == first_target
+    assert second_target.read_bytes() == second_bytes
+    assert not tuple(output.glob(".*.tmp"))
 
 
 def test_prepare_alignment_target_rejects_a_missing_provided_bed(tmp_path: Path) -> None:
@@ -411,6 +459,85 @@ def test_input_alignment_preflight_rejects_a_non_alignment_type_before_pinning(t
     pin.assert_not_called()
 
 
+def test_input_alignment_binding_precedes_validation_and_survives_source_replacement(tmp_path: Path) -> None:
+    """Every evidence reader must consume the inode opened before quickcheck, not its mutable source name."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    source = tmp_path / "patient-input" / "sample.bam"
+    source.parent.mkdir()
+    source.write_bytes(b"alignment-A")
+    replacement = tmp_path / "replacement.bam"
+    replacement.write_bytes(b"alignment-B")
+    seen_view: list[str] = []
+
+    def validate_bound(path: str, *, cwd: str | None, log_dir: str | None) -> None:
+        assert cwd == "/project"
+        assert log_dir == str(output)
+        assert Path(path).read_bytes() == b"alignment-A"
+        seen_view.append(path)
+        replacement.replace(source)
+
+    def read_bound_header(path: str, config: dict) -> str:
+        del config
+        assert path == seen_view[0]
+        assert Path(path).read_bytes() == b"alignment-A"
+        return "@SQ\tSN:chr1\tLN:249250621\n"
+
+    def resolve_bound_region(*args: object, **kwargs: object) -> str:
+        del args
+        assert kwargs["bam_file"] == seen_view[0]
+        assert Path(str(kwargs["bam_file"])).read_bytes() == b"alignment-A"
+        return "chr1:10-20"
+
+    def finish_preflight(**kwargs: object) -> AlignmentPlan:
+        binding = kwargs["binding"]
+        assert isinstance(binding, AlignmentBinding)
+        assert binding.is_open
+        assert kwargs["in_path"] == str(source)
+        assert kwargs["bound_view_path"] == seen_view[0]
+        return AlignmentPlan(
+            input_path=str(source),
+            view_path=seen_view[0],
+            file_format="bam",
+            index_path=f"{seen_view[0]}.bai",
+            reference_path=None,
+            reference_source="not-required",
+            uncovered_contigs=(),
+            unmapped_scan="indexed",
+            binding=binding,
+        )
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", side_effect=read_bound_header),
+        mock.patch(
+            "vntyper.scripts.pipeline_alignment.get_region_string_with_fallback",
+            side_effect=resolve_bound_region,
+        ),
+        mock.patch("vntyper.scripts.pipeline_alignment.run_preflight", side_effect=finish_preflight),
+    ):
+        prepared = prepare_input_alignment_preflight(
+            in_path=source,
+            input_type="BAM",
+            output_dir=output,
+            config={},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions="chr1:10-20",
+            reference_fasta=None,
+            fast_mode=False,
+            alignment_validator=validate_bound,
+            validation_cwd="/project",
+        )
+
+    try:
+        assert source.read_bytes() == b"alignment-B"
+        assert Path(prepared.plan.view_path).read_bytes() == b"alignment-A"
+        assert prepared.bed_file.read_bytes() == b"chr1\t10\t20\n"
+    finally:
+        prepared.plan.close()
+
+
 def test_input_alignment_header_failure_has_a_stable_artifact_and_restores_ref_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -418,6 +545,9 @@ def test_input_alignment_header_failure_has_a_stable_artifact_and_restores_ref_p
     """Assembly/header rejection belongs to a curated outer preflight phase."""
     output = tmp_path / "run-output"
     output.mkdir()
+    input_path = tmp_path / "patient-input" / "sample.bam"
+    input_path.parent.mkdir()
+    input_path.touch()
     monkeypatch.setenv("REF_PATH", "operator-value")
 
     with (
@@ -430,7 +560,7 @@ def test_input_alignment_header_failure_has_a_stable_artifact_and_restores_ref_p
         pytest.raises(ValueError, match="private assembly detail"),
     ):
         prepare_input_alignment_preflight(
-            in_path=tmp_path / "patient-input" / "sample.bam",
+            in_path=input_path,
             input_type="BAM",
             output_dir=output,
             config={"cram": {"local_ref_path": "/local/cache/%s"}},
@@ -463,6 +593,9 @@ def test_default_cram_remote_header_uri_fails_at_the_owned_policy_boundary_befor
     monkeypatch.setenv("REF_PATH", "operator-value")
     remote_uri = "http://127.0.0.1:8765/private/reference.fa"
     header = f"@SQ\tSN:chr7\tLN:100\tUR:{remote_uri}\n"
+    input_path = tmp_path / "patient-input" / "sample.cram"
+    input_path.parent.mkdir()
+    input_path.touch()
 
     with (
         mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value=header),
@@ -473,7 +606,7 @@ def test_default_cram_remote_header_uri_fails_at_the_owned_policy_boundary_befor
         pytest.raises(ValueError) as raised,
     ):
         prepare_input_alignment_preflight(
-            in_path=tmp_path / "patient-input" / "sample.cram",
+            in_path=input_path,
             input_type="CRAM",
             output_dir=output,
             config={"cram": {"local_ref_path": "/local/cache/%s"}},
@@ -548,6 +681,9 @@ def test_outer_boundary_preserves_the_inner_structured_reference_payload(tmp_pat
     output.mkdir()
     bed = tmp_path / "target.bed"
     bed.write_text("chr1\t10\t20\n", encoding="utf-8")
+    input_path = tmp_path / "patient-input" / "sample.cram"
+    input_path.parent.mkdir()
+    input_path.touch()
     payload = {
         "code": "reference_unresolved",
         "message": "curated reference failure",
@@ -572,7 +708,7 @@ def test_outer_boundary_preserves_the_inner_structured_reference_payload(tmp_pat
         pytest.raises(RuntimeError, match="private probe detail"),
     ):
         prepare_input_alignment_preflight(
-            in_path=tmp_path / "patient-input" / "sample.cram",
+            in_path=input_path,
             input_type="CRAM",
             output_dir=output,
             config={},

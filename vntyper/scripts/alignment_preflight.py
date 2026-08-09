@@ -121,13 +121,12 @@ def build_alignment_view(
     threads: int,
     *,
     bai_only: bool = False,
+    binding: AlignmentBinding | None = None,
+    bound_view_path: str | Path | None = None,
 ) -> tuple[str, str, AlignmentBinding]:
     """Create a run-local alignment symlink and a freshly built co-located index.
 
-    Supplied indexes are enumerated only as protected patient inputs. BAI, CRAI,
-    and CSI do not bind themselves to the alignment bytes, so even a structurally
-    valid wrong-sample index can return an empty slice with exit status zero. The
-    run-local index is therefore rebuilt from the view before any indexed proof.
+    Supplied indexes are protected but never trusted; the run-local index is rebuilt.
 
     Args:
         in_path: Input BAM or CRAM path.
@@ -137,9 +136,8 @@ def build_alignment_view(
         config: Pipeline configuration; missing tool configuration uses ``samtools``.
         threads: Thread count for an index build.
         bai_only: Use the legacy BAI-only BAM preflight/protection contract.
-
-    Returns:
-        The alignment view path, its co-located index path, and descriptor binding.
+        binding: Binding installed before validation, when present.
+        bound_view_path: Early-installed view owned by ``binding``.
 
     Raises:
         RuntimeError: If samtools cannot build a missing index or does not create it.
@@ -168,11 +166,18 @@ def build_alignment_view(
         )
     log_file = output / f"{output_name}_index.log"
     _validate_log_entry(log_file, protected_paths)
-    binding = AlignmentBinding(in_path)
+    owns_new_binding = binding is None
+    if binding is None:
+        binding = AlignmentBinding(in_path)
+    elif str(bound_view_path) != str(view_path) or binding.view_path != str(view_path):
+        message = "Pre-bound alignment view does not match the preflight destination."
+        logger.error(message)
+        raise ValueError(message)
     temporary_index: Path | None = None
     try:
         output.mkdir(parents=True, exist_ok=True)
-        binding.install_view(view_path)
+        if owns_new_binding:
+            binding.install_view(view_path)
         _remove_stale_view_indexes(str(view_path), file_format, str(view_index), owned_indexes, protected_paths)
         samtools_path = config.get("tools", {}).get("samtools", "samtools")
         descriptor, temporary_name = tempfile.mkstemp(
@@ -503,6 +508,8 @@ def run_preflight(
     fast_mode: bool = False,
     error_output_dir: str | Path | None = None,
     failure_context: error_io.PreflightErrorContext | None = None,
+    binding: AlignmentBinding | None = None,
+    bound_view_path: str | Path | None = None,
 ) -> AlignmentPlan:
     """Resolve and prove every alignment prerequisite used by later stages.
 
@@ -523,11 +530,9 @@ def run_preflight(
         header_m5s: Header contig and M5 pairs for terminal stream diagnostics.
         fast_mode: Whether downstream BAM processing can use any htslib index.
         error_output_dir: Run output root for the curated failure artifact.
-        failure_context: Optional outer-owned failure context. When absent, this
-            function retains its direct-call persistence behavior.
-
-    Returns:
-        A frozen plan whose index, scan, and CRAM reference have been exercised.
+        failure_context: Optional outer-owned failure context.
+        binding: Binding installed before pipeline validation, when present.
+        bound_view_path: Run-local view already owned by ``binding``.
 
     Raises:
         RuntimeError: If an indexed BAM cannot retrieve the requested target.
@@ -576,6 +581,8 @@ def run_preflight(
             config,
             threads,
             bai_only=bai_only,
+            binding=binding,
+            bound_view_path=bound_view_path,
         )
         try:
             unmapped_scan = "not-required"
