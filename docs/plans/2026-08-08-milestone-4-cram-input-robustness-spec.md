@@ -1,11 +1,11 @@
 # Milestone 4 — CRAM and input robustness
 
 **Status:** H1/H2/H3 and the final binding, evidence-mode and archive follow-ups are
-integrated and independently reviewed. Final performance is recorded below; the combined
-no-HIGH verdict remains the last explicit close-out item.
+integrated and independently reviewed. The final-candidate performance rerun and combined
+no-HIGH verdict remain the explicit close-out items.
 **Branch:** `fix/milestone-4-cram-input-robustness`
 **Closes:** #213, #225, #209, #178, #165, #161
-**Date:** 2026-08-08
+**Date:** 2026-08-09
 
 ---
 
@@ -288,8 +288,10 @@ samtools view -c -T full.fa -X in/s.cram out/s.cram.crai chr1:4900-5100
 Same result for BAM with a relocated `.bai`. **Putting the index path in a plan object
 does not make htslib find it.** Either every random-retrieval command carries
 `-X <alignment> <index>`, or the alignment and its index are made co-located by some
-means that does not write to the input tree. §4.1a takes the second route, because
-`samtools idxstats` — which §4.3(b) depends on — has no `-X` option at all:
+means that does not write to the input tree. §4.1a combines both routes: co-location
+during preflight, then an inode-retained index passed with `-X` to post-preflight
+random-access consumers. `samtools idxstats` — which §4.3(b) depends on — has no `-X`
+option at all:
 
 ```
 samtools idxstats -X in/s.cram out/s.cram.crai
@@ -318,7 +320,7 @@ noticed. It is correct behaviour — a resolvable `UR:` *is* a working reference
 makes candidate 4 succeed for reasons that have nothing to do with candidates 1–3, and
 any test of this path must suppress it.
 
-### 3.11 `idxstats` proves the indexed scan is lossless, from the index alone
+### 3.11 `idxstats` is necessary but not sufficient to prove the indexed scan
 
 `samtools view -f 4 <alignment> '*'` returns *unplaced* read-unmapped records. A flag-4
 read that is nonetheless *placed* would be missed. That is a silent-data-loss risk for
@@ -335,10 +337,24 @@ chr2  20000  301  0
 *     0      0    4000
 ```
 
-**If column 4 sums to zero across every contig, no placed unmapped read exists, so `'*'`
-provably recovers every flag-4 read in the file.** That is a per-run proof, not an
-assumption. When it is non-zero the run falls back to the whole-file stream scan
-automatically. §4.3(b) is rewritten around this.
+Column 4 summing to zero proves that no *placed* unmapped read exists, but the final
+adversarial review found that it does **not** prove htslib's literal-`'*'` fetch returns
+every record represented by the terminal `*` row. A fresh zero-placed CRAM and CRAI
+derived from the registered 7a61 alignment measured:
+
+```
+idxstats placed-unmapped sum       0
+idxstats terminal-* count          622690
+whole-file view -c -f 4            622690
+literal-'*' view -c -f 4           2690
+```
+
+The old rule would therefore have authorised a successful indexed run that silently lost
+620,000 records. The final per-run proof has two parts: column 4 must sum to zero **and**
+the exact literal-`'*'`/flag-4 consumer count must succeed and equal the terminal-`*`
+`idxstats` count. Any missing, malformed or unequal second half selects stream in `auto`;
+forced `indexed` rejects causally. A malformed or failed `idxstats` itself retains the
+older fail-closed rule and selects stream (A-SCAN-2).
 
 
 ### 3.12 Historical pathname-symlink view measurement (superseded)
@@ -365,8 +381,10 @@ Three things this settles:
 1. **`samtools index` does not follow the symlink when choosing where to write.** So the
    view needs no `-o` and cannot write into the input tree even by accident — the
    milestone-3 invariant is preserved by the mechanism rather than by remembering a flag.
-2. **`-X` is not needed anywhere.** Co-location is restored, so no builder grows an index
-   argument and `idxstats` — which has no `-X` — works.
+2. **Historical result: `-X` was not needed for this pathname view.** Co-location made
+   the measured commands work, including `idxstats`. §3.15 supersedes the conclusion for
+   post-preflight random access: a public co-located index name can be replaced, so those
+   consumers now use the retained inode explicitly with `-X`.
 3. **A co-located source index is mechanically usable through the view.** This original
    measurement established visibility, but §3.15 later proved that filename and htslib
    acceptance do not establish that the index belongs to the alignment. The final design
@@ -389,8 +407,9 @@ samtools idxstats placed.cram            -> chr1 20000 600 50   /   * 0 0 80
 **The indexed scan would have silently dropped 50 of 130 reads on this file, and column 4
 reports exactly those 50 — identically for BAM and CRAM.** Every flag-12 record in this
 fixture is also flag 4; §3.14 adds the single-end evidence that makes flag 4 the production
-contract. So `sum(col4) > 0` is a correct trigger, and `sum(col4) == 0` is a correct proof
-that `'*'` is complete.
+contract. So `sum(col4) > 0` is a correct placed-read loss trigger. The historical
+conclusion that `sum(col4) == 0` alone proves `'*'` complete is superseded by §3.11's
+exact literal-`'*'`/terminal-`*` count comparison.
 
 Two further properties, both measured:
 
@@ -445,6 +464,18 @@ has no reads here” from “this index belongs to another sample.” BAI/CSI/CR
 binding to the alignment bytes that VNtyper can authenticate. The run-local view must
 always receive an index freshly built from that view; a supplied index is protected as
 patient input but never trusted as proof.
+
+The final review then replaced the **fresh public run-local BAI pathname after preflight**
+with that same valid wrong-sample BAI. A later slice which let htslib rediscover the
+co-located name again returned 0 with exit 0. Preflight freshness is therefore insufficient
+unless later consumers remain bound to the generated inode. The corrected binding opens
+the temporary BAI/CRAI before atomic publication and retains it through coverage. With the
+visible BAI replaced, explicit `samtools view -X <view> <retained-index>` still returned
+29,736 target records and `samtools depth -X` returned 5,001 rows; removing `-X` reproduced
+the silent zero-record result. `idxstats` has no `-X` in shipped samtools 1.20, so it remains
+inside preflight while the co-located fresh index is still owned; every post-preflight
+random-access `view` and `depth` consumer receives the retained index explicitly. The
+whole-file stream scan intentionally uses no index.
 
 ### 3.16 A target proof does not prove a whole-file stream
 
@@ -602,14 +633,17 @@ Every ordinary failure in the boundary shares one curated-error context; a CRAM'
 `REF_PATH` is restored even for `BaseException`. `process_bam_to_fastq` consumes the plan
 instead of rediscovering its contents.
 
-`fastq_bam_processing.py` is 649 LOC against a ~650 guideline, and AGENTS.md rule 3 says
+`fastq_bam_processing.py` was 649 LOC at the design point against a ~650 guideline, and AGENTS.md rule 3 says
 to extract the region under change rather than grow the file. So the decisions go into
 new **pure** modules and only the subprocess calls stay behind I/O:
 
 | Module | Kind | Owns |
 | --- | --- | --- |
 | `alignment_contract.py` | contract | what each format requires; the `AlignmentPlan` dataclass, including its lifetime-owned `binding` and `close()`; the text of every failure message |
-| `alignment_binding.py` | I/O lifetime | opens the regular alignment once; installs the procfd view or verified hardlink fallback; removes the exact owned view before releasing its FD |
+| `alignment_binding.py` | I/O lifetime | opens the regular alignment once; installs the procfd view or verified hardlink fallback; owns the generated-index binding; removes exact owned entries before releasing their FDs |
+| `alignment_index_binding.py` | I/O lifetime | opens the fresh temporary BAI/CRAI before publication and retains its exact inode through a procfd path or verified hardlink fallback |
+| `alignment_consumer_commands.py` | pure | builds slice and unmapped commands from one `AlignmentPlan`, including its retained index and proven reference |
+| `samtools_command_fragments.py` | pure | quotes paths and builds shared thread, reference and explicit-index command fragments |
 | `reference_resolution.py` | pure | validated ordered candidate mapping and known or unavailable FASTA contig coverage |
 | `reference_uri_policy.py` | pure | remote-scheme detection and path-free CRAM header-URI policy |
 | `idxstats_parsing.py` | pure | parse captured `idxstats` text and fail closed to a lossless scan decision |
@@ -626,25 +660,30 @@ new **pure** modules and only the subprocess calls stay behind I/O:
 | `archive_safety.py` | archive I/O | creates/clears archives through descriptor-anchored paths, refusing aliases and unsafe source entries |
 | `docker/app/archive_delivery.py` | web delivery I/O | opens completed archives through trusted descriptors, streams bound files, and snapshots cohort inputs before worker consumption |
 
-The five pure modules are unit-testable with no filesystem and are held to the ~100%
+The seven pure modules are unit-testable with no filesystem and are held to the ~100%
 branch coverage the existing pure modules (`scoring.py`, `region_utils.py`,
 `cohort_rules.py`) already meet.
 
 `fastq_bam_processing.py` measured **649 lines** at the design point, not the 612 in
 AGENTS.md's older snapshot table. It was therefore already at the ~650 guideline before
-this milestone added a line, so the changes were net-negative: the final file is 632
-lines, with index/reference decisions in preflight and command construction in helpers.
+this milestone added a line, so the changes were net-negative: the final file is **625**
+lines. Final `alignment_preflight.py` is **644**, `pipeline.py` is **665**, and
+`kestrel_genotyping.py` is **865** lines; index/reference decisions and command
+construction live in focused helpers.
 
 ### 4.1a The run-local alignment view
 
 §3.9 measured that an index built into the output directory is **invisible** to
 `samtools view`; the naive reading of #225 builds an index and then fails exactly as
-before. Two mechanisms can fix that, and only one of them works everywhere:
+before. The final design deliberately combines the two available mechanisms:
 
-* `-X <alignment> <index>` on every random-retrieval command. Correct for `view`, but
-  `samtools idxstats` — which §4.3(b)'s losslessness proof depends on — **has no `-X`**
-  (measured: `idxstats: invalid option -- 'X'`).
-* Make the alignment and its index co-located somewhere writable.
+* During preflight, make the alignment view and fresh index co-located somewhere writable,
+  because `samtools idxstats` — which §4.3(b)'s losslessness proof depends on — **has no
+  `-X`** (measured: `idxstats: invalid option -- 'X'`).
+* Before publishing that fresh index, open it and retain its exact inode. Every
+  post-preflight random-access `view` or `depth` command in shipped samtools 1.20 uses
+  `-X <alignment> <retained-index>`, so replacing the public co-located name cannot retarget
+  a later consumer (§3.15).
 
 So the owned boundary first opens the input as a regular file and holds that FD in an
 `AlignmentBinding`, before quickcheck or any header/target read. It publishes a run-local
@@ -657,12 +696,13 @@ A supplied index is enumerated and protected from mutation, but it is never used
 authorise a run: §3.15 measured a valid wrong-sample BAI returning an empty slice with
 exit 0.
 
-This costs one run-local view and one index build, writes nothing to the input tree (the
-milestone-3 invariant), and makes co-location the normal case rather than a special case,
-so no builder needs an index argument and `idxstats` works. Each index and provenance file
-is installed with an atomic rename or exclusive link. The view is removed only after the
-final consumer (coverage) has returned; `AlignmentPlan.close()` removes exactly the owned
-view and then releases the descriptor. If cleanup detects replacement or fails while a
+This costs one run-local view, one index build and two retained descriptors, and writes
+nothing to the input tree (the milestone-3 invariant). Co-location lets preflight
+`idxstats` run; the retained index path binds every later consumer. Each index and
+provenance file is installed with an atomic rename or exclusive link. The view is removed
+only after the final consumer (coverage) has returned; `AlignmentPlan.close()` removes an
+exact fallback index entry when present, releases the index descriptor, removes the exact
+owned alignment view and then releases its descriptor. If cleanup detects replacement or fails while a
 pipeline failure is already active, it logs the cleanup failure and preserves the primary
 outcome; otherwise the cleanup failure is raised. A process death between index/provenance
 operations can leave an incomplete pair; the next run fails closed and names that ownership
@@ -790,13 +830,19 @@ but `'*'` returns only *unplaced* reads, so a read-unmapped record that is nonet
 placed would be dropped. The contract is flag 4, not flag 12: single-end reads do not have
 a meaningful mate-unmapped bit (§3.14). This applies to BAM and CRAM alike.
 
-§3.11 supplies the guarantee. `samtools idxstats` reports placed-unmapped counts per
-contig from the index alone, in 0.00 s. So the scan is **selected per run, from evidence**:
+§3.11 supplies the corrected guarantee. `samtools idxstats` reports placed-unmapped
+counts per contig plus the terminal-`*` count. When its table is valid and the placed sum
+is zero, preflight runs the exact literal-`'*'` flag-4 count used by indexed recovery.
+The scan is **selected per run, from both pieces of evidence**:
 
 ```
 placed_unmapped = sum(column 4 of samtools idxstats <view>)
-if placed_unmapped == 0:  indexed scan   # provably recovers every flag-4 read
-else:                     stream scan    # the O(file) form, because it is the correct one
+unplaced = terminal-* column 4 of samtools idxstats <view>
+indexed_count = samtools view -c -f 4 <view> '*'
+if placed_unmapped == 0 and indexed_count == unplaced:
+    indexed scan
+else:
+    stream scan
 ```
 
 Config-driven: both `bam.unmapped_scan` and `cram.unmapped_scan` are `auto` (default),
@@ -808,15 +854,18 @@ scan policy, run `idxstats`, or authorize a whole-file stream probe. Its plan re
 `unmapped_scan="not-required"`; normal mode retains the evidence-driven policy above.
 
 **The explicit values cannot be used to discard reads.** `indexed` forced on a file whose
-`idxstats` says reads would be lost **raises**, naming the count; it does not warn and
-continue. An earlier draft allowed it to proceed "for reproducing a historical run", which
+valid evidence says reads would be lost **raises**, naming the placed count or the exact
+literal-`'*'` discrepancy; it does not warn and continue. A failed or malformed
+`idxstats` retains A-SCAN-2's conservative stream fallback. An earlier draft allowed a
+proven-unsafe file to proceed "for reproducing a historical run", which
 would have let a configuration flag defeat the exit bar this spec opens with — a run that
 exits 0 having dropped 50 of 130 unmapped reads (§3.13) is precisely the outcome the
 milestone exists to make impossible. Reproducing a historical run is what `stream` is for;
 it is always safe, only slower.
 
 This is the difference between removing a failure mode and hiding it: the fast path is
-taken only where it is proven equivalent, and the proof costs one index read.
+taken only where it is proven equivalent, and the proof costs one index read plus the
+exact indexed count.
 
 ### 4.4 No read is silently discarded in normal-mode conversion
 
@@ -884,13 +933,16 @@ exact view identity, and refuses to remove an entry that has been replaced. Its 
 is intentionally alive until coverage, the final alignment consumer, finishes. No stale
 view is accepted as evidence for a new run.
 
-**A CRAM's `REF_PATH` scope nests and restores.** Pinning mutates `os.environ`, which is
+**A CRAM's `REF_PATH` scope is exclusive, nests and restores.** Pinning mutates `os.environ`, which is
 process-global and outlives a single `run_pipeline` call — and `run_pipeline` is imported
 and called in-process by tests and by anything embedding VNtyper as a library. The
-contract: every CRAM scope captures its own previous value (including "unset"), sets the
-pinned value, and restores that exact value in `finally`, including nested calls and a
-`BaseException`. BAM and FASTQ do not inspect this CRAM-only policy. Without that, one
-CRAM run silently reconfigures every later run in the same process.
+contract: a re-entrant process lock is acquired before inspecting or changing `REF_PATH`
+and held until restoration. Same-thread nested scopes remain LIFO; overlapping threads
+wait rather than restoring an ambient value while another CRAM is active. Every scope
+captures its own previous value (including "unset"), sets the pinned value, and restores
+that exact value in `finally`, including a `BaseException`; validation failure releases
+the lock. BAM and FASTQ do not inspect this CRAM-only policy. Without that, one CRAM run
+can silently reconfigure another run in the same process.
 
 **Every run-local index is fresh.** The candidate-name contract enumerates both spellings
 of BAI, CSI and CRAI so the outer output-safety boundary can protect every existing
@@ -900,9 +952,13 @@ consumption, and the deliberate non-fast BAM path remains BAI-only. §3.15 prove
 neither a valid container nor successful htslib retrieval binds an index to the intended
 alignment: a wrong BAI can return an empty target with exit 0. Preflight therefore builds
 BAI for BAM and CRAI for CRAM from the run-local view on every run, installs it atomically,
-and consumes only that artifact. Indexed recovery lets htslib discover the co-located
-index, removing separate
-“reuse” and “build” correctness paths.
+and opens the temporary artifact before publication. Preflight-only `idxstats` consumes
+the co-located name because samtools 1.20 offers no alternative; the returned plan owns a
+stable procfd or verified-hardlink index path, and every later random-access `view`/`depth`
+consumer uses that path explicitly with `-X`; the whole-file stream consumer needs no
+index. Replacing `AlignmentPlan.index_path` after preflight cannot retarget those
+consumers. This leaves one fresh-build correctness path and no trusted supplied-index
+path.
 
 ### 4.6 H2/H3 ownership and archive contracts
 
@@ -1288,7 +1344,7 @@ A-178-4 is the one explicit external, non-gating evidence request.
 | A-225-1 | An unindexed BAM and an unindexed CRAM both complete a region slice, with the built index never written beside the input. | integration, chmod read-only BAM+CRAM tree; Docker read-only BAM mount |
 | A-225-2 | The slice is performed through a path whose index htslib can actually find — proven by a run whose input directory contains **no** index at any point. | integration |
 | A-225-3 | After a real run over a read-only input tree, its file set and bytes are identical, for BAM and CRAM. | integration, `test_read_only_alignment_preflight.py` |
-| A-225-4 | A structurally valid BAI from a different sample cannot authorise an empty successful slice; the view rebuild returns the measured 29,736-record target. | integration |
+| A-225-4 | A structurally valid BAI from a different sample cannot authorise an empty successful slice, whether supplied before preflight or atomically installed over the public run-local BAI afterward. The retained generated index still returns the measured 29,736-record target and 5,001 coverage rows; removing the explicit bound-index argument reproduces the zero-record failure. | integration |
 | A-209-1 | A reference-dependent CRAM with its reference removed **and its `UR:` target renamed** is rejected before any stage runs, with a message naming the contig, its `M5` and every candidate tried. | integration |
 | A-209-2 | The same CRAM with `--reference-fasta` pointed at its reference runs to completion. | integration |
 | A-209-3 | A `no_ref=1` CRAM runs to completion with no reference supplied, and its commands carry no `-T`. | unit + golden cohort |
@@ -1296,15 +1352,16 @@ A-178-4 is the one explicit external, non-gating evidence request.
 | A-209-5 | Coverage (`samtools depth`) on a reference-dependent CRAM carries the same reference the slice used. | unit + integration |
 | A-209-6 | A reference path containing a space or a shell metacharacter is quoted, not executed. | unit |
 | A-178-1 | With ambient resolution explicitly enabled, a 0.25 s probe deadline and `REF_PATH` pointed at an endpoint that accepts TCP and never responds, the CRAM run reports that 0.25 s timeout and exits within the test's 5 s outer bound. The assertion is limited to the bounded probe; it does not claim later opt-in stages have a general timeout. | integration |
-| A-178-2 | For every golden-cohort CRAM sample that preflight authorises for both strategies, indexed and stream produce the **same read set** (`samtools view -c` plus sorted read-name digest). When placed-unmapped evidence makes indexed unsafe, forced indexed rejects before work with the declared `idxstats` column-four guard count, and the gate separately records the stream read set plus the raw indexed loss; it never accepts an unrelated exit or bypasses the guard to manufacture equality. | golden cohort |
+| A-178-2 | For every golden-cohort CRAM sample that preflight authorises for both strategies, indexed and stream produce the **same read set** (`samtools view -c` plus sorted read-name digest). Authorisation requires zero placed-unmapped records and equality between the exact literal-`'*'` flag-4 count and the terminal-`*` `idxstats` count. When either valid evidence source makes indexed unsafe, forced indexed rejects before work with the causal count diagnostic, and the gate separately records the stream read set plus the raw indexed loss; it never accepts an unrelated exit or bypasses the guard to manufacture equality. | golden cohort |
 | A-178-4 | The #178 reporter, on a post-#213 image, supplies `docker logs`; the stage the run reaches is recorded here. This is an evidence request, not a code change, and it does not gate the PR. | issue thread |
 | A-178-5 | With ambient resolution disabled/default, a reference-dependent CRAM reheadered with remote-first/local-last duplicate localhost `UR` values is rejected immediately after header read with a path-free contig/scheme diagnostic copied exactly into its `reference_policy_invalid` artifact, no network connection and no captured command. Every duplicate is inspected; anchored remote schemes work with or without `//`; local, relative and `file:` values remain accepted. Only actual boolean `true` is the ambient waiver; strings, numbers and null fail before header work. | unit + integration |
 | A-SCAN-1 | On BAM and CRAM containing placed read-unmapped records, `auto` selects `stream` and recovers every flag-4 read, including single-end reads; forcing `indexed` **raises** naming the count rather than dropping them. | unit + integration fixture |
 | A-SCAN-2 | A malformed, empty or non-zero-exit `idxstats` selects `stream`, never `indexed`. | unit |
 | A-SCAN-3 | In non-fast mode the target slice excludes flag 4 before merging with complete recovery; on the registered `b178` single-end fixture the merged BAM has exactly the source's 4,807-record sorted-QNAME multiset, not the duplicated 5,136-record set. Fast mode remains unchanged. | unit + integration |
 | A-SCAN-4 | A nonempty one-SQ BAM containing five all-unplaced flag-4 records selects indexed recovery and completes with the exact five-record sorted-QNAME multiset in recovery and final BAMs. | integration, purpose-built fixture |
-| A-VIEW-1 | The owned boundary opens the alignment before quickcheck, header/URI/assembly, target or coverage-region reads. Every proof and processing consumer uses the atomically published procfd view, or verified same-filesystem hardlink fallback, of that exact inode. The binding survives through coverage and removes that exact view before closing its FD. | unit + lifecycle integration |
-| A-VIEW-2 | `REF_PATH` holds its original value (including unset) after normal return, a raised `BaseException`, and nested CRAM scopes; cleanup failure never replaces an already-active pipeline outcome. | unit |
+| A-SCAN-5 | A valid zero-placed CRAM whose terminal-`*` count is 622,690 but whose literal-`'*'` flag-4 fetch returns only 2,690 selects stream in `auto`; forcing indexed rejects rather than losing 620,000 reads. | unit + real registered-fixture integration |
+| A-VIEW-1 | The owned boundary opens the alignment before quickcheck, header/URI/assembly, target or coverage-region reads, and opens the fresh generated index before publishing it. Every proof and processing consumer uses the exact bound alignment; every post-preflight random-access consumer uses the retained index through explicit `-X`. Both bindings survive through coverage and remove exact owned fallback entries before closing their FDs. | unit + lifecycle integration |
+| A-VIEW-2 | `REF_PATH` holds its original value (including unset) after normal return, a raised `BaseException`, and nested CRAM scopes; overlapping in-process CRAM threads are serialized for the full pin/restore scope; cleanup failure never replaces an already-active pipeline outcome. | unit |
 | A-OWN-1 | Pipeline outputs and CLI logs are exclusive regular files and do not lexically, resolvedly or by inode alias operator input; symlinks, hardlinks and special entries are refused before writers create/open them. Captured preflight logs refuse protected aliases and directories without following them, and atomically replace an unrelated stale final entry. | unit |
 | A-ARCHIVE-1 | The archive base is invariant under trailing output separators; reports precede archiving; the bound view is removed before traversal; and CLI and web use the same descriptor-anchored archive writer. | unit + web tier |
 | A-ARCHIVE-2 | Archive traversal uses `O_NOFOLLOW` descriptors and rejects symlink, hardlink and special-file entries without reading through them. Failed public-archive cleanup rolls back when safe or leaves a named quarantine. | unit + web tier |
@@ -1560,16 +1617,18 @@ tie rule; #161 defines `mixed` as rejected and adds R1/R2 count parity. `AGENTS.
 rule is actually corrected this time — round 2 was right that the previous entry claimed an
 edit that had not been made.
 
-### Round 2 — rebutted
+### Round 2 — initially rebutted, superseded by the final count proof
 
-* **"`auto` relies on a false index-only premise."** Tested rather than argued (§3.13). On
+* **"`auto` relies on a false index-only premise."** Round 2 tested the placed-record half
+  rather than arguing it (§3.13). On
   a CRAM built to contain 25 placed flag-12 pairs, ground truth is 130 flag-12 reads and
   `'*'` recovers 80 — so the indexed scan would indeed have lost 50, exactly as the finding
   feared. `samtools idxstats` reports those 50 in column 4, identically for BAM and CRAM,
-  and needs no reference to do it. The premise holds and the trigger fires. The finding's
-  *secondary* point is accepted: CRAI stores no counts, so this is not O(index) for CRAM,
-  and the spec no longer claims it is — it claims only that reading container headers is
-  far cheaper than the whole-file decode it replaces, which is the comparison that matters.
+  and needs no reference to do it. That proved the placed-record trigger, but the final
+  7a61 reproduction in §3.11 established a second independent failure: with the placed
+  sum zero, literal `'*'` still returned only 2,690 of the terminal row's 622,690 records.
+  The original broad finding is therefore accepted in final form. `idxstats` remains the
+  first half of the proof; the exact literal-`'*'` count comparison is the second.
 
 ### Round 1 — what changed as a result
 
@@ -1586,7 +1645,8 @@ Also accepted and specified: the second `conda run` in `docker/app/tasks.py` (#2
 web path); the reference never reaching `samtools depth` (#209 × coverage); the web
 service returning *Job submitted* before any check runs (§1's honest scope); layout
 inferred from the pre-merge slice being both wrong and circular (§4.4); `'*'` losing
-placed flag-12 reads (§4.3(b), now proven per run by `idxstats`); `mixed_tolerance`
+placed flag-4 reads and potentially under-returning even with zero placed reads
+(§4.3(b), now proven by both `idxstats` and the exact consumer count); `mixed_tolerance`
 contradicting the no-discard invariant (removed); an unquoted `-T` fragment being an
 injection path (builders take a path); the missing reference-free candidate (candidate 0);
 config keys promised but not specified (§6); acceptance criteria with no deadline and no

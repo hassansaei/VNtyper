@@ -15,8 +15,10 @@ atomic procfd view, with verified same-filesystem hardlink fallback) before quic
 header, target or coverage-region reads. An operator BED is likewise copied byte-exactly
 into a pipeline-owned file before proof. The boundary then builds the co-located fresh
 index, chooses the unmapped scan from `samtools idxstats`, and proves the reference for
-every consumer shape. It returns the target and frozen `AlignmentPlan` whose binding
-remains alive through coverage and is released by `AlignmentPlan.close()`. Read layout is
+every consumer shape. The generated BAI/CRAI is opened before publication; post-preflight
+random-access consumers use its retained procfd or verified-hardlink path explicitly.
+The boundary returns the target and frozen `AlignmentPlan` whose alignment and index
+bindings remain alive through coverage and are released by `AlignmentPlan.close()`. Read layout is
 **not** part of that plan — it is decided after conversion, from the FASTQs that were
 actually written. Decisions live in pure modules; only the preflight shells out.
 
@@ -26,14 +28,15 @@ pytest, ruff, mypy, Docker + Celery for the web layer.
 **Spec:** [`2026-08-08-milestone-4-cram-input-robustness-spec.md`](2026-08-08-milestone-4-cram-input-robustness-spec.md).
 
 **Status:** H1/H2/H3 and their final follow-ups are integrated and independently reviewed.
-Final A-PERF-1 is recorded; only the combined no-HIGH review remains unchecked.
+The final-candidate A-PERF-1 rerun and combined no-HIGH review remain unchecked.
 
 > **Read §3 of the spec before writing any CRAM code.** Six intuitions about htslib in
 > this area are wrong and the measurements say which. In particular: an index in the
 > output directory is invisible (§3.9); `-P` and `-c` cannot be combined (§3.10); `-P`
 > fetches cross-contig mates (§3.7); a resolvable `UR:` silently rescues a candidate that
-> should fail (§3.10); `'*'` loses *placed* read-unmapped records and `idxstats` detects them
-> (§3.13).
+> should fail (§3.10); `'*'` loses *placed* read-unmapped records and `idxstats` detects
+> them (§3.13), but zero placed records alone do not prove literal-`'*'` completeness
+> (§3.11).
 
 ## Global Constraints
 
@@ -62,8 +65,8 @@ From AGENTS.md. Every task's requirements implicitly include these.
   only in `command_builders.py`, via `quote_path`. Tool invocations are *not* quoted
   (`config["tools"]` holds command prefixes); paths, regions and sample names *are*.
 - **Keep files under ~650 LOC.** Re-measured final implementation values are
-  `fastq_bam_processing.py` **632**, `pipeline.py` **665**,
-  `kestrel_genotyping.py` **865**, and `alignment_preflight.py` **649** lines. Further
+  `fastq_bam_processing.py` **625**, `pipeline.py` **665**,
+  `kestrel_genotyping.py` **865**, and `alignment_preflight.py` **644** lines. Further
   edits to the two over-limit files extract the touched responsibility rather than grow it.
 - **Touch a file, add tests for it**, including for functions you only modify.
 - **If you touch `.github/workflows/`, run `make ci-local`,** not just `make check-all`.
@@ -84,8 +87,11 @@ make format && make test-unit
 
 | File | Status | Responsibility |
 | --- | --- | --- |
-| `vntyper/scripts/alignment_contract.py` | create | `AlignmentPlan`, including the lifetime-owned binding; index names per format; failure messages and the `preflight_error.json` payload. Contract module, not pure. |
-| `vntyper/scripts/alignment_binding.py` | create | Opened-inode binding; procfd view, verified hardlink fallback, exact owned-view cleanup and FD lifetime. |
+| `vntyper/scripts/alignment_contract.py` | create | `AlignmentPlan`, including lifetime-owned alignment/index bindings and `stable_index_path`; index names per format; failure messages and the `preflight_error.json` payload. Contract module, not pure. |
+| `vntyper/scripts/alignment_binding.py` | create | Opened-alignment binding; procfd view, verified hardlink fallback, generated-index ownership, exact cleanup and FD lifetime. |
+| `vntyper/scripts/alignment_index_binding.py` | create | Open the fresh temporary BAI/CRAI before publication and retain its exact inode through procfd or verified-hardlink view. |
+| `vntyper/scripts/alignment_consumer_commands.py` | create | Build post-preflight slice/unmapped commands from the complete proven plan. Pure. |
+| `vntyper/scripts/samtools_command_fragments.py` | create | Shared quoted thread/reference/explicit-index command fragments. Pure. |
 | `vntyper/scripts/reference_resolution.py` | create | Validated ordered reference candidates; known or unavailable FASTA contig coverage. Pure. |
 | `vntyper/scripts/idxstats_parsing.py` | create | Parse an `idxstats` table and decide the scan. Fails closed. Pure. |
 | `vntyper/scripts/read_layout.py` | create | The layout verdict from FASTQ record counts, and which files are consumed vs stranded. Pure. |
@@ -93,7 +99,7 @@ make format && make test-unit
 | `vntyper/scripts/preflight_command_io.py` | create | The one captured-command executor: atomic logs plus optional process-group deadline, kill and reap. |
 | `vntyper/scripts/kestrel_command.py` | create | `construct_kestrel_command`, extracted without behavioural change from `kestrel_genotyping.py` and re-exported for existing callers; final source is 865 lines. |
 | `vntyper/scripts/alignment_index.py` | modify | Add `resolve_any_index`; `resolve_bam_index` unchanged. |
-| `vntyper/scripts/command_builders.py` | modify | Thread slice + index; optional slice indexing; indexed unplaced fetch; reference probe; `reference_path` (quoted here) on slice, filter, probe and **depth**. |
+| `vntyper/scripts/command_builders.py` | modify | Thread slice + index; optional slice indexing; indexed unplaced fetch/count; reference probe; quoted `reference_path` and explicit retained `index_path` on slice, indexed filter and **depth**. |
 | `vntyper/scripts/fastq_bam_processing.py` | modify | Consume `AlignmentPlan`. Must end **below** 649 lines. |
 | `vntyper/scripts/chromosome_utils.py` | modify | Classified-only denominator, strict majority, config threshold. |
 | `vntyper/scripts/pipeline.py` | modify | Call the preflight; route the layout; give coverage the reference and the view. |
@@ -191,9 +197,11 @@ def test_the_error_payload_carries_no_absolute_worker_paths_beyond_the_input():
 - `SCAN_INDEXED = "indexed"`, `SCAN_STREAM = "stream"`
 - `parse_idxstats(text: str) -> tuple[int, int] | None` — `(placed_unmapped, unplaced)`,
   or `None` when the table is not well-formed.
-- `choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool) -> tuple[str, str]`
-  — `(scan, reason)`. Raises `ValueError` when `configured == "indexed"` and the table
-  proves reads would be lost.
+- `choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool, *,
+  indexed_count_text: str | None = None, indexed_count_exit_ok: bool = False) ->
+  tuple[str, str]` — `(scan, reason)`. Indexed is authorised only when the table is valid,
+  its placed sum is zero and the exact literal-`'*'` flag-4 count equals its terminal-`*`
+  count. Forced indexed raises when valid evidence proves that consumer incomplete.
 
 Spec §4.5: **anything not well-formed selects `stream`.** An unparsable table must never
 read as "column 4 summed to zero".
@@ -220,8 +228,11 @@ class TestParse:
         assert parse_idxstats(bad) is None
 
 class TestChooseScan:
-    def test_auto_picks_indexed_only_when_nothing_would_be_lost(self):
-        assert choose_scan("auto", CLEAN, exit_ok=True)[0] == SCAN_INDEXED
+    def test_auto_picks_indexed_only_when_both_counts_prove_nothing_would_be_lost(self):
+        assert choose_scan(
+            "auto", CLEAN, exit_ok=True,
+            indexed_count_text="80\n", indexed_count_exit_ok=True,
+        )[0] == SCAN_INDEXED
 
     def test_auto_falls_back_to_stream_when_placed_unmapped_reads_exist(self):
         scan, reason = choose_scan("auto", GOOD, exit_ok=True)
@@ -236,6 +247,13 @@ class TestChooseScan:
     def test_forcing_indexed_where_reads_would_be_lost_raises_rather_than_dropping(self):
         with pytest.raises(ValueError, match="50"):
             choose_scan("indexed", GOOD, exit_ok=True)
+
+    def test_zero_placed_but_incomplete_literal_star_fetch_is_not_authorised(self):
+        scan, reason = choose_scan(
+            "auto", CLEAN, exit_ok=True,
+            indexed_count_text="20\n", indexed_count_exit_ok=True,
+        )
+        assert scan == SCAN_STREAM and "20" in reason and "80" in reason
 
     def test_stream_is_always_allowed_because_it_is_never_lossy(self):
         assert choose_scan("stream", GOOD, exit_ok=True)[0] == SCAN_STREAM
@@ -281,17 +299,19 @@ _reference_flag(reference_path: str | Path | None) -> str   # "-T <quoted> " or 
 
 build_samtools_index_command(*, samtools_path, bam_file, output_bai=None, threads=1) -> str
 build_samtools_slice_command(*, samtools_path, in_bam, output_bam, region=None,
-                             bed_file=None, reference_path=None, threads=1,
+                             bed_file=None, reference_path=None, index_path=None, threads=1,
                              index_output=True, exclude_unmapped=False) -> str
 build_cram_unmapped_indexed_command(*, samtools_path, in_bam, unmapped_bam, threads,
-                                    reference_path=None) -> str
+                                    reference_path=None, index_path=None) -> str
 build_cram_unmapped_filter_command(*, samtools_path, in_bam, unmapped_bam, threads,
                                    reference_path=None) -> str     # signature change
 build_cram_reference_probe_command(*, samtools_path, in_bam, region=None, bed_file=None,
                                    reference_path=None, threads=1) -> str
 build_samtools_idxstats_command(*, samtools_path, in_bam, threads=1) -> str
+build_samtools_unmapped_indexed_count_command(*, samtools_path, in_bam, threads=1) -> str
 build_samtools_depth_command(*, samtools_path, threads, region, bam_file,
-                             coverage_output, reference_path=None) -> str   # signature change
+                             coverage_output, reference_path=None,
+                             index_path=None) -> str   # signature change
 ```
 
 - [ ] **Step 1: write the failing tests.** The four that matter most:
@@ -317,7 +337,7 @@ def test_depth_carries_the_reference_so_coverage_does_not_die_on_a_cram():
     command = build_samtools_depth_command(
         samtools_path="samtools", threads=4, region="chr1:1-2",
         bam_file="/o/view.cram", coverage_output="/o/d.txt", reference_path="/r/g.fa")
-    assert "-T /r/g.fa" in command
+    assert "--reference /r/g.fa" in command
 
 
 def test_a_reference_path_with_a_space_is_quoted_not_split():
@@ -432,7 +452,9 @@ def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplo
       override is skipped when `allow_ambient_reference_resolution` is true; and
       **`restore_reference_resolution` puts back the previous value, including "unset", in
       nested CRAM scopes and after `BaseException`** (spec §4.5 — `run_pipeline` is called
-      in-process by tests). Pin the warning contract:
+      in-process by tests). Because `os.environ` is process-global, hold one re-entrant
+      lock across the complete pin/restore lifetime: same-thread nesting remains LIFO,
+      overlapping CRAM threads wait, and validation failure releases the lock. Pin the warning contract:
       the opt-in may block later stages even though every reference probe remains bounded.
       Assert BAM and FASTQ neither validate nor mutate this policy.
       Add pure URI-policy tests for local/relative/`file://` values, anchored remote
@@ -472,7 +494,9 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
       multiset (§3.20).
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement:
       replace the `file_format="bam"` parameter with `plan: AlignmentPlan`; delete the
-      inline `resolve_bam_index` block (lines ~167-177) and use `plan.index_path`;
+      inline `resolve_bam_index` block (lines ~167-177); route every post-preflight
+      random-access builder through the plan helpers and `plan.stable_index_path`, while
+      retaining `plan.index_path` only as the owned public/provenance pathname;
       replace `cram_ref_option = ""` with the plan's reference; branch the CRAM scan on
       `plan.unmapped_scan`. In `pipeline.py`, invoke the owned input-alignment preflight
       boundary before header/region resolution; the boundary resolves and materialises the
@@ -487,6 +511,10 @@ tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipelin
       CRAM plans, call `build_cram_unmapped_indexed_command` (BAM has
       `reference_path=None`); remove only the production import/call of the optional BAI
       offset extractor, leaving its legacy module and parser tests intact.
+      Mutation-test the lifetime by atomically replacing `plan.index_path` with a valid
+      wrong-sample BAI after preflight: the bound `-X` slice and depth results must remain
+      29,736 records and 5,001 rows, while removing `-X` reproduces the silent zero-record
+      result.
 - [ ] **Step 4:** run the three suites → PASS.
 - [ ] **Step 5:** `wc -l vntyper/scripts/fastq_bam_processing.py` → **must be < 649**.
       If not, extract the CRAM branch into a helper rather than accepting it.
@@ -661,11 +689,12 @@ route every produced FASTQ or fail naming it.
       (spec §5b).
 - [ ] **Step 4:** prove A-178-2 — when preflight authorises both strategies, indexed and
       stream must produce the **same read set**, not merely the same genotype. When
-      placed-unmapped evidence rejects indexed, preserve that rejection and record the
-      stream read set plus a raw diagnostic of the reads `'*'` would lose. The indexed
-      result must also contain the exact stable guard diagnostic and its declared
-      `idxstats` column-four count (11,571 for `7a61`, 329 for `b178`); a different
-      preflight exit is not evidence for A-178-2:
+      placed-unmapped evidence or the exact literal-`'*'`/terminal-`*` count comparison
+      rejects indexed, preserve that rejection and record the stream read set plus a raw
+      diagnostic of the reads `'*'` would lose. The indexed result must also contain the
+      exact stable guard diagnostic and its declared causal count (placed-unmapped counts
+      are 11,571 for `7a61` and 329 for `b178`); a different preflight exit is not evidence
+      for A-178-2:
 
 ```bash
 python scripts/golden_cohort_gate.py run \
@@ -710,24 +739,27 @@ read-name digest of it.
 
 ### Final H1/H2/H3 reconciliation: binding, ownership and archival
 
-**Files:** modify `vntyper/scripts/alignment_binding.py`, `alignment_contract.py`,
+**Files:** modify `vntyper/scripts/alignment_binding.py`, `alignment_index_binding.py`,
+`alignment_consumer_commands.py`, `samtools_command_fragments.py`, `alignment_contract.py`,
 `pipeline.py`, `pipeline_cleanup.py`, `pipeline_coverage.py`, `pipeline_inputs.py`,
 `cli_logging_safety.py`, `archive_safety.py`, `docker/app/tasks.py`; tests in
 `tests/unit/test_alignment_binding_lifecycle.py`, `test_pipeline_coverage.py`,
 `test_pipeline_archive_destination_ownership.py`, `test_cli_logging_safety.py`,
 `test_archive_safety.py`, `tests/unit/web/test_response_hygiene.py`, and web archive-task tests.
 
-**Interfaces and lifetime:** `AlignmentPlan.binding: AlignmentBinding | None` and
+**Interfaces and lifetime:** `AlignmentPlan.binding: AlignmentBinding | None`,
+`AlignmentPlan.stable_index_path: str` and
 `AlignmentPlan.close() -> None`; `build_alignment_view(in_path, ...) -> (view_path,
 index_path, binding)`; `close_alignment_plan(plan, *, preserve_primary: bool) -> None`; and
 `calculate_alignment_coverage(plan=..., ...) -> str`. The binding opens the regular input,
-installs a procfd view or verified hardlink fallback, and lives until coverage has consumed
-the view. `close()` deletes only its exact owned view before closing its FD.
+installs a procfd view or verified hardlink fallback, opens the fresh temporary index before
+publication, and lives until coverage has consumed both exact inodes. `close()` deletes
+only exact owned fallback entries before closing the index and alignment FDs.
 
-- [x] **H1:** test path replacement after input open, procfs fallback identity, exact
-      owned-view removal, cleanup failure with and without a primary failure, and nested
-      `REF_PATH` restoration; implement the binding/lifetime boundary and primary-outcome
-      preservation.
+- [x] **H1:** test path replacement after input open, generated-index replacement after
+      preflight, procfs fallbacks, exact owned-entry removal, cleanup failure with and
+      without a primary failure, nested `REF_PATH` restoration and overlapping-thread
+      serialization; implement both binding lifetimes and primary-outcome preservation.
 - [x] **H2:** test exclusive regular-file ownership for outputs and logs, alias rejection,
       patient-tree scope, and `archive_base_name()` trailing-separator normalization;
       implement the shared pipeline/CLI ownership checks before every writer opens a path.
@@ -736,9 +768,10 @@ the view. `close()` deletes only its exact owned view before closing its FD.
       writer behaviour, descriptor-bound delivery/cohort snapshots, and web
       rollback/quarantine failure handling; implement archive creation only after report
       completion. Final H3 publication and descriptor-snapshot re-reviews are clean.
-- [x] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
+- [ ] **A-PERF-1:** alternate three 18-case runs per arm on clean `ddf49a1` and
       `2a5982e`; record 91.74/92.38/91.30 s versus 88.47/89.86/88.23 s, exact loads and
-      the non-overlapping no-regression verdict in spec §5b.
+      the non-overlapping no-regression verdict in spec §5b. Rerun against the actual
+      final behavioral revision before checking this item.
 - [ ] **Close-out:** run and record the combined final-diff adversarial review with no
       HIGH findings.
 

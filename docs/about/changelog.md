@@ -16,22 +16,30 @@ fastp, BWA and Kestrel.
 
 **BAM and CRAM inputs are preflighted through a run-local alignment view.** Missing
 indexes are built beside that view, where htslib can resolve them, without writing into a
-read-only patient input tree. Existing BAI, CSI and CRAI spellings are resolved by format,
-stale views and indexes are replaced safely, and every derived BAM/FASTQ/log destination
-is checked before a processing stage starts.
+read-only patient input tree. The alignment and freshly generated index are opened and
+retained for the plan lifetime; post-preflight random-access commands use that exact index
+inode, so replacing the public BAI/CRAI name cannot retarget a slice or depth calculation.
+Existing BAI, CSI and CRAI spellings are protected by format, and every derived
+BAM/FASTQ/log destination is checked before a processing stage starts.
 
 **Reference-dependent CRAM fails before processing unless one candidate can decode the
 real `-P` slice shape.** `--reference-fasta`, configured CRAM/BWA references and local
 htslib resolution are tried in configured order; coverage receives the same selected
 reference. Ambient network refget is disabled by default, `REF_PATH` is restored on every
-exit, and web jobs transport a curated preflight code/message without exposing worker
-paths.
+exit, overlapping in-process CRAM scopes are serialized, and web jobs transport a curated
+preflight code/message without exposing worker paths.
 
 **Unmapped CRAM extraction is fail-closed.** `auto` uses indexed `'*'` extraction only
-when idxstats proves no placed-unmapped reads; malformed evidence selects the stream
-path, and forcing an unsafe indexed path raises instead of losing reads. On the declared
-`7a61` CRAM, the corrected flag-4 stream recovered 634,261 records while a raw indexed
-fetch returned 2,690; the production guard refused that 631,571-read loss before work.
+when idxstats proves no placed-unmapped reads and the exact literal-`'*'` flag-4 count
+equals the terminal idxstats count; malformed or unequal evidence selects the stream
+path, and forcing an unsafe indexed path raises instead of losing reads. On a zero-placed
+`7a61` CRAM, whole-file decoding and idxstats each reported 622,690 records while the raw
+indexed fetch returned only 2,690; the count proof refused that 620,000-read loss.
+
+**Archives and web delivery are ownership-bound.** Result archives are built and served
+through descriptor-anchored paths, reject unsafe source aliases, and are quarantined or
+revoked when a later worker status step fails. Cohort inputs are snapshotted through held
+descriptors, so replacing a public path cannot change the bytes a child consumes.
 
 Chromosome naming now votes only across configured primary-contig patterns, requires a
 strict majority and returns `unknown` for ties or zero classified contigs. Threshold and
