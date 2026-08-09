@@ -191,6 +191,7 @@ def run_pipeline(
     previous_ref_path = None
     reference_resolution_pinned = False
     alignment_plan = None
+    primary_outcome_is_active = False
     try:
         # Validation owns a run-local log, but stage directories wait until preflight passes.
         if input_type in ["BAM", "CRAM"]:
@@ -692,10 +693,13 @@ def run_pipeline(
                 logger.info(f"Pipeline summary TSV written to: {tsv_path}")
 
     except Exception:
+        primary_outcome_is_active = True
         logger.exception("An error occurred")
         sys.exit(1)
+    except BaseException:
+        primary_outcome_is_active = True
+        raise
     finally:
-        primary_outcome_is_active = sys.exc_info()[0] is not None
         try:
             close_alignment_plan(alignment_plan, preserve_primary=primary_outcome_is_active)
         finally:

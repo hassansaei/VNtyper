@@ -528,6 +528,47 @@ def test_cleanup_failure_never_masks_a_primary_outcome_or_skips_exact_ref_path_r
             monkeypatch.setenv("REF_PATH", initial_ref_path)
 
 
+def test_caller_exception_state_does_not_hide_successful_run_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only this run's outcome can decide whether its cleanup failure is suppressed."""
+    out = tmp_path / "out"
+    original_ref_path = "http://operator.example/%s"
+    pinned_ref_path = "/local/cache/%2s/%2s/%s"
+    monkeypatch.setenv("REF_PATH", original_ref_path)
+    config = {**MINIMAL_CONFIG, "cram": {"local_ref_path": pinned_ref_path}}
+    cram = tmp_path / "patient-input" / "input.cram"
+    cram.parent.mkdir()
+    cram.touch()
+    binding = AlignmentBinding(str(cram))
+    plan = replace(_plan(out, "cram", reference_path="/refs/hg19.fa"), input_path=str(cram), binding=binding)
+
+    try:
+        try:
+            raise LookupError("unrelated caller failure")
+        except LookupError:
+            with mock.patch.object(
+                binding,
+                "close",
+                side_effect=[None, RuntimeError("alignment cleanup failed")],
+            ):
+                harness = run_pipeline_under_harness(
+                    out,
+                    config=config,
+                    bam=None,
+                    cram=str(cram),
+                    expect_failure=True,
+                    stage_side_effects={"run_preflight": lambda *args, **kwargs: plan},
+                )
+
+        assert isinstance(harness.error, RuntimeError)
+        assert str(harness.error) == "alignment cleanup failed"
+        assert os.environ["REF_PATH"] == original_ref_path
+    finally:
+        binding.close()
+
+
 def test_preflight_failure_stops_before_any_processing_stage(tmp_path: Path) -> None:
     out = tmp_path / "out"
 
