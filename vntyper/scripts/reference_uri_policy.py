@@ -73,8 +73,8 @@ def remote_ref_path_suffix(value: str) -> str | None:
     if match is None:
         return None
     remote = value[match.start("scheme") :]
-    scheme_separator = remote.find("://")
-    if re.search(r":(?=/)", remote[scheme_separator + 3 :]):
+    parsed = urlsplit(remote)
+    if any(":" in component for component in (parsed.path, parsed.query, parsed.fragment)):
         raise ValueError("Ambient REF_PATH cannot retain a local entry after a remote URL")
     return remote
 

@@ -40,12 +40,18 @@ def test_ref_path_remote_scheme_distinguishes_network_and_local_search_entries(
 
 def test_remote_ref_path_suffix_removes_local_cache_entries_before_ambient_lookup() -> None:
     assert remote_ref_path_suffix("/operator/%s:https://refget.example/%s") == "https://refget.example/%s"
+    assert remote_ref_path_suffix("/operator/%s:http://127.0.0.1:8765/%s") == "http://127.0.0.1:8765/%s"
     assert remote_ref_path_suffix("/operator/%s") is None
 
 
 @pytest.mark.parametrize(
     "value",
-    ["https://refget.example/%s:/operator/%s", "/first/%s:https://refget.example/%s:/last/%s"],
+    [
+        "https://refget.example/%s:/operator/%s",
+        "/first/%s:https://refget.example/%s:/last/%s",
+        "https://refget.example/%s:cache/%2s/%2s/%s",
+        "/first/%s:https://refget.example/%s:cache/%2s/%2s/%s",
+    ],
 )
 def test_remote_ref_path_suffix_rejects_trailing_local_entries_without_exposing_them(value: str) -> None:
     with pytest.raises(ValueError, match="cannot retain a local entry") as raised:
