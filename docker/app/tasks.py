@@ -9,8 +9,9 @@ from datetime import datetime, timedelta, timezone
 import redis
 from celery.utils.log import get_task_logger
 
-from vntyper.scripts.archive_safety import clear_stale_archive, create_safe_archive
+from vntyper.scripts.archive_safety import clear_stale_archive, create_safe_archive, quarantine_archive
 
+from .archive_delivery import snapshot_owned_archives
 from .celery_app import celery_app
 from .cohorts import cohort_key, extend_cohort_retention
 from .config import get_redis_password, settings
@@ -261,6 +262,7 @@ def run_vntyper_job(
     to pipeline preflight, which builds a run-local index under `output_dir`.
     """
     job_id = os.path.basename(output_dir)
+    archive_published = False
     # Bound before the try block: the cleanup below runs whether or not the task
     # got as far as its first Redis call, and must remove exactly the index this
     # job used -- uploaded or generated -- rather than raise a NameError of its
@@ -336,37 +338,32 @@ def run_vntyper_job(
 
         # Optionally, archive results
         if archive_results:
+            create_safe_archive(
+                output_dir,
+                "zip",
+                output_dir,
+                protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+            )
+            archive_published = True
             try:
-                create_safe_archive(
-                    output_dir,
-                    "zip",
-                    output_dir,
-                    protected_paths=(bam_path, index_path) if index_path else (bam_path,),
-                )
                 shutil.rmtree(output_dir)
                 logger.info(f"Archived results to {output_dir}.zip and removed original directory")
             except Exception as e:
-                logger.error(f"Error archiving results: {e}")
-                # Update usage data on failure
-                redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
                 try:
-                    clear_stale_archive(
+                    quarantine_path = quarantine_archive(
                         output_dir,
                         "zip",
                         protected_paths=(bam_path, index_path) if index_path else (bam_path,),
                     )
+                    archive_published = False
+                    logger.error(f"Result cleanup failed; preserved complete archive at {quarantine_path}: {e}")
                 except Exception as rollback_error:
-                    logger.error(f"Error removing failed job's public archive: {rollback_error}")
+                    logger.error(f"Error quarantining failed job's public archive: {rollback_error}")
                 raise
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
-        # **Removed**: Cohort assignment from the task
-        # if cohort_key:
-        #     redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
-
-        # **Cohort assignment is now handled only upon successful completion**
         if cohort_key:
             redis_cohort_client.sadd(f"{cohort_key}:jobs", job_id)
             logger.info(f"Assigned job {job_id} to cohort {cohort_key}")
@@ -396,17 +393,23 @@ def run_vntyper_job(
 
     except Exception as e:
         logger.error(f"Error in VNtyper job: {e}")
-        # Update usage data on failure
-        redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        if archive_published:
+            try:
+                clear_stale_archive(
+                    output_dir,
+                    "zip",
+                    protected_paths=(bam_path, index_path) if index_path else (bam_path,),
+                )
+                archive_published = False
+            except Exception as rollback_error:
+                logger.error(f"Error removing failed job's public archive: {rollback_error}")
+        try:
+            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        except Exception as status_error:
+            logger.error(f"Error recording failed status for {job_id}: {status_error}")
         raise
     finally:
-        # Patient-derived files come off the shared volume before anything else
-        # in this block, and every bookkeeping call after them is isolated.
-        # Both halves matter: this block used to open with two unguarded Redis
-        # calls, so a broker that became unreachable as the task exited left the
-        # alignment, its index and the whole input directory behind -- and
-        # replaced the pipeline's own exception with a connection error, hiding
-        # why the job failed.
+        # Patient-derived inputs come off the shared volume before bookkeeping.
         remove_job_input_files(bam_path, index_path)
 
         # The per-job input directory holds nothing but this submission's own
@@ -525,6 +528,8 @@ def run_cohort_analysis_job(
     # got as far as naming its scratch file, and must not mask the original
     # failure with a NameError of its own.
     input_file = None
+    snapshot_dir = None
+    archive_published = False
     logger.info(f"Starting joint cohort analysis for Cohort ID: {cohort_id}")
 
     # Generate a unique hash for the user
@@ -547,9 +552,11 @@ def run_cohort_analysis_job(
         clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
         # 1) Create directory, input file listing all .zip files
         os.makedirs(output_dir, exist_ok=True)
+        snapshot_dir = os.path.join(output_dir, ".cohort-members")
+        snapshot_paths = snapshot_owned_archives(zip_paths, snapshot_dir)
         input_file = os.path.join(output_dir, "cohort_input.txt")
         with open(input_file, "w") as f:
-            f.writelines(f"{zpath}\n" for zpath in zip_paths)
+            f.writelines(f"{zpath}\n" for zpath in snapshot_paths)
 
         # 2) Run the "vntyper cohort" command
         command = [
@@ -573,35 +580,54 @@ def run_cohort_analysis_job(
 
         os.remove(input_file)
         input_file = None
+        shutil.rmtree(snapshot_dir)
+        snapshot_dir = None
 
         # 3) Zip the results
-        try:
-            create_safe_archive(output_dir, "zip", output_dir, protected_paths=zip_paths)
-            logger.info(f"Zipped results to {output_dir}.zip")
-        except Exception as e:
-            logger.error(f"Error zipping results for cohort analysis: {e}")
-            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
-            raise
+        create_safe_archive(output_dir, "zip", output_dir, protected_paths=zip_paths)
+        archive_published = True
+        logger.info(f"Zipped results to {output_dir}.zip")
 
         # Update usage data on success
         redis_usage_client.hset(f"usage:{job_id}", "status", "completed")
 
     except Exception as e:
         logger.error(f"Error in joint cohort analysis for {cohort_id}: {e}")
-        redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        if archive_published:
+            try:
+                clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
+                archive_published = False
+            except Exception as rollback_error:
+                logger.error(f"Error removing failed cohort archive: {rollback_error}")
+        try:
+            redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
+        except Exception as status_error:
+            logger.error(f"Error recording failed status for cohort analysis {job_id}: {status_error}")
         raise
     finally:
         # Remove the task ID from the Redis list
-        redis_client.lrem("vntyper_job_queue", 0, task_id)
-        logger.info(f"Removed cohort analysis task ID {task_id} from queue")
+        try:
+            redis_client.lrem("vntyper_job_queue", 0, task_id)
+            logger.info(f"Removed cohort analysis task ID {task_id} from queue")
+        except Exception as e:
+            logger.error(f"Error removing cohort analysis task ID {task_id} from queue: {e}")
 
         # Extend cohort TTL if necessary
         if cohort_id:
-            extend_cohort_retention(
-                redis_cohort_client,
-                cohort_key(cohort_id),
-                settings.COHORT_RETENTION_DAYS * 86400,
-            )
+            try:
+                extend_cohort_retention(
+                    redis_cohort_client,
+                    cohort_key(cohort_id),
+                    settings.COHORT_RETENTION_DAYS * 86400,
+                )
+            except Exception as e:
+                logger.error(f"Error extending retention for cohort {cohort_id}: {e}")
+
+        if snapshot_dir:
+            try:
+                shutil.rmtree(snapshot_dir)
+            except Exception as e:
+                logger.error(f"Error deleting cohort member snapshots {snapshot_dir}: {e}")
 
         # Delete the listing file this task wrote for itself. That file is the
         # only thing here the task owns; the .zip paths it names are the

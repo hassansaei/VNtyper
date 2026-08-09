@@ -371,6 +371,72 @@ def test_concurrent_archive_parent_replacement_never_touches_the_attacker_direct
     assert not (original_parent / "download.zip").exists()
 
 
+def test_stale_clear_rechecks_parent_after_the_anchored_operation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A parent swap during stale removal cannot be reported as a successful clear."""
+    public_parent = tmp_path / "public"
+    public_parent.mkdir()
+    stale = public_parent / "download.zip"
+    stale.write_bytes(b"stale archive")
+    original_parent = tmp_path / "original-public"
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    original_clear = archive_safety._clear_stale_at
+
+    def clear_then_swap(parent_descriptor: int, destination_name: str) -> None:
+        original_clear(parent_descriptor, destination_name)
+        public_parent.rename(original_parent)
+        public_parent.mkdir()
+        os.link(patient, public_parent / destination_name)
+
+    monkeypatch.setattr(archive_safety, "_clear_stale_at", clear_then_swap)
+
+    with pytest.raises((OSError, ValueError), match="archive parent.*changed"):
+        archive_safety.clear_stale_archive(public_parent / "download", "zip")
+
+    attacker_destination = public_parent / "download.zip"
+    assert os.path.samefile(attacker_destination, patient)
+    assert attacker_destination.read_bytes() == PATIENT_BYTES
+    assert patient.read_bytes() == PATIENT_BYTES
+    assert not (original_parent / "download.zip").exists()
+
+
+def test_parent_swap_after_public_link_rolls_back_the_anchored_archive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A post-link parent swap fails and removes the archive from the opened parent."""
+    root = tmp_path / "results"
+    root.mkdir()
+    (root / "result.txt").write_bytes(b"safe result")
+    public_parent = tmp_path / "public"
+    public_parent.mkdir()
+    original_parent = tmp_path / "original-public"
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    original_link = archive_safety.os.link
+
+    def link_then_swap(source, target, *args, **kwargs):
+        result = original_link(source, target, *args, **kwargs)
+        if str(target) == "download.zip" and kwargs.get("dst_dir_fd") is not None:
+            public_parent.rename(original_parent)
+            public_parent.mkdir()
+            original_link(patient, public_parent / "download.zip")
+        return result
+
+    monkeypatch.setattr(archive_safety.os, "link", link_then_swap)
+
+    with pytest.raises((OSError, ValueError), match="archive parent.*changed"):
+        archive_safety.create_safe_archive(public_parent / "download", "zip", root)
+
+    attacker_destination = public_parent / "download.zip"
+    assert os.path.samefile(attacker_destination, patient)
+    assert attacker_destination.read_bytes() == PATIENT_BYTES
+    assert patient.read_bytes() == PATIENT_BYTES
+    assert not (original_parent / "download.zip").exists()
+    assert not [path for path in original_parent.iterdir() if path.name.startswith(".download")]
+
+
 def test_descriptor_cleanup_failure_occurs_before_public_archive_install(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

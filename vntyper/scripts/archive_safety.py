@@ -114,6 +114,27 @@ def _clear_stale_at(parent_descriptor: int, destination_name: str) -> None:
     os.unlink(quarantine_name, dir_fd=parent_descriptor)
 
 
+def _quarantine_at(parent_descriptor: int, destination_name: str) -> str | None:
+    """Move one regular public archive to an unserved name in its opened parent."""
+    try:
+        previous_metadata = os.stat(destination_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(previous_metadata.st_mode) or previous_metadata.st_nlink != 1:
+        _reject(f"Unsafe public archive cannot be quarantined: {destination_name}")
+    quarantine_name = f".{destination_name}.failed-{secrets.token_hex(8)}"
+    os.rename(
+        destination_name,
+        quarantine_name,
+        src_dir_fd=parent_descriptor,
+        dst_dir_fd=parent_descriptor,
+    )
+    quarantined_metadata = os.stat(quarantine_name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if not _same_identity(previous_metadata, quarantined_metadata):
+        _reject(f"Public archive changed during quarantine; retained '{quarantine_name}'.")
+    return quarantine_name
+
+
 def _open_parent(destination: Path) -> tuple[int, os.stat_result]:
     expected_metadata = os.stat(destination.parent)
     descriptor = os.open(destination.parent, _DIRECTORY_FLAGS)
@@ -163,6 +184,7 @@ def clear_stale_archive(
         )
         _require_current_parent(destination, parent_metadata)
         _clear_stale_at(parent_descriptor, destination.name)
+        _require_current_parent(destination, parent_metadata)
     except BaseException as error:
         primary_failure = error
         raise
@@ -173,6 +195,55 @@ def clear_stale_archive(
             if primary_failure is None:
                 raise
             logger.error(f"Stale archive cleanup failed and parent descriptor cleanup also failed: {cleanup_error}")
+
+
+def quarantine_archive(
+    base_name: str | Path,
+    archive_format: str,
+    *,
+    protected_paths: Iterable[str | Path] = (),
+) -> str | None:
+    """Atomically hide a complete public archive while preserving its bytes.
+
+    Args:
+        base_name: Public archive path without its suffix.
+        archive_format: ``zip`` or ``gztar``.
+        protected_paths: Operator-owned paths which must not be renamed.
+
+    Returns:
+        The private quarantine path, or ``None`` when no public archive exists.
+
+    Raises:
+        ValueError: If the destination is not an exclusively owned regular file.
+        OSError: If the parent changes or the rename cannot be completed safely.
+    """
+    destination = _archive_path(base_name, archive_format)
+    parent_descriptor, parent_metadata = _open_parent(destination)
+    primary_failure: BaseException | None = None
+    try:
+        _validate_destination(
+            destination,
+            None,
+            protected_paths,
+            allow_existing_symlink=False,
+            parent_descriptor=parent_descriptor,
+        )
+        _require_current_parent(destination, parent_metadata)
+        quarantine_name = _quarantine_at(parent_descriptor, destination.name)
+        _require_current_parent(destination, parent_metadata)
+        if quarantine_name is None:
+            return None
+        return str(destination.parent / quarantine_name)
+    except BaseException as error:
+        primary_failure = error
+        raise
+    finally:
+        try:
+            os.close(parent_descriptor)
+        except Exception as cleanup_error:
+            if primary_failure is None:
+                raise
+            logger.error(f"Archive quarantine failed and parent descriptor cleanup also failed: {cleanup_error}")
 
 
 def _archive_directory(
@@ -305,6 +376,7 @@ def create_safe_archive(
             parent_descriptor=parent_descriptor,
         )
         _clear_stale_at(parent_descriptor, archive_path.name)
+        _require_current_parent(archive_path, parent_metadata)
 
         temporary_descriptor = -1
         for _ in range(100):
@@ -357,7 +429,10 @@ def create_safe_archive(
             follow_symlinks=False,
         )
         try:
+            _require_current_parent(archive_path, parent_metadata)
             os.unlink(temporary_name, dir_fd=parent_descriptor)
+            temporary_name = None
+            _require_current_parent(archive_path, parent_metadata)
         except Exception:
             try:
                 os.unlink(archive_path.name, dir_fd=parent_descriptor)
@@ -366,7 +441,6 @@ def create_safe_archive(
                     f"Temporary archive cleanup failed and public archive rollback also failed: {rollback_error}"
                 )
             raise
-        temporary_name = None
     finally:
         if temporary_name is not None and parent_descriptor >= 0:
             try:

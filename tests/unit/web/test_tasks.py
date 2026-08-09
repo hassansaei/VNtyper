@@ -30,6 +30,7 @@ import inspect
 import json
 import logging
 import subprocess
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
@@ -572,6 +573,38 @@ def test_result_directory_cleanup_failure_removes_public_alias_without_following
     assert ("usage:job-1", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
 
 
+def test_partial_result_cleanup_quarantines_one_complete_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Partial source deletion cannot destroy both complete representations."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"complete result")
+
+    def partially_remove_then_fail(path: str) -> None:
+        assert Path(path) == output_dir
+        (output_dir / "result.txt").unlink()
+        raise OSError("partial result cleanup")
+
+    monkeypatch.setattr(tasks.shutil, "rmtree", partially_remove_then_fail)
+
+    with pytest.raises(OSError, match="partial result cleanup"):
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert not Path(f"{output_dir}.zip").exists()
+    quarantines = list(output_dir.parent.glob(".job-1.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("result.txt") == b"complete result"
+
+
 def test_archive_rollback_failure_is_logged_without_masking_result_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
@@ -588,13 +621,103 @@ def test_archive_rollback_failure_is_logged_without_masking_result_cleanup_failu
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"result data")
     monkeypatch.setattr(tasks.shutil, "rmtree", MagicMock(side_effect=OSError("result directory busy")))
-    clear_mock = MagicMock(side_effect=[None, OSError("rollback denied")])
-    monkeypatch.setattr(tasks, "clear_stale_archive", clear_mock)
+    monkeypatch.setattr(tasks, "quarantine_archive", MagicMock(side_effect=OSError("rollback denied")))
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
     with pytest.raises(OSError, match="result directory busy"):
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
 
+    assert "rollback denied" in caplog.text
+
+
+@pytest.mark.parametrize("fatal_step", ["completed", "cohort", "email"])
+def test_post_publish_failure_removes_the_individual_public_archive(
+    fatal_step: str,
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Every fatal operation after publication revokes the existence-only download."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    failure = RuntimeError(f"{fatal_step} failed")
+
+    if fatal_step == "completed":
+
+        def fail_completed(*args, **kwargs):
+            if args == ("usage:job-1", "status", "completed"):
+                raise failure
+            return None
+
+        redis_mocks.usage.hset.side_effect = fail_completed
+    elif fatal_step == "cohort":
+        redis_mocks.cohort.sadd.side_effect = failure
+    else:
+        no_email_task.delay.side_effect = failure
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_vntyper_job(
+            tasks,
+            **_job_kwargs(
+                tmp_path,
+                bam_path,
+                archive_results=True,
+                email="user@example.com" if fatal_step == "email" else None,
+                cohort_key="cohort:my-cohort" if fatal_step == "cohort" else None,
+            ),
+        )
+
+    assert raised.value is failure
+    assert not Path(f"{output_dir}.zip").exists()
+    assert ("usage:job-1", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+
+
+def test_post_publish_rollback_failure_does_not_mask_the_individual_primary_error(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    no_email_task: MagicMock,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A rollback error is visible while the completed-state failure remains primary."""
+    from app import tasks
+
+    bam_path, _ = _make_job_input(tmp_path)
+    _subprocess_stub(monkeypatch, tasks)
+    output_dir = tmp_path / "output" / "job-1"
+    output_dir.mkdir(parents=True)
+    (output_dir / "result.txt").write_bytes(b"result data")
+    primary = RuntimeError("completed state unavailable")
+
+    def fail_completed(*args, **kwargs):
+        if args == ("usage:job-1", "status", "completed"):
+            raise primary
+        return None
+
+    redis_mocks.usage.hset.side_effect = fail_completed
+    real_clear = tasks.clear_stale_archive
+    clear_calls = 0
+
+    def fail_rollback(*args, **kwargs):
+        nonlocal clear_calls
+        clear_calls += 1
+        if clear_calls == 2:
+            raise OSError("rollback denied")
+        return real_clear(*args, **kwargs)
+
+    monkeypatch.setattr(tasks, "clear_stale_archive", fail_rollback)
+    caplog.set_level(logging.ERROR, logger="app.tasks")
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
+
+    assert raised.value is primary
     assert "rollback denied" in caplog.text
 
 
@@ -1170,6 +1293,66 @@ def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
         )
 
     assert ("usage:analysis", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
+
+
+def test_cohort_completed_state_failure_removes_the_public_archive(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """A cohort archive is not downloadable when its completed transition fails."""
+    from app import tasks
+
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+    monkeypatch.setattr(tasks.subprocess, "run", lambda *args, **kwargs: None)
+    failure = RuntimeError("completed state unavailable")
+
+    def fail_completed(*args, **kwargs):
+        if args == ("usage:analysis", "status", "completed"):
+            raise failure
+        return None
+
+    redis_mocks.usage.hset.side_effect = fail_completed
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_cohort_job(
+            tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis")
+        )
+
+    assert raised.value is failure
+    assert not (tmp_path / "analysis.zip").exists()
+    assert zip_path.read_bytes() == b"result data"
+    assert ("usage:analysis", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+
+
+def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(
+    monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
+) -> None:
+    """The cohort subprocess consumes task-owned bytes, never a later path replacement."""
+    from app import tasks
+
+    member = tmp_path / "job-a.zip"
+    member.write_bytes(b"original member archive")
+    patient = tmp_path / "patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+    consumed: list[bytes] = []
+    consumed_names: list[str] = []
+
+    def replace_member_before_consumption(command, *args, **kwargs):
+        member.unlink()
+        member.symlink_to(patient)
+        input_file = Path(command[command.index("--input-file") + 1])
+        listed = Path(input_file.read_text().strip())
+        consumed_names.append(listed.name)
+        consumed.append(listed.read_bytes())
+
+    monkeypatch.setattr(tasks.subprocess, "run", replace_member_before_consumption)
+
+    _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(member)], output_dir=str(tmp_path / "analysis"))
+
+    assert consumed == [b"original member archive"]
+    assert consumed_names == ["job-a.zip"]
+    assert member.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 def test_cohort_analysis_skips_retention_extension_when_no_cohort_id_is_given(
