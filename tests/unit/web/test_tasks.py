@@ -606,14 +606,14 @@ def test_partial_result_cleanup_quarantines_one_complete_archive(
         assert archive.read("result.txt") == b"complete result"
 
 
-def test_quarantine_failure_preserves_complete_public_archive_after_partial_result_cleanup(
+def test_first_quarantine_failure_retries_without_leaving_a_regular_public_archive(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     no_email_task: MagicMock,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A failed quarantine cannot delete the only complete result representation."""
+    """A transient quarantine failure cannot leave a failed job downloadable."""
     from app import tasks
 
     bam_path, _ = _make_job_input(tmp_path)
@@ -621,35 +621,49 @@ def test_quarantine_failure_preserves_complete_public_archive_after_partial_resu
     output_dir = tmp_path / "output" / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"result data")
+    cleanup_failure = OSError("result directory busy")
 
     def partially_remove_then_fail(path: str) -> None:
         assert Path(path) == output_dir
         (output_dir / "result.txt").unlink()
-        raise OSError("result directory busy")
+        raise cleanup_failure
+
+    real_quarantine = tasks.quarantine_archive
+    quarantine_calls = 0
+
+    def fail_first_quarantine(*args, **kwargs):
+        nonlocal quarantine_calls
+        quarantine_calls += 1
+        if quarantine_calls == 1:
+            raise OSError("first quarantine denied")
+        return real_quarantine(*args, **kwargs)
 
     monkeypatch.setattr(tasks.shutil, "rmtree", partially_remove_then_fail)
-    monkeypatch.setattr(tasks, "quarantine_archive", MagicMock(side_effect=OSError("rollback denied")))
+    monkeypatch.setattr(tasks, "quarantine_archive", fail_first_quarantine)
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
-    with pytest.raises(OSError, match="result directory busy"):
+    with pytest.raises(OSError) as raised:
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
 
-    assert "rollback denied" in caplog.text
+    assert raised.value is cleanup_failure
+    assert "first quarantine denied" in caplog.text
     public_archive = Path(f"{output_dir}.zip")
-    assert public_archive.exists()
-    with zipfile.ZipFile(public_archive) as archive:
+    assert not public_archive.exists()
+    quarantines = list(output_dir.parent.glob(".job-1.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
         assert archive.read("result.txt") == b"result data"
 
 
 @pytest.mark.parametrize("fatal_step", ["completed", "cohort", "email"])
-def test_post_publish_failure_removes_the_individual_public_archive(
+def test_post_publish_failure_quarantines_the_individual_complete_archive(
     fatal_step: str,
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     no_email_task: MagicMock,
     tmp_path: Path,
 ) -> None:
-    """Every fatal operation after publication revokes the existence-only download."""
+    """Bookkeeping failures hide but preserve the complete scientific output."""
     from app import tasks
 
     bam_path, _ = _make_job_input(tmp_path)
@@ -686,17 +700,21 @@ def test_post_publish_failure_removes_the_individual_public_archive(
 
     assert raised.value is failure
     assert not Path(f"{output_dir}.zip").exists()
+    quarantines = list(output_dir.parent.glob(".job-1.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("result.txt") == b"result data"
     assert ("usage:job-1", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
 
 
-def test_post_publish_rollback_failure_does_not_mask_the_individual_primary_error(
+def test_post_publish_alias_cleanup_does_not_follow_target_or_mask_the_individual_primary_error(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,
     no_email_task: MagicMock,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A rollback error is visible while the completed-state failure remains primary."""
+    """An archive alias is unlinked without touching its target or masking failure."""
     from app import tasks
 
     bam_path, _ = _make_job_input(tmp_path)
@@ -704,38 +722,29 @@ def test_post_publish_rollback_failure_does_not_mask_the_individual_primary_erro
     output_dir = tmp_path / "output" / "job-1"
     output_dir.mkdir(parents=True)
     (output_dir / "result.txt").write_bytes(b"result data")
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
     primary = RuntimeError("completed state unavailable")
 
     def fail_completed(*args, **kwargs):
         if args == ("usage:job-1", "status", "completed"):
+            archive = Path(f"{output_dir}.zip")
+            archive.unlink()
+            archive.symlink_to(patient)
             raise primary
         return None
 
     redis_mocks.usage.hset.side_effect = fail_completed
-    real_clear = tasks.clear_stale_archive
-    clear_calls = 0
-
-    def fail_rollback(*args, **kwargs):
-        nonlocal clear_calls
-        clear_calls += 1
-        if clear_calls == 2:
-            raise OSError("rollback denied")
-        return real_clear(*args, **kwargs)
-
-    monkeypatch.setattr(tasks, "clear_stale_archive", fail_rollback)
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
     with pytest.raises(RuntimeError) as raised:
         _invoke_vntyper_job(tasks, **_job_kwargs(tmp_path, bam_path, archive_results=True))
 
     assert raised.value is primary
-    assert "rollback denied" in caplog.text
+    assert "symbolic link" in caplog.text
     public_archive = Path(f"{output_dir}.zip")
-    assert not public_archive.exists()
-    quarantines = list(output_dir.parent.glob(".job-1.zip.failed-*"))
-    assert len(quarantines) == 1
-    with zipfile.ZipFile(quarantines[0]) as archive:
-        assert archive.read("result.txt") == b"result data"
+    assert not public_archive.exists() and not public_archive.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 def test_worker_archive_refuses_a_real_symlink_without_reading_or_deleting_its_target(
@@ -1312,42 +1321,10 @@ def test_cohort_analysis_archive_failure_is_marked_failed_and_reraised(
     assert ("usage:analysis", "status", "failed") in [c.args for c in redis_mocks.usage.hset.call_args_list]
 
 
-def test_cohort_completed_state_failure_removes_the_public_archive(
+def test_cohort_completed_state_failure_quarantines_the_complete_archive(
     monkeypatch: pytest.MonkeyPatch, redis_mocks: SimpleNamespace, tmp_path: Path
 ) -> None:
-    """A cohort archive is not downloadable when its completed transition fails."""
-    from app import tasks
-
-    zip_path = tmp_path / "job-a.zip"
-    zip_path.write_bytes(b"result data")
-    monkeypatch.setattr(tasks.subprocess, "run", lambda *args, **kwargs: None)
-    failure = RuntimeError("completed state unavailable")
-
-    def fail_completed(*args, **kwargs):
-        if args == ("usage:analysis", "status", "completed"):
-            raise failure
-        return None
-
-    redis_mocks.usage.hset.side_effect = fail_completed
-
-    with pytest.raises(RuntimeError) as raised:
-        _invoke_cohort_job(
-            tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(tmp_path / "analysis")
-        )
-
-    assert raised.value is failure
-    assert not (tmp_path / "analysis.zip").exists()
-    assert zip_path.read_bytes() == b"result data"
-    assert ("usage:analysis", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
-
-
-def test_cohort_post_publish_removal_failure_quarantines_the_complete_archive(
-    monkeypatch: pytest.MonkeyPatch,
-    redis_mocks: SimpleNamespace,
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A failed public unlink hides the cohort archive without masking its failure."""
+    """A failed cohort transition hides but preserves its complete output."""
     from app import tasks
 
     zip_path = tmp_path / "job-a.zip"
@@ -1358,37 +1335,68 @@ def test_cohort_post_publish_removal_failure_quarantines_the_complete_archive(
         (output_dir / "cohort_result.tsv").write_bytes(b"complete cohort result")
 
     monkeypatch.setattr(tasks.subprocess, "run", write_cohort_result)
+    failure = RuntimeError("completed state unavailable")
+
+    def fail_completed(*args, **kwargs):
+        if args == ("usage:analysis", "status", "completed"):
+            raise failure
+        return None
+
+    redis_mocks.usage.hset.side_effect = fail_completed
+
+    with pytest.raises(RuntimeError) as raised:
+        _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
+
+    assert raised.value is failure
+    assert not (tmp_path / "analysis.zip").exists()
+    quarantines = list(tmp_path.glob(".analysis.zip.failed-*"))
+    assert len(quarantines) == 1
+    with zipfile.ZipFile(quarantines[0]) as archive:
+        assert archive.read("cohort_result.tsv") == b"complete cohort result"
+    assert zip_path.read_bytes() == b"result data"
+    assert ("usage:analysis", "status", "failed") in [call.args for call in redis_mocks.usage.hset.call_args_list]
+
+
+def test_cohort_post_publish_alias_cleanup_does_not_follow_target_or_mask_the_primary_error(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_mocks: SimpleNamespace,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cohort archive alias is removed without following it or masking failure."""
+    from app import tasks
+
+    zip_path = tmp_path / "job-a.zip"
+    zip_path.write_bytes(b"result data")
+    output_dir = tmp_path / "analysis"
+    patient = tmp_path / "external-patient.bam"
+    patient.write_bytes(PATIENT_BYTES)
+
+    def write_cohort_result(*args, **kwargs):
+        (output_dir / "cohort_result.tsv").write_bytes(b"complete cohort result")
+
+    monkeypatch.setattr(tasks.subprocess, "run", write_cohort_result)
     primary = RuntimeError("completed state unavailable")
 
     def fail_completed(*args, **kwargs):
         if args == ("usage:analysis", "status", "completed"):
+            archive = Path(f"{output_dir}.zip")
+            archive.unlink()
+            archive.symlink_to(patient)
             raise primary
         return None
 
     redis_mocks.usage.hset.side_effect = fail_completed
-    real_clear = tasks.clear_stale_archive
-    clear_calls = 0
-
-    def fail_rollback(*args, **kwargs):
-        nonlocal clear_calls
-        clear_calls += 1
-        if clear_calls == 2:
-            raise OSError("rollback denied")
-        return real_clear(*args, **kwargs)
-
-    monkeypatch.setattr(tasks, "clear_stale_archive", fail_rollback)
     caplog.set_level(logging.ERROR, logger="app.tasks")
 
     with pytest.raises(RuntimeError) as raised:
         _invoke_cohort_job(tasks, cohort_id="cohort-1", zip_paths=[str(zip_path)], output_dir=str(output_dir))
 
     assert raised.value is primary
-    assert "rollback denied" in caplog.text
-    assert not (tmp_path / "analysis.zip").exists()
-    quarantines = list(tmp_path.glob(".analysis.zip.failed-*"))
-    assert len(quarantines) == 1
-    with zipfile.ZipFile(quarantines[0]) as archive:
-        assert archive.read("cohort_result.tsv") == b"complete cohort result"
+    assert "symbolic link" in caplog.text
+    public_archive = tmp_path / "analysis.zip"
+    assert not public_archive.exists() and not public_archive.is_symlink()
+    assert patient.read_bytes() == PATIENT_BYTES
 
 
 def test_cohort_analysis_consumes_a_bound_snapshot_when_member_path_is_replaced(

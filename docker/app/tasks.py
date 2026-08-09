@@ -358,7 +358,7 @@ def run_vntyper_job(
                     logger.error(f"Result cleanup failed; preserved complete archive at {quarantine_path}: {e}")
                 except Exception as rollback_error:
                     logger.error(f"Error quarantining failed job's public archive: {rollback_error}")
-                    archive_published = os.path.islink(f"{output_dir}.zip")
+                    archive_published = True
                 raise
 
         # Update usage data on success
@@ -395,25 +395,25 @@ def run_vntyper_job(
         logger.error(f"Error in VNtyper job: {e}")
         if archive_published:
             try:
-                clear_stale_archive(
+                quarantine_path = quarantine_archive(
                     output_dir,
                     "zip",
                     protected_paths=(bam_path, index_path) if index_path else (bam_path,),
                 )
                 archive_published = False
-            except Exception as rollback_error:
-                logger.error(f"Error removing failed job's public archive: {rollback_error}")
+                if quarantine_path is not None:
+                    logger.error(f"Preserved failed job's complete archive at {quarantine_path}")
+            except Exception as quarantine_error:
+                logger.error(f"Error quarantining failed job's public archive: {quarantine_error}")
                 try:
-                    quarantine_path = quarantine_archive(
+                    clear_stale_archive(
                         output_dir,
                         "zip",
                         protected_paths=(bam_path, index_path) if index_path else (bam_path,),
                     )
                     archive_published = False
-                    if quarantine_path is not None:
-                        logger.error(f"Preserved failed job's complete archive at {quarantine_path}")
-                except Exception as quarantine_error:
-                    logger.error(f"Error quarantining failed job's public archive: {quarantine_error}")
+                except Exception as rollback_error:
+                    logger.error(f"Error removing failed job's public archive: {rollback_error}")
         try:
             redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
         except Exception as status_error:
@@ -604,17 +604,17 @@ def run_cohort_analysis_job(
         logger.error(f"Error in joint cohort analysis for {cohort_id}: {e}")
         if archive_published:
             try:
-                clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
+                quarantine_path = quarantine_archive(output_dir, "zip", protected_paths=zip_paths)
                 archive_published = False
-            except Exception as rollback_error:
-                logger.error(f"Error removing failed cohort archive: {rollback_error}")
+                if quarantine_path is not None:
+                    logger.error(f"Preserved failed cohort's complete archive at {quarantine_path}")
+            except Exception as quarantine_error:
+                logger.error(f"Error quarantining failed cohort archive: {quarantine_error}")
                 try:
-                    quarantine_path = quarantine_archive(output_dir, "zip", protected_paths=zip_paths)
+                    clear_stale_archive(output_dir, "zip", protected_paths=zip_paths)
                     archive_published = False
-                    if quarantine_path is not None:
-                        logger.error(f"Preserved failed cohort's complete archive at {quarantine_path}")
-                except Exception as quarantine_error:
-                    logger.error(f"Error quarantining failed cohort archive: {quarantine_error}")
+                except Exception as rollback_error:
+                    logger.error(f"Error removing failed cohort archive: {rollback_error}")
         try:
             redis_usage_client.hset(f"usage:{job_id}", "status", "failed")
         except Exception as status_error:
