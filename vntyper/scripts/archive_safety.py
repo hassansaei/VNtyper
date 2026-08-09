@@ -39,6 +39,21 @@ def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
+def _same_entry_observation(left: os.stat_result, right: os.stat_result) -> bool:
+    """Return whether two observations identify the same unchanged directory entry."""
+    return (
+        left.st_dev,
+        left.st_ino,
+        stat.S_IFMT(left.st_mode),
+        left.st_ctime_ns,
+    ) == (
+        right.st_dev,
+        right.st_ino,
+        stat.S_IFMT(right.st_mode),
+        right.st_ctime_ns,
+    )
+
+
 def _archive_path(base_name: str | Path, archive_format: str) -> Path:
     try:
         suffix = _ARCHIVE_SUFFIXES[archive_format]
@@ -141,6 +156,8 @@ def _clear_stale_at(
     )
     if previous_metadata is None:
         return
+    if expected_metadata is None or not _same_entry_observation(expected_metadata, previous_metadata):
+        _reject(f"Archive destination changed after validation: {destination_name}")
     quarantine_name = f".{destination_name}.stale-{secrets.token_hex(8)}"
     os.rename(
         destination_name,

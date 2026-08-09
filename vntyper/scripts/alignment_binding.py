@@ -29,7 +29,7 @@ class AlignmentBinding:
         self._descriptor: int | None = None
         self._descriptor_identity: tuple[int, int] | None = None
         self._view_path: Path | None = None
-        self._view_identity: tuple[int, int] | None = None
+        self._view_identity: tuple[int, int, int | None] | None = None
         self._view_kind: str | None = None
         self._index_binding: AlignmentIndexBinding | None = None
         self.input_path = input_path
@@ -87,7 +87,8 @@ class AlignmentBinding:
 
     def _record_view(self, destination: Path, installed_stat: os.stat_result, kind: str) -> None:
         self._view_path = destination
-        self._view_identity = (installed_stat.st_dev, installed_stat.st_ino)
+        stable_ctime = installed_stat.st_ctime_ns if kind == "symlink" else None
+        self._view_identity = (installed_stat.st_dev, installed_stat.st_ino, stable_ctime)
         self._view_kind = kind
 
     def _install_proc_view(self, destination: Path) -> bool:
@@ -102,6 +103,7 @@ class AlignmentBinding:
             os.symlink(self.view_target, temporary)
             installed_stat = os.lstat(temporary)
             os.replace(temporary, destination)
+            installed_stat = os.lstat(destination)
         except OSError:
             with suppress(OSError):
                 os.unlink(temporary)
@@ -125,6 +127,7 @@ class AlignmentBinding:
             ):
                 raise OSError("hardlink does not identify the already-open alignment")
             os.replace(temporary, destination)
+            installed_stat = os.stat(destination, follow_symlinks=False)
         except OSError as error:
             with suppress(OSError):
                 os.unlink(temporary)
@@ -171,7 +174,8 @@ class AlignmentBinding:
             message = f"Unable to inspect owned alignment view {self._view_path} before descriptor release: {error}"
             logger.error(message)
             raise RuntimeError(message) from error
-        current_identity = (current_stat.st_dev, current_stat.st_ino)
+        stable_ctime = current_stat.st_ctime_ns if self._view_kind == "symlink" else None
+        current_identity = (current_stat.st_dev, current_stat.st_ino, stable_ctime)
         expected_type = (
             stat.S_ISLNK(current_stat.st_mode) if self._view_kind == "symlink" else stat.S_ISREG(current_stat.st_mode)
         )

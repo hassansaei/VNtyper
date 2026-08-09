@@ -338,6 +338,7 @@ def test_a_known_task9_declaration_is_dispatched_without_changing_cram_selection
 @pytest.mark.parametrize("include_all", [False, True])
 def test_build_fixtures_dispatches_declared_single_end_bams_without_all_bypassing_them(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     include_all: bool,
 ) -> None:
     """Task9 declarations are materialized by the same command that validates them."""
@@ -361,6 +362,8 @@ def test_build_fixtures_dispatches_declared_single_end_bams_without_all_bypassin
             }
         )
     )
+    derived: list[Path] = []
+    monkeypatch.setattr(cram_fixtures, "derive_cram", lambda _s, bam, _d, _f: derived.append(bam))
 
     cram_fixtures.build_fixtures(
         "samtools",
@@ -377,6 +380,7 @@ def test_build_fixtures_dispatches_declared_single_end_bams_without_all_bypassin
         records = list(alignment.fetch(until_eof=True))
     assert len(records) == 1
     assert records[0].is_paired is False
+    assert derived == ([source] if include_all else [])
 
 
 def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_to_the_repo(

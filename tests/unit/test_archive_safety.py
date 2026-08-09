@@ -6,6 +6,7 @@ import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -276,12 +277,29 @@ def test_stale_cleanup_never_moves_a_destination_changed_after_validation(
     if initially_present:
         destination.write_bytes(b"old stale result")
     original_validate = archive_safety._validate_destination
+    original_stat = os.stat
 
     def validate_then_insert(*args, **kwargs):
         result = original_validate(*args, **kwargs)
         if destination.exists():
             destination.unlink()
         destination.write_bytes(PATIENT_BYTES)
+        if result is not None:
+            replacement = original_stat(destination, follow_symlinks=False)
+            reused_identity = SimpleNamespace(
+                st_dev=result.st_dev,
+                st_ino=result.st_ino,
+                st_mode=replacement.st_mode,
+                st_nlink=replacement.st_nlink,
+                st_ctime_ns=result.st_ctime_ns + 1,
+            )
+
+            def expose_reused_identity(path, *stat_args, **stat_kwargs):
+                if path == destination.name and stat_kwargs.get("dir_fd") is not None:
+                    return reused_identity
+                return original_stat(path, *stat_args, **stat_kwargs)
+
+            monkeypatch.setattr(archive_safety.os, "stat", expose_reused_identity)
         return result
 
     monkeypatch.setattr(archive_safety, "_validate_destination", validate_then_insert)

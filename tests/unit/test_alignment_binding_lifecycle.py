@@ -9,6 +9,7 @@ import shlex
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -389,6 +390,7 @@ def test_plan_close_never_unlinks_a_replaced_view(tmp_path: Path, replacement_ki
     _, _, plan = _build_view(tmp_path)
     view = Path(plan.view_path)
     owned_target = os.readlink(view)
+    owned_stat = os.lstat(view)
     view.unlink()
     if replacement_kind == "file":
         view.write_bytes(b"operator replacement")
@@ -399,7 +401,24 @@ def test_plan_close_never_unlinks_a_replaced_view(tmp_path: Path, replacement_ki
     else:
         view.symlink_to(owned_target)
 
-    with pytest.raises(RuntimeError, match="owned alignment view was replaced"):
+    replacement_stat = os.lstat(view)
+    reused_identity = SimpleNamespace(
+        st_dev=owned_stat.st_dev,
+        st_ino=owned_stat.st_ino,
+        st_mode=replacement_stat.st_mode,
+        st_ctime_ns=owned_stat.st_ctime_ns + 1,
+    )
+    real_lstat = os.lstat
+
+    def expose_reused_identity(path: str | os.PathLike[str]) -> os.stat_result | SimpleNamespace:
+        if Path(path) == view and replacement_kind == "same-target-symlink":
+            return reused_identity
+        return real_lstat(path)
+
+    with (
+        patch("vntyper.scripts.alignment_binding.os.lstat", side_effect=expose_reused_identity),
+        pytest.raises(RuntimeError, match="owned alignment view was replaced"),
+    ):
         plan.close()
 
     assert os.path.lexists(view)
@@ -488,17 +507,33 @@ def test_gc_preserves_the_descriptor_when_a_same_target_replacement_blocks_clean
     assert binding is not None
     target = os.readlink(view)
     descriptor = int(target.rsplit("/", maxsplit=1)[1])
+    owned_stat = os.lstat(view)
     view.unlink()
     view.symlink_to(target)
+    replacement_stat = os.lstat(view)
+    reused_identity = SimpleNamespace(
+        st_dev=owned_stat.st_dev,
+        st_ino=owned_stat.st_ino,
+        st_mode=replacement_stat.st_mode,
+        st_ctime_ns=owned_stat.st_ctime_ns + 1,
+    )
+    real_lstat = os.lstat
+
+    def expose_reused_identity(path: str | os.PathLike[str]) -> os.stat_result | SimpleNamespace:
+        if Path(path) == view:
+            return reused_identity
+        return real_lstat(path)
+
     reuse_candidate = tmp_path / "reuse-candidate.bin"
     reuse_candidate.write_bytes(b"must never appear through the alignment view")
     reused_descriptor: int | None = None
 
     try:
-        del plan
-        del binding
-        gc.collect()
-        reused_descriptor = os.open(reuse_candidate, os.O_RDONLY)
+        with patch("vntyper.scripts.alignment_binding.os.lstat", side_effect=expose_reused_identity):
+            del plan
+            del binding
+            gc.collect()
+            reused_descriptor = os.open(reuse_candidate, os.O_RDONLY)
 
         assert reused_descriptor != descriptor
         assert view.read_bytes() == alignment.read_bytes()
