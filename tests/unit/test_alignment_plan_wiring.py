@@ -237,6 +237,7 @@ def _assert_rejected_before_conversion_work(
     plan: AlignmentPlan,
     *,
     fast_mode: bool,
+    bed_file: Path | None = None,
     error_match: str = "derived alignment-conversion destination",
 ) -> None:
     """Assert an unsafe derived entry stops both region and command execution."""
@@ -255,10 +256,92 @@ def _assert_rejected_before_conversion_work(
             config=CONFIG,
             fast_mode=fast_mode,
             plan=plan,
+            bed_file=bed_file,
         )
 
     region_resolver.assert_not_called()
     command_runner.assert_not_called()
+
+
+def test_reference_alias_of_the_slice_is_rejected_before_conversion_work(tmp_path: Path) -> None:
+    plan = _plan(tmp_path, "cram")
+    reference = tmp_path / "run" / "output_sliced.bam"
+    reference.write_bytes(b"operator-reference")
+    plan = replace(plan, reference_path=str(reference))
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=True,
+        error_match="aliases protected input",
+    )
+
+    assert reference.read_bytes() == b"operator-reference"
+
+
+@pytest.mark.parametrize(
+    "destination_name",
+    [
+        "output_sliced.bam",
+        "output_unmapped.bam",
+        "output_sliced_unmapped.bam",
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_other.fastq.gz",
+        "output_single.fastq.gz",
+        "output_slice.log",
+        "output_filter.log",
+        "output_merge.log",
+        "output_index.log",
+        "output_sort_fastq.log",
+        "output_sliced.bam.bai",
+        "output_sliced.bam.csi",
+        "output_sliced.bai",
+        "output_sliced.csi",
+    ],
+)
+def test_operator_bed_alias_of_any_conversion_destination_is_rejected_before_work(
+    tmp_path: Path,
+    destination_name: str,
+) -> None:
+    plan = _plan(tmp_path, "bam")
+    bed_file = tmp_path / "run" / destination_name
+    bed_file.write_bytes(b"chr1\t1\t2\n")
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=False,
+        bed_file=bed_file,
+        error_match="aliases protected input",
+    )
+
+    assert bed_file.read_bytes() == b"chr1\t1\t2\n"
+
+
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+def test_operator_bed_filesystem_alias_of_a_conversion_destination_is_rejected_before_work(
+    tmp_path: Path,
+    alias_kind: str,
+) -> None:
+    plan = _plan(tmp_path, "bam")
+    destination = tmp_path / "run" / "output_R1.fastq.gz"
+    destination.write_bytes(b"operator-bed")
+    bed_file = tmp_path / "operator.bed"
+    if alias_kind == "symlink":
+        bed_file.symlink_to(destination)
+    else:
+        bed_file.hardlink_to(destination)
+
+    _assert_rejected_before_conversion_work(
+        tmp_path,
+        plan,
+        fast_mode=True,
+        bed_file=bed_file,
+        error_match="aliases protected input",
+    )
+
+    assert bed_file.read_bytes() == b"operator-bed"
 
 
 def test_stale_slice_symlink_to_patient_alignment_is_rejected_before_work(tmp_path: Path) -> None:

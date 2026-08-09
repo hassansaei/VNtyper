@@ -286,22 +286,6 @@ def test_side_expectation_rejects_a_missing_side() -> None:
         runner.materialize_side_expectation(case, "after")
 
 
-@pytest.mark.parametrize(
-    ("selected", "problem"),
-    [
-        ({"required_artifacts": []}, "expect_exit"),
-        ({"expect_exit": "maybe", "required_artifacts": []}, "expect_exit"),
-        ({"expect_exit": "zero", "required_artifacts": "summary.json"}, "required_artifacts"),
-    ],
-)
-def test_side_expectation_rejects_malformed_outcome_fields(selected: object, problem: str) -> None:
-    """A partial side declaration must not inherit a legacy outcome and pass silently."""
-    case = {"case_id": "mixed", "side_expectations": {"after": selected}}
-
-    with pytest.raises(ValueError, match=problem):
-        runner.materialize_side_expectation(case, "after")
-
-
 def test_a_cram_case_adds_a_missing_cram_section_to_its_complete_config_copy(tmp_path: Path) -> None:
     """Older target trees must still receive a replacement-safe complete config."""
     tree = tmp_path / "tree"

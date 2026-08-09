@@ -167,6 +167,61 @@ def test_a_nonzero_probe_requires_no_artefacts(tmp_path: Path) -> None:
     assert admissibility.check_case(case, _record(1), tmp_path)["expectation_met"] is True
 
 
+@pytest.mark.parametrize("stderr", ["", "reference could not be decoded", "FASTQ layout 'single' was rejected"])
+def test_a_declared_mixed_layout_refusal_rejects_an_unrelated_exit_one(tmp_path: Path, stderr: str) -> None:
+    """Missing tools, references, or another layout cannot satisfy the measured refusal."""
+    expected = "FASTQ layout 'mixed' cannot be consumed without dropping reads."
+    case = {
+        "case_id": "measured-mixed",
+        "expect_exit": "nonzero",
+        "required_artifacts": [],
+        "expected_stderr_contains": expected,
+    }
+
+    detail = admissibility.check_case(case, _record(1), tmp_path, stderr=stderr)
+
+    assert detail["expectation_met"] is False
+    assert detail["stderr_problem"] == f"expected stderr to contain {expected!r}"
+    assert detail["expectation_problems"] == [detail["stderr_problem"]]
+
+
+def test_a_declared_mixed_layout_refusal_accepts_the_causal_diagnostic(tmp_path: Path) -> None:
+    """The stable prefix proves the exit came from fail-closed read routing."""
+    expected = "FASTQ layout 'mixed' cannot be consumed without dropping reads."
+    case = {
+        "case_id": "measured-mixed",
+        "expect_exit": "nonzero",
+        "required_artifacts": [],
+        "expected_stderr_contains": expected,
+    }
+
+    detail = admissibility.check_case(
+        case,
+        _record(1),
+        tmp_path,
+        stderr=f"ERROR: {expected} Produced FASTQs: r1=1, r2=1, single=1",
+    )
+
+    assert detail["expectation_met"] is True
+    assert detail["stderr_problem"] == ""
+
+
+@pytest.mark.parametrize("invalid", ["", "   ", [], ["mixed"], False, True])
+def test_a_legacy_case_cannot_bypass_causal_diagnostic_validation(tmp_path: Path, invalid: object) -> None:
+    """Top-level expectations must be as strict as materialized side expectations."""
+    case = {
+        "case_id": "legacy-mixed",
+        "expect_exit": "nonzero",
+        "required_artifacts": [],
+        "expected_stderr_contains": invalid,
+    }
+
+    with pytest.raises(ValueError) as raised:
+        admissibility.check_case(case, _record(1), tmp_path, stderr="an unrelated exit")
+
+    assert str(raised.value) == "Case legacy-mixed has invalid expected_stderr_contains"
+
+
 def test_artefacts_are_not_checked_when_the_exit_code_already_failed(tmp_path: Path) -> None:
     """One failure, one message. A crashed run's missing files are a consequence, not a finding.
 

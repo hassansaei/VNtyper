@@ -33,6 +33,39 @@ def test_failed_idxstats_selects_the_lossless_stream_scan(tmp_path: Path) -> Non
     assert scan == "stream"
 
 
+def test_malformed_idxstats_logs_the_offending_line(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Fail-closed selection still tells the operator which evidence line was invalid."""
+    malformed = "chr1\t20000\tsix\t0\n*\t0\t0\t80\n"
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, malformed)),
+        caplog.at_level("INFO"),
+    ):
+        scan = choose_unmapped_scan("/run/view.cram", {}, 2, str(tmp_path), "sample")
+
+    assert scan == "stream"
+    assert "idxstats output is malformed at line 1: 'chr1\\t20000\\tsix\\t0'" in caplog.text
+
+
+def test_oversized_malformed_idxstats_log_is_bounded(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Untrusted idxstats output cannot expand a single operator diagnostic without bound."""
+    malformed = f"chr1\t{'9' * 5000}\t600\t0\n*\t0\t0\t80\n"
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, malformed)),
+        caplog.at_level("INFO"),
+    ):
+        scan = choose_unmapped_scan("/run/view.cram", {}, 2, str(tmp_path), "sample")
+
+    messages = [
+        record.getMessage() for record in caplog.records if "idxstats output is malformed" in record.getMessage()
+    ]
+    assert scan == "stream"
+    assert len(messages) == 1
+    assert "...<truncated>" in messages[0]
+    assert len(messages[0]) <= 300
+
+
 def test_bam_idxstats_with_placed_unmapped_reads_selects_the_complete_stream(tmp_path: Path) -> None:
     """The BAI tail shortcut cannot recover placed unmapped records."""
     placed = "chr1\t20000\t600\t329\n*\t0\t0\t4478\n"

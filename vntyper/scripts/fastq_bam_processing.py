@@ -12,6 +12,7 @@ from vntyper.scripts.alignment_contract import AlignmentPlan
 from vntyper.scripts.alignment_target_io import (
     remove_validated_slice_indexes,
     validate_alignment_conversion_destinations,
+    validate_fastq_processing_destinations,
 )
 from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
@@ -49,8 +50,10 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
         config (dict): Configuration dictionary containing tool paths and parameters.
 
     Raises:
+        ValueError: If a derived FASTQ destination is unsafe or aliases an input.
         RuntimeError: If FASTQ quality control fails.
     """
+    validate_fastq_processing_destinations(output, output_name, fastq_1, fastq_2)
     qc_command = build_fastp_command(
         fastp_path=config["tools"]["fastp"],
         threads=threads,
@@ -114,7 +117,8 @@ def process_bam_to_fastq(
         ValueError: If any derived output path is unsafe to overwrite.
         RuntimeError: If any step in the processing fails.
     """
-    validate_alignment_conversion_destinations(output, output_name, plan)
+    protected_inputs = (bed_file,) if bed_file is not None else ()
+    validate_alignment_conversion_destinations(output, output_name, plan, protected_inputs=protected_inputs)
     remove_validated_slice_indexes(output, output_name)
     samtools_path = config["tools"]["samtools"]
 

@@ -27,6 +27,7 @@ import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -482,6 +483,58 @@ def test_job_status_returns_the_stored_curated_preflight_message(
     response = client.get(f"/job-status/{FAILED_JOB_ID}/")
 
     assert response.json()["error"] == message
+
+
+def test_remote_header_policy_failure_survives_artifact_redis_status_transport(
+    client,
+    web_app,
+    fake_redis,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The exact curated policy message reaches the API without exposing its remote URI."""
+    from app.job_failures import read_preflight_failure
+
+    from vntyper.scripts.pipeline_alignment import prepare_input_alignment_preflight
+
+    _register_failed_job(fake_redis, web_app, monkeypatch)
+    output = tmp_path / "pipeline-output"
+    output.mkdir()
+    remote_uri = "http://127.0.0.1:8765/private/reference.fa"
+    header = f"@SQ\tSN:chr7\tLN:100\tUR:{remote_uri}\n"
+    expected_message = (
+        "Remote CRAM header reference is disabled by policy: contig=chr7, scheme=http. Replace the @SQ UR with "
+        "a local path, relative path, or file-scheme reference, or set "
+        "cram.allow_ambient_reference_resolution=true to accept "
+        "network access."
+    )
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value=header),
+        pytest.raises(ValueError, match="Remote CRAM header reference is disabled") as raised,
+    ):
+        prepare_input_alignment_preflight(
+            in_path=tmp_path / "patient-input" / "sample.cram",
+            input_type="CRAM",
+            output_dir=output,
+            config={"cram": {"local_ref_path": "/local/cache/%s"}},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+        )
+
+    assert str(raised.value) == expected_message
+    transported = read_preflight_failure(output)
+    assert transported == {"code": "reference_policy_invalid", "message": expected_message}
+    assert remote_uri not in expected_message
+    fake_redis.hset(f"usage:{FAILED_JOB_ID}", mapping=transported)
+
+    response = client.get(f"/job-status/{FAILED_JOB_ID}/")
+
+    assert response.json()["error"] == expected_message
 
 
 def test_job_status_uses_the_generic_message_when_no_curated_message_is_stored(

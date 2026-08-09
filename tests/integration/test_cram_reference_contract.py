@@ -341,7 +341,7 @@ def test_default_mode_rejects_a_remote_header_uri_before_network_or_probe_work(
     assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8")) == {
         "code": "reference_policy_invalid",
         "message": "Remote CRAM header reference is disabled by policy: contig=chr1, scheme=http. Replace the "
-        "@SQ UR with a local, relative, or file:// reference, or set "
+        "@SQ UR with a local path, relative path, or file-scheme reference, or set "
         "cram.allow_ambient_reference_resolution=true to accept network access.",
         "candidates": [],
     }

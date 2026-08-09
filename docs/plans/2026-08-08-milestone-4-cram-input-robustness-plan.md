@@ -616,7 +616,9 @@ route every produced FASTQ or fail naming it.
 - [ ] **Step 1:** baseline — three runs on `main`, alternating with the branch, on an idle
       host, through the harness's `run` subcommand. Time the BAM cases that complete on
       both revisions; separately record every case the new no-discard rule refuses so an
-      early failure is never compared with completed genotyping.
+      early failure is never compared with completed genotyping. Each declared
+      mixed-layout refusal must contain the stable causal routing diagnostic; an unrelated
+      exit 1 is not evidence.
 - [ ] **Step 2:** `make cram-fixtures` (never `--allow-matrix-drift`).
 - [ ] **Step 3:** three runs on the branch. Report median and range per arm. A regression
       is called only when the slower arm's *best* run beats the faster arm's *worst*
@@ -702,4 +704,6 @@ No preformatted reference fragment exists in `AlignmentPlan`; command builders r
 `reference_path` and own quoting. `choose_scan` returns `(scan, reason)` in Task 2 and is
 unpacked as such in Task 5.
 `classify_layout` takes four counts in Task 9's tests and its interface block.
-`resolve_any_index` (Task 3) is what Task 5 calls; `resolve_bam_index` is untouched.
+Task 5 uses the singular `resolve_any_index` for general supplied-artifact metadata and the
+deliberate BAI-only `resolve_bam_index` for non-fast BAM. Neither result is consumed: every
+run builds a fresh BAI or CRAI beside its view.

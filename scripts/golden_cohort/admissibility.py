@@ -134,20 +134,27 @@ def missing_artifacts(output_dir: Path, required: Sequence[str]) -> list[str]:
     return [name for name in required if not (output_dir / name).is_file()]
 
 
-def check_case(case: dict[str, Any], record: dict[str, Any], output_dir: Path) -> dict[str, Any]:
-    """Judge one completed case against its declared exit code and artefact set.
+def check_case(case: dict[str, Any], record: dict[str, Any], output_dir: Path, *, stderr: str = "") -> dict[str, Any]:
+    """Judge one completed case against its declared exit, diagnostic and artefacts.
 
     Args:
         case: The matrix entry, carrying ``expect_exit`` and ``required_artifacts``.
         record: The runner's record for this case, carrying ``exit_code``, ``aborted``
             and ``timed_out``.
         output_dir: Where the case wrote.
+        stderr: Complete process stderr used for an optional causal diagnostic check.
 
     Returns:
-        dict[str, Any]: ``expectation_met``, ``exit_problem``, ``missing_artifacts`` and
-        ``expectation_problems`` - the last being every reason as a list, empty when the
-        case is admissible.
+        dict[str, Any]: ``expectation_met``, ``exit_problem``, ``stderr_problem``,
+        ``missing_artifacts`` and ``expectation_problems`` - the last being every reason
+        as a list, empty when the case is admissible.
     """
+    expected_stderr = case.get("expected_stderr_contains")
+    if "expected_stderr_contains" in case and (not isinstance(expected_stderr, str) or not expected_stderr.strip()):
+        msg = f"Case {case.get('case_id', '<unknown>')} has invalid expected_stderr_contains"
+        logger.error(msg)
+        raise ValueError(msg)
+
     expect_exit = case.get("expect_exit", "zero")
     exit_problem = check_exit(
         expect_exit,
@@ -157,8 +164,11 @@ def check_case(case: dict[str, Any], record: dict[str, Any], output_dir: Path) -
     )
     required = list(case.get("required_artifacts", ()))
     missing = missing_artifacts(output_dir, required) if not exit_problem else []
+    stderr_problem = ""
+    if not exit_problem and isinstance(expected_stderr, str) and expected_stderr not in stderr:
+        stderr_problem = f"expected stderr to contain {expected_stderr!r}"
 
-    problems = [problem for problem in (exit_problem,) if problem]
+    problems = [problem for problem in (exit_problem, stderr_problem) if problem]
     if missing:
         problems.append(
             f"exited as expected but did not write {len(missing)} of {len(required)} required artefact(s): "
@@ -169,6 +179,7 @@ def check_case(case: dict[str, Any], record: dict[str, Any], output_dir: Path) -
         "required_artifacts": required,
         "missing_artifacts": missing,
         "exit_problem": exit_problem,
+        "stderr_problem": stderr_problem,
         "expectation_problems": problems,
         "expectation_met": not problems,
     }

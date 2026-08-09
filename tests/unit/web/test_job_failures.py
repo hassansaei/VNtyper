@@ -39,12 +39,29 @@ def test_reader_returns_only_code_and_message_from_the_exact_artifact(tmp_path: 
     [
         {"code": "reference_unresolved", "message": "missing candidates"},
         _artifact("Cannot decode /opt/vntyper/private/sample.cram"),
+        _artifact("Cannot decode file:///opt/vntyper/private/sample.cram"),
         _artifact(r"Cannot decode C:\worker\private\sample.cram"),
     ],
 )
 def test_reader_rejects_malformed_or_path_bearing_artifacts(tmp_path: Path, payload: dict) -> None:
     """An unauthenticated endpoint never trusts an incomplete or path-bearing file."""
     (tmp_path / "preflight_error.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert read_preflight_failure(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Cannot decode file://private-host",
+        "Cannot decode profile://private-host",
+        "Cannot decode file://file://private-host",
+        "Cannot decode FILE://private-host",
+    ],
+)
+def test_reader_rejects_uri_like_messages_that_could_hide_path_separators(tmp_path: Path, message: str) -> None:
+    """Removing an allowed-looking substring must never erase disclosure evidence."""
+    (tmp_path / "preflight_error.json").write_text(json.dumps(_artifact(message)), encoding="utf-8")
 
     assert read_preflight_failure(tmp_path) is None
 

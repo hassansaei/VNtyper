@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReadSetEvidence(TypedDict):
-    """Stable evidence that two extraction modes emitted the same BAM records."""
+    """Stable count and sorted-QNAME-multiset evidence for two extraction modes."""
 
     count: int
     sorted_read_name_sha256: str

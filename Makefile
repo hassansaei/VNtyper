@@ -213,8 +213,8 @@ test-fast:
 #   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
 #                never fails.
 # scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
-# whenever coverage climbs past it.
-COVERAGE_TARGET ?= 84
+# whenever coverage climbs past it. The current branch-inclusive target/floor is 85%.
+COVERAGE_TARGET ?= 85
 
 # `--cov-report=xml` costs ~0.1s and writes coverage.xml, which `patch-coverage` below
 # consumes. Emitting it here rather than from a second pytest run keeps the patch gate

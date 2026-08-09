@@ -12,7 +12,7 @@ from vntyper.scripts.alignment_preflight import (
     run_preflight,
 )
 from vntyper.scripts.alignment_processing import align_and_sort_fastq
-from vntyper.scripts.alignment_target_io import validate_alignment_output_root
+from vntyper.scripts.alignment_target_io import validate_alignment_output_root, validate_fastq_pipeline_destinations
 from vntyper.scripts.artifact_names import select_best_vcf_file
 
 # Import cross-match functions from cross_match.py
@@ -226,6 +226,7 @@ def run_pipeline(
             previous_ref_path = prepared.previous_ref_path
             reference_resolution_pinned = True
         else:
+            validate_fastq_pipeline_destinations(output_dir, fastq1, fastq2, bed_file, bwa_reference, config)
             bed_file_path = prepare_alignment_target(
                 input_type=input_type,
                 bam=bam,
@@ -247,8 +248,6 @@ def run_pipeline(
 
         summary = start_summary(version=VERSION, input_files=input_files)
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
-
-        # --- Input Conversion ---
         if input_type in ["BAM", "CRAM"]:
             logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
             conversion_start = datetime.now(timezone.utc).replace(tzinfo=None)

@@ -7,6 +7,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+MIXED_LAYOUT_FAILURE_DIAGNOSTIC = "FASTQ layout 'mixed' cannot be consumed without dropping reads."
+
 # Measured by the milestone-four full 50-BAM candidate run. The baseline exits zero for
 # these inputs only because samtools's stranded FASTQ was ignored; the candidate names and
 # rejects every produced file instead. Keeping the ids explicit makes this a reviewable
@@ -63,7 +65,11 @@ def declare_mixed_layout_outcome(case: dict[str, Any]) -> dict[str, Any]:
         required = list(declared["required_artifacts"])
         declared["side_expectations"] = {
             "before": {"expect_exit": "zero", "required_artifacts": required},
-            "after": {"expect_exit": "nonzero", "required_artifacts": []},
+            "after": {
+                "expect_exit": "nonzero",
+                "required_artifacts": [],
+                "expected_stderr_contains": MIXED_LAYOUT_FAILURE_DIAGNOSTIC,
+            },
         }
     return declared
 
@@ -110,5 +116,11 @@ def materialize_side_expectation(case: dict[str, Any], side: str) -> dict[str, A
         msg = f"Case {case['case_id']} has invalid {side!r} required_artifacts"
         logger.error(msg)
         raise ValueError(msg)
+    if "expected_stderr_contains" in selected:
+        expected_stderr = selected["expected_stderr_contains"]
+        if not isinstance(expected_stderr, str) or not expected_stderr.strip():
+            msg = f"Case {case['case_id']} has invalid {side!r} expected_stderr_contains"
+            logger.error(msg)
+            raise ValueError(msg)
     runtime.update(selected)
     return runtime

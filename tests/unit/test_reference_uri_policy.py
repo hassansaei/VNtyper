@@ -106,5 +106,7 @@ def test_default_header_policy_rejects_remote_uri_without_disclosing_its_path() 
     assert "contig=chr7" in message
     assert "scheme=http" in message
     assert "allow_ambient_reference_resolution=true" in message
+    assert "/" not in message
+    assert "file-scheme reference" in message
     assert uri not in message
     assert "/private/reference.fa" not in message

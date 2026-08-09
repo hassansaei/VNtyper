@@ -73,6 +73,42 @@ class TestChooseScan:
     def test_auto_falls_back_to_stream_on_a_malformed_table(self):
         assert choose_scan("auto", "garbage", exit_ok=True)[0] == SCAN_STREAM
 
+    def test_malformed_reason_names_the_exact_offending_line(self):
+        malformed = "chr1\t20000\tsix\t50\n*\t0\t0\t80\n"
+
+        scan, reason = choose_scan("auto", malformed, exit_ok=True)
+
+        assert scan == SCAN_STREAM
+        assert reason == (
+            "idxstats output is malformed at line 1: 'chr1\\t20000\\tsix\\t50'; using lossless stream scan"
+        )
+
+    def test_oversized_malformed_line_is_escaped_and_bounded(self):
+        oversized_count = "9" * 5000
+        malformed = f"chr1\t{oversized_count}\t600\t50\n*\t0\t0\t80\n"
+
+        scan, reason = choose_scan("auto", malformed, exit_ok=True)
+
+        assert scan == SCAN_STREAM
+        assert reason.startswith("idxstats output is malformed at line 1: 'chr1\\t999")
+        assert "...<truncated>" in reason
+        assert "\\t600\\t50" not in reason
+        assert len(reason) <= 256
+
+    def test_empty_output_reason_names_the_missing_evidence(self):
+        assert choose_scan("auto", "", exit_ok=True) == (
+            SCAN_STREAM,
+            "idxstats output is empty; using lossless stream scan",
+        )
+
+    def test_missing_star_reason_names_the_required_terminal_row(self):
+        without_star = "chr1\t20000\t600\t0\n"
+
+        assert choose_scan("auto", without_star, exit_ok=True) == (
+            SCAN_STREAM,
+            "idxstats output is missing its terminal '*' row; using lossless stream scan",
+        )
+
     def test_auto_falls_back_to_stream_when_idxstats_itself_failed(self):
         assert choose_scan("auto", CLEAN, exit_ok=False)[0] == SCAN_STREAM
 

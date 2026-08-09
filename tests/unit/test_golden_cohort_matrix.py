@@ -212,6 +212,7 @@ def test_mixed_base_cases_declare_side_specific_fail_closed_outcomes(tmp_path: P
         assert by_id[case_id]["side_expectations"]["after"] == {
             "expect_exit": "nonzero",
             "required_artifacts": [],
+            "expected_stderr_contains": "FASTQ layout 'mixed' cannot be consumed without dropping reads.",
         }
 
 
@@ -225,6 +226,7 @@ def test_repeats_do_not_blindly_inherit_the_base_layout_outcome(tmp_path: Path) 
     assert by_id["a5c1_hg19_advntr"]["side_expectations"]["after"] == {
         "expect_exit": "nonzero",
         "required_artifacts": [],
+        "expected_stderr_contains": "FASTQ layout 'mixed' cannot be consumed without dropping reads.",
     }
 
 

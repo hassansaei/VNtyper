@@ -331,7 +331,7 @@ def _run_one(
         if isinstance(raw_count, int) and isinstance(stream_count, int):
             record["raw_indexed_loss"] = stream_count - raw_count
 
-    record.update(admissibility.check_case(case, record, output_dir))
+    record.update(admissibility.check_case(case, record, output_dir, stderr=stderr))
     read_set_problems.extend(cram_evidence.validate_cram_evidence(case, record))
     if read_set_problems:
         record["expectation_problems"].extend(read_set_problems)

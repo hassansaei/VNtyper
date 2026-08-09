@@ -8,6 +8,49 @@ logger = logging.getLogger(__name__)
 
 SCAN_INDEXED = "indexed"
 SCAN_STREAM = "stream"
+_MAX_DIAGNOSTIC_EXCERPT_CHARACTERS = 160
+_TRUNCATION_MARKER = "...<truncated>"
+
+
+def _diagnostic_excerpt(line: str) -> str:
+    """Render one escaped idxstats line within the operator-message bound."""
+    rendered = repr(line)
+    if len(rendered) <= _MAX_DIAGNOSTIC_EXCERPT_CHARACTERS:
+        return rendered
+    prefix_length = _MAX_DIAGNOSTIC_EXCERPT_CHARACTERS - len(_TRUNCATION_MARKER) - 1
+    return f"{rendered[:prefix_length]}{_TRUNCATION_MARKER}{rendered[-1]}"
+
+
+def _parse_idxstats_with_error(text: str) -> tuple[tuple[int, int] | None, str]:
+    """Parse an idxstats table and retain the exact fail-closed diagnostic."""
+    lines = text.splitlines()
+    if not lines:
+        return None, "idxstats output is empty"
+
+    placed_unmapped = 0
+    unplaced = 0
+    star_rows = 0
+    for line_number, line in enumerate(lines, start=1):
+        fields = line.split("\t")
+        if len(fields) != 4 or not all(field.isascii() and field.isdecimal() for field in fields[1:]):
+            return None, f"idxstats output is malformed at line {line_number}: {_diagnostic_excerpt(line)}"
+
+        try:
+            counts = tuple(int(field) for field in fields[1:])
+        except ValueError:
+            return None, f"idxstats output is malformed at line {line_number}: {_diagnostic_excerpt(line)}"
+
+        if fields[0] == "*":
+            star_rows += 1
+            if line_number != len(lines):
+                return None, f"idxstats output is malformed at line {line_number}: {_diagnostic_excerpt(line)}"
+            unplaced = counts[2]
+        else:
+            placed_unmapped += counts[2]
+
+    if star_rows == 0:
+        return None, "idxstats output is missing its terminal '*' row"
+    return (placed_unmapped, unplaced), ""
 
 
 def parse_idxstats(text: str) -> tuple[int, int] | None:
@@ -19,36 +62,8 @@ def parse_idxstats(text: str) -> tuple[int, int] | None:
     Returns:
         A ``(placed_unmapped, unplaced)`` pair, or ``None`` for malformed output.
     """
-    lines = text.splitlines()
-    if not lines:
-        return None
-
-    placed_unmapped = 0
-    unplaced = 0
-    star_rows = 0
-    for line_number, line in enumerate(lines, start=1):
-        fields = line.split("\t")
-        if len(fields) != 4:
-            return None
-        if not all(field.isascii() and field.isdecimal() for field in fields[1:]):
-            return None
-
-        try:
-            counts = tuple(int(field) for field in fields[1:])
-        except ValueError:
-            return None
-
-        if fields[0] == "*":
-            star_rows += 1
-            if line_number != len(lines):
-                return None
-            unplaced = counts[2]
-        else:
-            placed_unmapped += counts[2]
-
-    if star_rows != 1:
-        return None
-    return placed_unmapped, unplaced
+    counts, _error = _parse_idxstats_with_error(text)
+    return counts
 
 
 def choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool) -> tuple[str, str]:
@@ -75,9 +90,9 @@ def choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool) -> tu
     if not exit_ok:
         return SCAN_STREAM, "idxstats failed; using lossless stream scan"
 
-    counts = parse_idxstats(idxstats_text if idxstats_text is not None else "")
+    counts, parse_error = _parse_idxstats_with_error(idxstats_text if idxstats_text is not None else "")
     if counts is None:
-        return SCAN_STREAM, "idxstats output is malformed; using lossless stream scan"
+        return SCAN_STREAM, f"{parse_error}; using lossless stream scan"
 
     placed_unmapped, _ = counts
     if placed_unmapped == 0:

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.resources as pkg_resources
-import json
 import logging
 from pathlib import Path
 
+from vntyper.scripts.alignment_target_io import bwa_index_paths
 from vntyper.scripts.command_builders import (
     build_bwa_align_sort_command,
     build_samtools_index_command,
@@ -16,7 +15,7 @@ from vntyper.scripts.utils import run_command
 logger = logging.getLogger(__name__)
 
 
-def check_bwa_index(reference: Path) -> bool:
+def check_bwa_index(reference: Path, config: dict | None = None) -> bool:
     """
     Check if the BWA index files exist for the given reference genome.
 
@@ -26,23 +25,13 @@ def check_bwa_index(reference: Path) -> bool:
 
     Args:
         reference (Path): Path to the reference genome (without extension).
+        config (dict | None): Pipeline configuration controlling BWA index suffixes.
 
     Returns:
         bool: True if all BWA index files exist, False otherwise.
     """
-    with pkg_resources.open_text("vntyper", "config.json") as f:
-        config_data = json.load(f)
-
-    required_extensions = config_data.get("tool_params", {}).get(
-        "bwa_index_extensions", [".amb", ".ann", ".bwt", ".pac", ".sa"]
-    )
-
     reference = Path(reference)
-    missing_files = [
-        reference.with_name(reference.name + ext)
-        for ext in required_extensions
-        if not reference.with_name(reference.name + ext).exists()
-    ]
+    missing_files = [path for path in bwa_index_paths(reference, config or {}) if not path.exists()]
 
     if missing_files:
         # Log a warning with the list of missing index files
@@ -93,7 +82,7 @@ def align_and_sort_fastq(
 
     sorted_bam_out = output_dir / f"{output_name}_sorted.bam"
 
-    if not check_bwa_index(reference):
+    if not check_bwa_index(reference, config):
         logger.error(
             f"BWA index files not found for reference: {reference}. "
             f"Please run 'bwa index {reference}' to generate them."

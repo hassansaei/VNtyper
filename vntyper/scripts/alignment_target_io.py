@@ -1,4 +1,4 @@
-"""Safe installation of generated alignment target BED files."""
+"""Safe installation and ownership validation for generated pipeline files."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from pathlib import Path
 from vntyper.scripts.alignment_contract import AlignmentPlan, index_candidate_names
 
 logger = logging.getLogger(__name__)
+
+BWA_INDEX_EXTENSIONS = (".amb", ".ann", ".bwt", ".pac", ".sa")
 
 
 def _reject(message: str) -> None:
@@ -40,7 +42,34 @@ def _protected_alignment_paths(input_path: str | Path, file_format: str) -> tupl
     return tuple(paths)
 
 
-def _alignment_plan_protected_paths(plan: AlignmentPlan) -> tuple[Path, ...]:
+def _protected_path_variants(paths: tuple[str | Path, ...]) -> tuple[Path, ...]:
+    variants: list[Path] = []
+    for path in paths:
+        absolute = _absolute(path)
+        variants.extend((absolute, absolute.resolve(strict=False)))
+    return tuple(dict.fromkeys(variants))
+
+
+def bwa_index_paths(reference: str | Path, config: dict) -> tuple[Path, ...]:
+    """Return the BWA sidecars used by alignment and pipeline safety.
+
+    Args:
+        reference: BWA reference FASTA.
+        config: Pipeline configuration containing optional index suffixes.
+
+    Returns:
+        The canonical sidecars plus any configured extras adjacent to ``reference``.
+    """
+    configured = config.get("tool_params", {}).get("bwa_index_extensions", ())
+    extensions = tuple(dict.fromkeys((*BWA_INDEX_EXTENSIONS, *configured)))
+    reference_path = Path(reference)
+    return tuple(reference_path.with_name(reference_path.name + extension) for extension in extensions)
+
+
+def _alignment_plan_protected_paths(
+    plan: AlignmentPlan,
+    additional_paths: tuple[str | Path, ...],
+) -> tuple[Path, ...]:
     paths: list[Path] = []
     for alignment_path in (plan.input_path, plan.view_path):
         alignment = _absolute(alignment_path)
@@ -49,49 +78,43 @@ def _alignment_plan_protected_paths(plan: AlignmentPlan) -> tuple[Path, ...]:
             paths.extend(_absolute(candidate) for candidate in index_candidate_names(str(source), plan.file_format))
     index = _absolute(plan.index_path)
     paths.extend((index, index.resolve(strict=False)))
+    operator_paths = additional_paths
+    if plan.reference_path is not None:
+        operator_paths = (*operator_paths, plan.reference_path)
+    paths.extend(_protected_path_variants(operator_paths))
     return tuple(dict.fromkeys(paths))
 
 
-def _validate_owned_destination(destination: Path, protected_paths: tuple[Path, ...]) -> None:
+def _validate_owned_destination(
+    destination: Path,
+    protected_paths: tuple[Path, ...],
+    *,
+    description: str = "derived alignment-conversion",
+    allowed_symlink_target: Path | None = None,
+) -> None:
     destination_absolute = _absolute(destination)
     if os.path.lexists(destination):
         destination_stat = os.lstat(destination)
-        if stat.S_ISLNK(destination_stat.st_mode):
-            _reject(f"Unsafe derived alignment-conversion destination is a symlink: {destination}")
-        if not stat.S_ISREG(destination_stat.st_mode):
-            _reject(f"Unsafe derived alignment-conversion destination is not a regular file: {destination}")
+        if stat.S_ISLNK(destination_stat.st_mode) and (
+            allowed_symlink_target is None
+            or destination.resolve(strict=False) != _absolute(allowed_symlink_target).resolve(strict=False)
+        ):
+            _reject(f"Unsafe {description} destination is a symlink: {destination}")
+        if not stat.S_ISREG(destination_stat.st_mode) and not stat.S_ISLNK(destination_stat.st_mode):
+            _reject(f"Unsafe {description} destination is not a regular file: {destination}")
     else:
         destination_stat = None
 
     for protected in protected_paths:
         if destination_absolute == protected or _same_file(destination, protected):
-            _reject(f"Unsafe derived alignment-conversion destination aliases protected input: {destination}")
+            _reject(f"Unsafe {description} destination aliases protected input: {destination}")
 
     if destination_stat is not None and destination_stat.st_nlink > 1:
-        _reject(f"Unsafe derived alignment-conversion destination has multiple hard links: {destination}")
+        _reject(f"Unsafe {description} destination has multiple hard links: {destination}")
 
 
-def validate_alignment_conversion_destinations(
-    output: str | Path,
-    output_name: str,
-    plan: AlignmentPlan,
-) -> None:
-    """Validate every file path owned by alignment-to-FASTQ conversion.
-
-    Existing single-link regular files are replaceable run artifacts. Symlinks,
-    non-regular entries, multiply linked files, and aliases of the proven plan are
-    rejected without modifying any destination.
-
-    Args:
-        output: Conversion-stage output directory.
-        output_name: Base name used for every derived artifact.
-        plan: Proven alignment inputs and index that destinations must not alias.
-
-    Raises:
-        ValueError: If an output root or derived destination is unsafe.
-    """
+def _alignment_conversion_destinations(output: str | Path, output_name: str) -> tuple[Path, ...]:
     output_root = Path(output)
-    validate_alignment_output_root(output_root, plan.input_path, plan.file_format)
     sliced_bam = output_root / f"{output_name}_sliced.bam"
     destinations = [
         sliced_bam,
@@ -108,9 +131,193 @@ def validate_alignment_conversion_destinations(
         output_root / f"{output_name}_sort_fastq.log",
     ]
     destinations.extend(Path(candidate) for candidate in index_candidate_names(str(sliced_bam), "bam"))
-    protected_paths = _alignment_plan_protected_paths(plan)
-    for destination in destinations:
+    return tuple(destinations)
+
+
+def _fastq_processing_destinations(output: str | Path, output_name: str, *, paired: bool) -> tuple[Path, ...]:
+    output_root = Path(output)
+    destinations = [
+        output_root / f"{output_name}_R1.fastq.gz",
+        output_root / f"{output_name}.html",
+        output_root / f"{output_name}.json",
+        output_root / f"{output_name}_fastp.log",
+    ]
+    if paired:
+        destinations.append(output_root / f"{output_name}_R2.fastq.gz")
+    return tuple(destinations)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _validate_operator_inputs_outside_output(
+    output_root: Path,
+    operator_inputs: tuple[str | Path, ...],
+) -> tuple[Path, ...]:
+    protected_paths = _protected_path_variants(operator_inputs)
+    root_variants = _protected_path_variants((output_root,))
+    for protected in protected_paths:
+        if any(_is_within(protected, root) for root in root_variants):
+            _reject(f"Operator-owned input is inside pipeline output root: {protected}")
+    return protected_paths
+
+
+def _validate_existing_output_tree(
+    output_root: Path,
+    protected_paths: tuple[Path, ...],
+    *,
+    allowed_file_symlinks: dict[Path, Path],
+) -> None:
+    if not os.path.lexists(output_root):
+        return
+    if not output_root.is_dir():
+        _reject(f"Pipeline output root must be a directory: {output_root}")
+
+    pending = [output_root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                if entry.is_symlink():
+                    if entry.is_dir(follow_symlinks=True):
+                        _reject(f"Unsafe pipeline output tree contains a symlink directory: {path}")
+                    allowed_target = allowed_file_symlinks.get(_absolute(path))
+                    if allowed_target is None or path.resolve(strict=False) != _absolute(allowed_target).resolve(
+                        strict=False
+                    ):
+                        _reject(f"Unsafe pipeline output tree contains an unsafe file symlink: {path}")
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    _reject(f"Unsafe pipeline output tree contains a non-regular entry: {path}")
+                if any(_same_file(path, protected) for protected in protected_paths):
+                    _reject(f"Pipeline output-tree entry aliases protected input: {path}")
+
+
+def validate_alignment_conversion_destinations(
+    output: str | Path,
+    output_name: str,
+    plan: AlignmentPlan,
+    *,
+    protected_inputs: tuple[str | Path, ...] = (),
+) -> None:
+    """Validate every file path owned by alignment-to-FASTQ conversion.
+
+    Existing single-link regular files are replaceable run artifacts. Symlinks,
+    non-regular entries, multiply linked files, and aliases of the proven plan are
+    rejected without modifying any destination.
+
+    Args:
+        output: Conversion-stage output directory.
+        output_name: Base name used for every derived artifact.
+        plan: Proven alignment inputs and index that destinations must not alias.
+        protected_inputs: Additional operator-owned inputs, such as a provided BED.
+
+    Raises:
+        ValueError: If an output root or derived destination is unsafe.
+    """
+    validate_alignment_output_root(output, plan.input_path, plan.file_format)
+    protected_paths = _alignment_plan_protected_paths(plan, protected_inputs)
+    for destination in _alignment_conversion_destinations(output, output_name):
         _validate_owned_destination(destination, protected_paths)
+
+
+def validate_fastq_processing_destinations(
+    output: str | Path,
+    output_name: str,
+    fastq_1: str | Path,
+    fastq_2: str | Path | None,
+) -> None:
+    """Reject fastp destinations that could overwrite operator-owned FASTQs.
+
+    Existing single-link regular files remain valid rerun artifacts. Direct path
+    collisions and filesystem aliases are rejected before fastp is launched.
+
+    Args:
+        output: FASTQ-processing output directory.
+        output_name: Base name used by fastp outputs and reports.
+        fastq_1: Operator-owned first FASTQ input.
+        fastq_2: Optional operator-owned second FASTQ input.
+
+    Raises:
+        ValueError: If a fastp destination is unsafe or aliases an input FASTQ.
+    """
+    protected_inputs: tuple[str | Path, ...] = (fastq_1,)
+    if fastq_2 is not None:
+        protected_inputs = (*protected_inputs, fastq_2)
+    protected_paths = _protected_path_variants(protected_inputs)
+    for destination in _fastq_processing_destinations(output, output_name, paired=fastq_2 is not None):
+        _validate_owned_destination(destination, protected_paths, description="FASTQ quality-control")
+
+
+def validate_fastq_pipeline_destinations(
+    output: str | Path,
+    fastq_1: str | Path,
+    fastq_2: str | Path | None,
+    bed_file: str | Path | None,
+    bwa_reference: str | Path,
+    config: dict,
+) -> None:
+    """Validate the full direct-FASTQ destination set against every input.
+
+    The validation runs once before stage-directory creation or any external tool,
+    covering destinations owned by fastp, BWA, alignment preflight, and post-alignment
+    conversion. A normal preflight view symlink from a previous run remains replaceable
+    only when it targets that run's sorted BAM.
+
+    Args:
+        output: Pipeline output root.
+        fastq_1: Operator-owned first FASTQ.
+        fastq_2: Optional operator-owned second FASTQ.
+        bed_file: Operator-provided BED target, or ``None`` for a generated target.
+        bwa_reference: BWA reference FASTA.
+        config: Pipeline configuration containing optional BWA index suffixes.
+
+    Raises:
+        ValueError: If any destructive destination is unsafe or aliases an input.
+    """
+    output_root = Path(output)
+    fastq_output = output_root / "fastq_bam_processing"
+    alignment_output = output_root / "alignment_processing"
+    sorted_bam = alignment_output / "output_sorted.bam"
+    post_alignment = fastq_output / "post_alignment.bam"
+    reference = Path(bwa_reference)
+    protected_inputs: tuple[str | Path, ...] = (fastq_1, reference, *bwa_index_paths(reference, config))
+    if fastq_2 is not None:
+        protected_inputs = (*protected_inputs, fastq_2)
+    if bed_file is not None:
+        protected_inputs = (*protected_inputs, bed_file)
+    protected_paths = _validate_operator_inputs_outside_output(output_root, protected_inputs)
+    _validate_existing_output_tree(
+        output_root,
+        protected_paths,
+        allowed_file_symlinks={_absolute(post_alignment): sorted_bam},
+    )
+    destinations = [
+        *_fastq_processing_destinations(fastq_output, "output", paired=fastq_2 is not None),
+        sorted_bam,
+        sorted_bam.with_suffix(".bam.bai"),
+        alignment_output / "output_alignment.log",
+        alignment_output / "output_index.log",
+        post_alignment,
+        *(Path(candidate) for candidate in index_candidate_names(str(post_alignment), "bam")),
+        fastq_output / "post_alignment_index.log",
+        fastq_output / "post_alignment_idxstats.log",
+        fastq_output / "post_alignment_alignment_probe.log",
+        *_alignment_conversion_destinations(fastq_output, "output"),
+    ]
+    for destination in dict.fromkeys(destinations):
+        allowed_target = sorted_bam if destination == post_alignment else None
+        _validate_owned_destination(
+            destination,
+            protected_paths,
+            description="direct-FASTQ pipeline",
+            allowed_symlink_target=allowed_target,
+        )
 
 
 def remove_validated_slice_indexes(output: str | Path, output_name: str) -> None:

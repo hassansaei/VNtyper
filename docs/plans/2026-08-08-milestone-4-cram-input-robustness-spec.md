@@ -805,13 +805,16 @@ contract: capture the previous value (including "unset"), set the pinned one, an
 it in a `finally`. Without that, one CRAM run silently reconfigures every later run in the
 same process.
 
-**Every run-local index is fresh.** The resolver still enumerates both spellings of BAI,
-CSI and CRAI so supplied patient artifacts can be protected and diagnostics can name
-them. It does not select one for consumption. §3.15 proved that neither a valid container
-nor successful htslib retrieval binds an index to the intended alignment: a wrong BAI can
-return an empty target with exit 0. Preflight therefore builds BAI for BAM and CRAI for
-CRAM from the run-local view on every run, installs it atomically, and consumes only that
-artifact. Indexed recovery lets htslib discover the co-located index, removing separate
+**Every run-local index is fresh.** The candidate-name contract enumerates both spellings
+of BAI, CSI and CRAI so the outer output-safety boundary can protect every existing
+patient artifact and diagnostics can name every candidate. The singular resolvers return
+only the first existing candidate in their declared order; they do not select one for
+consumption, and the deliberate non-fast BAM path remains BAI-only. §3.15 proved that
+neither a valid container nor successful htslib retrieval binds an index to the intended
+alignment: a wrong BAI can return an empty target with exit 0. Preflight therefore builds
+BAI for BAM and CRAI for CRAM from the run-local view on every run, installs it atomically,
+and consumes only that artifact. Indexed recovery lets htslib discover the co-located
+index, removing separate
 “reuse” and “build” correctness paths.
 
 ## 5. Per-issue changes
@@ -1018,7 +1021,9 @@ FASTQ. The 2.0.9 arm silently ignores those singles; the milestone arm correctly
 the mixed layout. Comparing their full wall-clocks would therefore compare completed
 genotyping with an intentional early failure. The performance arm is the 18-case
 intersection that completes on both revisions; the 32 fail-closed outcomes are recorded
-separately and are not reclassified or suppressed to make the timing gate pass.
+separately and are not reclassified or suppressed to make the timing gate pass. Exit 1
+alone is not evidence for those outcomes: each candidate case must emit the stable
+mixed-layout refusal diagnostic.
 
 **One before/after run cannot decide this.** The slice covers 5–10 kb
 (`config.json` `bam_region_*`), so `-@` adds thread setup to a job that may be too small
@@ -1152,7 +1157,7 @@ Each is a command whose output decides it. None is satisfied by reading code.
 | A-161-1 | A single-end BAM produces a genotype rather than an empty R1/R2 pair. | integration, derived fixture |
 | A-161-2 | A run that produces a non-empty FASTQ nothing consumes fails, naming the file and its read count. | unit |
 | A-161-3 | `--fastq1` without `--fastq2` is accepted and genotyped rather than rejected at argument parsing. | unit + integration |
-| A-PERF-1 | Golden-cohort wall-clock does not regress on BAM cases that complete on both revisions: three alternating runs per arm on an idle host, median and range reported; fail-closed mixed-layout cases are reported separately, never timed as if an early refusal were completed work. A regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
+| A-PERF-1 | Golden-cohort wall-clock does not regress on BAM cases that complete on both revisions: three alternating runs per arm on an idle host, median and range reported; fail-closed mixed-layout cases are reported separately and accepted only with their stable causal diagnostic, never timed as if an early refusal were completed work. A regression is called only when the slower arm's best beats the faster arm's worst. | golden cohort |
 | A-PERF-2 | A default (non-fast) BAM run builds the sliced BAM's index **once**, counted from the stage logs. | integration |
 | A-WEB-1 | A preflight failure reaches the job status as its own message, not the generic text `main.py:605` substitutes. | web tier |
 | A-ALL-1 | `make check-all` passes; `make patch-coverage` ≥ 80%; the coverage floor is not lowered; every function modified by this milestone gains a unit test for the behaviour that changed (AGENTS.md rule 1). | full gate |
@@ -1207,6 +1212,7 @@ PR.**
 | 2 | spec + plan | 11 | 7 | 4 | 10 accepted and fixed, 1 rebutted by measurement |
 | 3a | final diff | 2 | 6 | 3 | 2 accepted and fixed; MED/LOW dispositions are detailed below |
 | 3b | independent remote-header follow-up | 1 | 0 | 0 | 1 accepted and fixed (§3.21, A-178-5) |
+| 3c | final diff follow-up | 2 | 4 | 3 | 2 HIGH accepted and fixed; MED/LOW dispositions are detailed below |
 
 ### Round 3a — disposition
 
@@ -1241,6 +1247,27 @@ argument did not cover. A remote `@SQ UR` is now rejected under the default poli
 target or probe work (§3.21); the ambient opt-in and its bounded-probe/general-stage
 distinction remain unchanged.
 
+The final MED/LOW follow-up accepted two behavioral gaps. The 32 measured mixed-layout
+cases now require the stable routing diagnostic, so an unrelated exit 1 cannot satisfy
+their golden-cohort declaration. Malformed `idxstats` still fails closed to `stream`, and
+its logged reason now identifies the offending line or the missing empty/terminal-row
+evidence. A third finding identified stale index-policy prose: supplied candidate names
+are protected but never consumed, the singular resolvers retain their declared order, and
+every run builds a fresh BAI or CRAI beside its view. The request to replace A-178-2's
+count plus sorted-QNAME oracle with full-SAM identity was rebutted as a redesign; only the
+overclaiming evidence docstring was corrected. The predeclared A-PERF-1 rule, external
+non-gating A-178-4 evidence request, and run-scoped process-global `REF_PATH` policy were
+also retained rather than redesigned.
+
+The same review's two HIGH findings were accepted. Alignment destinations omitted
+operator-supplied BED/reference aliases, while fastp destinations had no input-FASTQ alias
+guard; both destination boundaries now receive those input paths before they can replace
+anything. The remote-header policy's curated message named `file://`, which the web
+transport correctly rejected as path-like; the public wording now says `file-scheme` so
+the reviewed policy failure reaches job status without weakening the transport's path
+guard. These fixes have not yet been promoted to a no-HIGH final verdict; the mandatory
+final-diff rerun remains the next review row.
+
 ### Wave 3 gate evidence before round 3
 
 `make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. The final BAM timing
@@ -1273,8 +1300,9 @@ are one candidate tried last rather than two with the no-reference one first, wh
 `UR:` outrank an explicit `--reference-fasta` and had recorded an externally-decoded CRAM
 as reference-free (§4.2). New §4.5 states the contracts the new mechanisms need: `idxstats`
 parsing fails closed, the view symlink is created exclusively and validated against
-`os.path.samefile` on collision, `REF_PATH` is restored in a `finally`, and which index a
-run needs is decided per mode so a CSI-only BAM is not rebuilt in fast mode. #165 gains a
+`os.path.samefile` on collision, `REF_PATH` is restored in a `finally`, and supplied
+indexes are protected but never consumed: every mode builds a fresh BAI or CRAI beside
+the run-local view. #165 gains a
 tie rule; #161 defines `mixed` as rejected and adds R1/R2 count parity. `AGENTS.md`'s docs
 rule is actually corrected this time — round 2 was right that the previous entry claimed an
 edit that had not been made.

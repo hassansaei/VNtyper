@@ -121,8 +121,8 @@ def enforce_header_reference_policy(header: str, *, allow_ambient: bool) -> None
         return
     message = (
         "Remote CRAM header reference is disabled by policy: "
-        f"contig={remote.contig}, scheme={remote.scheme}. Replace the @SQ UR with a local, relative, or file:// "
-        "reference, or set cram.allow_ambient_reference_resolution=true to accept network access."
+        f"contig={remote.contig}, scheme={remote.scheme}. Replace the @SQ UR with a local path, relative path, or "
+        "file-scheme reference, or set cram.allow_ambient_reference_resolution=true to accept network access."
     )
     logger.error(message)
     raise ValueError(message)
