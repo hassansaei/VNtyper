@@ -63,8 +63,84 @@ class TestParse:
 
 
 class TestChooseScan:
+    def test_zero_placed_counts_do_not_authorize_an_incomplete_literal_star_fetch(self):
+        """The CRAM index can expose fewer literal-star records than idxstats reports."""
+        scan, reason = choose_scan(
+            "auto",
+            CLEAN,
+            exit_ok=True,
+            indexed_count_text="20\n",
+            indexed_count_exit_ok=True,
+        )
+
+        assert scan == SCAN_STREAM
+        assert reason == "indexed '*' count 20 differs from idxstats unplaced count 80; using lossless stream scan"
+
+    def test_forced_indexed_rejects_an_incomplete_literal_star_fetch(self):
+        """An explicit indexed policy cannot override evidence that its consumer is lossy."""
+        with pytest.raises(ValueError, match=r"indexed '\*' count 20 differs from idxstats unplaced count 80"):
+            choose_scan(
+                "indexed",
+                CLEAN,
+                exit_ok=True,
+                indexed_count_text="20\n",
+                indexed_count_exit_ok=True,
+            )
+
+    def test_matching_literal_star_count_authorizes_indexed_recovery(self):
+        """Indexed recovery is safe only when the exact consumer count matches idxstats."""
+        assert choose_scan(
+            "auto",
+            CLEAN,
+            exit_ok=True,
+            indexed_count_text="80\n",
+            indexed_count_exit_ok=True,
+        ) == (SCAN_INDEXED, "idxstats and indexed '*' count agree on 80 unplaced reads")
+
+    @pytest.mark.parametrize(("count_text", "count_exit_ok"), [("not-a-count\n", True), (None, False)])
+    def test_missing_or_malformed_literal_star_evidence_fails_closed(self, count_text, count_exit_ok):
+        """A count command failure cannot authorize the consumer it was meant to prove."""
+        assert (
+            choose_scan(
+                "auto",
+                CLEAN,
+                exit_ok=True,
+                indexed_count_text=count_text,
+                indexed_count_exit_ok=count_exit_ok,
+            )[0]
+            == SCAN_STREAM
+        )
+
+    @pytest.mark.parametrize(("count_text", "count_exit_ok"), [("not-a-count\n", True), (None, False)])
+    def test_forced_indexed_rejects_missing_or_malformed_literal_star_evidence(self, count_text, count_exit_ok):
+        """A forced mode must raise when its exact-consumer evidence is unusable."""
+        with pytest.raises(ValueError, match=r"indexed '\*' count"):
+            choose_scan(
+                "indexed",
+                CLEAN,
+                exit_ok=True,
+                indexed_count_text=count_text,
+                indexed_count_exit_ok=count_exit_ok,
+            )
+
+    def test_oversized_literal_star_count_fails_closed_without_an_unbounded_diagnostic(self):
+        """Hostile captured output cannot escape count parsing or the message bound."""
+        scan, reason = choose_scan(
+            "auto",
+            CLEAN,
+            exit_ok=True,
+            indexed_count_text="9" * 5000,
+            indexed_count_exit_ok=True,
+        )
+
+        assert scan == SCAN_STREAM
+        assert len(reason) <= 256
+
     def test_auto_picks_indexed_only_when_nothing_would_be_lost(self):
-        assert choose_scan("auto", CLEAN, exit_ok=True)[0] == SCAN_INDEXED
+        assert (
+            choose_scan("auto", CLEAN, exit_ok=True, indexed_count_text="80\n", indexed_count_exit_ok=True)[0]
+            == SCAN_INDEXED
+        )
 
     def test_auto_falls_back_to_stream_when_placed_unmapped_reads_exist(self):
         scan, reason = choose_scan("auto", GOOD, exit_ok=True)

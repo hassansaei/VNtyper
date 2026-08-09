@@ -31,10 +31,20 @@ def preflight_log_paths(
     if file_format != FORMAT_CRAM:
         paths = [output / f"{output_name}_alignment_probe.log"]
         if not fast_mode:
-            paths.insert(0, output / f"{output_name}_idxstats.log")
+            paths[0:0] = [
+                output / f"{output_name}_idxstats.log",
+                output / f"{output_name}_indexed_unmapped_count.log",
+            ]
         return tuple(paths)
 
-    paths = [] if fast_mode else [output / f"{output_name}_idxstats.log"]
+    paths = (
+        []
+        if fast_mode
+        else [
+            output / f"{output_name}_idxstats.log",
+            output / f"{output_name}_indexed_unmapped_count.log",
+        ]
+    )
     positions = range(1, candidate_count + 2)
     paths.extend(output / f"{output_name}_reference_probe_{position}.log" for position in positions)
     if coverage_region is not None:

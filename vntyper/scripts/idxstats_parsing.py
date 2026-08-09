@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 SCAN_INDEXED = "indexed"
 SCAN_STREAM = "stream"
 _MAX_DIAGNOSTIC_EXCERPT_CHARACTERS = 160
+_MAX_COUNT_DIGITS = 20
 _TRUNCATION_MARKER = "...<truncated>"
 
 
@@ -66,13 +67,42 @@ def parse_idxstats(text: str) -> tuple[int, int] | None:
     return counts
 
 
-def choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool) -> tuple[str, str]:
+def _parse_indexed_count(text: str) -> int | None:
+    """Parse the single non-negative count emitted by ``samtools view -c``."""
+    lines = text.splitlines()
+    if len(lines) != 1 or len(lines[0]) > _MAX_COUNT_DIGITS or not lines[0].isascii() or not lines[0].isdecimal():
+        return None
+    try:
+        return int(lines[0])
+    except ValueError:
+        return None
+
+
+def _unsafe_indexed_result(configured: str, reason: str) -> tuple[str, str]:
+    """Fail closed, raising when an operator explicitly forced the unsafe mode."""
+    if configured == SCAN_INDEXED:
+        logger.error(reason)
+        raise ValueError(reason)
+    return SCAN_STREAM, reason
+
+
+def choose_scan(
+    configured: str,
+    idxstats_text: str | None,
+    exit_ok: bool,
+    *,
+    indexed_count_text: str | None = None,
+    indexed_count_exit_ok: bool = False,
+) -> tuple[str, str]:
     """Choose a lossless unmapped-read scan from idxstats evidence.
 
     Args:
         configured: Requested scan mode (``"auto"``, ``"indexed"`` or ``"stream"``).
         idxstats_text: Captured idxstats output, or ``None`` when unavailable.
         exit_ok: Whether the idxstats command exited successfully.
+        indexed_count_text: Captured count from the exact flag-4 literal-``'*'``
+            indexed consumer, when idxstats found no placed-unmapped records.
+        indexed_count_exit_ok: Whether that indexed count command exited successfully.
 
     Returns:
         The selected scan mode and a human-readable reason.
@@ -94,12 +124,25 @@ def choose_scan(configured: str, idxstats_text: str | None, exit_ok: bool) -> tu
     if counts is None:
         return SCAN_STREAM, f"{parse_error}; using lossless stream scan"
 
-    placed_unmapped, _ = counts
-    if placed_unmapped == 0:
-        return SCAN_INDEXED, "idxstats reports no placed-unmapped reads"
+    placed_unmapped, unplaced = counts
+    if placed_unmapped != 0:
+        reason = f"idxstats reports {placed_unmapped} placed-unmapped reads; using stream scan"
+        return _unsafe_indexed_result(configured, reason)
 
-    reason = f"idxstats reports {placed_unmapped} placed-unmapped reads; using stream scan"
-    if configured == SCAN_INDEXED:
-        logger.error(reason)
-        raise ValueError(reason)
-    return SCAN_STREAM, reason
+    if not indexed_count_exit_ok:
+        reason = "indexed '*' count failed; using lossless stream scan"
+        return _unsafe_indexed_result(configured, reason)
+    rendered_count = indexed_count_text if indexed_count_text is not None else ""
+    indexed_count = _parse_indexed_count(rendered_count)
+    if indexed_count is None:
+        reason = (
+            f"indexed '*' count output is malformed: {_diagnostic_excerpt(rendered_count)}; using lossless stream scan"
+        )
+        return _unsafe_indexed_result(configured, reason)
+    if indexed_count != unplaced:
+        reason = (
+            f"indexed '*' count {indexed_count} differs from idxstats unplaced count {unplaced}; "
+            "using lossless stream scan"
+        )
+        return _unsafe_indexed_result(configured, reason)
+    return SCAN_INDEXED, f"idxstats and indexed '*' count agree on {unplaced} unplaced reads"

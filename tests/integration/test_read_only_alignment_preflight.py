@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -404,6 +405,58 @@ def test_single_end_and_placed_unmapped_reads_survive_the_complete_scan(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert expected == 4807
     assert recovered == expected
+
+
+def test_zero_placed_cram_with_incomplete_literal_star_fetch_selects_stream(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    """A real multi-slice CRAM disproves zero placed count as sufficient proof."""
+    repository = Path(__file__).parents[2]
+    source = repository / "tests/data/remapped/bwa/hg38_ensembl/example_7a61_hg38_ensembl_bwa.bam"
+    assert source.is_file(), f"Missing registered fixture {source}; run `make download-test-data`."
+    alignment = tmp_path / "zero-placed.cram"
+    quoted_source = shlex.quote(str(source))
+    quoted_alignment = shlex.quote(str(alignment))
+    derivation = (
+        "set -o pipefail; "
+        f"{{ samtools view -H {quoted_source}; samtools view -F 4 {quoted_source}; "
+        f"samtools view -f 4 {quoted_source} '*'; }} | "
+        f"samtools view -C --output-fmt-option no_ref=1 -o {quoted_alignment} -"
+    )
+    subprocess.run(derivation, shell=True, executable="/bin/bash", check=True)
+    subprocess.run(["samtools", "index", str(alignment)], check=True)
+
+    idxstats = subprocess.check_output(["samtools", "idxstats", str(alignment)], text=True)
+    rows = [line.split("\t") for line in idxstats.splitlines()]
+    placed = sum(int(fields[3]) for fields in rows if fields[0] != "*")
+    unplaced = int(next(fields[3] for fields in rows if fields[0] == "*"))
+    whole = int(subprocess.check_output(["samtools", "view", "-c", "-f", "4", str(alignment)], text=True))
+    literal_star = int(subprocess.check_output(["samtools", "view", "-c", "-f", "4", str(alignment), "*"], text=True))
+    assert (placed, unplaced, whole, literal_star) == (0, 622_690, 622_690, 2_690)
+
+    plan = run_preflight(
+        str(alignment),
+        str(tmp_path / "run"),
+        "input",
+        "cram",
+        {
+            "tools": {"samtools": "samtools"},
+            "cram": {
+                "local_ref_path": str(tmp_path / "no-reference-cache" / "%2s/%2s/%s"),
+                "reference_probe_timeout_seconds": 10,
+                "unmapped_scan": "auto",
+                "reference_candidate_order": ["htslib_resolved"],
+            },
+        },
+        2,
+        region="1:1-10",
+        header_contigs=("1",),
+    )
+    try:
+        assert plan.unmapped_scan == "stream"
+    finally:
+        plan.close()
 
 
 def test_nonfast_slice_and_complete_recovery_merge_is_a_disjoint_flag_four_union(

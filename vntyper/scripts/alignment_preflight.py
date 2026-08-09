@@ -30,14 +30,13 @@ from vntyper.scripts.alignment_index_provenance import (
     generated_index_is_owned,
 )
 from vntyper.scripts.alignment_preflight_logs import preflight_log_paths
+from vntyper.scripts.alignment_scan import select_unmapped_scan
 from vntyper.scripts.command_builders import (
     build_cram_reference_probe_command,
     build_cram_stream_reference_probe_command,
     build_samtools_depth_command,
-    build_samtools_idxstats_command,
     build_samtools_index_command,
 )
-from vntyper.scripts.idxstats_parsing import choose_scan
 from vntyper.scripts.preflight_command_io import (
     capture_command,
 )
@@ -243,18 +242,15 @@ def choose_unmapped_scan(
     Raises:
         ValueError: If scan mode is invalid or forced indexed mode would lose reads.
     """
-    samtools_path = config.get("tools", {}).get("samtools", "samtools")
-    configured = config.get(file_format, {}).get("unmapped_scan", "auto")
-    command = build_samtools_idxstats_command(
-        samtools_path=samtools_path,
-        in_bam=view_path,
-        threads=threads,
+    return select_unmapped_scan(
+        view_path,
+        config,
+        threads,
+        output_dir,
+        output_name,
+        file_format=file_format,
+        capture=capture_command,
     )
-    log_file = str(Path(output_dir) / f"{output_name}_idxstats.log")
-    exit_ok, output = capture_command(command, log_file)
-    scan, reason = choose_scan(configured, output, exit_ok)
-    logger.info(f"Selected {scan} unmapped-read scan: {reason}")
-    return scan
 
 
 def _reference_probe_timeout_seconds(config: dict) -> float:

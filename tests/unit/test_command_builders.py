@@ -493,6 +493,18 @@ def test_idxstats_is_threaded_without_a_reference_flag():
     assert "-T" not in command
 
 
+def test_indexed_unmapped_count_probes_the_exact_literal_star_consumer():
+    """Authorization must count the same flag and region used by indexed recovery."""
+    command = command_builders.build_samtools_unmapped_indexed_count_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        threads=8,
+    )
+
+    assert command == "samtools view -c -f 4 -@ 8 /o/view.cram '*'"
+    assert "-T" not in command
+
+
 def test_the_merge_command_is_pinned():
     command = build_samtools_merge_command(
         samtools_path=SAMTOOLS,

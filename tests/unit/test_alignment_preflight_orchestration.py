@@ -37,14 +37,30 @@ def test_fast_cram_preflight_logs_include_only_the_probes_that_can_run(tmp_path:
 
 
 def test_clean_idxstats_selects_the_indexed_scan(tmp_path: Path) -> None:
-    """Complete evidence with no placed-unmapped reads permits the indexed scan."""
+    """Matching idxstats and literal-star counts permit the indexed scan."""
     clean = "chr1\t20000\t600\t0\n*\t0\t0\t80\n"
     config = {"tools": {"samtools": "samtools"}, "cram": {"unmapped_scan": "auto"}}
 
-    with patch("vntyper.scripts.alignment_preflight.capture_command", return_value=(True, clean)):
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=[(True, clean), (True, "80\n")],
+    ):
         scan = choose_unmapped_scan("/run/view.cram", config, 4, str(tmp_path), "sample")
 
     assert scan == "indexed"
+
+
+def test_zero_placed_cram_with_incomplete_literal_star_fetch_selects_stream(tmp_path: Path) -> None:
+    """A zero placed count alone cannot authorize a lossy CRAM literal-star fetch."""
+    clean = "chr1\t20000\t600\t0\n*\t0\t0\t622690\n"
+
+    with patch(
+        "vntyper.scripts.alignment_preflight.capture_command",
+        side_effect=[(True, clean), (True, "2690\n")],
+    ):
+        scan = choose_unmapped_scan("/run/view.cram", {}, 4, str(tmp_path), "sample")
+
+    assert scan == "stream"
 
 
 def test_failed_idxstats_selects_the_lossless_stream_scan(tmp_path: Path) -> None:
@@ -178,6 +194,8 @@ def test_a_cram_plan_uses_configured_candidate_order_and_idxstats_evidence(tmp_p
             return True, ""
         if " idxstats " in f" {command} ":
             return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
+        if arguments[1:5] == ["view", "-c", "-f", "4"]:
+            return True, "2\n"
         return True, "decoded"
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=successful_commands):
@@ -230,6 +248,8 @@ def test_default_policy_probes_the_cli_reference_before_configured_candidates(tm
             return True, ""
         if " idxstats " in f" {command} ":
             return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
+        if arguments[1:5] == ["view", "-c", "-f", "4"]:
+            return True, "2\n"
         reference_probes.append(command)
         return str(cram_reference) in shlex.split(command), "decode result"
 
@@ -270,6 +290,8 @@ def test_a_bam_plan_builds_an_index_selects_a_scan_and_probes_the_target(tmp_pat
             Path(arguments[arguments.index("-o") + 1]).write_bytes(b"BAI")
         if arguments[1] == "idxstats":
             return True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"
+        if arguments[1:5] == ["view", "-c", "-f", "4"]:
+            return True, "2\n"
         return True, ""
 
     with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=successful_probe):
@@ -284,7 +306,7 @@ def test_a_bam_plan_builds_an_index_selects_a_scan_and_probes_the_target(tmp_pat
             fast_mode=False,
         )
 
-    assert len(commands) == 3
+    assert len(commands) == 4
     assert any(" index " in f" {command} " for command in commands)
     assert any(" idxstats " in f" {command} " for command in commands)
     assert " -T " not in f" {commands[-1]} "

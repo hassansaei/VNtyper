@@ -348,7 +348,9 @@ def test_an_index_log_alias_of_the_input_is_rejected_before_the_view_is_created(
     ("file_format", "log_name"),
     [
         ("cram", "sample_idxstats.log"),
+        ("cram", "sample_indexed_unmapped_count.log"),
         ("cram", "sample_reference_probe_4.log"),
+        ("bam", "sample_indexed_unmapped_count.log"),
         ("bam", "sample_alignment_probe.log"),
     ],
 )

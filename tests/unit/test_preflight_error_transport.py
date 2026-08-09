@@ -132,6 +132,7 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     elif failure == "reference":
         command_results = [
             (True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"),
+            (True, "2\n"),
             (False, "failed to decode /private/worker/patient.cram"),
         ]
     elif failure == "missing_index":
@@ -139,6 +140,7 @@ def test_every_actionable_preflight_failure_writes_one_curated_artifact_before_r
     elif failure == "bam_probe":
         command_results = [
             (True, "chr1\t4\t1\t0\n*\t0\t0\t2\n"),
+            (True, "2\n"),
             (False, "private target /private/worker/patient.bam is stale"),
         ]
 

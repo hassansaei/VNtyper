@@ -449,6 +449,20 @@ def build_samtools_idxstats_command(*, samtools_path: str, in_bam: str | Path, t
     return f"{samtools_path} idxstats {_thread_flag(threads)}{quote_path(in_bam)}"
 
 
+def build_samtools_unmapped_indexed_count_command(*, samtools_path: str, in_bam: str | Path, threads: int = 1) -> str:
+    """Count records visible to the exact indexed unmapped-read consumer.
+
+    Args:
+        samtools_path: samtools invocation from config.
+        in_bam: Indexed BAM or CRAM alignment view.
+        threads: Thread count for samtools.
+
+    Returns:
+        A literal-``'*'`` flag-4 count command without a reference argument.
+    """
+    return f"{samtools_path} view -c -f 4 {_thread_flag(threads)}{quote_path(in_bam)} {quote_path('*')}"
+
+
 def build_samtools_merge_command(
     *,
     samtools_path: str,
