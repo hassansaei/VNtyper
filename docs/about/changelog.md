@@ -38,9 +38,9 @@ strict majority and returns `unknown` for ties or zero classified contigs. Thres
 pattern configuration is validated rather than accepted partially.
 
 On the 18 golden-cohort BAM cases that both 2.0.9 and 2.0.10 can complete without
-discarding reads, three final alternating runs measured medians of 90.86 s and 89.27 s,
-respectively. The overlapping ranges (90.67–140.61 vs 88.38–133.18 s) meet the
-predeclared no-regression rule without claiming a speedup.
+discarding reads, three final alternating runs measured medians of 90.92 s and 88.09 s,
+respectively. The non-overlapping ranges (90.58–91.12 vs 87.64–88.27 s) record a 3.1%
+median improvement under the predeclared rule.
 
 ## 2.0.9
 

@@ -1078,20 +1078,25 @@ did not measure.
 ### Wave 3 measurement (2026-08-09)
 
 The host was otherwise idle; the six final runs used one harness job, four pipeline
-threads and alternated `ddf49a1` (2.0.9) with `d3c0265` (the clean final candidate).
-Every counted side verified its package marker, exact revision and all 18 expectations.
+threads and alternated `ddf49a1` (2.0.9) with `be49f53` (the clean final behavioral
+candidate). Every counted side verified its package marker, exact revision and all 18
+expectations. The host was a 32-logical-CPU AMD Ryzen 9 9950X with one logged-in user.
+The raw one/five/fifteen-minute load averages at each alternating launch were baseline
+`1.69/1.43/1.10`, milestone `4.73/2.85/1.66`, baseline `2.92/2.87/1.80`, milestone
+`2.55/2.79/1.88`, baseline `3.22/3.18/2.12`, milestone `4.02/3.68/2.42`; the values include
+the immediately preceding four-thread arm rather than hiding that residual load.
 
 | Arm | Runs (s) | Median | Range |
 | --- | --- | --- | --- |
-| 2.0.9 baseline | 90.86, 90.67, 140.61 | 90.86 | 90.67–140.61 |
-| milestone | 88.38, 133.18, 89.27 | 89.27 | 88.38–133.18 |
+| 2.0.9 baseline | 91.12, 90.58, 90.92 | 90.92 | 90.58–91.12 |
+| milestone | 88.27, 87.64, 88.09 | 88.09 | 87.64–88.27 |
 
-The ranges overlap during a shared slow interval, so A-PERF-1 records **no measured
-regression** rather than claiming a win: the slower baseline arm's best run (90.67 s)
-does not exceed the faster milestone arm's worst run (133.18 s). The separate whole-50
-run found 32 explicit mixed-layout failures on the milestone arm; the baseline completed
-those cases only by discarding the stranded FASTQ, so they are exit-bar evidence rather
-than performance samples.
+The ranges do not overlap, so A-PERF-1 records a **measured improvement** under its
+predeclared rule: the slower baseline arm's best run (90.58 s) exceeds the faster
+milestone arm's worst run (88.27 s). The median difference is 2.83 s (3.1%). The separate
+whole-50 run found 32 explicit mixed-layout failures on the milestone arm; the baseline
+completed those cases only by discarding the stranded FASTQ, so they are exit-bar
+evidence rather than performance samples.
 
 The forced CRAM measurement also corrected two impossible premises in the original
 A-178-2 wording. Both declared golden CRAM sources have non-zero placed-unmapped counts,
@@ -1340,10 +1345,10 @@ behavioral revision before the concluding no-HIGH review.
 ### Wave 3 gate evidence before round 3
 
 `make cram-fixtures` derived 50/50 lossless CRAMs with zero skips. The final BAM timing
-result is the overlapping 90.67–140.61 s baseline versus 88.38–133.18 s milestone range in
-§5b, which meets the predeclared no-regression rule without claiming a speedup. The full
-base matrix also exposed 32 inputs whose previously ignored single FASTQ is now named and
-rejected. Forced indexed CRAM runs were rejected by the placed-unmapped
+result is the non-overlapping 90.58–91.12 s baseline versus 87.64–88.27 s milestone range
+in §5b, a 3.1% median improvement under the predeclared rule. The full base matrix also
+exposed 32 inputs whose previously ignored single FASTQ is now named and rejected. Forced
+indexed CRAM runs were rejected by the placed-unmapped
 guard, whose causal `idxstats` column-four counts are 11,571 and 329. The initial flag-12
 stream evidence (622,690 and 4,478 records) was superseded by
 the corrected flag-4 whole-stream evidence (634,261 and 4,807 records); raw indexed
