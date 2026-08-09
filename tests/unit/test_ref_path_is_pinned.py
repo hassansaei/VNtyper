@@ -45,6 +45,19 @@ def test_the_override_is_skipped_when_ambient_resolution_is_explicitly_allowed(
     assert "block" in caplog.text.lower()
 
 
+@pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None])
+def test_ambient_reference_resolution_requires_an_actual_boolean(
+    monkeypatch: pytest.MonkeyPatch, invalid: object
+) -> None:
+    """JSON lookalikes cannot become a truthiness-based network waiver."""
+    monkeypatch.setenv("REF_PATH", "/operator/original/%s")
+
+    with pytest.raises(ValueError, match="allow_ambient_reference_resolution must be true or false"):
+        pin_reference_resolution({"cram": {"allow_ambient_reference_resolution": invalid}})
+
+    assert os.environ["REF_PATH"] == "/operator/original/%s"
+
+
 @pytest.mark.parametrize(
     "remote_path",
     [

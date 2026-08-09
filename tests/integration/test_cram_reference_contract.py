@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import socket
 import subprocess
 import sys
@@ -93,10 +94,40 @@ def _run_cram(
         command.append("--fast-mode")
     if reference is not None:
         command.extend(["--reference-fasta", str(reference)])
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    environment = os.environ.copy()
+    environment["NO_PROXY"] = "127.0.0.1,localhost"
+    environment["no_proxy"] = "127.0.0.1,localhost"
+    result = subprocess.run(command, capture_output=True, text=True, check=False, env=environment)
     logger.info("CRAM contract stdout:\n%s", result.stdout)
     logger.info("CRAM contract stderr:\n%s", result.stderr)
     return result
+
+
+def _reheader_with_reference_uri(
+    source: Path,
+    destination: Path,
+    uri: str,
+    *,
+    trailing_uri: str | None = None,
+) -> None:
+    """Rewrite the first SQ UR without decoding the reference-compressed records."""
+    header = subprocess.check_output(["samtools", "view", "-H", str(source)], text=True)
+    rewritten: list[str] = []
+    changed = False
+    for line in header.splitlines():
+        if line.startswith("@SQ\t") and not changed:
+            fields = line.split("\t")
+            fields = [f"UR:{uri}" if field.startswith("UR:") else field for field in fields]
+            if trailing_uri is not None:
+                fields.append(f"UR:{trailing_uri}")
+            changed = any(field == f"UR:{uri}" for field in fields)
+            line = "\t".join(fields)
+        rewritten.append(line)
+    assert changed, "The purpose CRAM header has no SQ UR tag to rewrite."
+    header_path = destination.with_suffix(".header.sam")
+    header_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    with destination.open("wb") as output_handle:
+        subprocess.run(["samtools", "reheader", str(header_path), str(source)], stdout=output_handle, check=True)
 
 
 def _assert_no_reference_flags_in_cram_commands(result: subprocess.CompletedProcess[str]) -> None:
@@ -232,6 +263,7 @@ def test_a178_1_blackhole_reference_probe_exits_within_its_configured_deadline(
     started = time.monotonic()
     try:
         result = _run_cram(fixture.cram, tmp_path / "blackhole-output", config)
+        accepted.wait(timeout=0.25)
     finally:
         elapsed = time.monotonic() - started
         stop.set()
@@ -244,3 +276,77 @@ def test_a178_1_blackhole_reference_probe_exits_within_its_configured_deadline(
     assert result.returncode != 0
     assert elapsed < 5
     assert "timed out after 0.25 seconds" in diagnostic
+
+
+def test_default_mode_rejects_a_remote_header_uri_before_network_or_probe_work(
+    tmp_path: Path,
+    ensure_test_data: None,
+) -> None:
+    """A default CRAM run refuses a localhost SQ UR before any captured command."""
+    input_root = tmp_path / "patient-input"
+    fixture = build_reference_dependent_fixture(input_root / "purpose")
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    listener.settimeout(0.1)
+    port = listener.getsockname()[1]
+    accepted = threading.Event()
+    stop = threading.Event()
+
+    def respond_without_blocking() -> None:
+        while not stop.is_set():
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            accepted.set()
+            with connection:
+                try:
+                    connection.recv(4096)
+                    connection.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                except OSError:
+                    pass
+
+    server = threading.Thread(target=respond_without_blocking, daemon=True)
+    server.start()
+    remote_uri = f"http://127.0.0.1:{port}/private/reference.fa"
+    remote_cram = input_root / "remote-header.cram"
+    _reheader_with_reference_uri(
+        fixture.cram,
+        remote_cram,
+        remote_uri,
+        trailing_uri="file:///local/reference.fa",
+    )
+    rewritten_header = subprocess.check_output(["samtools", "view", "-H", str(remote_cram)], text=True)
+    assert f"UR:{remote_uri}\tUR:file:///local/reference.fa" in rewritten_header
+    output = tmp_path / "run-output" / "remote-header-output"
+    try:
+        result = _run_cram(remote_cram, output, _local_config(tmp_path))
+        accepted.wait(timeout=0.25)
+    finally:
+        stop.set()
+        listener.close()
+        server.join(timeout=2)
+
+    diagnostic = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode != 0
+    assert "contig=chr1" in diagnostic
+    assert "scheme=http" in diagnostic
+    assert remote_uri not in diagnostic
+    assert not accepted.is_set(), "default preflight contacted the remote SQ UR"
+    assert "Running captured command:" not in diagnostic
+    assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8")) == {
+        "code": "reference_policy_invalid",
+        "message": "Remote CRAM header reference is disabled by policy: contig=chr1, scheme=http. Replace the "
+        "@SQ UR with a local, relative, or file:// reference, or set "
+        "cram.allow_ambient_reference_resolution=true to accept network access.",
+        "candidates": [],
+    }
+    assert not (output / "custom_regions.bed").exists()
+    assert not (output / "fastq_bam_processing").exists()
+    assert not (output / "kestrel").exists()
+    assert not (output / "coverage").exists()
+    assert not (output / "pipeline_summary.json").exists()

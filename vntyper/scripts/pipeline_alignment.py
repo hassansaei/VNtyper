@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from vntyper.scripts import preflight_error_io as error_io
-from vntyper.scripts.alignment_contract import AlignmentPlan
+from vntyper.scripts.alignment_contract import AlignmentPlan, preflight_error_payload
 from vntyper.scripts.alignment_preflight import (
     pin_reference_resolution,
     restore_reference_resolution,
@@ -17,6 +17,10 @@ from vntyper.scripts.alignment_preflight import (
 from vntyper.scripts.alignment_target_io import install_generated_bed
 from vntyper.scripts.fastq_bam_processing import parse_contigs_from_header
 from vntyper.scripts.pipeline_guards import enforce_declared_assembly, read_alignment_header
+from vntyper.scripts.reference_uri_policy import (
+    allow_ambient_reference_resolution,
+    enforce_header_reference_policy,
+)
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -37,6 +41,7 @@ class AlignmentPreflightKwargs(TypedDict):
     reference_fasta: str | None
     header_contigs: tuple[str, ...]
     m5: str | None
+    header_m5s: tuple[tuple[str, str], ...]
     fast_mode: bool
     error_output_dir: str
 
@@ -84,9 +89,8 @@ def _first_active_bed_contig(bed_text: str) -> str | None:
     return None
 
 
-def _target_m5_from_header(header: str, target_contig: str | None) -> str | None:
-    if target_contig is None:
-        return None
+def _header_m5s(header: str) -> tuple[tuple[str, str], ...]:
+    result: list[tuple[str, str]] = []
     for line in header.splitlines():
         fields = line.split("\t")
         if not fields or fields[0] != "@SQ":
@@ -96,9 +100,11 @@ def _target_m5_from_header(header: str, target_contig: str | None) -> str | None
             key, separator, value = field.partition(":")
             if separator:
                 tags[key] = value
-        if tags.get("SN") == target_contig:
-            return tags.get("M5")
-    return None
+        contig = tags.get("SN")
+        checksum = tags.get("M5")
+        if contig is not None and checksum is not None:
+            result.append((contig, checksum))
+    return tuple(result)
 
 
 def prepare_alignment_target(
@@ -218,7 +224,8 @@ def build_alignment_preflight_kwargs(
         else ()
     )
     target_contig = _first_active_bed_contig(bed_file.read_text(encoding="utf-8"))
-    target_m5 = _target_m5_from_header(alignment_header, target_contig) if alignment_header is not None else None
+    header_m5s = _header_m5s(alignment_header) if alignment_header is not None else ()
+    target_m5 = dict(header_m5s).get(target_contig) if target_contig is not None else None
     return {
         "in_path": str(in_path),
         "output_dir": str(output_dir),
@@ -232,6 +239,7 @@ def build_alignment_preflight_kwargs(
         "reference_fasta": str(reference_fasta) if reference_fasta is not None else None,
         "header_contigs": header_contigs,
         "m5": target_m5,
+        "header_m5s": header_m5s,
         "fast_mode": fast_mode,
         "error_output_dir": str(error_output_dir) if error_output_dir is not None else str(output_dir),
     }
@@ -276,10 +284,22 @@ def prepare_input_alignment_preflight(
     input_path = str(in_path)
     failure_context = error_io.PreflightErrorContext(output_dir)
     with error_io.persist_preflight_failure(failure_context):
+        failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
         previous_ref_path = pin_reference_resolution(config)
         try:
             failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
             alignment_header = read_alignment_header(input_path, config)
+            if input_type == "CRAM":
+                failure_context.phase = error_io.REFERENCE_POLICY_FAILURE
+                try:
+                    enforce_header_reference_policy(
+                        alignment_header or "",
+                        allow_ambient=allow_ambient_reference_resolution(config),
+                    )
+                except ValueError as error:
+                    failure_context.payload = preflight_error_payload("reference_policy_invalid", str(error), ())
+                    raise
+            failure_context.phase = error_io.HEADER_PREPARATION_FAILURE
             enforce_declared_assembly(reference_assembly, alignment_header)
             failure_context.phase = error_io.TARGET_PREPARATION_FAILURE
             exact_bed = prepare_alignment_target(

@@ -30,16 +30,16 @@ paths.
 **Unmapped CRAM extraction is fail-closed.** `auto` uses indexed `'*'` extraction only
 when idxstats proves no placed-unmapped reads; malformed evidence selects the stream
 path, and forcing an unsafe indexed path raises instead of losing reads. On the declared
-`7a61` CRAM, stream recovered 622,690 records while a raw indexed fetch returned 2,690;
-the production guard refused that 620,000-read loss before work.
+`7a61` CRAM, the corrected flag-4 stream recovered 634,261 records while a raw indexed
+fetch returned 2,690; the production guard refused that 631,571-read loss before work.
 
 Chromosome naming now votes only across configured primary-contig patterns, requires a
 strict majority and returns `unknown` for ties or zero classified contigs. Threshold and
 pattern configuration is validated rather than accepted partially.
 
 On the 18 golden-cohort BAM cases that both 2.0.9 and 2.0.10 can complete without
-discarding reads, three alternating runs measured medians of 88.68 s and 86.08 s,
-respectively; the ranges did not overlap (88.43–88.77 vs 85.92–87.41 s).
+discarding reads, three final alternating runs measured medians of 88.57 s and 86.51 s,
+respectively; the ranges did not overlap (87.53–88.92 vs 85.52–86.80 s).
 
 ## 2.0.9
 

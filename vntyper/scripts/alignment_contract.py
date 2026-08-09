@@ -8,11 +8,10 @@ deterministic decisions and the data passed between the stage boundaries.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-
-from vntyper.scripts.command_builders import quote_path
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,29 @@ INDEX_SUFFIXES: dict[str, tuple[str, ...]] = {
 }
 
 ReferenceAttempt = tuple[str, str | None, str]
+
+
+def missing_reference_contig(diagnostic: str, known_contigs: Iterable[str]) -> str | None:
+    """Extract a known contig from pinned samtools reference failures.
+
+    Args:
+        diagnostic: Combined samtools output from a failed CRAM decode.
+        known_contigs: Contig names declared by the CRAM header.
+
+    Returns:
+        The referenced header contig, or ``None`` when the diagnostic shape is
+        unrecognized or names a contig outside the header.
+    """
+    known = tuple(known_contigs)
+    for pattern in (r"Unable to fetch reference ([^\s:]+)", r"ref '([^']+)' not present"):
+        match = re.search(pattern, diagnostic)
+        if match is not None and match.group(1) in known:
+            return match.group(1)
+    if "MD5 checksum reference mismatch" in diagnostic:
+        for contig in known:
+            if re.search(rf"(?:SN:|reference\s+){re.escape(contig)}(?:\s|\t|:|$)", diagnostic):
+                return contig
+    return None
 
 
 def index_candidate_names(in_path: str, file_format: str, *, bai_only: bool = False) -> tuple[str, ...]:
@@ -70,13 +92,6 @@ class AlignmentPlan:
     reference_source: str
     uncovered_contigs: tuple[str, ...]
     unmapped_scan: str
-
-    @property
-    def cram_ref_option(self) -> str:
-        """Return the shell fragment for a CRAM reference, if one is available."""
-        if self.reference_path is None:
-            return ""
-        return f"-T {quote_path(self.reference_path)}"
 
 
 def missing_index_message(in_path: str, file_format: str, tried: Iterable[str]) -> str:

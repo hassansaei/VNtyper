@@ -29,6 +29,61 @@ def test_default_candidate_order_maps_all_explicit_reference_sources() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("assembly", "cram_reference", "bwa_reference"),
+    [
+        ("GRCh37", "/refs/cram37.fa", "/refs/bwa37.fa"),
+        ("GRCh38", "/refs/cram38.fa", "/refs/bwa38.fa"),
+        ("hg19", "/refs/cram37.fa", "/refs/bwa37.fa"),
+        ("hg19_ensembl", "/refs/cram37.fa", "/refs/bwa37.fa"),
+        ("hg19_ncbi", "/refs/cram37.fa", "/refs/bwa37.fa"),
+        ("hg38", "/refs/cram38.fa", "/refs/bwa38.fa"),
+        ("hg38_ensembl", "/refs/cram38.fa", "/refs/bwa38.fa"),
+        ("hg38_ncbi", "/refs/cram38.fa", "/refs/bwa38.fa"),
+    ],
+)
+def test_every_supported_assembly_label_resolves_the_configured_coordinate_family_references(
+    assembly: str,
+    cram_reference: str,
+    bwa_reference: str,
+) -> None:
+    """Accepted aliases cannot silently discard both configured reference candidates."""
+    config = {
+        "reference_data": {
+            "cram_reference_hg19": "/refs/cram37.fa",
+            "bwa_reference_hg19": "/refs/bwa37.fa",
+            "cram_reference_hg38": "/refs/cram38.fa",
+            "bwa_reference_hg38": "/refs/bwa38.fa",
+        }
+    }
+
+    candidates = ordered_reference_candidates(config, assembly, None)
+
+    assert candidates[1:] == (
+        ("config_cram_reference", cram_reference),
+        ("config_bwa_reference", bwa_reference),
+    )
+
+
+def test_label_specific_reference_keys_override_the_family_fallback_including_null() -> None:
+    """A replacement config can deliberately specialize or disable one accepted label."""
+    config = {
+        "reference_data": {
+            "cram_reference_hg19": "/refs/family-cram.fa",
+            "bwa_reference_hg19": "/refs/family-bwa.fa",
+            "cram_reference_hg19_ncbi": None,
+            "bwa_reference_hg19_ncbi": "/refs/ncbi-bwa.fa",
+        }
+    }
+
+    candidates = ordered_reference_candidates(config, "hg19_ncbi", None)
+
+    assert candidates[1:] == (
+        ("config_cram_reference", None),
+        ("config_bwa_reference", "/refs/ncbi-bwa.fa"),
+    )
+
+
 def test_configured_candidate_order_is_preserved_without_silent_completion() -> None:
     """A valid explicit subset remains verbatim rather than being sorted or filled in."""
     config = {

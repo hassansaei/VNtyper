@@ -8,6 +8,7 @@ against the real cohort, not something a unit test should re-litigate on every r
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -409,6 +410,7 @@ def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_
     monkeypatch.setattr(cram_fixtures, "derive_cram", fake_derive_cram)
     monkeypatch.setattr(cram_fixtures, "build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr(cram_fixtures, "build_placed_flag12_fixture", lambda _root: None)
+    monkeypatch.setattr(cram_fixtures, "build_indexed_safe_fixture", lambda _root: None)
 
     exit_code = cram_fixtures.main(
         [
@@ -495,8 +497,28 @@ def test_placed_flag12_fixture_proves_idxstats_column_four_requires_the_stream_s
     assert fields == ["chr1", "20000", "600", "50"]
 
 
+def test_indexed_safe_fixture_has_nonempty_identical_indexed_and_stream_record_sets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """HIGH2: column-four zero must authorize a real, nonempty indexed extraction."""
+    monkeypatch.setenv("PATH", str(tmp_path / "no-samtools"))
+    fixture = cram_fixtures.build_indexed_safe_fixture(tmp_path)
+
+    idxstats = [line.split("\t") for line in pysam_any.idxstats(str(fixture.cram)).splitlines()]
+    stream_names = sorted(
+        record.partition("\t")[0] for record in pysam_any.view("-f", "4", str(fixture.cram)).splitlines()
+    )
+    indexed_names = sorted(record.partition("\t")[0] for record in pysam_any.view(str(fixture.cram), "*").splitlines())
+    digest = hashlib.sha256("".join(f"{name}\n" for name in stream_names).encode()).hexdigest()
+
+    assert idxstats == [["chr1", "20000", "20", "0"], ["*", "0", "0", "20"]]
+    assert len(stream_names) == 20
+    assert indexed_names == stream_names
+    assert digest == "16a0efa7785630c3d80716d9a386ddaa24f4933b5671f4ecd221b42a8dffe740"
+
+
 def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_path: Path, monkeypatch) -> None:
-    """``make cram-fixtures`` must make the #209 and A-SCAN-1 fixtures available."""
+    """``make cram-fixtures`` must make the #209, A-SCAN-1 and A-178-2 fixtures available."""
     data_root = tmp_path / "data"
     data_root.mkdir()
     calls: list[Path] = []
@@ -509,6 +531,7 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", fake_build)
     monkeypatch.setattr("scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda root: calls.append(root))
     monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda root: calls.append(root))
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_indexed_safe_fixture", lambda root: calls.append(root))
 
     exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
     all_exit_code = cram_fixtures.main(
@@ -518,7 +541,41 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
     assert exit_code == 1
     assert all_exit_code == 1
     assert selections == [False, True]
-    assert calls == [tmp_path / "cram", tmp_path / "cram", tmp_path / "all-cram", tmp_path / "all-cram"]
+    assert calls == [
+        tmp_path / "cram",
+        tmp_path / "cram",
+        tmp_path / "cram",
+        tmp_path / "all-cram",
+        tmp_path / "all-cram",
+        tmp_path / "all-cram",
+    ]
+
+
+def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: Path, monkeypatch) -> None:
+    """A partial fixture tree must not make the ordinary Make target report success."""
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    source = data_root / "good.bam"
+    source.write_bytes(b"BAM")
+    fixture = cram_fixtures.Fixture(
+        source_bam=source,
+        cram=tmp_path / "cram" / "good.cram",
+        records=1,
+        unmapped_pairs=0,
+        record_digest="digest",
+        source_bytes=3,
+        cram_bytes=2,
+    )
+    summary = Summary(fixtures=[fixture], skipped=[(data_root / "broken.bam", "truncated")])
+
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda _root: None)
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda _root: None)
+    monkeypatch.setattr("scripts.make_cram_fixtures.build_indexed_safe_fixture", lambda _root: None)
+
+    exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
+
+    assert exit_code == 1
 
 
 def test_the_reference_contract_purpose_fixtures_are_registered_with_portable_paths() -> None:
@@ -529,5 +586,6 @@ def test_the_reference_contract_purpose_fixtures_are_registered_with_portable_pa
         "reference_dependent_cram": "tests/data/cram/reference-dependent/reference-dependent.cram",
         "reference_fasta": "tests/data/cram/reference-dependent/reference.fa",
         "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram",
+        "indexed_safe_cram": "tests/data/cram/indexed-safe/indexed-safe.cram",
     }
     assert all(not Path(path).is_absolute() and ".." not in Path(path).parts for path in fixtures.values())

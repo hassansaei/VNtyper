@@ -19,10 +19,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Module-level cache for BAM chromosome resolution
-# Key: (bam_file, reference_assembly, chromosome_number), Value: chromosome_name
-_chromosome_cache: dict[tuple[str, str, int], str] = {}
-
 
 def get_region_string(bam_file: str, reference_assembly: str, region_type: str, config: dict) -> str:
     """
@@ -83,19 +79,9 @@ def get_region_string(bam_file: str, reference_assembly: str, region_type: str, 
     # Get chromosome number (currently hardcoded to 1, could be made configurable)
     chromosome_number = assembly_config.get("chromosome", 1)
 
-    # Check cache for chromosome name
-    cache_key = (bam_file, reference_assembly, chromosome_number)
-    if cache_key in _chromosome_cache:
-        chromosome_name = _chromosome_cache[cache_key]
-        logger.debug(f"Using cached chromosome name: {chromosome_name} for {bam_file}")
-    else:
-        # Get actual chromosome name from BAM
-        chromosome_name = get_chromosome_name_from_bam(
-            bam_file=bam_file, config=config, chromosome_number=chromosome_number, reference_assembly=reference_assembly
-        )
-        # Cache the result
-        _chromosome_cache[cache_key] = chromosome_name
-        logger.debug(f"Cached chromosome name: {chromosome_name} for {bam_file}")
+    chromosome_name = get_chromosome_name_from_bam(
+        bam_file=bam_file, config=config, chromosome_number=chromosome_number, reference_assembly=reference_assembly
+    )
 
     # Build final region string
     region = build_region_string(chromosome_name, coordinates)
@@ -206,6 +192,10 @@ def get_region_string_with_fallback(bam_file: str, reference_assembly: str, regi
         )
 
     except (KeyError, ValueError) as e:
+        from vntyper.scripts.chromosome_utils import NAMING_CONVENTION_ERROR_PREFIX
+
+        if isinstance(e, ValueError) and str(e).startswith(NAMING_CONVENTION_ERROR_PREFIX):
+            raise
         logger.warning(f"Dynamic region resolution failed: {e}. Falling back to legacy config lookup.")
 
         # Fall back to old method: look up hardcoded region in config
@@ -302,33 +292,3 @@ def _reject_region_absent_from_bam(bam_file: str, region: str, region_key: str, 
     )
     logger.error(message)
     raise ValueError(message)
-
-
-def clear_chromosome_cache():
-    """
-    Clear the module-level chromosome name cache.
-
-    This is useful when processing multiple BAM files in batch mode
-    to prevent memory leaks and ensure correct chromosome detection
-    for each file.
-
-    Should be called between processing different BAM files.
-    """
-    cache_size = len(_chromosome_cache)
-    _chromosome_cache.clear()
-    logger.debug(f"Cleared chromosome cache ({cache_size} entries)")
-
-
-def get_cache_info() -> dict:
-    """
-    Get information about the current cache state.
-
-    Returns:
-        dict: Cache statistics including size and entries
-
-    Example:
-        >>> info = get_cache_info()
-        >>> print(info["size"])
-        3
-    """
-    return {"size": len(_chromosome_cache), "entries": list(_chromosome_cache.keys())}

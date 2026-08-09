@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Set
 
+from vntyper.scripts.reference_registry import get_coordinate_system, get_reference_source, list_assemblies
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_REFERENCE_ORDER = ("cli", "config_cram_reference", "config_bwa_reference", "htslib_resolved")
@@ -22,7 +24,9 @@ def ordered_reference_candidates(
     Args:
         config: Pipeline configuration. Missing candidate policy uses the shipped
             explicit-first order.
-        reference_assembly: Assembly suffix used for configured reference keys.
+        reference_assembly: Supported assembly label used first as an exact
+            configured-key suffix, then by coordinate system for the UCSC
+            family fallback.
         reference_fasta: Explicit CLI or web reference path, when supplied.
 
     Returns:
@@ -58,10 +62,26 @@ def ordered_reference_candidates(
         raise ValueError(message)
 
     reference_data = config.get("reference_data", {})
+    coordinate_system = get_coordinate_system(reference_assembly)
+    family_assembly = next(
+        assembly
+        for assembly in list_assemblies()
+        if get_coordinate_system(assembly) == coordinate_system and get_reference_source(assembly) == "ucsc"
+    )
+    cram_key = f"cram_reference_{reference_assembly}"
+    bwa_key = f"bwa_reference_{reference_assembly}"
     values = {
         "cli": reference_fasta,
-        "config_cram_reference": reference_data.get(f"cram_reference_{reference_assembly}"),
-        "config_bwa_reference": reference_data.get(f"bwa_reference_{reference_assembly}"),
+        "config_cram_reference": (
+            reference_data[cram_key]
+            if cram_key in reference_data
+            else reference_data.get(f"cram_reference_{family_assembly}")
+        ),
+        "config_bwa_reference": (
+            reference_data[bwa_key]
+            if bwa_key in reference_data
+            else reference_data.get(f"bwa_reference_{family_assembly}")
+        ),
     }
     return tuple((source, values[source]) for source in explicit_order)
 

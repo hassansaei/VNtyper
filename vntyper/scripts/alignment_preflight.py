@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import re
 import tempfile
 from collections.abc import Iterable
 from contextlib import nullcontext, suppress
@@ -20,6 +19,7 @@ from vntyper.scripts.alignment_contract import (
     ReferenceAttempt,
     index_candidate_names,
     missing_index_message,
+    missing_reference_contig,
     unresolvable_reference_message,
 )
 from vntyper.scripts.alignment_index import resolve_any_index, resolve_bam_index
@@ -46,11 +46,11 @@ from vntyper.scripts.preflight_command_io import (
     validate_log_entry as _validate_log_entry,
 )
 from vntyper.scripts.reference_resolution import ordered_reference_candidates, uncovered_reference_contigs
+from vntyper.scripts.reference_uri_policy import allow_ambient_reference_resolution, ref_path_remote_scheme
 
 logger = logging.getLogger(__name__)
 
 HTSLIB_REFERENCE_SOURCE = "htslib-resolved (header UR: or REF_PATH)"
-_REMOTE_REFERENCE_URL = re.compile(r"(?:^|:)(?!file://)[A-Za-z][A-Za-z0-9+.-]*://", re.IGNORECASE)
 _MAX_REFERENCE_PROBE_TIMEOUT_SECONDS = 120.0
 
 
@@ -123,7 +123,7 @@ def build_alignment_view(
         file_format: Alignment format, either ``"bam"`` or ``"cram"``.
         config: Pipeline configuration; missing tool configuration uses ``samtools``.
         threads: Thread count for an index build.
-        bai_only: Require BAI for a BAM consumer that parses BAI bytes directly.
+        bai_only: Use the legacy BAI-only BAM preflight/protection contract.
 
     Returns:
         The alignment view path and its co-located index path.
@@ -248,11 +248,11 @@ def pin_reference_resolution(config: dict) -> str | None:
     """
     previous = os.environ.get("REF_PATH")
     cram_config = config.get("cram", {})
-    if cram_config.get("allow_ambient_reference_resolution", False):
+    if allow_ambient_reference_resolution(config):
         logger.warning("Ambient CRAM reference resolution is enabled and may block on a network endpoint.")
         return previous
     local_ref_path = cram_config.get("local_ref_path", "%2s/%2s/%s")
-    if _REMOTE_REFERENCE_URL.search(local_ref_path):
+    if ref_path_remote_scheme(local_ref_path) is not None:
         message = (
             "cram.local_ref_path must not contain a remote URL when ambient reference resolution is disabled: "
             f"{local_ref_path}"
@@ -341,6 +341,7 @@ def resolve_reference(
     header_contigs: Iterable[str],
     m5: str | None,
     *,
+    header_m5s: Iterable[tuple[str, str]] = (),
     unmapped_scan: str = "indexed",
     failure_context: error_io.PreflightErrorContext | None = None,
 ) -> tuple[str | None, str, tuple[str, ...]]:
@@ -357,6 +358,8 @@ def resolve_reference(
         output_name: Base name for probe logs.
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
+        header_m5s: Header contig and M5 pairs used to diagnose a later
+            whole-file stream failure.
         unmapped_scan: Downstream CRAM unmapped-read scan. Stream mode requires
             an additional whole-file decode proof from the same candidate.
         failure_context: Boundary diagnostics receiving structured candidate details.
@@ -440,9 +443,18 @@ def resolve_reference(
     attempts.append((HTSLIB_REFERENCE_SOURCE, None, output.strip() or "probe exited non-zero"))
     contigs = tuple(header_contigs)
     target_contig = _target_contig(region, bed_file, contigs)
-    message = unresolvable_reference_message(view_path, target_contig, m5, attempts)
+    failure_contig = next(
+        (
+            parsed
+            for _, _, reason in reversed(attempts)
+            if (parsed := missing_reference_contig(reason, contigs)) is not None
+        ),
+        target_contig,
+    )
+    failure_m5 = dict(header_m5s).get(failure_contig, m5 if failure_contig == target_contig else None)
+    message = unresolvable_reference_message(view_path, failure_contig, failure_m5, attempts)
     if failure_context is not None:
-        failure_context.payload = error_io.public_reference_error_payload(target_contig, m5, attempts)
+        failure_context.payload = error_io.public_reference_error_payload(failure_contig, failure_m5, attempts)
     _reject(message)
 
 
@@ -494,6 +506,7 @@ def run_preflight(
     reference_fasta: str | None = None,
     header_contigs: Iterable[str] = (),
     m5: str | None = None,
+    header_m5s: Iterable[tuple[str, str]] = (),
     fast_mode: bool = False,
     error_output_dir: str | Path | None = None,
     failure_context: error_io.PreflightErrorContext | None = None,
@@ -513,6 +526,7 @@ def run_preflight(
         reference_fasta: Explicit CLI or web reference candidate.
         header_contigs: Contigs declared by the alignment header.
         m5: Header M5 checksum for the target contig, when available.
+        header_m5s: Header contig and M5 pairs for terminal stream diagnostics.
         fast_mode: Whether downstream BAM processing can use any htslib index.
         error_output_dir: Run output root for the curated failure artifact.
         failure_context: Optional outer-owned failure context. When absent, this
@@ -575,6 +589,7 @@ def run_preflight(
                 output_name,
                 tuple(header_contigs),
                 m5,
+                header_m5s=header_m5s,
                 unmapped_scan=unmapped_scan,
                 failure_context=failure_context,
             )

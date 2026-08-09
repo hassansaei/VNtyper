@@ -158,6 +158,32 @@ def test_fresh_output_root_exists_for_validation_but_stage_directories_wait_for_
     assert harness.stages["run_preflight"].called
 
 
+def test_pipeline_forwards_a_cram_header_to_remote_uri_policy_before_region_or_preflight(tmp_path: Path) -> None:
+    """The top-level orchestration cannot bypass the owned post-header policy check."""
+    out = tmp_path / "run-output"
+    cram = tmp_path / "patient-input" / "patient.cram"
+    cram.parent.mkdir()
+    cram.touch()
+    header = "@SQ\tSN:chr1\tLN:100\tUR:https://refget.example/private/reference.fa\n"
+
+    harness = run_pipeline_under_harness(
+        out,
+        bam=None,
+        cram=str(cram),
+        config=MINIMAL_CONFIG,
+        expect_failure=True,
+        stage_side_effects={"read_alignment_header": lambda *args, **kwargs: header},
+    )
+
+    assert isinstance(harness.error, SystemExit)
+    assert json.loads((out / "preflight_error.json").read_text(encoding="utf-8"))["code"] == (
+        "reference_policy_invalid"
+    )
+    assert not harness.stages["get_region_string_with_fallback"].called
+    assert not harness.stages["run_preflight"].called
+    assert not harness.stages["get_tool_versions"].called
+
+
 def test_patient_input_tree_cannot_be_used_as_the_output_root(tmp_path: Path) -> None:
     input_root = tmp_path / "patient-input"
     input_root.mkdir()

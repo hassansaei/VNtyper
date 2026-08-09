@@ -1,0 +1,110 @@
+"""Pure policy tests for local and remote CRAM reference URIs."""
+
+from __future__ import annotations
+
+import pytest
+
+from vntyper.scripts import reference_uri_policy
+from vntyper.scripts.reference_uri_policy import (
+    RemoteHeaderReference,
+    enforce_header_reference_policy,
+    first_remote_header_reference,
+    ref_path_remote_scheme,
+)
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("https://refget.example/reference.fa", "https"),
+        ("S3://reference-bucket/reference.fa", "s3"),
+        ("/local/%s:http://127.0.0.1/reference.fa", "http"),
+        ("reference.fa", None),
+        ("../reference.fa", None),
+        ("/local/reference.fa", None),
+        ("file:///local/reference.fa", None),
+        ("file://reference-host/local/reference.fa", None),
+    ],
+)
+def test_ref_path_remote_scheme_distinguishes_network_and_local_search_entries(
+    value: str, expected: str | None
+) -> None:
+    """A non-file URI scheme is the only shape governed by the network waiver."""
+    assert ref_path_remote_scheme(value) == expected
+
+
+def test_first_remote_header_reference_reports_the_sq_contig_and_normalised_scheme() -> None:
+    """Tag order and unrelated header lines cannot hide a remote SQ reference."""
+    header = (
+        "@HD\tVN:1.6\n"
+        "@SQ\tUR:file:///local/chr1.fa\tBROKEN\tSN:chr1\tLN:100\n"
+        "@SQ\tM5:digest\tUR:HTTPS://refget.example/secret/path.fa\tLN:200\tSN:chr2\n"
+    )
+
+    assert first_remote_header_reference(header) == RemoteHeaderReference(contig="chr2", scheme="https")
+
+
+def test_every_duplicate_ur_field_is_inspected_instead_of_the_last_one_winning() -> None:
+    """A trailing local UR cannot hide an earlier remote reference on the same SQ line."""
+    header = "@SQ\tSN:chr7\tLN:100\tUR:http://refget.example/private.fa\tUR:file:///local/reference.fa\n"
+
+    assert first_remote_header_reference(header) == RemoteHeaderReference(contig="chr7", scheme="http")
+
+
+def test_remote_ur_without_an_sq_name_uses_the_path_free_unknown_contig() -> None:
+    """A malformed SQ line still rejects its remote target without exposing that target."""
+    header = "@SQ\tLN:100\tUR:https://refget.example/private.fa\n"
+
+    assert first_remote_header_reference(header) == RemoteHeaderReference(contig="unknown", scheme="https")
+
+
+@pytest.mark.parametrize("uri", ["http:refget.example/private.fa", "S3:reference-bucket/reference.fa"])
+def test_header_uri_schemes_are_recognised_without_slashes(uri: str) -> None:
+    """RFC-style htslib schemes are anchored at the URI start and do not require ``//``."""
+    header = f"@SQ\tSN:chr2\tLN:100\tUR:{uri}\n"
+
+    assert first_remote_header_reference(header) == RemoteHeaderReference(
+        contig="chr2", scheme=uri.partition(":")[0].lower()
+    )
+
+
+def test_header_and_ref_path_detection_have_context_specific_public_interfaces() -> None:
+    """Header URI syntax and colon-separated REF_PATH syntax cannot share ambiguous parsing."""
+    assert reference_uri_policy.header_reference_scheme("http:opaque-reference") == "http"
+    assert reference_uri_policy.header_reference_scheme("/local/cache:http://refget.example/%s") is None
+    assert reference_uri_policy.ref_path_remote_scheme("/local/cache:http://refget.example/%s") == "http"
+    assert reference_uri_policy.ref_path_remote_scheme("file:///local/reference.fa:/local/cache/%s") is None
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["reference.fa", "../reference.fa", "/reference/reference.fa", "file:///reference/reference.fa"],
+)
+def test_default_header_policy_allows_local_relative_and_file_uris(uri: str) -> None:
+    """Every explicitly local header form remains available in default mode."""
+    enforce_header_reference_policy(f"@SQ\tSN:chr1\tLN:100\tUR:{uri}\n", allow_ambient=False)
+
+
+def test_explicit_ambient_waiver_allows_a_remote_header_uri() -> None:
+    """The existing opt-in preserves operator-controlled network resolution."""
+    enforce_header_reference_policy(
+        "@SQ\tSN:chr1\tLN:100\tUR:https://refget.example/reference.fa\n",
+        allow_ambient=True,
+    )
+
+
+def test_default_header_policy_rejects_remote_uri_without_disclosing_its_path() -> None:
+    """The diagnostic identifies the decision while omitting the remote target path."""
+    uri = "http://127.0.0.1:8765/private/reference.fa"
+
+    with pytest.raises(ValueError) as raised:
+        enforce_header_reference_policy(f"@SQ\tSN:chr7\tLN:100\tUR:{uri}\n", allow_ambient=False)
+
+    message = str(raised.value)
+    assert "contig=chr7" in message
+    assert "scheme=http" in message
+    assert "allow_ambient_reference_resolution=true" in message
+    assert uri not in message
+    assert "/private/reference.fa" not in message

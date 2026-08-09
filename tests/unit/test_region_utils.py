@@ -1,18 +1,17 @@
 """
 Unit tests for region_utils.py
 
-Tests region string construction and chromosome name caching functionality.
+Tests region string construction and chromosome-name freshness.
 """
 
 import logging
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from vntyper.scripts.region_utils import (
     build_region_string,
-    clear_chromosome_cache,
-    get_cache_info,
     get_region_string,
     get_region_string_with_fallback,
     resolve_assembly_alias,
@@ -135,11 +134,10 @@ class TestGetRegionString:
         result = get_region_string("test.bam", "hg38", "bam_region_coords", config)
         assert result == "chr1:155184000-155194000"
 
-    @patch("vntyper.scripts.chromosome_utils.get_chromosome_name_from_bam")
-    def test_caching(self, mock_get_chr):
-        """Test that chromosome names are cached."""
-        mock_get_chr.return_value = "chr1"
-
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    def test_mutating_naming_policy_for_the_same_path_is_observed(self, mock_extract):
+        """Config-driven naming cannot reuse a decision made under old policy."""
+        mock_extract.return_value = "@SQ\tSN:chr1\tLN:100\n@SQ\tSN:1\tLN:100\n@SQ\tSN:2\tLN:100\n"
         config = {
             "bam_processing": {
                 "assemblies": {
@@ -152,18 +150,29 @@ class TestGetRegionString:
             }
         }
 
-        # Clear cache first
-        clear_chromosome_cache()
+        assert get_region_string("same.bam", "hg19", "bam_region_coords", config) == "1:155158000-155163000"
 
-        # First call should invoke get_chromosome_name_from_bam
-        result1 = get_region_string("test.bam", "hg19", "bam_region_coords", config)
-        assert result1 == "chr1:155158000-155163000"
-        assert mock_get_chr.call_count == 1
+        config["assembly_detection"] = {
+            "primary_contig_patterns": [r"^chr[0-9XYM]+$", r"^NC_\d{6}\.\d+$", r"^never$"],
+        }
+        assert get_region_string("same.bam", "hg19", "bam_region_coords", config) == "chr1:155158000-155163000"
+        assert mock_extract.call_count == 2
 
-        # Second call should use cached value
-        result2 = get_region_string("test.bam", "hg19", "vntr_region_coords", config)
-        assert result2 == "chr1:155160500-155162000"
-        assert mock_get_chr.call_count == 1  # Still 1, used cache
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    def test_replacing_a_file_at_the_same_path_is_observed(self, mock_extract, tmp_path: Path):
+        """A same-path replacement cannot inherit the previous file's naming."""
+        alignment = tmp_path / "sample.bam"
+        alignment.write_text("@SQ\tSN:chr1\tLN:100\n")
+        mock_extract.side_effect = lambda bam_file, _config: Path(bam_file).read_text()
+        config = {
+            "bam_processing": {"assemblies": {"GRCh37": {"bam_region_coords": "155158000-155163000", "chromosome": 1}}}
+        }
+
+        assert get_region_string(str(alignment), "hg19", "bam_region_coords", config) == ("chr1:155158000-155163000")
+
+        alignment.write_text("@SQ\tSN:1\tLN:100\n")
+        assert get_region_string(str(alignment), "hg19", "bam_region_coords", config) == "1:155158000-155163000"
+        assert mock_extract.call_count == 2
 
     def test_missing_assembly_config(self):
         """Test error when assembly not found in config."""
@@ -214,6 +223,28 @@ class TestGetRegionStringWithFallback:
 
         with pytest.raises(ValueError, match="Neither new nor legacy format"):
             get_region_string_with_fallback("test.bam", "hg19", "bam_region", config)
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "@SQ\tSN:chr1\tLN:100\n@SQ\tSN:1\tLN:100\n",
+            "@SQ\tSN:scaffold_a\tLN:100\n@SQ\tSN:scaffold_b\tLN:100\n",
+        ],
+        ids=["fifty-fifty", "zero-classifiable"],
+    )
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    def test_naming_ambiguity_is_not_swallowed_by_the_legacy_fallback(self, mock_extract, header):
+        """Target resolution must fail rather than select any configured fallback."""
+        mock_extract.return_value = header
+        config = {
+            "bam_processing": {
+                "assemblies": {"GRCh37": {"bam_region_coords": "155158000-155163000", "chromosome": 1}},
+                "bam_region_hg19": "chr1:155158000-155163000",
+            }
+        }
+
+        with pytest.raises(ValueError, match="Ambiguous or unclassifiable chromosome naming convention"):
+            get_region_string_with_fallback("ambiguous.bam", "hg19", "bam_region", config)
 
 
 class TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain:
@@ -350,25 +381,6 @@ class TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain:
         assert [r for r in caplog.records if r.levelno == logging.ERROR], (
             "refusing to slice must be logged at ERROR, not swallowed"
         )
-
-
-class TestCacheManagement:
-    """Test chromosome name cache management."""
-
-    def test_clear_cache(self):
-        """Test clearing the cache."""
-        # First, add something to cache by calling get_cache_info
-        clear_chromosome_cache()
-        info = get_cache_info()
-        assert info["size"] == 0
-
-    def test_get_cache_info(self):
-        """Test getting cache information."""
-        clear_chromosome_cache()
-        info = get_cache_info()
-        assert "size" in info
-        assert "entries" in info
-        assert isinstance(info["entries"], list)
 
 
 if __name__ == "__main__":

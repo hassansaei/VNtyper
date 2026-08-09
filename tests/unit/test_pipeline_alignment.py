@@ -360,6 +360,7 @@ def test_build_alignment_preflight_kwargs_pins_exact_bed_and_header_contigs(
         "reference_fasta": str(reference),
         "header_contigs": () if alignment_header is None else ("chr1", "chr2"),
         "m5": None,
+        "header_m5s": (),
         "fast_mode": True,
         "error_output_dir": str(error_output),
     }
@@ -450,6 +451,96 @@ def test_input_alignment_header_failure_has_a_stable_artifact_and_restores_ref_p
     preflight.assert_not_called()
 
 
+def test_default_cram_remote_header_uri_fails_at_the_owned_policy_boundary_before_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A header network target is rejected before assembly, target, probe, or stage work."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    (output / "preflight_error.json").write_text('{"code":"stale"}\n', encoding="utf-8")
+    monkeypatch.setenv("REF_PATH", "operator-value")
+    remote_uri = "http://127.0.0.1:8765/private/reference.fa"
+    header = f"@SQ\tSN:chr7\tLN:100\tUR:{remote_uri}\n"
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header", return_value=header),
+        mock.patch("vntyper.scripts.pipeline_alignment.enforce_declared_assembly") as assembly,
+        mock.patch("vntyper.scripts.pipeline_alignment.prepare_alignment_target") as target,
+        mock.patch("vntyper.scripts.pipeline_alignment.run_preflight") as preflight,
+        mock.patch("vntyper.scripts.alignment_preflight.capture_command") as capture,
+        pytest.raises(ValueError) as raised,
+    ):
+        prepare_input_alignment_preflight(
+            in_path=tmp_path / "patient-input" / "sample.cram",
+            input_type="CRAM",
+            output_dir=output,
+            config={"cram": {"local_ref_path": "/local/cache/%s"}},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+        )
+
+    message = str(raised.value)
+    assert "contig=chr7" in message
+    assert "scheme=http" in message
+    assert remote_uri not in message
+    assert os.environ["REF_PATH"] == "operator-value"
+    assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8")) == {
+        "code": "reference_policy_invalid",
+        "message": message,
+        "candidates": [],
+    }
+    assembly.assert_not_called()
+    target.assert_not_called()
+    preflight.assert_not_called()
+    capture.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["false", 0, None])
+def test_owned_cram_boundary_rejects_non_boolean_ambient_policy_before_header_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: object,
+) -> None:
+    """The pipeline boundary cannot reinterpret JSON strings, numbers, or null as a waiver."""
+    output = tmp_path / "run-output"
+    output.mkdir()
+    monkeypatch.setenv("REF_PATH", "operator-value")
+
+    with (
+        mock.patch("vntyper.scripts.pipeline_alignment.read_alignment_header") as header,
+        mock.patch("vntyper.scripts.pipeline_alignment.enforce_declared_assembly") as assembly,
+        mock.patch("vntyper.scripts.pipeline_alignment.prepare_alignment_target") as target,
+        mock.patch("vntyper.scripts.pipeline_alignment.run_preflight") as preflight,
+        pytest.raises(ValueError, match="allow_ambient_reference_resolution must be true or false"),
+    ):
+        prepare_input_alignment_preflight(
+            in_path=tmp_path / "patient-input" / "sample.cram",
+            input_type="CRAM",
+            output_dir=output,
+            config={"cram": {"allow_ambient_reference_resolution": invalid}},
+            threads=1,
+            reference_assembly="hg19",
+            bed_file=None,
+            custom_regions=None,
+            reference_fasta=None,
+            fast_mode=False,
+        )
+
+    assert os.environ["REF_PATH"] == "operator-value"
+    assert json.loads((output / "preflight_error.json").read_text(encoding="utf-8"))["code"] == (
+        "reference_policy_invalid"
+    )
+    header.assert_not_called()
+    assembly.assert_not_called()
+    target.assert_not_called()
+    preflight.assert_not_called()
+
+
 def test_outer_boundary_preserves_the_inner_structured_reference_payload(tmp_path: Path) -> None:
     """The outer preparation owner must not replace candidate-specific diagnostics."""
     output = tmp_path / "run-output"
@@ -526,3 +617,24 @@ def test_terminal_reference_diagnostic_uses_the_bed_target_and_its_m5(tmp_path: 
 
     assert "contig=chr2" in str(error.value)
     assert "M5=target-checksum" in str(error.value)
+
+
+def test_preflight_kwargs_preserve_m5_values_for_every_header_contig(tmp_path: Path) -> None:
+    """Terminal stream diagnostics can attribute a later BED failure to its own checksum."""
+    bed = tmp_path / "targets.bed"
+    bed.write_text("chr1\t10\t20\nchr2\t30\t40\n", encoding="utf-8")
+
+    kwargs = build_alignment_preflight_kwargs(
+        in_path="/input/sample.cram",
+        output_dir=tmp_path,
+        output_name="input",
+        file_format="cram",
+        config={},
+        threads=2,
+        bed_file=bed,
+        reference_assembly="hg38",
+        fast_mode=False,
+        alignment_header=("@SQ\tSN:chr1\tLN:100\tM5:first\n@SQ\tSN:chr2\tLN:200\tM5:second\n"),
+    )
+
+    assert kwargs["header_m5s"] == (("chr1", "first"), ("chr2", "second"))

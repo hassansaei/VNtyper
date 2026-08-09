@@ -30,7 +30,7 @@ Two rules follow, and they pull in opposite directions:
   operator-controlled configuration, not user input.
 
 The strings produced here are byte-identical to the ones the pipeline produced
-before this module existed, apart from four deliberate fixes:
+before this module existed, apart from five deliberate fixes:
 
 1. ``shlex.quote`` around interpolated paths (a no-op for paths that need no
    quoting, which is every path in the test suite and most real ones).
@@ -42,6 +42,9 @@ before this module existed, apart from four deliberate fixes:
 4. The CRAM unmapped-read extractor writes through a plain pipe rather than a
    ``tee >(...)`` process substitution, so the shell waits for the writer instead
    of returning while it is still flushing.
+5. Non-fast target slicing excludes flag-4 reads (``-F 4``) before merging with
+   complete recovery. On the registered b178 single-end fixture this prevents 329
+   target reads from being duplicated: the merged count is 4,807 rather than 5,136.
 
 Functions:
     build_fastp_command: FASTQ quality control
@@ -209,6 +212,7 @@ def build_samtools_slice_command(
     reference_path: str | Path | None = None,
     threads: int = 1,
     index_output: bool = True,
+    exclude_unmapped: bool = False,
 ) -> str:
     """
     Build the region-slicing command, followed by indexing the slice.
@@ -225,6 +229,8 @@ def build_samtools_slice_command(
         reference_path (str | Path | None): Reference FASTA for CRAM decoding.
         threads (int): Thread count for view and index.
         index_output (bool): Whether to append indexing of the resulting slice.
+        exclude_unmapped (bool): Exclude flag-4 reads recovered separately for a
+            subsequent disjoint merge. Fast-mode slices leave this disabled.
 
     Returns:
         str: ``samtools view ...``, optionally followed by ``&& samtools index``.
@@ -243,8 +249,9 @@ def build_samtools_slice_command(
         logger.error(message)
         raise ValueError(message)
 
+    exclude_flag = "-F 4 " if exclude_unmapped else ""
     command = (
-        f"{samtools_path} view -P -b {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"{samtools_path} view -P -b {exclude_flag}{_thread_flag(threads)}{_reference_flag(reference_path)}"
         f"{quote_path(in_bam)} {target} -o {quote_path(output_bam)}"
     )
     if not index_output:
@@ -286,19 +293,18 @@ def build_cram_unmapped_filter_command(
     reference_path: str | Path | None = None,
 ) -> str:
     """
-    Build the CRAM unmapped-read extraction command.
+    Build the whole-file unmapped-read extraction command.
 
-    BAM inputs use the offset-based extractor in
-    ``extract_unmapped_from_offset.py``; CRAM has no equivalent, so it streams the
-    whole file through samtools and picks out flag 4 (read unmapped). This also
-    retains unpaired reads, which do not carry the mate-unmapped bit.
+    Stream plans for BAM and CRAM decode the whole file through samtools and pick
+    out flag 4 (read unmapped). This also retains unpaired reads, which do not
+    carry the mate-unmapped bit.
 
     Args:
         samtools_path (str): samtools invocation from config. This is used for
             **both** stages of the pipeline - the writing stage used to be a bare
             ``samtools``, which under ``mamba run`` resolves against a different
             PATH.
-        in_bam (str | Path): The input CRAM.
+        in_bam (str | Path): The input BAM or CRAM.
         unmapped_bam (str | Path): Where the unmapped reads are written.
         threads (int): Thread count for both samtools invocations.
         reference_path (str | Path | None): Reference FASTA for CRAM decoding.
@@ -346,7 +352,7 @@ def build_cram_unmapped_indexed_command(
     threads: int,
     reference_path: str | Path | None = None,
 ) -> str:
-    """Build the indexed CRAM extraction command for unplaced unmapped reads.
+    """Build the indexed alignment command for unplaced unmapped reads.
 
     Args:
         samtools_path: samtools invocation from config.

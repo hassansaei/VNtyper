@@ -94,7 +94,6 @@ def _run_bam_to_fastq(tmp_path, **overrides):
     with (
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset"),
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(**kwargs)
@@ -178,7 +177,8 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam",
+        f"samtools view -P -b -F 4 -@ 4 /data/sample.bam {REGION} -o {tmp_path}/output_sliced.bam",
+        f"samtools view -b -f 4 -@ 4 /data/sample.bam '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
@@ -186,6 +186,15 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
         f"-s {tmp_path}/output_single.fastq.gz",
+    ]
+
+
+def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
+    """A valid all-unplaced BAM has no BAI chunk offset for the custom reader."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    assert [command for command in commands if "-f 4" in command] == [
+        f"samtools view -b -f 4 -@ 4 /data/sample.bam '*' -o {tmp_path}/output_unmapped.bam"
     ]
 
 
@@ -255,11 +264,8 @@ def test_an_existing_index_beside_the_input_is_reused_rather_than_rebuilt(tmp_pa
     )
 
 
-def test_the_preflight_index_is_handed_directly_to_the_offset_extractor(tmp_path):
-    """
-    Conversion consumes the exact BAI that preflight proved instead of resolving
-    or rebuilding an index of its own.
-    """
+def test_indexed_bam_recovery_uses_the_plan_view_without_a_reference(tmp_path):
+    """The htslib fetch consumes the proven view and discovers its co-located BAI."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     in_bam = input_dir / "sample.bam"
@@ -276,10 +282,10 @@ def test_the_preflight_index_is_handed_directly_to_the_offset_extractor(tmp_path
         unmapped_scan="indexed",
     )
 
+    recorder = _Recorder()
     with (
-        patch.object(fastq_bam_processing, "run_command", return_value=True),
+        patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset") as extractor,
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
@@ -291,41 +297,28 @@ def test_the_preflight_index_is_handed_directly_to_the_offset_extractor(tmp_path
             fast_mode=False,
         )
 
-    assert extractor.call_args.kwargs["bam_file"] == plan.view_path
-    assert extractor.call_args.kwargs["bai_file"] == plan.index_path
+    (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
+    assert unmapped_command == (f"samtools view -b -f 4 -@ 4 {plan.view_path} '*' -o {tmp_path}/output_unmapped.bam")
+    assert plan.index_path not in unmapped_command
+    assert " -T " not in unmapped_command
 
 
-@pytest.mark.parametrize(
-    ("existing", "expected_relative_to"),
-    [
-        ("sample.bam.bai", "input"),
-        ("sample.bai", "input"),
-        (None, "output"),
-    ],
-)
-def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_path, existing, expected_relative_to):
-    """
-    Resolving an index and then reading a different one is the silent version of #210.
-
-    ``extract_unmapped_reads_from_offset`` seeks by the offsets in the index it is
-    given, so an index that does not describe the alignment is not a crash - it is
-    a different set of unmapped reads. Whichever index the stage decided on, built
-    or found, is the one that must reach it.
-    """
+@pytest.mark.parametrize("index_path", ["sample.bam.bai", "sample.bai", None])
+def test_indexed_bam_recovery_never_embeds_an_index_operand(tmp_path, index_path):
+    """The proven index is co-located; htslib discovers it from the view path."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     in_bam = input_dir / "sample.bam"
     in_bam.write_bytes(b"BAM\x01")
-    if existing is not None:
-        (input_dir / existing).write_bytes(b"BAI\x01")
+    if index_path is not None:
+        (input_dir / index_path).write_bytes(b"BAI\x01")
 
     recorder = _Recorder()
     with (
         patch.object(fastq_bam_processing, "run_command", recorder),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset") as extractor,
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
@@ -338,7 +331,7 @@ def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_pat
                 input_path=str(in_bam),
                 view_path=str(in_bam),
                 file_format="bam",
-                index_path=str(input_dir / existing) if existing is not None else str(output_dir / "proven.bai"),
+                index_path=str(input_dir / index_path) if index_path is not None else str(output_dir / "proven.bai"),
                 reference_path=None,
                 reference_source="test",
                 uncovered_contigs=(),
@@ -346,12 +339,10 @@ def test_the_index_handed_to_the_offset_extractor_is_the_one_that_exists(tmp_pat
             ),
         )
 
-    bai_file = Path(extractor.call_args.kwargs["bai_file"])
-    if existing is not None:
-        assert bai_file == input_dir / existing
-    else:
-        assert bai_file == output_dir / "proven.bai"
-    assert bai_file.parent.name == expected_relative_to
+    (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
+    asserted_index = input_dir / index_path if index_path is not None else output_dir / "proven.bai"
+    assert str(asserted_index) not in unmapped_command
+    assert in_bam.as_posix() in unmapped_command
 
 
 # ---------------------------------------------------------------------------

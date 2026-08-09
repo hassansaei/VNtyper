@@ -92,9 +92,15 @@ collection time, so any other CWD breaks collection, including `-m unit`.
     (`<file>.bai`, then `<stem>.bai`), split out of `fastq_bam_processing.py`, which keeps
     every `run_command`/samtools call including the one that builds a missing index. It is
     **not** htslib's resolution order — htslib tries CSI first, and a CSI is ignored here
-    on purpose, because the only consumer of the path is the BAI-only offset extractor in
-    `extract_unmapped_from_offset.py`. Widening it is a change to that reader first.
-  All eight are fully annotated and at or near 100% branch coverage. Put new pure logic
+    on purpose. Non-fast preflight still uses this BAI-only result while protecting
+    supplied indexes and builds a fresh co-located BAI. Production indexed recovery now
+    lets htslib fetch literal `'*'` reads; it does not call the optional legacy offset
+    extractor in `extract_unmapped_from_offset.py`. Widening the resolver remains a
+    separate preflight-contract change.
+  - `reference_uri_policy.py` — typed, path-free remote-scheme detection with distinct
+    parsers for colon-separated `REF_PATH` and complete CRAM header `UR` values, plus
+    strict validation of the ambient-resolution boolean.
+  All nine are fully annotated and at or near 100% branch coverage. Put new pure logic
   there rather than back in the file it came from.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`

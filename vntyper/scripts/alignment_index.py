@@ -13,8 +13,9 @@ question here is which candidate name permitted by the alignment format exists, 
 order from :func:`alignment_contract.index_candidate_names`. BAM CSI is supported by
 :func:`resolve_any_index`, as is CRAM CSI after pinned samtools/htslib acceptance was
 measured directly. CSI is deliberately out of scope only for
-:func:`resolve_bam_index`, because the offset extractor downstream parses BAI bytes
-directly and makes that the correct answer rather than a gap.
+:func:`resolve_bam_index`, which remains the legacy BAI-only preflight/protection
+contract. The optional legacy offset parser remains independently tested but has no
+production consumer.
 
 That question lived in ``fastq_bam_processing.py``, where every other function shells out
 through ``run_command``, so it could only be exercised by driving a stage that runs
@@ -40,8 +41,8 @@ logger = logging.getLogger(__name__)
 def resolve_any_index(in_path: str | Path, file_format: str) -> str | None:
     """Find the first existing index accepted for an alignment format.
 
-    General resolution includes BAM and CRAM CSI. The BAI-only offset reader uses
-    :func:`resolve_bam_index` instead.
+    General resolution includes BAM and CRAM CSI. The legacy BAI-only BAM
+    preflight/protection path uses :func:`resolve_bam_index` instead.
 
     Args:
         in_path (str | Path): The alignment whose index is wanted.
@@ -67,14 +68,11 @@ def resolve_bam_index(in_bam: str | Path) -> str | None:
 
     **This is deliberately not htslib's resolution order, and must not be widened
     to match it.** htslib tries CSI before BAI - ``<file>.csi`` and ``<stem>.csi``
-    - and a CSI is ignored here in both spellings. The only consumer of the
-    returned path is ``extract_unmapped_from_offset.get_last_chunk_end``, which
-    walks the BAI container itself and rejects any file whose first four bytes are
-    not ``BAI\\x01``. Handing it a CSI would replace a working run with a
-    ``ValueError`` mid-stage, whereas returning None makes the caller build the
-    BAI it can actually read - into the run's *output* directory, never beside the
-    input. Resolving CSI is a change to the offset extractor first and to this
-    function second. Pinned by
+    - and a CSI is ignored here in both spellings. This function remains the legacy
+    BAI-only preflight/protection contract; production indexed recovery uses the
+    common htslib literal-``'*'`` fetch against the fresh run-local view. The
+    optional legacy offset parser is independently tested but has no production
+    consumer. Widening this resolver is a separate preflight-contract change. Pinned by
     ``tests/unit/test_alignment_index.py::test_a_csi_index_is_ignored_and_a_bai_is_built_instead``.
 
     Args:

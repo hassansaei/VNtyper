@@ -30,9 +30,6 @@ from vntyper.scripts.coverage_stats import (
     read_depth_values,
     summarise_coverage,
 )
-from vntyper.scripts.extract_unmapped_from_offset import (
-    extract_unmapped_reads_from_offset,
-)
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.utils import run_command
 
@@ -145,6 +142,7 @@ def process_bam_to_fastq(
         reference_path=plan.reference_path,
         threads=threads,
         index_output=fast_mode,
+        exclude_unmapped=not fast_mode,
     )
     log_file_slice = Path(output) / f"{output_name}_slice.log"
     logger.info(f"Executing region slicing with command: {command_slice}")
@@ -159,33 +157,25 @@ def process_bam_to_fastq(
     if not fast_mode:
         unmapped_bam = Path(output) / f"{output_name}_unmapped.bam"
 
-        if plan.file_format == "bam" and plan.unmapped_scan == "indexed":
-            logger.info("Extracting unmapped reads using offset calculation...")
-            extract_unmapped_reads_from_offset(
-                bam_file=plan.view_path,
-                bai_file=plan.index_path,
-                output_bam=str(unmapped_bam),
-            )
-        else:
-            unmapped_builder = (
-                build_cram_unmapped_indexed_command
-                if plan.unmapped_scan == "indexed"
-                else build_cram_unmapped_filter_command
-            )
-            command_filter = unmapped_builder(
-                samtools_path=samtools_path,
-                in_bam=plan.view_path,
-                unmapped_bam=unmapped_bam,
-                threads=threads,
-                reference_path=plan.reference_path,
-            )
-            log_file_filter = Path(output) / f"{output_name}_filter.log"
-            logger.info(f"Executing filtering with command: {command_filter}")
+        unmapped_builder = (
+            build_cram_unmapped_indexed_command
+            if plan.unmapped_scan == "indexed"
+            else build_cram_unmapped_filter_command
+        )
+        command_filter = unmapped_builder(
+            samtools_path=samtools_path,
+            in_bam=plan.view_path,
+            unmapped_bam=unmapped_bam,
+            threads=threads,
+            reference_path=plan.reference_path,
+        )
+        log_file_filter = Path(output) / f"{output_name}_filter.log"
+        logger.info(f"Executing filtering with command: {command_filter}")
 
-            success = run_command(str(command_filter), str(log_file_filter), critical=True)
-            if not success:
-                logger.error("BAM/CRAM filtering failed.")
-                raise RuntimeError("BAM/CRAM filtering failed.")
+        success = run_command(str(command_filter), str(log_file_filter), critical=True)
+        if not success:
+            logger.error("BAM/CRAM filtering failed.")
+            raise RuntimeError("BAM/CRAM filtering failed.")
 
         # Merge sliced + unmapped
         merged_bam = Path(output) / f"{output_name}_sliced_unmapped.bam"

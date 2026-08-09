@@ -14,6 +14,7 @@ from vntyper.scripts.alignment_preflight import (
     resolve_reference,
     run_preflight,
 )
+from vntyper.scripts.preflight_error_io import PreflightErrorContext
 
 pytestmark = pytest.mark.unit
 
@@ -454,6 +455,43 @@ def test_stream_mode_rejects_a_target_only_winner_and_tries_the_next_candidate(t
     assert " -P " not in f" {commands[1]} "
     assert " -P " in f" {commands[2]} "
     assert " -P " not in f" {commands[3]} "
+
+
+def test_terminal_stream_failure_names_the_later_missing_contig_and_its_m5(tmp_path: Path) -> None:
+    """A whole-file failure must not be attributed to the first otherwise-decodable BED target."""
+    bed_file = tmp_path / "targets.bed"
+    bed_file.write_text("chr1\t1\t100\nchr2\t1\t100\n", encoding="utf-8")
+    outcomes = [
+        (True, "target decoded"),
+        (False, "Reference file given, but ref 'chr2' not present"),
+    ]
+    failure_context = PreflightErrorContext(tmp_path)
+
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=outcomes),
+        pytest.raises(ValueError) as error,
+    ):
+        resolve_reference(
+            "/run/view.cram",
+            (),
+            None,
+            bed_file,
+            {},
+            1,
+            str(tmp_path),
+            "sample",
+            ("chr1", "chr2"),
+            "first-checksum",
+            header_m5s=(("chr1", "first-checksum"), ("chr2", "missing-checksum")),
+            unmapped_scan="stream",
+            failure_context=failure_context,
+        )
+
+    assert "contig=chr2" in str(error.value)
+    assert "M5=missing-checksum" in str(error.value)
+    assert failure_context.payload is not None
+    assert "contig=chr2" in failure_context.payload["message"]
+    assert "M5=missing-checksum" in failure_context.payload["message"]
 
 
 @pytest.mark.parametrize("configured", [0, -1, 120.1, "30", True, float("inf"), float("nan")])

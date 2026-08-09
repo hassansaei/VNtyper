@@ -218,6 +218,11 @@ class TestBuildChromosomeName:
         with pytest.raises(ValueError, match="Invalid chromosome number"):
             _build_chromosome_name(26, "ucsc", "hg19", config)
 
+    def test_unknown_convention_cannot_be_coerced_to_ensembl(self):
+        """The low-level builder must fail closed even outside the public resolver."""
+        with pytest.raises(ValueError, match="Unknown chromosome naming convention"):
+            _build_chromosome_name(1, "unknown", "hg19", {})
+
     @pytest.mark.parametrize(
         "reference_assembly,expected",
         [
@@ -325,6 +330,39 @@ class TestConstructNcbiAccession:
 
 class TestGetChromosomeNameFromBam:
     """Test getting chromosome name from BAM file."""
+
+    @pytest.mark.parametrize(
+        "contig_names",
+        [
+            ["chr1", "1"],
+            ["scaffold_a", "scaffold_b"],
+        ],
+        ids=["fifty-fifty", "zero-classifiable"],
+    )
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
+    def test_ambiguous_or_unclassifiable_headers_fail_before_selecting_a_target(
+        self, mock_parse, mock_extract, contig_names
+    ):
+        """An ``unknown`` vote is a refusal, never implicit Ensembl naming."""
+        mock_extract.return_value = "header"
+        mock_parse.return_value = [{"name": name, "length": 100} for name in contig_names]
+
+        with pytest.raises(ValueError, match="Ambiguous or unclassifiable chromosome naming convention") as excinfo:
+            get_chromosome_name_from_bam("ambiguous.bam", {}, chromosome_number=1, reference_assembly="hg19")
+
+        message = str(excinfo.value)
+        assert "ambiguous.bam" in message
+        assert all(name in message for name in contig_names)
+
+    @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
+    @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")
+    def test_an_unambiguous_ensembl_header_still_resolves_normally(self, mock_parse, mock_extract):
+        """Failing closed on ``unknown`` must not reject a classified header."""
+        mock_extract.return_value = "header"
+        mock_parse.return_value = [{"name": "1", "length": 249250621}, {"name": "2", "length": 243199373}]
+
+        assert get_chromosome_name_from_bam("ensembl.bam", {}, 1, "hg19") == "1"
 
     @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
     @patch("vntyper.scripts.fastq_bam_processing.parse_contigs_from_header")

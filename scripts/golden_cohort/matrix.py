@@ -49,13 +49,14 @@ Two properties of these cases are load-bearing rather than incidental:
 * a declared CRAM case whose fixture has not been derived is **skipped and logged**, never
   silently dropped from the contract. The count then comes out short, which is an ordinary
   :func:`check_matrix` mismatch and refuses the run unless ``--allow-matrix-drift`` is
-  passed. There is deliberately no "0 or 4 CRAM cases are both fine" rule: a run without
+  passed. There is deliberately no "0 or 6 CRAM cases are both fine" rule: a run without
   them is a reduced run and must not earn an attestation-grade verdict.
 
 What "derived" does and does not mean
 -------------------------------------
 Only the **base cases** are derived. The five non-fast ids, the three adVNTR ids, the two
-CRAM ids and the three probes are hardcoded policy, resolved against the derived set. The
+cohort CRAM ids, the indexed-safe purpose CRAM and the three probes are hardcoded policy,
+with the base-case selections resolved against the derived set. The
 CRAM *fixture paths* are derived from the base case's BAM path, so they cannot drift from
 what ``make_cram_fixtures.py`` wrote, but which cases are chosen is policy like the rest.
 Anything that describes this matrix as "derived" without that qualification is overstating
@@ -64,9 +65,9 @@ it, and the gate page has done exactly that.
 Drift is fatal by default
 -------------------------
 :func:`check_matrix` compares the derivation against the per-group contract the gate page
-records - 50 base, 5 non-fast, 3 adVNTR, 4 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
-for runs 1-5, which is the matrix every result table on that page was measured over; the
-CRAM group is new and no run has taken it yet.) That check used to be advisory in every
+records - 50 base, 5 non-fast, 3 adVNTR, 6 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
+for runs 1-5, which is the matrix every result table on that page was measured over; run 6
+took an earlier, smaller CRAM group.) That check used to be advisory in every
 direction: ``build_matrix`` logged the
 deviations as warnings, ``cmd_matrix`` returned 0 regardless, and the comparison's verdict
 ignored them - so a silently reduced run earned the same ``IDENTICAL`` as a full one, and a
@@ -173,10 +174,10 @@ PROBE_SPECS: tuple[tuple[str, str, str, str], ...] = (
 #: Runs 1-5 measured 20 hg19 / 9 hg38 / 8 GRCh38 / 7 GRCh37 / 7 hg19_ensembl /
 #: 7 hg38_ensembl, and run 2's after-side assembly-guard verdict counts are that same
 #: distribution. Each selected CRAM fixture now runs through both lossless scan strategies,
-#: moving hg19 to 22 and hg38_ensembl to 9. The page's ``x / 58`` result tables therefore
+#: moving hg19 to 24 and hg38_ensembl to 9. The page's ``x / 58`` result tables therefore
 #: describe the pre-CRAM matrix and are not restated here.
 DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
-    "hg19": 22,
+    "hg19": 24,
     "hg38": 9,
     "GRCh38": 8,
     "GRCh37": 7,
@@ -184,9 +185,9 @@ DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
     "hg38_ensembl": 9,
 }
 
-#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; four CRAM
-#: cases cover indexed and stream extraction and take it to 62.
-DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 4, "total": 62, "probes": 3}
+#: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; six CRAM
+#: cases cover indexed and stream extraction and take it to 64.
+DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 6, "total": 64, "probes": 3}
 
 
 def _short(sample: str) -> str:

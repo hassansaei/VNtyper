@@ -55,7 +55,7 @@ def _run_conversion(
     *,
     fast_mode: bool,
     keep_intermediates: bool = False,
-) -> tuple[list[str], MagicMock]:
+) -> list[str]:
     """Run conversion with shell and filesystem effects recorded.
 
     Args:
@@ -64,7 +64,7 @@ def _run_conversion(
         fast_mode: Whether the slice is final and therefore needs an index.
 
     Returns:
-        Emitted commands and the mocked offset extractor.
+        Emitted commands.
     """
     commands: list[str] = []
 
@@ -77,7 +77,6 @@ def _run_conversion(
     with (
         patch.object(fastq_bam_processing, "run_command", record),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value=REGION),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset") as extractor,
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(
@@ -89,8 +88,7 @@ def _run_conversion(
             keep_intermediates=keep_intermediates,
             plan=plan,
         )
-    assert isinstance(extractor, MagicMock)
-    return commands, extractor
+    return commands
 
 
 def test_conversion_api_has_one_authoritative_alignment_input() -> None:
@@ -103,7 +101,7 @@ def test_slice_uses_the_view_reference_threads_and_mode_specific_indexing(
 ) -> None:
     plan = _plan(tmp_path, "cram")
 
-    commands, _ = _run_conversion(tmp_path, plan, fast_mode=fast_mode)
+    commands = _run_conversion(tmp_path, plan, fast_mode=fast_mode)
 
     slice_command = commands[0]
     assert plan.view_path in slice_command
@@ -113,27 +111,25 @@ def test_slice_uses_the_view_reference_threads_and_mode_specific_indexing(
     assert ("&& samtools index" in slice_command) is expects_index
 
 
-def test_non_fast_bam_uses_the_plan_view_and_exact_plan_index_for_offsets(tmp_path: Path) -> None:
+def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "bam")
 
-    commands, extractor = _run_conversion(tmp_path, plan, fast_mode=False)
+    commands = _run_conversion(tmp_path, plan, fast_mode=False)
 
     assert plan.view_path in commands[0]
-    assert all("input.bam.bai" not in command or "output_sliced.bam" in command for command in commands)
-    extractor.assert_called_once_with(
-        bam_file=plan.view_path,
-        bai_file=plan.index_path,
-        output_bam=str(tmp_path / "run" / "output_unmapped.bam"),
+    (unmapped_command,) = [command for command in commands if "-f 4" in command]
+    assert unmapped_command == (
+        f"samtools view -b -f 4 -@ 4 {plan.view_path} '*' -o {tmp_path / 'run' / 'output_unmapped.bam'}"
     )
+    assert plan.index_path not in unmapped_command
 
 
 def test_bam_with_placed_unmapped_evidence_uses_the_complete_stream_scan(tmp_path: Path) -> None:
     """A placed unmapped record can occur before the BAI tail offset."""
     plan = _plan(tmp_path, "bam", unmapped_scan="stream")
 
-    commands, extractor = _run_conversion(tmp_path, plan, fast_mode=False)
+    commands = _run_conversion(tmp_path, plan, fast_mode=False)
 
-    extractor.assert_not_called()
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert "set -o pipefail" in unmapped_command
     assert plan.view_path in unmapped_command
@@ -151,7 +147,7 @@ def test_cram_unmapped_command_is_selected_by_the_proven_plan(
 ) -> None:
     plan = _plan(tmp_path, "cram", unmapped_scan=scan)
 
-    commands, _ = _run_conversion(tmp_path, plan, fast_mode=False)
+    commands = _run_conversion(tmp_path, plan, fast_mode=False)
 
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert expected_fragment in unmapped_command
@@ -227,7 +223,7 @@ def test_keep_intermediates_regenerates_stale_artifacts_for_the_new_plan(tmp_pat
     for stale_path in stale_paths:
         stale_path.write_bytes(b"prior-patient-artifact")
 
-    commands, _ = _run_conversion(tmp_path, plan, fast_mode=True, keep_intermediates=True)
+    commands = _run_conversion(tmp_path, plan, fast_mode=True, keep_intermediates=True)
 
     assert len(commands) == 2
     assert plan.view_path in commands[0]
@@ -249,7 +245,6 @@ def _assert_rejected_before_conversion_work(
     with (
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", region_resolver),
         patch.object(fastq_bam_processing, "run_command", command_runner),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset"),
         patch.object(fastq_bam_processing.os, "replace"),
         pytest.raises(ValueError, match=error_match),
     ):
@@ -379,7 +374,7 @@ def test_single_link_regular_derived_artifacts_remain_replaceable(tmp_path: Path
     (run_dir / "output_sliced.bam").write_bytes(b"stale-slice")
     (run_dir / "output_R1.fastq.gz").write_bytes(b"stale-fastq")
 
-    commands, _ = _run_conversion(tmp_path, plan, fast_mode=True)
+    commands = _run_conversion(tmp_path, plan, fast_mode=True)
 
     assert len(commands) == 2
 

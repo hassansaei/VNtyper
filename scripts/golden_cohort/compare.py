@@ -39,6 +39,7 @@ PIPELINE_ARTIFACTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "unmapped_read_set": ("opaque", ()),
     "raw_indexed_read_set": ("opaque", ()),
     "raw_indexed_loss": ("opaque", ()),
+    "placed_unmapped_guard_count": ("scalar", ()),
     "kestrel_result": ("table", artifacts.KESTREL_KEY),
     "kestrel_pre_result": ("table", artifacts.KESTREL_KEY),
     "advntr_result": ("table", artifacts.ADVNTR_KEY),

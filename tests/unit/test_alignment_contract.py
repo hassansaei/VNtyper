@@ -11,6 +11,7 @@ from vntyper.scripts.alignment_contract import (
     AlignmentPlan,
     index_candidate_names,
     missing_index_message,
+    missing_reference_contig,
     preflight_error_payload,
     unresolvable_reference_message,
 )
@@ -27,7 +28,7 @@ def _plan(*, reference_path: str | None = "/r/genome.fa") -> AlignmentPlan:
         reference_path=reference_path,
         reference_source="cli",
         uncovered_contigs=("chrM",),
-        unmapped_scan="offset",
+        unmapped_scan="indexed",
     )
 
 
@@ -54,7 +55,7 @@ def test_index_candidates_try_appended_then_stem_for_each_supported_suffix(
 
 
 def test_bam_bai_only_excludes_csi_candidates() -> None:
-    """The offset reader accepts BAI only, while general BAM preflight accepts CSI."""
+    """The legacy BAI-only preflight/protection contract excludes CSI candidates."""
     assert index_candidate_names("/data/sample.bam", FORMAT_BAM, bai_only=True) == (
         "/data/sample.bam.bai",
         "/data/sample.bai",
@@ -117,6 +118,26 @@ def test_unresolvable_reference_message_marks_missing_m5() -> None:
     assert "not supplied" in message
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    [
+        ("[E::cram_decode_slice] Unable to fetch reference chr2:1-12070", "chr2"),
+        ("Reference file given, but ref 'chr2' not present", "chr2"),
+        (
+            "MD5 checksum reference mismatch\n@SQ\tSN:chr2\tLN:20000\tM5:wrong",
+            "chr2",
+        ),
+        ("Unable to fetch reference unknown:1-2", None),
+        ("probe exited non-zero", None),
+    ],
+)
+def test_missing_reference_contig_recognizes_only_known_samtools_diagnostics(
+    diagnostic: str, expected: str | None
+) -> None:
+    """Pinned samtools failures identify the actual header contig without trusting arbitrary output."""
+    assert missing_reference_contig(diagnostic, ("chr1", "chr2")) == expected
+
+
 def test_alignment_plan_is_frozen_and_has_no_layout_field() -> None:
     """Layout belongs to conversion, so it cannot leak into this preflight contract."""
     plan = _plan()
@@ -135,13 +156,11 @@ def test_alignment_plan_is_frozen_and_has_no_layout_field() -> None:
         setattr(plan, field_name, "/other/index.bai")
 
 
-def test_the_reference_fragment_is_quoted_because_builders_interpolate_it_raw():
+def test_the_plan_exposes_a_reference_path_not_a_preformatted_shell_fragment():
     plan = _plan(reference_path="/r/genome ref.fa")
-    assert plan.cram_ref_option == "-T '/r/genome ref.fa'"
 
-
-def test_no_reference_yields_an_empty_fragment_so_no_ref_crams_are_byte_identical():
-    assert _plan(reference_path=None).cram_ref_option == ""
+    assert plan.reference_path == "/r/genome ref.fa"
+    assert not hasattr(plan, "cram_ref_option")
 
 
 def test_the_error_payload_carries_no_absolute_worker_paths_beyond_the_input():

@@ -35,6 +35,7 @@ CHR1_LENGTHS = {
 # the length is the evidence, and a mislabelled accession must not override it.
 CHR1_NAMES = frozenset({"chr1", "1"})
 NCBI_CHR1_PATTERN = re.compile(r"^nc_0*1(\.\d+)?$")
+NAMING_CONVENTION_ERROR_PREFIX = "Ambiguous or unclassifiable chromosome naming convention"
 
 
 def is_chr1_name(contig_name: str) -> bool:
@@ -253,7 +254,8 @@ def get_chromosome_name_from_bam(
         str: The actual chromosome name (e.g., "chr1", "1", "NC_000001.10")
 
     Raises:
-        ValueError: If chromosome cannot be found in BAM header
+        ValueError: If the naming convention is ambiguous or unclassifiable,
+            or if the chromosome cannot be found in the BAM header.
         FileNotFoundError: If BAM file doesn't exist
 
     Examples:
@@ -285,6 +287,13 @@ def get_chromosome_name_from_bam(
     # Detect naming convention
     convention = detect_naming_convention(contig_names, config)
     logger.debug(f"Detected naming convention: {convention}")
+    if convention == "unknown":
+        message = (
+            f"{NAMING_CONVENTION_ERROR_PREFIX} in BAM header for {bam_file}; "
+            f"cannot select chromosome {chromosome_number}. Available contigs: {', '.join(contig_names[:10])}..."
+        )
+        logger.error(message)
+        raise ValueError(message)
 
     # Build expected chromosome name based on convention
     chr_name = _build_chromosome_name(chromosome_number, convention, reference_assembly, config)
@@ -371,9 +380,9 @@ def _build_chromosome_name(chromosome_number: int, convention: str, reference_as
             return _construct_ncbi_accession(chromosome_number, coord_assembly)
 
     else:
-        # Unknown convention - return ENSEMBL simple numeric format as fallback
-        logger.warning(f"Unknown naming convention '{convention}', using ENSEMBL simple numeric format")
-        return chr_suffix if chromosome_number >= 23 else str(chromosome_number)
+        message = f"Unknown chromosome naming convention: '{convention}'"
+        logger.error(message)
+        raise ValueError(message)
 
 
 def _construct_ncbi_accession(chromosome_number: int, assembly: str) -> str:

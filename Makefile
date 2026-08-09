@@ -327,7 +327,7 @@ mutation-render:
 		--output docs/development/mutation-testing.md
 	@echo "$(GREEN)✓ Mutation page re-rendered$(RESET)"
 
-test-integration:
+test-integration: cram-fixtures
 	@echo "$(BLUE)Running integration tests (with progress tracking)...$(RESET)"
 	@echo "$(BLUE)Note: Integration tests are slow, watch the live log output$(RESET)"
 	pytest -m integration
@@ -335,7 +335,7 @@ test-integration:
 
 # --dist load, NOT loadfile: all 11 integration tests live in a single file, so
 # loadfile assigned every test to one worker and idled the rest.
-test-integration-parallel:
+test-integration-parallel: cram-fixtures
 	@echo "$(BLUE)Running integration tests in parallel (auto-detect CPU cores)...$(RESET)"
 	@echo "$(BLUE)Using pytest-xdist for parallel execution$(RESET)"
 	@if ! python -c "import xdist" 2>/dev/null; then \

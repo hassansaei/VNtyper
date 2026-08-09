@@ -146,13 +146,10 @@ Wave 2 until `make check-all` is green on the tip of Wave 1.
       reason; the dataclass is frozen; and:
 
 ```python
-def test_the_reference_fragment_is_quoted_because_builders_interpolate_it_raw():
+def test_the_plan_exposes_a_reference_path_not_a_preformatted_shell_fragment():
     plan = _plan(reference_path="/r/genome ref.fa")
-    assert plan.cram_ref_option == "-T '/r/genome ref.fa'"
-
-
-def test_no_reference_yields_an_empty_fragment_so_no_ref_crams_are_byte_identical():
-    assert _plan(reference_path=None).cram_ref_option == ""
+    assert plan.reference_path == "/r/genome ref.fa"
+    assert not hasattr(plan, "cram_ref_option")
 
 
 def test_the_error_payload_carries_no_absolute_worker_paths_beyond_the_input():
@@ -162,8 +159,8 @@ def test_the_error_payload_carries_no_absolute_worker_paths_beyond_the_input():
 
 - [ ] **Step 2:** `pytest tests/unit/test_alignment_contract.py -v` → FAIL
       (`ModuleNotFoundError`).
-- [ ] **Step 3:** implement. `cram_ref_option` is a `@property` returning
-      `f"-T {quote_path(self.reference_path)}"` or `""`.
+- [ ] **Step 3:** implement. `AlignmentPlan` carries only `reference_path`; command
+      builders receive that path and own quoting and option construction (§5 #209).
 - [ ] **Step 4:** `pytest tests/unit/test_alignment_contract.py -v` → PASS.
 - [ ] **Step 5:** `pytest ... --cov=vntyper.scripts.alignment_contract --cov-branch
       --cov-report=term-missing` → 100%. Add tests, never delete lines, to reach it.
@@ -240,10 +237,11 @@ first existing name from `index_candidate_names(...)`. The final round-3 design 
 only to enumerate/protect supplied patient artifacts; §3.15 forbids consuming any supplied
 index because a valid wrong-sample index can return an empty slice with exit 0.
 
-**Do not touch `resolve_bam_index`.** It is BAI-only because
-`extract_unmapped_from_offset.get_last_chunk_end` parses the BAI container and rejects
-anything not starting `BAI\x01`. `test_a_csi_index_is_ignored_and_a_bai_is_built_instead`
-pins that.
+**Do not touch `resolve_bam_index`.** It remains a BAI-only legacy
+preflight/protection contract, and
+`test_a_csi_index_is_ignored_and_a_bai_is_built_instead` pins that. Production indexed
+recovery no longer consumes its result through the optional offset parser (§3.20);
+widening preflight index policy is a separate change.
 
 - [ ] **Step 1: write the failing tests** — `.cram.crai` and `.crai` both found, file
       spelling wins; CRAM CSI is found only after both CRAI spellings, while a `.bai`
@@ -256,7 +254,7 @@ pins that.
 ### Task 4: command-builder changes (P1–P4 and the new forms)
 
 **Files:** modify `vntyper/scripts/command_builders.py`,
-`tests/unit/test_command_builders.py`
+`tests/unit/test_command_builders.py`; create `tests/unit/test_nonfast_slice_union.py`
 
 **Interfaces produced** — note every one takes `reference_path`, **not** a preformatted
 fragment, and quotes it here (spec §5 #209):
@@ -268,7 +266,7 @@ _reference_flag(reference_path: str | Path | None) -> str   # "-T <quoted> " or 
 build_samtools_index_command(*, samtools_path, bam_file, output_bai=None, threads=1) -> str
 build_samtools_slice_command(*, samtools_path, in_bam, output_bam, region=None,
                              bed_file=None, reference_path=None, threads=1,
-                             index_output=True) -> str
+                             index_output=True, exclude_unmapped=False) -> str
 build_cram_unmapped_indexed_command(*, samtools_path, in_bam, unmapped_bam, threads,
                                     reference_path=None) -> str
 build_cram_unmapped_filter_command(*, samtools_path, in_bam, unmapped_bam, threads,
@@ -317,10 +315,11 @@ Plus: slice threaded (`-@ 8`); `index_output=False` emits no `&&` and no `index`
 `index_output=True` still the default; index threaded; `threads=1` emits no `-@` so
 existing literal comparisons hold; the indexed fetch contains `'*'`, `-f 4` and **no**
 pipe; `build_samtools_idxstats_command` carries no `-T` (spec §3.13: idxstats needs no
-reference).
+reference). `exclude_unmapped=True` emits `-F 4`; the default remains byte-identical for
+fast mode and direct slice consumers.
 
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement.
-- [ ] **Step 4:** `pytest tests/unit/test_command_builders.py -v` → PASS. Where a
+- [ ] **Step 4:** `pytest tests/unit/test_command_builders.py tests/unit/test_nonfast_slice_union.py -v` → PASS. Where a
       pre-existing test compares a command string literally, fix the *expectation* only
       where `_thread_flag`/`_reference_flag` legitimately changed it; never pad the
       builder to match a stale string.
@@ -330,9 +329,10 @@ reference).
 ### Task 5: `alignment_preflight.py`
 
 **Files:** create `vntyper/scripts/alignment_preflight.py`,
-`vntyper/scripts/reference_resolution.py`, focused alignment-preflight unit modules,
-`tests/unit/test_reference_resolution.py`, and `tests/unit/test_ref_path_is_pinned.py`;
-modify `vntyper/config.json`
+`vntyper/scripts/reference_resolution.py`, `vntyper/scripts/reference_uri_policy.py`,
+focused alignment-preflight unit modules, `tests/unit/test_reference_resolution.py`,
+`tests/unit/test_reference_uri_policy.py`, and `tests/unit/test_ref_path_is_pinned.py`;
+modify `vntyper/scripts/pipeline_alignment.py`, `vntyper/config.json`
 
 **Interfaces produced:**
 - `build_alignment_view(in_path, output_dir, output_name, file_format, config, threads) -> tuple[str, str]`
@@ -348,6 +348,11 @@ modify `vntyper/config.json`
 - `ordered_reference_candidates(config, reference_assembly, reference_fasta)` and
   `uncovered_reference_contigs(header_contigs, reference_contigs)` — pure candidate-policy
   and reference-coverage decisions consumed by the I/O preflight.
+- `header_reference_scheme(value)`, `ref_path_remote_scheme(value)`,
+  `allow_ambient_reference_resolution(config)`, `first_remote_header_reference(header)`
+  and `enforce_header_reference_policy(header, *, allow_ambient)` — pure context-specific
+  URI and strict-boolean policy used by local `REF_PATH` validation and the owned
+  post-header boundary.
 
 **Config** (spec §6) — add `bam.unmapped_scan` (`"auto"`),
 `cram.allow_ambient_reference_resolution` (false), `cram.local_ref_path`
@@ -355,6 +360,11 @@ modify `vntyper/config.json`
 `cram.reference_candidate_order`, `reference_data.cram_reference_hg19`/`_hg38` (null),
 `assembly_detection.naming_convention_threshold` (0.5) and `primary_contig_patterns`.
 There is **no** `read_layout` block.
+
+The default `allow_ambient_reference_resolution=false` carries the no-network-block
+guarantee. `true` is an informed operator opt-in that may block later samtools stages;
+only reference probes remain bounded by `reference_probe_timeout_seconds`. Task 5 does
+not add a general stage timeout (spec §9).
 
 - [ ] **Step 1: write the failing tests for the view** (spec §4.5):
 
@@ -395,22 +405,40 @@ def test_a_reference_not_covering_every_header_contig_logs_a_warning(self, caplo
       local-only value; an operator's `http://` value is overridden by default; the
       override is skipped when `allow_ambient_reference_resolution` is true; and
       **`restore_reference_resolution` puts back the previous value, including "unset"**
-      (spec §4.5 — `run_pipeline` is called in-process by tests).
-- [ ] **Step 6:** implement, then run all three test files → PASS.
+      (spec §4.5 — `run_pipeline` is called in-process by tests). Pin the warning contract:
+      the opt-in may block later stages even though every reference probe remains bounded.
+      Add pure URI-policy tests for local/relative/`file://` values, anchored remote
+      schemes with and without `//`, every duplicate `UR` field, colon-separated
+      `REF_PATH`, strict boolean waiver validation and path-free contig/scheme rejection.
+      In the owned boundary, test a remote CRAM header fails under
+      `REFERENCE_POLICY_FAILURE` immediately after header read, before
+      assembly/target/`capture_command`, and persists that exact curated diagnostic;
+      only the actual boolean `true` remains the waiver. The real A-178-5 integration
+      rewrites the purpose CRAM with a remote-first/local-last duplicate localhost `UR`,
+      bypasses localhost proxies in both environment-variable spellings, waits for the
+      listener backlog and asserts no connection, captured command or stage artifact;
+      retain the ambient A-178-1 blackhole test unchanged.
+- [ ] **Step 6:** implement, then run the focused URI, REF_PATH, boundary and real CRAM
+      integration suites → PASS.
 - [ ] **Step 7:** commit — `feat(preflight): prove the index, the scan and the reference
       before any stage runs`.
 
 ### Task 6: wire the plan into the pipeline
 
 **Files:** modify `vntyper/scripts/fastq_bam_processing.py`, `vntyper/scripts/pipeline.py`;
-tests in `tests/unit/test_fastq_bam_processing.py`, `tests/unit/test_pipeline.py`,
-`tests/unit/test_input_tree_is_never_written.py`
+tests in `tests/unit/test_fastq_bam_command_wiring.py`, `tests/unit/test_pipeline.py`,
+`tests/unit/test_input_tree_is_never_written.py` and
+`tests/integration/test_read_only_alignment_preflight.py`
 
 - [ ] **Step 1: write the failing tests** — the slice runs against `plan.view_path`, not
       `in_bam`; the slice carries `-T` when the plan has a reference; the CRAM unmapped
       command is chosen by `plan.unmapped_scan`; `index_output=False` in non-fast mode
-      (P3) and `True` in fast mode; **coverage runs against the view with the plan's
-      reference**; the input tree is byte-identical afterwards for both formats.
+      (P3) and `True` in fast mode; the non-fast slice passes
+      `exclude_unmapped=True` so complete recovery is merged as a disjoint union, while
+      fast mode passes `False`; **coverage runs against the view with the plan's
+      reference**; the input tree is byte-identical afterwards for both formats. A real
+      nonempty all-unplaced BAM selects indexed and preserves its exact five-QNAME
+      multiset (§3.20).
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement:
       replace the `file_format="bam"` parameter with `plan: AlignmentPlan`; delete the
       inline `resolve_bam_index` block (lines ~167-177) and use `plan.index_path`;
@@ -420,6 +448,10 @@ tests in `tests/unit/test_fastq_bam_processing.py`, `tests/unit/test_pipeline.py
       exact BED internally, calls `run_preflight`, and returns both BED and plan. Pass the
       plan to both call sites, and change
       `input_bam = Path(cram)` at `:468` to the view plus the plan's reference.
+      Pass `exclude_unmapped=not fast_mode` to the slice builder. For indexed BAM and
+      CRAM plans, call `build_cram_unmapped_indexed_command` (BAM has
+      `reference_path=None`); remove only the production import/call of the optional BAI
+      offset extractor, leaving its legacy module and parser tests intact.
 - [ ] **Step 4:** run the three suites → PASS.
 - [ ] **Step 5:** `wc -l vntyper/scripts/fastq_bam_processing.py` → **must be < 649**.
       If not, extract the CRAM branch into a helper rather than accepting it.
@@ -455,8 +487,9 @@ Branch each from the tip of Wave 1, created with `superpowers:using-git-worktree
 
 ### Task 8: `detect_naming_convention` (#165)
 
-**Files:** modify `vntyper/scripts/chromosome_utils.py:137-197`, `vntyper/config.json`;
-test `tests/unit/test_chromosome_utils.py`
+**Files:** modify `vntyper/scripts/chromosome_utils.py`, `vntyper/scripts/region_utils.py`,
+`vntyper/config.json`; test `tests/unit/test_chromosome_utils.py`,
+`tests/unit/test_region_utils.py`
 
 - [ ] **Step 1: write the failing tests.**
 
@@ -483,9 +516,16 @@ def test_the_threshold_comes_from_config_not_from_a_literal(self):
         contigs, {"assembly_detection": {"naming_convention_threshold": 0.9}}) == "unknown"
 ```
 
+Also pin the public resolver and target boundary: 50/50 and zero-classifiable headers
+raise a `ValueError` naming the unresolved convention; an unambiguous header still
+resolves; mutating the naming policy and replacing a file at the same path are both
+observed on the next call.
+
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement: denominator = contigs matching *some*
       convention; return `unknown` when that is zero; a convention wins on a **strict
-      majority with no tie**; threshold from config with the 0.5 default.
+      majority with no tie**; threshold from config with the 0.5 default. The public
+      resolver raises before target construction when the result is `unknown`, the legacy
+      wrapper preserves that refusal, and the path-only chromosome cache is removed.
 - [ ] **Step 4:** run `test_chromosome_utils.py`, `test_assembly_guard.py`,
       `test_region_utils.py`, `test_builders.py`. `test_builders.py:263-268` asserts an
       `unknown` result — decide whether that header is *genuinely* ambiguous or was only
@@ -543,6 +583,10 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
       `fastq1, fastq2, _, _ = process_bam_to_fastq(...)` bindings with the four-value form
       plus `classify_layout`/`route_fastqs`; raise naming the file and its record count
       when anything is stranded; log the layout.
+**Fast-mode scope:** keep the existing explicit `--fast-mode` behaviour: it skips
+unmapped-read recovery and retains the historical target slice. This is not a
+`read_layout` tolerance or configuration escape hatch; normal-mode conversion must still
+route every produced FASTQ or fail naming it.
 - [ ] **Step 7:** allow `--fastq1` without `--fastq2` in `cli_handlers.py:227`.
 - [ ] **Step 8:** derive the single-end fixture with pysam, clearing `is_paired`,
       `is_read1`, `is_read2`, `is_proper_pair` and `mate_is_unmapped`; register it in
@@ -580,7 +624,10 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped(self):
 - [ ] **Step 4:** prove A-178-2 — when preflight authorises both strategies, indexed and
       stream must produce the **same read set**, not merely the same genotype. When
       placed-unmapped evidence rejects indexed, preserve that rejection and record the
-      stream read set plus a raw diagnostic of the reads `'*'` would lose:
+      stream read set plus a raw diagnostic of the reads `'*'` would lose. The indexed
+      result must also contain the exact stable guard diagnostic and its declared
+      `idxstats` column-four count (11,571 for `7a61`, 329 for `b178`); a different
+      preflight exit is not evidence for A-178-2:
 
 ```bash
 for mode in indexed stream; do
@@ -594,10 +641,17 @@ python - <<'PY'
 import json
 
 indexed, stream = (json.load(open(f"/tmp/{mode}/side.json")) for mode in ("indexed", "stream"))
+expected_guard_counts = {
+    "7a61_hg38_ensembl_indexed_cram": 11_571,
+    "7a61_hg38_ensembl_stream_cram": 11_571,
+    "b178_hg19_indexed_cram": 329,
+    "b178_hg19_stream_cram": 329,
+}
 for case_id, stream_result in stream["pipeline_results"].items():
     indexed_result = indexed["pipeline_results"][case_id]
     if indexed_result["unmapped_read_set"] is None:
         assert indexed_result["exit_code"] == 1
+        assert indexed_result["placed_unmapped_guard_count"] == expected_guard_counts[case_id]
         assert stream_result["unmapped_read_set"] is not None
     else:
         assert indexed_result["unmapped_read_set"] == stream_result["unmapped_read_set"]
@@ -644,7 +698,8 @@ there is no step whose target a fresh implementer has to invent.
 
 **Type consistency.** `AlignmentPlan` has no `layout` field in Task 1 and none is read in
 Tasks 5, 6 or 9. `reference_path` (a path) is the builder parameter everywhere in Task 4;
-`cram_ref_option` (a quoted fragment) exists only as the `AlignmentPlan` property in
-Task 1. `choose_scan` returns `(scan, reason)` in Task 2 and is unpacked as such in Task 5.
+No preformatted reference fragment exists in `AlignmentPlan`; command builders receive
+`reference_path` and own quoting. `choose_scan` returns `(scan, reason)` in Task 2 and is
+unpacked as such in Task 5.
 `classify_layout` takes four counts in Task 9's tests and its interface block.
 `resolve_any_index` (Task 3) is what Task 5 calls; `resolve_bam_index` is untouched.

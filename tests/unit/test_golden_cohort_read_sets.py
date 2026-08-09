@@ -210,6 +210,7 @@ def test_rejected_indexed_cram_records_raw_star_evidence_without_bypassing_the_g
             "expect_exit": "nonzero",
             "effective_unmapped_scan": "indexed",
             "cram_evidence_expectation": {
+                "placed_unmapped_guard_count": 11_571,
                 "raw_indexed_read_set": {
                     "count": 2_690,
                     "sorted_read_name_sha256": "c64be739cd6344b8b62004fc9ea568779b3cc06ff1d472ac0e5d97c343130d7d",
@@ -222,7 +223,9 @@ def test_rejected_indexed_cram_records_raw_star_evidence_without_bypassing_the_g
         }
     )
     pipeline_result = mock.Mock(
-        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n", stderr="indexed unsafe", returncode=1
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n",
+        stderr="idxstats reports 11571 placed-unmapped reads; using stream scan",
+        returncode=1,
     )
     expectation = cast(dict[str, object], case["cram_evidence_expectation"])
     raw_evidence = cast(dict[str, object], expectation["raw_indexed_read_set"])
@@ -254,8 +257,162 @@ def test_rejected_indexed_cram_records_raw_star_evidence_without_bypassing_the_g
     assert record["unmapped_read_set"] is None
     assert record["raw_indexed_read_set"] == raw_evidence
     assert record["raw_indexed_loss"] is None
+    assert record["placed_unmapped_guard_count"] == 11_571
     assert record["expectation_met"] is True
     assert record["expectation_problems"] == []
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        ("idxstats reports 329 placed-unmapped reads; using stream scan", 329),
+        (
+            "2026-08-08 23:46:51,964 - vntyper.scripts.idxstats_parsing - ERROR - "
+            "idxstats reports 11571 placed-unmapped reads; using stream scan",
+            11_571,
+        ),
+        (
+            "ValueError: idxstats reports 329 placed-unmapped reads; using stream scan",
+            329,
+        ),
+    ],
+)
+def test_placed_unmapped_guard_parser_accepts_only_the_stable_diagnostic(stderr: str, expected: int) -> None:
+    """The causal indexed rejection is recovered from the pipeline's stable diagnostic."""
+    assert cram_evidence.parse_placed_unmapped_guard_count(stderr) == expected
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "",
+        "missing CRAM reference",
+        "idxstats reports many placed-unmapped reads; using stream scan",
+        "idxstats reports -1 placed-unmapped reads; using stream scan",
+        "idxstats reports 329 placed unmapped reads; using stream scan",
+        "user message embeds idxstats reports 329 placed-unmapped reads; using stream scan here",
+        "/tmp/idxstats reports 329 placed-unmapped reads; using stream scan.log",
+        "WARNING - idxstats reports 329 placed-unmapped reads; using stream scan",
+        (
+            "idxstats reports 329 placed-unmapped reads; using stream scan\n"
+            "idxstats reports 631571 placed-unmapped reads; using stream scan"
+        ),
+    ],
+)
+def test_placed_unmapped_guard_parser_rejects_missing_malformed_unrelated_or_conflicting_diagnostics(
+    stderr: str,
+) -> None:
+    """Near matches and conflicting counts cannot authorize the golden rejection."""
+    assert cram_evidence.parse_placed_unmapped_guard_count(stderr) is None
+
+
+def test_placed_unmapped_guard_parser_rejects_a_hostile_huge_count_without_raising() -> None:
+    """Digit length is bounded before conversion so hostile stderr fails closed cheaply."""
+    stderr = f"ValueError: idxstats reports {'9' * 100_000} placed-unmapped reads; using stream scan"
+
+    assert cram_evidence.parse_placed_unmapped_guard_count(stderr) is None
+
+
+@pytest.mark.parametrize(("actual", "expected_problem_value"), [(None, "None"), (328, "328")])
+def test_forced_indexed_decision_rejects_missing_or_wrong_guard_count(
+    actual: int | None,
+    expected_problem_value: str,
+) -> None:
+    """An unrelated exit 1 or the wrong guard count cannot satisfy A-178-2."""
+    raw = {"count": 4_478, "sorted_read_name_sha256": "a" * 64}
+    case = {
+        "case_id": "b178_indexed_cram",
+        "effective_unmapped_scan": "indexed",
+        "cram_evidence_expectation": {
+            "placed_unmapped_guard_count": 329,
+            "raw_indexed_read_set": raw,
+            "stream_read_set": {"count": 4_807, "sorted_read_name_sha256": "b" * 64},
+        },
+    }
+    record = {
+        "raw_indexed_read_set": raw,
+        "unmapped_read_set": None,
+        "raw_indexed_loss": None,
+        "placed_unmapped_guard_count": actual,
+    }
+
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        f"A-178-2 indexed guard count differs: expected 329, got {expected_problem_value}"
+    ]
+
+
+def test_forced_indexed_decision_rejects_a_boolean_guard_declaration() -> None:
+    """Boolean is an ``int`` subclass but cannot be accepted as a measured read count."""
+    raw = {"count": 1, "sorted_read_name_sha256": "a" * 64}
+    case = {
+        "case_id": "malformed_indexed_cram",
+        "effective_unmapped_scan": "indexed",
+        "cram_evidence_expectation": {
+            "placed_unmapped_guard_count": True,
+            "raw_indexed_read_set": raw,
+            "stream_read_set": raw,
+        },
+    }
+    record = {
+        "raw_indexed_read_set": raw,
+        "unmapped_read_set": None,
+        "raw_indexed_loss": None,
+        "placed_unmapped_guard_count": 1,
+    }
+
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        "A-178-2 indexed guard expectation is missing or malformed: True"
+    ]
+
+
+def test_forced_indexed_runner_rejects_an_unrelated_preflight_exit(tmp_path: Path) -> None:
+    """Exit 1 with no output is insufficient without the measured guard diagnostic."""
+    tree = tmp_path / "tree"
+    output_dir = tmp_path / "out"
+    log_dir = tmp_path / "logs"
+    config_path = log_dir / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"tools": {"samtools": "/case/samtools"}}), encoding="utf-8")
+    case = _case("b178_indexed_cram", config_path)
+    raw = {"count": 4_478, "sorted_read_name_sha256": "a" * 64}
+    case.update(
+        {
+            "expect_exit": "nonzero",
+            "effective_unmapped_scan": "indexed",
+            "cram_evidence_expectation": {
+                "placed_unmapped_guard_count": 329,
+                "raw_indexed_read_set": raw,
+                "stream_read_set": {"count": 4_807, "sorted_read_name_sha256": "b" * 64},
+            },
+        }
+    )
+    pipeline_result = mock.Mock(
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n",
+        stderr="CRAM reference probe failed before idxstats decision",
+        returncode=1,
+    )
+
+    with (
+        mock.patch.object(read_set_commands, "collect_read_set_evidence", return_value=raw),
+        mock.patch.object(runner.subprocess, "run", return_value=pipeline_result),
+    ):
+        record = runner._run_one(
+            case=case,
+            argv=["--config-path", str(config_path), "pipeline", "--cram", str(case["cram"])],
+            tree=tree,
+            side="after",
+            marker="vntyper.scripts.cram_preflight",
+            expect_marker=True,
+            output_dir=output_dir,
+            log_dir=log_dir,
+            timeout=60,
+        )
+
+    assert record["exit_code"] == 1
+    assert record["unmapped_read_set"] is None
+    assert record["placed_unmapped_guard_count"] is None
+    assert record["expectation_met"] is False
+    assert record["expectation_problems"] == ["A-178-2 indexed guard count differs: expected 329, got None"]
 
 
 def test_stream_cram_decision_records_exact_read_set_and_raw_loss() -> None:
@@ -305,6 +462,45 @@ def test_stream_cram_decision_rejects_a_raw_loss_inconsistent_with_the_read_sets
     record = {"raw_indexed_read_set": raw, "unmapped_read_set": stream, "raw_indexed_loss": 3}
 
     assert cram_evidence.validate_cram_evidence(case, record) == ["A-178-2 raw indexed loss differs: expected 4, got 3"]
+
+
+@pytest.mark.parametrize("scan", ["indexed", "stream"])
+def test_authorized_indexed_and_stream_cram_decisions_require_the_same_nonempty_read_set(scan: str) -> None:
+    """HIGH2: both genuine extraction paths must satisfy the existing A-178-2 oracle."""
+    expected = {"count": 20, "sorted_read_name_sha256": "a" * 64}
+    case = {
+        "case_id": f"indexed_safe_{scan}_cram",
+        "effective_unmapped_scan": scan,
+        "cram_evidence_expectation": {
+            "indexed_authorized": True,
+            "raw_indexed_read_set": expected,
+            "stream_read_set": expected,
+        },
+    }
+    record = {"raw_indexed_read_set": expected, "unmapped_read_set": expected, "raw_indexed_loss": 0}
+
+    assert cram_evidence.validate_cram_evidence(case, record) == []
+
+
+def test_authorized_indexed_cram_decision_fails_closed_on_a_different_produced_read_set() -> None:
+    """Authorization never permits a lossy indexed result to pass the gate."""
+    expected = {"count": 20, "sorted_read_name_sha256": "a" * 64}
+    different = {"count": 19, "sorted_read_name_sha256": "b" * 64}
+    case = {
+        "case_id": "indexed_safe_indexed_cram",
+        "effective_unmapped_scan": "indexed",
+        "cram_evidence_expectation": {
+            "indexed_authorized": True,
+            "raw_indexed_read_set": expected,
+            "stream_read_set": expected,
+        },
+    }
+    record = {"raw_indexed_read_set": expected, "unmapped_read_set": different, "raw_indexed_loss": 1}
+
+    assert cram_evidence.validate_cram_evidence(case, record) == [
+        f"A-178-2 stream evidence differs: expected {expected}, got {different}",
+        "A-178-2 raw indexed loss differs: expected 0, got 1",
+    ]
 
 
 def test_raw_star_evidence_uses_the_same_bounded_collector_with_a_region(tmp_path: Path) -> None:

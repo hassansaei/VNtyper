@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from tests.parametrization import get_advntr_test_cases, get_bam_test_cases
+from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases
 from tests.support import orchestration
 
 pytestmark = pytest.mark.unit
@@ -89,6 +89,20 @@ def test_clean_remapped_paired_bam_retains_a_real_advntr_success_contract() -> N
                 "MeanCoverage": {"value": 70.3333333333, "tolerance_percentage": 10},
                 "Pvalue": {"value": 5.774455097259999e-59, "log10_tolerance": 2},
             },
+        }
+    ]
+
+
+def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:
+    """A-161-3 must exercise the single-input fastp/BWA/Kestrel path, not only argument parsing."""
+    single_fastq_cases = [case for case in get_fastq_test_cases() if not case.get("fastq2")]
+
+    assert single_fastq_cases == [
+        {
+            "test_name": "example_6449_hg19_subset_single_fastq",
+            "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+            "reference_assembly": "hg19",
+            "expected_files": ["summary_report.html", "kestrel/kestrel_result.tsv"],
         }
     ]
 

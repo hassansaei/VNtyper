@@ -55,7 +55,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pysam
 
@@ -135,6 +135,13 @@ class PlacedFlag12Fixture:
     cram: Path
 
 
+@dataclass(frozen=True)
+class IndexedSafeFixture:
+    """A CRAM with nonempty unplaced reads and no placed-unmapped records."""
+
+    cram: Path
+
+
 def _run(argv: list[str]) -> str:
     """Run a samtools command, returning stdout and raising with stderr on failure."""
     completed = subprocess.run(argv, capture_output=True, text=True, check=False)
@@ -184,10 +191,16 @@ def _select_source_bams(discovered: list[Path], *, data_config: Path, data_root:
     if __package__:
         from .cram_fixture_selection import select_source_bams as package_selector
 
-        return package_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all)
+        return cast(
+            list[Path],
+            package_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all),
+        )
     from cram_fixture_selection import select_source_bams as direct_selector
 
-    return direct_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all)
+    return cast(
+        list[Path],
+        direct_selector(discovered, data_config=data_config, data_root=data_root, include_all=include_all),
+    )
 
 
 def _derive_declared_single_end_fixtures(data_config: Path, repository_root: Path) -> None:
@@ -384,6 +397,31 @@ def build_placed_flag12_fixture(fixture_root: Path) -> PlacedFlag12Fixture:
     return PlacedFlag12Fixture(cram=cram)
 
 
+def build_indexed_safe_fixture(fixture_root: Path) -> IndexedSafeFixture:
+    """Create a nonempty CRAM on which indexed and stream extraction are equivalent.
+
+    Args:
+        fixture_root: Destination directory for the purpose-built fixture.
+
+    Returns:
+        The indexed CRAM fixture.
+    """
+    root = fixture_root / "indexed-safe"
+    root.mkdir(parents=True, exist_ok=True)
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 20_000}]}
+    cram = root / "indexed-safe.cram"
+    with pysam_any.AlignmentFile(
+        str(cram), "wc", header=header, format_options=[option.encode() for option in CRAM_WRITE_OPTIONS]
+    ) as output:
+        for number in range(20):
+            output.write(_segment(f"mapped-{number}", flag=0, reference_id=0, reference_start=number * 100))
+        for number in range(10):
+            output.write(_segment(f"unplaced-{number}", flag=77, reference_id=-1, reference_start=-1))
+            output.write(_segment(f"unplaced-{number}", flag=141, reference_id=-1, reference_start=-1))
+    pysam_any.index(str(cram))
+    return IndexedSafeFixture(cram=cram)
+
+
 def write_manifest(summary: Summary, manifest_path: Path) -> None:
     """Record what was derived, so a gate run can cite it rather than re-derive it."""
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -424,10 +462,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     build_reference_dependent_fixture(args.fixture_root)
     build_placed_flag12_fixture(args.fixture_root)
+    build_indexed_safe_fixture(args.fixture_root)
     write_manifest(summary, args.manifest or args.fixture_root / "manifest.json")
 
-    if not summary.fixtures:
-        logger.error("no fixtures derived")
+    if not summary.fixtures or summary.skipped:
+        logger.error(
+            "fixture derivation incomplete: %d verified, %d skipped",
+            len(summary.fixtures),
+            len(summary.skipped),
+        )
         return 1
     logger.info(
         "derived %d verified CRAM fixtures: %.1f MiB from %.1f MiB of BAM (%.0f%%), %d skipped",

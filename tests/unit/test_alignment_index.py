@@ -8,11 +8,10 @@ upload endpoint and the worker both deliberately accept was invisible to it.
 
 **`resolve_bam_index` is deliberately not htslib's resolution order and does not claim to
 be.** htslib tries CSI, in both spellings, before BAI, while `resolve_any_index` follows
-the format-aware candidate contract. The BAI-only returned path goes straight into
-`extract_unmapped_from_offset.get_last_chunk_end`, which parses the BAI container itself
-and rejects anything else, so ignoring a CSI is the correct behaviour rather than a missing
-feature - and is pinned below in both directions: the resolution ignores it, and the reader
-downstream would reject it.
+the format-aware candidate contract. `resolve_bam_index` remains the legacy BAI-only
+preflight/protection contract. The optional legacy offset parser remains independently
+tested but has no production consumer, so ignoring CSI here is a deliberately narrow
+contract rather than htslib parity.
 
 These tests moved here with `resolve_bam_index` when it came out of
 `fastq_bam_processing.py`. What that resolution is *for* - no index is ever written into
@@ -83,7 +82,7 @@ def test_bai_beside_cram_is_not_a_cram_index(tmp_path: Path) -> None:
 
 
 def test_bam_csi_is_found_by_any_index_but_not_bai_index(tmp_path: Path) -> None:
-    """General resolution accepts CSI while the BAI-only reader does not."""
+    """General resolution accepts CSI while the legacy BAI-only resolver does not."""
     bam = tmp_path / "sample.bam"
     bam.write_bytes(b"BAM\x01")
     csi = tmp_path / "sample.bam.csi"
@@ -152,12 +151,10 @@ def test_a_csi_index_is_ignored_and_a_bai_is_built_instead(tmp_path: Path) -> No
 
     htslib resolves CSI before BAI, in both the appended (``sample.bam.csi``) and the
     substituted (``sample.csi``) spelling, so this function is **not** htslib-equivalent
-    and must not claim to be. Reusing a CSI here would be a defect, not a feature: the
-    only consumer of the returned path is
-    ``extract_unmapped_from_offset.get_last_chunk_end``, which parses the BAI container
-    directly and rejects anything whose first four bytes are not ``BAI\\x01``. Returning
-    a CSI would turn a working run into a ``ValueError`` mid-stage; returning None makes
-    the caller build the BAI it needs, into the run's output directory.
+    and must not claim to be. It remains the legacy BAI-only preflight/protection
+    contract; production indexed recovery uses the common htslib literal-``'*'`` fetch.
+    The optional legacy offset parser remains independently tested but has no production
+    consumer.
 
     This test **passes before and after** the docstring correction that accompanies it -
     the behaviour was already right and is what is being pinned. What was wrong, and what
@@ -174,8 +171,8 @@ def test_a_csi_index_is_ignored_and_a_bai_is_built_instead(tmp_path: Path) -> No
     assert resolve_bam_index(bam) is None
 
 
-def test_the_bai_reader_downstream_really_does_reject_a_csi(tmp_path: Path) -> None:
-    """Why BAI-only is the correct behaviour rather than a gap, stated as a test.
+def test_the_optional_legacy_bai_parser_rejects_a_csi(tmp_path: Path) -> None:
+    """The independently tested legacy parser still rejects non-BAI containers.
 
     Args:
         tmp_path: Pytest temporary directory.
@@ -198,6 +195,8 @@ def test_the_docstring_does_not_claim_htslib_parity() -> None:
     candidate list to match it - so the text is pinned here rather than left to drift.
     """
     doc = resolve_bam_index.__doc__ or ""
+    normalised_doc = " ".join(doc.split())
 
     assert "the way htslib itself does" not in doc, "the parity claim is false and must not come back"
     assert "CSI" in doc, "the docstring must say which index formats are deliberately not resolved"
+    assert "no production consumer" in normalised_doc, "the retired production-parser data flow must not come back"

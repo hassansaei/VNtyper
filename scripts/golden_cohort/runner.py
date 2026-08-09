@@ -283,6 +283,7 @@ def _run_one(
         "unmapped_read_set": None,
         "raw_indexed_read_set": None,
         "raw_indexed_loss": None,
+        "placed_unmapped_guard_count": cram_evidence.parse_placed_unmapped_guard_count(stderr),
     }
 
     read_set_problems: list[str] = []

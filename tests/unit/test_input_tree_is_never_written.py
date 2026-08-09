@@ -233,7 +233,6 @@ def test_no_index_the_bam_path_builds_is_written_outside_the_output_directory(tm
     with (
         patch.object(fastq_bam_processing, "run_command", _record),
         patch.object(fastq_bam_processing, "get_region_string_with_fallback", return_value="chr1:1-2"),
-        patch.object(fastq_bam_processing, "extract_unmapped_reads_from_offset"),
         patch.object(fastq_bam_processing.os, "replace"),
     ):
         fastq_bam_processing.process_bam_to_fastq(

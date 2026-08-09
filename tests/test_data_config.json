@@ -703,7 +703,8 @@
     "cram_reference_contract": {
       "reference_dependent_cram": "tests/data/cram/reference-dependent/reference-dependent.cram",
       "reference_fasta": "tests/data/cram/reference-dependent/reference.fa",
-      "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram"
+      "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram",
+      "indexed_safe_cram": "tests/data/cram/indexed-safe/indexed-safe.cram"
     }
   },
   "unit_tests": {},
@@ -948,6 +949,15 @@
           "--extra-modules",
           "shark"
         ],
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
+      },
+      {
+        "test_name": "example_6449_hg19_subset_single_fastq",
+        "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+        "reference_assembly": "hg19",
         "expected_files": [
           "summary_report.html",
           "kestrel/kestrel_result.tsv"

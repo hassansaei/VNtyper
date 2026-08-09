@@ -7,12 +7,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from golden_cohort.admissibility import PIPELINE_REQUIRED_ARTIFACTS
+
 logger = logging.getLogger(__name__)
 
 CRAM_SCAN_MODES: tuple[str, ...] = ("indexed", "stream")
 
-CRAM_READ_SET_EXPECTATIONS: dict[str, dict[str, dict[str, int | str]]] = {
+CRAM_READ_SET_EXPECTATIONS: dict[str, dict[str, Any]] = {
     "7a61_hg38_ensembl_bwa": {
+        "placed_unmapped_guard_count": 11_571,
         "raw_indexed_read_set": {
             "count": 2_690,
             "sorted_read_name_sha256": "c64be739cd6344b8b62004fc9ea568779b3cc06ff1d472ac0e5d97c343130d7d",
@@ -23,6 +26,7 @@ CRAM_READ_SET_EXPECTATIONS: dict[str, dict[str, dict[str, int | str]]] = {
         },
     },
     "b178_hg19_subset": {
+        "placed_unmapped_guard_count": 329,
         "raw_indexed_read_set": {
             "count": 4_478,
             "sorted_read_name_sha256": "dad9a81a4e8cf30d1d938717459614f7d8ac6decb84978a5bc23c090b4d90a8b",
@@ -33,6 +37,45 @@ CRAM_READ_SET_EXPECTATIONS: dict[str, dict[str, dict[str, int | str]]] = {
         },
     },
 }
+
+INDEXED_SAFE_READ_SET: dict[str, int | str] = {
+    "count": 20,
+    "sorted_read_name_sha256": "16a0efa7785630c3d80716d9a386ddaa24f4933b5671f4ecd221b42a8dffe740",
+}
+
+# A no-variant pipeline success does not write the pre-filter variant frame. The purpose
+# cases still require the final Kestrel table, coverage, pipeline summary and HTML report.
+INDEXED_SAFE_REQUIRED_ARTIFACTS: tuple[str, ...] = tuple(
+    artifact for artifact in PIPELINE_REQUIRED_ARTIFACTS if artifact != "kestrel/kestrel_pre_result.tsv"
+)
+
+
+def _indexed_safe_cases(fixture: Path) -> list[dict[str, Any]]:
+    """Build the nonempty purpose cases that authorize both extraction strategies."""
+    expectation: dict[str, Any] = {
+        "indexed_authorized": True,
+        "raw_indexed_read_set": dict(INDEXED_SAFE_READ_SET),
+        "stream_read_set": dict(INDEXED_SAFE_READ_SET),
+    }
+    return [
+        {
+            "case_id": f"indexed_safe_{scan}_cram",
+            "kind": "pipeline",
+            "group": "cram",
+            "alignment_kind": "cram",
+            "sample": "example_indexed_safe",
+            "assembly": "hg19",
+            "cram": str(fixture),
+            "fast_mode": False,
+            "advntr": False,
+            "unmapped_scan": scan,
+            "repeat_of": "indexed_safe",
+            "expect_exit": "zero",
+            "required_artifacts": list(INDEXED_SAFE_REQUIRED_ARTIFACTS),
+            "cram_evidence_expectation": expectation,
+        }
+        for scan in CRAM_SCAN_MODES
+    ]
 
 
 def cram_fixture_for(case: dict[str, Any], data_dir: Path, cram_root: Path) -> Path:
@@ -129,7 +172,20 @@ def build_cram_cases(
                 }
             cases.append(case)
 
-    log.append(f"CRAM repeats: {len(cases)}/{len(cram_ids) * len(CRAM_SCAN_MODES)} from {cram_root}")
+    if cram_ids:
+        indexed_safe_fixture = cram_root / "indexed-safe" / "indexed-safe.cram"
+        if indexed_safe_fixture.is_file():
+            cases.extend(_indexed_safe_cases(indexed_safe_fixture))
+        else:
+            missing.append("indexed_safe")
+            log.append(f"skipped (no indexed-safe CRAM fixture at {indexed_safe_fixture}): indexed_safe")
+            logger.error(
+                f"matrix: no indexed-safe CRAM fixture at {indexed_safe_fixture}. Run `make cram-fixtures` to "
+                "derive it. This run's CRAM group is short, which the matrix check reports as drift."
+            )
+
+    declared_sources = len(cram_ids) + (1 if cram_ids else 0)
+    log.append(f"CRAM repeats: {len(cases)}/{declared_sources * len(CRAM_SCAN_MODES)} from {cram_root}")
     if missing:
         log.append(f"CRAM fixtures missing for: {', '.join(missing)}")
     return cases, log
