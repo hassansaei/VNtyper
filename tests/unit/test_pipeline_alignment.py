@@ -18,6 +18,7 @@ from vntyper.scripts.pipeline_alignment import (
     prepare_input_alignment_preflight,
 )
 from vntyper.scripts.preflight_error_io import PreflightErrorContext
+from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 
 pytestmark = pytest.mark.unit
 
@@ -541,7 +542,9 @@ def test_input_alignment_binding_precedes_validation_and_survives_source_replace
         prepared.plan.close()
 
 
-def test_owned_cram_boundary_drops_an_out_of_tree_header_uri_and_keeps_the_cli_reference(tmp_path: Path) -> None:
+def test_owned_cram_boundary_drops_an_out_of_tree_header_uri_and_keeps_the_cli_reference(
+    tmp_path: Path,
+) -> None:
     """An untrusted header path cannot block the explicit reference at the owned pipeline boundary."""
     output = tmp_path / "run-output"
     output.mkdir()
@@ -598,6 +601,7 @@ def test_owned_cram_boundary_drops_an_out_of_tree_header_uri_and_keeps_the_cli_r
         assert prepared.plan.reference_path == str(explicit_reference)
     finally:
         prepared.plan.close()
+        restore_reference_resolution(prepared.previous_ref_path)
 
 
 def test_cram_quickcheck_failure_uses_the_alignment_validation_phase_and_releases_state(
