@@ -389,7 +389,7 @@ show_missing = true
 # interchangeable and deleting `branch = true` would RAISE the reported total past this
 # floor while covering strictly less. tests/unit/test_coverage_gate.py pins both.
 #
-# The TARGET is 85% (COVERAGE_TARGET in the Makefile). Falling short of the target is
+# The TARGET is 86% (COVERAGE_TARGET in the Makefile). Falling short of the target is
 # a warning, not a failure - see scripts/coverage_gate.py.
 #
 # Four modules remain over the 650-LOC limit, measured at ec67fff:
@@ -406,7 +406,7 @@ show_missing = true
 # These percentages are a snapshot taken at the commit named above, not a live claim.
 # An earlier revision of this comment quoted kestrel_genotyping.py at 843 LOC / 41.9%,
 # figures already one commit stale when they were written.
-fail_under = 85
+fail_under = 86
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
