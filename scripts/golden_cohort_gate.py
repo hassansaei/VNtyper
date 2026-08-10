@@ -240,6 +240,9 @@ def cmd_matrix(args: argparse.Namespace) -> int:
     except ValueError as exc:
         logger.error(str(exc))
         return 1
+    if not built.get("cases") and not built.get("probes"):
+        logger.error("The matrix contains no pipeline cases or probes.")
+        return 1
     text = json.dumps(built, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
