@@ -119,6 +119,20 @@ def test_single_end_keep_case_names_the_real_unmapped_artifact() -> None:
     assert keep["expected_archive"] is False
 
 
+def test_single_end_cases_declare_the_negative_matrix_after_keep() -> None:
+    cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
+    artifact = "fastq_bam_processing/output_unmapped.bam"
+    assert cases["example_b178_hg19_single_end_delete"]["cli_options"] == ["--delete-intermediates"]
+    assert cases["example_b178_hg19_single_end_delete"]["expected_absent"] == [artifact]
+    assert cases["example_b178_hg19_single_end_delete_overrides_keep"]["cli_options"] == [
+        "--keep-intermediates",
+        "--delete-intermediates",
+    ]
+    assert cases["example_b178_hg19_single_end_delete_overrides_keep"]["expected_absent"] == [artifact]
+    assert cases["example_b178_hg19_single_end_archive"]["cli_options"] == ["--archive-results"]
+    assert cases["example_b178_hg19_single_end_archive"]["expected_archive"] is True
+
+
 def test_mixed_layout_diagnostic_renders_the_exact_dynamic_paths_and_counts(tmp_path: Path) -> None:
     """The contract must match the pipeline's full no-discard diagnostic, not a vague prefix."""
     expected = orchestration.mixed_layout_diagnostic(_negative_case(), tmp_path / "case-output")
