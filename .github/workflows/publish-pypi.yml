@@ -569,7 +569,8 @@ jobs:
           DEST=; DOWNLOADED=false
           for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
             CANDIDATE_DEST="evidence-${RUN_ID}-${RUN_ATTEMPT}-${API_ATTEMPT}"
-            if gh run download "$RUN_ID" -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" \
+            if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+                -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" \
                 -D "$CANDIDATE_DEST"; then
               DEST=$CANDIDATE_DEST
               DOWNLOADED=true
@@ -592,10 +593,17 @@ jobs:
           fi
           mv -- validated-evidence.json.tmp validated-evidence.json
           DIGEST=$(python -c 'import json; print(json.load(open("validated-evidence.json"))["digest"])')
-          if ! IMMUTABLE_DIGEST=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{.Manifest.Digest}}'); then
+          if ! docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Manifest}}' \
+              > immutable-manifest.json.tmp; then
             recovery_error "The immutable evidence manifest is unavailable."
             exit 1
           fi
+          if ! IMMUTABLE_DIGEST=$(python controller/scripts/release_manifest.py digest immutable-manifest.json.tmp); then
+            rm -f -- immutable-manifest.json.tmp
+            recovery_error "The immutable evidence manifest descriptor is invalid."
+            exit 1
+          fi
+          mv -- immutable-manifest.json.tmp immutable-manifest.json
           if [ "$IMMUTABLE_DIGEST" != "$DIGEST" ]; then
             recovery_error "The immutable manifest digest does not match evidence digest ${DIGEST}."
             exit 1
@@ -607,10 +615,17 @@ jobs:
             exit 1
           fi
           mv -- image-config.json.tmp image-config.json
-          if ! SHORT_DIGEST=$(docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" --format '{{.Manifest.Digest}}'); then
+          if ! docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" --format '{{json .Manifest}}' \
+              > short-manifest.json.tmp; then
             recovery_error "The exact short-SHA image tag is unavailable."
             exit 1
           fi
+          if ! SHORT_DIGEST=$(python controller/scripts/release_manifest.py digest short-manifest.json.tmp); then
+            rm -f -- short-manifest.json.tmp
+            recovery_error "The short-SHA image manifest descriptor is invalid."
+            exit 1
+          fi
+          mv -- short-manifest.json.tmp short-manifest.json
           if ! docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" \
               --format '{{json .Image}}' > short-image-config.json.tmp; then
             rm -f -- short-image-config.json.tmp
@@ -661,11 +676,15 @@ jobs:
             rm -f -- "$OBS_DIR/$safe_alias.digest" "$OBS_DIR/$safe_alias.image.json"
             for INSPECT_ATTEMPT in $(seq 1 "$RELEASE_ALIAS_INSPECT_ATTEMPTS"); do
               local error_path="$OBS_DIR/$safe_alias.$INSPECT_ATTEMPT.stderr"
-              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{.Manifest.Digest}}' \
-                  > "$OBS_DIR/$safe_alias.digest.tmp" 2> "$error_path"; then
-                if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
+              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Manifest}}' \
+                  > "$OBS_DIR/$safe_alias.manifest.json.tmp" 2> "$error_path"; then
+                if python controller/scripts/release_manifest.py digest \
+                    "$OBS_DIR/$safe_alias.manifest.json.tmp" > "$OBS_DIR/$safe_alias.digest.tmp" \
+                    2>> "$error_path" && \
+                    docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
                     > "$OBS_DIR/$safe_alias.image.json.tmp" 2>> "$error_path"; then
                   mv -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.digest"
+                  mv -- "$OBS_DIR/$safe_alias.manifest.json.tmp" "$OBS_DIR/$safe_alias.manifest.json"
                   mv -- "$OBS_DIR/$safe_alias.image.json.tmp" "$OBS_DIR/$safe_alias.image.json"
                   return 0
                 fi
@@ -673,7 +692,8 @@ jobs:
               elif ! python controller/scripts/release_registry.py classify-absence "$IMAGE:$alias" "$error_path"; then
                 saw_ambiguous_failure=true
               fi
-              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.image.json.tmp"
+              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.manifest.json.tmp" \
+                "$OBS_DIR/$safe_alias.image.json.tmp"
               if [ "$INSPECT_ATTEMPT" -lt "$RELEASE_ALIAS_INSPECT_ATTEMPTS" ]; then
                 sleep "$RELEASE_ALIAS_INSPECT_RETRY_SECONDS"
               fi
@@ -833,11 +853,15 @@ jobs:
             rm -f -- "$OBS_DIR/$safe_alias.digest" "$OBS_DIR/$safe_alias.image.json"
             for INSPECT_ATTEMPT in $(seq 1 "$RELEASE_ALIAS_INSPECT_ATTEMPTS"); do
               local error_path="$OBS_DIR/$safe_alias.$INSPECT_ATTEMPT.stderr"
-              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{.Manifest.Digest}}' \
-                  > "$OBS_DIR/$safe_alias.digest.tmp" 2> "$error_path"; then
-                if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
+              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Manifest}}' \
+                  > "$OBS_DIR/$safe_alias.manifest.json.tmp" 2> "$error_path"; then
+                if python controller/scripts/release_manifest.py digest \
+                    "$OBS_DIR/$safe_alias.manifest.json.tmp" > "$OBS_DIR/$safe_alias.digest.tmp" \
+                    2>> "$error_path" && \
+                    docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
                     > "$OBS_DIR/$safe_alias.image.json.tmp" 2>> "$error_path"; then
                   mv -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.digest"
+                  mv -- "$OBS_DIR/$safe_alias.manifest.json.tmp" "$OBS_DIR/$safe_alias.manifest.json"
                   mv -- "$OBS_DIR/$safe_alias.image.json.tmp" "$OBS_DIR/$safe_alias.image.json"
                   return 0
                 fi
@@ -845,7 +869,8 @@ jobs:
               elif ! python controller/scripts/release_registry.py classify-absence "$IMAGE:$alias" "$error_path"; then
                 saw_ambiguous_failure=true
               fi
-              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.image.json.tmp"
+              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.manifest.json.tmp" \
+                "$OBS_DIR/$safe_alias.image.json.tmp"
               if [ "$INSPECT_ATTEMPT" -lt "$RELEASE_ALIAS_INSPECT_ATTEMPTS" ]; then
                 sleep "$RELEASE_ALIAS_INSPECT_RETRY_SECONDS"
               fi
@@ -969,7 +994,11 @@ jobs:
             docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS" \
               "$IMAGE@$SOURCE_DIGEST"
             record_progress "$ALIAS" write-succeeded ""
-            FINAL_DIGEST=$(docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}')
+            SAFE_ALIAS=${ALIAS//./_}
+            docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Manifest}}' \
+              > "$OBS_DIR/$SAFE_ALIAS.final-manifest.json"
+            FINAL_DIGEST=$(python controller/scripts/release_manifest.py digest \
+              "$OBS_DIR/$SAFE_ALIAS.final-manifest.json")
             test "$FINAL_DIGEST" = "$SOURCE_DIGEST"
             record_progress "$ALIAS" verified "$FINAL_DIGEST"
           done < executable.tsv

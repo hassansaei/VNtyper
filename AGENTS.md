@@ -377,7 +377,8 @@ for the full tagged SHA: `Lint (Ruff)`, `Type Check (mypy)`, `Unit Tests (Python
 The Docker `sha-<7>` tag is only a convenience reference: contract-v1 evidence binds
 the full SHA and immutable digest, and the image labels
 `org.opencontainers.image.revision` and `org.opencontainers.image.version` must match
-that full revision and release version. Short-prefix collisions fail closed.
+that full revision and release version. A proven short-prefix collision continues from
+the evidence digest, while ambiguous short-tag drift fails closed.
 
 Promotion copies the evidence-verified digest, never rebuilds it. Exact `vX.Y.Z` and
 `X.Y.Z` aliases are immutable; floating `X.Y`, `X`, and `latest` advance monotonically
@@ -399,7 +400,7 @@ owner removes the obsolete token.
 ```text
 phase | job | permissions | retry/recovery
 validation | validate-release | contents: read | fix identity or ancestry, then rerun the existing tag
-gates | wait-for-release-gates | contents: read | rerun missing exact-SHA checks or the existing Docker Build run
+gates | wait-for-release-gates | actions: read, checks: read, contents: read, packages: read | rerun missing exact-SHA checks or the existing Docker Build run
 build | build-package | contents: read | rebuild the exact candidate wheel and sdist artifact
 promotion | promote-ghcr | contents: read, packages: write | rerun; verified aliases no-op and partial progress converges
 publish | publish-pypi | id-token: write | rerun safely; skip-existing distinguishes an existing release
@@ -503,8 +504,9 @@ summary | release-summary | none | always records success, failure, skipped jobs
     on `main`, waits for the exact ten full-SHA checks, and validates contract-v1 Docker
     evidence before any write. The `sha-<7>` image is accepted only when its digest and
     full `org.opencontainers.image.revision`/`org.opencontainers.image.version` labels
-    match that evidence; ambiguous prefix collisions fail closed. Promotion copies the
-    immutable digest to exact and monotonic floating aliases. Reruns converge after
+    match that evidence. A short-prefix collision proven by those identities continues
+    from the evidence digest; ambiguous drift fails closed. Promotion copies the immutable
+    digest to exact and monotonic floating aliases. Reruns converge after
     partial GHCR progress and PyPI uses `skip-existing`, but an identity conflict never
     overwrites an existing exact alias.
 13. **The package and the image must declare the same versions, and a test enforces it.**

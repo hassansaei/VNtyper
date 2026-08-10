@@ -95,6 +95,12 @@ def _release_runtime(tmp_path: Path, fixture: Mapping[str, object]) -> dict[str,
     shutil.copy2(ROOT / "scripts" / "release_policy.py", controller_scripts)
     shutil.copy2(ROOT / "scripts" / "release_evidence.py", controller_scripts)
     shutil.copy2(ROOT / "scripts" / "release_registry.py", controller_scripts)
+    manifest_script = ROOT / "scripts" / "release_manifest.py"
+    if manifest_script.is_file():
+        shutil.copy2(manifest_script, controller_scripts)
+        local_scripts = tmp_path / "scripts"
+        local_scripts.mkdir()
+        shutil.copy2(manifest_script, local_scripts)
     fixture_path = tmp_path / "fake-fixture.json"
     fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
     (tmp_path / "mutation.log").write_text("", encoding="utf-8")
@@ -130,6 +136,9 @@ if args and args[0] == "api":
     print(json.dumps(fixture.get("payloads", {}).get(key, [])))
     raise SystemExit(0)
 if args[:2] == ["run", "download"]:
+    if "--repo" not in args or args[args.index("--repo") + 1] != os.environ["GITHUB_REPOSITORY"]:
+        print("gh run download requires the exact explicit repository outside a checkout", file=sys.stderr)
+        raise SystemExit(2)
     run_id = args[2]
     destination = pathlib.Path(args[args.index("-D") + 1])
     evidence = fixture.get("downloads", {}).get(run_id)
@@ -207,7 +216,13 @@ if record is None:
     print(f"{args[3]}: manifest unknown", file=sys.stderr)
     raise SystemExit(1)
 if format_value == "{{.Manifest.Digest}}":
-    print(record["digest"])
+    print(f"Name:      {args[3]}")
+    print("MediaType: application/vnd.docker.distribution.manifest.v2+json")
+    print(f"Digest:    {record['digest']}")
+elif format_value == "{{json .Manifest}}":
+    descriptor = record.get("manifest", {"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                                          "digest": record["digest"], "size": 3464})
+    print(json.dumps(descriptor, indent=2))
 elif format_value == "{{json .Image}}":
     print(json.dumps(record["image"]))
 else:
@@ -389,7 +404,8 @@ def test_release_evidence_uses_post_push_registry_digest_and_attempt_scoped_arti
     registry = steps[registry_index]
     assert registry["if"] == "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
     assert "sha-$SHORT_SHA" in registry["run"]
-    assert "--format '{{.Manifest.Digest}}'" in registry["run"]
+    assert "--format '{{json .Manifest}}'" in registry["run"]
+    assert "release_manifest.py digest" in registry["run"]
     assert "--format '{{json .Image}}'" in registry["run"]
     assert "org.opencontainers.image.revision" in registry["run"]
     assert "org.opencontainers.image.version" in registry["run"]
@@ -413,6 +429,83 @@ def test_release_evidence_uses_post_push_registry_digest_and_attempt_scoped_arti
         "if-no-files-found": "error",
         "retention-days": "90",
     }
+
+
+def test_every_workflow_manifest_site_uses_descriptor_json_and_one_fail_closed_parser() -> None:
+    """All seven registry identity reads must share the canonical descriptor parser."""
+    docker_source = (ROOT / ".github" / "workflows" / "docker-build.yml").read_text(encoding="utf-8")
+    publish_source = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
+    combined = docker_source + publish_source
+
+    assert "{{.Manifest.Digest}}" not in combined
+    assert docker_source.count("{{json .Manifest}}") == 2
+    assert publish_source.count("{{json .Manifest}}") == 5
+    assert docker_source.count("release_manifest.py digest") == 2
+    assert publish_source.count("release_manifest.py digest") == 5
+
+
+def test_docker_build_digest_steps_execute_descriptor_parser_for_base_and_pushed_image(tmp_path: Path) -> None:
+    """Both Docker workflow shell sites must reduce descriptor JSON to one canonical digest."""
+    docker = _workflow("docker-build.yml")
+    digest = "sha256:" + "b" * 64
+    image = "ghcr.io/hassansaei/vntyper"
+    base_image = f"{image}-base"
+    base_tag = "base-deadbeefdeadbeef"
+    fixture = {
+        "docker": {
+            f"{base_image}:{base_tag}": {"digest": digest, "image": {"config": {"Labels": {}}}},
+            f"{image}:sha-aaaaaaa": {
+                "digest": digest,
+                "image": {
+                    "config": {
+                        "Labels": {
+                            "org.opencontainers.image.revision": "a" * 40,
+                            "org.opencontainers.image.version": "2.0.10",
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+    base_root = tmp_path / "base"
+    base_env = _release_runtime(base_root, fixture)
+    base_output = base_root / "github-output"
+    base_run = _step_with_id(docker, "build-and-test", "base")["run"]
+    base_run = base_run.replace("${{ steps.img.outputs.base }}", base_image).replace(
+        "${{ steps.hash.outputs.tag }}", base_tag
+    )
+    base_completed = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", base_run],
+        cwd=base_root,
+        env={**os.environ, **base_env, "GITHUB_OUTPUT": str(base_output)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert base_completed.returncode == 0, base_completed.stderr
+    assert base_output.read_text(encoding="utf-8") == f"ref={base_image}@{digest}\n"
+
+    pushed_root = tmp_path / "pushed"
+    pushed_env = _release_runtime(pushed_root, fixture)
+    pushed_output = pushed_root / "github-output"
+    pushed_completed = _run_step(
+        pushed_root,
+        docker,
+        "build-and-test",
+        "registry-digest",
+        pushed_env
+        | {
+            "GITHUB_OUTPUT": str(pushed_output),
+            "GITHUB_SHA": "a" * 40,
+            "IMAGE": image,
+            "VERSION": "2.0.10",
+        },
+    )
+
+    assert pushed_completed.returncode == 0, pushed_completed.stderr
+    assert pushed_output.read_text(encoding="utf-8") == f"value={digest}\n"
 
 
 def test_release_evidence_serializer_writes_typed_exact_identity_payload(tmp_path: Path) -> None:
@@ -647,6 +740,7 @@ def test_current_container_commands_use_only_the_rolling_ghcr_main_image() -> No
     """Every runnable install example must be truthful before the first gated release."""
     surfaces = (
         ROOT / "README.md",
+        ROOT / "docker" / "README.md",
         ROOT / "docs" / "getting-started" / "installation.md",
         ROOT / "docs" / "user-guide" / "docker.md",
     )
@@ -695,6 +789,7 @@ def test_generation_renames_grammar_and_protected_identities_are_exact() -> None
     assert "## VNtyper Version:" in (ROOT / "vntyper" / "scripts" / "kestrel_genotyping.py").read_text(encoding="utf-8")
     assert (ROOT / "snakemake" / "vntyper2.smk").is_file()
     assert (ROOT / "snakemake" / "run_vntyper2.sh").is_file()
+    assert "Before VNtyper 2.0.6 all of" in (ROOT / "docs" / "cli" / "online.md").read_text(encoding="utf-8")
 
 
 def test_validate_release_resolves_in_controller_and_tests_exact_candidate() -> None:
@@ -1103,12 +1198,61 @@ def test_source_recovery_uses_only_exact_sha_attempt_artifacts_and_digest_inspec
     assert "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" in preflight
     assert "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" in evidence
     assert "docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}" in evidence
-    assert 'gh run download "$RUN_ID"' in evidence
+    assert 'gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY"' in evidence
     assert '"$IMAGE@$DIGEST"' in evidence
     assert '"$IMAGE:sha-${SHORT_SHA}"' in evidence
     assert "sha-${SHORT_SHA}" in evidence
     assert ":main" not in evidence
     assert "rerun this existing Docker Build run" in evidence
+
+
+def test_evidence_download_requires_exact_repo_outside_checkout_and_workflow_supplies_it(tmp_path: Path) -> None:
+    """The selected artifact must remain downloadable from the non-git GitHub workspace."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _successful_evidence_fixture()) | {"GITHUB_WORKSPACE": str(tmp_path)}
+    assert not (tmp_path / ".git").exists()
+
+    without_repo = subprocess.run(
+        ["gh", "run", "download", "41", "-n", "evidence", "-D", "without-repo"],
+        cwd=tmp_path,
+        env={**os.environ, **env},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    wrong_repo = subprocess.run(
+        ["gh", "run", "download", "41", "--repo", "other/project", "-n", "evidence", "-D", "wrong-repo"],
+        cwd=tmp_path,
+        env={**os.environ, **env},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    exact_repo = subprocess.run(
+        [
+            "gh",
+            "run",
+            "download",
+            "41",
+            "--repo",
+            "hassansaei/VNtyper",
+            "-n",
+            "evidence",
+            "-D",
+            "exact-repo",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, **env},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    workflow = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+
+    assert without_repo.returncode == 2
+    assert wrong_repo.returncode == 2
+    assert exact_repo.returncode == 0, exact_repo.stderr
+    assert workflow.returncode == 0, workflow.stderr
 
 
 def test_evidence_provenance_and_recovery_fields_are_job_outputs_for_final_summary_dataflow() -> None:
@@ -2132,7 +2276,7 @@ def test_hostile_unbound_absence_output_retries_then_aborts_before_create_or_pro
     assert (tmp_path / "mutation.log").read_text() == ""
     assert not (tmp_path / "github-output").exists()
     counts = json.loads((tmp_path / "fake-counts.json").read_text(encoding="utf-8"))
-    assert counts[f"inspect:{reference}:{{{{.Manifest.Digest}}}}"] == 3
+    assert counts[f"inspect:{reference}:{{{{json .Manifest}}}}"] == 3
 
 
 def test_release_guidance_records_current_controller_rollout_and_recovery_contract() -> None:
@@ -2167,6 +2311,8 @@ def test_release_guidance_records_current_controller_rollout_and_recovery_contra
         "legacy token workflow",
         "inert only after",
         "pre-milestone commit",
+        "proven short-prefix collision continues from the evidence digest",
+        "ambiguous short-tag drift fails closed",
     ):
         assert literal in normalized_agents
     assert "mypy vntyper/ docker/app/ scripts/" in agents
@@ -2174,7 +2320,7 @@ def test_release_guidance_records_current_controller_rollout_and_recovery_contra
     assert re.search(
         r"```text\nphase \| job \| permissions \| retry/recovery\n"
         r"validation \| validate-release \| contents: read \|.*\n"
-        r"gates \| wait-for-release-gates \| contents: read \|.*\n"
+        r"gates \| wait-for-release-gates \| actions: read, checks: read, contents: read, packages: read \|.*\n"
         r"build \| build-package \| contents: read \|.*\n"
         r"promotion \| promote-ghcr \| contents: read, packages: write \|.*\n"
         r"publish \| publish-pypi \| id-token: write \|.*\n"

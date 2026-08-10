@@ -195,10 +195,16 @@ jobs:
         run: |
           set -euo pipefail
           REF="${{ steps.img.outputs.base }}:${{ steps.hash.outputs.tag }}"
-          if ! DIGEST=$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}' 2>/dev/null); then
+          if ! docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' \
+              > base-manifest.json.tmp 2>/dev/null; then
             echo "::error::Base image $REF is missing even though the build-base job did not fail. Check that job's logs, or re-run 'Docker Base Image' with force=true."
             exit 1
           fi
+          if ! DIGEST=$(python scripts/release_manifest.py digest base-manifest.json.tmp); then
+            echo "::error::Base image $REF returned an invalid manifest descriptor."
+            exit 1
+          fi
+          mv -- base-manifest.json.tmp base-manifest.json
           echo "ref=${{ steps.img.outputs.base }}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Read package and image identity
@@ -400,12 +406,16 @@ jobs:
           set -euo pipefail
           SHORT_SHA=${GITHUB_SHA:0:7}
           for ATTEMPT in 1 2 3 4 5 6; do
-            if DIGEST=$(docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" \
-                --format '{{.Manifest.Digest}}'); then break; fi
+            rm -f -- pushed-manifest.json.tmp
+            if docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" \
+                --format '{{json .Manifest}}' > pushed-manifest.json.tmp && \
+                DIGEST=$(python scripts/release_manifest.py digest pushed-manifest.json.tmp); then
+              mv -- pushed-manifest.json.tmp pushed-manifest.json
+              break
+            fi
             if [ "$ATTEMPT" -eq 6 ]; then echo "pushed short-SHA manifest was not observable" >&2; exit 1; fi
             sleep 5
           done
-          case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
           docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" --format '{{json .Image}}' > pushed-image.json
           python - "$GITHUB_SHA" "$VERSION" pushed-image.json <<'PY'
           import json, sys
