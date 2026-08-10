@@ -1,6 +1,13 @@
 import pytest
 
-from scripts.release_policy import REQUIRED_CHECK_NAMES, classify_check_runs, parse_release_tag, required_aliases
+from scripts.release_policy import (
+    REQUIRED_CHECK_NAMES,
+    AliasState,
+    classify_check_runs,
+    parse_release_tag,
+    plan_alias_updates,
+    required_aliases,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -104,3 +111,104 @@ def test_incomplete_check_remains_pending() -> None:
     aggregate = poll.verdicts[7]
     assert poll.action == "wait"
     assert (aggregate.state, aggregate.conclusion, aggregate.check_run_id) == ("pending", None, 1)
+
+
+def test_exact_aliases_create_noop_or_fail_but_never_advance() -> None:
+    version = parse_release_tag("v2.0.10")
+    current = dict.fromkeys(required_aliases(version))
+    source = "sha256:" + "a" * 64
+    current["v2.0.10"] = AliasState(source, "2.0.10")
+    current["2.0.10"] = AliasState("sha256:" + "b" * 64, "2.0.10")
+    updates = plan_alias_updates(version, source, current, dry_run=False)
+    assert [(update.alias, update.decision, update.execute) for update in updates[:2]] == [
+        ("v2.0.10", "no-op", False),
+        ("2.0.10", "fail-conflict", False),
+    ]
+
+
+def test_floating_aliases_create_advance_or_skip_newer_without_downgrade() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["2"] = AliasState("sha256:" + "b" * 64, "2.0.9")
+    current["latest"] = AliasState("sha256:" + "c" * 64, "2.1.0")
+    updates = plan_alias_updates(version, source, current, dry_run=False)
+    assert [(update.alias, update.decision, update.execute) for update in updates] == [
+        ("v2.0.10", "create", True),
+        ("2.0.10", "create", True),
+        ("2.0", "create", True),
+        ("2", "advance", True),
+        ("latest", "skip-newer", False),
+    ]
+
+
+@pytest.mark.parametrize("observed_version", (None, "2.0", "v2.0.9"))
+def test_floating_alias_with_unorderable_version_is_skipped(observed_version: str | None) -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["2.0"] = AliasState("sha256:" + "b" * 64, observed_version)
+    update = plan_alias_updates(version, source, current, dry_run=False)[2]
+    assert (update.alias, update.decision, update.execute) == ("2.0", "skip-unorderable", False)
+
+
+def test_equal_floating_version_with_a_different_digest_is_a_hard_conflict() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["latest"] = AliasState("sha256:" + "b" * 64, "2.0.10")
+    latest = plan_alias_updates(version, source, current, dry_run=False)[-1]
+    assert (latest.decision, latest.execute) == ("fail-conflict", False)
+
+
+def test_each_completed_alias_prefix_converges_to_noop_on_rerun() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    aliases = ("v2.0.10", "2.0.10", "2.0", "2", "latest")
+    for prefix_length in range(len(aliases) + 1):
+        current = dict.fromkeys(aliases)
+        for alias in aliases[:prefix_length]:
+            current[alias] = AliasState(source, "2.0.10")
+        updates = plan_alias_updates(version, source, current, dry_run=False)
+        expected = [
+            (alias, "no-op", False) if index < prefix_length else (alias, "create", True)
+            for index, alias in enumerate(aliases)
+        ]
+        assert [(update.alias, update.decision, update.execute) for update in updates] == expected
+
+
+def test_dry_run_preserves_decisions_but_disables_every_write() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["2"] = AliasState("sha256:" + "b" * 64, "2.0.9")
+    current["latest"] = AliasState("sha256:" + "c" * 64, "2.1.0")
+    live = plan_alias_updates(version, source, current, dry_run=False)
+    dry = plan_alias_updates(version, source, current, dry_run=True)
+    assert [(update.alias, update.decision) for update in dry] == [
+        ("v2.0.10", "create"),
+        ("2.0.10", "create"),
+        ("2.0", "create"),
+        ("2", "advance"),
+        ("latest", "skip-newer"),
+    ]
+    assert [(update.alias, update.decision) for update in dry] == [(update.alias, update.decision) for update in live]
+    assert all(update.execute is False for update in dry)
+
+
+@pytest.mark.parametrize("source", ("not-a-digest", "sha256:" + "a" * 63, "sha256:" + "A" * 64))
+def test_alias_plan_rejects_noncanonical_source_digest(source: str) -> None:
+    version = parse_release_tag("v2.0.10")
+    current = dict.fromkeys(required_aliases(version))
+    with pytest.raises(ValueError, match="sha256"):
+        plan_alias_updates(version, source, current, dry_run=False)
+
+
+def test_alias_plan_requires_exactly_all_five_alias_keys() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current.pop("latest")
+    current["main"] = None
+    with pytest.raises(ValueError, match="exactly"):
+        plan_alias_updates(version, source, current, dry_run=False)

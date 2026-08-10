@@ -52,6 +52,24 @@ class CheckPoll:
     elapsed_seconds: int
 
 
+@dataclass(frozen=True)
+class AliasState:
+    """Observed digest and package version for one registry alias."""
+
+    digest: str
+    version: str | None
+
+
+@dataclass(frozen=True)
+class AliasUpdate:
+    """Planned decision for one release alias."""
+
+    alias: str
+    decision: Literal["create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict"]
+    execute: bool
+    reason: str
+
+
 def parse_release_tag(tag: str) -> ReleaseVersion:
     """Parse a strict VNtyper release tag.
 
@@ -184,3 +202,80 @@ def classify_check_runs(
         attempt=attempt,
         elapsed_seconds=(attempt - 1) * 30,
     )
+
+
+def plan_alias_updates(
+    version: ReleaseVersion,
+    source_digest: str,
+    current_aliases: Mapping[str, AliasState | None],
+    *,
+    dry_run: bool,
+) -> tuple[AliasUpdate, ...]:
+    """Plan immutable and monotonic release alias updates.
+
+    Args:
+        version: Parsed candidate release version.
+        source_digest: Verified immutable source manifest digest.
+        current_aliases: Current state for exactly the five required aliases.
+        dry_run: Whether to suppress all executable writes.
+
+    Returns:
+        Alias decisions in exact-first promotion order.
+
+    Raises:
+        ValueError: If the digest is not canonical or the alias key set is incomplete.
+    """
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", source_digest) is None:
+        msg = f"Source digest {source_digest!r} must be canonical sha256:<64 lowercase hex characters>."
+        raise ValueError(msg)
+
+    aliases = required_aliases(version)
+    if set(current_aliases) != set(aliases):
+        msg = "Current aliases must contain exactly the five required release alias keys."
+        raise ValueError(msg)
+
+    candidate_parts = (version.major, version.minor, version.patch)
+    updates: list[AliasUpdate] = []
+    for index, alias in enumerate(aliases):
+        current = current_aliases[alias]
+        if current is None:
+            decision: Literal["create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict"] = (
+                "create"
+            )
+            reason = "Alias is absent and will be created."
+        elif index < 2:
+            if current.digest == source_digest:
+                decision = "no-op"
+                reason = "Exact alias already resolves to the source digest."
+            else:
+                decision = "fail-conflict"
+                reason = "Exact alias resolves to a different digest and is immutable."
+        else:
+            observed_version: ReleaseVersion | None = None
+            if current.version is not None:
+                try:
+                    observed_version = parse_release_tag(f"v{current.version}")
+                except ValueError:
+                    observed_version = None
+
+            if observed_version is None:
+                decision = "skip-unorderable"
+                reason = f"Existing alias version {current.version!r} is not strict MAJOR.MINOR.PATCH."
+            else:
+                observed_parts = (observed_version.major, observed_version.minor, observed_version.patch)
+                if observed_parts < candidate_parts:
+                    decision = "advance"
+                    reason = f"Existing version {current.version!r} is older than candidate {version.plain!r}."
+                elif observed_parts > candidate_parts:
+                    decision = "skip-newer"
+                    reason = f"Existing version {current.version!r} is newer than candidate {version.plain!r}."
+                elif current.digest == source_digest:
+                    decision = "no-op"
+                    reason = "Alias already resolves to the candidate version and source digest."
+                else:
+                    decision = "fail-conflict"
+                    reason = "Alias reports the candidate version but resolves to a different digest."
+
+        execute = decision in {"create", "advance"} and not dry_run
+        updates.append(AliasUpdate(alias=alias, decision=decision, execute=execute, reason=reason))
+    return tuple(updates)
