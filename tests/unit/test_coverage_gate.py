@@ -244,7 +244,7 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert f"all {script_count} Python files" in normalized_agents
     assert "6,000 of 6,387 measured units" in normalized_agents
     assert "93.94% aggregate scripts-only branch-inclusive coverage" in normalized_agents
-    assert "89.15% combined branch-inclusive coverage across 5,067 unit tests" in normalized_agents
+    assert "89.15% combined branch-inclusive coverage across 5,072 unit tests" in normalized_agents
     assert "every script was measured above" not in agents
     assert "24 Python files" not in agents
     assert "92.5166935298181%" not in agents

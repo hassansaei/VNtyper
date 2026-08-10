@@ -559,7 +559,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
     final 2026-08-10 verification measured all 35 Python files at 6,000 of 6,387 measured
     units, or 93.94% aggregate scripts-only branch-inclusive coverage, and 89.15% combined
-    branch-inclusive coverage across 5,067 unit tests in both the maintained Python 3.12
+    branch-inclusive coverage across 5,072 unit tests in both the maintained Python 3.12
     environment and `ci-local`'s clean Python 3.13 rebuild. The Python 3.10–3.13 GitHub
     matrix remains the authoritative cross-version gate. These figures do not change the
     independent gate semantics:
