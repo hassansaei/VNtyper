@@ -46,6 +46,9 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3.0",  # Prevent stuck tests
     "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
+    # Python 3.10 has no stdlib tomllib; the BLE001 policy guard uses this only
+    # while running the unit tier, so it belongs in the test-only extra.
+    "tomli>=2.0.1; python_version < '3.11'",
     "testcontainers>=4.0.0",  # Docker container testing
     "requests>=2.31.0",  # HTTP library for downloading test data
     # Scores coverage of CHANGED lines only (`make patch-coverage`, gated at 80% in CI).

@@ -1,6 +1,5 @@
 """Schema, identity, and live-policy tests for the BLE001 adapter."""
 
-import ast
 import json
 import re
 import subprocess
@@ -33,89 +32,46 @@ EXPECTED_RUFF_PATHS = ("vntyper/", "docker/app/", "tests/", "scripts/", "docs/")
 def _ruff_lint_values() -> tuple[list[str], list[str]]:
     """Read only Ruff's selected rules and per-file ignore values."""
     text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    lint_lines = _toml_section_lines(text, "[tool.ruff.lint]")
-    ignore_lines = _toml_section_lines(text, "[tool.ruff.lint.per-file-ignores]")
-    selected = _toml_array_assignments(lint_lines).get("select")
-    if selected is None:
-        raise AssertionError("Ruff select list is missing")
-    ignored = [rule for values in _toml_array_assignments(ignore_lines).values() for rule in values]
+    document = _parse_toml(text)
+    tool = _require_table(document.get("tool"), "tool")
+    ruff = _require_table(tool.get("ruff"), "tool.ruff")
+    lint = _require_table(ruff.get("lint"), "tool.ruff.lint")
+    selected = _require_rule_array(lint.get("select"), "tool.ruff.lint.select")
+    per_file_ignores = _require_table(lint.get("per-file-ignores"), "tool.ruff.lint.per-file-ignores")
+    ignored = [
+        rule
+        for path, rules in per_file_ignores.items()
+        for rule in _require_rule_array(rules, f"tool.ruff.lint.per-file-ignores.{path}")
+    ]
     return selected, ignored
 
 
-def _toml_section_lines(text: str, header: str) -> list[str]:
-    """Return literal TOML lines belonging to one exact table header."""
-    found = False
-    lines: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if found:
-                break
-            found = stripped == header
-            continue
-        if found:
-            lines.append(line)
-    if not found:
-        raise AssertionError(f"Ruff lint configuration section is missing: {header}")
-    return lines
+def _parse_toml(text: str) -> dict[str, object]:
+    """Parse TOML with the stdlib parser or Python 3.10's declared backport."""
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib
+
+    try:
+        parsed = tomllib.loads(text)
+    except ValueError as exc:
+        raise AssertionError(f"Could not parse pyproject.toml: {exc}") from exc
+    return _require_table(parsed, "top-level TOML document")
 
 
-def _toml_array_assignments(lines: list[str]) -> dict[str, list[str]]:
-    """Parse string-array assignments from a small, read-only TOML table subset."""
-    values: dict[str, list[str]] = {}
-    current: list[str] = []
-    current_key = ""
-    depth = 0
-    for line in lines:
-        if not current:
-            if "=" not in line:
-                continue
-            assignment, value = line.split("=", maxsplit=1)
-            current_key = assignment.strip()
-            value = value.lstrip()
-            if not value.startswith("["):
-                continue
-        else:
-            value = line
-        current.append(value)
-        depth = _toml_array_depth(value, depth)
-        if depth != 0:
-            continue
-        parsed = ast.literal_eval("\n".join(current))
-        if not isinstance(parsed, list) or not all(isinstance(rule, str) for rule in parsed):
-            raise AssertionError("Ruff arrays must contain only rule strings")
-        if current_key in values:
-            raise AssertionError(f"Ruff array assignment is ambiguous: {current_key}")
-        values[current_key] = parsed
-        current = []
-        current_key = ""
-    if current:
-        raise AssertionError("Ruff array assignment is not closed")
-    return values
+def _require_table(value: object, location: str) -> dict[str, object]:
+    """Return one TOML table or fail closed with its exact configuration path."""
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise AssertionError(f"{location} must be a table")
+    return value
 
 
-def _toml_array_depth(value: str, depth: int) -> int:
-    """Track brackets outside TOML strings and comments for one array fragment."""
-    quote = ""
-    escaped = False
-    for character in value:
-        if quote:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == quote:
-                quote = ""
-            continue
-        if character == "#":
-            break
-        if character in {"'", '"'}:
-            quote = character
-        elif character == "[":
-            depth += 1
-        elif character == "]":
-            depth -= 1
-    return depth
+def _require_rule_array(value: object, location: str) -> list[str]:
+    """Return a Ruff rule array after rejecting every non-string shape."""
+    if not isinstance(value, list) or not all(isinstance(rule, str) for rule in value):
+        raise AssertionError(f"{location} must be an array of strings")
+    return [rule for rule in value if isinstance(rule, str)]
 
 
 def test_ruff_guard_reads_multiline_per_file_ignores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,6 +95,95 @@ select = ["E4"]
 
     assert selected == ["E4"]
     assert "BLE001" in ignored
+
+
+def test_ruff_guard_parses_quoted_equals_key_and_trailing_header_comment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard reads TOML keys and headers rather than splitting their source text."""
+    (tmp_path / "pyproject.toml").write_text(
+        """\
+[tool.ruff.lint] # rule selection
+select = ["E4"]
+
+[tool.ruff.lint.per-file-ignores] # intentional local exemptions
+"tests/has=equals.py" = ["BLE001", "G004"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+
+    selected, ignored = _ruff_lint_values()
+
+    assert selected == ["E4"]
+    assert {"BLE001", "G004"} <= set(ignored)
+
+
+def test_ruff_guard_rejects_a_duplicate_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Malformed duplicate TOML tables cannot yield a partial policy view."""
+    (tmp_path / "pyproject.toml").write_text(
+        """\
+[tool.ruff.lint]
+select = ["E4"]
+
+[tool.ruff.lint]
+select = ["BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match="Could not parse pyproject.toml"):
+        _ruff_lint_values()
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (
+            """\
+[tool.ruff.lint]
+select = "BLE001"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+""",
+            "tool.ruff.lint.select must be an array of strings",
+        ),
+        (
+            """\
+[tool.ruff.lint]
+select = ["E4"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = "BLE001"
+""",
+            "tool.ruff.lint.per-file-ignores.tests/**/*.py must be an array of strings",
+        ),
+        (
+            """\
+[tool.ruff.lint]
+select = ["E4", 1]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+""",
+            "tool.ruff.lint.select must be an array of strings",
+        ),
+    ],
+)
+def test_ruff_guard_rejects_relevant_wrong_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str, expected: str
+) -> None:
+    """The policy guard fails closed when relevant TOML values are not rule arrays."""
+    (tmp_path / "pyproject.toml").write_text(config, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match=re.escape(expected)):
+        _ruff_lint_values()
 
 
 def _track(root: Path, *relative_paths: str) -> None:
