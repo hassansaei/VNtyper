@@ -2,6 +2,10 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
+## Unreleased
+
+No unreleased changes.
+
 ## 2.0.11 (Current)
 
 When both `--keep-intermediates` and `--delete-intermediates` are supplied,
@@ -9,9 +13,9 @@ When both `--keep-intermediates` and `--delete-intermediates` are supplied,
 versions kept the intermediate BAM in this conflicting form.
 
 **The golden-cohort harness covers more outcome and input states.** Successful cases now
-assert both present and absent intermediate/archive artifacts, an independent paired b178
-FASTQ case runs without SHARK, and derived CRAM fixtures carry indexed/stream read-set
-evidence (#71, #226).
+assert both present and absent intermediate/archive artifacts, run an independent paired
+b178 FASTQ case without SHARK, and carry indexed/stream read-set evidence in derived CRAM
+fixtures (#71, #226).
 
 **Runtime quality gates now measure the root scripts.** `make type-check` includes
 `scripts/` in mypy (#204), and all 35 Python files there are part of branch-inclusive
