@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, get_type_hints
 from unittest import mock
 
 import pytest
@@ -24,7 +24,7 @@ def _kwargs(tmp_path: Path) -> dict[str, Any]:
         "sample_name": "patient-7",
         "log_level": logging.DEBUG,
         "cwd": "/project/root",
-        "summary": cast(list[dict[str, Any]], {"steps": []}),
+        "summary": {"steps": []},
         "summary_file_path": str(tmp_path / "pipeline_summary.json"),
         "runner": mock.Mock(),
     }
@@ -37,7 +37,9 @@ def test_stage_forwards_the_complete_tuple_and_records_the_exact_summary(tmp_pat
 
     run_kestrel_stage(**kwargs)
 
-    cast(mock.Mock, kwargs["runner"]).assert_called_once_with(
+    runner = kwargs["runner"]
+    assert isinstance(runner, mock.Mock)
+    runner.assert_called_once_with(
         vcf_path=tmp_path / "kestrel" / "output.vcf",
         output_dir=tmp_path / "kestrel",
         fastq_files=("R1.fastq.gz", "R2.fastq.gz", "single.fastq.gz"),
@@ -58,6 +60,10 @@ def test_stage_forwards_the_complete_tuple_and_records_the_exact_summary(tmp_pat
     assert record.call_args.kwargs == {"write_summary_path": str(tmp_path / "pipeline_summary.json")}
 
 
+def test_stage_summary_annotation_matches_the_real_pipeline_payload() -> None:
+    assert get_type_hints(run_kestrel_stage)["summary"] == dict[str, Any]
+
+
 @pytest.mark.parametrize("fastq_files", [(), ("same.fastq.gz", "same.fastq.gz")])
 def test_stage_rejects_empty_or_duplicate_inputs_before_runner(
     fastq_files: tuple[str, ...], tmp_path: Path, monkeypatch
@@ -70,7 +76,9 @@ def test_stage_rejects_empty_or_duplicate_inputs_before_runner(
     with pytest.raises(ValueError, match="FASTQ"):
         run_kestrel_stage(**kwargs)
 
-    cast(mock.Mock, kwargs["runner"]).assert_not_called()
+    runner = kwargs["runner"]
+    assert isinstance(runner, mock.Mock)
+    runner.assert_not_called()
     record.assert_not_called()
 
 
@@ -88,7 +96,8 @@ def test_runner_failure_cannot_create_a_successful_summary_step(tmp_path: Path, 
 
 def test_summary_failure_rolls_back_a_partially_appended_success_step(tmp_path: Path, monkeypatch) -> None:
     kwargs = _kwargs(tmp_path)
-    summary = cast(dict[str, Any], kwargs["summary"])
+    summary = kwargs["summary"]
+    assert isinstance(summary, dict)
 
     def append_then_fail(*args: object, **kwargs: object) -> None:
         del args, kwargs

@@ -105,7 +105,7 @@ def construct_kestrel_command(
         f"--maxalignstates {max_align_states} --maxhapstates {max_hap_states} "
         f"-r {quote_path(reference_vntr)} -o {quote_path(vcf_out)} "
         f"-s{quote_path(sample_name)} {fastq_inputs} "
-        f"--hapfmt sam -p {quote_path(str(Path(output_dir) / 'output.sam'))} --logstderr --logstdout "
+        f"--hapfmt sam -p {quote_path(f'{output_dir}/output.sam')} --logstderr --logstdout "
         f"--loglevel {log_level.upper()} --temploc {quote_path(output_dir)}"
     )
     if additional_settings:

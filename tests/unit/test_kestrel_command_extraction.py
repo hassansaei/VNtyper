@@ -41,6 +41,43 @@ def test_extraction_preserves_the_existing_paired_command_byte_for_byte() -> Non
 
 
 @pytest.mark.parametrize(
+    ("output_dir", "expected_sam", "expected_temp"),
+    [
+        (".", "./output.sam", "."),
+        ("/out/", "/out//output.sam", "/out/"),
+    ],
+)
+def test_output_directory_spelling_is_preserved_byte_for_byte(
+    output_dir: str,
+    expected_sam: str,
+    expected_temp: str,
+) -> None:
+    command = construct_kestrel_command(
+        kmer_size=20,
+        kestrel_path="/opt/kestrel.jar",
+        reference_vntr="/ref/muc1.fa",
+        output_dir=output_dir,
+        fastq_files=("/in/R1.fastq.gz", "/in/R2.fastq.gz"),
+        vcf_out="/out/output.vcf",
+        java_path="/usr/bin/java",
+        java_memory="12g",
+        max_align_states=40,
+        max_hap_states=40,
+        log_level="info",
+        sample_name="SAMPLE1",
+    )
+
+    assert command == (
+        "/usr/bin/java -Xmx12g -jar /opt/kestrel.jar -k 20 "
+        "--maxalignstates 40 --maxhapstates 40 "
+        "-r /ref/muc1.fa -o /out/output.vcf "
+        "-sSAMPLE1 /in/R1.fastq.gz /in/R2.fastq.gz "
+        f"--hapfmt sam -p {expected_sam} --logstderr --logstdout "
+        f"--loglevel INFO --temploc {expected_temp}"
+    )
+
+
+@pytest.mark.parametrize(
     ("fastq_files", "expected_inputs"),
     [
         (("/in/R1.fastq.gz",), "/in/R1.fastq.gz"),
