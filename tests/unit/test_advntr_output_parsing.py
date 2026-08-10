@@ -260,6 +260,36 @@ class TestPathsThatWriteNoFile:
         assert [r for r in caplog.records if r.levelno >= logging.ERROR], label
 
 
+def test_header_rewrite_oserror_logs_and_returns_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed header rewrite remains observable without claiming a result."""
+    source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
+    result_path = tmp_path / f"output{RESULT_SUFFIX}"
+    real_open = open
+
+    def fail_header_rewrite(path, mode="r", *args, **kwargs):
+        if Path(path) == source and mode == "w":
+            raise OSError("header rewrite blocked")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fail_header_rewrite)
+
+    with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        result = advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+    assert result is None
+    assert not result_path.exists()
+    errors = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == advntr.logger.name and record.levelno >= logging.ERROR
+    ]
+    assert errors == [(logging.ERROR, "Error reading adVNTR output: header rewrite blocked")]
+
+
 @pytest.mark.parametrize(
     ("failure_stage", "expected_message"),
     [
