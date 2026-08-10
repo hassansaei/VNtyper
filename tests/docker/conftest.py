@@ -168,6 +168,18 @@ class ContainerExecutor(Protocol):
 
 
 def _map_registered_input(path: Path, test_data_root: Path) -> str:
+    lexical_root = test_data_root.absolute()
+    lexical_path = path.absolute()
+    try:
+        relative = lexical_path.relative_to(lexical_root)
+    except ValueError as exc:
+        raise ValueError(f"Path is not registered test data: {path}") from exc
+    current = lexical_root
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError(f"Path is not registered test data because it contains a symlink: {path}")
+
     root = test_data_root.resolve(strict=True)
     try:
         resolved = path.resolve(strict=True)

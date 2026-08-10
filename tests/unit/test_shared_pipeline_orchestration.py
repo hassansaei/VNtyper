@@ -120,6 +120,9 @@ def test_build_pipeline_argv_maps_fastq_and_explicit_cram_reference(tmp_path: Pa
         ({"input_paths": ()}, "exactly one"),
         ({"input_kind": "fastq", "input_paths": (Path("a"), Path("b"), Path("c"))}, "one or two"),
         ({"cli_options": ("--threads", "9")}, "owned by PipelineRequest"),
+        ({"cli_options": ("--threads=9",)}, "owned by PipelineRequest"),
+        ({"cli_options": ("--output-dir=/tmp/shared",)}, "owned by PipelineRequest"),
+        ({"cli_options": ("--log-level=INFO",)}, "owned by PipelineRequest"),
         ({"cli_options": ("--fast-mode", "--fast-mode")}, "Duplicate"),
     ],
 )
@@ -167,8 +170,8 @@ def test_bam_orchestration_sends_one_canonical_request_and_checks_failure_text(t
     ]
 
 
-def test_bam_orchestration_preserves_the_unowned_single_end_legacy_runner(tmp_path: Path) -> None:
-    """The shared boundary must not break the separate single-end integration caller."""
+def test_bam_orchestration_rejects_a_bare_integer_result(tmp_path: Path) -> None:
+    """An exit code without captured diagnostics can never satisfy a declared failure."""
     case = {
         "test_name": "legacy-single-end",
         "bam": "tests/data/single.bam",
@@ -176,15 +179,12 @@ def test_bam_orchestration_preserves_the_unowned_single_end_legacy_runner(tmp_pa
         "expected_exit_code": 1,
         "expected_diagnostic": "known refusal",
     }
-    received: list[tuple[Path, str, Path]] = []
 
-    def legacy_runner(bam: Path, reference: str, output_dir: Path) -> int:
-        received.append((bam, reference, output_dir))
+    def runner(_request: orchestration.PipelineRequest) -> int:
         return 1
 
-    orchestration.run_bam_test_case(case, legacy_runner, tmp_path)
-
-    assert received == [(Path("tests/data/single.bam"), "hg19", tmp_path)]
+    with pytest.raises(TypeError, match="PipelineRunResult"):
+        orchestration.run_bam_test_case(case, runner, tmp_path)  # type: ignore[arg-type]
 
 
 def test_expected_failure_diagnostic_is_found_across_captured_streams(tmp_path: Path) -> None:
@@ -325,7 +325,11 @@ def _write_strict_success_tree(output_dir: Path, *, advntr: bool = False) -> Non
     (output_dir / "kestrel").mkdir(parents=True)
     (output_dir / "coverage").mkdir()
     (output_dir / "kestrel" / "kestrel_result.tsv").write_text(
-        "Confidence\tEstimated_Depth_AlternateVariant\nHigh_Precision*\t125\n",
+        (
+            "Confidence\tEstimated_Depth_AlternateVariant\t"
+            "Estimated_Depth_Variant_ActiveRegion\tDepth_Score\n"
+            "High_Precision*\t125\t1024\t0.1220703125\n"
+        ),
         encoding="utf-8",
     )
     (output_dir / "coverage" / "coverage_summary.tsv").write_text(
@@ -368,6 +372,8 @@ def _strict_fastq_case() -> dict[str, Any]:
         "kestrel_assertions": {
             "Confidence": "High_Precision*",
             "Estimated_Depth_AlternateVariant": 125,
+            "Estimated_Depth_Variant_ActiveRegion": 1024,
+            "Depth_Score": 0.1220703125,
         },
         "coverage_assertions": {
             "mean": "566.92",
@@ -400,9 +406,23 @@ def test_strict_fastq_success_validates_values_summary_report_and_archive(tmp_pa
     changed["kestrel_assertions"] = {
         "Confidence": "Negative",
         "Estimated_Depth_AlternateVariant": 125,
+        "Estimated_Depth_Variant_ActiveRegion": 1024,
+        "Depth_Score": 0.1220703125,
     }
     with pytest.raises(AssertionError, match="Confidence"):
         orchestration.validate_strict_fastq_success(changed, output_dir)
+
+
+@pytest.mark.parametrize("missing", ["Estimated_Depth_Variant_ActiveRegion", "Depth_Score"])
+def test_strict_fastq_success_requires_every_characterized_kestrel_field(tmp_path: Path, missing: str) -> None:
+    """The strict oracle must not silently weaken either characterized depth value."""
+    output_dir = tmp_path / "fastq"
+    _write_strict_success_tree(output_dir)
+    case = _strict_fastq_case()
+    del case["kestrel_assertions"][missing]
+
+    with pytest.raises(ValueError, match=missing):
+        orchestration.validate_strict_fastq_success(case, output_dir)
 
 
 @pytest.mark.parametrize(

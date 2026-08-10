@@ -35,6 +35,11 @@ def _negative_case() -> dict[str, Any]:
     }
 
 
+def _negative_result() -> orchestration.PipelineRunResult:
+    diagnostic = "\n".join(orchestration.current_declared_failure_diagnostic_adapter(_negative_case()))
+    return orchestration.PipelineRunResult(1, "", diagnostic)
+
+
 def test_every_known_mixed_fixture_declares_exit_one_and_its_exact_record_counts() -> None:
     """The ten measured mixed fixtures must be explicit rather than silently treated as successes."""
     configured = {}
@@ -119,10 +124,12 @@ def test_alternate_paired_fastq_uses_b178_and_omits_shark() -> None:
     assert case["fastq2"] == "tests/data/example_b178_hg19_subset_R2.fastq.gz"
     assert case["reference_assembly"] == "hg19"
     assert case["expected_files"] == ["summary_report.html", "kestrel/kestrel_result.tsv"]
-    runner = mock.Mock(return_value=0)
+    runner = mock.Mock(return_value=orchestration.PipelineRunResult(0, "", ""))
     with mock.patch.object(orchestration, "assert_required_files"):
         orchestration.run_fastq_test_case(case, runner, Path("output"))
-    assert runner.call_args.args[4] == []
+    request = runner.call_args.args[0]
+    assert isinstance(request, orchestration.PipelineRequest)
+    assert request.cli_options == ()
 
 
 def test_single_end_keep_case_names_the_real_unmapped_artifact() -> None:
@@ -252,7 +259,11 @@ def test_successful_bam_enforces_declared_artifacts(tmp_path: Path) -> None:
         mock.patch.object(orchestration, "validate_coverage_output", return_value={"mean_cov": 0}),
         pytest.raises(AssertionError, match="case=bam-artifact field=expected_present"),
     ):
-        orchestration.run_bam_test_case(case, mock.Mock(return_value=0), tmp_path)
+        orchestration.run_bam_test_case(
+            case,
+            mock.Mock(return_value=orchestration.PipelineRunResult(0, "", "")),
+            tmp_path,
+        )
 
 
 def test_declared_archive_distinguishes_omitted_false_and_true(tmp_path: Path) -> None:
@@ -296,7 +307,7 @@ def test_declared_archive_skips_every_nonzero_outcome(tmp_path: Path) -> None:
 def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:
     """An expected fail-closed BAM case must stop before Kestrel/coverage success assertions."""
     case = _negative_case()
-    runner = mock.Mock(return_value=1)
+    runner = mock.Mock(return_value=_negative_result())
 
     with (
         mock.patch.object(orchestration, "assert_required_files") as required_files,
@@ -305,7 +316,10 @@ def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifac
     ):
         orchestration.run_bam_test_case(case, runner, tmp_path)
 
-    runner.assert_called_once_with(Path("fixture.bam"), "hg19", tmp_path)
+    request = runner.call_args.args[0]
+    assert isinstance(request, orchestration.PipelineRequest)
+    assert request.input_paths == (Path("fixture.bam"),)
+    assert request.output_dir == tmp_path
     required_files.assert_not_called()
     kestrel.assert_not_called()
     coverage.assert_not_called()
@@ -314,7 +328,7 @@ def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifac
 def test_advntr_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:
     """The mixed adVNTR fixture has the same early fail-closed contract as ordinary BAM cases."""
     case = _negative_case()
-    runner = mock.Mock(return_value=1)
+    runner = mock.Mock(return_value=_negative_result())
 
     with (
         mock.patch.object(orchestration, "assert_required_files") as required_files,
@@ -322,7 +336,10 @@ def test_advntr_orchestration_accepts_the_declared_exit_one_without_success_arti
     ):
         orchestration.run_advntr_test_case(case, runner, tmp_path)
 
-    runner.assert_called_once_with(Path("fixture.bam"), "hg19", tmp_path, ["advntr"], [])
+    request = runner.call_args.args[0]
+    assert isinstance(request, orchestration.PipelineRequest)
+    assert request.input_paths == (Path("fixture.bam"),)
+    assert request.cli_options == ("--extra-modules", "advntr")
     required_files.assert_not_called()
     advntr.assert_not_called()
 
@@ -332,4 +349,8 @@ def test_clean_bam_cases_still_require_exit_zero(tmp_path: Path) -> None:
     case = {"bam": "clean.bam", "reference_assembly": "hg19"}
 
     with pytest.raises(AssertionError, match="expected 0, got 1"):
-        orchestration.run_bam_test_case(case, mock.Mock(return_value=1), tmp_path)
+        orchestration.run_bam_test_case(
+            case,
+            mock.Mock(return_value=orchestration.PipelineRunResult(1, "", "")),
+            tmp_path,
+        )

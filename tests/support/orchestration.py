@@ -1,7 +1,6 @@
 """Transport-independent VNtyper integration-test orchestration."""
 
 import csv
-import inspect
 import json
 import os
 from collections.abc import Callable
@@ -102,7 +101,7 @@ def build_pipeline_argv(request: PipelineRequest, path_mapper: Callable[[Path], 
             raise ValueError("FASTQ requests require one or two input paths")
         raise ValueError(f"{request.input_kind.upper()} requests require exactly one input path")
 
-    flags = [option for option in request.cli_options if option.startswith("-")]
+    flags = [option.partition("=")[0] for option in request.cli_options if option.startswith("-")]
     owned = sorted(_REQUEST_OWNED_OPTIONS.intersection(flags))
     if owned:
         raise ValueError(f"Options {owned} are owned by PipelineRequest fields")
@@ -276,27 +275,19 @@ def _failure_diagnostic_fragments(test_case: dict[str, Any]) -> tuple[str, ...]:
     return current_declared_failure_diagnostic_adapter(test_case)
 
 
-def _coerce_run_result(result: PipelineRunResult | int) -> tuple[PipelineRunResult, bool]:
-    """Keep old pure harness tests readable while real runners migrate atomically."""
-    if isinstance(result, PipelineRunResult):
-        return result, False
-    return PipelineRunResult(exit_code=result, stdout="", stderr=""), True
-
-
 def _assert_expected_exit(
-    test_case: dict[str, Any], result: PipelineRunResult | int, *, label: str
+    test_case: dict[str, Any], result: PipelineRunResult, *, label: str
 ) -> tuple[bool, PipelineRunResult]:
     """Assert the configured application exit and report whether success artefacts apply."""
-    captured, legacy_int = _coerce_run_result(result)
+    if not isinstance(result, PipelineRunResult):
+        raise TypeError("Pipeline runners must return PipelineRunResult with captured diagnostics")
     expected_exit = test_case.get("expected_exit_code", 0)
-    assert captured.exit_code == expected_exit, (
-        f"{label} pipeline exit: expected {expected_exit}, got {captured.exit_code}"
-    )
-    if expected_exit != 0 and not legacy_int:
-        combined = f"{captured.stdout}\n{captured.stderr}"
+    assert result.exit_code == expected_exit, f"{label} pipeline exit: expected {expected_exit}, got {result.exit_code}"
+    if expected_exit != 0:
+        combined = f"{result.stdout}\n{result.stderr}"
         for fragment in _failure_diagnostic_fragments(test_case):
             assert fragment in combined, f"{label} pipeline missing declared causal diagnostic: {fragment}"
-    return expected_exit == 0, captured
+    return expected_exit == 0, result
 
 
 def _request_from_case(
@@ -316,23 +307,6 @@ def _request_from_case(
         cli_options=tuple(test_case.get("cli_options", ())),
         reference_fasta=Path(test_case["reference_fasta"]) if test_case.get("reference_fasta") else None,
     )
-
-
-def _invoke_runner(
-    runner: Callable[..., PipelineRunResult | int],
-    request: PipelineRequest,
-    legacy_args: tuple[Any, ...],
-) -> PipelineRunResult | int:
-    """Invoke typed runners while retaining compatibility with unowned legacy callers."""
-    if isinstance(getattr(runner, "return_value", None), int):
-        return runner(*legacy_args)
-    try:
-        inspect.signature(runner).bind(request)
-    except TypeError:
-        return runner(*legacy_args)
-    except ValueError:
-        pass
-    return runner(request)
 
 
 def assert_read_set_routing(
@@ -387,12 +361,26 @@ _STRICT_FASTQ_FIELDS = frozenset(
     }
 )
 _STRICT_ADVNTR_FIELDS = _STRICT_FASTQ_FIELDS | {"advntr_assertions", "cross_match_assertions"}
+_STRICT_KESTREL_FIELDS = frozenset(
+    {
+        "Confidence",
+        "Estimated_Depth_AlternateVariant",
+        "Estimated_Depth_Variant_ActiveRegion",
+        "Depth_Score",
+    }
+)
 
 
 def _require_oracle_fields(test_case: dict[str, Any], required: frozenset[str]) -> None:
     missing = sorted(required.difference(test_case))
     if missing:
         raise ValueError(f"case={test_case.get('test_name', '<unnamed>')} missing strict oracle field(s): {missing}")
+
+
+def _require_kestrel_fields(test_case: dict[str, Any]) -> None:
+    missing = sorted(_STRICT_KESTREL_FIELDS.difference(test_case["kestrel_assertions"]))
+    if missing:
+        raise ValueError(f"kestrel_assertions missing characterized field(s): {missing}")
 
 
 def _read_tsv_row(path: Path) -> dict[str, str]:
@@ -464,6 +452,7 @@ def validate_strict_fastq_success(test_case: dict[str, Any], output_dir: Path) -
         AssertionError: If any declared artifact or value differs.
     """
     _require_oracle_fields(test_case, _STRICT_FASTQ_FIELDS)
+    _require_kestrel_fields(test_case)
     assert_required_files(output_dir, test_case["expected_files"])
     validate_kestrel_output(output_dir, test_case["kestrel_assertions"])
     _assert_coverage_values(test_case, output_dir)
@@ -484,6 +473,7 @@ def validate_strict_advntr_success(test_case: dict[str, Any], output_dir: Path) 
         AssertionError: If any declared artifact or value differs.
     """
     _require_oracle_fields(test_case, _STRICT_ADVNTR_FIELDS)
+    _require_kestrel_fields(test_case)
     assert set(test_case["advntr_assertions"]) == {
         "VID",
         "State",
@@ -502,7 +492,7 @@ def validate_strict_advntr_success(test_case: dict[str, Any], output_dir: Path) 
 
 def run_bam_test_case(
     test_case: dict,
-    runner: Callable[[PipelineRequest], PipelineRunResult | int] | Callable[[Path, str, Path], int],
+    runner: Callable[[PipelineRequest], PipelineRunResult],
     output_dir: Path,
 ) -> None:
     """Run and validate one BAM case identically across transports.
@@ -516,7 +506,7 @@ def run_bam_test_case(
         AssertionError: If any declared outcome differs.
     """
     request = _request_from_case(test_case, "bam", (Path(test_case["bam"]),), output_dir)
-    result = _invoke_runner(runner, request, (request.input_paths[0], request.reference_assembly, output_dir))
+    result = runner(request)
     success, captured = _assert_expected_exit(test_case, result, label="BAM")
     if not success:
         return
@@ -549,7 +539,7 @@ def run_bam_test_case(
 
 def run_advntr_test_case(
     test_case: dict,
-    runner: Callable[[PipelineRequest], PipelineRunResult | int],
+    runner: Callable[[PipelineRequest], PipelineRunResult],
     output_dir: Path,
 ) -> None:
     """Run and validate one adVNTR case identically across transports.
@@ -563,25 +553,6 @@ def run_advntr_test_case(
         AssertionError: If any declared outcome differs.
     """
     bam_file = Path(test_case["bam"])
-    reference = test_case["reference_assembly"]
-
-    cli_options = list(test_case.get("cli_options", []))
-    extra_modules = ["advntr"]
-    extra_cli_options: list[str] = []
-
-    i = 0
-    while i < len(cli_options):
-        if cli_options[i] == "--extra-modules":
-            if i + 1 < len(cli_options):
-                for mod in cli_options[i + 1].split(","):
-                    if mod not in extra_modules:
-                        extra_modules.append(mod)
-                i += 2
-            else:
-                i += 1
-        else:
-            extra_cli_options.append(cli_options[i])
-            i += 1
 
     request = _request_from_case(test_case, "bam", (bam_file,), output_dir)
     if "--extra-modules" not in request.cli_options:
@@ -592,11 +563,11 @@ def run_advntr_test_case(
             output_dir=request.output_dir,
             threads=request.threads,
             log_level=request.log_level,
-            cli_options=(*request.cli_options, "--extra-modules", ",".join(extra_modules)),
+            cli_options=(*request.cli_options, "--extra-modules", "advntr"),
             reference_fasta=request.reference_fasta,
         )
 
-    result = _invoke_runner(runner, request, (bam_file, reference, output_dir, extra_modules, extra_cli_options))
+    result = runner(request)
     success, captured = _assert_expected_exit(test_case, result, label="adVNTR")
     if not success:
         return
@@ -621,7 +592,7 @@ def run_advntr_test_case(
 
 def run_fastq_test_case(
     test_case: dict,
-    runner: Callable[[PipelineRequest], PipelineRunResult | int],
+    runner: Callable[[PipelineRequest], PipelineRunResult],
     output_dir: Path,
 ) -> None:
     """Run and validate one FASTQ case identically across transports.
@@ -636,14 +607,6 @@ def run_fastq_test_case(
     """
     fastq1 = Path(test_case["fastq1"])
     fastq2 = Path(test_case.get("fastq2", "")) if test_case.get("fastq2") else None
-    reference = test_case.get("reference_assembly", "hg19")
-    extra_modules: list[str] = []
-
-    cli_options = test_case.get("cli_options", [])
-    if "--extra-modules" in cli_options:
-        idx = cli_options.index("--extra-modules")
-        if idx + 1 < len(cli_options):
-            extra_modules = cli_options[idx + 1].split(",")
 
     request = _request_from_case(
         test_case,
@@ -652,7 +615,7 @@ def run_fastq_test_case(
         output_dir,
     )
 
-    result = _invoke_runner(runner, request, (fastq1, fastq2, reference, output_dir, extra_modules))
+    result = runner(request)
     success, _captured = _assert_expected_exit(test_case, result, label="FASTQ")
     assert success, "FASTQ declarations currently require a successful outcome"
 

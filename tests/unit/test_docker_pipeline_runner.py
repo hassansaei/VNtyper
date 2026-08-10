@@ -1,11 +1,14 @@
 """Unit contracts for Docker's path-only pipeline transport."""
 
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.docker import conftest as docker_support
+from tests.integration import test_pipeline_integration as local_support
 from tests.support.orchestration import PipelineRequest, PipelineRunResult
 
 pytestmark = pytest.mark.unit
@@ -97,6 +100,34 @@ def test_docker_mapper_rejects_unregistered_escape_symlink_and_nonempty_output(t
         )
 
 
+@pytest.mark.parametrize("symlink_component", [False, True])
+def test_docker_mapper_rejects_in_root_symlinks(tmp_path: Path, symlink_component: bool) -> None:
+    """A symlink is unregistered even when its resolved target remains under the input root."""
+    data_root = tmp_path / "data"
+    real_dir = data_root / "real"
+    real_dir.mkdir(parents=True)
+    real_input = real_dir / "sample.bam"
+    real_input.write_bytes(b"bam")
+    if symlink_component:
+        linked_dir = data_root / "linked-dir"
+        linked_dir.symlink_to(real_dir, target_is_directory=True)
+        candidate = linked_dir / "sample.bam"
+    else:
+        candidate = data_root / "linked.bam"
+        candidate.symlink_to(real_input)
+    output_root = tmp_path / "docker_output0"
+    output_dir = output_root / "case"
+    output_dir.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        docker_support.map_docker_request_path(
+            candidate,
+            request=_request(data_root, output_dir, input_paths=(candidate,)),
+            test_data_root=data_root,
+            output_mount_root=output_root,
+        )
+
+
 @pytest.mark.parametrize(
     ("reference", "expected"),
     [
@@ -182,6 +213,48 @@ def test_generic_docker_runner_builds_exact_request_argv_and_captures_output(tmp
             ),
         ]
     ]
+
+
+def test_local_and_docker_commands_have_identical_normalized_semantics(tmp_path: Path, monkeypatch) -> None:
+    """Both real transports must preserve request identity and every non-path argv token."""
+    data_root = tmp_path / "data"
+    input_path = data_root / "nested" / "sample.bam"
+    input_path.parent.mkdir(parents=True)
+    input_path.write_bytes(b"bam")
+    output_root = tmp_path / "docker_output0"
+    output_dir = output_root / "suite" / "case"
+    output_dir.mkdir(parents=True)
+    request = _request(data_root, output_dir)
+    local_commands: list[list[str]] = []
+
+    def capture_local(command: list[str]) -> subprocess.CompletedProcess[str]:
+        local_commands.append(command)
+        return subprocess.CompletedProcess(command, 1, "local stdout", "local stderr")
+
+    monkeypatch.setattr(local_support, "_run_cli", capture_local)
+    local_result = local_support._run_local_pipeline(request)
+    container = _Container()
+    docker_result = docker_support.run_vntyper_pipeline(
+        container,
+        request,
+        test_data_root=data_root,
+        output_mount_root=output_root,
+    )
+    docker_prefix = "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
+    docker_argv = shlex.split(container.commands[0][2].removeprefix(docker_prefix))
+    identities = {
+        str(input_path): "INPUT:nested/sample.bam",
+        "/opt/vntyper/input/nested/sample.bam": "INPUT:nested/sample.bam",
+        str(output_dir): "OUTPUT:suite/case",
+        "/opt/vntyper/output/suite/case": "OUTPUT:suite/case",
+    }
+
+    assert request == _request(data_root, output_dir)
+    assert [identities.get(token, token) for token in local_commands[0]] == [
+        identities.get(token, token) for token in docker_argv
+    ]
+    assert local_result == PipelineRunResult(1, "local stdout", "local stderr")
+    assert docker_result == PipelineRunResult(1, "captured combined docker output", "")
 
 
 def test_generic_docker_runner_maps_fastq_output_to_its_case_suffix(tmp_path: Path) -> None:
