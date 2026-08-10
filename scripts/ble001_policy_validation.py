@@ -168,10 +168,19 @@ def _reject_symlink_components(repo_root: Path, candidate: Path, context: str) -
 
 
 def _tracked_path_error(repo_root: Path, candidate: Path) -> str | None:
-    """Return why Git cannot verify a path as tracked evidence."""
+    """Return why Git cannot verify one literal path as tracked evidence."""
     try:
         result = run_process(
-            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", candidate.as_posix()],
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "--literal-pathspecs",
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                candidate.as_posix(),
+            ],
             capture_output=True,
             text=True,
             check=False,

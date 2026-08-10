@@ -23,7 +23,7 @@ from scripts.ble001_policy import (
     read_ruff_paths,
     validate_policy,
 )
-from scripts.ble001_policy_validation import behavior_node_error
+from scripts.ble001_policy_validation import behavior_node_error, validate_scope_paths
 
 pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -355,6 +355,42 @@ def test_behavior_node_resolution_rejects_symlink_and_untracked_source_evidence(
     untracked.write_text("def test_present():\n    pass\n", encoding="utf-8")
     untracked_error = behavior_node_error(tmp_path, "tests/unit/test_untracked.py::test_present")
     assert untracked_error is not None and "tracked" in untracked_error
+
+
+@pytest.mark.parametrize("candidate", ["*", "[t]racked.py"])
+def test_scope_validation_rejects_literal_untracked_git_pathspec_metacharacters(tmp_path: Path, candidate: str) -> None:
+    """An existing literal filename is not tracked just because its pathspec matches another file."""
+    _track(tmp_path, "tracked.py")
+    (tmp_path / candidate).write_text("untracked\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="tracked evidence"):
+        validate_scope_paths(tmp_path, (candidate,))
+
+
+@pytest.mark.parametrize("candidate", ["*", "[t]racked.py"])
+def test_behavior_node_resolution_rejects_literal_untracked_git_pathspec_metacharacters(
+    tmp_path: Path, candidate: str
+) -> None:
+    """Behavior evidence cannot use a literal metacharacter name to match tracked source."""
+    source = tmp_path / "tests/unit" / candidate
+    source.parent.mkdir(parents=True)
+    source.write_text("def test_present():\n    pass\n", encoding="utf-8")
+    _track(tmp_path, "tests/unit/tracked.py")
+
+    error = behavior_node_error(tmp_path, f"tests/unit/{candidate}::test_present")
+
+    assert error is not None and "tracked evidence" in error
+
+
+def test_tracking_validation_accepts_an_ordinary_literal_tracked_path(tmp_path: Path) -> None:
+    """Literal enforcement preserves the normal tracked-source and scope cases."""
+    source = tmp_path / "tests/unit/tracked.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def test_present():\n    pass\n", encoding="utf-8")
+    _track(tmp_path, "tests/unit/tracked.py")
+
+    validate_scope_paths(tmp_path, ("tests/unit/tracked.py",))
+    assert behavior_node_error(tmp_path, "tests/unit/tracked.py::test_present") is None
 
 
 def test_policy_rejects_a_category_c_handler_without_behavior_evidence(tmp_path: Path) -> None:
