@@ -35,6 +35,21 @@ def _heredoc_python(run: str, invocation: str = "python - <<'PY'") -> str:
     return after_invocation.split("\nPY", maxsplit=1)[0]
 
 
+def _heredoc_pythons(run: str) -> list[str]:
+    scripts: list[str] = []
+    lines = iter(run.splitlines())
+    for line in lines:
+        if not line.strip().startswith("python") or not line.rstrip().endswith("<<'PY'"):
+            continue
+        body: list[str] = []
+        for body_line in lines:
+            if body_line == "PY":
+                break
+            body.append(body_line)
+        scripts.append("\n".join(body))
+    return scripts
+
+
 def test_main_push_forces_every_substantive_ci_and_docker_scope_true() -> None:
     """A path-only main commit must not skip evidence required by a later tag."""
     ci = _workflow("ci-tests.yml")
@@ -206,4 +221,168 @@ def test_release_evidence_serializer_writes_typed_exact_identity_payload(tmp_pat
         "run_attempt": 3,
         "revision": revision,
         "version": "2.4.6",
+    }
+
+
+def test_release_trigger_accepts_only_existing_tag_dry_runs_and_strict_tag_pushes() -> None:
+    """Manual dispatch must never acquire a production or tag-creation switch."""
+    publish = _workflow("publish-pypi.yml")
+
+    assert publish["name"] == "Publish PyPI and promote GHCR"
+    assert publish["on"]["push"]["tags"] == ["v*.*.*"]
+    assert publish["on"]["workflow_dispatch"]["inputs"] == {
+        "tag": {
+            "description": "Existing strict vMAJOR.MINOR.PATCH tag to inspect without writes",
+            "required": "true",
+            "type": "string",
+        }
+    }
+    assert publish["permissions"] == {}
+    assert publish["concurrency"] == {
+        "group": "release-${{ inputs.tag || github.ref_name }}",
+        "cancel-in-progress": "false",
+    }
+    assert set(publish["jobs"]) == {"validate-release"}
+    assert publish["jobs"]["validate-release"]["permissions"] == {"contents": "read"}
+
+    commands = "\n".join(step.get("run", "") for job in publish["jobs"].values() for step in job.get("steps", []))
+    assert "git tag" not in commands
+    assert "git push" not in commands
+    assert "gh release create" not in commands
+
+
+def test_validate_release_resolves_in_controller_and_tests_exact_candidate() -> None:
+    """An old tag must use current policy while validating metadata from its own commit."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["validate-release"]
+    steps = job["steps"]
+    checkouts = [step for step in steps if step.get("uses") == "actions/checkout@v7"]
+
+    assert job["outputs"] == {
+        "mode": "${{ steps.resolve.outputs.mode }}",
+        "tag": "${{ steps.resolve.outputs.tag }}",
+        "version": "${{ steps.resolve.outputs.version }}",
+        "sha": "${{ steps.resolve.outputs.sha }}",
+        "short_sha": "${{ steps.resolve.outputs.short_sha }}",
+        "summary_json": "${{ steps.validate-result.outputs.summary_json }}",
+    }
+    assert checkouts == [
+        {
+            "uses": "actions/checkout@v7",
+            "with": {"fetch-depth": "0", "persist-credentials": "false", "path": "controller"},
+        },
+        {
+            "uses": "actions/checkout@v7",
+            "with": {
+                "ref": "${{ steps.resolve.outputs.sha }}",
+                "persist-credentials": "false",
+                "path": "candidate",
+            },
+        },
+    ]
+
+    resolve = _step_with_id(publish, "validate-release", "resolve")
+    candidate = _step_with_id(publish, "validate-release", "candidate")
+    assert resolve["working-directory"] == "controller"
+    assert candidate["working-directory"] == "candidate"
+    assert "from scripts.release_policy import parse_release_tag" in resolve["run"]
+    assert resolve["run"].index("parse_release_tag") < resolve["run"].index('git rev-parse "refs/tags/${TAG}^{commit}"')
+    assert "git fetch --no-tags origin main" in resolve["run"]
+    assert 'git merge-base --is-ancestor "$SHA" origin/main' in resolve["run"]
+    assert 'if [ "$EVENT_NAME" = "push" ]; then test "$SHA" = "$PUSH_SHA"; fi' in resolve["run"]
+    assert "MODE=dry-run; TAG=$DISPATCH_TAG" in resolve["run"]
+    assert "else MODE=production; TAG=$PUSH_TAG" in resolve["run"]
+
+    assert 'runpy.run_path("vntyper/version.py")' in candidate["run"]
+    assert "python3 -m venv .release-venv" in candidate["run"]
+    assert ".release-venv/bin/pip install pytest packaging PyYAML requests" in candidate["run"]
+    assert ".release-venv/bin/pytest -m unit tests/unit/test_version_consistency.py -q" in candidate["run"]
+
+
+def test_dispatch_is_read_only_and_metadata_eligible_before_any_check_polling() -> None:
+    """Pre-milestone tags must complete dry-run validation without production polling or writes."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["validate-release"]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+
+    assert set(publish["jobs"]) == {"validate-release"}
+    assert job["permissions"] == {"contents": "read"}
+    assert "id-token" not in job["permissions"]
+    assert "packages" not in job["permissions"]
+    assert "classify_check_runs" not in commands
+    assert "/check-runs" not in commands
+    assert "gh api" not in commands
+
+
+def test_validation_summary_preserves_structured_mismatch_observations(tmp_path: Path) -> None:
+    """A failed candidate test must retain each independently observed version and verdict."""
+    publish = _workflow("publish-pypi.yml")
+    candidate = _step_with_id(publish, "validate-release", "candidate")
+    validate_result = _step_with_id(publish, "validate-release", "validate-result")
+    candidate_scripts = _heredoc_pythons(candidate["run"])
+    assert len(candidate_scripts) == 2
+
+    candidate_root = tmp_path / "candidate"
+    (candidate_root / "vntyper").mkdir(parents=True)
+    (candidate_root / "docs" / "about").mkdir(parents=True)
+    (candidate_root / "vntyper" / "version.py").write_text('__version__ = "7.8.8"\n')
+    (candidate_root / "CITATION.cff").write_text('version: "7.8.7"\n')
+    (candidate_root / "docs" / "about" / "changelog.md").write_text("## 7.8.6\n")
+    candidate_env = os.environ | {"MODE": "dry-run", "SHA": "1" * 40, "TAG": "v7.8.9", "VERSION": "7.8.9"}
+
+    first = subprocess.run(
+        [sys.executable, "-c", candidate_scripts[0]],
+        cwd=candidate_root,
+        env=candidate_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert first.returncode == 0, first.stderr
+    second = subprocess.run(
+        [sys.executable, "-c", candidate_scripts[1], "1"],
+        cwd=candidate_root,
+        env=candidate_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert second.returncode == 0, second.stderr
+
+    summary_env = os.environ | {
+        "CANDIDATE_OUTCOME": "failure",
+        "MODE": "dry-run",
+        "RESOLVE_OUTCOME": "success",
+        "SHA": "1" * 40,
+        "TAG": "v7.8.9",
+        "VERSION": "7.8.9",
+    }
+    summary = subprocess.run(
+        [sys.executable, "-c", _heredoc_python(validate_result["run"], "python - <<'PY' >> \"$GITHUB_OUTPUT\"")],
+        cwd=tmp_path,
+        env=summary_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert summary.returncode == 0, summary.stderr
+    prefix, encoded = summary.stdout.strip().split("=", maxsplit=1)
+    assert prefix == "summary_json"
+    assert json.loads(encoded) == {
+        "mode": "dry-run",
+        "tag": "v7.8.9",
+        "version": "7.8.9",
+        "sha": "1" * 40,
+        "main_ancestor": True,
+        "resolve_outcome": "success",
+        "candidate_outcome": "failure",
+        "version_validation": {
+            "expected_version": "7.8.9",
+            "package": {"observed": "7.8.8", "matches": False},
+            "citation": {"observed": "7.8.7", "matches": False},
+            "changelog": {"observed": "7.8.6", "matches": False},
+            "version_test_exit_code": 1,
+            "version_test_passed": False,
+        },
     }
