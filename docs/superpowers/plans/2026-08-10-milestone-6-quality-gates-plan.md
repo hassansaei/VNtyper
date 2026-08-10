@@ -13,7 +13,9 @@
 - Work from the repository root; `tests/parametrization.py` reads `tests/test_data_config.json` relative to the current directory.
 - Keep `[tool.coverage.report].fail_under = 86`, `COVERAGE_TARGET ?= 86`, and `PATCH_COVERAGE_TARGET ?= 80` unchanged.
 - Reach a precise scripts-only branch-inclusive result of at least 88.00%, up from the reconstructed 69.01% baseline (3,817 measurable units, approximately 1,183 uncovered, approximately 725 additional units required before new-code overhead).
-- Include every Python file under `scripts/`; add no coverage omit entry and no package/file exclusion.
+- Include every Python file under `scripts/`; add no coverage omit entry and no package/file exclusion. Preserve the
+  existing report-only `exclude_also` entry for mechanical `if __name__ == "__main__"` bootstrap guards while measuring
+  every callable `main(...)`, exit policy, and substantive CLI branch.
 - `scripts/download_test_data.py` and `scripts/advntr_len_differential.py` must both move from 0% to non-zero measured coverage.
 - Append `scripts` to `[tool.coverage.run].source` only after the isolated 88.00% measurement passes; its final position is after `vntyper` and `docker/app`.
 - The combined branch-inclusive result must be at least 86.00% independently on Python 3.10, 3.11, 3.12, and 3.13.
@@ -694,9 +696,10 @@ Run the named node and then compare the `term-missing` file rows to `find script
 
 - [ ] **Step 6: Run marker, lint, and type checks**
 
-Run: `pytest -m unit tests/unit/test_marker_hygiene.py -q && make format-check && make type-check-all`
+Run: `pytest -m unit tests/unit -q && make format-check && make type-check-all`
 
-Expected: PASS.
+Expected: PASS. Marker hygiene must run with the full unit collection because it audits the live session's collected
+items; invoking only its own file would incorrectly report every other unit module as unselected.
 
 - [ ] **Step 7: Commit**
 
@@ -786,9 +789,11 @@ the only pytest configuration authority. Do not move or reword its live marker d
 
 - [ ] **Step 5: Run GREEN combined coverage locally**
 
-Run: `pytest -m unit tests/unit/test_coverage_gate.py tests/unit/test_workflow_consistency.py tests/unit/test_marker_hygiene.py -q && make test-unit-cov`
+Run: `pytest -m unit tests/unit -q && make test-unit-cov`
 
-Expected: PASS; precise combined branch coverage is `>=86.00%`; `coverage.xml` contains `scripts/` paths.
+Expected: PASS; precise combined branch coverage is `>=86.00%`; `coverage.xml` contains `scripts/` paths. The first
+command deliberately collects the complete unit tier because marker hygiene derives its assertion from the live
+session's collected items; a three-file collection is not a valid focused invocation of that test.
 
 - [ ] **Step 6: Run patch coverage against a real merge base**
 

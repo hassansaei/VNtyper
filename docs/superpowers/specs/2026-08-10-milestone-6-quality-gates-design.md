@@ -73,8 +73,12 @@ retains that direction and updates its numerical acceptance criteria for the cur
    `COVERAGE_TARGET` remains **86**. They have different semantics and must not be collapsed.
 6. `PATCH_COVERAGE_TARGET` remains **80**. Once `scripts` enters `source`, changed Python lines
    there are scored by the same merge-base patch gate as other measured Python.
-7. No file, package, pattern, generated branch, CLI entry point, or difficult I/O path under
-   `scripts/` is omitted from measurement.
+7. No file, package, pattern, generated branch, CLI policy, or difficult I/O path under
+   `scripts/` is omitted from measurement. The repository's existing report-only
+   `exclude_also` entry for the mechanical `if __name__ == "__main__"` bootstrap guard remains
+   unchanged; the callable `main(...)` functions, exit policy, and substantive CLI branches are
+   measured. This distinction avoids describing the pre-existing bootstrap-line exclusion as an
+   omitted CLI entry point.
 8. A regression test pins branch measurement and complete source scope, because deleting
    `branch = true` or removing a poorly covered source can make the headline percentage rise.
 
@@ -133,12 +137,13 @@ This is rejected. It makes the untested code visible quickly, but it weakens the
 ratchet and contradicts the maintainer's direction to earn coverage first. It also makes a
 known transient state part of the repository's gate contract.
 
-### Approach B: omit entry points and measure only library-like helpers
+### Approach B: omit CLI policy and measure only library-like helpers
 
-This is rejected. The two zero-coverage entry points and the subprocess drivers are precisely
+This is rejected. The two formerly zero-coverage modules and the subprocess drivers are precisely
 where policy, exit codes, and evidence production concentrate. An omit list would preserve the
 gap the issue is intended to close, and the combined metric would cease to describe the whole
-gate harness.
+gate harness. The unchanged report-only exclusion for a mechanical direct-execution bootstrap
+line does not exclude the module or its callable CLI policy.
 
 ### Approach C: test first, independently prove 88%, then append the source
 
