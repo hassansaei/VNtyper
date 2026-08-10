@@ -1061,7 +1061,7 @@ def test_input_cleanup_logs_one_error_and_attempts_every_owned_path(
     monkeypatch.setattr(tasks.os, "remove", remove)
 
     with caplog.at_level(logging.ERROR, logger=tasks.logger.name):
-        assert tasks.remove_job_input_files("/jobs/1/sample.bam", "/jobs/1/sample.bam.bai") is None
+        tasks.remove_job_input_files("/jobs/1/sample.bam", "/jobs/1/sample.bam.bai")
 
     assert attempted == list(
         dict.fromkeys(

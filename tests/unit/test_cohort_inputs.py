@@ -497,7 +497,7 @@ def test_cleanup_attempts_all_directories_after_failure(tmp_path, caplog, monkey
 
     monkeypatch.setattr(cohort_inputs.shutil, "rmtree", _blocked_rmtree)
 
-    assert cleanup_temp_dirs([first, second]) is None
+    cleanup_temp_dirs([first, second])
     assert attempted == [first, second]
     records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_inputs"]
     assert len(records) == 1

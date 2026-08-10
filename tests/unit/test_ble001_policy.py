@@ -667,3 +667,12 @@ def test_policy_counts_equal_live_measurements() -> None:
         len(all_handlers.diagnostics),
     )
     assert normal.ruff_version == all_handlers.ruff_version
+
+
+def test_contributor_exception_counts_are_generated_from_policy() -> None:
+    """Contributor guidance states the current policy-derived exception totals."""
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    policy = load_policy(REPO_ROOT / "scripts/ble001_policy.json")
+
+    assert f"{policy.expected_normal} normal/{policy.expected_all} including suppressions" in agents
+    assert "current BLE001 count is 67" not in agents

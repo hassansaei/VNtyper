@@ -186,7 +186,7 @@ def test_pseudonym_table_write_failure_is_logged(tmp_path, caplog, monkeypatch) 
 
     monkeypatch.setattr(cohort_exports, "open", _blocked_open, raising=False)
 
-    assert write_pseudonymization_table(tmp_path, {"a": "b"}) is None
+    write_pseudonymization_table(tmp_path, {"a": "b"})
 
     assert not (tmp_path / "pseudonymization_table.tsv").exists()
     records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_exports"]
