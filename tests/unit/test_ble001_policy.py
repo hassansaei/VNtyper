@@ -610,6 +610,7 @@ def test_main_prints_version_counts_and_categories_for_a_clean_policy(
     assert "reviewed Ruff: ruff 0.16.1" in output
     assert "actual Ruff: ruff 0.16.1" in output
     assert "normal/all: 1/2" in output
+    assert "suppression delta: 1" in output
     assert "categories A/B/C: 1/1/0" in output
 
 
@@ -652,3 +653,17 @@ def test_live_ble001_inventory_and_behavior_nodes_match_reviewed_policy() -> Non
     all_handlers = measure_ble001(REPO_ROOT, scope, ignore_noqa=True)
     policy = load_policy(REPO_ROOT / "scripts/ble001_policy.json")
     assert validate_policy(REPO_ROOT, normal, all_handlers, policy) == []
+
+
+def test_policy_counts_equal_live_measurements() -> None:
+    """The frozen totals equal a fresh normal and all-mode no-cache measurement."""
+    policy = load_policy(REPO_ROOT / "scripts/ble001_policy.json")
+    scope = read_ruff_paths(REPO_ROOT / "Makefile")
+    normal = measure_ble001(REPO_ROOT, scope, ignore_noqa=False)
+    all_handlers = measure_ble001(REPO_ROOT, scope, ignore_noqa=True)
+
+    assert (policy.expected_normal, policy.expected_all) == (
+        len(normal.diagnostics),
+        len(all_handlers.diagnostics),
+    )
+    assert normal.ruff_version == all_handlers.ruff_version

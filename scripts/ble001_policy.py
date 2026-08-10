@@ -647,6 +647,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"reviewed Ruff: {policy.reviewed_ruff_version}")
     print(f"actual Ruff: {normal.ruff_version}")
     print(f"normal/all: {policy.expected_normal}/{policy.expected_all}")
+    print(f"suppression delta: {policy.expected_all - policy.expected_normal}")
     print(f"categories A/B/C: {category_counts['A']}/{category_counts['B']}/{category_counts['C']}")
     return 0
 
