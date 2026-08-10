@@ -329,7 +329,7 @@
       "normal_count": 1,
       "all_count": 1,
       "category": "C",
-      "rationale": "vntyper/scripts/cohort_inputs.py::cleanup_temp_dirs: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_cleanup_attempts_all_directories_after_failure and failure remains observable via WARNING log"
+      "rationale": "vntyper/scripts/cohort_inputs.py::cleanup_temp_dirs: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_cleanup_attempts_all_directories_after_failure and failure remains observable via ERROR log"
     },
     {
       "path": "vntyper/scripts/cohort_inputs.py",
@@ -337,7 +337,7 @@
       "normal_count": 1,
       "all_count": 1,
       "category": "C",
-      "rationale": "vntyper/scripts/cohort_inputs.py::discover_sample_directories: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_bad_archive_is_skipped_and_other_inputs_continue and failure remains observable via WARNING log and continued discovery"
+      "rationale": "vntyper/scripts/cohort_inputs.py::discover_sample_directories: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_bad_archive_is_skipped_and_other_inputs_continue and failure remains observable via ERROR log and continued discovery"
     },
     {
       "path": "vntyper/scripts/cohort_inputs.py",
@@ -715,7 +715,7 @@
       "outcome": "Logs one cleanup failure and continues attempting every remaining temporary directory.",
       "rationale": "One filesystem cleanup error must not leak all later cohort extraction directories.",
       "behavior_test": "tests/unit/test_cohort_inputs.py::test_cleanup_attempts_all_directories_after_failure",
-      "observable_via": "WARNING log"
+      "observable_via": "ERROR log"
     },
     {
       "path": "vntyper/scripts/cohort_inputs.py",
@@ -724,7 +724,7 @@
       "outcome": "Skips a bad archive and continues discovering other supplied inputs.",
       "rationale": "One malformed cohort archive must not erase independently valid sample inputs.",
       "behavior_test": "tests/unit/test_cohort_inputs.py::test_bad_archive_is_skipped_and_other_inputs_continue",
-      "observable_via": "WARNING log and continued discovery"
+      "observable_via": "ERROR log and continued discovery"
     },
     {
       "path": "vntyper/scripts/cohort_inputs.py",
