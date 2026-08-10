@@ -14,8 +14,10 @@ IGV generation is never triggered -- ``bed_file`` is left unset, so
 """
 
 import json
+import logging
 import re
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -298,6 +300,26 @@ def test_a_negative_run_renders_its_placeholder_row(tmp_path) -> None:
     assert "Negative" in html
 
 
+def test_kestrel_conversion_failure_preserves_both_frames(monkeypatch, caplog) -> None:
+    """A formatting conversion failure keeps matching evidence and escaped display data."""
+    monkeypatch.setattr(generate_report.pd, "to_numeric", Mock(side_effect=ValueError("bad depth")))
+    caplog.set_level(logging.WARNING, logger=generate_report.logger.name)
+    caplog.clear()
+
+    display_frame, matching_frame = generate_report.build_kestrel_frames(
+        [{**KESTREL_ROW, "Motif_sequence": "<untrusted>"}]
+    )
+
+    assert len(display_frame) == len(matching_frame) == 1
+    assert matching_frame.loc[0, "Confidence"] == "High_Precision"
+    assert matching_frame.loc[0, "Motif Sequence"] == "<untrusted>"
+    assert display_frame.loc[0, "Confidence"] == '<span style="color:red;font-weight:bold;">High_Precision</span>'
+    assert display_frame.loc[0, "Motif Sequence"] == "&lt;untrusted&gt;"
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.WARNING, "Could not convert 'Depth Score' to numeric: bad depth")
+    ]
+
+
 # ---------------------------------------------------------------------------
 # The screening summary box - defect W3
 # ---------------------------------------------------------------------------
@@ -513,6 +535,18 @@ def test_the_igv_fragments_are_used_when_a_report_exists(positive_summary, monke
     assert 'const sessionDictionary = {"0":"blob:x"};' in html
 
 
+def test_igv_extraction_failure_returns_empty_fragment(monkeypatch, caplog) -> None:
+    """An unreadable optional IGV page preserves its exact three-part fallback."""
+    monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable IGV")))
+    caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
+    caplog.clear()
+
+    assert generate_report.extract_igv_content("igv_report.html") == ("", "", "")
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.ERROR, "Unexpected error reading IGV report: unreadable IGV")
+    ]
+
+
 # ---------------------------------------------------------------------------
 # The BAM header block
 # ---------------------------------------------------------------------------
@@ -551,6 +585,45 @@ def test_the_pipeline_log_is_embedded(positive_summary) -> None:
 
 def test_no_log_file_says_so_rather_than_failing(positive_summary) -> None:
     assert "No pipeline log file was provided." in render(positive_summary, log_file=None)
+
+
+def test_fastp_failure_returns_empty_mapping(monkeypatch, caplog) -> None:
+    """Unreadable optional fastp metrics are reported as an empty mapping."""
+    monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable fastp")))
+    caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
+    caplog.clear()
+
+    assert generate_report.load_fastp_output("output.json") == {}
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.ERROR, "Failed to load or parse fastp output: unreadable fastp")
+    ]
+
+
+def test_pipeline_log_failure_returns_failure_message(monkeypatch, caplog) -> None:
+    """A log read failure differs from an absent log and remains visible to the user."""
+    monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable log")))
+    caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
+    caplog.clear()
+
+    assert generate_report.load_pipeline_log("pipeline.log") == "Failed to load pipeline log."
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.ERROR, "Failed to read pipeline log file: unreadable log")
+    ]
+
+
+def test_pipeline_summary_failure_returns_empty_mapping(monkeypatch, caplog) -> None:
+    """An unreadable pipeline summary preserves report rendering's empty state."""
+    monkeypatch.setattr(generate_report.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr("builtins.open", Mock(side_effect=OSError("unreadable summary")))
+    caplog.set_level(logging.ERROR, logger=generate_report.logger.name)
+    caplog.clear()
+
+    assert generate_report.load_pipeline_summary("pipeline_summary.json") == {}
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (logging.ERROR, "Failed to load pipeline summary: unreadable summary")
+    ]
 
 
 # ---------------------------------------------------------------------------
