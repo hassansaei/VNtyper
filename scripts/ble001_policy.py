@@ -8,9 +8,22 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+TEST_NODE_ID = re.compile(
+    r"^tests/unit/(?:[A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_]+\.py"
+    r"(?:::[A-Za-z_][A-Za-z0-9_]*)*::test_[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\[[^\]\r\n]+\])?$"
+)
+RUFF_VERSION = re.compile(r"^ruff [0-9]+\.[0-9]+\.[0-9]+(?:[^\s]*)?$")
+DISPOSITIONS = {
+    "preserved-contract",
+    "conformed-to-existing-contract",
+    "preserved-no-authorized-alternative",
+}
 
 
 @dataclass(frozen=True, order=True)
@@ -186,7 +199,7 @@ def measure_ble001(
         detail = version_result.stderr.strip() or version_result.stdout.strip() or "no diagnostic output"
         raise RuntimeError(f"Could not determine Ruff version from {ruff_executable}: {detail}")
     ruff_version = version_result.stdout.strip()
-    if re.fullmatch(r"ruff [0-9]+\.[0-9]+\.[0-9]+(?:[^\s]*)?", ruff_version) is None:
+    if RUFF_VERSION.fullmatch(ruff_version) is None:
         raise RuntimeError(f"Ruff returned malformed or empty version output: {ruff_version!r}")
 
     command = [ruff_executable, "check", "--no-cache", "--select", "BLE001", "--output-format", "json"]
@@ -248,8 +261,144 @@ def enclosing_symbol(source: str, row: int) -> str:
 
 
 def load_policy(path: Path) -> Policy:
-    """Load and validate a frozen BLE001 policy artifact."""
-    raise NotImplementedError("not implemented")
+    """Load and validate a frozen BLE001 policy artifact.
+
+    Args:
+        path: JSON policy artifact path.
+
+    Returns:
+        Immutable, fully validated policy data.
+
+    Raises:
+        ValueError: If the file is unreadable or any schema invariant is violated.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"Could not read policy {path}: {exc}") from exc
+    try:
+        payload: Any = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Could not parse policy JSON {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Policy must be a JSON object")
+    _require_exact_keys(
+        payload,
+        {"reviewed_ruff_version", "expected_counts", "handlers", "fail_open"},
+        "policy",
+    )
+
+    reviewed_version = _require_non_empty_string(payload, "reviewed_ruff_version", "policy")
+    if RUFF_VERSION.fullmatch(reviewed_version) is None:
+        raise ValueError(f"policy.reviewed_ruff_version is malformed: {reviewed_version!r}")
+
+    expected_counts = payload["expected_counts"]
+    if not isinstance(expected_counts, dict):
+        raise ValueError("policy.expected_counts must be an object")
+    _require_exact_keys(expected_counts, {"normal", "ignore_noqa"}, "policy.expected_counts")
+    expected_normal = _require_count(expected_counts, "normal", "policy.expected_counts")
+    expected_all = _require_count(expected_counts, "ignore_noqa", "policy.expected_counts")
+    if expected_normal > expected_all:
+        raise ValueError("policy expected normal count cannot exceed ignore_noqa count")
+
+    raw_handlers = payload["handlers"]
+    if not isinstance(raw_handlers, list):
+        raise ValueError("policy.handlers must be an array")
+    handlers: list[HandlerPolicy] = []
+    handler_keys: set[tuple[str, str]] = set()
+    for index, raw_handler in enumerate(raw_handlers):
+        context = f"policy.handlers[{index}]"
+        if not isinstance(raw_handler, dict):
+            raise ValueError(f"{context} must be an object")
+        _require_exact_keys(
+            raw_handler,
+            {"path", "symbol", "normal_count", "all_count", "category", "rationale"},
+            context,
+        )
+        handler_path = _require_relative_path(raw_handler, "path", context)
+        symbol = _require_non_empty_string(raw_handler, "symbol", context)
+        normal_count = _require_count(raw_handler, "normal_count", context)
+        all_count = _require_count(raw_handler, "all_count", context)
+        if normal_count > all_count:
+            raise ValueError(f"{context}.normal_count cannot exceed all_count")
+        category = _require_non_empty_string(raw_handler, "category", context)
+        if category not in {"A", "B", "C"}:
+            raise ValueError(f"{context}.category must be A, B, or C")
+        rationale = _require_non_empty_string(raw_handler, "rationale", context)
+        key = (handler_path, symbol)
+        if key in handler_keys:
+            raise ValueError(f"duplicate handler policy for {handler_path}::{symbol}")
+        handler_keys.add(key)
+        handlers.append(HandlerPolicy(handler_path, symbol, normal_count, all_count, category, rationale))
+
+    normal_total = sum(handler.normal_count for handler in handlers)
+    all_total = sum(handler.all_count for handler in handlers)
+    if (normal_total, all_total) != (expected_normal, expected_all):
+        raise ValueError(
+            "policy handler totals do not match expected_counts: "
+            f"handlers {normal_total}/{all_total}, expected {expected_normal}/{expected_all}"
+        )
+
+    raw_fail_open = payload["fail_open"]
+    if not isinstance(raw_fail_open, list):
+        raise ValueError("policy.fail_open must be an array")
+    fail_open: list[FailOpenPolicy] = []
+    fail_open_keys: set[tuple[str, str]] = set()
+    for index, raw_record in enumerate(raw_fail_open):
+        context = f"policy.fail_open[{index}]"
+        if not isinstance(raw_record, dict):
+            raise ValueError(f"{context} must be an object")
+        _require_exact_keys(
+            raw_record,
+            {"path", "symbol", "disposition", "outcome", "rationale", "behavior_test", "observable_via"},
+            context,
+        )
+        record_path = _require_relative_path(raw_record, "path", context)
+        symbol = _require_non_empty_string(raw_record, "symbol", context)
+        disposition = _require_non_empty_string(raw_record, "disposition", context)
+        if disposition not in DISPOSITIONS:
+            raise ValueError(f"{context}.disposition is not an allowed policy disposition")
+        outcome = _require_non_empty_string(raw_record, "outcome", context)
+        rationale = _require_non_empty_string(raw_record, "rationale", context)
+        behavior_test = _require_non_empty_string(raw_record, "behavior_test", context)
+        if TEST_NODE_ID.fullmatch(behavior_test) is None or any(
+            part in {".", ".."} for part in behavior_test.split("::", maxsplit=1)[0].split("/")
+        ):
+            raise ValueError(f"{context}.behavior_test is not a valid unit-test node ID: {behavior_test!r}")
+        observable_via = _require_non_empty_string(raw_record, "observable_via", context)
+        key = (record_path, symbol)
+        if key in fail_open_keys:
+            raise ValueError(f"duplicate fail_open policy for {record_path}::{symbol}")
+        fail_open_keys.add(key)
+        fail_open.append(
+            FailOpenPolicy(
+                record_path,
+                symbol,
+                disposition,
+                outcome,
+                rationale,
+                behavior_test,
+                observable_via,
+            )
+        )
+
+    category_c_keys = {(handler.path, handler.symbol) for handler in handlers if handler.category == "C"}
+    missing_fail_open = sorted(category_c_keys - fail_open_keys)
+    if missing_fail_open:
+        rendered = ", ".join(f"{item_path}::{symbol}" for item_path, symbol in missing_fail_open)
+        raise ValueError(f"category C handlers require exactly one fail_open record; missing: {rendered}")
+    orphan_fail_open = sorted(fail_open_keys - category_c_keys)
+    if orphan_fail_open:
+        rendered = ", ".join(f"{item_path}::{symbol}" for item_path, symbol in orphan_fail_open)
+        raise ValueError(f"fail_open record exists for non-category-C handler: {rendered}")
+
+    return Policy(
+        reviewed_version,
+        expected_normal,
+        expected_all,
+        tuple(handlers),
+        tuple(fail_open),
+    )
 
 
 def validate_policy(
@@ -258,8 +407,157 @@ def validate_policy(
     all_handlers: Measurement,
     policy: Policy,
 ) -> list[str]:
-    """Return all mismatches between live measurements and reviewed policy."""
-    raise NotImplementedError("not implemented")
+    """Return all mismatches between live measurements and reviewed policy.
+
+    Args:
+        repo_root: Repository root containing every diagnostic source path.
+        normal: Ruff measurement using normal suppression semantics.
+        all_handlers: Ruff measurement including explicit suppressions.
+        policy: Reviewed policy to compare with live discovery.
+
+    Returns:
+        Actionable mismatch descriptions. An empty list means exact agreement.
+    """
+    errors: list[str] = []
+    if normal.ruff_version != all_handlers.ruff_version:
+        errors.append(
+            f"Measurement version mismatch: normal Ruff {normal.ruff_version}; "
+            f"ignore-noqa Ruff {all_handlers.ruff_version}. Rerun both modes with one executable."
+        )
+        return errors
+    if normal.ruff_version != policy.reviewed_ruff_version:
+        errors.append(
+            f"Ruff version drift: reviewed {policy.reviewed_ruff_version}; actual {normal.ruff_version}. "
+            "Review and reclassify the complete inventory before updating policy metadata."
+        )
+
+    if len(normal.diagnostics) != policy.expected_normal:
+        errors.append(
+            f"normal count mismatch: expected {policy.expected_normal}, actual {len(normal.diagnostics)} "
+            f"under reviewed {policy.reviewed_ruff_version} and actual {normal.ruff_version}"
+        )
+    if len(all_handlers.diagnostics) != policy.expected_all:
+        errors.append(
+            f"ignore-noqa count mismatch: expected {policy.expected_all}, actual {len(all_handlers.diagnostics)} "
+            f"under reviewed {policy.reviewed_ruff_version} and actual {all_handlers.ruff_version}"
+        )
+
+    normal_records = Counter(normal.diagnostics)
+    all_records = Counter(all_handlers.diagnostics)
+    if normal_records - all_records:
+        errors.append("normal diagnostics are not a subset of ignore-noqa diagnostics")
+
+    normal_counts, normal_rows, normal_mapping_errors = _symbol_counts(repo_root, normal.diagnostics)
+    all_counts, all_rows, all_mapping_errors = _symbol_counts(repo_root, all_handlers.diagnostics)
+    errors.extend(normal_mapping_errors)
+    errors.extend(error for error in all_mapping_errors if error not in normal_mapping_errors)
+
+    expected_normal = {
+        (handler.path, handler.symbol): handler.normal_count for handler in policy.handlers if handler.normal_count
+    }
+    expected_all = {
+        (handler.path, handler.symbol): handler.all_count for handler in policy.handlers if handler.all_count
+    }
+    errors.extend(_count_mismatches("normal", expected_normal, normal_counts, normal_rows))
+    errors.extend(_count_mismatches("ignore-noqa", expected_all, all_counts, all_rows))
+
+    category_c_keys = {(handler.path, handler.symbol) for handler in policy.handlers if handler.category == "C"}
+    fail_open_keys = {(record.path, record.symbol) for record in policy.fail_open}
+    for item_path, symbol in sorted(category_c_keys - fail_open_keys):
+        errors.append(f"category C handler lacks fail_open policy: {item_path}::{symbol}")
+    for item_path, symbol in sorted(fail_open_keys - category_c_keys):
+        errors.append(f"stale fail_open policy for non-category-C handler: {item_path}::{symbol}")
+    return errors
+
+
+def _require_exact_keys(record: dict[str, Any], expected: set[str], context: str) -> None:
+    """Reject missing or unknown JSON object keys."""
+    actual = set(record)
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    if missing or unknown:
+        raise ValueError(f"{context} has missing keys {missing} and unknown keys {unknown}")
+
+
+def _require_non_empty_string(record: dict[str, Any], key: str, context: str) -> str:
+    """Return one required non-empty string field."""
+    value = record[key]
+    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+        raise ValueError(f"{context}.{key} must be a non-empty single-line string")
+    return value
+
+
+def _require_count(record: dict[str, Any], key: str, context: str) -> int:
+    """Return one required non-negative integer count."""
+    value = record[key]
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{context}.{key} must be a non-negative integer")
+    return value
+
+
+def _require_relative_path(record: dict[str, Any], key: str, context: str) -> str:
+    """Return one normalized repository-relative POSIX path."""
+    value = _require_non_empty_string(record, key, context)
+    if Path(value).is_absolute():
+        raise ValueError(f"{context}.{key} must be relative")
+    if "\\" in value or any(part in {".", "..", ""} for part in value.split("/")):
+        raise ValueError(f"{context}.{key} contains parent traversal or a non-normal path component")
+    return value
+
+
+def _symbol_counts(
+    repo_root: Path, diagnostics: tuple[Diagnostic, ...]
+) -> tuple[dict[tuple[str, str], int], dict[tuple[str, str], list[int]], list[str]]:
+    """Map normalized diagnostics to stable symbol counts and observed rows."""
+    counts: Counter[tuple[str, str]] = Counter()
+    rows: dict[tuple[str, str], list[int]] = {}
+    errors: list[str] = []
+    source_cache: dict[str, str | None] = {}
+    for diagnostic in diagnostics:
+        if diagnostic.path not in source_cache:
+            try:
+                source_cache[diagnostic.path] = (repo_root / diagnostic.path).read_text(encoding="utf-8")
+            except OSError as exc:
+                source_cache[diagnostic.path] = None
+                errors.append(f"Could not read diagnostic source {diagnostic.path}: {exc}")
+        source = source_cache[diagnostic.path]
+        if source is None:
+            continue
+        try:
+            symbol = enclosing_symbol(source, diagnostic.row)
+        except ValueError as exc:
+            errors.append(f"Could not map diagnostic source {diagnostic.path} row {diagnostic.row}: {exc}")
+            continue
+        identity = (diagnostic.path, symbol)
+        counts[identity] += 1
+        rows.setdefault(identity, []).append(diagnostic.row)
+    return dict(counts), rows, errors
+
+
+def _count_mismatches(
+    mode: str,
+    expected: dict[tuple[str, str], int],
+    actual: dict[tuple[str, str], int],
+    rows: dict[tuple[str, str], list[int]],
+) -> list[str]:
+    """Describe exact added, removed, and changed stable identity counts."""
+    errors: list[str] = []
+    for identity in sorted(set(expected) | set(actual)):
+        expected_count = expected.get(identity, 0)
+        actual_count = actual.get(identity, 0)
+        if expected_count == actual_count:
+            continue
+        item_path, symbol = identity
+        if actual_count == 0:
+            errors.append(
+                f"{mode} removed reviewed identity {item_path}::{symbol}: expected {expected_count}, actual 0"
+            )
+        else:
+            errors.append(
+                f"{mode} identity {item_path}::{symbol}: expected {expected_count}, actual {actual_count}; "
+                f"observed rows {rows.get(identity, [])}"
+            )
+    return errors
 
 
 def main(argv: list[str] | None = None) -> int:
