@@ -256,14 +256,31 @@ def test_floating_aliases_create_advance_or_skip_newer_without_downgrade() -> No
     ]
 
 
-@pytest.mark.parametrize("observed_version", (None, "2.0", "v2.0.9"))
-def test_floating_alias_with_unorderable_version_is_skipped(observed_version: str | None) -> None:
+@pytest.mark.parametrize("alias_index", (2, 3, 4))
+def test_floating_alias_with_legacy_main_version_advances(alias_index: int) -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    alias = required_aliases(version)[alias_index]
+    current[alias] = AliasState("sha256:" + "b" * 64, "main")
+
+    update = plan_alias_updates(version, source, current, dry_run=False)[alias_index]
+
+    assert (update.alias, update.decision, update.execute) == (alias, "advance", True)
+    assert "legacy rolling" in update.reason
+
+
+@pytest.mark.parametrize("observed_version", (None, "2.0", "v2.0.9", "nightly"))
+def test_floating_alias_with_unknown_unorderable_version_fails_closed(observed_version: str | None) -> None:
     version = parse_release_tag("v2.0.10")
     source = "sha256:" + "a" * 64
     current = dict.fromkeys(required_aliases(version))
     current["2.0"] = AliasState("sha256:" + "b" * 64, observed_version)
+
     update = plan_alias_updates(version, source, current, dry_run=False)[2]
-    assert (update.alias, update.decision, update.execute) == ("2.0", "skip-unorderable", False)
+
+    assert (update.alias, update.decision, update.execute) == ("2.0", "fail-conflict", False)
+    assert "cannot be ordered safely" in update.reason
 
 
 def test_equal_floating_version_with_a_different_digest_is_a_hard_conflict() -> None:

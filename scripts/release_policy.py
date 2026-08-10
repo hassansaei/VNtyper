@@ -65,7 +65,7 @@ class AliasUpdate:
     """Planned decision for one release alias."""
 
     alias: str
-    decision: Literal["create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict"]
+    decision: Literal["create", "advance", "no-op", "skip-newer", "fail-conflict"]
     execute: bool
     reason: str
 
@@ -249,9 +249,7 @@ def plan_alias_updates(
     for index, alias in enumerate(aliases):
         current = current_aliases[alias]
         if current is None:
-            decision: Literal["create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict"] = (
-                "create"
-            )
+            decision: Literal["create", "advance", "no-op", "skip-newer", "fail-conflict"] = "create"
             reason = "Alias is absent and will be created."
         elif index < 2:
             if current.digest == source_digest:
@@ -262,16 +260,22 @@ def plan_alias_updates(
                 reason = "Exact alias resolves to a different digest and is immutable."
         else:
             observed_version: ReleaseVersion | None = None
-            if current.version is not None:
+            if current.version == "main":
+                decision = "advance"
+                reason = "Existing alias is the recognized legacy rolling 'main' state and will advance to the release."
+            elif current.version is not None:
                 try:
                     observed_version = parse_release_tag(f"v{current.version}")
                 except ValueError:
                     observed_version = None
 
-            if observed_version is None:
-                decision = "skip-unorderable"
-                reason = f"Existing alias version {current.version!r} is not strict MAJOR.MINOR.PATCH."
-            else:
+            if current.version != "main" and observed_version is None:
+                decision = "fail-conflict"
+                reason = (
+                    f"Existing alias version {current.version!r} cannot be ordered safely; "
+                    "repair or remove the floating alias before retrying."
+                )
+            elif observed_version is not None:
                 observed_parts = (observed_version.major, observed_version.minor, observed_version.patch)
                 if observed_parts < candidate_parts:
                     decision = "advance"

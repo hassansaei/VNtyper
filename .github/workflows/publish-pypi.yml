@@ -930,7 +930,7 @@ jobs:
           if conflicts:
               raise SystemExit("release alias conflict: " + json.dumps(conflicts, separators=(",", ":")))
           for item in plan:
-              if item["decision"] in {"skip-newer", "skip-unorderable", "no-op"}:
+              if item["decision"] in {"skip-newer", "no-op"}:
                   print(f"::notice title=GHCR alias {item['alias']}::{item['reason']}", file=sys.stderr)
               if item["execute"]:
                   print(f"{item['alias']}\t{item['decision']}")

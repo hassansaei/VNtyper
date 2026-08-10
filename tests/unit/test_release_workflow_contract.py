@@ -2082,14 +2082,14 @@ def test_promotion_converges_after_every_completed_alias_prefix(tmp_path: Path, 
     assert all(registry[f"ghcr.io/hassansaei/vntyper:{alias}"]["digest"] == digest for alias in ordered)
 
 
-def test_newer_and_unorderable_floating_aliases_emit_notices_without_writes(tmp_path: Path) -> None:
-    """Fail-safe floating decisions must be observable without moving protected aliases."""
+def test_newer_floating_alias_emits_a_notice_without_writes(tmp_path: Path) -> None:
+    """An anti-downgrade decision must be observable without moving protected aliases."""
     digest = "sha256:" + "b" * 64
     aliases = {
         "v2.0.10": (digest, "2.0.10"),
         "2.0.10": (digest, "2.0.10"),
         "2.0": (digest, "2.0.10"),
-        "2": (digest, None),
+        "2": (digest, "2.0.10"),
         "latest": (digest, "2.1.0"),
     }
     publish = _workflow("publish-pypi.yml")
@@ -2098,8 +2098,6 @@ def test_newer_and_unorderable_floating_aliases_emit_notices_without_writes(tmp_
     completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
 
     assert completed.returncode == 0, completed.stderr
-    assert "::notice title=GHCR alias 2::" in completed.stderr
-    assert "not strict MAJOR.MINOR.PATCH" in completed.stderr
     assert "::notice title=GHCR alias latest::" in completed.stderr
     assert "newer than candidate" in completed.stderr
     assert (tmp_path / "mutation.log").read_text() == ""
@@ -2417,10 +2415,7 @@ def test_release_summary_renders_all_provenance_and_handles_partial_invalid_stat
         "version": "2.0.10",
     }
     aliases = {
-        "plan": [
-            {"decision": decision}
-            for decision in ("create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict")
-        ],
+        "plan": [{"decision": decision} for decision in ("create", "advance", "no-op", "skip-newer", "fail-conflict")],
         "alias_progress": [{"attempted": True, "write_succeeded": True, "verified": False}],
     }
     package = {"artifact_name": "python-dist-2.0.10-1-1", "files": ["vntyper.whl", "vntyper.tar.gz"]}

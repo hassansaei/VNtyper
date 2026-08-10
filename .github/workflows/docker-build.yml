@@ -16,11 +16,6 @@ on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
-    inputs:
-      full:
-        description: 'Run the full Docker suite including the slow adVNTR tests'
-        type: boolean
-        default: false
 
 concurrency:
   # A group was previously absent entirely, so two pushes inside the ~30 min build
@@ -377,17 +372,19 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             make test-docker-quick
-          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.full }}" = "true" ]; then
+          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             make test-docker
           else
             make test-docker-fast
           fi
 
-      # Publish only now, once the image has actually passed its tests. The previous
-      # workflow pushed to ghcr before any test ran. PRs never publish: a fork PR's
-      # GITHUB_TOKEN is read-only, and a tag per PR accumulated multi-GB images forever.
+      # Publish only from an exact main push, once the image has actually passed its
+      # tests. Scheduled and manual runs still exercise the full validation tier, but
+      # cannot overwrite the push-bound main/short-SHA tags without matching evidence.
+      # PRs never publish: a fork PR's GITHUB_TOKEN is read-only, and a tag per PR
+      # accumulated multi-GB images forever.
       - name: Push image
-        if: github.event_name != 'pull_request'
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
           set -euo pipefail
           printf '%s\n' "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do

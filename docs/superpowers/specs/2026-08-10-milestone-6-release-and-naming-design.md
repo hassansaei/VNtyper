@@ -225,6 +225,8 @@ The package version is read from `vntyper/version.py` without importing the appl
 passes only the dynamic OCI keys it owns (`created`, `revision`, and `version`) so the Dockerfile's
 title and renamed description remain authoritative. The dead tag metadata rule is removed. A main
 build never emits a production semantic alias or `latest`.
+Nightly and manual runs retain the full test tier, but scheduled and manual Docker validation never publish application tags.
+Only an exact push to `refs/heads/main` publishes the rolling `main`, short-SHA tag, and matching evidence.
 
 The `changes` job remains a pull-request cost optimization only. Every push to `main`
 runs the substantive CI jobs and `build-and-test`, even when its diff is documentation
@@ -411,8 +413,11 @@ Alias invariants:
 - If a floating alias already reports a higher semantic package version, the candidate is an old
   rerun: skip that alias and emit an explicit anti-downgrade notice. Do not fail the otherwise
   valid rerun and do not move the alias backward.
-- If an existing floating alias has a missing or unparsable version label, skip it with an explicit
-  fail-safe notice rather than overwriting an artifact whose ordering cannot be proved.
+- An existing floating alias labelled exactly `main` is the recognized legacy rolling `main` state
+  and advances to the evidence-verified release digest during the first migration.
+- Any other missing or unrecognized version label fails closed before every alias write. The error
+  requires an operator to repair or remove that floating alias before retrying; a release cannot
+  remain green while one of its five required aliases stays stale.
 - Promotion never reads from or writes `main`.
 
 Exact aliases execute before floating aliases. This ensures that a release always acquires its
@@ -482,7 +487,7 @@ Protected values include, but are not limited to:
 | Image identity | SHA tag exists and digest/revision/version all agree. | Nothing promoted. Re-run the main Docker workflow for that SHA; never substitute another tag. | Reinspection is read-only and deterministic. |
 | Package build | Wheel and sdist build and pass `twine check`. | Nothing promoted or published because promotion depends on the build. Fix packaging and create a new version if immutable publication already occurred. | Rebuilds from the same verified SHA. |
 | Exact promotion | Both exact aliases point to the tested digest. | One exact alias may exist before a later command fails. The summary names completed operations. | Same-digest aliases are no-ops; different-digest aliases hard-fail, so rerun converges without mutation. |
-| Floating promotion | Eligible aliases advance; newer or unorderable aliases are skipped with notice. | Failure after some advances leaves every changed alias on the intended tested digest. | Re-evaluation makes same-version operations no-ops and never downgrades. |
+| Floating promotion | Eligible aliases and legacy `main` advance; newer aliases skip with notice; every other unorderable label hard-fails before writes. | Failure after some advances leaves every changed alias on the intended tested digest. | Re-evaluation makes same-version operations no-ops and never downgrades. |
 | PyPI publish | OIDC action uploads missing distributions and attestations in environment `pypi`. | GHCR may already be complete. PyPI may contain one distribution from a partial upload. Do not roll back immutable aliases. | `skip-existing: true` ignores already-uploaded files and uploads only missing ones. |
 | Manual dry run | Full validation, gate/image inspection, package check, and plan summary complete. | No production mutation exists to roll back. | Repeatable; it cannot cross into production mode. |
 
@@ -557,14 +562,14 @@ The final `release-summary` job writes a single structured GitHub step summary c
 - SHA image reference, immutable digest, OCI revision, and OCI package version;
 - Docker workflow run ID/attempt/URL, evidence contract version, and provenance verdict;
 - each alias, its previous digest/version if present, decision (`create`, `advance`, `no-op`,
-  `skip-newer`, `skip-unorderable`, or `fail-conflict`), its attempted/write-succeeded/verified state, and final digest
+  `skip-newer`, or `fail-conflict`), its attempted/write-succeeded/verified state, and final digest
   where known;
 - package artifact filenames and `twine check` result;
 - PyPI mode/result and whether the candidate version existed immediately before the OIDC action, allowing the summary
   to distinguish `already-existed-skip`, `published`, and `failed`;
 - a prominent statement that dry run performed no registry, PyPI, tag, or release mutation.
 
-Anti-downgrade and unorderable-floating decisions also emit `::notice::` annotations. Identity
+Anti-downgrade decisions emit `::notice::` annotations. Unorderable-floating labels, identity
 mismatches, exact-alias conflicts, failed checks, and poll exhaustion emit `::error::` annotations
 with the exact offending name/ref and a recovery instruction. No token, OIDC assertion, secret,
 registry password, or signed upload URL is logged.
@@ -582,7 +587,8 @@ Unit tests must prove:
   bound;
 - alias derivation returns exactly `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X`, `latest` in deterministic order;
 - exact aliases cover absent, same-digest, and conflicting-digest states;
-- floating aliases cover absent, older, equal, newer, and missing/unparseable label states;
+- floating aliases cover absent, older, equal, newer, recognized legacy `main`, and missing/unparseable label states;
+- recognized legacy `main` advances, while every other missing/unparseable label hard-fails before writes;
 - equal-version floating aliases cover same-digest no-op and different-digest hard conflict;
 - a rerun after every possible prefix of completed alias operations converges on the same digest;
 - dry-run plans contain the same decisions but no executable mutation operations.
@@ -591,8 +597,8 @@ Unit tests must prove:
 
 Static executable tests must parse the workflows and prove:
 
-- Docker main builds publish `main` plus the existing short-SHA tag with a full revision label,
-  never semantic aliases or `latest`;
+- Docker main pushes publish `main` plus the existing short-SHA tag with a full revision label,
+  never semantic aliases or `latest`; schedules and manual runs retain tests but publish no application tag;
 - tag builds are not introduced into `docker-build.yml`;
 - revision and package-version labels are explicit and the Dockerfile description is not
   overwritten by repository metadata;

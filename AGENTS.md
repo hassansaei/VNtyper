@@ -382,10 +382,16 @@ the full SHA and immutable digest, and the image labels
 `org.opencontainers.image.revision` and `org.opencontainers.image.version` must match
 that full revision and release version. A proven short-prefix collision continues from
 the evidence digest, while ambiguous short-tag drift fails closed.
+The push of `main` is the only event allowed to publish the application `main` and
+short-SHA tags and their evidence; scheduled and manual Docker validation never publish application tags.
 
 Promotion copies the evidence-verified digest, never rebuilds it. Exact `vX.Y.Z` and
 `X.Y.Z` aliases are immutable; floating `X.Y`, `X`, and `latest` advance monotonically
 and never downgrade. `main` remains rolling/unreleased and is never a release alias.
+For floating aliases, legacy rolling `main` is the one recognized pre-semver version
+state and advances to the verified release digest. A missing or unrecognized version label
+fails closed before any alias write and requires the operator to repair or remove that
+floating alias before retrying.
 GHCR mutation is serialized by the fixed `vntyper-ghcr-release-promotion` group. If a
 pending promotion is canceled or superseded before it acquires that lock, rerun it; if
 Docker evidence is missing, rerun the existing exact-SHA Docker Build run. A partial

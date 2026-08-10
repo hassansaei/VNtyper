@@ -19,7 +19,8 @@
 - Promote only the immutable digest recorded by the successful exact-SHA Docker run's contract-v1 evidence artifact,
   after verifying the short `sha-<7>` reference (or explicitly detecting its prefix collision), full revision label,
   package-version label, and manifest. Never substitute `main` or rebuild tag-context source.
-- Required aliases are exactly `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X`, and `latest`. Exact aliases never move to a different digest; floating aliases never downgrade and skip unorderable existing labels with notice. `main` remains `main`.
+- Required aliases are exactly `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X`, and `latest`. Exact aliases never move to a different digest; floating aliases never downgrade. The recognized legacy rolling `main` label advances during migration; every other missing or unrecognized version label fails closed before writes. `main` remains `main`.
+- Nightly and manual runs retain full Docker testing, but scheduled and manual Docker validation never publish application tags; only an exact push to `refs/heads/main` publishes rolling and short-SHA application tags plus evidence.
 - Serialize `promote-ghcr` across all versions with one fixed repository-wide concurrency group and
   `cancel-in-progress: false`. This is a mutual-exclusion lock, not an unbounded queue: GitHub may replace an older
   pending promotion with a newer pending run. The canceled version is explicitly rerun; it cannot have written before
@@ -67,7 +68,7 @@
 | `tests/unit/test_release_evidence.py` | Create | Exact-run selection, malformed/stale evidence, digest/label/collision, and CLI output tests |
 | `tests/unit/test_release_workflow_contract.py` | Create | Parsed and executable workflow graph/permission/trigger/label checks plus GHCR documentation and naming invariants |
 | `.github/workflows/ci-tests.yml` | Modify | Make path-derived `python` and `docs` outputs true for every main push while retaining PR filtering |
-| `.github/workflows/docker-build.yml` | Modify | Make image output true for every main push; retain short SHA; add full revision/package labels; upload exact-SHA digest evidence; remove dead tag metadata |
+| `.github/workflows/docker-build.yml` | Modify | Make image output true for every main push; publish application tags/evidence only for exact push/main while retaining scheduled/manual tests; retain short SHA; add full revision/package labels; remove dead tag metadata |
 | `.github/workflows/publish-pypi.yml` | Rewrite in place | Default-branch repository-dispatch boundary, exact-tag validation, bounded evidence polling, missing-image recovery, package artifact build, serialized digest promotion, dry-run, OIDC publish, summary |
 | `README.md` | Modify | GHCR-only commands, stable/rolling tag explanation, eight generation-name edits, grammar repair |
 | `docs/getting-started/installation.md` | Modify | Remove active Docker Hub command; document supported GHCR pull |
@@ -135,7 +136,7 @@ class AliasState:
 @dataclass(frozen=True)
 class AliasUpdate:
     alias: str
-    decision: Literal["create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict"]
+    decision: Literal["create", "advance", "no-op", "skip-newer", "fail-conflict"]
     execute: bool
     reason: str
 
@@ -317,7 +318,7 @@ def test_exact_aliases_create_noop_or_fail_but_never_advance() -> None:
 
 - [ ] **Step 2: Write RED floating anti-downgrade and dry-run tests (2–5 min)**
 
-Cover `2.0` absent → `create`, `2` at `2.0.9` → `advance`, `latest` at `2.1.0` → `skip-newer`, and an existing alias with `version=None` → `skip-unorderable`. Add:
+Cover `2.0` absent → `create`, `2` at `2.0.9` → `advance`, `latest` at `2.1.0` → `skip-newer`, an existing floating alias at legacy version `main` → `advance`, and an existing alias with `version=None` or another malformed label → `fail-conflict` before writes. Add:
 
 ```python
 def test_equal_floating_version_with_a_different_digest_is_a_hard_conflict() -> None:
@@ -471,6 +472,11 @@ passed through environment variables, then upload it in the same run:
 ```json
 {"contract_version": 1, "sha": "<40 hex>", "digest": "sha256:<64 hex>", "run_id": 1, "run_attempt": 1, "revision": "<40 hex>", "version": "X.Y.Z"}
 ```
+
+Guard the application `Push image` step with the same exact
+`${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}` condition as digest capture, evidence
+serialization, and evidence upload. Scheduled/manual validation still builds and runs the full tier but never executes
+the application-tag push loop. Keep base-image bootstrap and cache behavior unchanged.
 
 Use these literal steps immediately after the existing explicit `docker push` loop; validate the pushed tag's
 registry-reported manifest digest and OCI labels before upload. Do not interpolate
@@ -1351,8 +1357,8 @@ promotion performs no writes and must be rerun. Do not assert that three simulta
 - [ ] **Step 2: Write RED exact/floating/dry-run workflow tests (2–5 min)**
 
 Assert the job calls `plan_alias_updates`; aliases are exactly the required five; `main` is not a target;
-`fail-conflict` (including floating equal-version/different-digest) exits nonzero before any write; `skip-newer` and
-`skip-unorderable` emit `::notice::`; only `create`/`advance` execute. Assert `promote-ghcr.if` contains
+`fail-conflict` (including floating equal-version/different-digest and unknown unorderable labels) exits nonzero before
+any write; `skip-newer` emits `::notice::`; recognized legacy rolling `main` advances; only `create`/`advance` execute. Assert `promote-ghcr.if` contains
 exactly `github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release'`, so manual or unrelated
 dispatches cannot log in or write.
 
@@ -1468,7 +1474,7 @@ Append this job and use a local observation directory plus the typed policy. Raw
           if conflicts:
               raise SystemExit("release alias conflict: " + json.dumps(conflicts, separators=(",", ":")))
           for item in plan:
-              if item["decision"] in {"skip-newer", "skip-unorderable", "no-op"}:
+              if item["decision"] in {"skip-newer", "no-op"}:
                   print(f"::notice title=GHCR alias {item['alias']}::{item['reason']}", file=sys.stderr)
               if item["execute"]:
                   print(f"{item['alias']}\t{item['decision']}")
@@ -1565,7 +1571,8 @@ do not duplicate response-wide `grep` policy in either shell body.
 Export single-line `alias_summary_json` containing previous digest/version, decision, reason, and final expected digest
 for all five aliases. Before each create, atomically persist `attempted=true`; immediately after Buildx returns zero,
 atomically persist `write_succeeded=true`; only after digest reinspection atomically persist `verified=true` and the
-final digest. Emit notices for anti-downgrade/unorderable skips and no-ops. Reinspect changed aliases and
+final digest. Emit notices for anti-downgrade skips and no-ops; treat unknown unorderable labels as pre-write
+conflicts. Reinspect changed aliases and
 hard-fail if any final digest differs from the verified source digest. The final summary job, not this job's local step
 summary, owns the cross-job report.
 
@@ -1931,8 +1938,8 @@ and environment/dataflow for every upstream result plus its JSON output. Require
 main ancestry, observed package/citation/changelog versions and verdicts, structured preflight state/reason/candidates,
 ten check verdicts and URLs, attempt/elapsed time, Docker run/evidence provenance, source
 ref/digest/revision/version, alias attempted/write-succeeded/verified progress, all alias decisions
-(`create`, `advance`, `no-op`, `skip-newer`, `skip-unorderable`,
-`fail-conflict`), package filenames, PyPI result, and `dry run performed no production writes`.
+(`create`, `advance`, `no-op`, `skip-newer`, `fail-conflict`), package filenames, PyPI result, and
+`dry run performed no production writes`.
 
 - [ ] **Step 3: Run RED against stale token/tag guidance (2–5 min)**
 
@@ -2014,7 +2021,9 @@ The renderer treats empty outputs as unavailable, includes `needs.*.result`, emi
 Replace “tag pushes publish immediately” with the existing-tag plus authenticated `vntyper_release` repository-dispatch
 sequence; explain why the default-branch coordinator has no production `push.tags` trigger; expand version trap 12 to all three sources,
 exact-SHA Docker evidence artifact, short-SHA/full label, aliases, anti-downgrade, prefix-collision, and rerun semantics;
-state every main push is substantive while PRs retain filters. Reconcile the scripts type-check paragraph with the
+state every main push is substantive while PRs retain filters, and state that scheduled/manual validation cannot
+publish application tags or evidence. Document the legacy-`main` migration and fail-closed unknown-label recovery.
+Reconcile the scripts type-check paragraph with the
 already-landed milestone-6 quality-gate change rather than restoring stale “not type-checked” text. Mark B4 resolved
 and leave secret deletion explicitly pending first live OIDC proof. State that historical tagged commits retain their
 legacy tag-triggered token workflow, forbid new pre-milestone tags while the token exists, and call those workflows
