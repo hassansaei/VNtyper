@@ -102,15 +102,17 @@ def test_parse_coverage_stats_yields_none_for_no_rows() -> None:
 
 
 def test_parse_coverage_stats_survives_an_unreadable_value(caplog) -> None:
-    row: dict[str, object] = dict.fromkeys(COVERAGE_COLUMNS, 1)
-    row["stdev"] = "not-a-number"
+    row: dict[str, object] = dict.fromkeys(COVERAGE_COLUMNS, "3.5")
+    row["stdev"] = object()
     with caplog.at_level(logging.ERROR, logger="vntyper.scripts.report_formatting"):
         stats = rf.parse_coverage_stats([row])
 
-    assert stats["mean"] == pytest.approx(1.0), "fields read before the failure are kept"
+    assert set(stats) == set(COVERAGE_COLUMNS)
+    assert stats["mean"] == pytest.approx(3.5), "fields read before the failure are kept"
     assert stats["stdev"] is None
-    assert stats["percent_uncovered"] is None, "fields after the failure stay unset"
-    assert any(record.levelno >= logging.ERROR for record in caplog.records)
+    assert all(stats[column] is None for column in COVERAGE_COLUMNS[2:])
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.report_formatting"]
+    assert [record.levelno for record in records] == [logging.ERROR]
 
 
 def test_a_renamed_coverage_column_is_visible_rather_than_silent() -> None:

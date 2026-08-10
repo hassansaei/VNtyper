@@ -26,6 +26,7 @@ assertion here pins the wording of a message, only which state gets one.
 
 import itertools
 import logging
+from unittest import mock
 
 import pandas as pd
 import pytest
@@ -66,6 +67,22 @@ def test_the_report_config_loads(report_config) -> None:
     assert report_config, "report_config.json did not load"
     assert report_config["screening_summary_rules"], "no screening rules loaded"
     assert report_config["screening_summary_default"]
+
+
+@pytest.mark.parametrize("failure", ["open", "json_load"])
+def test_report_config_failure_returns_empty_mapping(monkeypatch, caplog, failure: str) -> None:
+    """Unreadable and invalid report configuration both remain visible empty fallbacks."""
+    if failure == "open":
+        monkeypatch.setattr("builtins.open", mock.Mock(side_effect=OSError("unreadable")))
+    else:
+        monkeypatch.setattr(ss.json, "load", mock.Mock(side_effect=ValueError("invalid JSON")))
+
+    with caplog.at_level(logging.ERROR, logger="vntyper.scripts.screening_summary"):
+        assert ss.load_report_config() == {}
+
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.screening_summary"]
+    assert [record.levelno for record in records] == [logging.ERROR]
+    assert "Failed to load report config" in records[0].message
 
 
 def test_the_kestrel_block_declares_the_expected_states(report_config) -> None:
@@ -431,21 +448,21 @@ def test_widening_the_quality_axis_cannot_change_positivity(report_config) -> No
 
 
 def test_a_broken_config_yields_the_unavailable_message(caplog) -> None:
-    """`report_config.json` failing to load must not take the whole report down."""
-
-    class Exploding(dict):
-        def get(self, *args, **kwargs):
-            raise RuntimeError("boom")
-
-    with caplog.at_level(logging.ERROR, logger="vntyper.scripts.screening_summary"):
-        summary = ss.build_screening_summary(
-            pd.DataFrame(), pd.DataFrame(), False, evaluate_coverage_qc(None, None, 100, 50.0), Exploding()
-        )
+    """An internal screening dependency failure yields the explicit unavailable state."""
+    with (
+        mock.patch.object(ss, "compute_algorithm_result", side_effect=RuntimeError("boom")),
+        caplog.at_level(logging.ERROR, logger="vntyper.scripts.screening_summary"),
+    ):
+        summary = ss.build_screening_summary(pd.DataFrame(), pd.DataFrame(), False, _passing(), {})
 
     assert summary.text == ss.UNAVAILABLE_SUMMARY_MESSAGE
     assert summary.is_positive is False
+    assert summary.kestrel_result == ""
+    assert summary.advntr_result == ""
+    assert summary.quality_metrics_pass is False
     assert summary.matched_rule is False
-    assert any(record.levelno >= logging.ERROR for record in caplog.records)
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.screening_summary"]
+    assert [record.levelno for record in records] == [logging.ERROR]
 
 
 def test_a_state_with_no_rule_warns_rather_than_going_quiet(caplog, report_config) -> None:

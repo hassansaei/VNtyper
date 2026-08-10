@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest import mock
 
 import coverage
 import pytest
@@ -154,9 +155,17 @@ def test_the_gate_fails_below_the_floor(monkeypatch) -> None:
     assert coverage_gate.main() == 1
 
 
-def test_unreadable_coverage_fails_the_gate(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("failing_method", ["load", "report"])
+def test_coverage_read_failure_returns_none_and_fails_gate(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing_method: str
 ) -> None:
+    """Coverage API read failures remain a ``None`` sentinel that the gate fails closed."""
+    fake_coverage = mock.Mock()
+    getattr(fake_coverage, failing_method).side_effect = OSError("unreadable")
+    monkeypatch.setattr(coverage, "Coverage", mock.Mock(return_value=fake_coverage))
+
+    assert coverage_gate.read_total() is None
+
     monkeypatch.setattr(sys, "argv", ["coverage_gate.py"])
     monkeypatch.setattr(coverage_gate, "read_floor", lambda: 86.0)
     monkeypatch.setattr(coverage_gate, "read_total", lambda: None)
