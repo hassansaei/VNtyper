@@ -23,7 +23,7 @@ help:
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format the same paths with Ruff"
 	@echo "  make format-check     - Check formatting and lint without changes"
-	@echo "  make type-check       - Run mypy type checker on vntyper/ and docker/app/"
+	@echo "  make type-check       - Run mypy type checker on vntyper/, docker/app/, and scripts/"
 	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
@@ -116,6 +116,9 @@ install-dev:
 # formatter on them at all. The three checks that gate a PR (`check`, `check-all`,
 # `ci-local`) all reach ruff through these targets, so widening the variable widens
 # every gate at once.
+#
+# Ruff's production scope and mypy's runtime scope must be reviewed together. Tests are
+# checked in a separate mypy pass, while docs/ is Ruff-only.
 RUFF_PATHS := vntyper/ docker/app/ tests/ scripts/ docs/
 
 lint:
@@ -143,8 +146,8 @@ format-check:
 
 # Type checking targets
 type-check:
-	@echo "$(BLUE)Running mypy type checker on vntyper package and web service...$(RESET)"
-	mypy vntyper/ docker/app/
+	@echo "$(BLUE)Running mypy type checker on vntyper package, web service, and scripts...$(RESET)"
+	mypy vntyper/ docker/app/ scripts/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 type-check-tests:

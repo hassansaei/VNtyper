@@ -179,6 +179,14 @@ def test_repository_coverage_thresholds_remain_independent() -> None:
     assert re.search(r"^PATCH_COVERAGE_TARGET\s*\?=\s*80$", text, re.MULTILINE)
 
 
+def test_mypy_runtime_and_test_scopes_are_deliberately_separate() -> None:
+    recipes = _recipes()
+    assert "mypy vntyper/ docker/app/ scripts/" in recipes["type-check"]
+    assert "tests/" not in recipes["type-check"]
+    assert "mypy vntyper/ tests/" in recipes["type-check-all"]
+    assert "scripts/" not in recipes["type-check-all"]
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)

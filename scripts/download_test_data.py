@@ -144,7 +144,7 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
             logger.info(f"  ... and {len(all_files) - 10} more entries")
 
         # Robust detection of dominant top-level directory
-        dir_counts = {}
+        dir_counts: dict[str, int] = {}
         files_at_root = 0
 
         for name in all_files:
