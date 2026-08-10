@@ -1,11 +1,11 @@
 # Milestone 6 Release Automation and Naming Design
 
-**Date:** 2026-08-10  
-**Status:** Approved design; implementation not started  
-**Milestone:** [#6 — 5. Gates, harness and release automation (parallel)](https://github.com/hassansaei/VNtyper/milestone/6)  
+**Date:** 2026-08-10
+**Status:** Approved design; implementation not started
+**Milestone:** [#6 — 5. Gates, harness and release automation (parallel)](https://github.com/hassansaei/VNtyper/milestone/6)
 **Issues:** [#214](https://github.com/hassansaei/VNtyper/issues/214),
 [#218](https://github.com/hassansaei/VNtyper/issues/218),
-[#220](https://github.com/hassansaei/VNtyper/issues/220)  
+[#220](https://github.com/hassansaei/VNtyper/issues/220)
 **Evidence baseline:** `main` at `ebb15b26631242a3295607e4eda4c68f688cd9a2`
 
 ## 1. Outcome

@@ -1,7 +1,7 @@
 # Milestone 6 Gates, Harness, and Release Automation Program Design
 
-**Date:** 2026-08-10  
-**Milestone:** [#6 — 5. Gates, harness and release automation (parallel)](https://github.com/hassansaei/VNtyper/milestone/6)  
+**Date:** 2026-08-10
+**Milestone:** [#6 — 5. Gates, harness and release automation (parallel)](https://github.com/hassansaei/VNtyper/milestone/6)
 **Issues:** [#71](https://github.com/hassansaei/VNtyper/issues/71), [#204](https://github.com/hassansaei/VNtyper/issues/204), [#208](https://github.com/hassansaei/VNtyper/issues/208), [#211](https://github.com/hassansaei/VNtyper/issues/211), [#214](https://github.com/hassansaei/VNtyper/issues/214), [#218](https://github.com/hassansaei/VNtyper/issues/218), [#219](https://github.com/hassansaei/VNtyper/issues/219), [#220](https://github.com/hassansaei/VNtyper/issues/220), [#226](https://github.com/hassansaei/VNtyper/issues/226)
 
 ## Decision summary
