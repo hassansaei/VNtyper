@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases
+from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases, load_test_config
 from tests.support import orchestration
 
 pytestmark = pytest.mark.unit
@@ -107,6 +107,14 @@ def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:
             "expected_files": ["summary_report.html", "kestrel/kestrel_result.tsv"],
         }
     ]
+
+
+def test_single_end_keep_case_names_the_real_unmapped_artifact() -> None:
+    cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
+    keep = cases["example_b178_hg19_single_end_keep"]
+    assert keep["cli_options"] == ["--keep-intermediates"]
+    assert keep["expected_present"] == ["fastq_bam_processing/output_unmapped.bam"]
+    assert keep["expected_archive"] is False
 
 
 def test_mixed_layout_diagnostic_renders_the_exact_dynamic_paths_and_counts(tmp_path: Path) -> None:

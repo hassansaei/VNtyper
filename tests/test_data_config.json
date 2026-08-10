@@ -891,12 +891,16 @@
         "check_igv_report": false
       },
       {
-        "test_name": "example_b178_hg19_single_end_default",
+        "test_name": "example_b178_hg19_single_end_keep",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
         "cli_options": [
           "--keep-intermediates"
         ],
+        "expected_present": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "expected_archive": false,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
             "value": 416,
