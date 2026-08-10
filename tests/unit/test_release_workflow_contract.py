@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,17 @@ from scripts.release_policy import REQUIRED_CHECK_NAMES
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
+
+README_RENAMES = {
+    "# VNtyper 2.0 - A Pipeline": "# VNtyper 2 - A Pipeline",
+    "**VNtyper 2.0** is an advanced": "**VNtyper 2** is an advanced",
+    "VNtyper 2.0 uses modern Python packaging": "VNtyper 2 uses modern Python packaging",
+    "VNtyper 2.0 offers multiple subcommands": "VNtyper 2 offers multiple subcommands",
+    "Docker image for VNtyper 2.0 is provided": "Docker image for VNtyper 2 is provided",
+    "VNtyper 2.0 integrates multiple steps": "VNtyper 2 integrates multiple steps",
+    "VNtyper 2.0 relies on several tools": "VNtyper 2 relies on several tools",
+    "If you use VNtyper 2.0 in your research": "If you use VNtyper 2 in your research",
+}
 
 
 def _workflow(name: str) -> dict[str, Any]:
@@ -628,6 +640,60 @@ def test_publish_result_distinguishes_new_existing_and_failed_reruns(
         "step_outcome": publish_outcome,
         "existed_before": existed_before == "true",
     }
+
+
+def test_current_container_commands_use_only_the_rolling_ghcr_main_image() -> None:
+    """Every runnable install example must be truthful before the first gated release."""
+    surfaces = (
+        ROOT / "README.md",
+        ROOT / "docs" / "getting-started" / "installation.md",
+        ROOT / "docs" / "user-guide" / "docker.md",
+    )
+    active_kinds: set[str] = set()
+    unsupported = re.compile(r"(?<![A-Za-z0-9_.-])(?:docker://)?saei/vntyper")
+    for path in surfaces:
+        text = path.read_text(encoding="utf-8")
+        normalized = " ".join(text.lower().split())
+        assert "rolling" in normalized
+        assert "unreleased" in normalized
+        assert "first gated release" in normalized
+        assert "`latest`" in text
+        assert "`vX.Y.Z`" in text
+        assert "`X.Y.Z`" in text
+        for block in re.findall(r"```bash\n(.*?)```", text, flags=re.DOTALL):
+            kinds = {kind for kind in ("docker pull", "docker run", "apptainer pull") if kind in block}
+            if not kinds:
+                continue
+            active_kinds.update(kinds)
+            assert "ghcr.io/hassansaei/vntyper:main" in block
+            assert unsupported.search(block) is None
+    assert active_kinds == {"docker pull", "docker run", "apptainer pull"}
+
+
+def test_generation_renames_grammar_and_protected_identities_are_exact() -> None:
+    """Only the nine approved generation-prose targets may drop the minor component."""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    for before, after in README_RENAMES.items():
+        assert before not in readme
+        assert readme.count(after) == 1
+    assert "This version is a refactored version of VNtyper v1 integrates" not in readme
+    assert "This refactored version of VNtyper v1 integrates" in readme
+    assert 'org.opencontainers.image.description="VNtyper 2.0 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1"' not in (
+        dockerfile
+    )
+    assert (
+        dockerfile.count(
+            'org.opencontainers.image.description="VNtyper 2 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1"'
+        )
+        == 1
+    )
+
+    assert 'title: "VNtyper"' in (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+    assert "site_name: VNtyper" in (ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "## VNtyper Version:" in (ROOT / "vntyper" / "scripts" / "kestrel_genotyping.py").read_text(encoding="utf-8")
+    assert (ROOT / "snakemake" / "vntyper2.smk").is_file()
+    assert (ROOT / "snakemake" / "run_vntyper2.sh").is_file()
 
 
 def test_validate_release_resolves_in_controller_and_tests_exact_candidate() -> None:

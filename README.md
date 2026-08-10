@@ -1,8 +1,8 @@
 [![DOI](https://zenodo.org/badge/484326398.svg)](https://doi.org/10.5281/zenodo.19744166)
 
-# VNtyper 2.0 - A Pipeline to genotype the MUC1-VNTR
+# VNtyper 2 - A Pipeline to genotype the MUC1-VNTR
 
-**VNtyper 2.0** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This version is a refactored version of VNtyper v1 integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
+**VNtyper 2** is an advanced pipeline designed to genotype MUC1 coding Variable Number Tandem Repeats (VNTR) in Autosomal Dominant Tubulointerstitial Kidney Disease (ADTKD-MUC1) using Short-Read Sequencing (SRS) data. This refactored version of VNtyper v1 integrates enhanced variant calling algorithms, robust logging mechanisms, and streamlined installation processes to provide researchers with a powerful tool for VNTR analysis.
 
 - We have developed a web server to provide free access to VNtyper, which runs in the background for ease of use.  
   Access it through the following link: [vntyper-online](https://vntyper.org/)
@@ -58,7 +58,7 @@
 
 ## Installation
 
-VNtyper 2.0 uses modern Python packaging with `pyproject.toml` and can be installed using `pip` (≥21.3) or via Conda environments for streamlined dependency management.
+VNtyper 2 uses modern Python packaging with `pyproject.toml` and can be installed using `pip` (≥21.3) or via Conda environments for streamlined dependency management.
 
 ### Using `pip`
 
@@ -86,7 +86,7 @@ VNtyper 2.0 uses modern Python packaging with `pyproject.toml` and can be instal
 
 ## Usage
 
-VNtyper 2.0 offers multiple subcommands that can be used depending on your input data and requirements. Below are the main subcommands available:
+VNtyper 2 offers multiple subcommands that can be used depending on your input data and requirements. Below are the main subcommands available:
 
 ### 1. Running the Full Pipeline
 
@@ -130,17 +130,17 @@ vntyper --config-path /path/to/config.json pipeline \
 
 ### 2. Running VNtyper with Docker
 
-Docker image for VNtyper 2.0 is provided and can be pulled and used as follows:
+Docker image for VNtyper 2 is provided and can be pulled and used as follows. The current `main` image is rolling and unreleased. The stable `latest` and immutable `vX.Y.Z` and `X.Y.Z` aliases become available only after the first gated release. Docker Hub artifacts are legacy, frozen, and unsupported.
 
 ```bash
 # pull the docker image
-docker pull saei/vntyper:main
+docker pull ghcr.io/hassansaei/vntyper:main
 
 # run the pipeline using the docker image
 docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    saei/vntyper:latest \
+    ghcr.io/hassansaei/vntyper:main \
     vntyper pipeline \
     --bam /opt/vntyper/input/filename.bam \
     -o /opt/vntyper/output/filename/
@@ -164,7 +164,7 @@ docker run -w /opt/vntyper --rm \
 >    docker run --user $(id -u):$(id -g) -w /opt/vntyper --rm \
 >      -v /local/input/folder/:/opt/vntyper/input \
 >      -v /local/output/folder/:/opt/vntyper/output \
->      saei/vntyper:latest \
+>      ghcr.io/hassansaei/vntyper:main \
 >      vntyper pipeline \
 >      --bam /opt/vntyper/input/filename.bam \
 >      -o /opt/vntyper/output/filename/
@@ -176,7 +176,7 @@ An Apptainer image can be generated from the Docker image as follows:
 
 ```bash
 # create the apptainer sif image
-apptainer pull docker://saei/vntyper:main
+apptainer pull docker://ghcr.io/hassansaei/vntyper:main
 
 # run the pipeline using the apptainer image
 apptainer run --pwd /opt/vntyper \
@@ -206,7 +206,7 @@ vntyper --config-path /path/to/config.json report \
 
 ## Pipeline Overview
 
-VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
+VNtyper 2 integrates multiple steps into a streamlined pipeline. The following is an overview of the steps involved:
 
 1. **FASTQ Quality Control**: Raw FASTQ files are checked for quality.  
 2. **(Optional) SHARK Filtering**: If `shark` is specified in `--extra-modules`, raw FASTQ reads are first filtered to extract MUC1-specific reads (especially relevant for exome or large WGS datasets).  
@@ -219,7 +219,7 @@ VNtyper 2.0 integrates multiple steps into a streamlined pipeline. The following
 
 ## Dependencies
 
-VNtyper 2.0 relies on several tools and Python libraries. Ensure that the following dependencies are available in your environment:
+VNtyper 2 relies on several tools and Python libraries. Ensure that the following dependencies are available in your environment:
 
 - Python >= 3.10 (`requires-python` in `pyproject.toml`; CI covers 3.10-3.13, and the
   Docker image runs the 3.12.13 pinned by `conda/environment_vntyper.yml`)  
@@ -320,7 +320,7 @@ Once the pipeline completes, you will have:
 
 ## Citations
 
-If you use VNtyper 2.0 in your research, please cite the following:
+If you use VNtyper 2 in your research, please cite the following:
 
 1. Saei H, Morinière V, Heidet L, et al. VNtyper enables accurate alignment-free genotyping of MUC1 coding VNTR using short-read sequencing data. iScience. 2023.  
 2. Audano PA, Ravishankar S, et al. Mapping-free variant calling using haplotype reconstruction from k-mer frequencies. Bioinformatics. 2018.  

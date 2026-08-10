@@ -4,17 +4,15 @@ VNtyper 2 provides pre-built Docker images with all dependencies included.
 
 ## Pull Pre-built Images
 
-=== "Docker Hub"
+Pull the current rolling image from GitHub Container Registry:
 
-    ```bash
-    docker pull saei/vntyper:latest
-    ```
+```bash
+docker pull ghcr.io/hassansaei/vntyper:main
+```
 
-=== "GitHub Container Registry"
-
-    ```bash
-    docker pull ghcr.io/hassansaei/vntyper:latest
-    ```
+The `main` tag is rolling and unreleased. The stable `latest` and immutable
+`vX.Y.Z` and `X.Y.Z` aliases become available only after the first gated
+release. Docker Hub artifacts are legacy, frozen, and unsupported.
 
 ## Build from Source
 
@@ -37,7 +35,7 @@ docker run -w /opt/vntyper --rm \
     --user $(id -u):$(id -g) \
     -v /path/to/input:/opt/vntyper/input \
     -v /path/to/output:/opt/vntyper/output \
-    vntyper:latest \
+    ghcr.io/hassansaei/vntyper:main \
     vntyper pipeline --bam /opt/vntyper/input/sample.bam \
     -o /opt/vntyper/output/sample/
 ```
@@ -55,9 +53,9 @@ docker run -w /opt/vntyper --rm \
 ## Verify Installation
 
 ```bash
-docker run --rm vntyper:latest vntyper --version
-docker run --rm vntyper:latest samtools --version
-docker run --rm vntyper:latest java -version
+docker run --rm ghcr.io/hassansaei/vntyper:main vntyper --version
+docker run --rm ghcr.io/hassansaei/vntyper:main samtools --version
+docker run --rm ghcr.io/hassansaei/vntyper:main java -version
 ```
 
 ## Health Checks
@@ -100,7 +98,7 @@ docker run -d -p 8000:8000 \
     -e REDIS_PASSWORD="$REDIS_PASSWORD" \
     -v /path/to/input:/opt/vntyper/input \
     -v /path/to/output:/opt/vntyper/output \
-    vntyper:latest
+    ghcr.io/hassansaei/vntyper:main
 ```
 
 Submit a job:
@@ -125,7 +123,7 @@ curl -O "http://localhost:8000/download/sample.zip"
 Convert the Docker image to an Apptainer SIF:
 
 ```bash
-apptainer pull docker://saei/vntyper:latest
+apptainer pull docker://ghcr.io/hassansaei/vntyper:main
 ```
 
 Run with Apptainer:

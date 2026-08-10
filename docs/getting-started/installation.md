@@ -60,15 +60,15 @@ VNtyper 2 requires the following to be installed on your system:
 
 === "Docker"
 
-    Pull the pre-built image from Docker Hub or GitHub Container Registry:
+    Pull the current image from GitHub Container Registry:
 
     ```bash
-    # Docker Hub
-    docker pull saei/vntyper:latest
-
-    # GitHub Container Registry
-    docker pull ghcr.io/hassansaei/vntyper:latest
+    docker pull ghcr.io/hassansaei/vntyper:main
     ```
+
+    The `main` tag is rolling and unreleased. The stable `latest` and immutable
+    `vX.Y.Z` and `X.Y.Z` aliases become available only after the first gated
+    release. Docker Hub artifacts are legacy, frozen, and unsupported.
 
     Or build from source:
 
