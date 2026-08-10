@@ -84,7 +84,9 @@ class TestEvaluateCondition:
         row = pd.Series({"Motif": "2"})
         with caplog.at_level(logging.WARNING, logger="vntyper.scripts.flagging"):
             assert evaluate_condition(row, "NonExistent > 0") is False
-        assert "NonExistent" in caplog.text
+        matching_records = [record for record in caplog.records if "NonExistent" in record.getMessage()]
+        assert len(matching_records) == 1
+        assert matching_records[0].levelno == logging.WARNING
 
     def test_combined_and_condition(self):
         row = pd.Series({"Depth_Score": 0.3, "Motif": "2"})
@@ -291,6 +293,15 @@ class TestEvaluateConditionErrorPath:
         with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
             assert evaluate_condition(row, "Depth_Score < 0.4") is False
         assert "Error evaluating condition" in caplog.text
+
+    def test_evaluation_error_is_false_and_observable(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A non-NameError condition failure stays false and logs at ERROR."""
+        row = pd.Series({"Depth_Score": "n/a"})
+        with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
+            assert evaluate_condition(row, "Depth_Score < 0.4") is False
+        matching_records = [record for record in caplog.records if "Error evaluating condition" in record.getMessage()]
+        assert len(matching_records) == 1
+        assert matching_records[0].levelno == logging.ERROR
 
     def test_a_broken_rule_cannot_invent_a_flag(self):
         """End to end: a rule that cannot be evaluated leaves the row unflagged (kills 89)."""

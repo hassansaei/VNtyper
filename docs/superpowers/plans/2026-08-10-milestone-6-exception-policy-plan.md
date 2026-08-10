@@ -553,6 +553,9 @@ git commit -m "test(errors): characterize flagging and VCF fallbacks"
 
 Omit unchanged production files.
 
+- [x] **Review round 1:** Strengthen missing-name log severity to exact WARNING and add the
+  selector-compatible non-`NameError` ERROR characterization.
+
 ### Task 5: Freeze guard, report, summary, and coverage-gate degradation
 
 **Files:**
