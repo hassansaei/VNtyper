@@ -10,7 +10,7 @@ import pytest
 
 from scripts.single_end_fixture import parse_single_end_fixture
 from tests.parametrization import load_test_config
-from tests.support.orchestration import run_bam_test_case
+from tests.support.orchestration import assert_declared_archive, run_bam_test_case
 
 logger = logging.getLogger(__name__)
 
@@ -61,3 +61,4 @@ def test_single_end_bam_produces_a_genotype(
         return result.returncode
 
     run_bam_test_case(case, local_runner, output_dir)
+    assert_declared_archive(case, output_dir)

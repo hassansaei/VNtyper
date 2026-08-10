@@ -50,6 +50,8 @@ def test_declared_failures_do_not_retain_unreachable_success_expectations() -> N
     """A case that stops at routing must not promise downstream reports or genotype fields."""
     success_only = {
         "expected_archive",
+        "expected_absent",
+        "expected_present",
         "kestrel_assertions",
         "check_igv_report",
         "expected_vcf",
@@ -188,6 +190,47 @@ def test_declared_absence_rejects_a_dangling_symlink_entry(tmp_path: Path) -> No
     case = {"test_name": "broken-link", "expected_absent": ["broken.txt"]}
     with pytest.raises(AssertionError, match="case=broken-link field=expected_absent unexpectedly present"):
         orchestration.assert_declared_artifacts(case, output)
+
+
+def test_successful_bam_enforces_declared_artifacts(tmp_path: Path) -> None:
+    case = {
+        "test_name": "bam-artifact",
+        "bam": "clean.bam",
+        "reference_assembly": "hg19",
+        "kestrel_assertions": {},
+        "expected_present": ["must-exist.txt"],
+    }
+    with (
+        mock.patch.object(orchestration, "assert_required_files"),
+        mock.patch.object(orchestration, "validate_kestrel_output"),
+        mock.patch.object(orchestration, "validate_coverage_output", return_value={"mean_cov": 0}),
+        pytest.raises(AssertionError, match="case=bam-artifact field=expected_present"),
+    ):
+        orchestration.run_bam_test_case(case, mock.Mock(return_value=0), tmp_path)
+
+
+def test_declared_archive_distinguishes_omitted_false_and_true(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    archive = Path(f"{output}.zip")
+    orchestration.assert_declared_archive({"test_name": "omitted"}, output)
+    orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
+    with pytest.raises(AssertionError, match="case=present field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "present", "expected_archive": True}, output)
+    archive.write_bytes(b"zip")
+    orchestration.assert_declared_archive({"test_name": "present", "expected_archive": True}, output)
+    with pytest.raises(AssertionError, match="case=absent field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
+
+
+def test_declared_archive_rejects_invalid_boolean_and_broken_symlink(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    with pytest.raises(ValueError, match="case=invalid field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "invalid", "expected_archive": "false"}, output)
+    Path(f"{output}.zip").symlink_to(tmp_path / "missing.zip")
+    with pytest.raises(AssertionError, match="case=absent field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
 
 
 def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:

@@ -107,6 +107,32 @@ def assert_declared_artifacts(test_case: dict, output_dir: Path) -> None:
     assert not failures, "Declared artifact mismatch:\n" + "\n".join(failures)
 
 
+def assert_declared_archive(test_case: dict, output_dir: Path) -> None:
+    """Assert the optional default sibling ZIP state for a successful case.
+
+    Args:
+        test_case: Integration case carrying an optional archive declaration.
+        output_dir: Per-case pipeline output directory.
+
+    Raises:
+        AssertionError: If the sibling archive has the wrong filesystem state.
+        ValueError: If ``expected_archive`` is not a Boolean.
+    """
+    if "expected_archive" not in test_case:
+        return
+    case_id = str(test_case.get("test_name", "<unnamed>"))
+    expected = test_case["expected_archive"]
+    if not isinstance(expected, bool):
+        raise ValueError(f"case={case_id} field=expected_archive must be a Boolean")
+    archive = Path(f"{output_dir}.zip")
+    if expected:
+        assert archive.is_file(), f"case={case_id} field=expected_archive expected file is missing: {archive}"
+    else:
+        assert not os.path.lexists(archive), (
+            f"case={case_id} field=expected_archive unexpected entry is present: {archive}"
+        )
+
+
 def mixed_layout_diagnostic(test_case: dict, output_dir: Path) -> str:
     """Render the exact fail-closed diagnostic declared for one mixed fixture.
 
@@ -196,6 +222,7 @@ def run_bam_test_case(
     # 6. Validate coverage output
     coverage_metrics = validate_coverage_output(output_dir)
     assert coverage_metrics["mean_cov"] >= 0, "Coverage mean should be non-negative"
+    assert_declared_artifacts(test_case, output_dir)
 
 
 def run_advntr_test_case(
