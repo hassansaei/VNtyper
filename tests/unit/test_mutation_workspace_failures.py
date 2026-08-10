@@ -66,14 +66,19 @@ def _install_lifecycle_double(
 
 
 @pytest.mark.parametrize(
-    "add_exception",
-    [OSError("add exploded"), KeyboardInterrupt("add interrupted")],
+    ("add_exception", "expected_type", "expected_message"),
+    [
+        (OSError("add exploded"), RuntimeError, "git worktree add failed: add exploded"),
+        (KeyboardInterrupt("add interrupted"), KeyboardInterrupt, "add interrupted"),
+    ],
     ids=["oserror", "keyboard-interrupt"],
 )
 def test_add_subprocess_exception_still_forces_exact_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     add_exception: OSError | KeyboardInterrupt,
+    expected_type: type[BaseException],
+    expected_message: str,
 ) -> None:
     real = tmp_path / "real"
     real.mkdir()
@@ -81,7 +86,7 @@ def test_add_subprocess_exception_still_forces_exact_cleanup(
     calls = _install_lifecycle_double(monkeypatch, real, sweep, add_exception=add_exception)
 
     with (
-        pytest.raises(type(add_exception), match=str(add_exception)),
+        pytest.raises(expected_type, match=expected_message),
         mutation_workspace.detached_head_workspace(real, (), ()),
     ):
         pytest.fail("a failed add must not yield")
