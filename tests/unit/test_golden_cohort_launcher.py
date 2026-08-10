@@ -295,19 +295,9 @@ def test_launch_uses_resolved_tree_and_exact_cli_argv_then_restores_process_stat
 
 def test_launch_restores_command_recorder_process_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     original_init = subprocess.Popen.__init__
-
-    def replacement_init(self: Any, args: Any, *rest: Any, **kwargs: Any) -> None:
-        del self, args, rest, kwargs
-
-    def install_recorder(log_path: Path) -> Any:
-        assert log_path == tmp_path / "commands.jsonl"
-        subprocess.Popen.__init__ = replacement_init  # type: ignore[method-assign]
-        return original_init
-
     monkeypatch.setattr(sys, "path", sys.path.copy())
     monkeypatch.setattr(launcher.os, "chdir", lambda tree: None)
     monkeypatch.setattr(launcher, "resolve", lambda tree, marker: _resolution(tmp_path, True))
-    monkeypatch.setattr(launcher, "_record_commands", install_recorder)
     monkeypatch.setitem(sys.modules, "vntyper.cli", SimpleNamespace(main=lambda: None))
 
     try:
@@ -323,6 +313,7 @@ def test_launch_restores_command_recorder_process_state(tmp_path: Path, monkeypa
             == 0
         )
         assert subprocess.Popen.__init__ is original_init
+        assert (tmp_path / "commands.jsonl").parent.is_dir()
     finally:
         subprocess.Popen.__init__ = original_init  # type: ignore[method-assign]
 

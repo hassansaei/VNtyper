@@ -402,6 +402,9 @@ Examples:
     if not isinstance(archive_url, str) or not archive_url.strip():
         logger.error("Archive URL is missing or invalid in test_data_config.json")
         return 1
+    if not isinstance(config.get("file_resources", []), list):
+        logger.error("file_resources must be a list in test_data_config.json")
+        return 1
 
     # Verify only mode
     if args.verify_only:
@@ -466,7 +469,7 @@ Examples:
             logger.info("You can now run tests with: make test")
             exit_code = 0
 
-    except Exception as e:
+    except (Exception, SystemExit) as e:
         logger.error(f"Download failed: {e}")
     try:
         if tmp_path.exists():

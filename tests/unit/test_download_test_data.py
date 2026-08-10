@@ -1,3 +1,4 @@
+import builtins
 import hashlib
 import json
 import sys
@@ -5,6 +6,7 @@ import zipfile
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -221,6 +223,30 @@ def test_main_returns_one_and_diagnoses_missing_archive_url(
     assert "Archive URL is missing or invalid in test_data_config.json" in caplog.text
 
 
+def test_main_returns_one_when_file_resources_is_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    script = tmp_path / "scripts/download_test_data.py"
+    script.parent.mkdir()
+    script.touch()
+    config = tmp_path / "tests/test_data_config.json"
+    config.parent.mkdir()
+    config.write_text(
+        json.dumps(
+            {
+                "archive_file": {"url": "https://example.invalid/data.zip"},
+                "file_resources": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dtd, "__file__", str(script))
+
+    with caplog.at_level("ERROR", logger=dtd.__name__):
+        assert dtd.main([]) == 1
+    assert "file_resources must be a list in test_data_config.json" in caplog.text
+
+
 def test_main_returns_one_and_diagnoses_temporary_archive_creation_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -365,6 +391,36 @@ def test_download_exception_returns_one_and_removes_temporary_archive(
         lambda **kwargs: nullcontext(SimpleNamespace(name=str(temporary_archive))),
     )
     monkeypatch.setattr(dtd, "download_file_requests", fail_download)
+
+    assert dtd.main(["--force"]) == 1
+    assert not temporary_archive.exists()
+
+
+def test_requests_unavailable_returns_one_and_removes_temporary_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / "scripts/download_test_data.py"
+    script.parent.mkdir()
+    script.touch()
+    config = tmp_path / "tests/test_data_config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"archive_file": {"url": "https://example.invalid/data.zip"}}))
+    temporary_archive = tmp_path / "named-temporary.zip"
+    temporary_archive.touch()
+    original_import = builtins.__import__
+
+    def fail_requests_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "requests":
+            raise ImportError("requests unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(dtd, "__file__", str(script))
+    monkeypatch.setattr(
+        dtd.tempfile,
+        "NamedTemporaryFile",
+        lambda **kwargs: nullcontext(SimpleNamespace(name=str(temporary_archive))),
+    )
+    monkeypatch.setattr(builtins, "__import__", fail_requests_import)
 
     assert dtd.main(["--force"]) == 1
     assert not temporary_archive.exists()
