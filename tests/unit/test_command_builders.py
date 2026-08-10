@@ -177,19 +177,21 @@ def test_the_fastp_command_uses_its_single_input_form_when_mate_two_is_absent():
 
 
 @pytest.mark.parametrize(
-    ("disable_adapter_trimming", "deduplication", "expected_suffix"),
+    ("disable_adapter_trimming", "deduplication", "expected_threads", "expected_suffix"),
     [
-        (True, True, " --disable_adapter_trimming --dedup"),
-        (True, False, " --disable_adapter_trimming"),
-        (False, True, " --dedup"),
-        (False, False, ""),
+        (True, True, 1, " --disable_adapter_trimming --dedup"),
+        (True, False, 4, " --disable_adapter_trimming"),
+        (False, True, 1, " --dedup"),
+        (False, False, 4, ""),
     ],
 )
-def test_every_fastp_flag_combination_is_pinned(disable_adapter_trimming, deduplication, expected_suffix):
-    """All four conditional-flag combinations, so neither switch can invert unnoticed."""
+def test_every_fastp_flag_combination_is_pinned(
+    disable_adapter_trimming, deduplication, expected_threads, expected_suffix
+):
+    """Only deduplication serializes fastp across all four flag combinations."""
     command = build_fastp_command(
         fastp_path=FASTP,
-        threads=1,
+        threads=4,
         fastq_1="/a_1.fq",
         fastq_2="/a_2.fq",
         output="/o",
@@ -202,6 +204,7 @@ def test_every_fastp_flag_combination_is_pinned(disable_adapter_trimming, dedupl
         deduplication=deduplication,
     )
 
+    assert command.startswith(f"fastp --thread {expected_threads} ")
     assert command.endswith("--json /o/s.json " + expected_suffix)
 
 

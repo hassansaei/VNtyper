@@ -30,7 +30,7 @@ Two rules follow, and they pull in opposite directions:
   operator-controlled configuration, not user input.
 
 The strings produced here are byte-identical to the ones the pipeline produced
-before this module existed, apart from five deliberate fixes:
+before this module existed, apart from six deliberate fixes:
 
 1. ``shlex.quote`` around interpolated paths (a no-op for paths that need no
    quoting, which is every path in the test suite and most real ones).
@@ -45,6 +45,9 @@ before this module existed, apart from five deliberate fixes:
 5. Non-fast target slicing excludes flag-4 reads (``-F 4``) before merging with
    complete recovery. On the registered b178 single-end fixture this prevents 329
    target reads from being duplicated: the merged count is 4,807 rather than 5,136.
+6. Dedup-enabled fastp commands use one worker because fastp 0.23.4's shared
+   atomic duplicate table retains whichever representative wins a scheduling race.
+   Dedup-disabled commands retain the caller's requested concurrency.
 
 Functions:
     build_fastp_command: FASTQ quality control

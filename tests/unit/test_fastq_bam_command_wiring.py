@@ -128,6 +128,35 @@ def test_process_fastq_emits_the_pinned_fastp_command(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("disable_adapter_trimming", "deduplication", "expected_threads"),
+    [
+        (True, True, 1),
+        (True, False, 4),
+        (False, True, 1),
+        (False, False, 4),
+    ],
+)
+def test_process_fastq_serializes_only_deduplication(
+    tmp_path, disable_adapter_trimming, deduplication, expected_threads
+):
+    """Adapter trimming does not influence the fastp worker count."""
+    recorder = _Recorder()
+    config = {
+        **CONFIG,
+        "bam_processing": {
+            **CONFIG["bam_processing"],
+            "disable_adapter_trimming": disable_adapter_trimming,
+            "deduplication": deduplication,
+        },
+    }
+
+    with patch.object(fastq_bam_processing, "run_command", recorder):
+        fastq_bam_processing.process_fastq("/data/in_R1.fq.gz", "/data/in_R2.fq.gz", 4, str(tmp_path), "output", config)
+
+    assert recorder.commands[0].startswith(f"fastp --thread {expected_threads} ")
+
+
 def test_process_fastq_raises_when_the_command_fails(tmp_path):
     """A failed fastp run must abort the stage rather than return silently."""
     with (
