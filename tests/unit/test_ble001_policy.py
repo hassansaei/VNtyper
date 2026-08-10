@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ import pytest
 from scripts import ble001_policy as policy_module
 from scripts.ble001_policy import (
     Diagnostic,
+    FailOpenPolicy,
     HandlerPolicy,
     Measurement,
     Policy,
@@ -229,6 +231,198 @@ def test_enclosing_symbol_rejects_invalid_source_or_row() -> None:
         enclosing_symbol("def broken(:\n", 1)
     with pytest.raises(ValueError, match="positive"):
         enclosing_symbol(SOURCE, 0)
+
+
+def _empty_policy() -> Policy:
+    """Return a policy which has deliberately reviewed no handler identities."""
+    return Policy("ruff 0.14.3", 0, 0, 0, (0, 0, 0), (), ())
+
+
+def _one_handler_policy(symbol: str, category: str = "A") -> Policy:
+    """Return one complete policy record for a handler in ``module.py``."""
+    fail_open: tuple[FailOpenPolicy, ...] = ()
+    categories: tuple[int, int, int] = (1, 0, 0)
+    if category == "C":
+        categories = (0, 0, 1)
+        fail_open = (
+            FailOpenPolicy(
+                "module.py",
+                symbol,
+                "preserved-contract",
+                "Returns an empty result.",
+                "The fallback remains observable.",
+                "tests/unit/test_module.py::test_fallback",
+                "ERROR log",
+            ),
+        )
+    return Policy(
+        "ruff 0.14.3",
+        1,
+        1,
+        1,
+        categories,
+        (HandlerPolicy("module.py", symbol, 1, 1, category, "Reviewed boundary."),),
+        fail_open,
+    )
+
+
+def test_validation_rejects_unreviewed_handler_growth(tmp_path: Path) -> None:
+    """An unsuppressed broad handler cannot grow outside the reviewed inventory."""
+    source = tmp_path / "module.py"
+    source.write_text("try:\n    pass\nexcept Exception:\n    pass\n", encoding="utf-8")
+    diagnostic = Diagnostic("module.py", 3, 1, "BLE001", "blind-except")
+
+    errors = validate_policy(
+        tmp_path,
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        _empty_policy(),
+    )
+
+    assert any("module.py::<module>" in error and "expected 0, actual 1" in error for error in errors)
+    assert any("normal count mismatch: expected 0, actual 1" in error for error in errors)
+    assert any("ignore-noqa count mismatch: expected 0, actual 1" in error for error in errors)
+
+
+def test_validation_rejects_suppressed_handler_growth_only_in_all_mode(tmp_path: Path) -> None:
+    """A suppressed handler changes the all-mode review burden without falsifying normal mode."""
+    source = tmp_path / "module.py"
+    source.write_text("try:\n    pass\nexcept Exception:  # noqa: BLE001\n    pass\n", encoding="utf-8")
+    diagnostic = Diagnostic("module.py", 3, 1, "BLE001", "blind-except")
+
+    errors = validate_policy(
+        tmp_path,
+        Measurement("ruff 0.14.3", ()),
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        _empty_policy(),
+    )
+
+    assert not any(error.startswith("normal count mismatch") for error in errors)
+    assert any("ignore-noqa count mismatch: expected 0, actual 1" in error for error in errors)
+    assert any("ignore-noqa identity module.py::<module>: expected 0, actual 1" in error for error in errors)
+
+
+def test_validation_uses_symbols_not_rows_when_source_moves(tmp_path: Path) -> None:
+    """Moving a handler without renaming it retains its reviewed stable identity."""
+    source = tmp_path / "module.py"
+    source.write_text(
+        "class Worker:\n    def run(self):\n        try:\n            pass\n        except Exception:\n            pass\n",
+        encoding="utf-8",
+    )
+    policy = _one_handler_policy("Worker.run")
+    diagnostic = Diagnostic("module.py", 5, 1, "BLE001", "blind-except")
+    assert (
+        validate_policy(
+            tmp_path,
+            Measurement("ruff 0.14.3", (diagnostic,)),
+            Measurement("ruff 0.14.3", (diagnostic,)),
+            policy,
+        )
+        == []
+    )
+
+    source.write_text("\n\n" + source.read_text(encoding="utf-8"), encoding="utf-8")
+    moved_diagnostic = replace(diagnostic, row=7)
+    assert (
+        validate_policy(
+            tmp_path,
+            Measurement("ruff 0.14.3", (moved_diagnostic,)),
+            Measurement("ruff 0.14.3", (moved_diagnostic,)),
+            policy,
+        )
+        == []
+    )
+
+
+def test_validation_detects_symbol_rename_as_removed_and_added_identity(tmp_path: Path) -> None:
+    """A rename requires a new reviewed identity rather than accepting line coincidence."""
+    source = tmp_path / "module.py"
+    source.write_text(
+        "class Worker:\n    def execute(self):\n        try:\n            pass\n        except Exception:\n            pass\n",
+        encoding="utf-8",
+    )
+    diagnostic = Diagnostic("module.py", 5, 1, "BLE001", "blind-except")
+
+    errors = validate_policy(
+        tmp_path,
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        _one_handler_policy("Worker.run"),
+    )
+
+    assert any("removed reviewed identity module.py::Worker.run" in error for error in errors)
+    assert any("identity module.py::Worker.execute: expected 0, actual 1" in error for error in errors)
+
+
+@pytest.mark.parametrize("field", ["disposition", "outcome", "rationale", "behavior_test", "observable_via"])
+def test_load_policy_rejects_missing_category_c_metadata(tmp_path: Path, field: str) -> None:
+    """Every category-C evidence field is required rather than optional prose."""
+    payload = json.loads((REPO_ROOT / "scripts/ble001_policy.json").read_text(encoding="utf-8"))
+    record = next(item for item in payload["fail_open"] if item["symbol"] == "write_pseudonymization_table")
+    del record[field]
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        load_policy(policy_path)
+
+
+def test_validation_rejects_category_c_record_with_a_nonexistent_behavior_node(tmp_path: Path) -> None:
+    """A category-C record must point at a resolvable unit-test function."""
+    source = tmp_path / "module.py"
+    source.write_text("try:\n    pass\nexcept Exception:\n    pass\n", encoding="utf-8")
+    diagnostic = Diagnostic("module.py", 3, 1, "BLE001", "blind-except")
+    policy = _one_handler_policy("<module>", category="C")
+    invalid_record = replace(policy.fail_open[0], behavior_test="tests/unit/test_missing.py::test_fallback")
+    policy = replace(policy, fail_open=(invalid_record,))
+
+    errors = validate_policy(
+        tmp_path,
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        Measurement("ruff 0.14.3", (diagnostic,)),
+        policy,
+    )
+
+    assert errors == [
+        "unresolved behavior-test node tests/unit/test_missing.py::test_fallback: "
+        "could not read tests/unit/test_missing.py: [Errno 2] No such file or directory: "
+        f"'{tmp_path / 'tests/unit/test_missing.py'}'"
+    ]
+
+
+def test_main_attributes_a_clean_inventory_to_reviewed_and_actual_ruff_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A clean remeasurement still reports both the frozen and executable Ruff versions."""
+    policy_path = tmp_path / "policy.json"
+    monkeypatch.setattr(policy_module, "read_ruff_paths", lambda _path: ("module.py",))
+    monkeypatch.setattr(policy_module, "load_policy", lambda _path: _one_handler_policy("<module>"))
+    measurements = iter((Measurement("ruff 0.16.0", ()), Measurement("ruff 0.16.0", ())))
+    monkeypatch.setattr(policy_module, "measure_ble001", lambda *_args, **_kwargs: next(measurements))
+    monkeypatch.setattr(policy_module, "validate_policy", lambda *_args: [])
+
+    assert main(["--repo-root", str(tmp_path), "--policy", str(policy_path)]) == 0
+    output = capsys.readouterr().out
+    assert "reviewed Ruff: ruff 0.14.3" in output
+    assert "actual Ruff: ruff 0.16.0" in output
+
+
+def test_validation_attributes_identity_drift_to_the_reviewed_and_actual_ruff_versions(tmp_path: Path) -> None:
+    """A changed identity under a new Ruff version asks for reclassification, not source blame."""
+    source = tmp_path / "module.py"
+    source.write_text("try:\n    pass\nexcept Exception:\n    pass\n", encoding="utf-8")
+    diagnostic = Diagnostic("module.py", 3, 1, "BLE001", "blind-except")
+
+    errors = validate_policy(
+        tmp_path,
+        Measurement("ruff 0.16.0", (diagnostic,)),
+        Measurement("ruff 0.16.0", (diagnostic,)),
+        _empty_policy(),
+    )
+
+    assert any("reviewed Ruff ruff 0.14.3 and actual Ruff ruff 0.16.0" in error for error in errors)
+    assert any("review and reclassify the changed identities" in error for error in errors)
+    assert not any("source growth" in error for error in errors)
 
 
 def test_measure_ble001_runs_independent_versioned_normal_and_all_measurements(
