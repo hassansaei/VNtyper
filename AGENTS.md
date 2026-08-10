@@ -41,6 +41,7 @@ Neither exists — use the commands above.
 | Fast tests (what CI runs) | `make test-unit` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
+| Scripts-only coverage proof | `make test-scripts-cov` |
 | Coverage of changed lines | `make patch-coverage` |
 | Advisory mutation score | `make mutation` |
 | Integration tests (needs 1.1 GB data) | `make test-integration` |
@@ -108,8 +109,8 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
-  `mypy vntyper/ docker/app/` (#194). `scripts/` is linted and formatted but is still in
-  no mypy target — see trap 16.
+  `mypy vntyper/ docker/app/ scripts/` (#194, #204). The root `scripts/` validation
+  instruments are also part of the canonical coverage source — see trap 16.
 - `vntyper/dependencies/kestrel/` — vendored JARs, never hand-edit.
 
 ## Code style
@@ -476,21 +477,23 @@ limit.
     files no longer *conflict* (`pyproject.toml` pins `numpy>=1.26.0`, the env installs
     `numpy=2.0.2`, which satisfies it) — but they are still resolved by two different
     solvers, so `--no-deps` stays.
-16. **`scripts/` is linted and formatted but is not type-checked.** `RUFF_PATHS` covers
-    `vntyper/ docker/app/ tests/ scripts/ docs/`, but `make type-check-all` runs
-    `mypy vntyper/ docker/app/` and then `mypy vntyper/ tests/` — `scripts/` appears in
-    neither, so nothing under it is type-checked by any gate. That is now **over 5,000
-    lines** — re-measure with `find scripts -name '*.py' | xargs wc -l`; it read 5,048
-    across 13 files when this was written, and it is still growing. Roughly 3,200 of
-    those arrived on this branch (`git diff --numstat origin/main...HEAD -- scripts/`:
-    3,212 added, 45 removed) — the golden-cohort harness, the adVNTR `LEN` differential
-    and the mutation runner's growth; the coverage gate, the test-data downloader and
-    `mutation_guard.py` predate it. The figure quoted here has been wrong before, which
-    is why the command is given rather than just the number.
-    Adding `scripts/` to the first mypy invocation is a one-line
-    change and still surfaces exactly one pre-existing error
-    (`scripts/download_test_data.py:147: Need type annotation for "dir_counts"`);
-    fix that first, then widen the target.
+16. **`scripts/` is in both runtime quality gates.** `RUFF_PATHS` covers
+    `vntyper/ docker/app/ tests/ scripts/ docs/`, and `make type-check` runs
+    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 118 source files.
+    `make type-check-all` then adds the deliberately separate `mypy vntyper/ tests/`
+    pass — do not claim `scripts/` is part of that tests invocation or collapse the two.
+
+    Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
+    appended only after all 24 Python files reached 92.5166935298181% branch-inclusive
+    coverage (4,018 of 4,343 statement/branch units). The four isolated combined runs
+    measured 87.90% on Python 3.10 and 87.89% on Python 3.11, 3.12 and 3.13, each across
+    4,510 unit tests. These figures do not change the independent gate semantics:
+    `[tool.coverage.report].fail_under = 86` is the hard floor,
+    `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
+    lines, and `SCRIPTS_COVERAGE_TARGET ?= 88` is the isolated pre-source proof. The
+    existing `exclude_also` entry ignores only mechanical direct-execution bootstrap
+    guards; callable `main(...)` functions, exit policy and substantive CLI branches
+    remain measured. Add no scripts omit entry to improve any of these numbers.
 
 ## Never
 

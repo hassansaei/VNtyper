@@ -216,8 +216,18 @@ def test_scripts_only_coverage_scope_matches_the_repository_tree() -> None:
 
 def test_coverage_source_is_complete_and_has_no_script_omission() -> None:
     config = coverage.Coverage(config_file=str(coverage_gate.PYPROJECT)).config
+    assert config.source is not None
     assert list(config.source) == ["vntyper", "docker/app", "scripts"]
     script_paths = [str(path) for path in sorted(coverage_gate.REPO_ROOT.glob("scripts/**/*.py"))]
     assert not config.run_omit
     assert not config.report_omit
     assert script_paths
+
+
+def test_contributor_docs_match_the_scripts_quality_scope() -> None:
+    agents = (coverage_gate.REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    mkdocs = (coverage_gate.REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "`scripts/` is linted and formatted but is not type-checked" not in agents
+    assert "`mypy vntyper/ docker/app/ scripts/`" in agents
+    assert "source = [`vntyper`, `docker/app`, `scripts`]" in agents
+    assert "  superpowers/" in mkdocs
