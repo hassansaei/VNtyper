@@ -30,7 +30,7 @@ help:
 	@echo "  make download-test-data      - Download test data from Zenodo (1.1GB, ~10-30 min)"
 	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
 	@echo "  make test                    - Run all tests (needs test data + Docker)"
-	@echo "  make test-unit               - Run unit tests only (fast, ~0.5s)"
+	@echo "  make test-unit               - Run unit tests only"
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
 	@echo "  make test-scripts-cov        - Measure scripts-only unit coverage"
@@ -44,7 +44,7 @@ help:
 	@echo "  make test-verbose            - Run tests with detailed output"
 	@echo ""
 	@echo "$(GREEN)Gates (run before opening a PR):$(RESET)"
-	@echo "  make check-all         - format + lint + mypy + unit tests (~4s)"
+	@echo "  make check-all         - format + lint + mypy + unit tests"
 	@echo "  make ci-local          - everything ci-tests.yml runs, locally"
 	@echo "  make ci-local-uv       - replicate CI's uv install path in a temp venv"
 	@echo "  make ci-local-docker   - everything docker-build.yml runs, locally"
@@ -220,8 +220,8 @@ test-fast:
 # whenever coverage climbs past it. The current branch-inclusive target/floor is 86%.
 COVERAGE_TARGET ?= 86
 
-# Pre-source proof for scripts/: this target intentionally starts below its fixed bar
-# and isolates its data file so test-unit-cov remains the canonical coverage producer.
+# The aggregate scripts-only proof keeps its fixed 88% bar and isolates its data file so
+# test-unit-cov remains the canonical coverage producer.
 SCRIPTS_COVERAGE_TARGET ?= 88
 
 # `--cov-report=xml` costs ~0.1s and writes coverage.xml, which `patch-coverage` below

@@ -141,10 +141,10 @@ jobs:
       # mypy genuinely needs the runtime deps installed to resolve imports.
       - run: uv pip install -e .[dev]
 
-      # type-check-all, not type-check: the latter is `mypy vntyper/ docker/app/` only,
-      # so every line under tests/ was outside CI's type gate. `type-check-all` adds a
-      # second, separate `mypy vntyper/ tests/` invocation - separate on purpose, see
-      # the comment on the target in the Makefile.
+      # type-check-all, not type-check: the latter is `mypy vntyper/ docker/app/ scripts/`
+      # only, so every line under tests/ would remain outside CI's type gate.
+      # `type-check-all` adds a second, separate `mypy vntyper/ tests/` invocation -
+      # separate on purpose, see the comment on the target in the Makefile.
       - run: make type-check-all
 
   test-unit:

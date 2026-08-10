@@ -248,4 +248,8 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "every script was measured above" not in agents
     assert "24 Python files" not in agents
     assert "92.5166935298181%" not in agents
+    assert "~5000 statements" not in agents
+    assert "three untested lines moved it 0.03" not in agents
+    assert "dedicated ratchet change" in normalized_agents
+    assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
     assert "  superpowers/" in mkdocs

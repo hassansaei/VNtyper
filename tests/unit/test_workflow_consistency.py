@@ -100,3 +100,4 @@ def test_unit_coverage_matrix_and_patch_coverage_version_are_fixed() -> None:
     assert "run: make test-unit-cov" in workflow
     assert "matrix.python-version == '3.12'" in workflow
     assert "PATCH_COVERAGE_BASE" in workflow
+    assert "`mypy vntyper/ docker/app/ scripts/`" in workflow

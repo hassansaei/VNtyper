@@ -50,8 +50,8 @@ Neither exists — use the commands above.
 | Docs build (CI-equivalent) | `make docs-build` |
 
 Always run `make check-all` before opening a PR. It gates on the **unit** tier only
-(~0.5 s) so it is runnable on a fresh clone; use `make check-full` when you also want the
-tiers that need the 1.1 GB Zenodo archive.
+so it is runnable on a fresh clone; use `make check-full` when you also want the tiers
+that need the 1.1 GB Zenodo archive.
 
 **If you changed anything under `.github/workflows/`, `make check-all` is not enough —
 run `make ci-local`.** It mirrors `ci-tests.yml` job for job (actionlint, format, lint,
@@ -178,14 +178,14 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 86** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 86** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it only in a dedicated ratchet change after the rounded integer is sustained by the Python 3.10–3.13 matrix; never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 86%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. The fresh milestone-4 gate measured **86.14% branch-inclusive across 4,303 unit
+against. The final milestone-4 gate measured **86.14% branch-inclusive across 4,303 unit
 tests**. Historically, the #171-#212 suite measured 81.70% after the floor moved from the
 earlier 80.24%; statement-only coverage at that earlier branch-coverage rollout was
 80.77%.
@@ -199,12 +199,11 @@ merge accident: they measure the same figure for different purposes, so the targ
 a warning and keeps its headroom above the gate. Do not collapse them.
 
 **The patch gate is what makes this rule enforceable.** The hard floor is an average over
-~5000 statements, so a PR can add a hundred untested lines and move it by less than a
-point — measured: three untested lines moved it 0.03. It has never once failed a PR for
-shipping untested code, and it cannot. `make patch-coverage` runs `diff-cover` over the
-lines your branch changed and fails below 80%, so an untested new function fails its own
-PR regardless of what the repo total is doing. The patch bar remains independently fixed
-at 80%; making every PR meet it helps the whole-repository average climb toward the
+thousands of statement and branch units, so a PR can add untested lines without moving
+the rounded repository total enough to fail. `make patch-coverage` runs `diff-cover` over
+the lines your branch changed and fails below 80%, so an untested new function fails its
+own PR regardless of what the repo total is doing. The patch bar remains independently
+fixed at 80%; making every PR meet it helps the whole-repository average climb toward the
 current 86% target.
 
 It scores against the **merge base**, so commits landing on `main` while your PR is open
@@ -232,9 +231,10 @@ prove the round trip leaves the committed file byte-identical.
 When you add tests to clear the patch gate, write them to kill mutants — assert on the
 values, not just that the call returned.
 
-`make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
-coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
-The gap between the two is real work, and rule 2 explains why it exists.
+`make test-unit-cov` reports both and prints the candidate edit when local coverage crosses
+an integer. Raise the floor only in a dedicated ratchet change after that integer is
+sustained by the Python 3.10–3.13 matrix. Never lower the floor to make a build pass — add
+the test instead. The gap between the two is real work, and rule 2 explains why it exists.
 
 **When raising the floor, use the number `make test-unit-cov` prints — never the `TOTAL`
 column of the coverage table.** Both that column and `coverage report --format=total`

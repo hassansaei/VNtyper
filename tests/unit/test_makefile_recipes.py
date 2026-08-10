@@ -171,6 +171,8 @@ def test_scripts_coverage_target_is_isolated_and_fixed_at_88() -> None:
     assert "COVERAGE_FILE=" in recipe
     assert 'test -n "$$tmp_dir"' in recipe
     assert 'rm -rf -- "$$tmp_dir"' in recipe
+    assert "starts below its fixed bar" not in text
+    assert "aggregate scripts-only proof keeps its fixed 88% bar" in text
 
 
 def test_repository_coverage_thresholds_remain_independent() -> None:
