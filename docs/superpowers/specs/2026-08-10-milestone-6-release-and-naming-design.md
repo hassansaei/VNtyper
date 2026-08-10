@@ -204,6 +204,10 @@ and Docker tests, and the first push. It still does not publish PR images. For a
 - existing-compatible `ghcr.io/hassansaei/vntyper:sha-<7 lowercase hexadecimal characters>`;
 - `org.opencontainers.image.revision=<the same 40-character SHA>`;
 - `org.opencontainers.image.version=<vntyper.version.__version__>`.
+- a run-attempt-scoped `docker-release-evidence-<full SHA>-<run attempt>` artifact containing contract version, full
+  SHA, the post-push registry-reported manifest digest, workflow run ID/attempt, revision label, and package-version label.
+  It uses `actions/upload-artifact@v5`, fails when the file is absent, and has explicit 90-day retention so an
+  operator-created tag can consume evidence after the originating main run.
 
 The package version is read from `vntyper/version.py` without importing the application. The build
 passes only the dynamic OCI keys it owns (`created`, `revision`, and `version`) so the Dockerfile's
@@ -231,6 +235,9 @@ filesystem mutation, subprocess, or network I/O. Its tested interfaces cover:
 - floating-alias semver comparison and anti-downgrade decisions;
 - a structured release plan suitable for `$GITHUB_OUTPUT` and the step summary.
 
+Runtime collection protocols (`Mapping` and `Sequence`) come from `collections.abc`; only `Literal` comes from
+`typing`, preserving the Python 3.10 floor without deprecated runtime typing aliases.
+
 Workflow steps own `gh api`, Git fetches, `docker buildx imagetools inspect/create`, artifact
 upload/download, sleep, and logging. They convert external observations into policy inputs and
 execute only an approved plan. This keeps release judgment independently unit-testable without
@@ -251,10 +258,18 @@ shipping it inside the `vntyper` runtime package.
 5. `publish-pypi` — download the built distributions and invoke the protected OIDC publisher. It
    runs only for a valid tag event and needs validation, gates, package build, and GHCR promotion.
 
-A final always-running summary step/job records all terminal decisions. Whole-workflow concurrency
-is per version with `cancel-in-progress: false`. The `promote-ghcr` job additionally uses one fixed
-repository-wide concurrency group with `cancel-in-progress: false`; promotions of different
-versions therefore cannot race between inspecting and updating floating aliases.
+A final always-running summary job depends on every prior job with job-level `if: always()` and composes their explicit
+JSON outputs plus `needs.<job>.result`; individual job summaries are not treated as cross-job state.
+Each fallible phase has a separate `if: always()` result serializer. Polling persists the last snapshot before deciding;
+the evidence preflight persists `pending`, `eligible`, `ineligible`, or `infrastructure-failure` plus ordered candidate
+runs and the selected run; evidence persists selected-run/validation state; promotion atomically records `attempted`,
+then `write_succeeded`, then `verified` for each alias so a successful write followed by failed inspection remains visible; publication
+records pre-publish PyPI existence plus action outcome. Terminal failures therefore retain structured last state.
+Whole-workflow concurrency is per version with `cancel-in-progress: false`. The `promote-ghcr` job additionally uses one fixed
+repository-wide concurrency group with `cancel-in-progress: false`, so promotions cannot execute concurrently between
+inspecting and updating floating aliases. GitHub retains at most one pending run per group: a newer pending promotion
+may cancel an older pending promotion before it acquires write authority. That canceled version is retried explicitly;
+idempotent alias/package rules make retry safe. This group is a mutual-exclusion lock, not an unbounded queue.
 
 ## 6. Interfaces, inputs, outputs, and invariants
 
@@ -268,6 +283,9 @@ versions therefore cannot race between inspecting and updating floating aliases.
 - The tag's plain version must equal the executed value of `vntyper/version.py::__version__`.
 - The existing version-consistency test must also prove `CITATION.cff` and the current changelog
   version agree. A mismatch fails before polling or publication.
+- Validation summary state retains the expected tag version, each observed package, `CITATION.cff`, and current
+  changelog version, a Boolean match verdict for each, and the version-consistency pytest exit/verdict. An early setup
+  failure uses explicit unavailable values rather than dropping the fields.
 
 The workflow reacts to an operator-created tag. It never creates, force-updates, deletes, or pushes
 a Git tag and never creates a GitHub Release.
@@ -277,7 +295,13 @@ a Git tag and never creates a GitHub Release.
 `workflow_dispatch` accepts one required existing strict `vMAJOR.MINOR.PATCH` tag. It resolves the
 tag to a 40-character candidate SHA and plain version. Manual mode:
 
+- keeps the current workflow/controller checkout separate from the candidate checkout, so coordinator helpers remain
+  available even when inspecting a pre-milestone tag while version tests execute against candidate files;
 - verifies the SHA is on `main` and the candidate version equals package metadata at that SHA;
+- performs an evidence-contract preflight before the long check poll: completed successful main-push Docker runs with
+  no attempt-qualified contract artifact are explicitly pre-contract/ineligible; no completed run remains pending.
+  Eligible runs are ordered by descending numeric run ID and the exact attempt-qualified artifact search falls back in
+  that order; the structured preflight state preserves every eligible run and the selected run;
 - polls the same exact-SHA checks and inspects the same SHA image;
 - builds and checks the distributions;
 - computes the exact alias and anti-downgrade plan;
@@ -307,7 +331,11 @@ For each name the coordinator reads check-runs for the full candidate SHA, filte
 Actions app, and evaluates the newest run attempt. A success from a different SHA, older attempt,
 or similarly named job is irrelevant.
 
-Polling is bounded to 120 attempts at 30-second intervals: no more than 60 minutes of waiting.
+Polling is bounded to 120 attempts at 30-second intervals: no more than 60 minutes of deliberate sleep. The job timeout
+is at least 65 minutes so setup/API overhead cannot preempt the policy timeout.
+Each Check Runs API snapshot is itself bounded to three attempts with five seconds between failures. The classifier
+receives the configured maximum explicitly, and the shell exits nonzero after the outer loop even if a future
+classifier/configuration mismatch returns `wait` on the last iteration.
 Missing, queued, requested, waiting, or in-progress checks continue polling. `failure`,
 `cancelled`, `timed_out`, `action_required`, `startup_failure`, `stale`, or another terminal
 non-success conclusion fails immediately. Exhausting the bound fails with the last observed state
@@ -318,21 +346,35 @@ cannot silently restore green-on-skip release behavior.
 
 ### 6.4 Image input and promotion output
 
-The only release image input is:
+The human-readable release image reference is:
 
 `ghcr.io/hassansaei/vntyper:sha-<first 7 characters of candidate SHA>`
 
-Before promotion, inspection must prove:
+The authoritative input is the post-push registry digest from the successful exact-SHA Docker workflow's
+run-attempt-scoped evidence artifact. After its explicit push, the Docker workflow reads the registry-reported
+`{{.Manifest.Digest}}` for `sha-<7>` and verifies that registry object's revision/version labels before upload. The coordinator orders all
+completed-success main-branch `push` runs of `docker-build.yml` whose `head_sha` equals the candidate by descending
+numeric run ID, selects the first with its exact run-attempt-qualified artifact, downloads only that artifact, and
+validates its contract version, run ID/attempt, SHA, digest, revision, and version. Before
+promotion, inspection must prove:
 
 - the tag exists;
 - it resolves to one non-empty `sha256:` manifest digest;
 - OCI `org.opencontainers.image.revision` equals the full candidate SHA;
 - OCI `org.opencontainers.image.version` equals the plain release version;
+- the short tag points to that same digest, or its own revision label is a different 40-character SHA sharing the
+  candidate's seven-character prefix; only that case is a collision, while any other mismatch fails as unexplained
+  drift, and the immutable evidence digest is used only after its full-SHA/label proof;
 - the manifest is the artifact published by the successful Docker workflow for that SHA.
 
-Every target is created from `ghcr.io/hassansaei/vntyper@sha256:...` with manifest-level tooling.
+Every target is created from `ghcr.io/hassansaei/vntyper@sha256:...` with manifest-level tooling and
+`docker buildx imagetools create --prefer-index=false`, preserving a single manifest as a carbon copy instead of
+silently wrapping it in a new index.
 No layer is rebuilt or pulled into a local daemon. All aliases therefore resolve to the identical
 tested digest.
+
+Manual dispatch executes one untagged `imagetools create --dry-run --prefer-index=false` probe against the immutable
+source digest. The probe is read-only, has no `--tag`, and proves the Buildx contract without registry login or writes.
 
 Alias invariants:
 
@@ -340,6 +382,8 @@ Alias invariants:
   is an invariant violation and hard failure. They are never silently repointed.
 - `X.Y`, `X`, and `latest` are floating. Absent means create. An existing lower semantic version
   advances to the candidate. The same version/digest is a no-op.
+- A floating alias with the candidate version but a different digest is `fail-conflict`; it is never treated as a
+  no-op or silently overwritten.
 - If a floating alias already reports a higher semantic package version, the candidate is an old
   rerun: skip that alias and emit an explicit anti-downgrade notice. Do not fail the otherwise
   valid rerun and do not move the alias backward.
@@ -350,11 +394,11 @@ Alias invariants:
 Exact aliases execute before floating aliases. This ensures that a release always acquires its
 immutable identity even when a newer release already owns all floating aliases.
 
-If the short-SHA source tag is absent, the release stops before package build or any write and
-names the exact failed `Docker Build` run to rerun. Every eligible post-milestone `main` push is
-required to build regardless of paths, so rerunning that existing run is a real recovery path.
-Pre-milestone SHAs without this guarantee are dry-run diagnostics only and are not eligible for a
-new production release. No alternate image or `main` tag may be substituted.
+If the evidence artifact or source manifest is absent, the release stops before package build or any write and names
+the exact `Docker Build` run to rerun. An evidence payload with the wrong contract version is explicitly ineligible.
+Every eligible post-milestone `main` push is required to build regardless of paths, so rerunning that existing run is a
+real recovery path. Pre-milestone SHAs lack this artifact and are dry-run diagnostics only; production rejects them with
+the explicit ineligibility reason. No alternate image or `main` tag may be substituted.
 
 ### 6.5 Python distribution output
 
@@ -362,6 +406,8 @@ The build job checks out the verified SHA with persisted Git credentials disable
 3.12 inside an explicit virtual environment, installs only build/check tooling, runs
 `python -m build` and `twine check dist/*`, and uploads only the resulting wheel and sdist. It has
 `contents: read` and no `id-token: write`, environment, package-write permission, or package secret.
+It uses `actions/upload-artifact@v5` with seven-day retention; the OIDC job consumes the exact artifact name with
+`actions/download-artifact@v5`.
 
 The publish job has no source checkout or build toolchain. It downloads that workflow artifact,
 uses GitHub environment `pypi`, and grants only `id-token: write` plus permissions required to read
@@ -429,6 +475,8 @@ digest, treats promotion as a no-op, and retries OIDC publication with `skip-exi
   helper code remains compatible with the declared floor.
 - CI creates an explicit virtual environment (`uv venv`/`VIRTUAL_ENV` and `.venv/bin`, or an
   equivalent `setup-python` venv). It never uses `uv pip install --system` on Ubuntu 24.04.
+- Candidate validation's explicit venv installs `pytest`, `packaging`, `PyYAML`, and `requests`; `requests` is required
+  at collection time by repository `tests/conftest.py` even when only the version-consistency node is selected.
 - Tests run from the repository root. Every new unit test module declares
   `pytestmark = pytest.mark.unit`; pure policy tests use no network, Docker daemon, registry, or
   test-data archive.
@@ -444,7 +492,7 @@ Workflow-level permissions remain `{}`. Each job receives only what it uses:
 | Job | Permissions | Prohibited capability |
 | --- | --- | --- |
 | `validate-release` | `contents: read` | no checks, package write, OIDC, or secrets |
-| `wait-for-release-gates` | `contents: read`, `checks: read`, `packages: read` | no package write or OIDC |
+| `wait-for-release-gates` | `actions: read`, `contents: read`, `checks: read`, `packages: read` | no package write or OIDC |
 | `build-package` | `contents: read`, workflow artifact access | no OIDC, environment, or package secret |
 | `promote-ghcr` | `contents: read`, `packages: write` | no OIDC or PyPI credential |
 | `publish-pypi` | `id-token: write`, workflow artifact access | no checkout credential, package write, or long-lived secret |
@@ -453,6 +501,8 @@ Workflow-level permissions remain `{}`. Each job receives only what it uses:
 - The production event is a base-repository tag push, but a tag alone is not authority: strict
   syntax, main ancestry, exact-SHA checks, package version, and image identity all fail closed.
 - `GITHUB_TOKEN` authenticates GHCR. Docker Hub credentials are unused and must not be added.
+- Production gate inspection performs an explicit `docker/login-action@v4` GHCR login before Buildx reads; promotion
+  performs its own write-authorized login. Manual dispatch remains unauthenticated and read-only.
 - Shell steps place validated values in environment variables, quote expansions, use
   `set -euo pipefail`, and never interpolate unvalidated tag/input strings into executable code.
 - The PyPI job uses the protected `pypi` environment. Its OIDC token is short-lived and job-bound;
@@ -464,18 +514,22 @@ Workflow-level permissions remain `{}`. Each job receives only what it uses:
 
 ## 10. Observability and diagnostic output
 
-Every release run writes a single structured GitHub step summary containing:
+The final `release-summary` job writes a single structured GitHub step summary containing:
 
 - event mode (`production tag` or `dry run`), tag/candidate version, full SHA, and main-ancestry
   result;
 - package, citation, and changelog version verdicts;
+- evidence-preflight state/reason, ordered eligible Docker runs, and selected run when one exists;
 - required check name, selected check-run URL/attempt/status/conclusion, attempt count, and elapsed
   polling time;
 - SHA image reference, immutable digest, OCI revision, and OCI package version;
+- Docker workflow run ID/attempt/URL, evidence contract version, and provenance verdict;
 - each alias, its previous digest/version if present, decision (`create`, `advance`, `no-op`,
-  `skip-newer`, `skip-unorderable`, or `fail-conflict`), and final digest where known;
+  `skip-newer`, `skip-unorderable`, or `fail-conflict`), its attempted/write-succeeded/verified state, and final digest
+  where known;
 - package artifact filenames and `twine check` result;
-- PyPI mode/result and whether `skip-existing` handled an existing distribution;
+- PyPI mode/result and whether the candidate version existed immediately before the OIDC action, allowing the summary
+  to distinguish `already-existed-skip`, `published`, and `failed`;
 - a prominent statement that dry run performed no registry, PyPI, tag, or release mutation.
 
 Anti-downgrade and unorderable-floating decisions also emit `::notice::` annotations. Identity
@@ -497,6 +551,7 @@ Unit tests must prove:
 - alias derivation returns exactly `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X`, `latest` in deterministic order;
 - exact aliases cover absent, same-digest, and conflicting-digest states;
 - floating aliases cover absent, older, equal, newer, and missing/unparseable label states;
+- equal-version floating aliases cover same-digest no-op and different-digest hard conflict;
 - a rerun after every possible prefix of completed alias operations converges on the same digest;
 - dry-run plans contain the same decisions but no executable mutation operations.
 
@@ -512,9 +567,15 @@ Static executable tests must parse the workflows and prove:
 - `publish-pypi.yml` has tag and manual triggers, and manual mode cannot satisfy any production
   job guard;
 - `publish-pypi.yml` retains its exact filename and environment `pypi`;
+- Docker evidence and package uploads use `actions/upload-artifact@v5` with explicit 90-day and seven-day retention,
+  respectively, and PyPI uses `actions/download-artifact@v5` with the exact package artifact name;
 - all ten exact component/aggregate check-run names and the finite polling constants are present;
-- promotion consumes a digest resolved from the existing short-SHA tag after verifying its full
-  revision label and creates exactly five aliases;
+- Check Runs API retries are finite, the classifier receives the configured bound, and loop exhaustion cannot fall
+  through as success;
+- promotion consumes the immutable digest bound to the successful exact-SHA Docker evidence artifact, verifies the
+  short-tag/full-revision/package-version relationship, and creates exactly five aliases with
+  `--prefer-index=false`; an executable shell test and the read-only Buildx dry-run probe enforce this rather than a
+  source-string assertion;
 - `main` is absent from release-promotion destinations;
 - package build and PyPI publish are separate jobs; publish needs validation, gates, build, and
   promotion;
@@ -530,8 +591,9 @@ Tests must prove:
 - active install surfaces in `README.md`, `docs/getting-started/installation.md`, and
   `docs/user-guide/docker.md` use `ghcr.io/hassansaei/vntyper`, with no active
   `saei/vntyper` pull/run/Apptainer command;
-- documented current aliases are members of the release policy and documented `main` semantics
-  remain rolling/development rather than stable/latest;
+- documented current aliases are members of the release policy and documented `main` semantics remain
+  rolling/development rather than stable/latest. Until the first gated release creates `latest`, runnable install
+  examples use `main` or an exact existing SHA and explicitly label the transition;
 - the nine explicit targets contain `VNtyper 2` and no longer contain generation prose
   `VNtyper 2.0`;
 - the README grammar repair retains `VNtyper v1`;
@@ -556,7 +618,7 @@ make test-unit-cov
 make patch-coverage
 make docs-build
 make ci-local
-actionlint .github/workflows/docker-build.yml .github/workflows/publish-pypi.yml
+make lint-actions
 ```
 
 `make ci-local` is mandatory because this track changes workflows and must exercise CI's clean
@@ -615,9 +677,8 @@ coherent registry contract.
 
 1. Land implementation and tests without changing the package version or pushing any tag.
 2. Merge only after local workflow gates and GitHub `CI Success`/`Docker Success` pass.
-3. Use `workflow_dispatch` with an existing strict version tag to exercise the
-   full dry-run path. Confirm the summary proves checks, digest, labels, aliases, package build,
-   and zero production mutations.
+3. Use `workflow_dispatch` with an existing pre-milestone strict tag only to prove the explicit ineligibility path and
+   zero production mutations. Do not describe it as a full-path success.
 4. Prepare the next normal patch release on `main`, updating the repository's three authoritative
    version surfaces through the established process.
 5. After that exact main SHA earns both required checks, an operator creates and pushes the strict
@@ -626,9 +687,11 @@ coherent registry contract.
 6. Observe exact-alias promotion, floating-alias decisions, protected `pypi` approval, OIDC upload,
    PyPI attestations, and the final summary. Verify all GHCR aliases resolve to the recorded digest
    and PyPI files correspond to the workflow artifact.
-7. After the first successful real OIDC publication, a repository owner deletes the obsolete
+7. Dispatch that newly eligible existing tag and verify the complete dry-run path reports the same evidence and alias
+   plan while performing no writes.
+8. After the first successful real OIDC publication, a repository owner deletes the obsolete
    `PYPI_API_TOKEN` secret and records that action on #218.
-8. Close #214, #218, and #220 only with links to passing contract tests, the production release
+9. Close #214, #218, and #220 only with links to passing contract tests, the production release
    run, published GHCR aliases, PyPI OIDC evidence, and the completed secret-removal follow-up.
 
 Rollback of workflow or documentation code uses an ordinary PR. Published PyPI files and exact

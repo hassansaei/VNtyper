@@ -91,6 +91,9 @@ The authoritative floor at this baseline is 86.
   and exit policy with all network and filesystem effects mocked or confined to `tmp_path`.
 - `scripts/advntr_len_differential.py`: pure tests for parsing, command construction, case
   classification, result comparison, summary/exit policy, and failure reporting.
+- The quality-gates track creates `tests/unit/test_golden_cohort_launcher.py`; the later
+  exception-policy track modifies that shared file rather than recreating it and preserves the
+  single `golden_cohort.launcher` module identity.
 - Every other Python file under `scripts/`, prioritizing the currently weakest command-line and
   subprocess drivers: `golden_cohort/launcher.py`, `golden_cohort_gate.py`,
   `golden_cohort/artifacts.py`, `golden_cohort/runner.py`, `make_cram_fixtures.py`, and
@@ -99,6 +102,8 @@ The authoritative floor at this baseline is 86.
   otherwise require a network, Docker, conda, reference data, or a real subprocess.
 - `Makefile`, `pyproject.toml`, `pytest.ini` only where needed for the new gates and marker
   behavior.
+- `pytest.ini` remains the sole live pytest authority with strict markers and all five marker names;
+  the dead duplicated `[tool.pytest.ini_options]` block is removed rather than maintained in parallel.
 - Unit tests and gate-invariant tests under `tests/unit/`.
 - CI workflow commentary or commands necessary to make the 3.10-3.13 matrix exercise the final
   configuration.
@@ -251,9 +256,11 @@ Global invariants:
    must move above zero before work proceeds to aggregate optimization.
 2. Add decision- and failure-path tests for the weakest harness modules in measured priority
    order. Extract only pure logic needed to isolate effects.
-3. Run the isolated scripts-only command after each tranche. Continue until the precise
+3. Run unchanged-production characterizations before mutation-sensitive negative checks; a passing
+   characterization is not called RED.
+4. Run the isolated scripts-only command after each tranche. Continue until the precise
    branch-inclusive figure is at least 88.00%, with no omitted module.
-4. Run mutation testing selectively where practical to ensure assertions detect wrong values;
+5. Run mutation testing selectively where practical to ensure assertions detect wrong values;
    mutation results remain advisory.
 
 ### Phase 4: close the dynamic-analysis gap (#211)

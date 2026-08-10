@@ -27,7 +27,8 @@ linked criteria:
    child may write under the real repository's `vntyper/` tree.
 2. **AC208-2 — disposable working snapshot.** A sweep uses a unique
    `git worktree add --detach <path> <head>` checkout, verifies its HEAD, overlays the
-   validated current tracked and non-ignored untracked state, records that manifest,
+   validated current tracked and non-ignored untracked state, records both the overlay
+   operations and the authoritative post-overlay baseline manifest,
    and mutates only there.
 3. **AC208-3 — actual execution isolation.** Every baseline, canary, scoped and full-tier
    pytest subprocess uses the disposable worktree as `cwd`; import provenance must
@@ -107,7 +108,7 @@ The disposable `sweep_root` is used only for:
 - the unmutated baseline;
 - the killed-mutant canary;
 - scoped and full-tier pytest runs; and
-- the end-of-sweep manifest-relative restore check inside the disposable worktree.
+- the end-of-sweep post-overlay-baseline restore check inside the disposable worktree.
 
 Both roots are resolved absolute paths. Startup refuses if they are equal, if either is
 an ancestor of the other, or if a target resolved from `sweep_root` escapes that root.
@@ -150,9 +151,16 @@ Lifecycle:
    old path. Reject absolute paths, `..`,
    paths below the disposable-worktree parent, and symlinks whose resolved target
    escapes the real checkout. Never copy `.git`, ignored caches, mutation outputs, or
-   another worktree.
-6. Record a deterministic manifest of overlaid and deleted relative paths, then verify
-   selected target bytes in the disposable tree equal their guarded real-tree bytes.
+   a registered worktree whose root is a strict descendant of `real_root`. A registered
+   worktree that is an ancestor of `real_root` is the containing checkout and does not
+   exclude ordinary paths inside `real_root`.
+6. Record the deterministic `overlay_changes` applied from the real checkout. Then query
+   status inside the disposable tree and record a separate deterministic
+   `baseline_manifest` plus content/symlink/deletion digests. `baseline_manifest`, not
+   `overlay_changes`, is authoritative for later restoration: a staged real change whose
+   worktree bytes were reverted to HEAD still requires a copy operation, but that copy
+   correctly produces no disposable-tree status entry. Verify selected target bytes in
+   the disposable tree equal their guarded real-tree bytes.
 7. Yield the workspace.
 8. In `finally`, run `git -C <real_root> worktree remove --force <sweep_root>` and remove
    a remaining temporary directory only when it is the exact validated temporary path.
@@ -173,8 +181,8 @@ Within `main`:
 
 - `_refuse_if_dirty` continues to use `REAL_REPO_ROOT` and protects selected real target
   paths plus real output paths.
-- `detached_head_workspace(REAL_REPO_ROOT)` provides `workspace.sweep_root` plus the
-  current-working-tree snapshot manifest.
+- `detached_head_workspace(REAL_REPO_ROOT)` provides `workspace.sweep_root`, the applied
+  `overlay_changes`, and the authoritative post-overlay `baseline_manifest`.
 - every baseline/canary/sweep call receives that root explicitly;
 - `write_outputs` receives already-resolved real output paths and runs only after a
   complete valid sweep; and
@@ -237,8 +245,9 @@ Canary sequence:
 4. Run its scoped tests with `cwd=sweep_root`.
 5. Require a non-zero pytest result, meaning the canary was killed.
 6. Restore the disposable target in `finally` and prove the disposable worktree status
-   exactly equals the recorded overlay manifest before starting the full sweep. Empty
-   status is expected only when the real working snapshot itself was clean.
+   exactly equals the recorded post-overlay `baseline_manifest` before starting the full
+   sweep. The baseline manifest may be empty even when `overlay_changes` is non-empty—for
+   example, when staged content is reverted in the real worktree back to HEAD bytes.
 
 If the canary passes, times out for an unrelated reason, cannot be located, or cannot be
 restored, return non-zero and write no result files. A timeout is a kill during an
@@ -326,7 +335,8 @@ If normal cleanup fails:
 A sweep is successful only when:
 
 1. selected real targets and real outputs pass the dirty-path guard;
-2. the detached worktree is at the captured HEAD and its status equals the recorded overlay manifest;
+2. the detached worktree is at the captured HEAD, all validated overlay operations were
+   applied, and its status equals the separately recorded post-overlay baseline manifest;
 3. provenance resolves into the worktree;
 4. the unmutated baseline is green;
 5. the known-killed canary is killed and restored;
@@ -433,7 +443,7 @@ Add `tests/unit/test_mutation_workspace.py` for the extracted lifecycle and exte
 | Test | Acceptance evidence |
 | --- | --- |
 | Worktree command construction uses `add --detach` and the captured full HEAD | AC208-2 |
-| Added worktree with wrong HEAD is refused; post-overlay status must equal the manifest rather than be empty | AC208-2, AC208-8 |
+| Added worktree with wrong HEAD is refused; post-overlay status must equal its separately captured baseline manifest rather than the overlay-operation list or an assumed empty status | AC208-2, AC208-8 |
 | Porcelain rename records copy the new path and remove the old path in the snapshot | AC208-8 |
 | Target resolver rejects absolute, parent, symlink-escape and real-root paths | AC208-1, AC208-6 |
 | Every baseline/canary/scoped/full subprocess receives disposable `cwd` | AC208-3 |
@@ -442,7 +452,7 @@ Add `tests/unit/test_mutation_workspace.py` for the extracted lifecycle and exte
 | Output arguments resolve against the real invocation root before workspace entry | AC208-4 |
 | Canary lookup requires the exact scoring mutant | AC208-5 |
 | Canary pass, timeout, collection error or missing identity refuses publication | AC208-5 |
-| Canary restoration returns the disposable worktree to its exact overlay-manifest state | AC208-5, AC208-8 |
+| Canary restoration returns the disposable worktree to its exact post-overlay baseline-manifest state | AC208-5, AC208-8 |
 | Real-source digest is unchanged after success, raised exception and cleanup failure | AC208-1, AC208-6 |
 | Cleanup is attempted on success, exception and handled signals | AC208-7 |
 | Cleanup failure returns non-zero and never invokes broad/destructive Git commands | AC208-7 |

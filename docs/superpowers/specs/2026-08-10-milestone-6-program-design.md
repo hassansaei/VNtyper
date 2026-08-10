@@ -89,7 +89,10 @@ The five track specifications own detailed interfaces. Shared integration contra
 - Mutation code receives distinct immutable `REAL_REPO_ROOT`, disposable `sweep_root`, and pre-resolved persistent output paths. Subprocess `cwd`, not only `PYTHONPATH`, selects the disposable source.
 - Test cases may declare literal artifact paths expected present or absent. Assertions run only after the case reaches its declared successful exit.
 - `--delete-intermediates` wins when both cleanup flags are present, matching CLI help; this behavior change is recorded under Unreleased.
-- A release never builds tag-context source. Every push to `main` runs the substantive CI and Docker jobs even for documentation-only diffs. The release resolves the existing `sha-<short commit>` tag, verifies its full revision label, and promotes the resulting immutable digest only after every named component and aggregate check for that exact SHA succeeds.
+- A release never builds tag-context source. Every push to `main` runs the substantive CI and Docker jobs even for
+  documentation-only diffs and uploads a run-attempt-scoped full-SHA/post-push-registry-digest evidence artifact. The release selects the
+  successful exact-SHA Docker run, verifies that evidence plus the short tag/full revision/package labels, and promotes
+  the immutable evidence digest only after every named component and aggregate check for that exact SHA succeeds.
 - Production release aliases are `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X`, and `latest`; ordinary `main` images remain `main` and SHA-tagged.
 - The existing `publish-pypi.yml` filename and `pypi` environment name remain fixed because PyPI's trust configuration names them.
 
@@ -105,7 +108,10 @@ The five track specifications own detailed interfaces. Shared integration contra
 8. Land #219 after the large script/test tranche stabilizes so its baseline is not instantly obsolete.
 9. Integrate, run fresh final gates, conduct whole-branch reviews, push, open the PR, and monitor required checks.
 
-Read-only research and review may run concurrently. Implementation may run concurrently only in isolated worktrees with disjoint files and frozen interfaces. `Makefile`, `pyproject.toml`, workflows, shared test helpers, and integration contracts are serialized.
+Read-only research and review may run concurrently. The installed Superpowers 6.2.0
+`subagent-driven-development` skill forbids concurrent implementation subagents, so all implementation tasks are
+serialized even when their file sets are disjoint. `Makefile`, `pyproject.toml`, workflows, shared test helpers, and
+integration contracts remain explicit serialization points if a future skill version permits implementation parallelism.
 
 ## Interfaces, inputs, outputs, and invariants
 
@@ -218,7 +224,9 @@ Existing Docker Hub images remain historical and unsupported. Current install su
 
 ## Objective definition of done
 
-- All six specifications and all six implementation plans exist, have no placeholders, and have passed self-review plus independent `claude-opus-5` maximum-effort review with no unresolved Critical or High finding.
+- All six specifications, the master plus five bounded implementation plans, and the separate execution prompt exist,
+  have no placeholders, and have passed self-review plus independent `claude-opus-5` maximum-effort review with no
+  unresolved Critical or High finding.
 - The persistent task ledger maps every criterion above to implementation, tests, commits, and review verdicts.
 - All nine issues are traced to current or new executable evidence; #226 is not redundantly reimplemented.
 - Fresh local gates applicable to every changed file pass with captured results, and unavailable tiers are not claimed.

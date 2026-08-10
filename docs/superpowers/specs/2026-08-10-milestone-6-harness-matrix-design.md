@@ -284,6 +284,10 @@ continues to own overwrite/refusal behavior; this track does not weaken it for t
   `tests/parametrization.py` reads `tests/test_data_config.json` by relative path.
 - The b178 inputs and derived fixture come from the existing test-data contract; no
   network is added to unit tests.
+- The isolated milestone worktree does not inherit the primary checkout's git-ignored `tests/data/`. Before the first
+  real matrix node, verify the existing primary-checkout archive in place, require the milestone destination to be
+  absent, copy it with `cp -a --reflink=auto` into the milestone worktree, and run `make cram-fixtures` there. Never
+  symlink the data trees or derive fixtures through the primary checkout.
 - Integration data bootstrap remains fail-closed. Use
   `VNTYPER_TEST_DATA_SKIP_DOWNLOAD=1` when a missing archive should fail immediately.
 - The integration tier remains scheduled rather than a PR gate. That limitation must
@@ -291,8 +295,10 @@ continues to own overwrite/refusal behavior; this track does not weaken it for t
 
 ## Security and permissions
 
-- Test-declared relative paths are confined under `output_dir`; absolute and parent
-  traversal paths are rejected before access.
+- Test-declared relative paths are confined under `output_dir`; absolute paths, direct or nested
+  parent traversal, leaf symlink escapes, and intermediate-directory symlink escapes are rejected
+  before access. A dangling symlink is an existing directory entry and cannot satisfy an
+  `expected_absent` declaration.
 - Inputs are never deleted or rewritten. Cleanup assertions name only files created
   below the case output root.
 - No credentials, GitHub permissions, network endpoints or workflow token scopes change.

@@ -240,12 +240,22 @@ quietly moving to an unaudited helper.
 The manifest is hand-reviewed policy data, not generated from current code. Ruff/AST discovery is
 generated; rationale and disposition are not.
 
+Behavior-test IDs may name top-level or class-qualified tests under any nested `tests/unit/`
+subdirectory, including parametrized suffixes. Paths outside `tests/unit/`, parent traversal,
+missing `test_` function components, and newline-bearing IDs are invalid. Every category-C record
+is complete before the full live validator is enabled; the validator is not run against a knowingly
+partial manifest.
+
 ### Behavior tests
 
 Behavior tests live beside the affected module's existing unit tests and use the current unit
 marker. They drive the symbol with a deterministic exception from a mocked dependency, then assert
 the contractual outcome. Existing tests are extended rather than duplicated where they already
 characterize the behavior.
+
+Each node is first run unchanged as characterization. After it passes, a temporary behavior mutation
+must make the exact value/state assertion fail and must be restored before policy validation. A
+passing characterization is not mislabeled as an expected RED implementation failure.
 
 Important seed contracts include:
 
@@ -260,6 +270,8 @@ Important seed contracts include:
   log rather than only an empty/non-empty result.
 - `screening_summary` loaders/builders: assert that failures produce the established unavailable
   state and never a positive emphasis inferred from message text.
+- `generate_report.extract_igv_content`: an unreadable report returns the exact three-value tuple
+  `("", "", "")`, matching its unpacking caller; it is not a scalar empty-string fallback.
 - `coverage_gate.read_total`: assert `None` is converted by the caller into a non-zero gate result
   with an actionable message, so this is degraded parsing but not a fail-open CI pass.
 
@@ -314,13 +326,16 @@ Global invariants:
 
 ### Phase 3: audit fail-open behavior
 
-1. Seed the category-C manifest with the named minimum production symbols.
-2. Add every additional C symbol found by Phase 2.
-3. Apply the deterministic disposition rule, write the rationale, and add or strengthen the linked
-   behavior test.
-4. For an existing contract that requires a different outcome, make only the focused semantic
+1. Create one complete manifest record for every category-C symbol found by Phase 2, including
+   disposition, exact outcome, rationale, behavior-test node ID, and observability.
+2. Run a diagnostic identity/count check while linked behavior nodes are being added; do not run or
+   claim the full live validator against unresolved nodes.
+3. Add or strengthen every linked behavior test, run unchanged characterization, and prove its exact
+   assertion fails under a temporary mutation before restoring the source.
+4. Enable the full live validator only after every frozen C record's behavior node resolves.
+5. For an existing contract that requires a different outcome, make only the focused semantic
    change needed to conform and test both the failure outcome and its caller-visible effect.
-5. Preserve every other current fallback explicitly; do not narrow category B as a side quest.
+6. Preserve every other current fallback explicitly; do not narrow category B as a side quest.
 
 ### Phase 4: final remeasurement and integration
 
