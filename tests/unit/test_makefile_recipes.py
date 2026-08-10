@@ -32,6 +32,7 @@ Pure unit test: it reads the Makefile, asks make to expand recipes with
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -156,3 +157,103 @@ def test_recipe_is_valid_shell_when_tool_is_absent(var: str) -> None:
             f'-- `"$({var})"` -- so the branch stays a syntactically valid word.\n\n'
             f"Rendered recipe:\n{expanded.stdout}"
         )
+
+
+def test_scripts_coverage_target_is_isolated_and_fixed_at_88() -> None:
+    text = MAKEFILE.read_text(encoding="utf-8")
+    recipe = _recipes()["test-scripts-cov"]
+    assert re.search(r"^SCRIPTS_COVERAGE_TARGET\s*\?=\s*88$", text, re.MULTILINE)
+    assert "--cov=scripts" in recipe
+    assert "--cov-fail-under=$(SCRIPTS_COVERAGE_TARGET)" in recipe
+    assert "--cov-report=term-missing" in recipe
+    assert "coverage.xml" not in recipe
+    assert "mktemp -d" in recipe
+    assert "COVERAGE_FILE=" in recipe
+    assert 'test -n "$$tmp_dir"' in recipe
+    assert 'rm -rf -- "$$tmp_dir"' in recipe
+
+
+def test_repository_coverage_thresholds_remain_independent() -> None:
+    text = MAKEFILE.read_text(encoding="utf-8")
+    assert re.search(r"^COVERAGE_TARGET\s*\?=\s*86$", text, re.MULTILINE)
+    assert re.search(r"^PATCH_COVERAGE_TARGET\s*\?=\s*80$", text, re.MULTILINE)
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _run_scripts_coverage_with_fake_pytest(
+    tmp_path: Path,
+    pytest_status: int,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "coverage-file.txt"
+    _write_executable(
+        fake_bin / "pytest",
+        """#!/bin/sh
+printf '%s\n' "$COVERAGE_FILE" > "$COVERAGE_CAPTURE"
+exit "$FAKE_PYTEST_STATUS"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["COVERAGE_CAPTURE"] = str(capture)
+    env["FAKE_PYTEST_STATUS"] = str(pytest_status)
+    result = subprocess.run(
+        ["make", "--no-print-directory", "test-scripts-cov"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, Path(capture.read_text(encoding="utf-8").strip())
+
+
+def test_scripts_coverage_removes_temporary_data_after_success(tmp_path: Path) -> None:
+    result, coverage_file = _run_scripts_coverage_with_fake_pytest(tmp_path, pytest_status=0)
+
+    assert result.returncode == 0
+    assert coverage_file.name == ".coverage"
+    assert not coverage_file.parent.exists()
+
+
+def test_scripts_coverage_removes_temporary_data_and_preserves_failure(tmp_path: Path) -> None:
+    result, coverage_file = _run_scripts_coverage_with_fake_pytest(tmp_path, pytest_status=17)
+
+    assert result.returncode == 2
+    assert "Error 17" in result.stderr
+    assert coverage_file.name == ".coverage"
+    assert not coverage_file.parent.exists()
+
+
+def test_scripts_coverage_does_not_run_pytest_when_mktemp_fails(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "coverage-file.txt"
+    _write_executable(fake_bin / "mktemp", "#!/bin/sh\nexit 23\n")
+    _write_executable(
+        fake_bin / "pytest",
+        """#!/bin/sh
+printf '%s\n' "$COVERAGE_FILE" > "$COVERAGE_CAPTURE"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["COVERAGE_CAPTURE"] = str(capture)
+
+    result = subprocess.run(
+        ["make", "--no-print-directory", "test-scripts-cov"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "Error 23" in result.stderr
+    assert not capture.exists(), "pytest received a COVERAGE_FILE path after mktemp failed"

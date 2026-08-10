@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -33,6 +33,7 @@ help:
 	@echo "  make test-unit               - Run unit tests only (fast, ~0.5s)"
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
+	@echo "  make test-scripts-cov        - Measure scripts-only unit coverage"
 	@echo "  make patch-coverage          - Coverage of changed lines only (CI gate)"
 	@echo "  make mutation                - Advisory mutation score (not gated)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
@@ -207,7 +208,7 @@ test-fast:
 
 # Coverage for the fast tier.
 #
-# Two thresholds:
+# Two repository thresholds:
 #   HARD FLOOR - `fail_under` in pyproject.toml [tool.coverage.report]. CI fails below
 #                it. A ratchet: it only ever goes up.
 #   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
@@ -215,6 +216,10 @@ test-fast:
 # scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
 # whenever coverage climbs past it. The current branch-inclusive target/floor is 86%.
 COVERAGE_TARGET ?= 86
+
+# Pre-source proof for scripts/: this target intentionally starts below its fixed bar
+# and isolates its data file so test-unit-cov remains the canonical coverage producer.
+SCRIPTS_COVERAGE_TARGET ?= 88
 
 # `--cov-report=xml` costs ~0.1s and writes coverage.xml, which `patch-coverage` below
 # consumes. Emitting it here rather than from a second pytest run keeps the patch gate
@@ -224,6 +229,13 @@ test-unit-cov:
 	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing --cov-report=xml
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
+
+test-scripts-cov:
+	@tmp_dir="$$(mktemp -d)" || exit $$?; test -n "$$tmp_dir" || exit 1; coverage_file="$$tmp_dir/.coverage"; \
+	trap 'rm -rf -- "$$tmp_dir"' EXIT; \
+	COVERAGE_FILE="$$coverage_file" pytest -m unit tests/unit -o log_cli=false \
+		--cov=scripts --cov-config=pyproject.toml --cov-report=term-missing \
+		--cov-fail-under=$(SCRIPTS_COVERAGE_TARGET)
 
 coverage-report:
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
