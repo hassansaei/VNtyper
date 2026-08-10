@@ -51,6 +51,8 @@ def behavior_node_error(repo_root: Path, node_id: str) -> str | None:
         ``None`` when the node resolves uniquely, otherwise an actionable error string.
     """
     path_text, *qualifiers = node_id.split("::")
+    if not qualifiers:
+        return f"behavior-test node must name a test function after '::': {path_text}"
     source_path = Path(path_text)
     if source_path.is_absolute() or any(part in {"", ".", ".."} for part in source_path.parts):
         return f"source path is not normalized and repository-relative: {path_text}"

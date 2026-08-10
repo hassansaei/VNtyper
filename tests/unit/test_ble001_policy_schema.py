@@ -429,6 +429,18 @@ def test_behavior_node_resolution_accepts_top_level_class_and_parametrized_nodes
     assert behavior_node_error(tmp_path, "tests/unit/test_module.py::TestPolicy::test_method") is None
 
 
+def test_behavior_node_resolution_reports_a_missing_symbol_qualifier(tmp_path: Path) -> None:
+    """A source-only node ID returns an actionable error instead of raising IndexError."""
+    test_path = tmp_path / "tests/unit/test_module.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text("def test_top():\n    pass\n", encoding="utf-8")
+    _track(tmp_path, "tests/unit/test_module.py")
+
+    error = behavior_node_error(tmp_path, "tests/unit/test_module.py")
+
+    assert error == "behavior-test node must name a test function after '::': tests/unit/test_module.py"
+
+
 def test_behavior_node_resolution_reports_unreadable_unparseable_and_missing_paths(tmp_path: Path) -> None:
     """Each unresolved-node failure names whether reading, parsing, or symbol lookup failed."""
     missing = behavior_node_error(tmp_path, "tests/unit/test_missing.py::test_absent")
