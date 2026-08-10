@@ -7,7 +7,7 @@ import hashlib
 import os
 import signal
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -102,7 +102,7 @@ def _install_orchestration_harness(
             if failure == "cleanup":
                 raise RuntimeError(f"orphaned worktree: {sweep_root}")
 
-    def fake_dirty_guard(targets: object, outputs: object) -> str | None:
+    def fake_dirty_guard(targets: Iterable[str], outputs: Iterable[Path | None]) -> str | None:
         assert tuple(targets) == ("sample.py",)
         assert tuple(outputs) == (harness.output, harness.results_json)
         harness.events.append("dirty-guard")
@@ -110,7 +110,7 @@ def _install_orchestration_harness(
             os.close(capability.descriptor)
         return "dirty selected target" if failure == "dirty" else None
 
-    def fake_capture(root: Path, targets: object) -> dict[str, str]:
+    def fake_capture(root: Path, targets: Iterable[str]) -> dict[str, str]:
         assert root == real_root
         assert tuple(targets) == ("sample.py",)
         harness.events.append("real-digest-captured")
@@ -144,7 +144,7 @@ def _install_orchestration_harness(
             raise OSError("cache clear failed")
         return 0
 
-    def fake_baseline(targets: object, timeout: int, *, repo_root: object) -> str | None:
+    def fake_baseline(targets: Iterable[str], timeout: int, *, repo_root: object) -> str | None:
         assert tuple(targets) == ("sample.py",)
         assert timeout == 600
         assert repo_root is capability
@@ -194,6 +194,11 @@ def _install_orchestration_harness(
         harness.output.write_bytes(b"new-markdown")
 
     monotonic = iter((10.0, 12.0))
+
+    def fake_install_signal_handlers() -> tuple[int, ...]:
+        harness.events.append("signal-install")
+        return ()
+
     monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", real_root)
     monkeypatch.setattr(
         mutation_test,
@@ -217,7 +222,7 @@ def _install_orchestration_harness(
         monkeypatch.setattr(
             mutation_test,
             "_install_signal_handlers",
-            lambda: harness.events.append("signal-install") or (),
+            fake_install_signal_handlers,
             raising=False,
         )
     monkeypatch.setattr(mutation_test, "_refuse_if_dirty", fake_dirty_guard)
