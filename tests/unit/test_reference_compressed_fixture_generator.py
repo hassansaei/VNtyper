@@ -98,7 +98,7 @@ def _prepare_main_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
 @pytest.mark.parametrize(
     ("reference_args", "expected_reference"),
     [
-        ([], generator.DEFAULT_REFERENCE_COMPRESSED_FASTA),
+        ([], Path("reference/alignment/chr1.hg19.fa")),
         (
             ["--reference-fasta", "/opt/vntyper/reference/alignment/chr1.hg19.fa"],
             Path("/opt/vntyper/reference/alignment/chr1.hg19.fa"),
@@ -112,9 +112,12 @@ def test_main_forwards_selected_reference_fasta_unchanged(
     expected_reference: Path,
 ) -> None:
     data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
+    authority = mock.sentinel.validated_reference
+    validate = mock.Mock(return_value=authority)
     derive = mock.Mock(return_value=mock.Mock(as_manifest_entry=dict))
     summary = mock.Mock(fixtures=[mock.sentinel.fixture], skipped=[], total_cram_bytes=1, total_source_bytes=1)
     monkeypatch.setattr(generator, "build_fixtures", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr(generator, "validate_reference_fasta", validate)
     monkeypatch.setattr(generator, "derive_reference_compressed_cram", derive)
     monkeypatch.setattr(generator, "build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr(generator, "build_placed_flag12_fixture", lambda _root: None)
@@ -134,12 +137,14 @@ def test_main_forwards_selected_reference_fasta_unchanged(
     )
 
     assert exit_code == 0
+    validate.assert_called_once_with(expected_reference)
     assert derive.call_args.args == (
         "samtools",
         generator.DEFAULT_REFERENCE_COMPRESSED_SOURCE,
         expected_reference,
         fixture_root,
     )
+    assert derive.call_args.kwargs == {"validated_reference": authority}
 
 
 @pytest.mark.parametrize(
@@ -160,7 +165,31 @@ def test_main_rejects_explicit_missing_or_invalid_reference_before_publication(
     reference = tmp_path / "explicit-reference.fa"
     if reference_value is not None:
         reference.write_text(reference_value, encoding="utf-8")
-    monkeypatch.setattr(generator, "build_fixtures", lambda *_args, **_kwargs: generator.Summary())
+    final_cram = _touch(fixture_root / "reference-compressed/example_b178_hg19_subset.cram", "existing cram")
+    final_crai = _touch(Path(f"{final_cram}.crai"), "existing crai")
+    expected_bytes = (final_cram.read_bytes(), final_crai.read_bytes())
+
+    def publishing_builder(marker: Path, result: object = None) -> mock.Mock:
+        def publish(*_args: object, **_kwargs: object) -> object:
+            _touch(marker, "published")
+            return result
+
+        return mock.Mock(side_effect=publish)
+
+    markers = [tmp_path / f"builder-{number}.published" for number in range(4)]
+    build = publishing_builder(markers[0], generator.Summary())
+    derive = mock.Mock(wraps=generator.derive_reference_compressed_cram)
+    reference_dependent = publishing_builder(markers[1])
+    placed_flag12 = publishing_builder(markers[2])
+    indexed_safe = publishing_builder(markers[3])
+    manifest = publishing_builder(tmp_path / "manifest.published")
+    builders = [build, derive, reference_dependent, placed_flag12, indexed_safe, manifest]
+    monkeypatch.setattr(generator, "build_fixtures", build)
+    monkeypatch.setattr(generator, "derive_reference_compressed_cram", derive)
+    monkeypatch.setattr(generator, "build_reference_dependent_fixture", reference_dependent)
+    monkeypatch.setattr(generator, "build_placed_flag12_fixture", placed_flag12)
+    monkeypatch.setattr(generator, "build_indexed_safe_fixture", indexed_safe)
+    monkeypatch.setattr(generator, "write_manifest", manifest)
 
     with pytest.raises(error, match=message):
         generator.main(
@@ -176,7 +205,11 @@ def test_main_rejects_explicit_missing_or_invalid_reference_before_publication(
             ]
         )
 
-    assert not fixture_root.exists()
+    for builder in builders:
+        builder.assert_not_called()
+    assert not any(marker.exists() for marker in markers)
+    assert not (tmp_path / "manifest.published").exists()
+    assert (final_cram.read_bytes(), final_crai.read_bytes()) == expected_bytes
 
 
 def test_normalized_digest_builds_the_explicit_indexed_query(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,6 +272,43 @@ def test_reference_identity_is_checked_before_encoding(tmp_path: Path, missing: 
 
     with pytest.raises((FileNotFoundError, ValueError), match=expected):
         generator.derive_reference_compressed_cram("samtools", source, reference, tmp_path / "cram")
+
+
+def test_derivation_rejects_authority_bound_to_another_reference(tmp_path: Path) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    other_reference = _touch(tmp_path / "other.fa", ">chr1\nACGT\n")
+    digest = hashlib.sha256(other_reference.read_bytes()).hexdigest()
+    authority = generator.validate_reference_fasta(other_reference, digest)
+
+    with pytest.raises(ValueError, match="Validated reference path mismatch"):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            validated_reference=authority,
+        )
+
+    assert not (tmp_path / "cram").exists()
+
+
+def test_derivation_rejects_authority_for_another_required_digest(tmp_path: Path) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    digest = hashlib.sha256(reference.read_bytes()).hexdigest()
+    authority = generator.validate_reference_fasta(reference, digest)
+
+    with pytest.raises(ValueError, match="Validated reference SHA-256 mismatch"):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            validated_reference=authority,
+        )
+
+    assert not (tmp_path / "cram").exists()
 
 
 def test_derivation_stages_then_publishes_explicit_reference_artifacts(

@@ -34,8 +34,10 @@ if __package__:
         REFERENCE_VALIDATION_REGION,
         LossyConversionError,
         ReferenceCompressedFixture,
+        ValidatedReferenceFasta,
         header_with_hg19_m5,
         normalize_sam_record,
+        validate_reference_fasta,
         validate_registered_b178_index_evidence,
     )
 else:
@@ -44,8 +46,10 @@ else:
         REFERENCE_VALIDATION_REGION,
         LossyConversionError,
         ReferenceCompressedFixture,
+        ValidatedReferenceFasta,
         header_with_hg19_m5,
         normalize_sam_record,
+        validate_reference_fasta,
         validate_registered_b178_index_evidence,
     )
 
@@ -298,6 +302,7 @@ def derive_reference_compressed_cram(
     fixture_root: Path,
     *,
     expected_reference_sha256: str = HG19_CHR1_REFERENCE_SHA256,
+    validated_reference: ValidatedReferenceFasta | None = None,
 ) -> ReferenceCompressedFixture:
     """Derive and prove a real-read CRAM decoded with an explicit FASTA.
 
@@ -307,6 +312,7 @@ def derive_reference_compressed_cram(
         reference: Exact chr1 hg19 FASTA used for encoding and decoding.
         fixture_root: Root beneath which the fixture is regenerated.
         expected_reference_sha256: Required identity of the reference bytes.
+        validated_reference: Optional path-bound authority from an earlier validation.
 
     Returns:
         The derived fixture and stable digest evidence.
@@ -317,21 +323,12 @@ def derive_reference_compressed_cram(
         LossyConversionError: If decoded records or record counts differ.
         RuntimeError: If encoding, indexing, or decoding fails.
     """
-    if not reference.is_file():
-        raise FileNotFoundError(f"Reference FASTA does not exist: {reference}")
-
-    reference_hasher = hashlib.sha256()
-    with reference.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            reference_hasher.update(chunk)
-    reference_sha256 = reference_hasher.hexdigest()
-    if reference_sha256 != expected_reference_sha256:
-        msg = (
-            f"Reference FASTA SHA-256 mismatch for {reference}: "
-            f"expected {expected_reference_sha256}, observed {reference_sha256}."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
+    reference_authority = validate_reference_fasta(
+        reference,
+        expected_reference_sha256,
+        validated_reference=validated_reference,
+    )
+    reference_sha256 = reference_authority.sha256
 
     cram = fixture_root / "reference-compressed" / f"{source_bam.stem}.cram"
     crai = Path(f"{cram}.crai")
@@ -604,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("test-data config not found: %s", args.data_config)
         return 1
 
+    validated_reference = validate_reference_fasta(args.reference_fasta)
     summary = build_fixtures(
         args.samtools,
         args.data_root,
@@ -617,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
         DEFAULT_REFERENCE_COMPRESSED_SOURCE,
         args.reference_fasta,
         args.fixture_root,
+        validated_reference=validated_reference,
     )
     build_reference_dependent_fixture(args.fixture_root)
     build_placed_flag12_fixture(args.fixture_root)

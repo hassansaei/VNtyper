@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 HG19_CHR1_REFERENCE_SHA256 = "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338"
 REFERENCE_VALIDATION_REGION = "chr1:155160500-155162000"
@@ -47,6 +51,14 @@ class LossyConversionError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ValidatedReferenceFasta:
+    """A reference path whose bytes match a required SHA-256 identity."""
+
+    path: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
 class ReferenceCompressedFixture:
     """One explicitly referenced CRAM and its reproducibility evidence."""
 
@@ -82,6 +94,57 @@ class ReferenceCompressedFixture:
             "source_bytes": self.source_bytes,
             "cram_bytes": self.cram_bytes,
         }
+
+
+def validate_reference_fasta(
+    reference: Path,
+    expected_sha256: str = HG19_CHR1_REFERENCE_SHA256,
+    *,
+    validated_reference: ValidatedReferenceFasta | None = None,
+) -> ValidatedReferenceFasta:
+    """Validate a reference FASTA once and return its path-bound authority.
+
+    Args:
+        reference: FASTA path whose bytes must be identified.
+        expected_sha256: Required SHA-256 identity.
+        validated_reference: Optional authority to bind without reading the FASTA again.
+
+    Returns:
+        The validated reference path and observed identity.
+
+    Raises:
+        FileNotFoundError: If the reference does not exist.
+        ValueError: If the reference bytes do not match the required identity.
+    """
+    if validated_reference is not None:
+        if validated_reference.path != reference:
+            msg = f"Validated reference path mismatch: expected {reference}, observed {validated_reference.path}."
+            logger.error(msg)
+            raise ValueError(msg)
+        if validated_reference.sha256 != expected_sha256:
+            msg = (
+                f"Validated reference SHA-256 mismatch for {reference}: "
+                f"expected {expected_sha256}, observed {validated_reference.sha256}."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+        return validated_reference
+
+    if not reference.is_file():
+        raise FileNotFoundError(f"Reference FASTA does not exist: {reference}")
+
+    hasher = hashlib.sha256()
+    with reference.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    observed_sha256 = hasher.hexdigest()
+    if observed_sha256 != expected_sha256:
+        msg = (
+            f"Reference FASTA SHA-256 mismatch for {reference}: expected {expected_sha256}, observed {observed_sha256}."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+    return ValidatedReferenceFasta(reference, observed_sha256)
 
 
 def normalize_sam_record(line: str) -> bytes:

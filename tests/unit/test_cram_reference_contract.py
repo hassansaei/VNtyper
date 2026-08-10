@@ -14,6 +14,7 @@ from scripts.cram_reference_contract import (
     LossyConversionError,
     header_with_hg19_m5,
     normalize_sam_record,
+    validate_reference_fasta,
     validate_registered_b178_index_evidence,
 )
 
@@ -21,6 +22,44 @@ pytestmark = pytest.mark.unit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROVENANCE = REPO_ROOT / "scripts/ucsc_hg19_primary_contigs.tsv"
+
+
+def test_validate_reference_fasta_returns_path_bound_digest(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    expected_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
+
+    authority = validate_reference_fasta(reference, expected_sha256)
+
+    assert authority.path == reference
+    assert authority.sha256 == expected_sha256
+
+
+def test_validate_reference_fasta_reuses_bound_authority_without_reading_again(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    expected_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
+    authority = validate_reference_fasta(reference, expected_sha256)
+    reference.unlink()
+
+    reused = validate_reference_fasta(reference, expected_sha256, validated_reference=authority)
+
+    assert reused is authority
+
+
+@pytest.mark.parametrize("reference_state", ["missing", "wrong"])
+def test_validate_reference_fasta_rejects_unidentified_bytes(tmp_path: Path, reference_state: str) -> None:
+    reference = tmp_path / "reference.fa"
+    if reference_state == "wrong":
+        reference.write_text(">chr1\nA\n", encoding="utf-8")
+        error: type[Exception] = ValueError
+        message = "SHA-256 mismatch"
+    else:
+        error = FileNotFoundError
+        message = "does not exist"
+
+    with pytest.raises(error, match=message):
+        validate_reference_fasta(reference)
 
 
 def test_normalize_sam_record_sorts_only_optional_fields() -> None:

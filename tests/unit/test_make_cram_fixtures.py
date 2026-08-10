@@ -43,6 +43,10 @@ def _touch(path: Path, content: str = "x") -> Path:
     return path
 
 
+def _stub_reference_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cram_fixtures, "validate_reference_fasta", mock.Mock(return_value=mock.sentinel.authority))
+
+
 def _paired_source_bam(path: Path) -> Path:
     """Write a minimal indexed-coordinate BAM suitable for single-end derivation."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,8 +150,8 @@ def test_the_direct_script_entry_point_loads_its_sibling_selection_module_withou
     assert "--all" in result.stdout
 
 
-def test_the_direct_script_dispatches_its_sibling_single_end_builder_without_pythonpath(tmp_path: Path) -> None:
-    """The ordinary direct-script command must import and run both sibling modules."""
+def test_the_direct_module_dispatches_its_sibling_single_end_builder_without_pythonpath(tmp_path: Path) -> None:
+    """Direct-module mode must import and run the sibling builder without package imports."""
     repository_root = tmp_path / "repo"
     data_root = repository_root / "tests" / "data"
     source = _paired_source_bam(data_root / "source.bam")
@@ -169,24 +173,22 @@ def test_the_direct_script_dispatches_its_sibling_single_end_builder_without_pyt
         )
     )
 
+    dispatch = (
+        "import sys; from pathlib import Path; "
+        f"sys.path.insert(0, {str(REPO_ROOT / 'scripts')!r}); "
+        "import make_cram_fixtures as fixtures; "
+        "fixtures._derive_declared_single_end_fixtures(Path('tests/test_data_config.json'), Path('.'))"
+    )
     result = subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "scripts" / "make_cram_fixtures.py"),
-            "--data-root",
-            "tests/data",
-            "--fixture-root",
-            "tests/data/cram",
-            "--data-config",
-            "tests/test_data_config.json",
-        ],
+        [sys.executable, "-c", dispatch],
         cwd=repository_root,
+        env={"PATH": os.defpath},
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert result.returncode == 1, result.stderr
+    assert result.returncode == 0, result.stderr
     assert "ModuleNotFoundError" not in result.stderr
     assert output.is_file()
     assert output.with_suffix(".bam.bai").is_file()
@@ -576,10 +578,11 @@ def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_
 
     monkeypatch.chdir(repository_root)
     monkeypatch.setattr(cram_fixtures, "derive_cram", fake_derive_cram)
+    _stub_reference_validation(monkeypatch)
     monkeypatch.setattr(
         cram_fixtures,
         "derive_reference_compressed_cram",
-        lambda *_args: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
+        lambda *_args, **_kwargs: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
     )
     monkeypatch.setattr(cram_fixtures, "build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr(cram_fixtures, "build_placed_flag12_fixture", lambda _root: None)
@@ -717,11 +720,14 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
         selections.append(kwargs["include_all"])
         return Summary()
 
-    def record_reference_fixture(_samtools: str, _source: Path, _reference: Path, root: Path) -> mock.Mock:
+    def record_reference_fixture(
+        _samtools: str, _source: Path, _reference: Path, root: Path, **_kwargs: object
+    ) -> mock.Mock:
         calls.append(root)
         return mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"})
 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", fake_build)
+    _stub_reference_validation(monkeypatch)
     monkeypatch.setattr(
         "scripts.make_cram_fixtures.derive_reference_compressed_cram",
         record_reference_fixture,
@@ -768,9 +774,10 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     summary = Summary(fixtures=[fixture], skipped=[(data_root / "broken.bam", "truncated")])
 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", lambda *_args, **_kwargs: summary)
+    _stub_reference_validation(monkeypatch)
     monkeypatch.setattr(
         "scripts.make_cram_fixtures.derive_reference_compressed_cram",
-        lambda *_args: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
+        lambda *_args, **_kwargs: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
     )
     monkeypatch.setattr("scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda _root: None)
@@ -795,6 +802,7 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
         raise LossyConversionError("not lossless")
 
     monkeypatch.setattr(cram_fixtures, "build_fixtures", fail_build)
+    _stub_reference_validation(monkeypatch)
     with pytest.raises(LossyConversionError, match="not lossless"):
         cram_fixtures.main(
             [
