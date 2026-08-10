@@ -421,8 +421,9 @@ keys `org.opencontainers.image.revision` and `org.opencontainers.image.version` 
 assert action `actions/upload-artifact@v5`, name
 `docker-release-evidence-${{ github.sha }}-${{ github.run_attempt }}`, `if-no-files-found: error`, and
 `retention-days: "90"`. Assert a
-JSON-producing prior step whose payload uses the registry-reported `{{.Manifest.Digest}}` inspected after the short tag
-is pushed, includes
+JSON-producing prior step whose payload uses the digest parsed fail-closed by
+`scripts/release_manifest.py digest <file>` from an exact file containing the registry-reported
+`{{json .Manifest}}` descriptor inspected after the short tag is pushed, includes
 `${{ github.run_id }}`, `${{ github.run_attempt }}`, and
 `"contract_version": 1`.
 
@@ -492,12 +493,16 @@ JSON with shell string concatenation:
           set -euo pipefail
           SHORT_SHA=${GITHUB_SHA:0:7}
           for ATTEMPT in 1 2 3 4 5 6; do
-            if DIGEST=$(docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" \
-                --format '{{.Manifest.Digest}}'); then break; fi
+            rm -f -- pushed-manifest.json.tmp
+            if docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" \
+                --format '{{json .Manifest}}' > pushed-manifest.json.tmp && \
+                DIGEST=$(python scripts/release_manifest.py digest pushed-manifest.json.tmp); then
+              mv -- pushed-manifest.json.tmp pushed-manifest.json
+              break
+            fi
             if [ "$ATTEMPT" -eq 6 ]; then echo "pushed short-SHA manifest was not observable" >&2; exit 1; fi
             sleep 5
           done
-          case "$DIGEST" in sha256:????????????????????????????????????????????????????????????????) ;; *) exit 1 ;; esac
           docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" --format '{{json .Image}}' > pushed-image.json
           python - "$GITHUB_SHA" "$VERSION" pushed-image.json <<'PY'
           import json, sys
@@ -1126,7 +1131,7 @@ required pre-milestone manual dry-run result, not an import failure from checkin
 
 After polling, refresh the eligible-run list because a preflight `pending` candidate may have completed while checks
 were polled. In descending run-ID order, select the first run that owns the exact attempt-qualified artifact and run
-`gh run download "$RUN_ID" -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}"`. Retry that exact download at most three
+`gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}"`. Retry that exact download at most three
 times; never substitute a different artifact name or an unexamined run. Parse the single JSON file with Python;
 validate contract version/run identity/SHA/digest/revision/version, then inspect `${IMAGE}@${DIGEST}` and compare OCI
 labels. Inspect `sha-${SHORT_SHA}`: matching digest passes; a different full-revision label is a detected prefix
@@ -1197,7 +1202,8 @@ The evidence step uses this concrete data path (the Python validator also writes
           DEST=; DOWNLOADED=false
           for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
             CANDIDATE_DEST="evidence-${RUN_ID}-${RUN_ATTEMPT}-${API_ATTEMPT}"
-            if gh run download "$RUN_ID" -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" \
+            if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+                -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" \
                 -D "$CANDIDATE_DEST"; then
               DEST=$CANDIDATE_DEST
               DOWNLOADED=true
@@ -1214,10 +1220,16 @@ The evidence step uses this concrete data path (the Python validator also writes
             --sha "$SHA" --version "$VERSION" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
             > validated-evidence.json
           DIGEST=$(python -c 'import json; print(json.load(open("validated-evidence.json"))["digest"])')
-          IMMUTABLE_DIGEST=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{.Manifest.Digest}}')
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Manifest}}' \
+            > immutable-manifest.json.tmp
+          IMMUTABLE_DIGEST=$(python controller/scripts/release_manifest.py digest immutable-manifest.json.tmp)
+          mv -- immutable-manifest.json.tmp immutable-manifest.json
           test "$IMMUTABLE_DIGEST" = "$DIGEST"
           docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Image}}' > image-config.json
-          SHORT_DIGEST=$(docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" --format '{{.Manifest.Digest}}')
+          docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" --format '{{json .Manifest}}' \
+            > short-manifest.json.tmp
+          SHORT_DIGEST=$(python controller/scripts/release_manifest.py digest short-manifest.json.tmp)
+          mv -- short-manifest.json.tmp short-manifest.json
           docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" --format '{{json .Image}}' > short-image-config.json
           python controller/scripts/release_evidence.py validate-image validated-evidence.json image-config.json \
             short-image-config.json --immutable-digest "$IMMUTABLE_DIGEST" --short-digest "$SHORT_DIGEST" \
@@ -1425,12 +1437,16 @@ Append this job and use a local observation directory plus the typed policy. Raw
           trap 'rm -rf -- "$OBS_DIR"' EXIT
           for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
             SAFE_ALIAS=${ALIAS//./_}
-            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}' \
-                > "$OBS_DIR/$SAFE_ALIAS.digest"; then
+            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Manifest}}' \
+                > "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp"; then
+              python controller/scripts/release_manifest.py digest \
+                "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp" > "$OBS_DIR/$SAFE_ALIAS.digest.tmp"
+              mv -- "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp" "$OBS_DIR/$SAFE_ALIAS.manifest.json"
+              mv -- "$OBS_DIR/$SAFE_ALIAS.digest.tmp" "$OBS_DIR/$SAFE_ALIAS.digest"
               docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Image}}' \
                 > "$OBS_DIR/$SAFE_ALIAS.image.json"
             else
-              rm -f -- "$OBS_DIR/$SAFE_ALIAS.digest"
+              rm -f -- "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp" "$OBS_DIR/$SAFE_ALIAS.digest.tmp"
             fi
           done
           python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" > plan.json <<'PY'
@@ -1536,7 +1552,11 @@ Append this job and use a local observation directory plus the typed policy. Raw
             record_progress "$ALIAS" attempted ""
             docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS" "$IMAGE@$SOURCE_DIGEST"
             record_progress "$ALIAS" write-succeeded ""
-            FINAL_DIGEST=$(docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}')
+            docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Manifest}}' \
+              > "$OBS_DIR/$SAFE_ALIAS.final-manifest.json.tmp"
+            FINAL_DIGEST=$(python controller/scripts/release_manifest.py digest \
+              "$OBS_DIR/$SAFE_ALIAS.final-manifest.json.tmp")
+            mv -- "$OBS_DIR/$SAFE_ALIAS.final-manifest.json.tmp" "$OBS_DIR/$SAFE_ALIAS.final-manifest.json"
             test "$FINAL_DIGEST" = "$SOURCE_DIGEST"
             record_progress "$ALIAS" verified "$FINAL_DIGEST"
           done < executable.tsv
@@ -1596,12 +1616,16 @@ write:
           trap 'rm -rf -- "$OBS_DIR"' EXIT
           for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
             SAFE_ALIAS=${ALIAS//./_}
-            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}' \
-                > "$OBS_DIR/$SAFE_ALIAS.digest"; then
+            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Manifest}}' \
+                > "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp"; then
+              python controller/scripts/release_manifest.py digest \
+                "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp" > "$OBS_DIR/$SAFE_ALIAS.digest.tmp"
+              mv -- "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp" "$OBS_DIR/$SAFE_ALIAS.manifest.json"
+              mv -- "$OBS_DIR/$SAFE_ALIAS.digest.tmp" "$OBS_DIR/$SAFE_ALIAS.digest"
               docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Image}}' \
                 > "$OBS_DIR/$SAFE_ALIAS.image.json"
             else
-              rm -f -- "$OBS_DIR/$SAFE_ALIAS.digest"
+              rm -f -- "$OBS_DIR/$SAFE_ALIAS.manifest.json.tmp" "$OBS_DIR/$SAFE_ALIAS.digest.tmp"
             fi
           done
           docker buildx imagetools create --dry-run --prefer-index=false \

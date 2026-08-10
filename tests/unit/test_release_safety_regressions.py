@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,6 +39,57 @@ def _write_executable(path: Path, source: str) -> None:
     """Write one executable used only inside an isolated test directory."""
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
+
+
+def _evaluate_image_output(expression: str, *, event_name: str, filtered: bool) -> str:
+    """Evaluate the workflow's restricted image-output expression and normalize it."""
+    match = re.fullmatch(r"\$\{\{\s*(.*?)\s*}}", expression)
+    assert match is not None
+    selected = False
+    for term in (part.strip() for part in match.group(1).split("||")):
+        event_term = re.fullmatch(r"github\.event_name == '([^']+)'", term)
+        if event_term is not None:
+            selected = selected or event_name == event_term.group(1)
+        else:
+            assert term == "steps.filter.outputs.image == 'true'"
+            selected = selected or filtered
+    return str(selected).lower()
+
+
+def _image_job_gate_accepts(condition: str, normalized_output: str) -> bool:
+    """Evaluate the shared image-output requirement with all other terms satisfied."""
+    assert "needs.changes.outputs.image == 'true'" in condition
+    return normalized_output == "true"
+
+
+@pytest.mark.parametrize(
+    ("event_name", "filtered", "expected"),
+    (
+        ("push", False, "true"),
+        ("schedule", False, "true"),
+        ("workflow_dispatch", False, "true"),
+        ("pull_request", False, "false"),
+        ("pull_request", True, "true"),
+    ),
+)
+def test_validation_events_force_normalized_image_output_before_job_gates(
+    event_name: str,
+    filtered: bool,
+    expected: str,
+) -> None:
+    """Pathless validation events must reach the base and application jobs."""
+    workflow = _workflow("docker-build.yml")
+    normalized = _evaluate_image_output(
+        workflow["jobs"]["changes"]["outputs"]["image"],
+        event_name=event_name,
+        filtered=filtered,
+    )
+    base_gate = workflow["jobs"]["base-status"]["if"]
+    application_gate = workflow["jobs"]["build-and-test"]["if"]
+
+    assert normalized == expected
+    assert _image_job_gate_accepts(base_gate, normalized) is (expected == "true")
+    assert _image_job_gate_accepts(application_gate, normalized) is (expected == "true")
 
 
 def test_only_exact_main_push_may_publish_release_authoritative_application_tags() -> None:
@@ -77,6 +129,28 @@ def test_release_contract_documents_nightly_immutability_and_legacy_alias_migrat
         assert "missing or unrecognized version label" in text
         assert "fails closed" in text
         assert "skip-unorderable" not in text
+        assert "full: true" not in text
+
+
+def test_release_spec_and_plan_use_fail_closed_manifest_and_repository_bound_downloads() -> None:
+    """Executable release guidance must match the proven registry and repository boundaries."""
+    paths = (
+        ROOT / "docs" / "superpowers" / "specs" / "2026-08-10-milestone-6-release-and-naming-design.md",
+        ROOT / "docs" / "superpowers" / "plans" / "2026-08-10-milestone-6-release-and-naming-plan.md",
+    )
+    for path in paths:
+        contents = path.read_text(encoding="utf-8")
+        assert "{{.Manifest.Digest}}" not in contents
+        lines = contents.splitlines()
+        for index, line in enumerate(lines):
+            if "gh run download" not in line:
+                continue
+            command = line.strip()
+            cursor = index
+            while command.endswith("\\"):
+                cursor += 1
+                command = f"{command} {lines[cursor].strip()}"
+            assert '--repo "$GITHUB_REPOSITORY"' in command
 
 
 def test_main_push_publication_shell_still_pushes_main_and_short_sha_tags(tmp_path: Path) -> None:

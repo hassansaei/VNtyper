@@ -377,8 +377,9 @@ The human-readable release image reference is:
 `ghcr.io/hassansaei/vntyper:sha-<first 7 characters of candidate SHA>`
 
 The authoritative input is the post-push registry digest from the successful exact-SHA Docker workflow's
-run-attempt-scoped evidence artifact. After its explicit push, the Docker workflow reads the registry-reported
-`{{.Manifest.Digest}}` for `sha-<7>` and verifies that registry object's revision/version labels before upload. The coordinator orders all
+run-attempt-scoped evidence artifact. After its explicit push, the Docker workflow writes the registry-reported
+`{{json .Manifest}}` descriptor for `sha-<7>` to an exact file, parses its digest fail-closed with
+`scripts/release_manifest.py digest <file>`, and verifies that registry object's revision/version labels before upload. The coordinator orders all
 completed-success main-branch `push` runs of `docker-build.yml` whose `head_sha` equals the candidate by descending
 numeric run ID, selects the first with its exact run-attempt-qualified artifact, downloads only that artifact, and
 validates its contract version, run ID/attempt, SHA, digest, revision, and version. Before
