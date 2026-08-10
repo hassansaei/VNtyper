@@ -10,6 +10,7 @@ The ONLY difference between local and Docker tests is the
 This architecture guarantees 100% test identity.
 """
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -38,6 +39,72 @@ _FASTQ_OUTPUTS = (
     ("other", "output_other.fastq.gz"),
     ("single", "output_single.fastq.gz"),
 )
+
+
+def _declared_artifact_paths(test_case: dict, field: str, output_dir: Path) -> list[Path]:
+    """Validate and resolve one declared artifact list beneath an output directory.
+
+    Args:
+        test_case: Integration case carrying the artifact declaration.
+        field: Declaration field to validate.
+        output_dir: Per-case pipeline output directory.
+
+    Returns:
+        Validated artifact paths rooted beneath ``output_dir``.
+
+    Raises:
+        ValueError: If the declaration is malformed, duplicated, or escapes the output directory.
+    """
+    test_name = str(test_case.get("test_name", "<unnamed>"))
+    raw_paths = test_case.get(field, [])
+    if not isinstance(raw_paths, list):
+        raise ValueError(f"case={test_name} field={field} must be a list of relative artifact paths")
+    root = output_dir.resolve()
+    result: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        if not isinstance(raw, str) or not raw:
+            raise ValueError(f"case={test_name} field={field} contains an empty or non-string artifact path")
+        relative = Path(raw)
+        if relative.is_absolute() or ".." in relative.parts or raw in seen:
+            raise ValueError(f"case={test_name} field={field} invalid artifact: {raw}")
+        seen.add(raw)
+        candidate = root / relative
+        resolved_parent = candidate.parent.resolve(strict=False)
+        if not resolved_parent.is_relative_to(root):
+            raise ValueError(f"case={test_name} field={field} artifact escapes output_dir: {raw}")
+        if field == "expected_present" and not candidate.resolve(strict=False).is_relative_to(root):
+            raise ValueError(f"case={test_name} field={field} artifact escapes output_dir: {raw}")
+        result.append(candidate)
+    return result
+
+
+def assert_declared_artifacts(test_case: dict, output_dir: Path) -> None:
+    """Assert every case-declared output-relative artifact state.
+
+    Args:
+        test_case: Integration case carrying optional presence and absence declarations.
+        output_dir: Per-case pipeline output directory.
+
+    Raises:
+        AssertionError: If a declared artifact has the wrong filesystem state.
+        ValueError: If a declaration is malformed or escapes the output directory.
+    """
+    test_name = str(test_case.get("test_name", "<unnamed>"))
+    present = _declared_artifact_paths(test_case, "expected_present", output_dir)
+    absent = _declared_artifact_paths(test_case, "expected_absent", output_dir)
+    overlap = set(present).intersection(absent)
+    if overlap:
+        raise ValueError(
+            f"case={test_name} fields=expected_present,expected_absent overlap: {sorted(map(str, overlap))}"
+        )
+    failures = [f"case={test_name} field=expected_present missing: {path}" for path in present if not path.exists()]
+    failures.extend(
+        f"case={test_name} field=expected_absent unexpectedly present: {path}"
+        for path in absent
+        if os.path.lexists(path)
+    )
+    assert not failures, "Declared artifact mismatch:\n" + "\n".join(failures)
 
 
 def mixed_layout_diagnostic(test_case: dict, output_dir: Path) -> str:

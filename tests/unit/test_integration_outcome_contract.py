@@ -130,6 +130,66 @@ def test_mixed_layout_diagnostic_rejects_an_incomplete_count_contract(tmp_path: 
         orchestration.mixed_layout_diagnostic(case, tmp_path)
 
 
+def test_declared_artifacts_assert_both_presence_and_absence(tmp_path: Path) -> None:
+    kept = tmp_path / "kept.txt"
+    kept.write_text("kept\n", encoding="utf-8")
+    case = {
+        "test_name": "artifact-case",
+        "expected_present": ["kept.txt"],
+        "expected_absent": ["removed.txt"],
+    }
+    orchestration.assert_declared_artifacts(case, tmp_path)
+
+    kept.unlink()
+    (tmp_path / "removed.txt").write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(AssertionError) as exc_info:
+        orchestration.assert_declared_artifacts(case, tmp_path)
+    assert f"case=artifact-case field=expected_present missing: {kept.resolve()}" in str(exc_info.value)
+    assert (
+        f"case=artifact-case field=expected_absent unexpectedly present: {(tmp_path / 'removed.txt').resolve()}"
+        in str(exc_info.value)
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"expected_present": [""]},
+        {"expected_present": ["/absolute.txt"]},
+        {"expected_present": ["../escape.txt"]},
+        {"expected_present": ["nested/../../escape.txt"]},
+        {"expected_present": ["same.txt", "same.txt"]},
+        {"expected_present": ["same.txt"], "expected_absent": ["same.txt"]},
+    ],
+)
+def test_declared_artifacts_reject_invalid_paths(tmp_path: Path, case: dict) -> None:
+    with pytest.raises(ValueError, match="artifact|expected_"):
+        orchestration.assert_declared_artifacts(case, tmp_path)
+
+
+def test_declared_artifacts_reject_leaf_and_intermediate_symlink_escapes(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leaf.txt").write_text("outside\n", encoding="utf-8")
+    (output / "leaf.txt").symlink_to(outside / "leaf.txt")
+    (output / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    for declared in ("leaf.txt", "linked-dir/leaf.txt"):
+        with pytest.raises(ValueError, match="escapes output_dir"):
+            orchestration.assert_declared_artifacts({"expected_present": [declared]}, output)
+
+
+def test_declared_absence_rejects_a_dangling_symlink_entry(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "broken.txt").symlink_to(tmp_path / "missing.txt")
+    case = {"test_name": "broken-link", "expected_absent": ["broken.txt"]}
+    with pytest.raises(AssertionError, match="case=broken-link field=expected_absent unexpectedly present"):
+        orchestration.assert_declared_artifacts(case, output)
+
+
 def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:
     """An expected fail-closed BAM case must stop before Kestrel/coverage success assertions."""
     case = _negative_case()
