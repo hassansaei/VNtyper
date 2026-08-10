@@ -354,8 +354,57 @@ limit.
 - Copilot and Sourcery AI review PRs. The established pattern is a follow-up commit
   addressing their comments, not a force-push.
 - CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` across 3.10–3.13,
-  plus a Docker image build and quick Docker tests. Formatting is *not* gated in CI —
-  run `make format-check` yourself.
+  plus a Docker image build and quick Docker tests. PR path filters remain, while every
+  push to `main` is treated as substantive and runs both required-check workflows.
+  Formatting is *not* gated in CI — run `make format-check` yourself.
+
+## Release workflow
+
+Production release policy lives on the default branch in
+`.github/workflows/publish-pypi.yml`. An operator first creates the existing tag outside
+the workflow, then sends an authenticated `repository_dispatch` of type `vntyper_release` whose
+`client_payload.tag` is that strict `vX.Y.Z` tag. There is deliberately no production
+`push.tags` trigger: the default-branch controller validates the tagged commit, but the
+workflow never creates or moves a tag and historical workflow code cannot select the
+current production policy. A manual invocation such as
+`gh workflow run publish-pypi.yml -f tag=vX.Y.Z` validates an existing tag as a dry run
+and performs no production writes.
+
+The release accepts only a tag on `main` ancestry after these exact ten checks succeed
+for the full tagged SHA: `Lint (Ruff)`, `Type Check (mypy)`, `Unit Tests (Python 3.10)`,
+`Unit Tests (Python 3.11)`, `Unit Tests (Python 3.12)`, `Unit Tests (Python 3.13)`,
+`Docs build (strict)`, `CI Success`, `Build and test image`, and `Docker Success`.
+The Docker `sha-<7>` tag is only a convenience reference: contract-v1 evidence binds
+the full SHA and immutable digest, and the image labels
+`org.opencontainers.image.revision` and `org.opencontainers.image.version` must match
+that full revision and release version. Short-prefix collisions fail closed.
+
+Promotion copies the evidence-verified digest, never rebuilds it. Exact `vX.Y.Z` and
+`X.Y.Z` aliases are immutable; floating `X.Y`, `X`, and `latest` advance monotonically
+and never downgrade. `main` remains rolling/unreleased and is never a release alias.
+GHCR mutation is serialized by the fixed `vntyper-ghcr-release-promotion` group. If a
+pending promotion is canceled or superseded before it acquires that lock, rerun it; if
+Docker evidence is missing, rerun the existing exact-SHA Docker Build run. A partial
+promotion is idempotent, and a PyPI retry uses `skip-existing` while reporting whether
+the version was newly published or already existed.
+
+PyPI publication uses Trusted Publishing in the protected `pypi` environment with only
+`id-token: write`; there is no package token in the current controller.
+Do not delete `PYPI_API_TOKEN` until the first successful OIDC release has proved the
+publisher configuration. The owner must then delete it separately. Until that deletion, do not
+create a release tag pointing at a pre-milestone commit: historical tagged commits
+still contain a legacy token workflow, and those workflows become inert only after the
+owner removes the obsolete token.
+
+```text
+phase | job | permissions | retry/recovery
+validation | validate-release | contents: read | fix identity or ancestry, then rerun the existing tag
+gates | wait-for-release-gates | contents: read | rerun missing exact-SHA checks or the existing Docker Build run
+build | build-package | contents: read | rebuild the exact candidate wheel and sdist artifact
+promotion | promote-ghcr | contents: read, packages: write | rerun; verified aliases no-op and partial progress converges
+publish | publish-pypi | id-token: write | rerun safely; skip-existing distinguishes an existing release
+summary | release-summary | none | always records success, failure, skipped jobs, and unavailable partial outputs
+```
 
 ## Traps
 
@@ -449,8 +498,15 @@ limit.
     arguments `generate_summary_report()` does not accept — and now lives in
     `cli_report.py` with its call contract pinned by a signature-binding spy.)
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
-    `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
-    if the pushed tag disagrees with `vntyper/version.py`.
+    `CITATION.cff`, and `docs/about/changelog.md`. The default-branch release controller
+    requires all three to equal the existing strict tag, requires the tag commit to be
+    on `main`, waits for the exact ten full-SHA checks, and validates contract-v1 Docker
+    evidence before any write. The `sha-<7>` image is accepted only when its digest and
+    full `org.opencontainers.image.revision`/`org.opencontainers.image.version` labels
+    match that evidence; ambiguous prefix collisions fail closed. Promotion copies the
+    immutable digest to exact and monotonic floating aliases. Reruns converge after
+    partial GHCR progress and PyPI uses `skip-existing`, but an identity conflict never
+    overwrites an existing exact alias.
 13. **The package and the image must declare the same versions, and a test enforces it.**
     `conda/environment_vntyper.yml` is what the Docker image *runs*; `pyproject.toml` is
     what the PyPI package *declares*. When they disagree, `pip install .` inside the
@@ -497,7 +553,10 @@ limit.
 
 ## Never
 
-- Never push a `v*.*.*` tag. It publishes to PyPI immediately and irreversibly.
+- Never create, move, or push a release tag as an agent. A tag alone no longer starts
+  current production policy, but operators must create the reviewed existing tag before
+  sending the authenticated `vntyper_release` dispatch; historical tag workflows retain
+  legacy behavior until the owner completes the token-deletion follow-up.
 - Never commit into `tests/data/`, `reference/`, `out/`, `download/`, `vntyper.egg-info/`
   or the local `adVNTR/` clone — all are generated or downloaded.
 - Never hand-edit `vntyper/dependencies/kestrel/*.jar` or anything in `vntyper.egg-info/`.

@@ -122,16 +122,22 @@ a bare `ruff format --check .` discovers, so the Makefile target and the obvious
 cannot report different things; the comment above `RUFF_PATHS` gives the command that
 checks that.
 
-### B4. PyPI Trusted Publishing — MEDIUM
+### B4. PyPI Trusted Publishing — RESOLVED; owner cleanup remains
 
-`publish-pypi.yml` still authenticates with a long-lived `PYPI_API_TOKEN`. The migration
-is documented in the workflow header and is a two-part change that **must** be done in
-order, or the next release fails:
+The current default-branch `publish-pypi.yml` controller uses PyPI Trusted Publishing:
+its production publisher runs in the protected `pypi` environment with only
+`id-token: write`, consumes the exact candidate artifact, and invokes a commit-pinned
+PyPA publisher with `skip-existing`. It does not read `PYPI_API_TOKEN` or another
+long-lived package credential.
 
-1. On pypi.org: Manage project → Publishing → add a GitHub publisher
-   (owner `hassansaei`, repo `VNtyper`, workflow `publish-pypi.yml`, environment `pypi`).
-2. In the workflow: add `id-token: write` and the `environment:` block, replace the twine
-   step with `pypa/gh-action-pypi-publish@release/v1`, delete the secret.
+One owner-only rollout action remains intentionally pending. Do not delete
+`PYPI_API_TOKEN` until the first successful OIDC release proves that the configured
+publisher (owner `hassansaei`, repository `VNtyper`, workflow `publish-pypi.yml`,
+environment `pypi`) works live. After that proof, the owner must delete the obsolete
+secret separately and record the release run. Until deletion, do not create a release
+tag pointing at a pre-milestone commit: historical tagged commits still contain their
+legacy token workflow. Those old workflows become inert only after the token is
+removed, so the current workflow migration is resolved while secret retirement is not.
 
 ### B5. `vntyper report` is broken — RESOLVED (#179)
 

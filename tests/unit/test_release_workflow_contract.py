@@ -476,6 +476,7 @@ def test_release_trigger_uses_default_branch_repository_dispatch_for_production(
         "build-package",
         "promote-ghcr",
         "publish-pypi",
+        "release-summary",
     }
     assert publish["jobs"]["validate-release"]["permissions"] == {"contents": "read"}
 
@@ -766,6 +767,7 @@ def test_dispatch_is_read_only_and_metadata_eligible_before_any_check_polling() 
         "build-package",
         "promote-ghcr",
         "publish-pypi",
+        "release-summary",
     }
     assert job["permissions"] == {"contents": "read"}
     assert "id-token" not in job["permissions"]
@@ -2131,3 +2133,197 @@ def test_hostile_unbound_absence_output_retries_then_aborts_before_create_or_pro
     assert not (tmp_path / "github-output").exists()
     counts = json.loads((tmp_path / "fake-counts.json").read_text(encoding="utf-8"))
     assert counts[f"inspect:{reference}:{{{{.Manifest.Digest}}}}"] == 3
+
+
+def test_release_guidance_records_current_controller_rollout_and_recovery_contract() -> None:
+    """Maintainer guidance must describe the implemented default-branch release controller exactly."""
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    followups = (ROOT / "docs" / "development" / "ci-followups.md").read_text(encoding="utf-8")
+    workflow_source = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
+    publish = _workflow("publish-pypi.yml")
+    normalized_agents = " ".join(agents.split())
+
+    assert all(name in normalized_agents for name in REQUIRED_CHECK_NAMES)
+    for literal in (
+        "vntyper_release",
+        "client_payload.tag",
+        "repository_dispatch",
+        "default branch",
+        "sha-<7>",
+        "org.opencontainers.image.revision",
+        "org.opencontainers.image.version",
+        "digest",
+        "main",
+        "latest",
+        "vX.Y.Z",
+        "X.Y.Z",
+        "fixed `vntyper-ghcr-release-promotion`",
+        "existing tag",
+        "dry run",
+        "`pypi` environment",
+        "`id-token: write`",
+        "Do not delete `PYPI_API_TOKEN` until the first successful OIDC release",
+        "historical tagged commits",
+        "legacy token workflow",
+        "inert only after",
+        "pre-milestone commit",
+    ):
+        assert literal in normalized_agents
+    assert "mypy vntyper/ docker/app/ scripts/" in agents
+    assert "`scripts/` is linted and formatted but is not type-checked" not in agents
+    assert re.search(
+        r"```text\nphase \| job \| permissions \| retry/recovery\n"
+        r"validation \| validate-release \| contents: read \|.*\n"
+        r"gates \| wait-for-release-gates \| contents: read \|.*\n"
+        r"build \| build-package \| contents: read \|.*\n"
+        r"promotion \| promote-ghcr \| contents: read, packages: write \|.*\n"
+        r"publish \| publish-pypi \| id-token: write \|.*\n"
+        r"summary \| release-summary \| none \|.*\n```",
+        agents,
+    )
+
+    b4 = followups.split("### B4.", maxsplit=1)[1].split("### B5.", maxsplit=1)[0]
+    assert "RESOLVED" in b4
+    assert "owner" in b4
+    assert "first successful OIDC release" in b4
+    assert "PYPI_API_TOKEN" in b4
+    assert "historical tagged commits" in b4
+    assert "inert only after" in b4
+
+    assert "client_payload.tag" in workflow_source
+    assert "default branch" in workflow_source
+    assert "push:" not in workflow_source.split("permissions:", maxsplit=1)[0]
+    production_guard = "${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}"
+    assert publish["jobs"]["promote-ghcr"]["if"] == production_guard
+    assert publish["jobs"]["publish-pypi"]["if"] == production_guard
+
+
+def test_release_summary_has_complete_always_run_safe_dataflow() -> None:
+    """The diagnostic job must retain every upstream result without obtaining release authority."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["release-summary"]
+    step = _step_with_id(publish, "release-summary", "summarize")
+
+    assert job["needs"] == [
+        "validate-release",
+        "wait-for-release-gates",
+        "build-package",
+        "promote-ghcr",
+        "publish-pypi",
+    ]
+    assert job["if"] == "${{ always() }}"
+    assert job["permissions"] == {}
+    assert "environment" not in job
+    assert step["env"] == {
+        "VALIDATE_RESULT": "${{ needs.validate-release.result }}",
+        "VALIDATE_JSON": "${{ needs.validate-release.outputs.summary_json }}",
+        "GATES_RESULT": "${{ needs.wait-for-release-gates.result }}",
+        "PREFLIGHT_JSON": "${{ needs.wait-for-release-gates.outputs.preflight_summary_json }}",
+        "CHECKS_JSON": "${{ needs.wait-for-release-gates.outputs.check_summary_json }}",
+        "EVIDENCE_JSON": "${{ needs.wait-for-release-gates.outputs.evidence_summary_json }}",
+        "BUILD_RESULT": "${{ needs.build-package.result }}",
+        "PACKAGE_JSON": "${{ needs.build-package.outputs.package_summary_json }}",
+        "PROMOTE_RESULT": "${{ needs.promote-ghcr.result }}",
+        "ALIASES_JSON": "${{ needs.promote-ghcr.outputs.alias_summary_json }}",
+        "DRY_ALIASES_JSON": "${{ needs.wait-for-release-gates.outputs.dry_run_alias_summary_json }}",
+        "PUBLISH_RESULT": "${{ needs.publish-pypi.result }}",
+        "PUBLISH_JSON": "${{ needs.publish-pypi.outputs.publish_summary_json }}",
+        "EVENT_NAME": "${{ github.event_name }}",
+    }
+    assert "Dry run performed no production writes." in step["run"]
+    assert "raw value intentionally not emitted" in step["run"]
+    assert "json.loads(raw)" in step["run"]
+    assert not {"GH_TOKEN", "GITHUB_TOKEN", "PYPI_API_TOKEN", "TWINE_PASSWORD"} & set(step["env"])
+
+
+def test_release_summary_renders_all_provenance_and_handles_partial_invalid_state(tmp_path: Path) -> None:
+    """Summary output must expose structured provenance while suppressing malformed raw values."""
+    workflow = _workflow("publish-pypi.yml")
+    summary_path = tmp_path / "summary.md"
+    validation = {
+        "mode": "dry-run",
+        "tag": "v2.0.10",
+        "sha": "a" * 40,
+        "main_ancestor": True,
+        "observed_versions": {"package": "2.0.10", "citation": "2.0.10", "changelog": "2.0.10"},
+        "matches": {"package": True, "citation": True, "changelog": True},
+    }
+    preflight = {
+        "state": "eligible",
+        "reason": "checks exist",
+        "eligible_runs": [{"id": 41, "url": "https://github.test/runs/41"}],
+        "selected_run": {"id": 41, "url": "https://github.test/runs/41"},
+    }
+    checks = {
+        "attempt": 2,
+        "elapsed_seconds": 60,
+        "verdicts": [
+            {"name": name, "verdict": "success", "url": "https://github.test/check/1"} for name in REQUIRED_CHECK_NAMES
+        ],
+    }
+    evidence = {
+        "run": {"id": 41, "attempt": 3},
+        "artifact": {"id": 501, "name": "docker-release-evidence"},
+        "evidence_contract_version": 1,
+        "source_ref": "ghcr.io/hassansaei/vntyper@sha256:" + "b" * 64,
+        "digest": "sha256:" + "b" * 64,
+        "revision": "a" * 40,
+        "version": "2.0.10",
+    }
+    aliases = {
+        "plan": [
+            {"decision": decision}
+            for decision in ("create", "advance", "no-op", "skip-newer", "skip-unorderable", "fail-conflict")
+        ],
+        "alias_progress": [{"attempted": True, "write_succeeded": True, "verified": False}],
+    }
+    package = {"artifact_name": "python-dist-2.0.10-1-1", "files": ["vntyper.whl", "vntyper.tar.gz"]}
+    env = {
+        "GITHUB_STEP_SUMMARY": str(summary_path),
+        "EVENT_NAME": "workflow_dispatch",
+        "VALIDATE_RESULT": "success",
+        "VALIDATE_JSON": json.dumps(validation),
+        "GATES_RESULT": "failure",
+        "PREFLIGHT_JSON": json.dumps(preflight),
+        "CHECKS_JSON": json.dumps(checks),
+        "EVIDENCE_JSON": json.dumps(evidence),
+        "BUILD_RESULT": "success",
+        "PACKAGE_JSON": json.dumps(package),
+        "PROMOTE_RESULT": "skipped",
+        "ALIASES_JSON": json.dumps(aliases),
+        "DRY_ALIASES_JSON": "",
+        "PUBLISH_RESULT": "skipped",
+        "PUBLISH_JSON": "not-json SUPER_SECRET_MUST_NOT_LEAK",
+    }
+
+    completed = _run_step(tmp_path, workflow, "release-summary", "summarize", env)
+
+    assert completed.returncode == 0, completed.stderr
+    rendered = summary_path.read_text(encoding="utf-8")
+    assert "Dry run performed no production writes." in rendered
+    for title in (
+        "Validation",
+        "Docker evidence preflight",
+        "Exact-SHA checks",
+        "Docker evidence",
+        "Package",
+        "GHCR aliases",
+        "Dry-run aliases",
+        "PyPI",
+    ):
+        assert f"## {title}" in rendered
+    for literal in (
+        "main_ancestor",
+        "observed_versions",
+        "elapsed_seconds",
+        "evidence_contract_version",
+        "source_ref",
+        "alias_progress",
+        "write_succeeded",
+        "fail-conflict",
+        "vntyper.whl",
+        "Structured output: unavailable",
+        "Structured output: invalid JSON",
+    ):
+        assert literal in rendered
+    assert "SUPER_SECRET_MUST_NOT_LEAK" not in rendered

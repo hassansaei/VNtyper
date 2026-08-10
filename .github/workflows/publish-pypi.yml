@@ -1,8 +1,18 @@
-# Production releases use the narrowly scoped vntyper_release repository dispatch so
-# policy is always loaded from the default branch. Manual dispatch validates an
-# existing tag in dry-run mode and performs no writes.
-# GHCR promotion uses one repository-wide mutual-exclusion lock, not an unbounded queue.
-# A superseded pending promotion performs no writes before acquiring it and must be rerun.
+# Production starts only from an authenticated repository_dispatch with event type
+# vntyper_release and client_payload.tag naming an existing strict release tag. GitHub
+# loads this controller from the default branch, so old tagged workflow code cannot
+# select production policy. There is deliberately no production push.tags trigger, and
+# this workflow never creates or moves a tag.
+# Inspect an existing tag without writes with:
+#   gh workflow run publish-pypi.yml -f tag=vX.Y.Z
+# The Docker Build run for the exact full SHA must already have emitted matching
+# evidence. If evidence or its image is missing, rerun that existing Docker Build run.
+# Production promotes the verified digest to immutable vX.Y.Z/X.Y.Z and monotonic
+# floating X.Y/X/latest aliases; main remains the rolling unreleased image.
+# GHCR promotion uses the fixed vntyper-ghcr-release-promotion mutual-exclusion lock,
+# not an unbounded queue. A canceled/superseded pending promotion performs no writes
+# before acquiring it and must be rerun. A partial PyPI retry is safe: the publisher
+# uses skip-existing and the summary distinguishes a new upload from an existing file.
 name: Publish PyPI and promote GHCR
 
 on:
@@ -1045,4 +1055,62 @@ jobs:
               outcome = "failed"
           payload = {"result": outcome, "step_outcome": sys.argv[2], "existed_before": existed}
           print("publish_summary_json=" + json.dumps(payload, separators=(",", ":")))
+          PY
+
+  release-summary:
+    needs: [validate-release, wait-for-release-gates, build-package, promote-ghcr, publish-pypi]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - id: summarize
+        env:
+          VALIDATE_RESULT: ${{ needs.validate-release.result }}
+          VALIDATE_JSON: ${{ needs.validate-release.outputs.summary_json }}
+          GATES_RESULT: ${{ needs.wait-for-release-gates.result }}
+          PREFLIGHT_JSON: ${{ needs.wait-for-release-gates.outputs.preflight_summary_json }}
+          CHECKS_JSON: ${{ needs.wait-for-release-gates.outputs.check_summary_json }}
+          EVIDENCE_JSON: ${{ needs.wait-for-release-gates.outputs.evidence_summary_json }}
+          BUILD_RESULT: ${{ needs.build-package.result }}
+          PACKAGE_JSON: ${{ needs.build-package.outputs.package_summary_json }}
+          PROMOTE_RESULT: ${{ needs.promote-ghcr.result }}
+          ALIASES_JSON: ${{ needs.promote-ghcr.outputs.alias_summary_json }}
+          DRY_ALIASES_JSON: ${{ needs.wait-for-release-gates.outputs.dry_run_alias_summary_json }}
+          PUBLISH_RESULT: ${{ needs.publish-pypi.result }}
+          PUBLISH_JSON: ${{ needs.publish-pypi.outputs.publish_summary_json }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+
+          sections = (
+              ("Validation", "VALIDATE_RESULT", "VALIDATE_JSON"),
+              ("Docker evidence preflight", "GATES_RESULT", "PREFLIGHT_JSON"),
+              ("Exact-SHA checks", "GATES_RESULT", "CHECKS_JSON"),
+              ("Docker evidence", "GATES_RESULT", "EVIDENCE_JSON"),
+              ("Package", "BUILD_RESULT", "PACKAGE_JSON"),
+              ("GHCR aliases", "PROMOTE_RESULT", "ALIASES_JSON"),
+              ("Dry-run aliases", "GATES_RESULT", "DRY_ALIASES_JSON"),
+              ("PyPI", "PUBLISH_RESULT", "PUBLISH_JSON"),
+          )
+          print("# Release summary")
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              print("\n> Dry run performed no production writes.")
+          for title, result_key, payload_key in sections:
+              result = os.environ.get(result_key, "not reached") or "not reached"
+              raw = os.environ.get(payload_key, "")
+              print(f"\n## {title}\n\nJob result: `{result}`")
+              if not raw:
+                  print("\nStructured output: unavailable (job was skipped, failed before output, or was not reached).")
+                  continue
+              try:
+                  payload = json.loads(raw)
+              except json.JSONDecodeError as exc:
+                  print(f"\nStructured output: invalid JSON ({exc.msg}); raw value intentionally not emitted.")
+                  continue
+              print("\n```json")
+              print(json.dumps(payload, indent=2, sort_keys=True))
+              print("```")
           PY
