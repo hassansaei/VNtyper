@@ -546,15 +546,19 @@ summary | release-summary | none | always records success, failure, skipped jobs
     solvers, so `--no-deps` stays.
 16. **`scripts/` is in both runtime quality gates.** `RUFF_PATHS` covers
     `vntyper/ docker/app/ tests/ scripts/ docs/`, and `make type-check` runs
-    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 118 source files.
+    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 129 source files.
     `make type-check-all` then adds the deliberately separate `mypy vntyper/ tests/`
-    pass — do not claim `scripts/` is part of that tests invocation or collapse the two.
+    pass, which checked 282 test sources. Do not claim `scripts/` is part of that tests
+    invocation or collapse the two.
 
     Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
-    appended only after all 24 Python files reached 92.5166935298181% branch-inclusive
-    coverage (4,018 of 4,343 statement/branch units). The four isolated combined runs
-    measured 87.90% on Python 3.10 and 87.89% on Python 3.11, 3.12 and 3.13, each across
-    4,510 unit tests. These figures do not change the independent gate semantics:
+    appended only after the scripts aggregate exceeded the separate 88% threshold. The
+    final 2026-08-10 verification measured all 35 Python files at 6,000 of 6,387 measured
+    units, or 93.94% aggregate scripts-only branch-inclusive coverage, and 89.15% combined
+    branch-inclusive coverage across 5,067 unit tests in both the maintained Python 3.12
+    environment and `ci-local`'s clean Python 3.13 rebuild. The Python 3.10–3.13 GitHub
+    matrix remains the authoritative cross-version gate. These figures do not change the
+    independent gate semantics:
     `[tool.coverage.report].fail_under = 86` is the hard floor,
     `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
     lines, and `SCRIPTS_COVERAGE_TARGET ?= 88` is the isolated pre-source proof. The

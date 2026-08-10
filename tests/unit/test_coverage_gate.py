@@ -236,7 +236,16 @@ def test_coverage_source_is_complete_and_has_no_script_omission() -> None:
 def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     agents = (coverage_gate.REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     mkdocs = (coverage_gate.REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    normalized_agents = " ".join(agents.split())
+    script_count = len(list(coverage_gate.REPO_ROOT.glob("scripts/**/*.py")))
     assert "`scripts/` is linted and formatted but is not type-checked" not in agents
     assert "`mypy vntyper/ docker/app/ scripts/`" in agents
     assert "source = [`vntyper`, `docker/app`, `scripts`]" in agents
+    assert f"all {script_count} Python files" in normalized_agents
+    assert "6,000 of 6,387 measured units" in normalized_agents
+    assert "93.94% aggregate scripts-only branch-inclusive coverage" in normalized_agents
+    assert "89.15% combined branch-inclusive coverage across 5,067 unit tests" in normalized_agents
+    assert "every script was measured above" not in agents
+    assert "24 Python files" not in agents
+    assert "92.5166935298181%" not in agents
     assert "  superpowers/" in mkdocs
