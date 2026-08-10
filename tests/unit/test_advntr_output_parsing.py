@@ -22,7 +22,6 @@ writing a file. A caller that gets no file does not see the real cause at that p
 sees a misleading downstream failure much later, so which paths reach it is pinned.
 """
 
-import builtins
 import logging
 from pathlib import Path
 
@@ -261,27 +260,48 @@ class TestPathsThatWriteNoFile:
         assert [r for r in caplog.records if r.levelno >= logging.ERROR], label
 
 
-def test_unreadable_advntr_output_logs_and_returns_none(tmp_path: Path, monkeypatch, caplog) -> None:
-    """An unreadable optional adVNTR result has no parsed-result artifact."""
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_message"),
+    [
+        ("dataframe_load", "Error loading data into DataFrame: unreadable result"),
+        ("variant_processing", "Error during processing of deletions and insertions: unreadable result"),
+    ],
+)
+def test_unreadable_advntr_output_logs_and_returns_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_stage: str,
+    expected_message: str,
+) -> None:
+    """Each broad parsing catch returns None without claiming a result artifact."""
     source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
-    original_open = builtins.open
 
-    def unreadable(path, *args, **kwargs):
-        if path == str(source):
-            raise OSError("unreadable result")
-        return original_open(path, *args, **kwargs)
+    def unreadable(*_args, **_kwargs):
+        raise OSError("unreadable result")
 
-    monkeypatch.setattr(builtins, "open", unreadable)
+    if failure_stage == "dataframe_load":
+        monkeypatch.setattr(advntr.pd, "read_csv", unreadable)
+    else:
+        monkeypatch.setattr(advntr, "advntr_processing_del", unreadable)
+
+    cleanup_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        advntr,
+        "cleanup_files",
+        lambda output, output_name: cleanup_calls.append((output, output_name)),
+    )
 
     with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
         assert advntr.process_advntr_output(str(source), str(tmp_path), "output") is None
 
     assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
+    assert cleanup_calls == []
     errors = [
         record for record in caplog.records if record.name == advntr.logger.name and record.levelno >= logging.ERROR
     ]
     assert [record.levelno for record in errors] == [logging.ERROR]
-    assert "unreadable result" in caplog.text
+    assert errors[0].getMessage() == expected_message
 
 
 # ---------------------------------------------------------------------------

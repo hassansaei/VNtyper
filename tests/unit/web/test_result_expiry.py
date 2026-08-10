@@ -115,32 +115,50 @@ def test_the_sweep_leaves_files_that_are_not_result_archives_alone(expiry_task, 
 def test_cleanup_continues_after_one_delete_error(
     monkeypatch: pytest.MonkeyPatch, fake_redis, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """One failed result deletion does not stop the scheduled cleanup sweep."""
+    """One failed expired-cohort deletion does not stop its remaining cleanup."""
     from app import tasks
 
     for attr in ("redis_client", "redis_cohort_client", "redis_usage_client"):
         monkeypatch.setattr(tasks, attr, fake_redis)
     monkeypatch.setattr(tasks.settings, "DEFAULT_OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(tasks.os, "listdir", lambda _path: ["blocked.zip", "later.zip"])
-    monkeypatch.setattr(tasks.os.path, "isfile", lambda _path: True)
-    too_old = (tasks.settings.MAX_RESULT_AGE_DAYS + 1) * _SECONDS_PER_DAY
-    monkeypatch.setattr(tasks.os.path, "getctime", lambda _path: time.time() - too_old)
+    monkeypatch.setattr(tasks.os, "listdir", lambda _path: [])
+    redis_exists = fake_redis.exists
+    monkeypatch.setattr(fake_redis, "scan_iter", lambda _pattern: iter(["cohort:expired"]))
+    monkeypatch.setattr(fake_redis, "exists", lambda key: False if key == "cohort:expired" else redis_exists(key))
+    monkeypatch.setattr(fake_redis, "smembers", lambda _key: ["blocked-job", "later-job"])
+
+    blocked_archive = tmp_path / "blocked-job.zip"
+    later_archive = tmp_path / "later-job.zip"
+    blocked_archive.write_bytes(b"blocked")
+    later_archive.write_bytes(b"later")
+    cohort_jobs_key = "cohort:expired:jobs"
+    fake_redis.sadd(cohort_jobs_key, "blocked-job", "later-job")
+    for job_id in ("blocked-job", "later-job"):
+        fake_redis.set(job_id, "result")
+        fake_redis.set(f"celery-task-meta-{job_id}", "metadata")
 
     attempted: list[str] = []
 
     def remove(path: str) -> None:
         attempted.append(path)
-        if path.endswith("blocked.zip"):
+        if path == str(blocked_archive):
             raise OSError("blocked")
+        Path(path).unlink()
 
     monkeypatch.setattr(tasks.os, "remove", remove)
 
     with caplog.at_level(logging.ERROR, logger=tasks.logger.name):
         assert tasks.delete_old_results.run() is None
 
-    assert attempted == [str(tmp_path / "blocked.zip"), str(tmp_path / "later.zip")]
+    assert attempted == [str(blocked_archive), str(later_archive)]
+    assert blocked_archive.exists()
+    assert not later_archive.exists()
+    assert not redis_exists(cohort_jobs_key)
+    for job_id in ("blocked-job", "later-job"):
+        assert fake_redis.get(job_id) is None
+        assert fake_redis.get(f"celery-task-meta-{job_id}") is None
     errors = [
         record for record in caplog.records if record.name == tasks.logger.name and record.levelno >= logging.ERROR
     ]
     assert [record.levelno for record in errors] == [logging.ERROR]
-    assert "blocked" in caplog.text
+    assert errors[0].getMessage() == f"Error deleting file {blocked_archive}: blocked"

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -186,8 +188,10 @@ def test_pseudonym_table_write_failure_is_logged(tmp_path, caplog, monkeypatch) 
 
     monkeypatch.setattr(cohort_exports, "open", _blocked_open, raising=False)
 
-    write_pseudonymization_table(tmp_path, {"a": "b"})
+    writer: Callable[[str | Path, dict[str, str]], object] = write_pseudonymization_table
+    result = writer(tmp_path, {"a": "b"})
 
+    assert result is None
     assert not (tmp_path / "pseudonymization_table.tsv").exists()
     records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_exports"]
     assert len(records) == 1

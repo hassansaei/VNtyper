@@ -327,7 +327,9 @@ def test_read_vcf_without_comments_unreadable_path_returns_empty_dataframe(tmp_p
 
     assert out.empty
     assert list(out.columns) == []
-    assert any("Error reading VCF file" in r.message for r in caplog.records)
+    records = [record for record in caplog.records if "Error reading VCF file" in record.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
 
 
 def test_read_vcf_without_comments_no_header_line_returns_empty_dataframe(tmp_path):

@@ -60,7 +60,9 @@ def test_invalid_regex_is_false_and_observable(caplog: pytest.LogCaptureFixture)
     """An invalid configured regex fails closed and leaves an ERROR breadcrumb."""
     with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
         assert regex_match("[", "value") is False
-    assert "Error in regex_match" in caplog.text
+    records = [record for record in caplog.records if "Error in regex_match" in record.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
 
 
 # --- evaluate_condition tests ---
