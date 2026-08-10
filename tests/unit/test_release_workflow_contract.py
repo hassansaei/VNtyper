@@ -179,10 +179,20 @@ if args[:3] != ["buildx", "imagetools", "inspect"]:
     with pathlib.Path(os.environ["MUTATION_LOG"]).open("a", encoding="utf-8") as handle:
         handle.write("docker " + " ".join(args) + "\\n")
     raise SystemExit(97)
+counter_path = pathlib.Path(os.environ["FAKE_FIXTURE"]).with_name("fake-counts.json")
+counts = json.loads(counter_path.read_text(encoding="utf-8")) if counter_path.is_file() else {}
+format_value = args[args.index("--format") + 1]
+inspect_key = f"inspect:{args[3]}:{format_value}"
+counts[inspect_key] = counts.get(inspect_key, 0) + 1
+counter_path.write_text(json.dumps(counts), encoding="utf-8")
+failure = fixture.get("inspect_failures", {}).get(args[3])
+if failure is not None and counts[inspect_key] <= failure["times"]:
+    print(failure["stderr"], file=sys.stderr)
+    raise SystemExit(failure.get("exit_code", 1))
 record = fixture.get("docker", {}).get(args[3])
 if record is None:
+    print("manifest unknown: not found", file=sys.stderr)
     raise SystemExit(1)
-format_value = args[args.index("--format") + 1]
 if format_value == "{{.Manifest.Digest}}":
     print(record["digest"])
 elif format_value == "{{json .Image}}":
@@ -203,6 +213,8 @@ else:
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "RELEASE_API_ATTEMPTS": "3",
         "RELEASE_API_RETRY_SECONDS": "0",
+        "RELEASE_ALIAS_INSPECT_ATTEMPTS": "3",
+        "RELEASE_ALIAS_INSPECT_RETRY_SECONDS": "0",
         "RELEASE_POLL_ATTEMPTS": "1",
         "RELEASE_POLL_INTERVAL_SECONDS": "0",
         "SHA": "a" * 40,
@@ -378,6 +390,8 @@ def test_release_evidence_uses_post_push_registry_digest_and_attempt_scoped_arti
         "VERSION": "${{ steps.package.outputs.version }}",
     }
     assert '"contract_version": 1' in evidence["run"]
+    assert "tempfile.mkstemp" in evidence["run"]
+    assert "os.replace" in evidence["run"]
     upload = steps[upload_index]
     assert upload["if"] == "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
     assert upload["with"] == {
@@ -600,6 +614,59 @@ def test_validation_summary_preserves_structured_mismatch_observations(tmp_path:
     }
 
 
+@pytest.mark.parametrize("invalid_contents", ["", "{", "[]"])
+def test_validation_result_always_emits_structured_fallback_for_invalid_candidate_phase_json(
+    tmp_path: Path,
+    invalid_contents: str,
+) -> None:
+    """A torn candidate observation must not suppress the always-run validation output."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "candidate-version-observations.json").write_text(invalid_contents, encoding="utf-8")
+    output = tmp_path / "github-output"
+    publish = _workflow("publish-pypi.yml")
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "validate-release",
+        "validate-result",
+        {
+            "CANDIDATE_OUTCOME": "failure",
+            "GITHUB_OUTPUT": str(output),
+            "MODE": "production",
+            "RESOLVE_OUTCOME": "success",
+            "SHA": "1" * 40,
+            "TAG": "v7.8.9",
+            "VERSION": "7.8.9",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    name, encoded = output.read_text(encoding="utf-8").strip().split("=", maxsplit=1)
+    assert name == "summary_json"
+    payload = json.loads(encoded)
+    assert payload["candidate_outcome"] == "failure"
+    assert payload["version_validation"] == {
+        "expected_version": "7.8.9",
+        "package": {"observed": None, "matches": False},
+        "citation": {"observed": None, "matches": False},
+        "changelog": {"observed": None, "matches": False},
+        "version_test_exit_code": None,
+        "version_test_passed": False,
+    }
+
+
+def test_candidate_phase_json_uses_atomic_replace_for_initial_and_updated_snapshots() -> None:
+    """Both candidate writers must publish a complete observation object atomically."""
+    candidate = _step_with_id(_workflow("publish-pypi.yml"), "validate-release", "candidate")
+    scripts = _heredoc_pythons(candidate["run"])
+
+    assert len(scripts) == 2
+    assert all("os.replace" in script for script in scripts)
+    assert all("tempfile.mkstemp" in script for script in scripts)
+
+
 @pytest.mark.parametrize(
     ("package", "citation", "changelog"),
     [
@@ -729,7 +796,12 @@ def test_exact_sha_gate_has_bounded_polling_auth_and_read_only_permissions() -> 
     evidence = _step_with_id(publish, "wait-for-release-gates", "evidence")
 
     assert job["needs"] == "validate-release"
-    assert job["timeout-minutes"] == "70"
+    poll_attempts = int(job["env"]["RELEASE_POLL_ATTEMPTS"])
+    poll_interval = int(job["env"]["RELEASE_POLL_INTERVAL_SECONDS"])
+    api_attempts = int(job["env"]["RELEASE_API_ATTEMPTS"])
+    api_retry = int(job["env"]["RELEASE_API_RETRY_SECONDS"])
+    worst_poll_and_retry_seconds = (poll_attempts - 1) * poll_interval + poll_attempts * (api_attempts - 1) * api_retry
+    assert int(job["timeout-minutes"]) * 60 > worst_poll_and_retry_seconds + 10 * 60
     assert job["permissions"] == {
         "actions": "read",
         "checks": "read",
@@ -791,6 +863,55 @@ def test_source_recovery_uses_only_exact_sha_attempt_artifacts_and_digest_inspec
     assert "sha-${SHORT_SHA}" in evidence
     assert ":main" not in evidence
     assert "rerun this existing Docker Build run" in evidence
+
+
+def test_evidence_provenance_and_recovery_fields_are_job_outputs_for_final_summary_dataflow() -> None:
+    """The future final summary must not reconstruct source or recovery identity from logs."""
+    publish = _workflow("publish-pypi.yml")
+
+    assert publish["jobs"]["wait-for-release-gates"]["outputs"] == {
+        "source_ref": "${{ steps.evidence.outputs.source_ref }}",
+        "source_digest": "${{ steps.evidence.outputs.source_digest }}",
+        "source_revision": "${{ steps.evidence.outputs.source_revision }}",
+        "source_version": "${{ steps.evidence.outputs.source_version }}",
+        "evidence_contract_version": "${{ steps.evidence.outputs.evidence_contract_version }}",
+        "short_tag_collision": "${{ steps.evidence.outputs.short_tag_collision }}",
+        "source_run_id": "${{ steps.evidence.outputs.source_run_id }}",
+        "source_run_attempt": "${{ steps.evidence.outputs.source_run_attempt }}",
+        "source_run_url": "${{ steps.evidence.outputs.source_run_url }}",
+        "source_artifact_name": "${{ steps.evidence.outputs.source_artifact_name }}",
+        "source_artifact_url": "${{ steps.evidence.outputs.source_artifact_url }}",
+        "source_artifact_download_url": "${{ steps.evidence.outputs.source_artifact_download_url }}",
+        "recovery_instruction": "${{ steps.evidence.outputs.recovery_instruction }}",
+        "preflight_summary_json": "${{ steps.evidence-preflight-result.outputs.preflight_summary_json }}",
+        "check_summary_json": "${{ steps.poll-result.outputs.check_summary_json }}",
+        "evidence_summary_json": "${{ steps.evidence-result.outputs.evidence_summary_json }}",
+        "dry_run_alias_summary_json": "${{ steps.dry-run-aliases.outputs.dry_run_alias_summary_json }}",
+    }
+
+
+def test_release_phase_json_is_published_only_by_atomic_rename() -> None:
+    """A failed producer must never expose a partial JSON file to an always-run serializer."""
+    publish = _workflow("publish-pypi.yml")
+    phase_files = [
+        ("wait-for-release-gates", "evidence-preflight", "preflight-state.json"),
+        ("wait-for-release-gates", "evidence-preflight", "eligible-runs.json"),
+        ("wait-for-release-gates", "poll", "poll.json"),
+        ("wait-for-release-gates", "evidence", "evidence-eligible-runs.json"),
+        ("wait-for-release-gates", "evidence", "selected-run.json"),
+        ("wait-for-release-gates", "evidence", "selected-artifact.json"),
+        ("wait-for-release-gates", "evidence", "validated-evidence.json"),
+        ("wait-for-release-gates", "evidence", "image-config.json"),
+        ("wait-for-release-gates", "evidence", "short-image-config.json"),
+        ("wait-for-release-gates", "evidence", "validated-image.json"),
+        ("promote-ghcr", "promote", "plan.json"),
+        ("promote-ghcr", "promote", "alias-progress.json"),
+    ]
+
+    for job, step_id, filename in phase_files:
+        run = _step_with_id(publish, job, step_id)["run"]
+        assert f"{filename}.tmp" in run
+        assert f"mv -- {filename}.tmp {filename}" in run
 
 
 def test_preflight_retries_api_and_falls_back_to_older_exact_artifact(tmp_path: Path) -> None:
@@ -924,6 +1045,100 @@ def test_poll_serializer_reserves_missing_snapshot_diagnostic_for_nonterminal_pr
     assert "preflight_state" not in payload
 
 
+@pytest.mark.parametrize("invalid_contents", ["", "{", "[]"])
+def test_preflight_result_always_replaces_invalid_phase_json_with_structured_failure(
+    tmp_path: Path,
+    invalid_contents: str,
+) -> None:
+    """A torn preflight write must still yield one structured job output."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, {"payloads": {}})
+    (tmp_path / "preflight-state.json").write_text(invalid_contents, encoding="utf-8")
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "evidence-preflight-result",
+        env | {"PREFLIGHT_OUTCOME": "failure"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads((tmp_path / "preflight-state.json").read_text(encoding="utf-8"))
+    assert payload == {
+        "sha": "a" * 40,
+        "state": "infrastructure-failure",
+        "reason": "preflight ended before structured state was written",
+        "eligible_runs": [],
+        "selected_run": None,
+        "step_outcome": "failure",
+    }
+    name, encoded = (tmp_path / "github-output").read_text(encoding="utf-8").strip().split("=", maxsplit=1)
+    assert name == "preflight_summary_json"
+    assert json.loads(encoded) == payload
+
+
+@pytest.mark.parametrize("invalid_contents", ["{", "[]"])
+def test_poll_result_always_replaces_invalid_phase_json_with_structured_failure(
+    tmp_path: Path,
+    invalid_contents: str,
+) -> None:
+    """A nonempty malformed poll snapshot must not escape through the job output."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, {"payloads": {}})
+    (tmp_path / "poll.json").write_text(invalid_contents, encoding="utf-8")
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "poll-result",
+        env | {"POLL_OUTCOME": "failure"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads((tmp_path / "poll.json").read_text(encoding="utf-8"))
+    assert payload["action"] == "fail"
+    assert payload["infrastructure_error"] == "poll step ended before a Check Runs snapshot"
+    assert payload["step_outcome"] == "failure"
+
+
+@pytest.mark.parametrize(
+    ("filename", "invalid_contents", "availability_key"),
+    [
+        ("plan.json", "", "plan_available"),
+        ("plan.json", "[]", "plan_available"),
+        ("alias-progress.json", "{", "alias_progress_available"),
+        ("alias-progress.json", "{}", "alias_progress_available"),
+    ],
+)
+def test_promotion_result_always_serializes_invalid_or_wrong_shape_phase_json(
+    tmp_path: Path,
+    filename: str,
+    invalid_contents: str,
+    availability_key: str,
+) -> None:
+    """Promotion recovery must retain a structured result after a torn phase write."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _promotion_fixture())
+    (tmp_path / filename).write_text(invalid_contents, encoding="utf-8")
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "promote-ghcr",
+        "promote-result",
+        env | {"PROMOTE_OUTCOME": "failure"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads((tmp_path / "alias-summary.json").read_text(encoding="utf-8"))
+    assert payload["step_outcome"] == "failure"
+    assert payload[availability_key] is False
+    assert isinstance(payload["plan"], dict)
+    assert isinstance(payload["alias_progress"], list)
+
+
 def test_ineligible_preflight_prints_exact_run_recovery_context(tmp_path: Path) -> None:
     """Operators need the exact run URL and rerun action, not a generic rebuild suggestion."""
     fixture = {
@@ -998,11 +1213,24 @@ def _successful_evidence_fixture(**evidence_overrides: object) -> dict[str, Any]
             }
         }
     }
+    artifact_name = f"docker-release-evidence-{sha}-3"
     return {
         "payloads": {
             "runs": [{"workflow_runs": [_docker_run(41, attempt=3), _docker_run(42, attempt=2)]}],
             "artifacts:42": [{"artifacts": []}],
-            "artifacts:41": [{"artifacts": [{"name": f"docker-release-evidence-{sha}-3", "expired": False}]}],
+            "artifacts:41": [
+                {
+                    "artifacts": [
+                        {
+                            "id": 501,
+                            "name": artifact_name,
+                            "expired": False,
+                            "url": "https://api.github.test/artifacts/501",
+                            "archive_download_url": "https://api.github.test/artifacts/501/zip",
+                        }
+                    ]
+                }
+            ],
         },
         "downloads": {"41": evidence},
         "docker": {
@@ -1018,22 +1246,67 @@ def test_evidence_step_selects_fallback_run_and_exports_exact_digest_identity(tm
     env = _release_runtime(tmp_path, _successful_evidence_fixture())
 
     completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+    serialized = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "evidence-result",
+        env | {"EVIDENCE_OUTCOME": "success"},
+    )
 
     assert completed.returncode == 0, completed.stderr
+    assert serialized.returncode == 0, serialized.stderr
     assert json.loads((tmp_path / "selected-run.json").read_text()) == {
         "id": 41,
         "run_attempt": 3,
         "html_url": "https://github.test/runs/41",
     }
+    assert json.loads((tmp_path / "selected-artifact.json").read_text()) == {
+        "id": 501,
+        "name": f"docker-release-evidence-{'a' * 40}-3",
+        "expired": False,
+        "url": "https://api.github.test/artifacts/501",
+        "archive_download_url": "https://api.github.test/artifacts/501/zip",
+    }
     output = (tmp_path / "github-output").read_text().splitlines()
     digest = "sha256:" + "b" * 64
-    assert output == [
+    assert output[:-1] == [
         f"source_ref=ghcr.io/hassansaei/vntyper@{digest}",
         f"source_digest={digest}",
         f"source_revision={'a' * 40}",
         "source_version=2.0.10",
+        "evidence_contract_version=1",
         "short_tag_collision=false",
+        "source_run_id=41",
+        "source_run_attempt=3",
+        "source_run_url=https://github.test/runs/41",
+        f"source_artifact_name=docker-release-evidence-{'a' * 40}-3",
+        "source_artifact_url=https://api.github.test/artifacts/501",
+        "source_artifact_download_url=https://api.github.test/artifacts/501/zip",
+        (
+            "recovery_instruction=Rerun existing Docker Build run https://github.test/runs/41 "
+            f"(run 41, attempt 3) to regenerate exact artifact docker-release-evidence-{'a' * 40}-3; "
+            "artifact API URL: https://api.github.test/artifacts/501."
+        ),
     ]
+    assert output[-1].startswith("evidence_summary_json=")
+    assert json.loads((tmp_path / "validated-image.json").read_text()) == {
+        "source_ref": f"ghcr.io/hassansaei/vntyper@{digest}",
+        "source_digest": digest,
+        "source_revision": "a" * 40,
+        "source_version": "2.0.10",
+        "evidence_contract_version": 1,
+        "short_tag_collision": False,
+    }
+    summary = json.loads((tmp_path / "evidence-summary.json").read_text(encoding="utf-8"))
+    assert summary["state"] == "verified"
+    assert summary["source_ref"] == f"ghcr.io/hassansaei/vntyper@{digest}"
+    assert summary["evidence_contract_version"] == 1
+    assert summary["short_tag_collision"] is False
+    assert summary["selected_run"]["html_url"] == "https://github.test/runs/41"
+    assert summary["selected_artifact"]["url"] == "https://api.github.test/artifacts/501"
+    assert summary["selected_artifact"]["archive_download_url"] == "https://api.github.test/artifacts/501/zip"
+    assert summary["recovery_instruction"].startswith("Rerun existing Docker Build run https://github.test/runs/41")
     assert (tmp_path / "mutation.log").read_text() == ""
 
 
@@ -1058,6 +1331,7 @@ def test_evidence_step_rejects_wrong_contract_digest_revision_and_version(
 
     assert completed.returncode != 0
     assert error_fragment in completed.stderr
+    assert not (tmp_path / "validated-evidence.json").exists()
     assert (tmp_path / "mutation.log").read_text() == ""
 
 
@@ -1126,14 +1400,60 @@ def test_evidence_step_fails_when_immutable_manifest_is_missing_and_preserves_ru
     payload = json.loads((tmp_path / "evidence-summary.json").read_text())
     assert payload["state"] == "failed"
     assert payload["selected_run"]["html_url"] == "https://github.test/runs/41"
+    assert payload["selected_artifact"] == {
+        "available": True,
+        "id": 501,
+        "name": f"docker-release-evidence-{'a' * 40}-3",
+        "url": "https://api.github.test/artifacts/501",
+        "archive_download_url": "https://api.github.test/artifacts/501/zip",
+    }
     assert payload["evidence"]["digest"] == "sha256:" + "b" * 64
+    assert payload["evidence_contract_version"] == 1
+    assert payload["source_ref"] is None
+    assert payload["short_tag_collision"] is None
+    assert payload["recovery_instruction"].startswith("Rerun existing Docker Build run https://github.test/runs/41")
     assert payload["image"]["available"] is False
+
+
+def test_evidence_step_without_selected_artifact_names_every_candidate_run_url(tmp_path: Path) -> None:
+    """Artifact absence must retain all exact candidate URLs in logs and structured recovery data."""
+    fixture = _successful_evidence_fixture()
+    fixture["payloads"]["artifacts:41"] = [{"artifacts": []}]
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+    summary = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "evidence-result",
+        env | {"EVIDENCE_OUTCOME": "failure"},
+    )
+
+    assert completed.returncode != 0
+    assert "https://github.test/runs/42" in completed.stderr
+    assert "https://github.test/runs/41" in completed.stderr
+    assert "run URL unavailable" not in completed.stderr
+    assert summary.returncode == 0, summary.stderr
+    payload = json.loads((tmp_path / "evidence-summary.json").read_text(encoding="utf-8"))
+    assert [run["html_url"] for run in payload["candidate_runs"]] == [
+        "https://github.test/runs/42",
+        "https://github.test/runs/41",
+    ]
+    assert payload["selected_run"]["available"] is False
+    assert payload["selected_artifact"]["available"] is False
+    assert payload["recovery_instruction"] == (
+        "Rerun one of these existing exact-SHA Docker Build runs to regenerate its exact attempt-qualified "
+        "evidence artifact: https://github.test/runs/42, https://github.test/runs/41."
+    )
 
 
 def _promotion_fixture(
     aliases: Mapping[str, tuple[str, str | None]] | None = None,
     *,
     fail_reinspect: tuple[str, ...] = (),
+    inspect_failures: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     """Return registry observations for executable promotion-step tests."""
     image = "ghcr.io/hassansaei/vntyper"
@@ -1158,6 +1478,7 @@ def _promotion_fixture(
     return {
         "docker": docker,
         "fail_reinspect": [f"{image}:{alias}" for alias in fail_reinspect],
+        "inspect_failures": dict(inspect_failures or {}),
     }
 
 
@@ -1248,6 +1569,101 @@ def test_equal_version_digest_conflict_fails_before_any_alias_write(
     assert "release alias conflict" in completed.stderr
     assert (tmp_path / "mutation.log").read_text() == ""
     assert _create_records(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("alias", "existing_version", "failure_stderr", "expected_returncode"),
+    [
+        ("v2.0.10", "2.0.10", "request timed out", 1),
+        ("latest", "2.1.0", "unexpected status from HEAD request: 503 Service Unavailable", 0),
+    ],
+)
+def test_transient_inspection_cannot_hide_and_overwrite_existing_alias(
+    tmp_path: Path,
+    alias: str,
+    existing_version: str,
+    failure_stderr: str,
+    expected_returncode: int,
+) -> None:
+    """A retry must reveal immutable conflicts and newer floating aliases before planning writes."""
+    image = "ghcr.io/hassansaei/vntyper"
+    source_digest = "sha256:" + "b" * 64
+    existing_digest = "sha256:" + "c" * 64
+    other_aliases = {
+        candidate: (source_digest, "2.0.10")
+        for candidate in ("v2.0.10", "2.0.10", "2.0", "2", "latest")
+        if candidate != alias
+    }
+    other_aliases[alias] = (existing_digest, existing_version)
+    fixture = _promotion_fixture(
+        other_aliases,
+        inspect_failures={f"{image}:{alias}": {"times": 1, "stderr": failure_stderr}},
+    )
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert completed.returncode == expected_returncode
+    if alias == "v2.0.10":
+        assert "release alias conflict" in completed.stderr
+    else:
+        assert "newer than candidate" in completed.stderr
+    assert _create_records(tmp_path) == []
+    registry = json.loads((tmp_path / "fake-fixture.json").read_text())["docker"]
+    assert registry[f"{image}:{alias}"]["digest"] == existing_digest
+
+
+@pytest.mark.parametrize(
+    "failure_stderr",
+    [
+        "unauthorized: authentication required",
+        "unexpected status from HEAD request: 401 Unauthorized: manifest not found",
+        "dial tcp: network is unreachable",
+        "request timed out",
+        "unexpected status from HEAD request: 503 Service Unavailable",
+        "unexpected status from HEAD request: 503 Service Unavailable: repository not found",
+    ],
+)
+def test_ambiguous_alias_inspection_failure_aborts_before_every_registry_write(
+    tmp_path: Path,
+    failure_stderr: str,
+) -> None:
+    """Only an authoritative registry not-found response may be treated as an absent alias."""
+    image = "ghcr.io/hassansaei/vntyper"
+    hidden_alias = f"{image}:latest"
+    fixture = _promotion_fixture(
+        inspect_failures={hidden_alias: {"times": 3, "stderr": failure_stderr}},
+    )
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert completed.returncode != 0
+    assert "alias inspection failed without authoritative not-found" in completed.stderr
+    assert _create_records(tmp_path) == []
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+def test_authoritative_registry_404_may_plan_create_after_bounded_retries(tmp_path: Path) -> None:
+    """An explicit registry 404 remains the only failed inspection that proves alias absence."""
+    image = "ghcr.io/hassansaei/vntyper"
+    fixture = _promotion_fixture(
+        inspect_failures={
+            f"{image}:latest": {
+                "times": 3,
+                "stderr": "unexpected status from HEAD request: 404 Not Found",
+            }
+        },
+    )
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert len(_create_records(tmp_path)) == 5
 
 
 @pytest.mark.parametrize("completed_prefix", range(6))
@@ -1361,3 +1777,25 @@ def test_manual_alias_dry_run_executes_one_untagged_probe_and_zero_writes(tmp_pa
     summary = json.loads(encoded)
     assert [item["alias"] for item in summary["plan"]] == ["v2.0.10", "2.0.10", "2.0", "2", "latest"]
     assert not any(item["execute"] for item in summary["plan"])
+
+
+def test_manual_alias_inspection_aborts_on_non_authoritative_failure_before_dry_run_probe(tmp_path: Path) -> None:
+    """Dry-run planning must not describe an uncertain registry observation as absence."""
+    image = "ghcr.io/hassansaei/vntyper"
+    fixture = _promotion_fixture(
+        inspect_failures={
+            f"{image}:latest": {
+                "times": 3,
+                "stderr": "unauthorized: authentication required",
+            }
+        }
+    )
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "dry-run-aliases", env)
+
+    assert completed.returncode != 0
+    assert "alias inspection failed without authoritative not-found" in completed.stderr
+    assert _create_records(tmp_path) == []
+    assert not (tmp_path / "github-output").exists()

@@ -95,6 +95,7 @@ jobs:
           import os
           import re
           import runpy
+          import tempfile
           from pathlib import Path
 
           expected = os.environ["VERSION"]
@@ -125,9 +126,17 @@ jobs:
               "version_test_exit_code": None,
               "version_test_passed": False,
           }
-          Path("candidate-version-observations.json").write_text(
-              json.dumps(observed, separators=(",", ":")), encoding="utf-8"
-          )
+          path = Path("candidate-version-observations.json")
+          descriptor, temporary = tempfile.mkstemp(prefix=".candidate-version-observations.", dir=".")
+          try:
+              with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                  json.dump(observed, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
           PY
           python3 -m venv .release-venv
           .release-venv/bin/pip install pytest packaging PyYAML requests
@@ -137,7 +146,9 @@ jobs:
           set -e
           python - "$TEST_STATUS" <<'PY'
           import json
+          import os
           import sys
+          import tempfile
           from pathlib import Path
 
           path = Path("candidate-version-observations.json")
@@ -145,7 +156,16 @@ jobs:
           test_status = int(sys.argv[1])
           observed["version_test_exit_code"] = test_status
           observed["version_test_passed"] = test_status == 0
-          path.write_text(json.dumps(observed, separators=(",", ":")), encoding="utf-8")
+          descriptor, temporary = tempfile.mkstemp(prefix=".candidate-version-observations.", dir=".")
+          try:
+              with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                  json.dump(observed, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
           if not all(observed[source]["matches"] for source in ("package", "citation", "changelog")):
               raise SystemExit("candidate release metadata does not match the requested tag version")
           raise SystemExit(test_status)
@@ -167,18 +187,19 @@ jobs:
           import pathlib
 
           observations_path = pathlib.Path("candidate/candidate-version-observations.json")
-          observations = (
-              json.loads(observations_path.read_text(encoding="utf-8"))
-              if observations_path.is_file()
-              else {
-                  "expected_version": os.environ["VERSION"] or None,
-                  "package": {"observed": None, "matches": False},
-                  "citation": {"observed": None, "matches": False},
-                  "changelog": {"observed": None, "matches": False},
-                  "version_test_exit_code": None,
-                  "version_test_passed": False,
-              }
-          )
+          fallback = {
+              "expected_version": os.environ["VERSION"] or None,
+              "package": {"observed": None, "matches": False},
+              "citation": {"observed": None, "matches": False},
+              "changelog": {"observed": None, "matches": False},
+              "version_test_exit_code": None,
+              "version_test_passed": False,
+          }
+          try:
+              loaded = json.loads(observations_path.read_text(encoding="utf-8"))
+          except (OSError, ValueError):
+              loaded = None
+          observations = loaded if isinstance(loaded, dict) else fallback
           payload = {
               "mode": os.environ["MODE"] or "unresolved",
               "tag": os.environ["TAG"] or None,
@@ -195,7 +216,7 @@ jobs:
   wait-for-release-gates:
     needs: validate-release
     runs-on: ubuntu-24.04
-    timeout-minutes: 70
+    timeout-minutes: 90
     permissions:
       actions: read
       checks: read
@@ -206,6 +227,15 @@ jobs:
       source_digest: ${{ steps.evidence.outputs.source_digest }}
       source_revision: ${{ steps.evidence.outputs.source_revision }}
       source_version: ${{ steps.evidence.outputs.source_version }}
+      evidence_contract_version: ${{ steps.evidence.outputs.evidence_contract_version }}
+      short_tag_collision: ${{ steps.evidence.outputs.short_tag_collision }}
+      source_run_id: ${{ steps.evidence.outputs.source_run_id }}
+      source_run_attempt: ${{ steps.evidence.outputs.source_run_attempt }}
+      source_run_url: ${{ steps.evidence.outputs.source_run_url }}
+      source_artifact_name: ${{ steps.evidence.outputs.source_artifact_name }}
+      source_artifact_url: ${{ steps.evidence.outputs.source_artifact_url }}
+      source_artifact_download_url: ${{ steps.evidence.outputs.source_artifact_download_url }}
+      recovery_instruction: ${{ steps.evidence.outputs.recovery_instruction }}
       preflight_summary_json: ${{ steps.evidence-preflight-result.outputs.preflight_summary_json }}
       check_summary_json: ${{ steps.poll-result.outputs.check_summary_json }}
       evidence_summary_json: ${{ steps.evidence-result.outputs.evidence_summary_json }}
@@ -242,7 +272,7 @@ jobs:
             return 1
           }
           write_preflight_state() {
-            python - "$SHA" "$1" "$2" "${3:-}" "${4:-}" "${5:-}" <<'PY' > preflight-state.json
+            python - "$SHA" "$1" "$2" "${3:-}" "${4:-}" "${5:-}" <<'PY' > preflight-state.json.tmp
           import json
           import pathlib
           import sys
@@ -256,6 +286,7 @@ jobs:
           print(json.dumps({"sha": sha, "state": state, "reason": reason,
                             "eligible_runs": eligible, "selected_run": selected}, separators=(",", ":")))
           PY
+            mv -- preflight-state.json.tmp preflight-state.json
           }
           if ! api_json \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-build.yml/runs?head_sha=${SHA}&per_page=100" \
@@ -265,7 +296,8 @@ jobs:
             exit 1
           fi
           python controller/scripts/release_evidence.py eligible-runs preflight-runs.json --sha "$SHA" \
-            > eligible-runs.json
+            > eligible-runs.json.tmp
+          mv -- eligible-runs.json.tmp eligible-runs.json
           COUNT=$(python -c 'import json; print(len(json.load(open("eligible-runs.json"))))')
           if [ "$COUNT" -eq 0 ]; then
             write_preflight_state pending "no completed successful exact-SHA main-push Docker Build run exists yet"
@@ -308,20 +340,27 @@ jobs:
           SHA: ${{ needs.validate-release.outputs.sha }}
         run: |
           set -euo pipefail
-          python - "$PREFLIGHT_OUTCOME" "$SHA" <<'PY'
+          python - "$PREFLIGHT_OUTCOME" "$SHA" <<'PY' > preflight-state.json.tmp
           import json
           import pathlib
           import sys
 
           path = pathlib.Path("preflight-state.json")
-          payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {
-              "sha": sys.argv[2], "state": "infrastructure-failure",
+          try:
+              loaded = json.loads(path.read_text(encoding="utf-8"))
+          except (OSError, ValueError):
+              loaded = None
+          payload = dict(loaded) if isinstance(loaded, dict) else {
+              "sha": sys.argv[2],
+              "state": "infrastructure-failure",
               "reason": "preflight ended before structured state was written",
-              "eligible_runs": [], "selected_run": None,
+              "eligible_runs": [],
+              "selected_run": None,
           }
           payload["step_outcome"] = sys.argv[1]
-          path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+          print(json.dumps(payload, separators=(",", ":")))
           PY
+          mv -- preflight-state.json.tmp preflight-state.json
           printf 'preflight_summary_json=%s\n' "$(cat preflight-state.json)" >> "$GITHUB_OUTPUT"
 
       - id: poll
@@ -348,18 +387,19 @@ jobs:
               if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
             done
             if [ "$API_OK" != true ]; then
-              python - "$attempt" "$RELEASE_API_ATTEMPTS" <<'PY' > poll.json
+              python - "$attempt" "$RELEASE_API_ATTEMPTS" <<'PY' > poll.json.tmp
           import json
           import sys
           print(json.dumps({"action": "fail", "attempt": int(sys.argv[1]), "elapsed_seconds": 0,
                             "verdicts": [], "infrastructure_error":
                             f"Check Runs API failed after {sys.argv[2]} attempts"}, separators=(",", ":")))
           PY
+              mv -- poll.json.tmp poll.json
               cat poll.json >&2
               exit 1
             fi
             PYTHONPATH="$COORDINATOR_ROOT" python - "$SHA" "$attempt" "$RELEASE_POLL_ATTEMPTS" \
-                checks-pages.json poll.json <<'PY'
+                checks-pages.json poll.json.tmp <<'PY'
           import dataclasses
           import json
           import sys
@@ -374,6 +414,7 @@ jobs:
           with open(sys.argv[5], "w", encoding="utf-8") as handle:
               json.dump(dataclasses.asdict(poll), handle, separators=(",", ":"))
           PY
+            mv -- poll.json.tmp poll.json
             ACTION=$(python -c 'import json; print(json.load(open("poll.json"))["action"])')
             if [ "$ACTION" = success ]; then
               exit 0
@@ -394,16 +435,26 @@ jobs:
           POLL_OUTCOME: ${{ steps.poll.outcome }}
         run: |
           set -euo pipefail
-          if [ ! -s poll.json ]; then
-            python - "$POLL_OUTCOME" <<'PY' > poll.json
+          python - "$POLL_OUTCOME" <<'PY' > poll.json.tmp
           import json
           import pathlib
           import sys
 
+          def load_mapping(path):
+              try:
+                  payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  return None
+              return payload if isinstance(payload, dict) else None
+
+          poll = load_mapping("poll.json")
           preflight_path = pathlib.Path("preflight-state.json")
-          preflight = json.loads(preflight_path.read_text(encoding="utf-8")) if preflight_path.is_file() else None
+          preflight = load_mapping(preflight_path)
           preflight_state = None if preflight is None else preflight.get("state")
-          if preflight_state in {"ineligible", "infrastructure-failure"}:
+          if poll is not None:
+              payload = dict(poll)
+              payload["step_outcome"] = sys.argv[1]
+          elif preflight_state in {"ineligible", "infrastructure-failure"}:
               payload = {
                   "action": "not-run",
                   "attempt": 0,
@@ -424,7 +475,7 @@ jobs:
               }
           print(json.dumps(payload, separators=(",", ":")))
           PY
-          fi
+          mv -- poll.json.tmp poll.json
           printf 'check_summary_json=%s\n' "$(cat poll.json)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR for production inspection
@@ -467,7 +518,8 @@ jobs:
             exit 1
           fi
           python controller/scripts/release_evidence.py eligible-runs evidence-runs.json --sha "$SHA" \
-            > evidence-eligible-runs.json
+            > evidence-eligible-runs.json.tmp
+          mv -- evidence-eligible-runs.json.tmp evidence-eligible-runs.json
           python -c 'import json; [print("{}\t{}\t{}".format(r["id"], r["run_attempt"], r.get("html_url", ""))) for r in json.load(open("evidence-eligible-runs.json"))]' \
             > evidence-eligible-runs.tsv
           RUN_ID=; RUN_ATTEMPT=; RUN_URL=
@@ -477,24 +529,31 @@ jobs:
               echo "GitHub artifacts API failed after ${RELEASE_API_ATTEMPTS} attempts for Docker Build run ${CANDIDATE_RUN}" >&2
               exit 1
             fi
-            if python controller/scripts/release_evidence.py artifact-present \
+            if python controller/scripts/release_evidence.py select-artifact \
                 "evidence-artifacts-${CANDIDATE_RUN}.json" \
-                --name "docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}"; then
+                --name "docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}" \
+                > selected-artifact.json.tmp; then
+              mv -- selected-artifact.json.tmp selected-artifact.json
               RUN_ID=$CANDIDATE_RUN; RUN_ATTEMPT=$CANDIDATE_ATTEMPT; RUN_URL=$CANDIDATE_URL
               break
             fi
+            rm -f -- selected-artifact.json.tmp
           done < evidence-eligible-runs.tsv
           if [ -z "$RUN_ID" ]; then
-            echo "No eligible exact-SHA Docker evidence artifact for ${SHA}; run URL unavailable; " \
-                 "rerun this existing Docker Build run." >&2
+            echo "No eligible exact-SHA Docker evidence artifact for ${SHA}." >&2
+            while IFS=$'\t' read -r CANDIDATE_RUN CANDIDATE_ATTEMPT CANDIDATE_URL; do
+              echo "Rerun existing Docker Build run ${CANDIDATE_RUN} attempt ${CANDIDATE_ATTEMPT}: " \
+                   "${CANDIDATE_URL}; expected artifact docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}." >&2
+            done < evidence-eligible-runs.tsv
             exit 1
           fi
-          python - "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL" <<'PY' > selected-run.json
+          python - "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL" <<'PY' > selected-run.json.tmp
           import json
           import sys
           print(json.dumps({"id": int(sys.argv[1]), "run_attempt": int(sys.argv[2]),
                             "html_url": sys.argv[3] or None}, separators=(",", ":")))
           PY
+          mv -- selected-run.json.tmp selected-run.json
           RUN_ID=$(python -c 'import json; print(json.load(open("selected-run.json"))["id"])')
           RUN_ATTEMPT=$(python -c 'import json; print(json.load(open("selected-run.json"))["run_attempt"])')
           DEST=; DOWNLOADED=false
@@ -513,12 +572,15 @@ jobs:
             exit 1
           fi
           EVIDENCE_PATH="$DEST/docker-release-evidence.json"
+          rm -f -- validated-evidence.json validated-evidence.json.tmp
           if ! python controller/scripts/release_evidence.py validate-evidence "$EVIDENCE_PATH" \
               --sha "$SHA" --version "$VERSION" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
-              > validated-evidence.json; then
+              > validated-evidence.json.tmp; then
+            rm -f -- validated-evidence.json.tmp
             recovery_error "Downloaded contract-v1 evidence did not match the selected run."
             exit 1
           fi
+          mv -- validated-evidence.json.tmp validated-evidence.json
           DIGEST=$(python -c 'import json; print(json.load(open("validated-evidence.json"))["digest"])')
           if ! IMMUTABLE_DIGEST=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{.Manifest.Digest}}'); then
             recovery_error "The immutable evidence manifest is unavailable."
@@ -528,25 +590,33 @@ jobs:
             recovery_error "The immutable manifest digest does not match evidence digest ${DIGEST}."
             exit 1
           fi
-          if ! docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Image}}' > image-config.json; then
+          if ! docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Image}}' \
+              > image-config.json.tmp; then
+            rm -f -- image-config.json.tmp
             recovery_error "The immutable image configuration is unavailable."
             exit 1
           fi
+          mv -- image-config.json.tmp image-config.json
           if ! SHORT_DIGEST=$(docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" --format '{{.Manifest.Digest}}'); then
             recovery_error "The exact short-SHA image tag is unavailable."
             exit 1
           fi
           if ! docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" \
-              --format '{{json .Image}}' > short-image-config.json; then
+              --format '{{json .Image}}' > short-image-config.json.tmp; then
+            rm -f -- short-image-config.json.tmp
             recovery_error "The short-SHA image configuration is unavailable."
             exit 1
           fi
+          mv -- short-image-config.json.tmp short-image-config.json
           if ! python controller/scripts/release_evidence.py validate-image validated-evidence.json image-config.json \
               short-image-config.json --immutable-digest "$IMMUTABLE_DIGEST" --short-digest "$SHORT_DIGEST" \
-              --image "$IMAGE" --output "$GITHUB_OUTPUT"; then
+              --image "$IMAGE" --selected-run selected-run.json --selected-artifact selected-artifact.json \
+              --state-output validated-image.json.tmp --output "$GITHUB_OUTPUT"; then
+            rm -f -- validated-image.json.tmp
             recovery_error "OCI identity validation failed."
             exit 1
           fi
+          mv -- validated-image.json.tmp validated-image.json
 
       - id: evidence-result
         if: ${{ always() }}
@@ -558,6 +628,8 @@ jobs:
           python controller/scripts/release_evidence.py summarize \
             --sha "$SHA" --step-outcome "$EVIDENCE_OUTCOME" --selected-run selected-run.json \
             --validated-evidence validated-evidence.json --image image-config.json \
+            --candidate-runs evidence-eligible-runs.json --selected-artifact selected-artifact.json \
+            --validated-image validated-image.json \
             --output evidence-summary.json
           printf 'evidence_summary_json=%s\n' "$(cat evidence-summary.json)" >> "$GITHUB_OUTPUT"
 
@@ -565,21 +637,52 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           IMAGE: ghcr.io/hassansaei/vntyper
+          RELEASE_ALIAS_INSPECT_ATTEMPTS: "3"
+          RELEASE_ALIAS_INSPECT_RETRY_SECONDS: "5"
           SOURCE_DIGEST: ${{ steps.evidence.outputs.source_digest }}
           VERSION: ${{ needs.validate-release.outputs.version }}
         run: |
           set -euo pipefail
           OBS_DIR=$(mktemp -d)
           trap 'rm -rf -- "$OBS_DIR"' EXIT
+          inspect_alias() {
+            local alias=$1 safe_alias=$2
+            local saw_ambiguous_failure=false
+            rm -f -- "$OBS_DIR/$safe_alias.digest" "$OBS_DIR/$safe_alias.image.json"
+            for INSPECT_ATTEMPT in $(seq 1 "$RELEASE_ALIAS_INSPECT_ATTEMPTS"); do
+              local error_path="$OBS_DIR/$safe_alias.$INSPECT_ATTEMPT.stderr"
+              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{.Manifest.Digest}}' \
+                  > "$OBS_DIR/$safe_alias.digest.tmp" 2> "$error_path"; then
+                if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
+                    > "$OBS_DIR/$safe_alias.image.json.tmp" 2>> "$error_path"; then
+                  mv -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.digest"
+                  mv -- "$OBS_DIR/$safe_alias.image.json.tmp" "$OBS_DIR/$safe_alias.image.json"
+                  return 0
+                fi
+                saw_ambiguous_failure=true
+              elif grep -Eiq 'unauthori[sz]ed|authentication|forbidden|denied|timed?[ -]?out|timeout|network|dial tcp|connection|tls|temporary|service unavailable|too many requests|(^|[^0-9])(401|403|408|429|5[0-9]{2})([^0-9]|$)' \
+                  "$error_path"; then
+                saw_ambiguous_failure=true
+              elif ! grep -Eiq 'manifest unknown|unexpected status.*404([^0-9]|$)|(^|[[:space:]:])not found([[:space:]]|$)' \
+                  "$error_path"; then
+                saw_ambiguous_failure=true
+              fi
+              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.image.json.tmp"
+              if [ "$INSPECT_ATTEMPT" -lt "$RELEASE_ALIAS_INSPECT_ATTEMPTS" ]; then
+                sleep "$RELEASE_ALIAS_INSPECT_RETRY_SECONDS"
+              fi
+            done
+            if [ "$saw_ambiguous_failure" = false ]; then
+              return 0
+            fi
+            echo "::error title=GHCR alias ${alias}::alias inspection failed without authoritative not-found " \
+                 "after ${RELEASE_ALIAS_INSPECT_ATTEMPTS} attempts; no alias write was attempted" >&2
+            cat "$OBS_DIR/$safe_alias.$RELEASE_ALIAS_INSPECT_ATTEMPTS.stderr" >&2
+            return 1
+          }
           for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
             SAFE_ALIAS=${ALIAS//./_}
-            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}' \
-                > "$OBS_DIR/$SAFE_ALIAS.digest"; then
-              docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Image}}' \
-                > "$OBS_DIR/$SAFE_ALIAS.image.json"
-            else
-              rm -f -- "$OBS_DIR/$SAFE_ALIAS.digest"
-            fi
+            inspect_alias "$ALIAS" "$SAFE_ALIAS"
           done
           docker buildx imagetools create --dry-run --prefer-index=false \
             "$IMAGE@$SOURCE_DIGEST" > "$OBS_DIR/source-carbon-copy.json"
@@ -645,23 +748,54 @@ jobs:
       - id: promote
         env:
           IMAGE: ghcr.io/hassansaei/vntyper
+          RELEASE_ALIAS_INSPECT_ATTEMPTS: "3"
+          RELEASE_ALIAS_INSPECT_RETRY_SECONDS: "5"
           SOURCE_DIGEST: ${{ needs.wait-for-release-gates.outputs.source_digest }}
           VERSION: ${{ needs.validate-release.outputs.version }}
         run: |
           set -euo pipefail
           OBS_DIR=$(mktemp -d)
           trap 'rm -rf -- "$OBS_DIR"' EXIT
+          inspect_alias() {
+            local alias=$1 safe_alias=$2
+            local saw_ambiguous_failure=false
+            rm -f -- "$OBS_DIR/$safe_alias.digest" "$OBS_DIR/$safe_alias.image.json"
+            for INSPECT_ATTEMPT in $(seq 1 "$RELEASE_ALIAS_INSPECT_ATTEMPTS"); do
+              local error_path="$OBS_DIR/$safe_alias.$INSPECT_ATTEMPT.stderr"
+              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{.Manifest.Digest}}' \
+                  > "$OBS_DIR/$safe_alias.digest.tmp" 2> "$error_path"; then
+                if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
+                    > "$OBS_DIR/$safe_alias.image.json.tmp" 2>> "$error_path"; then
+                  mv -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.digest"
+                  mv -- "$OBS_DIR/$safe_alias.image.json.tmp" "$OBS_DIR/$safe_alias.image.json"
+                  return 0
+                fi
+                saw_ambiguous_failure=true
+              elif grep -Eiq 'unauthori[sz]ed|authentication|forbidden|denied|timed?[ -]?out|timeout|network|dial tcp|connection|tls|temporary|service unavailable|too many requests|(^|[^0-9])(401|403|408|429|5[0-9]{2})([^0-9]|$)' \
+                  "$error_path"; then
+                saw_ambiguous_failure=true
+              elif ! grep -Eiq 'manifest unknown|unexpected status.*404([^0-9]|$)|(^|[[:space:]:])not found([[:space:]]|$)' \
+                  "$error_path"; then
+                saw_ambiguous_failure=true
+              fi
+              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.image.json.tmp"
+              if [ "$INSPECT_ATTEMPT" -lt "$RELEASE_ALIAS_INSPECT_ATTEMPTS" ]; then
+                sleep "$RELEASE_ALIAS_INSPECT_RETRY_SECONDS"
+              fi
+            done
+            if [ "$saw_ambiguous_failure" = false ]; then
+              return 0
+            fi
+            echo "::error title=GHCR alias ${alias}::alias inspection failed without authoritative not-found " \
+                 "after ${RELEASE_ALIAS_INSPECT_ATTEMPTS} attempts; no alias write was attempted" >&2
+            cat "$OBS_DIR/$safe_alias.$RELEASE_ALIAS_INSPECT_ATTEMPTS.stderr" >&2
+            return 1
+          }
           for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
             SAFE_ALIAS=${ALIAS//./_}
-            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}' \
-                > "$OBS_DIR/$SAFE_ALIAS.digest"; then
-              docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Image}}' \
-                > "$OBS_DIR/$SAFE_ALIAS.image.json"
-            else
-              rm -f -- "$OBS_DIR/$SAFE_ALIAS.digest"
-            fi
+            inspect_alias "$ALIAS" "$SAFE_ALIAS"
           done
-          python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" > plan.json <<'PY'
+          python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" > plan.json.tmp <<'PY'
           import dataclasses
           import json
           import pathlib
@@ -694,6 +828,7 @@ jobs:
           }
           print(json.dumps(summary, separators=(",", ":")))
           PY
+          mv -- plan.json.tmp plan.json
           python - plan.json > executable.tsv <<'PY'
           import json
           import sys
@@ -708,7 +843,8 @@ jobs:
               if item["execute"]:
                   print(f"{item['alias']}\t{item['decision']}")
           PY
-          printf '[]' > alias-progress.json
+          printf '[]' > alias-progress.json.tmp
+          mv -- alias-progress.json.tmp alias-progress.json
           record_progress() {
             python - alias-progress.json plan.json "$1" "$2" "$3" <<'PY'
           import json
@@ -776,16 +912,24 @@ jobs:
           PROMOTE_OUTCOME: ${{ steps.promote.outcome }}
         run: |
           set -euo pipefail
-          python - "$PROMOTE_OUTCOME" <<'PY' > alias-summary.json
+          python - "$PROMOTE_OUTCOME" <<'PY' > alias-summary.json.tmp
           import json
           import pathlib
           import sys
 
-          def load(path, fallback):
+          def load(path, expected_type, fallback):
               file = pathlib.Path(path)
-              return json.loads(file.read_text(encoding="utf-8")) if file.is_file() else fallback
+              try:
+                  payload = json.loads(file.read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  return fallback, False
+              return (payload, True) if isinstance(payload, expected_type) else (fallback, False)
 
-          print(json.dumps({"step_outcome": sys.argv[1], "plan": load("plan.json", {}),
-                            "alias_progress": load("alias-progress.json", [])}, separators=(",", ":")))
+          plan, plan_available = load("plan.json", dict, {})
+          progress, progress_available = load("alias-progress.json", list, [])
+          print(json.dumps({"step_outcome": sys.argv[1], "plan_available": plan_available, "plan": plan,
+                            "alias_progress_available": progress_available,
+                            "alias_progress": progress}, separators=(",", ":")))
           PY
+          mv -- alias-summary.json.tmp alias-summary.json
           printf 'alias_summary_json=%s\n' "$(cat alias-summary.json)" >> "$GITHUB_OUTPUT"

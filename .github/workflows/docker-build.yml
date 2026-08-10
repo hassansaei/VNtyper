@@ -432,6 +432,7 @@ jobs:
           import json
           import os
           import re
+          import tempfile
 
           sha = os.environ["REVISION"]
           digest = os.environ["DIGEST"]
@@ -442,8 +443,16 @@ jobs:
           payload = {"contract_version": 1, "sha": sha, "digest": digest,
                      "run_id": int(os.environ["RUN_ID"]), "run_attempt": int(os.environ["RUN_ATTEMPT"]),
                      "revision": sha, "version": os.environ["VERSION"]}
-          with open("docker-release-evidence.json", "w", encoding="utf-8") as handle:
-              json.dump(payload, handle, separators=(",", ":"))
+          descriptor, temporary = tempfile.mkstemp(prefix=".docker-release-evidence.", dir=".")
+          try:
+              with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                  json.dump(payload, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temporary, "docker-release-evidence.json")
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
           PY
 
       - uses: actions/upload-artifact@v5

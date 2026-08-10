@@ -796,7 +796,9 @@ git commit -m "ci(release): validate existing tagged main commits"
 
 **Interfaces:**
 - Consumes: validation outputs, `classify_check_runs`, GitHub Check Runs API, GHCR short-SHA manifest.
-- Produces from `wait-for-release-gates`: `source_ref`, `source_digest`, `source_revision`, `source_version`, and a JSON check summary.
+- Produces from `wait-for-release-gates`: source ref/digest/revision/version, evidence contract version, short-tag
+  collision verdict, exact source run/artifact identifiers and URLs, a recovery instruction, and structured
+  preflight/check/evidence summaries for the final-summary dataflow.
 - Produces: `eligible_successful_runs(payload: Mapping[str, object] | Sequence[Mapping[str, object]], sha: str) -> tuple[Mapping[str, object], ...]`, ordered by descending numeric run ID after filtering exact SHA, completed/success, `push`, and `main`,
   `validate_evidence(payload: Mapping[str, object], *, sha: str, version: str, run_id: int, run_attempt: int) -> Mapping[str, object]`, and
   `validate_image(evidence: Mapping[str, object], image: Mapping[str, object], short_image: Mapping[str, object], *, immutable_digest: str, short_digest: str) -> Mapping[str, object]`.
@@ -806,7 +808,8 @@ git commit -m "ci(release): validate existing tagged main commits"
 - [ ] **Step 1: Write RED permissions, names, and finite-poll assertions (2–5 min)**
 
 Assert `wait-for-release-gates.permissions` is exactly `contents: read`, `checks: read`, `actions: read`,
-`packages: read`; `timeout-minutes == "70"`; workflow literals include all `REQUIRED_CHECK_NAMES`,
+`packages: read`; `timeout-minutes == "90"` (strictly greater than the 4,770-second worst poll/API retry sleep budget
+plus 10 minutes of command and runner overhead); workflow literals include all `REQUIRED_CHECK_NAMES`,
 `RELEASE_POLL_ATTEMPTS: "120"`, `RELEASE_POLL_INTERVAL_SECONDS: "30"`, `RELEASE_API_ATTEMPTS: "3"`, and
 `RELEASE_API_RETRY_SECONDS: "5"`; the polling step calls `classify_check_runs` with
 `max_attempts=int(...)`, has `env.GH_TOKEN == "${{ secrets.GITHUB_TOKEN }}"`, retries `gh api` at most three times,
@@ -874,7 +877,7 @@ with shell):
   wait-for-release-gates:
     needs: validate-release
     runs-on: ubuntu-24.04
-    timeout-minutes: 70
+    timeout-minutes: 90
     permissions:
       actions: read
       checks: read

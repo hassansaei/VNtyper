@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import os
 import re
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -55,6 +57,8 @@ def eligible_successful_runs(
             and run.get("event") == "push"
             and run.get("status") == "completed"
             and run.get("conclusion") == "success"
+            and isinstance(run.get("html_url"), str)
+            and bool(run.get("html_url"))
         ):
             eligible.append((run_id, run))
     eligible.sort(key=lambda item: item[0], reverse=True)
@@ -76,6 +80,35 @@ def artifact_present(
     """
     return any(
         artifact.get("name") == name and artifact.get("expired") is False for artifact in _records(payload, "artifacts")
+    )
+
+
+def exact_artifact(
+    payload: Mapping[str, object] | Sequence[Mapping[str, object]],
+    name: str,
+) -> Mapping[str, object] | None:
+    """Select the exact active artifact record including its registry URLs.
+
+    Args:
+        payload: One artifacts response or the page array emitted by ``gh api --slurp``.
+        name: Exact attempt-qualified artifact name.
+
+    Returns:
+        A plain copy of the first exact active artifact, otherwise ``None``.
+    """
+    return next(
+        (
+            dict(artifact)
+            for artifact in _records(payload, "artifacts")
+            if artifact.get("name") == name
+            and artifact.get("expired") is False
+            and type(artifact.get("id")) is int
+            and isinstance(artifact.get("url"), str)
+            and bool(artifact.get("url"))
+            and isinstance(artifact.get("archive_download_url"), str)
+            and bool(artifact.get("archive_download_url"))
+        ),
+        None,
     )
 
 
@@ -164,6 +197,9 @@ def validate_image(
     if not isinstance(version, str) or not version:
         msg = "evidence version must be a non-empty string"
         raise ValueError(msg)
+    if type(evidence.get("contract_version")) is not int or evidence.get("contract_version") != 1:
+        msg = "evidence contract_version must be exactly 1 before image validation"
+        raise ValueError(msg)
     if immutable_digest != digest:
         msg = "immutable_digest does not match the evidence digest"
         raise ValueError(msg)
@@ -204,8 +240,121 @@ def validate_image(
         "source_digest": digest,
         "source_revision": revision,
         "source_version": version,
+        "evidence_contract_version": 1,
         "short_tag_collision": collision,
     }
+
+
+def _recovery_instruction(
+    sha: str,
+    selected_run: Mapping[str, object] | None,
+    selected_artifact: Mapping[str, object] | None,
+    candidate_runs: Sequence[Mapping[str, object]],
+) -> str:
+    if selected_run is not None:
+        run_url = selected_run.get("html_url")
+        run_id = selected_run.get("id")
+        run_attempt = selected_run.get("run_attempt")
+        artifact_name = (
+            f"docker-release-evidence-{sha}-{run_attempt}"
+            if selected_artifact is None
+            else selected_artifact.get("name")
+        )
+        instruction = (
+            f"Rerun existing Docker Build run {run_url} (run {run_id}, attempt {run_attempt}) to regenerate exact "
+            f"artifact {artifact_name}"
+        )
+        if selected_artifact is None:
+            return instruction + "."
+        return instruction + f"; artifact API URL: {selected_artifact.get('url')}."
+    candidate_urls: list[str] = []
+    for run in candidate_runs:
+        run_url = run.get("html_url")
+        if isinstance(run_url, str):
+            candidate_urls.append(run_url)
+    if candidate_urls:
+        return (
+            "Rerun one of these existing exact-SHA Docker Build runs to regenerate its exact attempt-qualified "
+            f"evidence artifact: {', '.join(candidate_urls)}."
+        )
+    return (
+        "Wait for or rerun an exact-SHA main-push Docker Build run to regenerate its exact attempt-qualified "
+        "evidence artifact."
+    )
+
+
+def _valid_run(record: Mapping[str, object] | None) -> bool:
+    return (
+        record is not None
+        and type(record.get("id")) is int
+        and type(record.get("run_attempt")) is int
+        and isinstance(record.get("html_url"), str)
+        and bool(record.get("html_url"))
+    )
+
+
+def _valid_artifact(record: Mapping[str, object] | None) -> bool:
+    return (
+        record is not None
+        and type(record.get("id")) is int
+        and isinstance(record.get("name"), str)
+        and bool(record.get("name"))
+        and isinstance(record.get("url"), str)
+        and bool(record.get("url"))
+        and isinstance(record.get("archive_download_url"), str)
+        and bool(record.get("archive_download_url"))
+    )
+
+
+def _valid_evidence(record: Mapping[str, object] | None) -> bool:
+    if record is None:
+        return False
+    digest = record.get("digest")
+    revision = record.get("revision")
+    version = record.get("version")
+    return (
+        type(record.get("contract_version")) is int
+        and record.get("contract_version") == 1
+        and isinstance(digest, str)
+        and CANONICAL_DIGEST.fullmatch(digest) is not None
+        and isinstance(revision, str)
+        and FULL_SHA.fullmatch(revision) is not None
+        and isinstance(version, str)
+        and bool(version)
+    )
+
+
+def _valid_image(record: Mapping[str, object] | None) -> bool:
+    labels = _image_labels(record or {})
+    revision = labels.get(REVISION_LABEL)
+    version = labels.get(VERSION_LABEL)
+    return (
+        isinstance(revision, str)
+        and FULL_SHA.fullmatch(revision) is not None
+        and isinstance(version, str)
+        and bool(version)
+    )
+
+
+def _valid_source(record: Mapping[str, object] | None) -> bool:
+    if record is None:
+        return False
+    source_ref = record.get("source_ref")
+    digest = record.get("source_digest")
+    revision = record.get("source_revision")
+    version = record.get("source_version")
+    return (
+        isinstance(source_ref, str)
+        and bool(source_ref)
+        and isinstance(digest, str)
+        and CANONICAL_DIGEST.fullmatch(digest) is not None
+        and isinstance(revision, str)
+        and FULL_SHA.fullmatch(revision) is not None
+        and isinstance(version, str)
+        and bool(version)
+        and record.get("evidence_contract_version") == 1
+        and type(record.get("short_tag_collision")) is bool
+    )
 
 
 def summarize_evidence_state(
@@ -215,6 +364,9 @@ def summarize_evidence_state(
     selected_run: Mapping[str, object] | None,
     validated_evidence: Mapping[str, object] | None,
     image: Mapping[str, object] | None,
+    candidate_runs: Sequence[Mapping[str, object]] = (),
+    selected_artifact: Mapping[str, object] | None = None,
+    validated_image: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
     """Build an explicit evidence summary after success or partial failure.
 
@@ -224,18 +376,34 @@ def summarize_evidence_state(
         selected_run: Selected run state, when written before failure.
         validated_evidence: Validated evidence state, when available.
         image: Immutable image configuration, when inspection succeeded.
+        candidate_runs: Every eligible exact-SHA run considered for evidence recovery.
+        selected_artifact: Exact active artifact metadata, when selected.
+        validated_image: Validated immutable source identity, when available.
 
     Returns:
         A JSON-compatible summary preserving every available identity field.
     """
+    selected_run = selected_run if _valid_run(selected_run) else None
+    selected_artifact = selected_artifact if _valid_artifact(selected_artifact) else None
+    validated_evidence = validated_evidence if _valid_evidence(validated_evidence) else None
+    image = image if _valid_image(image) else None
+    validated_image = validated_image if _valid_source(validated_image) else None
+    candidate_runs = tuple(run for run in candidate_runs if _valid_run(run))
     selected_available = selected_run is not None
+    artifact_available = selected_artifact is not None
     evidence_available = validated_evidence is not None
     image_available = image is not None
+    source_available = validated_image is not None
     labels = _image_labels(image or {})
+    candidate_state = [
+        {"id": run.get("id"), "run_attempt": run.get("run_attempt"), "html_url": run.get("html_url")}
+        for run in candidate_runs
+    ]
     return {
         "sha": sha,
         "state": "verified"
-        if step_outcome == "success" and all((selected_available, evidence_available, image_available))
+        if step_outcome == "success"
+        and all((selected_available, artifact_available, evidence_available, image_available, source_available))
         else "failed",
         "step_outcome": step_outcome,
         "selected_run": {
@@ -244,8 +412,19 @@ def summarize_evidence_state(
             "run_attempt": None if selected_run is None else selected_run.get("run_attempt"),
             "html_url": None if selected_run is None else selected_run.get("html_url"),
         },
+        "selected_artifact": {
+            "available": artifact_available,
+            "id": None if selected_artifact is None else selected_artifact.get("id"),
+            "name": None if selected_artifact is None else selected_artifact.get("name"),
+            "url": None if selected_artifact is None else selected_artifact.get("url"),
+            "archive_download_url": (
+                None if selected_artifact is None else selected_artifact.get("archive_download_url")
+            ),
+        },
+        "candidate_runs": candidate_state,
         "evidence": {
             "available": evidence_available,
+            "contract_version": (None if validated_evidence is None else validated_evidence.get("contract_version")),
             "digest": None if validated_evidence is None else validated_evidence.get("digest"),
             "revision": None if validated_evidence is None else validated_evidence.get("revision"),
             "version": None if validated_evidence is None else validated_evidence.get("version"),
@@ -255,6 +434,12 @@ def summarize_evidence_state(
             "revision": labels.get(REVISION_LABEL),
             "version": labels.get(VERSION_LABEL),
         },
+        "source_ref": None if validated_image is None else validated_image.get("source_ref"),
+        "evidence_contract_version": (
+            None if validated_evidence is None else validated_evidence.get("contract_version")
+        ),
+        "short_tag_collision": (None if validated_image is None else validated_image.get("short_tag_collision")),
+        "recovery_instruction": _recovery_instruction(sha, selected_run, selected_artifact, candidate_runs),
     }
 
 
@@ -281,7 +466,41 @@ def _load_pages(path: Path) -> Mapping[str, object] | Sequence[Mapping[str, obje
 
 
 def _optional_mapping(path: Path) -> Mapping[str, object] | None:
-    return _load_mapping(path) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return _load_mapping(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _optional_pages(path: Path) -> tuple[Mapping[str, object], ...]:
+    if not path.is_file():
+        return ()
+    try:
+        payload = _load_pages(path)
+    except (OSError, ValueError):
+        return ()
+    if isinstance(payload, Mapping):
+        return (payload,)
+    return tuple(payload)
+
+
+def _write_json_atomic(path: Path, payload: object) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -295,6 +514,10 @@ def _parser() -> argparse.ArgumentParser:
     artifact = commands.add_parser("artifact-present")
     artifact.add_argument("payload", type=Path)
     artifact.add_argument("--name", required=True)
+
+    selected_artifact = commands.add_parser("select-artifact")
+    selected_artifact.add_argument("payload", type=Path)
+    selected_artifact.add_argument("--name", required=True)
 
     evidence = commands.add_parser("validate-evidence")
     evidence.add_argument("payload", type=Path)
@@ -310,6 +533,9 @@ def _parser() -> argparse.ArgumentParser:
     image.add_argument("--immutable-digest", required=True)
     image.add_argument("--short-digest", required=True)
     image.add_argument("--image", required=True)
+    image.add_argument("--selected-run", required=True, type=Path)
+    image.add_argument("--selected-artifact", required=True, type=Path)
+    image.add_argument("--state-output", required=True, type=Path)
     image.add_argument("--output", required=True, type=Path)
 
     summary = commands.add_parser("summarize")
@@ -318,6 +544,9 @@ def _parser() -> argparse.ArgumentParser:
     summary.add_argument("--selected-run", required=True, type=Path)
     summary.add_argument("--validated-evidence", required=True, type=Path)
     summary.add_argument("--image", required=True, type=Path)
+    summary.add_argument("--candidate-runs", type=Path, default=Path("evidence-eligible-runs.json"))
+    summary.add_argument("--selected-artifact", type=Path, default=Path("selected-artifact.json"))
+    summary.add_argument("--validated-image", type=Path, default=Path("validated-image.json"))
     summary.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -337,6 +566,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "artifact-present":
         return 0 if artifact_present(_load_pages(args.payload), args.name) else 1
+    if args.command == "select-artifact":
+        selected = exact_artifact(_load_pages(args.payload), args.name)
+        if selected is None:
+            return 1
+        print(json.dumps(selected, separators=(",", ":")))
+        return 0
     if args.command == "validate-evidence":
         result = validate_evidence(
             _load_mapping(args.payload),
@@ -348,20 +583,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(result, separators=(",", ":")))
         return 0
     if args.command == "validate-image":
+        evidence_payload = _load_mapping(args.evidence)
         result = validate_image(
-            _load_mapping(args.evidence),
+            evidence_payload,
             _load_mapping(args.image_config),
             _load_mapping(args.short_image_config),
             immutable_digest=args.immutable_digest,
             short_digest=args.short_digest,
         )
+        selected_run = _load_mapping(args.selected_run)
+        selected_artifact = _load_mapping(args.selected_artifact)
+        source_ref = f"{args.image}@{result['source_digest']}"
+        validated_image = {"source_ref": source_ref, **result}
+        recovery_instruction = _recovery_instruction(
+            str(evidence_payload.get("sha")), selected_run, selected_artifact, ()
+        )
         lines = (
-            f"source_ref={args.image}@{result['source_digest']}",
+            f"source_ref={source_ref}",
             f"source_digest={result['source_digest']}",
             f"source_revision={result['source_revision']}",
             f"source_version={result['source_version']}",
+            f"evidence_contract_version={result['evidence_contract_version']}",
             f"short_tag_collision={str(result['short_tag_collision']).lower()}",
+            f"source_run_id={selected_run.get('id')}",
+            f"source_run_attempt={selected_run.get('run_attempt')}",
+            f"source_run_url={selected_run.get('html_url')}",
+            f"source_artifact_name={selected_artifact.get('name')}",
+            f"source_artifact_url={selected_artifact.get('url')}",
+            f"source_artifact_download_url={selected_artifact.get('archive_download_url')}",
+            f"recovery_instruction={recovery_instruction}",
         )
+        _write_json_atomic(args.state_output, validated_image)
         args.output.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return 0
     if args.command == "summarize":
@@ -371,8 +623,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             selected_run=_optional_mapping(args.selected_run),
             validated_evidence=_optional_mapping(args.validated_evidence),
             image=_optional_mapping(args.image),
+            candidate_runs=_optional_pages(args.candidate_runs),
+            selected_artifact=_optional_mapping(args.selected_artifact),
+            validated_image=_optional_mapping(args.validated_image),
         )
-        args.output.write_text(json.dumps(summary, separators=(",", ":")), encoding="utf-8")
+        _write_json_atomic(args.output, summary)
         return 0
     raise AssertionError("argparse accepted an unknown release evidence command")
 
