@@ -1329,10 +1329,15 @@ git commit -m "ci(release): wait for exact-sha artifacts"
 **Files:**
 - Modify: `.github/workflows/publish-pypi.yml`
 - Modify: `tests/unit/test_release_workflow_contract.py`
+- Create: `scripts/release_registry.py`
+- Create: `tests/unit/test_release_registry.py`
 
 **Interfaces:**
 - Consumes: verified source digest/version and `plan_alias_updates` observations.
 - Produces: GHCR aliases `vX.Y.Z`, `X.Y.Z`, `X.Y`, `X`, `latest` pointing to the tested digest plus structured alias summary.
+- Produces: `classify_manifest_absence(reference: str, error_text: str) -> Literal["absent", "ambiguous"]`;
+  only one physical error line that binds the exact requested GHCR reference or derived manifest URL directly to its
+  `404`, `manifest unknown`, or `not found` status proves absence.
 
 - [ ] **Step 1: Write RED concurrency and digest-source tests (2–5 min)**
 
@@ -1363,6 +1368,11 @@ says all three are true and records the final digest. These are behavior tests o
 Execute the dispatch `dry-run-aliases` step with the same fake and require exactly one read-only
 `imagetools create --dry-run --prefer-index=false ${IMAGE}@${SOURCE_DIGEST}` probe with no `--tag`, plus zero
 production create records. This proves Buildx accepts the carbon-copy contract while preserving the no-write boundary.
+Before either mode may reach a create or dry-run probe, execute the same Python absence classifier after each failed
+inspection. Add a pure truth table and executable hostile output where the requested manifest and a token-endpoint 404
+are on separate lines, an unrelated manifest reports 404, or `manifest unknown` is unbound. Each case exhausts exactly
+three observations and produces zero create/probe records. Reject malformed and multiline requested references, and
+pin the same-line binding so combining independent line matches cannot pass.
 
 - [ ] **Step 3: Run RED and confirm promotion is absent (2–5 min)**
 
@@ -1545,7 +1555,10 @@ Inspect every target alias before mutation, record digest and package-version la
 `plan_alias_updates(..., dry_run=False)`, and fail before writes if any `fail-conflict` exists. Execute exact aliases in
 tuple order followed by eligible floating aliases using
 `docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS" "$IMAGE@$SOURCE_DIGEST"`. Parse the policy's JSON output in
-Python or `jq -er`; never `eval` it as shell.
+Python or `jq -er`; never `eval` it as shell. Treat a failed inspection as absence only when
+`scripts/release_registry.py classify-absence "$IMAGE:$ALIAS" "$error_path"` exits zero; every other classifier result
+is ambiguous, is retried to the bound, and prevents all writes. Use this one classifier in production and manual modes;
+do not duplicate response-wide `grep` policy in either shell body.
 
 - [ ] **Step 5: Make partial reruns observable and convergent (2–5 min)**
 

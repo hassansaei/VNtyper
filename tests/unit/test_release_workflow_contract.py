@@ -82,6 +82,7 @@ def _release_runtime(tmp_path: Path, fixture: Mapping[str, object]) -> dict[str,
     controller_scripts.mkdir(parents=True)
     shutil.copy2(ROOT / "scripts" / "release_policy.py", controller_scripts)
     shutil.copy2(ROOT / "scripts" / "release_evidence.py", controller_scripts)
+    shutil.copy2(ROOT / "scripts" / "release_registry.py", controller_scripts)
     fixture_path = tmp_path / "fake-fixture.json"
     fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
     (tmp_path / "mutation.log").write_text("", encoding="utf-8")
@@ -191,7 +192,7 @@ if failure is not None and counts[inspect_key] <= failure["times"]:
     raise SystemExit(failure.get("exit_code", 1))
 record = fixture.get("docker", {}).get(args[3])
 if record is None:
-    print("manifest unknown: not found", file=sys.stderr)
+    print(f"{args[3]}: manifest unknown", file=sys.stderr)
     raise SystemExit(1)
 if format_value == "{{.Manifest.Digest}}":
     print(record["digest"])
@@ -1517,6 +1518,8 @@ def test_ghcr_promotion_has_fixed_global_lock_exact_guard_and_digest_only_source
     assert 'docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS"' in promote["run"]
     assert '"$IMAGE@$SOURCE_DIGEST"' in promote["run"]
     assert '"$IMAGE:main"' not in promote["run"]
+    assert promote["run"].count("release_registry.py classify-absence") == 1
+    assert "grep -Ei" not in promote["run"]
 
 
 def test_promotion_executes_five_digest_copies_and_rerun_converges_to_noops(tmp_path: Path) -> None:
@@ -1776,6 +1779,8 @@ def test_manual_alias_dry_run_executes_one_untagged_probe_and_zero_writes(tmp_pa
     assert job["outputs"]["dry_run_alias_summary_json"] == (
         "${{ steps.dry-run-aliases.outputs.dry_run_alias_summary_json }}"
     )
+    assert step["run"].count("release_registry.py classify-absence") == 1
+    assert "grep -Ei" not in step["run"]
     assert completed.returncode == 0, completed.stderr
     records = _create_records(tmp_path)
     assert len(records) == 1
@@ -1845,3 +1850,49 @@ def test_missing_credential_executable_aborts_both_modes_before_create_or_probe(
     assert _create_records(tmp_path) == []
     assert (tmp_path / "mutation.log").read_text() == ""
     assert not (tmp_path / "github-output").exists()
+
+
+@pytest.mark.parametrize(
+    "failure_stderr",
+    (
+        (
+            "HEAD https://ghcr.io/v2/hassansaei/vntyper/manifests/latest failed\n"
+            "unexpected status from token request: 404 Not Found"
+        ),
+        (
+            "unexpected status from HEAD request to "
+            "https://ghcr.io/v2/hassansaei/vntyper/manifests/unrelated: 404 Not Found"
+        ),
+        "manifest unknown: not found",
+        "ghcr.io/hassansaei/vntyper:latest:\nmanifest unknown",
+    ),
+)
+@pytest.mark.parametrize(
+    ("job", "step"),
+    (("promote-ghcr", "promote"), ("wait-for-release-gates", "dry-run-aliases")),
+)
+def test_hostile_unbound_absence_output_retries_then_aborts_before_create_or_probe(
+    tmp_path: Path,
+    failure_stderr: str,
+    job: str,
+    step: str,
+) -> None:
+    """Cross-line, wrong-manifest, and unbound statuses cannot authorize a registry operation."""
+    image = "ghcr.io/hassansaei/vntyper"
+    reference = f"{image}:latest"
+    fixture = _promotion_fixture(
+        inspect_failures={reference: {"times": 3, "stderr": failure_stderr}},
+    )
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, job, step, env)
+
+    assert completed.returncode != 0
+    assert "alias inspection failed without authoritative not-found" in completed.stderr
+    assert "after 3 attempts" in completed.stderr
+    assert _create_records(tmp_path) == []
+    assert (tmp_path / "mutation.log").read_text() == ""
+    assert not (tmp_path / "github-output").exists()
+    counts = json.loads((tmp_path / "fake-counts.json").read_text(encoding="utf-8"))
+    assert counts[f"inspect:{reference}:{{{{.Manifest.Digest}}}}"] == 3
