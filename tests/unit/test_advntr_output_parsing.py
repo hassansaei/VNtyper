@@ -22,6 +22,7 @@ writing a file. A caller that gets no file does not see the real cause at that p
 sees a misleading downstream failure much later, so which paths reach it is pinned.
 """
 
+import builtins
 import logging
 from pathlib import Path
 
@@ -258,6 +259,29 @@ class TestPathsThatWriteNoFile:
 
         assert not (tmp_path / f"output{RESULT_SUFFIX}").exists(), label
         assert [r for r in caplog.records if r.levelno >= logging.ERROR], label
+
+
+def test_unreadable_advntr_output_logs_and_returns_none(tmp_path: Path, monkeypatch, caplog) -> None:
+    """An unreadable optional adVNTR result has no parsed-result artifact."""
+    source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
+    original_open = builtins.open
+
+    def unreadable(path, *args, **kwargs):
+        if path == str(source):
+            raise OSError("unreadable result")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", unreadable)
+
+    with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        assert advntr.process_advntr_output(str(source), str(tmp_path), "output") is None
+
+    assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
+    errors = [
+        record for record in caplog.records if record.name == advntr.logger.name and record.levelno >= logging.ERROR
+    ]
+    assert [record.levelno for record in errors] == [logging.ERROR]
+    assert "unreadable result" in caplog.text
 
 
 # ---------------------------------------------------------------------------

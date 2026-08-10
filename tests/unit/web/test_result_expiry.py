@@ -13,6 +13,7 @@ its meaning.
 imports before this module, so `app.tasks` is importable here.
 """
 
+import logging
 import time
 from pathlib import Path
 
@@ -109,3 +110,37 @@ def test_the_sweep_leaves_files_that_are_not_result_archives_alone(expiry_task, 
 
     assert not (tmp_path / "stale.zip").exists()
     assert (tmp_path / "stale.log").exists()
+
+
+def test_cleanup_continues_after_one_delete_error(
+    monkeypatch: pytest.MonkeyPatch, fake_redis, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One failed result deletion does not stop the scheduled cleanup sweep."""
+    from app import tasks
+
+    for attr in ("redis_client", "redis_cohort_client", "redis_usage_client"):
+        monkeypatch.setattr(tasks, attr, fake_redis)
+    monkeypatch.setattr(tasks.settings, "DEFAULT_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(tasks.os, "listdir", lambda _path: ["blocked.zip", "later.zip"])
+    monkeypatch.setattr(tasks.os.path, "isfile", lambda _path: True)
+    too_old = (tasks.settings.MAX_RESULT_AGE_DAYS + 1) * _SECONDS_PER_DAY
+    monkeypatch.setattr(tasks.os.path, "getctime", lambda _path: time.time() - too_old)
+
+    attempted: list[str] = []
+
+    def remove(path: str) -> None:
+        attempted.append(path)
+        if path.endswith("blocked.zip"):
+            raise OSError("blocked")
+
+    monkeypatch.setattr(tasks.os, "remove", remove)
+
+    with caplog.at_level(logging.ERROR, logger=tasks.logger.name):
+        assert tasks.delete_old_results.run() is None
+
+    assert attempted == [str(tmp_path / "blocked.zip"), str(tmp_path / "later.zip")]
+    errors = [
+        record for record in caplog.records if record.name == tasks.logger.name and record.levelno >= logging.ERROR
+    ]
+    assert [record.levelno for record in errors] == [logging.ERROR]
+    assert "blocked" in caplog.text

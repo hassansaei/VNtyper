@@ -152,6 +152,27 @@ def test_resolve_reports_an_import_failure(tmp_path: Path, monkeypatch: pytest.M
     }
 
 
+def test_resolve_returns_structured_import_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unavailable candidate is returned as an unstartable resolution."""
+    original_import = builtins.__import__
+
+    def fail_vntyper_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "vntyper":
+            raise ImportError("candidate import failed")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_vntyper_import)
+
+    assert launcher.resolve(tmp_path, "vntyper.scripts.marker") == {
+        "tree": str(tmp_path),
+        "vntyper_file": None,
+        "in_tree": False,
+        "marker": "vntyper.scripts.marker",
+        "marker_present": None,
+        "error": "ImportError: candidate import failed",
+    }
+
+
 def test_launch_returns_abort_when_import_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     resolved = _resolution(tmp_path, False)
     resolved.update({"vntyper_file": None, "in_tree": False, "marker_present": None, "error": "ImportError: missing"})
