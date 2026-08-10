@@ -2,17 +2,18 @@ name: CI Tests
 
 # NOTE: no workflow-level `paths:` filter. A workflow skipped by a path filter leaves
 # its required status check permanently "Pending" and blocks the merge, whereas a job
-# skipped by an `if:` reports "Success". So filtering happens per job below, gated on
-# the `changes` job, and `ci-success` is the single required check.
+# skipped by an `if:` reports "Success". So PR filtering happens per job below, gated
+# on the `changes` job, while every main push runs every substantive evidence job.
+# `ci-success` remains the aggregate required check.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# Cancel superseded PR runs, but never abandon a run on main.
+# Cancel superseded PR runs, but retain each main commit's exact-SHA evidence.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
@@ -26,8 +27,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      python: ${{ steps.filter.outputs.python }}
-      docs: ${{ steps.filter.outputs.docs }}
+      python: ${{ github.event_name == 'push' || steps.filter.outputs.python == 'true' }}
+      docs: ${{ github.event_name == 'push' || steps.filter.outputs.docs == 'true' }}
     steps:
       - uses: actions/checkout@v7
 
