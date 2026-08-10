@@ -1,10 +1,11 @@
-# Production releases are triggered only by pushing an existing strict vX.Y.Z tag.
-# Manual dispatch validates an existing tag in dry-run mode and performs no writes.
+# Production releases use the narrowly scoped vntyper_release repository dispatch so
+# policy is always loaded from the default branch. Manual dispatch validates an
+# existing tag in dry-run mode and performs no writes.
 name: Publish PyPI and promote GHCR
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  repository_dispatch:
+    types: [vntyper_release]
   workflow_dispatch:
     inputs:
       tag:
@@ -15,7 +16,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag || github.event.client_payload.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -43,12 +44,21 @@ jobs:
         working-directory: controller
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
+          EVENT_ACTION: ${{ github.event.action }}
           EVENT_NAME: ${{ github.event_name }}
-          PUSH_SHA: ${{ github.sha }}
-          PUSH_TAG: ${{ github.ref_name }}
+          PRODUCTION_TAG: ${{ github.event.client_payload.tag }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then MODE=dry-run; TAG=$DISPATCH_TAG; else MODE=production; TAG=$PUSH_TAG; fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            MODE=dry-run
+            TAG=$DISPATCH_TAG
+          elif [ "$EVENT_NAME" = "repository_dispatch" ] && [ "$EVENT_ACTION" = "vntyper_release" ]; then
+            MODE=production
+            TAG=$PRODUCTION_TAG
+          else
+            echo "::error::Unsupported release event: ${EVENT_NAME}/${EVENT_ACTION}"
+            exit 1
+          fi
           VERSION=$(python - "$TAG" <<'PY'
           import sys
           from scripts.release_policy import parse_release_tag
@@ -56,7 +66,6 @@ jobs:
           PY
           )
           SHA=$(git rev-parse "refs/tags/${TAG}^{commit}")
-          if [ "$EVENT_NAME" = "push" ]; then test "$SHA" = "$PUSH_SHA"; fi
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$SHA" origin/main
           SHORT_SHA=${SHA:0:7}
@@ -131,11 +140,14 @@ jobs:
 
           path = Path("candidate-version-observations.json")
           observed = json.loads(path.read_text(encoding="utf-8"))
-          observed["version_test_exit_code"] = int(sys.argv[1])
-          observed["version_test_passed"] = int(sys.argv[1]) == 0
+          test_status = int(sys.argv[1])
+          observed["version_test_exit_code"] = test_status
+          observed["version_test_passed"] = test_status == 0
           path.write_text(json.dumps(observed, separators=(",", ":")), encoding="utf-8")
+          if not all(observed[source]["matches"] for source in ("package", "citation", "changelog")):
+              raise SystemExit("candidate release metadata does not match the requested tag version")
+          raise SystemExit(test_status)
           PY
-          exit "$TEST_STATUS"
 
       - id: validate-result
         if: ${{ always() }}

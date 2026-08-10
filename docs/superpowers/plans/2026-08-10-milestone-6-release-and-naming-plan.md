@@ -4,14 +4,14 @@
 
 **Goal:** Release only an exact, fully tested `main` commit by promoting its existing GHCR digest, publish Python distributions through protected PyPI OIDC, make GHCR documentation truthful, and use “VNtyper 2” only for the nine approved generation-prose targets.
 
-**Architecture:** `scripts/release_policy.py` contains pure, typed release decisions; GitHub workflow steps own Git, API, registry, artifact, wait, and summary I/O. Every `main` push produces substantive CI and Docker evidence plus a short-SHA image carrying full revision and package-version labels; `publish-pypi.yml` validates an existing tag, polls the exact SHA's component and aggregate checks, promotes that tested digest under a globally serialized job, then invokes an OIDC-only publisher. Manual dispatch exercises the same read/build path for an existing tag but has no route to production writes.
+**Architecture:** `scripts/release_policy.py` contains pure, typed release decisions; GitHub workflow steps own Git, API, registry, artifact, wait, and summary I/O. Every `main` push produces substantive CI and Docker evidence plus a short-SHA image carrying full revision and package-version labels. Authenticated `repository_dispatch` type `vntyper_release` supplies an existing tag in `client_payload.tag`, loads `publish-pypi.yml` from the default branch, polls the tag's exact SHA checks, promotes that tested digest under a globally serialized job, then invokes an OIDC-only publisher. Manual dispatch exercises the same read/build path for an existing tag but has no route to production writes.
 
 **Tech Stack:** Python 3.10–3.13, pytest, dataclasses and typed standard-library collections, GitHub Actions, `gh api`, Docker Buildx imagetools, GHCR, PyPI Trusted Publishing, PyPA `gh-action-pypi-publish`, actionlint, MkDocs.
 
 ## Global Constraints
 
 - Implement the approved spec at [`../specs/2026-08-10-milestone-6-release-and-naming-design.md`](../specs/2026-08-10-milestone-6-release-and-naming-design.md); do not redesign it during execution.
-- Production accepts only strict `vMAJOR.MINOR.PATCH` tags whose peeled 40-character SHA is an ancestor of `origin/main` and whose plain version equals all three version sources.
+- Production accepts only authenticated `repository_dispatch` type/action `vntyper_release` with a pre-existing strict `vMAJOR.MINOR.PATCH` tag in `client_payload.tag`; its peeled 40-character SHA is an ancestor of `origin/main` and its plain version equals all three version sources.
 - Keep the existing `sha-<7 lowercase hexadecimal characters>` image tag; prove identity with `org.opencontainers.image.revision=<full SHA>` and `org.opencontainers.image.version=<package version>`.
 - Every push to `main` runs `Lint (Ruff)`, `Type Check (mypy)`, all four `Unit Tests` matrix jobs, `Docs build (strict)`, `Build and test image`, `CI Success`, and `Docker Success`; path filters remain PR-only optimizations.
 - Release polling requires all ten exact component/aggregate check names and treats a skipped component as terminal failure even when an aggregator is green.
@@ -25,8 +25,15 @@
   pending promotion with a newer pending run. The canceled version is explicitly rerun; it cannot have written before
   acquiring the lock, and all promotion/package operations are idempotent.
 - `workflow_dispatch` accepts one existing strict version tag, is dry-run only, and can never create/move a tag, promote an alias, request OIDC, or publish a package.
+- Production has no `push.tags` trigger. Every production job guards exact event name
+  `repository_dispatch` and action `vntyper_release`; the workflow and controller therefore come
+  from the default branch, never from a tagged historical commit.
 - Keep the trusted-publisher identity exactly workflow `publish-pypi.yml`, environment `pypi`. Build without publication privilege; publish with OIDC only through the SHA-pinned action and preserve `skip-existing: true`.
-- GHCR is authoritative. Do not publish to Docker Hub, restore Docker Hub credentials, delete external settings, push a tag, create a GitHub Release, publish a version, or delete `PYPI_API_TOKEN` in this implementation.
+- GHCR is authoritative. Do not publish to Docker Hub, restore Docker Hub credentials, delete external settings, push a tag, create a GitHub Release, send a production dispatch, publish a version, or delete `PYPI_API_TOKEN` in this implementation.
+- During first-release migration, legacy token workflows stored in historical tagged commits are not
+  inert merely because default-branch `push.tags` was removed. Do not create or push a tag pointing at
+  a pre-milestone commit while `PYPI_API_TOKEN` exists. Delete that token only after the first successful
+  production OIDC publication; only then are those legacy token workflows inert.
 - Change exactly eight README generation-prose targets and one Dockerfile description from `VNtyper 2.0` to `VNtyper 2`; preserve every real version, historical reference, dependency, identifier, parsed banner, bare canonical name, and `snakemake/vntyper2*` filename.
 - All new Python is fully annotated and Python 3.10 compatible. New unit files declare `pytestmark = pytest.mark.unit` and remain pure: no network, Docker, registry, or reference archive.
 - Run pytest from the repository root. Never lower coverage floor 86, target 86, patch target 80, or disable branch coverage.
@@ -58,10 +65,10 @@
 | `scripts/release_evidence.py` | Create | Typed local-JSON adapter selecting exact-SHA Docker runs and validating contract-v1 evidence/image labels; no network or registry I/O |
 | `tests/unit/test_release_policy.py` | Create | Exhaustive decision tests, including invalid inputs, terminal states, reruns, conflicts, and dry-run execution flags |
 | `tests/unit/test_release_evidence.py` | Create | Exact-run selection, malformed/stale evidence, digest/label/collision, and CLI output tests |
-| `tests/unit/test_release_workflow_contract.py` | Create | Static workflow graph/permission/trigger/label checks plus GHCR documentation and naming invariants |
+| `tests/unit/test_release_workflow_contract.py` | Create | Parsed and executable workflow graph/permission/trigger/label checks plus GHCR documentation and naming invariants |
 | `.github/workflows/ci-tests.yml` | Modify | Make path-derived `python` and `docs` outputs true for every main push while retaining PR filtering |
 | `.github/workflows/docker-build.yml` | Modify | Make image output true for every main push; retain short SHA; add full revision/package labels; upload exact-SHA digest evidence; remove dead tag metadata |
-| `.github/workflows/publish-pypi.yml` | Rewrite in place | Exact-tag validation, bounded evidence polling, missing-image recovery, package artifact build, serialized digest promotion, dry-run, OIDC publish, summary |
+| `.github/workflows/publish-pypi.yml` | Rewrite in place | Default-branch repository-dispatch boundary, exact-tag validation, bounded evidence polling, missing-image recovery, package artifact build, serialized digest promotion, dry-run, OIDC publish, summary |
 | `README.md` | Modify | GHCR-only commands, stable/rolling tag explanation, eight generation-name edits, grammar repair |
 | `docs/getting-started/installation.md` | Modify | Remove active Docker Hub command; document supported GHCR pull |
 | `docs/user-guide/docker.md` | Modify | Remove active Docker Hub/Apptainer commands; document aliases and `main` semantics |
@@ -544,46 +551,56 @@ git add .github/workflows/ci-tests.yml .github/workflows/docker-build.yml tests/
 git commit -m "ci(release): build substantive evidence on main"
 ```
 
-### Task 5: Exact existing-tag validation and dry-run boundary
+### Task 5: Default-branch existing-tag validation and dry-run boundary
 
 **Files:**
 - Modify: `.github/workflows/publish-pypi.yml`
 - Modify: `tests/unit/test_release_workflow_contract.py`
 
 **Interfaces:**
-- Consumes: `parse_release_tag`, fetched `origin/main`, actual pushed or dispatch-supplied existing tag.
+- Consumes: `parse_release_tag`, fetched `origin/main`, `repository_dispatch.client_payload.tag`, or manual dispatch's existing tag.
 - Produces from `validate-release`: `mode`, `tag`, `version`, `sha`, and `short_sha` job outputs.
 
 - [ ] **Step 1: Write RED trigger and production-guard tests (2–5 min)**
 
-Assert `push.tags == ["v*.*.*"]`; `workflow_dispatch.inputs.tag.required == "true"`; no dispatch input named `publish`, `dry_run`, `sha`, or `version`; no step contains `git tag`, `git push`, or `gh release create`. Production-job guards are added and tested in the task that creates each job; Task 5 does not create placeholders.
+Assert the trigger set is exactly `repository_dispatch` and `workflow_dispatch`;
+`repository_dispatch.types == ["vntyper_release"]`; no `push`/`push.tags` trigger exists;
+`workflow_dispatch.inputs.tag.required == "true"`; no manual input is named `publish`, `dry_run`, `sha`, or
+`version`; and no step contains `git tag`, `git push`, or `gh release create`. Production-job guards are added and
+tested in the task that creates each job; Task 5 does not create placeholders.
 
 - [ ] **Step 2: Write RED validation contract tests (2–5 min)**
 
-Assert `validate-release` uses `actions/checkout@v7` with `fetch-depth: "0"` and `persist-credentials: "false"`; runs `git rev-parse "${TAG}^{commit}"`, `git merge-base --is-ancestor "$SHA" origin/main`, `parse_release_tag`, and the precise version consistency test `pytest -m unit tests/unit/test_version_consistency.py -q` before any downstream job.
+Assert `validate-release` uses `actions/checkout@v7` with `fetch-depth: "0"` and `persist-credentials: "false"`; runs `git rev-parse "refs/tags/${TAG}^{commit}"`, `git merge-base --is-ancestor "$SHA" origin/main`, `parse_release_tag`, and the precise version consistency test `pytest -m unit tests/unit/test_version_consistency.py -q` before any downstream job.
 Assert the first checkout path is `controller`, the second is `candidate` at `${{ steps.resolve.outputs.sha }}`;
 `parse_release_tag` runs in controller while `runpy` and pytest run with `working-directory: candidate`. This prevents
 manual old-tag validation from importing helpers out of the candidate or testing current-main metadata.
 Assert the candidate step creates `.release-venv` and installs exactly the test's collection/runtime requirements
 `pytest packaging PyYAML requests`; omitting `requests` is a collection failure because repository `tests/conftest.py`
 imports it before the selected test runs. Execute a mismatch fixture and assert `summary_json` preserves the expected
-tag version plus observed package, `CITATION.cff`, and changelog versions and a Boolean verdict for each.
+tag version plus observed package, `CITATION.cff`, and changelog versions and a Boolean verdict for each. Execute the
+entire candidate shell step with fake successful `pip`/`pytest` commands for four hostile fixtures: package-only false,
+citation-only false, changelog-only false, and three internally consistent sources that all mismatch the tag. Every
+fixture must exit nonzero while retaining `version_test_passed: true`. Execute `resolve` with a former `push` event, a
+wrong repository-dispatch action, and shell-metacharacter tags; each must fail before the fake Git executable is called.
 
 - [ ] **Step 3: Run RED against the token-based combined workflow (2–5 min)**
 
 Run: `pytest -m unit tests/unit/test_release_workflow_contract.py -q`
-Expected: failures name missing dispatch trigger, `validate-release`, full-history checkout, main-ancestry proof, and production guards.
+Expected: failures name the tag-push trigger, absent repository dispatch, permissive event fallback, missing
+`validate-release`, full-history checkout, main-ancestry proof, and false metadata verdicts exiting zero.
 
 - [ ] **Step 4: Replace the header and create `validate-release` minimally (2–5 min)**
 
-Document production `vX.Y.Z` tag usage and `workflow_dispatch` existing-tag dry run. Build the workflow header/job from this
+Document authenticated production repository dispatch over an existing `vX.Y.Z` tag and `workflow_dispatch`
+existing-tag dry run. Build the workflow header/job from this
 literal skeleton, filling only the validated shell body described below:
 
 ```yaml
 name: Publish PyPI and promote GHCR
 on:
-  push:
-    tags: ["v*.*.*"]
+  repository_dispatch:
+    types: [vntyper_release]
   workflow_dispatch:
     inputs:
       tag:
@@ -592,7 +609,7 @@ on:
         type: string
 permissions: {}
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag || github.event.client_payload.tag }}
   cancel-in-progress: false
 jobs:
   validate-release:
@@ -616,12 +633,21 @@ jobs:
         working-directory: controller
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
+          EVENT_ACTION: ${{ github.event.action }}
           EVENT_NAME: ${{ github.event_name }}
-          PUSH_SHA: ${{ github.sha }}
-          PUSH_TAG: ${{ github.ref_name }}
+          PRODUCTION_TAG: ${{ github.event.client_payload.tag }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then MODE=dry-run; TAG=$DISPATCH_TAG; else MODE=production; TAG=$PUSH_TAG; fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            MODE=dry-run
+            TAG=$DISPATCH_TAG
+          elif [ "$EVENT_NAME" = "repository_dispatch" ] && [ "$EVENT_ACTION" = "vntyper_release" ]; then
+            MODE=production
+            TAG=$PRODUCTION_TAG
+          else
+            echo "::error::Unsupported release event: ${EVENT_NAME}/${EVENT_ACTION}"
+            exit 1
+          fi
           VERSION=$(python - "$TAG" <<'PY'
           import sys
           from scripts.release_policy import parse_release_tag
@@ -629,7 +655,6 @@ jobs:
           PY
           )
           SHA=$(git rev-parse "refs/tags/${TAG}^{commit}")
-          if [ "$EVENT_NAME" = "push" ]; then test "$SHA" = "$PUSH_SHA"; fi
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$SHA" origin/main
           SHORT_SHA=${SHA:0:7}
@@ -688,11 +713,14 @@ jobs:
 
           path = Path("candidate-version-observations.json")
           observed = json.loads(path.read_text(encoding="utf-8"))
-          observed["version_test_exit_code"] = int(sys.argv[1])
-          observed["version_test_passed"] = int(sys.argv[1]) == 0
+          test_status = int(sys.argv[1])
+          observed["version_test_exit_code"] = test_status
+          observed["version_test_passed"] = test_status == 0
           path.write_text(json.dumps(observed, separators=(",", ":")), encoding="utf-8")
+          if not all(observed[source]["matches"] for source in ("package", "citation", "changelog")):
+              raise SystemExit("candidate release metadata does not match the requested tag version")
+          raise SystemExit(test_status)
           PY
-          exit "$TEST_STATUS"
       - id: validate-result
         if: ${{ always() }}
         env:
@@ -725,13 +753,17 @@ jobs:
           PY
 ```
 
-The controller checkout always holds the current coordinator helpers/workflow. Resolve dispatch input only through
-`git rev-parse "refs/tags/${TAG}^{commit}"` there; require the tag already exists. For a
-push, require peeled SHA equals `${PUSH_SHA}`. Validate tag before using it in shell commands, fetch `origin/main`, prove
-ancestry, then check out the resolved candidate separately. Read the candidate's `vntyper/version.py` via `runpy`,
+The controller checkout always holds the current default-branch coordinator helpers/workflow. Resolve either dispatch
+input only through `git rev-parse "refs/tags/${TAG}^{commit}"` there; require the tag already exists. Accept production
+only when `github.event_name == 'repository_dispatch'` and `github.event.action == 'vntyper_release'`; `github.sha`
+identifies the default-branch coordinator and is never treated as candidate identity. Validate the payload tag before
+using it in shell commands, fetch `origin/main`, prove ancestry, then check out the resolved candidate separately. Read
+the candidate's `vntyper/version.py` via `runpy`,
 create the explicit Python environment inside `candidate/`, install only `pytest`, `packaging`, `PyYAML`, and
 `requests`, run the candidate's version-consistency test, and export all six outputs. Before environment setup, persist
 the observed package/citation/changelog values and per-source match verdicts; after pytest, add its exit code/verdict.
+Exit nonzero if pytest fails or if any per-source match verdict is false; internal agreement among all three version
+sources is not sufficient when they all mismatch the requested tag.
 The always-run serializer retains those observations on a mismatch or uses explicit unavailable values if setup failed.
 `summary_json` is single-line JSON written through `$GITHUB_OUTPUT`.
 
@@ -744,7 +776,8 @@ workflow-level concurrency block from the skeleton exactly. Do not grant
 - [ ] **Step 6: Run GREEN and test hostile manual tags (2–5 min)**
 
 Run: `pytest -m unit tests/unit/test_release_workflow_contract.py -q && make lint-actions`
-Expected: the trigger, existing-tag-only input, ancestry/version proof, no tag creation, and production guards pass.
+Expected: the default-branch repository trigger, existing-tag-only inputs, ancestry/version proof, explicit false-verdict
+failure, no tag creation, exact event/action boundary, and hostile event/tag probes pass.
 
 - [ ] **Step 7: Commit validation boundary (2–5 min)**
 
@@ -781,7 +814,8 @@ has no unbounded `while true`, and exits nonzero after the outer loop instead of
 Assert the evidence-download step independently carries the same `GH_TOKEN`; job permissions alone are not CLI
 authentication.
 Assert a `docker/login-action@v4` step using `GITHUB_TOKEN` precedes every production GHCR inspection and is guarded by
-`github.event_name == 'push'`; dispatch must still perform no registry login or write.
+exactly `github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release'`; manual dispatch must
+still perform no registry login or write.
 
 - [ ] **Step 2: Write RED source-image and recovery assertions (2–5 min)**
 
@@ -1056,7 +1090,7 @@ with shell):
           fi
           printf 'check_summary_json=%s\n' "$(cat poll.json)" >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR for production inspection
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -1068,8 +1102,9 @@ For attempts `1..120`, retry each Check Runs API snapshot at most three times, f
 `check_runs` arrays, pass the combined JSON, attempt, and explicit `max_attempts=120` into `classify_check_runs`, export
 one-line `check_summary_json`, exit on `success`/`fail`/`timeout`, and sleep exactly 30 seconds only for `wait`. The shell
 also exits nonzero after the loop, so a classifier/configuration disagreement cannot fall through as success. Never
-accept aggregate success as replacement for a missing/skipped component. Production authenticates before GHCR reads;
-dispatch deliberately uses the public read path without login and still has no registry-write authority.
+accept aggregate success as replacement for a missing/skipped component. The exact production repository dispatch
+authenticates before GHCR reads; manual dispatch deliberately uses the public read path without login and still has no
+registry-write authority.
 
 The preflight deliberately precedes the long check poll. A candidate with no completed main-push Docker run is still
 possibly building and proceeds to bounded polling. A candidate with completed successful main-push runs but no
@@ -1308,7 +1343,8 @@ promotion performs no writes and must be rerun. Do not assert that three simulta
 Assert the job calls `plan_alias_updates`; aliases are exactly the required five; `main` is not a target;
 `fail-conflict` (including floating equal-version/different-digest) exits nonzero before any write; `skip-newer` and
 `skip-unorderable` emit `::notice::`; only `create`/`advance` execute. Assert `promote-ghcr.if` contains
-`github.event_name == 'push'`, so dispatch cannot log in or write.
+exactly `github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release'`, so manual or unrelated
+dispatches cannot log in or write.
 
 Use the Task 6 `_run_step` harness with a fake `docker` that returns controlled alias digests/labels and records every
 `imagetools create`. Make the fake reject a production create lacking `--prefer-index=false` and execute the checked-in
@@ -1336,7 +1372,7 @@ Append this job and use a local observation directory plus the typed policy. Raw
 ```yaml
   promote-ghcr:
     needs: [validate-release, wait-for-release-gates]
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: vntyper-ghcr-release-promotion
@@ -1625,7 +1661,7 @@ Assert literal action `pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11
 `PYPI_API_TOKEN`, `TWINE_PASSWORD`, `TWINE_USERNAME`, `DOCKER_USERNAME`, or `DOCKER_PASSWORD`. Inspect that PyPA
 step's own `with` mapping has no `password` or `user`; a separate GHCR login may use
 `password: ${{ secrets.GITHUB_TOKEN }}`. Assert build and publish are downstream of image evidence; publish is
-tag-push-only.
+guarded by exact `repository_dispatch` event name and `vntyper_release` action only.
 
 - [ ] **Step 3: Run RED against the remaining token path (2–5 min)**
 
@@ -1706,7 +1742,7 @@ Download the exact `needs.build-package.outputs.artifact_name` in this job; do n
 ```yaml
   publish-pypi:
     needs: [validate-release, wait-for-release-gates, build-package, promote-ghcr]
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
     runs-on: ubuntu-24.04
     environment:
       name: pypi
@@ -1865,6 +1901,9 @@ git commit -m "docs(release): make GHCR and VNtyper 2 canonical"
 - [ ] **Step 1: Write RED guidance and summary literal tests (2–5 min)**
 
 Assert `AGENTS.md` names the ten checks, short-SHA/full-revision distinction, digest promotion, `main` versus `latest`, manual existing-tag dry run, fixed promotion serialization, OIDC environment, and “do not delete `PYPI_API_TOKEN` until the first successful OIDC release”. Assert B4 says `RESOLVED` for workflow migration and retains owner-only token deletion as follow-up.
+Also require the exact `vntyper_release` repository-dispatch type/payload, default-branch controller semantics, absence of
+production `push.tags`, exact event/action guards on every production job, and the first-release warning that historical
+tag workflows become inert only after the post-OIDC token deletion.
 
 - [ ] **Step 2: Assert precise diagnostic categories (2–5 min)**
 
@@ -1880,12 +1919,15 @@ ref/digest/revision/version, alias attempted/write-succeeded/verified progress, 
 - [ ] **Step 3: Run RED against stale token/tag guidance (2–5 min)**
 
 Run: `pytest -m unit tests/unit/test_release_workflow_contract.py -q`
-Expected: failures cite AGENTS trap 12/“Never push” wording, unresolved B4, stale workflow header, and incomplete summary categories.
+Expected: failures cite AGENTS trap 12/“Never push” wording, absent repository-dispatch/default-branch guidance,
+unresolved B4, stale workflow header, missing legacy-token migration warning, and incomplete summary categories.
 
 - [ ] **Step 4: Update workflow header and always-run summary (2–5 min)**
 
-Document production event, dry-run syntax, immutable/floating aliases, missing-image rerun, canceled-pending promotion
-retry, partial PyPI retry, and the prohibition on workflow-created tags. Add this job and implement its Python renderer:
+Document the authenticated production `repository_dispatch` event type `vntyper_release`, `client_payload.tag`,
+default-branch policy selection, dry-run syntax, immutable/floating aliases, missing-image rerun, canceled-pending
+promotion retry, partial PyPI retry, and the prohibition on workflow-created tags. Add this job and implement its
+Python renderer:
 
 ```yaml
   release-summary:
@@ -1951,11 +1993,14 @@ The renderer treats empty outputs as unavailable, includes `needs.*.result`, emi
 
 - [ ] **Step 5: Update AGENTS and ci-followups accurately (2–5 min)**
 
-Replace “tag pushes publish immediately” with the gated sequence; expand version trap 12 to all three sources,
+Replace “tag pushes publish immediately” with the existing-tag plus authenticated `vntyper_release` repository-dispatch
+sequence; explain why the default-branch coordinator has no production `push.tags` trigger; expand version trap 12 to all three sources,
 exact-SHA Docker evidence artifact, short-SHA/full label, aliases, anti-downgrade, prefix-collision, and rerun semantics;
 state every main push is substantive while PRs retain filters. Reconcile the scripts type-check paragraph with the
 already-landed milestone-6 quality-gate change rather than restoring stale “not type-checked” text. Mark B4 resolved
-and leave secret deletion explicitly pending first live proof. Include a literal fenced workflow-state table in AGENTS
+and leave secret deletion explicitly pending first live OIDC proof. State that historical tagged commits retain their
+legacy tag-triggered token workflow, forbid new pre-milestone tags while the token exists, and call those workflows
+inert only after the owner deletes the token following successful OIDC publication. Include a literal fenced workflow-state table in AGENTS
 mapping validation/gates/build/promotion/publish/summary to permissions and retry behavior so the prose test has exact
 content rather than substring-only coverage.
 
@@ -1982,7 +2027,8 @@ successful gated production release and, for #218, the separately authorized obs
 
 **Interfaces:**
 - Consumes: complete branch implementation.
-- Produces: local gate transcript and next-release owner checklist; no push, PR, dispatch, tag, or production release.
+- Produces: local gate transcript and next-release owner checklist; no push, PR, workflow dispatch,
+  repository dispatch, tag, or production release.
 
 - [ ] **Step 1: Run focused tests freshly (2–5 min)**
 
@@ -2022,24 +2068,32 @@ Expected: focused Conventional Commits in task order and no whitespace errors, g
 - [ ] **Step 7: Record the PR-check expectation without external mutation**
 
 Write the ten exact expected check names into the SDD task report. Do not push, open/update a PR, wait on GitHub, push
-a `v*.*.*` tag, or dispatch a workflow here; master integration owns final reviews before PR publication.
+a `v*.*.*` tag, manually dispatch a workflow, or send `repository_dispatch` here; master integration owns final reviews
+before PR publication.
 
 - [ ] **Step 8: Record the post-merge dry-run acceptance script without running it**
 
-Record these owner commands/checks in the task report, explicitly marked not executed: dispatch a pre-milestone strict
-tag to prove the ineligibility/no-write path; after the first post-milestone release, dispatch that eligible existing
-tag to prove the full no-write summary. The checklist requires ten exact-SHA checks, Docker evidence
+Record these owner commands/checks in the task report, explicitly marked not executed: manually dispatch a
+pre-milestone strict tag to prove the ineligibility/no-write path; after the first post-milestone release, manually
+dispatch that eligible existing tag to prove the full no-write summary. These are read-only `workflow_dispatch` runs,
+not production repository dispatches. The checklist requires ten exact-SHA checks, Docker evidence
 run/digest/revision/version, alias dry-run plan, package files, and “no production writes”.
 
 - [ ] **Step 9: Hand off the first-live-release checklist without executing it**
 
-Record: create the next version on `main`; wait for all exact-SHA checks; create/push its strict tag externally; approve environment `pypi`; verify five GHCR aliases and PyPI attestations; then have an owner delete `PYPI_API_TOKEN` and link evidence on #218. No implementation commit is created for verification-only evidence unless a failing gate requires a focused code/docs fix and a rerun.
+Record: create the next version on `main`; wait for all exact-SHA checks; create/push its strict tag externally at the
+post-milestone commit; send authenticated `repository_dispatch` with `event_type=vntyper_release` and that tag in
+`client_payload.tag`; approve environment `pypi`; verify five GHCR aliases and PyPI attestations; only after that OIDC
+publication succeeds, have an owner delete `PYPI_API_TOKEN`, record that legacy historical tag workflows are now inert,
+and link evidence on #218. Do not create or push a tag at a pre-milestone commit while the token exists. No implementation
+commit is created for verification-only evidence unless a failing gate requires a focused code/docs fix and a rerun.
 
 ## Completion definition
 
 - Every traceability row has a passing named test and corresponding focused commit.
 - Every `main` push produces non-skipped component and aggregator evidence plus a tested short-SHA image whose labels carry full SHA and package version.
-- Production tag and manual existing-tag modes share validation/gates/build; only production can promote or request OIDC.
+- Production `vntyper_release` repository dispatch and manual existing-tag modes share validation/gates/build; only the
+  exact production event/action can promote or request OIDC, and no production tag-push trigger exists.
 - Missing/ineligible image evidence names the exact Docker run to rerun; partial alias/PyPI failures converge safely;
   floating aliases cannot downgrade; promotions cannot execute concurrently. A pending run canceled by GitHub's
   one-pending-slot concurrency semantics is rerun explicitly and has performed no writes.

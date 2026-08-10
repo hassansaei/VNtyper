@@ -224,12 +224,13 @@ def test_release_evidence_serializer_writes_typed_exact_identity_payload(tmp_pat
     }
 
 
-def test_release_trigger_accepts_only_existing_tag_dry_runs_and_strict_tag_pushes() -> None:
-    """Manual dispatch must never acquire a production or tag-creation switch."""
+def test_release_trigger_uses_default_branch_repository_dispatch_for_production() -> None:
+    """Production policy must come from the default branch, never a tagged historical commit."""
     publish = _workflow("publish-pypi.yml")
 
     assert publish["name"] == "Publish PyPI and promote GHCR"
-    assert publish["on"]["push"]["tags"] == ["v*.*.*"]
+    assert set(publish["on"]) == {"repository_dispatch", "workflow_dispatch"}
+    assert publish["on"]["repository_dispatch"] == {"types": ["vntyper_release"]}
     assert publish["on"]["workflow_dispatch"]["inputs"] == {
         "tag": {
             "description": "Existing strict vMAJOR.MINOR.PATCH tag to inspect without writes",
@@ -239,7 +240,7 @@ def test_release_trigger_accepts_only_existing_tag_dry_runs_and_strict_tag_pushe
     }
     assert publish["permissions"] == {}
     assert publish["concurrency"] == {
-        "group": "release-${{ inputs.tag || github.ref_name }}",
+        "group": "release-${{ inputs.tag || github.event.client_payload.tag }}",
         "cancel-in-progress": "false",
     }
     assert set(publish["jobs"]) == {"validate-release"}
@@ -284,14 +285,24 @@ def test_validate_release_resolves_in_controller_and_tests_exact_candidate() -> 
     resolve = _step_with_id(publish, "validate-release", "resolve")
     candidate = _step_with_id(publish, "validate-release", "candidate")
     assert resolve["working-directory"] == "controller"
+    assert resolve["env"] == {
+        "DISPATCH_TAG": "${{ inputs.tag }}",
+        "EVENT_ACTION": "${{ github.event.action }}",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "PRODUCTION_TAG": "${{ github.event.client_payload.tag }}",
+    }
     assert candidate["working-directory"] == "candidate"
     assert "from scripts.release_policy import parse_release_tag" in resolve["run"]
     assert resolve["run"].index("parse_release_tag") < resolve["run"].index('git rev-parse "refs/tags/${TAG}^{commit}"')
     assert "git fetch --no-tags origin main" in resolve["run"]
     assert 'git merge-base --is-ancestor "$SHA" origin/main' in resolve["run"]
-    assert 'if [ "$EVENT_NAME" = "push" ]; then test "$SHA" = "$PUSH_SHA"; fi' in resolve["run"]
-    assert "MODE=dry-run; TAG=$DISPATCH_TAG" in resolve["run"]
-    assert "else MODE=production; TAG=$PUSH_TAG" in resolve["run"]
+    assert "MODE=dry-run" in resolve["run"]
+    assert "TAG=$DISPATCH_TAG" in resolve["run"]
+    assert 'elif [ "$EVENT_NAME" = "repository_dispatch" ] && [ "$EVENT_ACTION" = "vntyper_release" ]' in resolve["run"]
+    assert "MODE=production" in resolve["run"]
+    assert "TAG=$PRODUCTION_TAG" in resolve["run"]
+    assert "PUSH_SHA" not in resolve["run"]
+    assert "PUSH_TAG" not in resolve["run"]
 
     assert 'runpy.run_path("vntyper/version.py")' in candidate["run"]
     assert "python3 -m venv .release-venv" in candidate["run"]
@@ -347,7 +358,8 @@ def test_validation_summary_preserves_structured_mismatch_observations(tmp_path:
         capture_output=True,
         text=True,
     )
-    assert second.returncode == 0, second.stderr
+    assert second.returncode == 1
+    assert "candidate release metadata does not match" in second.stderr
 
     summary_env = os.environ | {
         "CANDIDATE_OUTCOME": "failure",
@@ -386,3 +398,123 @@ def test_validation_summary_preserves_structured_mismatch_observations(tmp_path:
             "version_test_passed": False,
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("package", "citation", "changelog"),
+    [
+        ("7.8.8", "7.8.9", "7.8.9"),
+        ("7.8.9", "7.8.8", "7.8.9"),
+        ("7.8.9", "7.8.9", "7.8.8"),
+        ("7.8.8", "7.8.8", "7.8.8"),
+    ],
+)
+def test_candidate_step_rejects_each_false_version_verdict_even_when_pytest_passes(
+    tmp_path: Path,
+    package: str,
+    citation: str,
+    changelog: str,
+) -> None:
+    """No tag mismatch may pass merely because candidate metadata is internally consistent."""
+    publish = _workflow("publish-pypi.yml")
+    candidate = _step_with_id(publish, "validate-release", "candidate")
+    candidate_root = tmp_path / "candidate"
+    fake_bin = tmp_path / "bin"
+    (candidate_root / "vntyper").mkdir(parents=True)
+    (candidate_root / "docs" / "about").mkdir(parents=True)
+    fake_bin.mkdir()
+    (candidate_root / "vntyper" / "version.py").write_text(f'__version__ = "{package}"\n')
+    (candidate_root / "CITATION.cff").write_text(f'version: "{citation}"\n')
+    (candidate_root / "docs" / "about" / "changelog.md").write_text(f"## {changelog}\n")
+
+    fake_python3 = fake_bin / "python3"
+    fake_python3.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = -m\n'
+        'test "$2" = venv\n'
+        'mkdir -p "$3/bin"\n'
+        "printf '#!/usr/bin/env bash\\nexit 0\\n' > \"$3/bin/pip\"\n"
+        "printf '#!/usr/bin/env bash\\nexit 0\\n' > \"$3/bin/pytest\"\n"
+        'chmod +x "$3/bin/pip" "$3/bin/pytest"\n'
+    )
+    fake_python3.chmod(0o755)
+    env = os.environ | {
+        "MODE": "production",
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "SHA": "1" * 40,
+        "TAG": "v7.8.9",
+        "VERSION": "7.8.9",
+    }
+
+    completed = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", candidate["run"]],
+        cwd=candidate_root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    observations = json.loads((candidate_root / "candidate-version-observations.json").read_text())
+    assert observations["version_test_exit_code"] == 0
+    assert observations["version_test_passed"] is True
+    assert False in {
+        observations["package"]["matches"],
+        observations["citation"]["matches"],
+        observations["changelog"]["matches"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("event_name", "event_action", "dispatch_tag", "production_tag"),
+    [
+        ("push", "", "", "v7.8.9"),
+        ("repository_dispatch", "not_a_release", "", "v7.8.9"),
+        ("repository_dispatch", "vntyper_release", "", "HOSTILE"),
+        ("workflow_dispatch", "", "HOSTILE", ""),
+    ],
+)
+def test_resolve_rejects_wrong_events_and_hostile_tags_before_git(
+    tmp_path: Path,
+    event_name: str,
+    event_action: str,
+    dispatch_tag: str,
+    production_tag: str,
+) -> None:
+    """Only the named dispatches may reach Git, and tag text must be parsed first."""
+    publish = _workflow("publish-pypi.yml")
+    resolve = _step_with_id(publish, "validate-release", "resolve")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git_log = tmp_path / "git-called"
+    injection_marker = tmp_path / "injected"
+    hostile_tag = f"v7.8.9;touch {injection_marker}"
+    dispatch_tag = hostile_tag if dispatch_tag == "HOSTILE" else dispatch_tag
+    production_tag = hostile_tag if production_tag == "HOSTILE" else production_tag
+    fake_git = fake_bin / "git"
+    fake_git.write_text(f"#!/usr/bin/env bash\nprintf called > {git_log}\nexit 97\n")
+    fake_git.chmod(0o755)
+    env = os.environ | {
+        "DISPATCH_TAG": dispatch_tag,
+        "EVENT_ACTION": event_action,
+        "EVENT_NAME": event_name,
+        "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "PRODUCTION_TAG": production_tag,
+        "PUSH_TAG": production_tag,
+    }
+
+    completed = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", resolve["run"]],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert not git_log.exists()
+    assert not injection_marker.exists()
