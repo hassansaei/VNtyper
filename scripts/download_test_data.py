@@ -43,6 +43,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _confined_archive_target(root: Path, relative: Path) -> Path:
+    """Return an archive target only when it remains below the extraction root.
+
+    Args:
+        root: Caller-provided extraction directory.
+        relative: Archive member path relative to ``root``.
+
+    Returns:
+        The un-resolved target path below ``root``.
+
+    Raises:
+        ValueError: If the member path is empty, absolute, traverses upward, or
+            resolves outside the extraction root through a symlink.
+    """
+    if not relative.parts or relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("archive member escapes extraction directory")
+
+    resolved_root = root.resolve()
+    target = root / relative
+    if not target.resolve().is_relative_to(resolved_root):
+        raise ValueError("archive member escapes extraction directory")
+    return target
+
+
 def compute_md5(file_path: Path) -> str:
     """Compute MD5 hash of a file."""
     hasher = hashlib.md5()
@@ -186,60 +210,58 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
 
         if common_prefix:
             logger.info(f"Extracting files while stripping '{common_prefix}' prefix...")
-            logger.info(f"Target directory: {extract_to.absolute()}")
-            extracted_count = 0
-            total_members = len([m for m in zip_ref.infolist() if not m.filename.endswith("/")])
-
-            for member in zip_ref.infolist():
-                if member.filename.endswith("/"):  # Skip directory entries
-                    continue
-
-                member_path = member.filename
-                original_path = member_path  # Keep for logging
-
-                member_path = member_path.removeprefix(common_prefix)
-
-                # Skip files not in dominant directory
-                if not member_path or member_path == member.filename:
-                    logger.debug(f"Skipping: {member.filename} (not in dominant directory)")
-                    continue
-
-                target_path = extract_to / member_path
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Log progress for large extractions
-                extracted_count += 1
-                if extracted_count % 10 == 0 or extracted_count == total_members:
-                    logger.info(f"Extracting [{extracted_count}/{total_members}]: {original_path} → {target_path}")
-
-                # Use shutil.copyfileobj for robust large file extraction
-                try:
-                    with zip_ref.open(member) as source, open(target_path, "wb") as target:
-                        shutil.copyfileobj(source, target, length=65536)
-
-                    # Verify file was written
-                    if not target_path.exists():
-                        raise RuntimeError(f"File not found after extraction: {target_path}")
-
-                    file_size = target_path.stat().st_size
-
-                    # Allow empty files for certain types (log files, etc.)
-                    # They can legitimately be empty (e.g., .quickcheck.log when no issues found)
-                    if file_size == 0:
-                        logger.debug(f"Extracted empty file: {target_path.name} (this may be normal for log files)")
-
-                    # Log details for first few files
-                    if extracted_count <= 3:
-                        logger.info(f"  ✓ Verified: {target_path.name} ({file_size / (1024 * 1024):.2f} MB)")
-
-                except Exception as e:
-                    logger.error(f"Failed to extract {member.filename} to {target_path}: {e}")
-                    raise
-
-            logger.info(f"✓ Successfully extracted {extracted_count} files to {extract_to.absolute()}")
         else:
             logger.info("Extracting all files normally...")
-            zip_ref.extractall(extract_to)
+
+        logger.info(f"Target directory: {extract_to.absolute()}")
+        extracted_count = 0
+        total_members = len([m for m in zip_ref.infolist() if not m.filename.endswith("/")])
+
+        for member in zip_ref.infolist():
+            if member.filename.endswith("/"):  # Skip directory entries
+                continue
+
+            original_path = member.filename
+            member_path = member.filename.removeprefix(common_prefix) if common_prefix else member.filename
+
+            # Skip files not in dominant directory
+            if common_prefix and (not member_path or member_path == member.filename):
+                logger.debug(f"Skipping: {member.filename} (not in dominant directory)")
+                continue
+
+            target_path = _confined_archive_target(extract_to, Path(member_path))
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Log progress for large extractions
+            extracted_count += 1
+            if extracted_count % 10 == 0 or extracted_count == total_members:
+                logger.info(f"Extracting [{extracted_count}/{total_members}]: {original_path} → {target_path}")
+
+            # Use shutil.copyfileobj for robust large file extraction
+            try:
+                with zip_ref.open(member) as source, open(target_path, "wb") as target:
+                    shutil.copyfileobj(source, target, length=65536)
+
+                # Verify file was written
+                if not target_path.exists():
+                    raise RuntimeError(f"File not found after extraction: {target_path}")
+
+                file_size = target_path.stat().st_size
+
+                # Allow empty files for certain types (log files, etc.)
+                # They can legitimately be empty (e.g., .quickcheck.log when no issues found)
+                if file_size == 0:
+                    logger.debug(f"Extracted empty file: {target_path.name} (this may be normal for log files)")
+
+                # Log details for first few files
+                if extracted_count <= 3:
+                    logger.info(f"  ✓ Verified: {target_path.name} ({file_size / (1024 * 1024):.2f} MB)")
+
+            except Exception as e:
+                logger.error(f"Failed to extract {member.filename} to {target_path}: {e}")
+                raise
+
+        logger.info(f"✓ Successfully extracted {extracted_count} files to {extract_to.absolute()}")
 
     logger.info("Archive extracted successfully")
 
@@ -311,7 +333,7 @@ def verify_test_data(config_path: Path, data_dir: Path, skip_md5: bool = False) 
         return True, []
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Download and verify VNtyper test data",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -338,7 +360,7 @@ Examples:
     parser.add_argument("--quiet", action="store_true", help="Minimal output")
     parser.add_argument("--verbose", action="store_true", help="Detailed output")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Check for environment variable to skip MD5 (useful in CI)
     skip_md5 = args.skip_md5 or os.environ.get("VNTYPER_SKIP_MD5_CHECK", "").lower() in ("1", "true", "yes")
@@ -359,7 +381,7 @@ Examples:
 
     if not config_path.exists():
         logger.error(f"Config file not found: {config_path}")
-        sys.exit(1)
+        return 1
 
     # Load config
     with config_path.open("r") as f:
@@ -368,13 +390,13 @@ Examples:
     archive_config = config.get("archive_file")
     if not archive_config:
         logger.error("No archive_file configuration found in test_data_config.json")
-        sys.exit(1)
+        return 1
 
     # Verify only mode
     if args.verify_only:
         logger.info("Verify-only mode: checking existing files")
         success, _ = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
-        sys.exit(0 if success else 1)
+        return 0 if success else 1
 
     # Check if download needed
     need_download = args.force
@@ -383,7 +405,7 @@ Examples:
         success, _ = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
         if success:
             logger.info("Test data already exists and is valid. Use --force to re-download.")
-            sys.exit(0)
+            return 0
         logger.info("Test data is missing or invalid. Starting download...")
         need_download = True
 
@@ -416,11 +438,12 @@ Examples:
         logger.info("VERIFYING DATA")
         logger.info("=" * 80)
 
+        errors: list[str] = []
         success, errors = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
 
         if not success:
             logger.error("Verification failed after extraction!")
-            sys.exit(1)
+            return 1
 
         logger.info("")
         logger.info("=" * 80)
@@ -428,10 +451,11 @@ Examples:
         logger.info("=" * 80)
         logger.info(f"Test data installed to: {data_dir}")
         logger.info("You can now run tests with: make test")
+        return 0
 
     except Exception as e:
         logger.error(f"Download failed: {e}")
-        sys.exit(1)
+        return 1
     finally:
         # Cleanup temp file
         if tmp_path.exists():
@@ -439,4 +463,4 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
