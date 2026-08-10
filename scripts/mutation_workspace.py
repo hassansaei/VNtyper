@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -129,41 +130,167 @@ class MutationWorkspace:
 
 def _registered_worktree_roots(payload: bytes) -> tuple[Path, ...]:
     """Extract absolute worktree roots from Git's NUL-delimited porcelain output."""
-    if payload and not payload.endswith(b"\0"):
-        raise RuntimeError("malformed worktree list: missing NUL terminator")
+    if not payload:
+        return ()
+    if not payload.endswith(b"\0\0"):
+        raise RuntimeError("malformed worktree list: missing record terminator")
     roots: list[Path] = []
-    for field in payload.split(b"\0"):
-        if not field.startswith(b"worktree "):
-            continue
-        root = Path(os.fsdecode(field.removeprefix(b"worktree ")))
+    for record in payload[:-2].split(b"\0\0"):
+        fields = record.split(b"\0")
+        if (
+            not fields
+            or not fields[0].startswith(b"worktree ")
+            or any(field.startswith(b"worktree ") for field in fields[1:])
+        ):
+            raise RuntimeError("malformed worktree list: invalid record")
+        root = Path(os.fsdecode(fields[0].removeprefix(b"worktree ")))
         if not root.is_absolute():
             raise RuntimeError(f"malformed worktree list: non-absolute root: {root}")
         roots.append(root.resolve(strict=False))
     return tuple(roots)
 
 
-def _replace_with_overlay_copy(source: Path, destination: Path, sweep_root: Path) -> None:
-    """Replace one disposable path with a confined regular file or symlink."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_symlink() or destination.is_file():
-        destination.unlink()
-    elif destination.exists():
-        shutil.rmtree(destination)
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
-    if source.is_symlink():
-        link_text = source.readlink()
-        proposed_target = link_text if link_text.is_absolute() else destination.parent / link_text
-        resolved_target = proposed_target.resolve(strict=False)
-        resolved_sweep = sweep_root.resolve(strict=True)
-        if not resolved_target.is_relative_to(resolved_sweep):
-            raise RuntimeError(f"workspace symlink escapes workspace root: {destination.relative_to(resolved_sweep)}")
-        if ".git" in resolved_target.relative_to(resolved_sweep).parts:
-            raise RuntimeError(f"unsafe workspace path: {destination.relative_to(resolved_sweep)}")
-        destination.symlink_to(link_text)
+
+def _relative_parts(relative: str) -> tuple[str, ...]:
+    """Return the components of one lexically safe workspace-relative path."""
+    candidate = Path(relative)
+    if (
+        relative in {"", "."}
+        or candidate.is_absolute()
+        or candidate.as_posix() != relative
+        or ".." in candidate.parts
+        or ".git" in candidate.parts
+    ):
+        raise ValueError(f"unsafe workspace path: {relative}")
+    return candidate.parts
+
+
+@contextlib.contextmanager
+def _parent_directory_fd(root: Path, relative: str, *, create: bool) -> Iterator[tuple[int, str]]:
+    """Open a relative path's parent without following directory symlinks."""
+    parts = _relative_parts(relative)
+    descriptors = [os.open(root, _DIRECTORY_OPEN_FLAGS)]
+    try:
+        for component in parts[:-1]:
+            if create:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(component, dir_fd=descriptors[-1])
+            descriptors.append(os.open(component, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptors[-1]))
+        yield descriptors[-1], parts[-1]
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _remove_entry_at(parent_fd: int, name: str) -> None:
+    """Remove one directory entry without following its final component."""
+    try:
+        entry_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
         return
-    if not source.is_file():
-        raise RuntimeError(f"overlay source is not a regular file: {source}")
-    shutil.copy2(source, destination)
+    if not stat.S_ISDIR(entry_stat.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return
+
+    child_fd = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
+    try:
+        opened_stat = os.fstat(child_fd)
+        for child_name in os.listdir(child_fd):
+            _remove_entry_at(child_fd, child_name)
+        current_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current_stat.st_dev, current_stat.st_ino) != (opened_stat.st_dev, opened_stat.st_ino):
+            raise RuntimeError(f"workspace destination changed during removal: {name}")
+        os.rmdir(name, dir_fd=parent_fd)
+    finally:
+        os.close(child_fd)
+
+
+def _copy_regular_file_at(
+    source_parent_fd: int, source_name: str, destination_parent_fd: int, destination_name: str
+) -> None:
+    """Copy one regular file through anchored directory descriptors."""
+    source_fd = os.open(source_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_parent_fd)
+    destination_fd: int | None = None
+    try:
+        source_stat = os.fstat(source_fd)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise RuntimeError(f"overlay source is not a regular file: {source_name}")
+        _remove_entry_at(destination_parent_fd, destination_name)
+        destination_fd = os.open(
+            destination_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            stat.S_IMODE(source_stat.st_mode),
+            dir_fd=destination_parent_fd,
+        )
+        while chunk := os.read(source_fd, 1024 * 1024):
+            offset = 0
+            while offset < len(chunk):
+                offset += os.write(destination_fd, chunk[offset:])
+        os.fchmod(destination_fd, stat.S_IMODE(source_stat.st_mode))
+        os.utime(destination_fd, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        with contextlib.suppress(OSError):
+            for attribute in os.listxattr(source_fd):
+                with contextlib.suppress(OSError):
+                    os.setxattr(destination_fd, attribute, os.getxattr(source_fd, attribute))
+    except BaseException:
+        if destination_fd is not None:
+            os.close(destination_fd)
+            destination_fd = None
+            _remove_entry_at(destination_parent_fd, destination_name)
+        raise
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(source_fd)
+
+
+def _symlink_target_relative(relative: str, link_text: str) -> str:
+    """Return a lexically confined target name for a copied relative symlink."""
+    if Path(link_text).is_absolute():
+        raise RuntimeError(f"workspace symlink escapes workspace root: {relative}")
+    target = Path(os.path.normpath(str(Path(relative).parent / link_text))).as_posix()
+    try:
+        _relative_parts(target)
+    except ValueError as exc:
+        raise RuntimeError(f"workspace symlink escapes workspace root: {relative}") from exc
+    return target
+
+
+def _copy_overlay_entry(real_root: Path, sweep_root: Path, relative: str) -> None:
+    """Copy a confined source to an anchored, no-follow destination."""
+    try:
+        with _parent_directory_fd(real_root, relative, create=False) as (source_parent_fd, source_name):
+            source_stat = os.stat(source_name, dir_fd=source_parent_fd, follow_symlinks=False)
+            with _parent_directory_fd(sweep_root, relative, create=True) as (destination_parent_fd, destination_name):
+                if stat.S_ISLNK(source_stat.st_mode):
+                    link_text = os.readlink(source_name, dir_fd=source_parent_fd)
+                    target_relative = _symlink_target_relative(relative, link_text)
+                    confined_path(real_root, target_relative, must_exist=True)
+                    confined_path(sweep_root, target_relative, must_exist=True)
+                    _remove_entry_at(destination_parent_fd, destination_name)
+                    os.symlink(link_text, destination_name, dir_fd=destination_parent_fd)
+                else:
+                    _copy_regular_file_at(
+                        source_parent_fd,
+                        source_name,
+                        destination_parent_fd,
+                        destination_name,
+                    )
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"unsafe workspace destination: {relative}: {exc}") from exc
+
+
+def _delete_overlay_entry(sweep_root: Path, relative: str) -> None:
+    """Delete a destination entry without following parent or final symlinks."""
+    try:
+        with _parent_directory_fd(sweep_root, relative, create=False) as (parent_fd, name):
+            _remove_entry_at(parent_fd, name)
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"unsafe workspace destination: {relative}: {exc}") from exc
 
 
 def _sha256(path: Path) -> str:
@@ -225,7 +352,6 @@ def _apply_overlay_changes(
     for change in changes:
         try:
             source = confined_path(real_root, change.path, must_exist=change.action == "copy")
-            destination = confined_path(sweep_root, change.path, must_exist=False)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         resolved_source = source.resolve(strict=False)
@@ -235,11 +361,9 @@ def _apply_overlay_changes(
             raise RuntimeError(f"nested registered worktree cannot be overlaid: {change.path}")
 
         if change.action == "copy":
-            _replace_with_overlay_copy(source, destination, sweep_root)
-        elif destination.is_symlink() or destination.is_file():
-            destination.unlink()
-        elif destination.exists():
-            shutil.rmtree(destination)
+            _copy_overlay_entry(real_root, sweep_root, change.path)
+        else:
+            _delete_overlay_entry(sweep_root, change.path)
 
 
 def detached_head_workspace(
@@ -247,7 +371,19 @@ def detached_head_workspace(
     targets: tuple[str, ...],
     excluded_outputs: tuple[Path, ...],
 ) -> contextlib.AbstractContextManager[MutationWorkspace]:
-    """Create a detached mutation workspace and dispose it on context exit."""
+    """Create a detached mutation workspace and dispose it on context exit.
+
+    Args:
+        real_root: Source working tree whose current state is overlaid.
+        targets: Repository-relative regular files selected for mutation.
+        excluded_outputs: Source paths that must never be copied into the workspace.
+
+    Returns:
+        A context manager yielding the detached, overlaid mutation workspace.
+
+    Raises:
+        RuntimeError: If Git, overlay validation, baseline capture, or cleanup fails.
+    """
 
     @contextlib.contextmanager
     def workspace_context() -> Iterator[MutationWorkspace]:
@@ -263,13 +399,13 @@ def detached_head_workspace(
         head = head_result.stdout.decode("ascii").strip()
 
         sweep_root = Path(tempfile.mkdtemp(prefix="vntyper-mutation-")).resolve(strict=True)
-        add_result = subprocess.run(
-            ["git", "worktree", "add", "--detach", str(sweep_root), head],
-            cwd=resolved_real_root,
-            capture_output=True,
-            check=False,
-        )
         try:
+            add_result = subprocess.run(
+                ["git", "worktree", "add", "--detach", str(sweep_root), head],
+                cwd=resolved_real_root,
+                capture_output=True,
+                check=False,
+            )
             if add_result.returncode != 0:
                 raise RuntimeError(add_result.stderr.decode("utf-8", errors="replace").strip())
             disposable_head_result = subprocess.run(
@@ -338,12 +474,15 @@ def detached_head_workspace(
                 baseline_digests=baseline_digests,
             )
         finally:
-            remove_result = subprocess.run(
-                ["git", "worktree", "remove", "--force", str(sweep_root)],
-                cwd=resolved_real_root,
-                capture_output=True,
-                check=False,
-            )
+            try:
+                remove_result = subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(sweep_root)],
+                    cwd=resolved_real_root,
+                    capture_output=True,
+                    check=False,
+                )
+            except (OSError, KeyboardInterrupt) as exc:
+                raise RuntimeError(f"orphaned worktree: {sweep_root}: cleanup command failed: {exc}") from exc
             if remove_result.returncode != 0:
                 stderr = remove_result.stderr.decode("utf-8", errors="replace").strip()
                 raise RuntimeError(f"orphaned worktree: {sweep_root}: {stderr}")
@@ -367,15 +506,7 @@ def confined_path(root: Path, relative: str, *, must_exist: bool) -> Path:
     Raises:
         ValueError: If the name is unsafe, escapes the root, or must exist but does not.
     """
-    candidate = Path(relative)
-    if (
-        relative in {"", "."}
-        or candidate.is_absolute()
-        or candidate.as_posix() != relative
-        or ".." in candidate.parts
-        or ".git" in candidate.parts
-    ):
-        raise ValueError(f"unsafe workspace path: {relative}")
+    candidate = Path(*_relative_parts(relative))
     resolved_root = root.resolve()
     lexical = resolved_root / candidate
     try:
