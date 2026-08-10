@@ -591,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--samtools", default="samtools")
     parser.add_argument("--limit", type=int, default=None, help="derive only the first N, for a smoke run")
     parser.add_argument("--data-config", type=Path, default=DEFAULT_DATA_CONFIG)
+    parser.add_argument("--reference-fasta", type=Path, default=DEFAULT_REFERENCE_COMPRESSED_FASTA, help="hg19 FASTA")
     parser.add_argument("--all", action="store_true", help="derive every discovered BAM, for the golden cohort")
     args = parser.parse_args(argv)
 
@@ -614,7 +615,7 @@ def main(argv: list[str] | None = None) -> int:
     reference_compressed = derive_reference_compressed_cram(
         args.samtools,
         DEFAULT_REFERENCE_COMPRESSED_SOURCE,
-        DEFAULT_REFERENCE_COMPRESSED_FASTA,
+        args.reference_fasta,
         args.fixture_root,
     )
     build_reference_dependent_fixture(args.fixture_root)

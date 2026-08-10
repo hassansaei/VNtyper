@@ -88,6 +88,97 @@ def _registered_digest(
     return "normalized-record-digest", 34_214
 
 
+def _prepare_main_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    data_config = _touch(tmp_path / "test_data_config.json", "{}")
+    return data_root, data_config, tmp_path / "cram"
+
+
+@pytest.mark.parametrize(
+    ("reference_args", "expected_reference"),
+    [
+        ([], generator.DEFAULT_REFERENCE_COMPRESSED_FASTA),
+        (
+            ["--reference-fasta", "/opt/vntyper/reference/alignment/chr1.hg19.fa"],
+            Path("/opt/vntyper/reference/alignment/chr1.hg19.fa"),
+        ),
+    ],
+)
+def test_main_forwards_selected_reference_fasta_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference_args: list[str],
+    expected_reference: Path,
+) -> None:
+    data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
+    derive = mock.Mock(return_value=mock.Mock(as_manifest_entry=dict))
+    summary = mock.Mock(fixtures=[mock.sentinel.fixture], skipped=[], total_cram_bytes=1, total_source_bytes=1)
+    monkeypatch.setattr(generator, "build_fixtures", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr(generator, "derive_reference_compressed_cram", derive)
+    monkeypatch.setattr(generator, "build_reference_dependent_fixture", lambda _root: None)
+    monkeypatch.setattr(generator, "build_placed_flag12_fixture", lambda _root: None)
+    monkeypatch.setattr(generator, "build_indexed_safe_fixture", lambda _root: None)
+    monkeypatch.setattr(generator, "write_manifest", lambda *_args, **_kwargs: None)
+
+    exit_code = generator.main(
+        [
+            "--data-root",
+            str(data_root),
+            "--data-config",
+            str(data_config),
+            "--fixture-root",
+            str(fixture_root),
+            *reference_args,
+        ]
+    )
+
+    assert exit_code == 0
+    assert derive.call_args.args == (
+        "samtools",
+        generator.DEFAULT_REFERENCE_COMPRESSED_SOURCE,
+        expected_reference,
+        fixture_root,
+    )
+
+
+@pytest.mark.parametrize(
+    ("reference_value", "error", "message"),
+    [
+        (None, FileNotFoundError, "does not exist"),
+        (">chr1\nA\n", ValueError, "SHA-256 mismatch"),
+    ],
+)
+def test_main_rejects_explicit_missing_or_invalid_reference_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reference_value: str | None,
+    error: type[Exception],
+    message: str,
+) -> None:
+    data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
+    reference = tmp_path / "explicit-reference.fa"
+    if reference_value is not None:
+        reference.write_text(reference_value, encoding="utf-8")
+    monkeypatch.setattr(generator, "build_fixtures", lambda *_args, **_kwargs: generator.Summary())
+
+    with pytest.raises(error, match=message):
+        generator.main(
+            [
+                "--data-root",
+                str(data_root),
+                "--data-config",
+                str(data_config),
+                "--fixture-root",
+                str(fixture_root),
+                "--reference-fasta",
+                str(reference),
+            ]
+        )
+
+    assert not fixture_root.exists()
+
+
 def test_normalized_digest_builds_the_explicit_indexed_query(monkeypatch: pytest.MonkeyPatch) -> None:
     record = "read-1\t0\tchr1\t155160500\t60\t4M\t*\t0\t0\tACGT\tIIII\tNM:i:0\tAS:i:4\n"
     popen = mock.Mock(return_value=_DigestProcess(record))
