@@ -160,6 +160,14 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
         all_files = zip_ref.namelist()
         logger.info(f"Archive contains {len(all_files)} entries")
 
+        # Validate the archive's original names before any dominant-prefix
+        # normalization. Otherwise a one-entry ``../name`` or ``/name`` archive
+        # can have its unsafe component stripped and appear confined afterward.
+        for name in all_files:
+            original_member = Path(name)
+            if original_member.is_absolute() or ".." in original_member.parts:
+                raise ValueError(f"archive member escapes extraction directory: {name}")
+
         # List first few files for debugging
         logger.info("First 10 entries in archive:")
         for i, name in enumerate(all_files[:10]):

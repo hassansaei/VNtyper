@@ -67,7 +67,10 @@ def test_extract_archive_preserves_safe_empty_directories_in_every_layout(tmp_pa
     assert expected.is_dir()
 
 
-@pytest.mark.parametrize("member", ["data/../../escaped", "data/link/payload"])
+@pytest.mark.parametrize(
+    "member",
+    ["../escaped", "/absolute", "data/../../escaped", "data/link/payload"],
+)
 def test_extract_archive_rejects_members_that_escape_destination(tmp_path: Path, member: str) -> None:
     archive = tmp_path / "data.zip"
     output = tmp_path / "out"
@@ -79,6 +82,8 @@ def test_extract_archive_rejects_members_that_escape_destination(tmp_path: Path,
     with pytest.raises(ValueError, match="archive member escapes extraction directory"):
         dtd.extract_archive(archive, output)
     assert not (tmp_path / "escaped").exists()
+    assert not (output / "escaped").exists()
+    assert not (output / "absolute").exists()
     assert not (tmp_path / "outside/payload").exists()
 
 
