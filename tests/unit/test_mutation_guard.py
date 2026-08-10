@@ -1,13 +1,4 @@
-"""
-Unit tests for ``scripts/mutation_guard.py``, the mutation harness's working-tree guard.
-
-The harness rewrites production source in place and restores whatever it read at the
-start, so it is only correct on a clean tree. This module is what enforces that, and the
-property worth pinning hardest is negative: **no message it produces may name a command
-that discards uncommitted work**. The one moment a user reads these messages is the
-moment their own edits are on the line, and the harness's previous advice - ``git
-checkout --`` - would have deleted exactly the work it was misdiagnosing.
-"""
+"""Unit tests for the mutation harness's selected-target and output guards."""
 
 import subprocess
 import sys
@@ -244,6 +235,23 @@ def test_the_refusal_says_the_tree_was_left_alone() -> None:
 
     assert "Nothing has been modified." in message
     assert message.startswith("ERROR:")
+
+
+def test_indeterminate_refusal_names_the_two_guarded_boundaries() -> None:
+    """Unknown Git state must not be confused with real-source mutation."""
+    message = mutation_guard.format_indeterminate_refusal("git unavailable")
+
+    assert "cannot verify selected targets and requested outputs" in message
+    assert "rewrites production source in place" not in message
+
+
+def test_dirty_refusal_explains_why_targets_and_outputs_must_be_clean() -> None:
+    """The refusal distinguishes snapshot identity from real-output replacement."""
+    message = mutation_guard.format_dirty_tree_refusal(["vntyper/scripts/scoring.py"])
+
+    assert "selected targets define the committed measurement baseline" in message
+    assert "requested outputs are replaced in the real checkout" in message
+    assert "rewrites each target in place" not in message
 
 
 def test_the_unrestored_warning_points_at_a_read_only_inspection() -> None:

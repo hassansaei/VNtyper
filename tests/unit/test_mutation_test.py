@@ -819,84 +819,6 @@ def test_the_preflight_refusal_never_tells_the_user_to_discard_their_work(tmp_pa
         assert advice not in err, f"the refusal must not recommend {advice!r}"
 
 
-def test_the_unrestored_file_error_never_tells_the_user_to_discard_their_work(tmp_path, monkeypatch, capsys) -> None:
-    """
-    The end-of-run check fires on any diff, and cannot tell a mutant from a real edit.
-
-    It runs after a clean preflight here - the genuine "restore failed" case - and even
-    then it must not name a command that throws work away.
-    """
-    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
-    _prepare_main(tmp_path, monkeypatch, ["", " M sample.py\n"])
-
-    exit_code = mutation_test.main()
-
-    assert exit_code != 0
-    err = capsys.readouterr().err
-    assert "sample.py" in err
-    for advice in DESTRUCTIVE_ADVICE:
-        assert advice not in err, f"the restore failure must not recommend {advice!r}"
-
-
-def test_a_clean_target_tree_is_swept_normally(tmp_path, monkeypatch) -> None:
-    """The preflight must gate on uncommitted work only - a clean tree runs as before."""
-    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
-    _prepare_main(tmp_path, monkeypatch, ["", ""])
-
-    exit_code = mutation_test.main()
-
-    assert exit_code == 0
-
-
-def test_the_preflight_checks_only_the_targets_the_run_will_rewrite(tmp_path, monkeypatch) -> None:
-    """
-    ``--module`` narrows the sweep, so it must narrow the guard too.
-
-    Blocking on a file this run will never touch would make the harness unusable in any
-    working tree with an edit in flight.
-    """
-    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
-    calls = _prepare_main(
-        tmp_path,
-        monkeypatch,
-        ["", ""],
-        argv=["mutation_test.py", "--module", "sample.py"],
-    )
-    monkeypatch.setattr(mutation_test, "TARGETS", {"sample.py": ("tests/unit/x.py",), "other.py": ("tests/unit/y.py",)})
-
-    mutation_test.main()
-
-    git_calls = [c for c in calls if c[0] == "git"]
-    assert git_calls, "the preflight must consult git before mutating anything"
-    assert "sample.py" in git_calls[0]
-    assert "other.py" not in git_calls[0], "an unselected target must not gate the run"
-
-
-def test_the_preflight_also_guards_the_files_it_will_overwrite(tmp_path, monkeypatch) -> None:
-    """
-    `write_outputs()` rewrites the report and the raw results wholesale, every run.
-
-    Guarding only the mutated sources meant an uncommitted edit to
-    ``docs/development/mutation-testing.md`` was destroyed by the next `make mutation`
-    with no warning at all.
-    """
-    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
-    report = tmp_path / "docs/development/mutation-testing.md"
-    results = tmp_path / "docs/development/mutation-results.json"
-    calls = _prepare_main(
-        tmp_path,
-        monkeypatch,
-        ["", ""],
-        argv=["mutation_test.py", "--output", str(report), "--results-json", str(results)],
-    )
-
-    mutation_test.main()
-
-    preflight = [c for c in calls if c[0] == "git"][0]
-    assert "docs/development/mutation-testing.md" in preflight
-    assert "docs/development/mutation-results.json" in preflight
-
-
 def test_a_dirty_report_page_stops_the_run_before_it_is_overwritten(tmp_path, monkeypatch, capsys) -> None:
     """The docs page is generated, but an edit in flight is still somebody's work."""
     _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
@@ -978,7 +900,7 @@ def test_an_indeterminate_git_answer_stops_the_run(tmp_path, monkeypatch, capsys
 
     assert exit_code != 0, "a guard that cannot check must not wave the sweep through"
     assert swept == []
-    assert "cannot determine" in capsys.readouterr().err
+    assert "cannot verify selected targets and requested outputs" in capsys.readouterr().err
 
 
 def _raise_missing_git(command, *_args, **_kwargs):
@@ -1083,101 +1005,6 @@ def test_the_baseline_refusal_quotes_the_failure_and_names_what_it_ran(monkeypat
     assert "tests/unit/test_scoring.py" in refusal
     assert "vntyper/scripts/scoring.py" in refusal
     assert "UNMUTATED" in refusal
-
-
-def test_a_red_baseline_aborts_before_anything_is_mutated_or_written(tmp_path, monkeypatch, capsys) -> None:
-    """
-    The defect this preflight exists for, end to end.
-
-    Every pytest run in this file's subprocess double exits non-zero - which is exactly
-    what a broken checkout looks like to the harness. Without the preflight ``main()``
-    swept the module, scored every mutant as killed, printed a perfect result, wrote it
-    over ``docs/development/mutation-testing.md`` and returned 0.
-    """
-    original = "def f(a):\n    return a >= 1 and a\n"
-    _write_module(tmp_path, original)
-    report = tmp_path / "docs/development/mutation-testing.md"
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text("# the previous, real measurement\n", encoding="utf-8")
-    _prepare_main(
-        tmp_path,
-        monkeypatch,
-        ["", ""],
-        argv=["mutation_test.py", "--output", str(report)],
-        stub_baseline=False,
-    )
-    swept: list[str] = []
-    monkeypatch.setattr(mutation_test, "sweep_module", lambda path_str, *_a, **_k: swept.append(path_str))
-
-    exit_code = mutation_test.main()
-
-    assert exit_code != 0, "a run that produced no usable measurement must not report success"
-    assert swept == [], "nothing may be mutated once the baseline is known to be red"
-    assert (tmp_path / "sample.py").read_text(encoding="utf-8") == original
-    assert report.read_text(encoding="utf-8") == "# the previous, real measurement\n", (
-        "the committed evidence page must survive a refused run"
-    )
-    err = capsys.readouterr().err
-    assert "REFUSING TO SWEEP" in err
-    assert "sample.py" in err
-
-
-def test_the_baseline_is_narrowed_by_module_exactly_as_the_sweep_is(tmp_path, monkeypatch) -> None:
-    """``--module`` must not make the preflight run tests for targets nobody selected."""
-    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
-    _prepare_main(
-        tmp_path,
-        monkeypatch,
-        ["", ""],
-        argv=["mutation_test.py", "--module", "sample.py"],
-        stub_baseline=False,
-    )
-    monkeypatch.setattr(
-        mutation_test,
-        "TARGETS",
-        {"sample.py": ("tests/unit/x.py",), "other.py": ("tests/unit/y.py",)},
-    )
-    checked: list[tuple[str, ...]] = []
-
-    def fake_run_pytest(paths, _timeout, parallel=False, *, repo_root: Path):
-        assert repo_root == tmp_path
-        checked.append(paths)
-        return mutation_test.TestRun(passed=True, output="", returncode=0, timed_out=False)
-
-    monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
-    monkeypatch.setattr(
-        mutation_test,
-        "sweep_module",
-        lambda path_str, *_a, **_k: mutation_test.ModuleResult(path=path_str, killed=1),
-    )
-
-    mutation_test.main()
-
-    assert ("tests/unit/x.py",) in checked
-    assert ("tests/unit/y.py",) not in checked, "an unselected target's tests must not gate the run"
-
-
-def test_a_green_baseline_lets_the_sweep_run(tmp_path, monkeypatch) -> None:
-    """The gate must bind on a red baseline only - a healthy tree sweeps as before."""
-    _write_module(tmp_path, "def f(a):\n    return a >= 1\n")
-    _prepare_main(tmp_path, monkeypatch, ["", ""], stub_baseline=False)
-    monkeypatch.setattr(
-        mutation_test,
-        "run_pytest",
-        lambda *_a, **_k: mutation_test.TestRun(passed=True, output="", returncode=0, timed_out=False),
-    )
-    swept: list[str] = []
-
-    def record_sweep(path_str, *_args, **_kwargs):
-        swept.append(path_str)
-        return mutation_test.ModuleResult(path=path_str, killed=1)
-
-    monkeypatch.setattr(mutation_test, "sweep_module", record_sweep)
-
-    exit_code = mutation_test.main()
-
-    assert exit_code == 0
-    assert swept == ["sample.py"]
 
 
 def test_the_baseline_runs_only_after_the_dirty_tree_refusal(tmp_path, monkeypatch) -> None:

@@ -109,6 +109,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -118,13 +119,16 @@ import subprocess
 import sys
 import time
 import tokenize
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import FrameType
+from typing import NoReturn
 
-from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning, writable_paths
+from mutation_guard import dirty_paths, format_dirty_tree_refusal, writable_paths
 from mutation_output import atomic_write_text, validate_disjoint_paths
 from mutation_source import WorkspaceRoot, atomic_replace_source, read_source_bytes
+from mutation_workspace import detached_head_workspace, verify_import_provenance
 from mutation_workspace_fs import git_capability_path, using_root_capability
 
 REAL_REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1299,6 +1303,56 @@ def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> 
     return format_dirty_tree_refusal(dirty) if dirty else None
 
 
+def _real_target_digests(real_root: Path, targets: Mapping[str, object]) -> dict[str, str]:
+    """Capture SHA-256 digests for exactly the selected real-checkout targets.
+
+    Args:
+        real_root: Immutable real repository root.
+        targets: Selected repository-relative mutation targets.
+
+    Returns:
+        A target-to-digest mapping captured before workspace creation.
+
+    Raises:
+        OSError: If a selected target cannot be read.
+        RuntimeError: If a selected target is not a regular file.
+    """
+    return {relative: hashlib.sha256(read_source_bytes(real_root, relative)).hexdigest() for relative in targets}
+
+
+def _verify_real_target_digests(real_root: Path, expected: Mapping[str, str]) -> None:
+    """Require selected real-checkout targets to retain their startup bytes.
+
+    Args:
+        real_root: Immutable real repository root.
+        expected: Target digests captured before workspace creation.
+
+    Raises:
+        OSError: If a selected target cannot be read.
+        RuntimeError: If a target is not regular or its bytes changed.
+    """
+    for relative, expected_digest in expected.items():
+        current_digest = hashlib.sha256(read_source_bytes(real_root, relative)).hexdigest()
+        if current_digest != expected_digest:
+            raise RuntimeError(f"real mutation target changed during sweep: {relative}")
+
+
+def _terminate(signum: int, _frame: FrameType | None) -> NoReturn:
+    """Convert a catchable termination signal into the common unwind path."""
+    raise KeyboardInterrupt(f"terminated by signal {signum}")
+
+
+def _install_signal_handlers() -> tuple[int, ...]:
+    """Install cleanup-aware handlers without replacing Python's SIGINT behavior."""
+    registered: list[int] = []
+    for name in ("SIGTERM", "SIGHUP", "SIGQUIT"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            signal.signal(signum, _terminate)
+            registered.append(signum)
+    return tuple(registered)
+
+
 def main() -> int:
     """
     Run the mutation sweep and print the report.
@@ -1341,9 +1395,9 @@ def main() -> int:
         if refusal is not None:
             print(refusal, file=sys.stderr)
             return 1
-        results, elapsed = results_from_dict(json.loads(render_input.read_text(encoding="utf-8")))
-        print(format_report(results, elapsed))
-        write_outputs(results, elapsed, output, None)
+        render_results, elapsed = results_from_dict(json.loads(render_input.read_text(encoding="utf-8")))
+        print(format_report(render_results, elapsed))
+        write_outputs(render_results, elapsed, output, None)
         return 0
 
     targets = {p: t for p, t in TARGETS.items() if not args.module or args.module in p}
@@ -1371,56 +1425,62 @@ def main() -> int:
         print(refusal, file=sys.stderr)
         return 1
 
-    # SIGINT already unwinds through the `finally` in sweep_module() as a
-    # KeyboardInterrupt, but SIGTERM terminates the interpreter outright - which would
-    # leave a MUTATED MODULE ON DISK in a repo someone is about to commit from.
-    # Turning it into an exception makes both paths restore.
-    def _terminate(signum, _frame):
-        raise KeyboardInterrupt(f"terminated by signal {signum}")
-
-    signal.signal(signal.SIGTERM, _terminate)
-
-    # Before anything else. See the `.pyc` warning in the module docstring: a stale
-    # cache from an earlier sweep is enough on its own to make every mutant "survive".
-    removed = clear_bytecode_caches(REAL_REPO_ROOT / "vntyper")
-    print(f"Cleared {removed} __pycache__ directories before starting.")
-
-    # A mutant is "killed" whenever pytest exits non-zero, so a suite that is already red
-    # scores every mutant as a kill and publishes a fictional 100%. Prove the tests pass
-    # on the unmutated tree first, using the same invocations the sweep will use. This
-    # runs AFTER the cache clear so the baseline is measured under the same conditions
-    # the mutants will be, and BEFORE `time.monotonic()` so its cost is not reported as
-    # sweep duration.
-    print("Checking the baseline: the tests must pass on the UNMUTATED tree.")
-    refusal = baseline_refusal(targets, args.timeout, repo_root=REAL_REPO_ROOT)
-    if refusal is not None:
-        print(f"\n{refusal}", file=sys.stderr)
-        return 1
-
-    start = time.monotonic()
-    results = [sweep_module(p, t, args.timeout, args.verbose, repo_root=REAL_REPO_ROOT) for p, t in targets.items()]
-    elapsed = time.monotonic() - start
-
-    print()
-    print(format_report(results, elapsed))
-    write_outputs(results, elapsed, output, results_json)
-
-    # This harness rewrites production source in place, so it ends by proving it put
-    # everything back. A restore that silently failed would otherwise be discovered by
-    # someone committing a mutant. The preflight above is what makes this check
-    # meaningful: the tree was clean when the sweep started, so anything dirty now came
-    # from the sweep rather than from the maintainer.
+    status = 0
+    real_digests: dict[str, str] | None = None
     try:
-        unrestored = dirty_paths(REAL_REPO_ROOT, targets)
-    except RuntimeError as exc:
-        # git answered before the sweep and cannot now. The sources may hold a mutant and
-        # nothing here can prove otherwise, so say so rather than exit 0.
+        real_digests = _real_target_digests(REAL_REPO_ROOT, targets)
+        _install_signal_handlers()
+        excluded_outputs = tuple(path for path in (output, results_json) if path is not None)
+        with detached_head_workspace(REAL_REPO_ROOT, tuple(targets), excluded_outputs) as workspace:
+            print(f"Captured HEAD: {workspace.head}")
+            print(f"Disposable worktree: {workspace.sweep_root}")
+            verify_import_provenance(workspace, tuple(targets))
+            execution_root = workspace.root_capability or workspace.sweep_root
+
+            with using_root_capability(execution_root) as capability:
+                removed = clear_bytecode_caches(git_capability_path(capability) / "vntyper")
+            print(f"Cleared {removed} __pycache__ directories before starting.")
+
+            print("Checking the baseline: the tests must pass on the UNMUTATED tree.")
+            refusal = baseline_refusal(targets, args.timeout, repo_root=execution_root)
+            if refusal is not None:
+                raise RuntimeError(refusal)
+
+            refusal = canary_refusal(args.timeout, repo_root=execution_root)
+            if refusal is not None:
+                raise RuntimeError(refusal)
+            print("Known-killed canary: killed (scoped)")
+            workspace.verify_baseline()
+
+            start = time.monotonic()
+            results: list[ModuleResult] = []
+            for path_str, scoped_tests in targets.items():
+                results.append(
+                    sweep_module(
+                        path_str,
+                        scoped_tests,
+                        args.timeout,
+                        args.verbose,
+                        repo_root=execution_root,
+                    )
+                )
+                workspace.verify_baseline()
+            elapsed = time.monotonic() - start
+
+            print()
+            print(format_report(results, elapsed))
+            write_outputs(results, elapsed, output, results_json)
+    except (RuntimeError, OSError, KeyboardInterrupt) as exc:
         print(f"\n{exc}", file=sys.stderr)
-        return 1
-    if unrestored:
-        print(f"\n{format_unrestored_warning(unrestored)}", file=sys.stderr)
-        return 1
-    return 0
+        status = 1
+    finally:
+        if real_digests is not None:
+            try:
+                _verify_real_target_digests(REAL_REPO_ROOT, real_digests)
+            except (RuntimeError, OSError, KeyboardInterrupt) as exc:
+                print(f"\n{exc}", file=sys.stderr)
+                status = 1
+    return status
 
 
 if __name__ == "__main__":

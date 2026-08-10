@@ -1,28 +1,21 @@
 """
 Working-tree guards for the advisory mutation harness.
 
-``mutation_test.py`` rewrites production source **in place**: it reads a target file,
-writes one mutant after another over it, and finally writes back the text it read at
-the start. That contract is only safe on a clean tree, because the text it read at the
-start is whatever happened to be on disk - not what is committed. Sweeping a tree with
-an uncommitted edit in a target file therefore goes wrong three ways at once:
-
-* the published score and the committed evidence page describe **uncommitted** code
-  while presenting it as the committed baseline;
-* the end-of-sweep "is everything back?" check sees the maintainer's own edit and
-  reports it as a failed restoration; and
-* whatever that error suggests doing about it is aimed at code the harness never
-  touched.
+``mutation_test.py`` mutates only a disposable detached worktree. Selected real targets
+must nevertheless be clean: their committed bytes define the measurement identity,
+while ordinary dirty non-target source and tests are safely overlaid into the disposable
+snapshot. This keeps a selected target's reported score tied to the captured commit.
 
 The generated files are in the same position. ``write_outputs()`` rewrites
 ``docs/development/mutation-testing.md`` and the raw results wholesale, on every run
 including ``--render-only``, so an uncommitted edit to either is simply overwritten. They
 are guarded alongside the sources; see :func:`writable_paths`.
 
-This module holds what follows from that: listing what a run would write, asking git
-which of those are dirty, and wording the three failures. All of it is separated from the
-harness because it is the part a test can drive without a sweep - the parsing and the
-messages are pure, and the one subprocess call has a single well-defined command.
+This module holds what follows from that: listing selected targets and requested real
+outputs, asking Git which of those are dirty, and wording the refusal. All of it is
+separated from the harness because it is the part a test can drive without a sweep - the
+parsing and messages are pure, and the one subprocess call has a single well-defined
+command.
 
 The guard **fails closed**. When git cannot answer, :func:`dirty_paths` raises rather than
 assuming the tree is clean: unknown is not clean, and the asymmetry is total - refusing
@@ -75,17 +68,16 @@ def parse_porcelain(output: str) -> list[str]:
 
 def writable_paths(repo_root: Path, targets: Iterable[str], outputs: Iterable[Path | None]) -> list[str]:
     """
-    List every repo-relative path a run would write, sources and generated files alike.
+    List every repo-relative path whose clean state a run requires.
 
-    The sweep rewrites its mutation targets, and ``write_outputs()`` overwrites the
-    report and the raw results unconditionally - including on ``--render-only``, which
-    rewrites the docs page without mutating anything. Guarding only the sources therefore
-    left an uncommitted edit to ``docs/development/mutation-testing.md`` to be destroyed
-    by the next ``make mutation``.
+    Selected targets define the committed measurement baseline. ``write_outputs()``
+    replaces the report and raw results unconditionally - including on
+    ``--render-only``. Guarding both boundaries prevents either an ambiguous measurement
+    or loss of an uncommitted output edit.
 
     Args:
         repo_root (Path): Repository root. Outputs are expressed relative to it.
-        targets (Iterable[str]): Repo-relative source paths the sweep will mutate.
+        targets (Iterable[str]): Repo-relative sources defining the measurement.
         outputs (Iterable[Path | None]): Output destinations, ``None`` for the ones this
             run was not asked to write.
 
@@ -117,14 +109,13 @@ def format_indeterminate_refusal(reason: str) -> str:
         str: A message giving the reason and saying that nothing was touched.
     """
     return (
-        "ERROR: refusing to start - cannot determine whether the working tree is clean:\n"
+        "ERROR: refusing to start - cannot verify selected targets and requested outputs:\n"
         f"  {reason}\n"
         "\n"
-        "The sweep rewrites production source in place and puts back the text it read at\n"
-        "the start, and it overwrites the generated report, so it is only safe on a clean\n"
-        "tree. Without an answer from git that precondition cannot be established, and\n"
-        "assuming the tree is clean is the assumption whose cost is somebody's uncommitted\n"
-        "work. Run inside a git working tree, with git on PATH.\n"
+        "Selected targets define the committed measurement baseline, and requested\n"
+        "outputs are replaced in the real checkout after measurement. Without an answer\n"
+        "from Git those two preconditions cannot be established. Run inside a Git working\n"
+        "tree, with Git on PATH.\n"
         "Nothing has been modified."
     )
 
@@ -180,27 +171,20 @@ def format_dirty_tree_refusal(dirty: Sequence[str]) -> str:
     """
     listed = "\n".join(f"  {path}" for path in dirty)
     return (
-        "ERROR: refusing to start - these files the run would overwrite have uncommitted\n"
+        "ERROR: refusing to start - selected targets or requested outputs have uncommitted\n"
         "changes:\n"
         f"{listed}\n"
         "\n"
-        "The sweep rewrites each target in place and puts back the text it read at the\n"
-        "start, so running it now would measure and publish uncommitted code as the\n"
-        "committed baseline, and would then report your own edit as a failed restore.\n"
-        "The generated report and results are rewritten wholesale, so an uncommitted edit\n"
-        "to either is simply lost.\n"
+        "The selected targets define the committed measurement baseline used by the\n"
+        "detached worktree. The requested outputs are replaced in the real checkout after\n"
+        "measurement, so an uncommitted output edit would be lost.\n"
         "Commit or stash these changes and re-run. Nothing has been modified."
     )
 
 
 def format_unrestored_warning(dirty: Sequence[str]) -> str:
     """
-    Word the end-of-sweep failure where a target was left differing from the tree.
-
-    The tree was verified clean before the sweep, so a difference here is a mutant the
-    harness failed to put back. The message still stops short of prescribing a command:
-    it cannot prove the diff is only the mutant, and the cost of being wrong is somebody
-    else's work.
+    Word a real-target integrity failure without prescribing destructive recovery.
 
     Args:
         dirty (Sequence[str]): Target paths that still differ.
@@ -210,10 +194,10 @@ def format_unrestored_warning(dirty: Sequence[str]) -> str:
     """
     listed = "\n".join(f"  {path}" for path in dirty)
     return (
-        "ERROR: the sweep may not have restored these files:\n"
+        "ERROR: selected real source changed while the isolated sweep ran:\n"
         f"{listed}\n"
         "\n"
-        "They were clean when the sweep started, so the difference is most likely a\n"
-        "mutant left on disk. Review it with `git diff -- <path>`, and do not commit,\n"
-        "build, install or package from this tree until you have."
+        "The harness never mutates real production source. Review the concurrent or\n"
+        "unrelated change with `git diff -- <path>`, and do not commit, build, install\n"
+        "or package from this tree until you understand it."
     )
