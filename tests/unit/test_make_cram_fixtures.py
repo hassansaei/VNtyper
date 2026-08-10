@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pysam
 import pytest
@@ -103,6 +104,23 @@ def test_discovery_finds_every_bam_and_excludes_the_fixture_root(tmp_path: Path)
     found = discover_source_bams(data_root, fixture_root)
 
     assert found == [data_root / "a.bam", data_root / "remapped" / "b.bam"]
+
+
+def test_discovery_returns_an_empty_list_when_no_bams_exist(tmp_path: Path) -> None:
+    assert discover_source_bams(tmp_path / "data", tmp_path / "data/cram") == []
+
+
+def test_run_failure_includes_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    completed = subprocess.CompletedProcess(["samtools"], 2, stdout="", stderr="broken index")
+    monkeypatch.setattr(cram_fixtures.subprocess, "run", mock.Mock(return_value=completed))
+    with pytest.raises(RuntimeError, match="samtools exited 2: broken index"):
+        cram_fixtures._run(["samtools"])
+
+
+def test_run_returns_stdout_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    completed = subprocess.CompletedProcess(["samtools"], 0, stdout="record-count\n", stderr="")
+    monkeypatch.setattr(cram_fixtures.subprocess, "run", mock.Mock(return_value=completed))
+    assert cram_fixtures._run(["samtools"]) == "record-count\n"
 
 
 def test_the_direct_script_entry_point_loads_its_sibling_selection_module_without_pythonpath(tmp_path: Path) -> None:
@@ -260,6 +278,12 @@ def test_the_manifest_records_what_was_derived_and_what_was_skipped(tmp_path: Pa
     assert payload["skipped"] == [{"bam": "tests/data/broken.bam", "reason": "truncated"}]
 
 
+def test_manifest_creation_creates_its_parent_directory(tmp_path: Path) -> None:
+    manifest = tmp_path / "nested" / "reports" / "manifest.json"
+    write_manifest(Summary(), manifest)
+    assert json.loads(manifest.read_text(encoding="utf-8"))["fixtures"] == []
+
+
 def test_the_default_deriver_uses_only_bams_declared_in_the_data_config(tmp_path: Path, monkeypatch) -> None:
     """An incidental BAM must not silently enlarge the normal fixture set."""
     data_root = tmp_path / "data"
@@ -295,6 +319,71 @@ def test_the_all_switch_derives_every_discovered_bam(tmp_path: Path, monkeypatch
     cram_fixtures.build_fixtures("samtools", data_root, data_root / "cram", data_config=config, include_all=True)
 
     assert derived == [declared, incidental]
+
+
+def test_select_source_bams_distinguishes_declared_and_all_modes(tmp_path: Path) -> None:
+    data_root = tmp_path / "tests/data"
+    declared = _touch(data_root / "declared.bam")
+    incidental = _touch(data_root / "incidental.bam")
+    config = tmp_path / "tests/test_data_config.json"
+    config.write_text(
+        json.dumps({"file_resources": [{"local_path": "tests/data", "filename": declared.name}]}),
+        encoding="utf-8",
+    )
+    discovered = [declared, incidental]
+
+    assert cram_fixtures._select_source_bams(
+        discovered,
+        data_config=config,
+        data_root=data_root,
+        include_all=False,
+    ) == [declared]
+    assert (
+        cram_fixtures._select_source_bams(
+            discovered,
+            data_config=config,
+            data_root=data_root,
+            include_all=True,
+        )
+        == discovered
+    )
+
+
+def test_build_fixtures_retains_successes_when_a_later_conversion_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "tests/data"
+    good = _touch(data_root / "a-good.bam", "good")
+    bad = _touch(data_root / "b-bad.bam", "bad")
+    config = tmp_path / "tests/test_data_config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "file_resources": [
+                    {"local_path": "tests/data", "filename": good.name},
+                    {"local_path": "tests/data", "filename": bad.name},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    good_fixture = Fixture(good, data_root / "cram/a-good.cram", 7, 2, "digest", 4, 3)
+
+    def derive(_samtools: str, bam: Path, _data_root: Path, _fixture_root: Path) -> Fixture:
+        if bam == bad:
+            raise RuntimeError("conversion failed")
+        return good_fixture
+
+    monkeypatch.setattr(cram_fixtures, "derive_cram", derive)
+    summary = cram_fixtures.build_fixtures(
+        "samtools",
+        data_root,
+        data_root / "cram",
+        data_config=config,
+    )
+
+    assert summary.fixtures == [good_fixture]
+    assert summary.skipped == [(bad, "conversion failed")]
 
 
 def test_a_known_task9_declaration_is_dispatched_without_changing_cram_selection(tmp_path: Path, monkeypatch) -> None:
@@ -598,6 +687,46 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
 
     assert exit_code == 1
+
+
+def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    config = tmp_path / "test_data_config.json"
+    config.write_text("{}", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+
+    def fail_build(*args: object, **kwargs: object) -> Summary:
+        del args, kwargs
+        raise LossyConversionError("not lossless")
+
+    monkeypatch.setattr(cram_fixtures, "build_fixtures", fail_build)
+    with pytest.raises(LossyConversionError, match="not lossless"):
+        cram_fixtures.main(
+            [
+                "--data-root",
+                str(data_root),
+                "--data-config",
+                str(config),
+                "--manifest",
+                str(manifest),
+            ]
+        )
+    assert not manifest.exists()
+
+
+@pytest.mark.parametrize("missing", ["data", "config"])
+def test_main_returns_one_when_required_input_is_missing(tmp_path: Path, missing: str) -> None:
+    data_root = tmp_path / "data"
+    config = tmp_path / "test_data_config.json"
+    if missing != "data":
+        data_root.mkdir()
+    if missing != "config":
+        config.write_text("{}", encoding="utf-8")
+
+    assert cram_fixtures.main(["--data-root", str(data_root), "--data-config", str(config)]) == 1
 
 
 def test_the_reference_contract_purpose_fixtures_are_registered_with_portable_paths() -> None:

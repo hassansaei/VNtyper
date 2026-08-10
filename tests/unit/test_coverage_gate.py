@@ -98,6 +98,16 @@ def test_read_floor_raises_when_fail_under_is_absent(monkeypatch, tmp_path) -> N
         coverage_gate.read_floor()
 
 
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_read_total_returns_none_for_missing_or_corrupt_coverage_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corrupt: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if corrupt:
+        (tmp_path / ".coverage").write_bytes(b"not a coverage database")
+    assert coverage_gate.read_total() is None
+
+
 def _run_gate(monkeypatch, floor: float, total: float) -> str:
     """Run ``main()`` against a stubbed floor and coverage total.
 
@@ -141,3 +151,63 @@ def test_the_gate_fails_below_the_floor(monkeypatch) -> None:
     monkeypatch.setattr(coverage_gate, "read_total", lambda: 35.0)
     monkeypatch.setattr(sys, "argv", ["coverage_gate.py"])
     assert coverage_gate.main() == 1
+
+
+def test_unreadable_coverage_fails_the_gate(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["coverage_gate.py"])
+    monkeypatch.setattr(coverage_gate, "read_floor", lambda: 86.0)
+    monkeypatch.setattr(coverage_gate, "read_total", lambda: None)
+    assert coverage_gate.main() == 1
+    assert "could not read" in capsys.readouterr().out.lower()
+
+
+def test_total_below_the_soft_target_is_warning_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["coverage_gate.py", "--target", "90", "--ratchet-margin", "100"])
+    monkeypatch.setattr(coverage_gate, "read_floor", lambda: 80.0)
+    monkeypatch.setattr(coverage_gate, "read_total", lambda: 85.0)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    assert coverage_gate.main() == 0
+    output = capsys.readouterr().out
+    assert "Coverage 85.00% is below the 90% target" in output
+    assert "Not a failure" in output
+
+
+def test_write_summary_is_a_noop_without_a_github_summary_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    coverage_gate.write_summary(87.5, 86.0, 90.0)
+    assert not summary.exists()
+
+
+def test_write_summary_appends_exact_github_markdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("existing\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    coverage_gate.write_summary(87.5, 86.0, 90.0)
+
+    assert summary.read_text(encoding="utf-8") == (
+        "existing\n"
+        "### Unit test coverage\n\n"
+        "`███████████████████████████████████░░░░░` **87.50%**\n\n"
+        "| | % |\n| --- | --- |\n"
+        "| Measured | **87.50** |\n"
+        "| Hard floor (CI fails below) | 86 |\n"
+        "| Target | 90 — 🎯 below target |\n\n"
+    )
+
+
+def test_scripts_only_coverage_scope_matches_the_repository_tree() -> None:
+    scripts = sorted(
+        path.relative_to(coverage_gate.REPO_ROOT).as_posix() for path in coverage_gate.REPO_ROOT.glob("scripts/**/*.py")
+    )
+    makefile = (coverage_gate.REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert scripts
+    assert "--cov=scripts" in makefile
+    assert "--cov-omit" not in makefile
+    assert all(path.startswith("scripts/") for path in scripts)
