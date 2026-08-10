@@ -13,6 +13,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ble001_policy_validation import (
+    behavior_node_error,
+    require_count,
+    require_exact_keys,
+    require_non_empty_string,
+    require_relative_path,
+    validate_scope_paths,
+)
+
 TEST_NODE_ID = re.compile(
     r"^tests/unit/(?:[A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_]+\.py"
     r"(?:::[A-Za-z_][A-Za-z0-9_]*)*::test_[A-Za-z_][A-Za-z0-9_]*"
@@ -77,6 +86,8 @@ class Policy:
     reviewed_ruff_version: str
     expected_normal: int
     expected_all: int
+    expected_identities: int
+    expected_categories: tuple[int, int, int]
     handlers: tuple[HandlerPolicy, ...]
     fail_open: tuple[FailOpenPolicy, ...]
 
@@ -103,6 +114,7 @@ def read_ruff_paths(makefile: Path) -> tuple[str, ...]:
     scope = tuple(assignments[0].split())
     if not scope:
         raise ValueError(f"Expected exactly one RUFF_PATHS assignment with at least one path in {makefile}")
+    validate_scope_paths(makefile, scope)
     return scope
 
 
@@ -205,6 +217,7 @@ def measure_ble001(
     command = [ruff_executable, "check", "--no-cache", "--select", "BLE001", "--output-format", "json"]
     if ignore_noqa:
         command.append("--ignore-noqa")
+    command.append("--")
     command.extend(scope)
     try:
         check_result = subprocess.run(
@@ -282,49 +295,69 @@ def load_policy(path: Path) -> Policy:
         raise ValueError(f"Could not parse policy JSON {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("Policy must be a JSON object")
-    _require_exact_keys(
+    require_exact_keys(
         payload,
         {"reviewed_ruff_version", "expected_counts", "handlers", "fail_open"},
         "policy",
     )
 
-    reviewed_version = _require_non_empty_string(payload, "reviewed_ruff_version", "policy")
+    reviewed_version = require_non_empty_string(payload, "reviewed_ruff_version", "policy")
     if RUFF_VERSION.fullmatch(reviewed_version) is None:
         raise ValueError(f"policy.reviewed_ruff_version is malformed: {reviewed_version!r}")
 
     expected_counts = payload["expected_counts"]
     if not isinstance(expected_counts, dict):
         raise ValueError("policy.expected_counts must be an object")
-    _require_exact_keys(expected_counts, {"normal", "ignore_noqa"}, "policy.expected_counts")
-    expected_normal = _require_count(expected_counts, "normal", "policy.expected_counts")
-    expected_all = _require_count(expected_counts, "ignore_noqa", "policy.expected_counts")
+    require_exact_keys(
+        expected_counts,
+        {"normal", "ignore_noqa", "identities", "categories"},
+        "policy.expected_counts",
+    )
+    expected_normal = require_count(expected_counts, "normal", "policy.expected_counts")
+    expected_all = require_count(expected_counts, "ignore_noqa", "policy.expected_counts")
+    expected_identities = require_count(expected_counts, "identities", "policy.expected_counts")
+    raw_categories = expected_counts["categories"]
+    if not isinstance(raw_categories, dict):
+        raise ValueError("policy.expected_counts.categories must be an object")
+    require_exact_keys(raw_categories, {"A", "B", "C"}, "policy.expected_counts.categories")
+    expected_categories = (
+        require_count(raw_categories, "A", "policy.expected_counts.categories"),
+        require_count(raw_categories, "B", "policy.expected_counts.categories"),
+        require_count(raw_categories, "C", "policy.expected_counts.categories"),
+    )
     if expected_normal > expected_all:
         raise ValueError("policy expected normal count cannot exceed ignore_noqa count")
 
     raw_handlers = payload["handlers"]
     if not isinstance(raw_handlers, list):
         raise ValueError("policy.handlers must be an array")
+    if not raw_handlers:
+        raise ValueError("policy.handlers must contain at least one handler")
+    if not expected_normal or not expected_all or not expected_identities:
+        raise ValueError("policy expected normal, ignore_noqa, and identity counts must be strictly positive")
     handlers: list[HandlerPolicy] = []
     handler_keys: set[tuple[str, str]] = set()
     for index, raw_handler in enumerate(raw_handlers):
         context = f"policy.handlers[{index}]"
         if not isinstance(raw_handler, dict):
             raise ValueError(f"{context} must be an object")
-        _require_exact_keys(
+        require_exact_keys(
             raw_handler,
             {"path", "symbol", "normal_count", "all_count", "category", "rationale"},
             context,
         )
-        handler_path = _require_relative_path(raw_handler, "path", context)
-        symbol = _require_non_empty_string(raw_handler, "symbol", context)
-        normal_count = _require_count(raw_handler, "normal_count", context)
-        all_count = _require_count(raw_handler, "all_count", context)
+        handler_path = require_relative_path(raw_handler, "path", context)
+        symbol = require_non_empty_string(raw_handler, "symbol", context)
+        normal_count = require_count(raw_handler, "normal_count", context)
+        all_count = require_count(raw_handler, "all_count", context)
+        if not all_count:
+            raise ValueError(f"{context}.all_count must be strictly positive")
         if normal_count > all_count:
             raise ValueError(f"{context}.normal_count cannot exceed all_count")
-        category = _require_non_empty_string(raw_handler, "category", context)
+        category = require_non_empty_string(raw_handler, "category", context)
         if category not in {"A", "B", "C"}:
             raise ValueError(f"{context}.category must be A, B, or C")
-        rationale = _require_non_empty_string(raw_handler, "rationale", context)
+        rationale = require_non_empty_string(raw_handler, "rationale", context)
         key = (handler_path, symbol)
         if key in handler_keys:
             raise ValueError(f"duplicate handler policy for {handler_path}::{symbol}")
@@ -338,6 +371,17 @@ def load_policy(path: Path) -> Policy:
             "policy handler totals do not match expected_counts: "
             f"handlers {normal_total}/{all_total}, expected {expected_normal}/{expected_all}"
         )
+    if len(handlers) != expected_identities:
+        raise ValueError(
+            f"policy handler identity count does not match expected_counts: handlers {len(handlers)}, "
+            f"expected {expected_identities}"
+        )
+    actual_categories = tuple(sum(handler.category == category for handler in handlers) for category in ("A", "B", "C"))
+    if actual_categories != expected_categories:
+        raise ValueError(
+            "policy category identity counts do not match expected_counts: "
+            f"handlers {actual_categories}, expected {expected_categories}"
+        )
 
     raw_fail_open = payload["fail_open"]
     if not isinstance(raw_fail_open, list):
@@ -348,24 +392,24 @@ def load_policy(path: Path) -> Policy:
         context = f"policy.fail_open[{index}]"
         if not isinstance(raw_record, dict):
             raise ValueError(f"{context} must be an object")
-        _require_exact_keys(
+        require_exact_keys(
             raw_record,
             {"path", "symbol", "disposition", "outcome", "rationale", "behavior_test", "observable_via"},
             context,
         )
-        record_path = _require_relative_path(raw_record, "path", context)
-        symbol = _require_non_empty_string(raw_record, "symbol", context)
-        disposition = _require_non_empty_string(raw_record, "disposition", context)
+        record_path = require_relative_path(raw_record, "path", context)
+        symbol = require_non_empty_string(raw_record, "symbol", context)
+        disposition = require_non_empty_string(raw_record, "disposition", context)
         if disposition not in DISPOSITIONS:
             raise ValueError(f"{context}.disposition is not an allowed policy disposition")
-        outcome = _require_non_empty_string(raw_record, "outcome", context)
-        rationale = _require_non_empty_string(raw_record, "rationale", context)
-        behavior_test = _require_non_empty_string(raw_record, "behavior_test", context)
+        outcome = require_non_empty_string(raw_record, "outcome", context)
+        rationale = require_non_empty_string(raw_record, "rationale", context)
+        behavior_test = require_non_empty_string(raw_record, "behavior_test", context)
         if TEST_NODE_ID.fullmatch(behavior_test) is None or any(
             part in {".", ".."} for part in behavior_test.split("::", maxsplit=1)[0].split("/")
         ):
             raise ValueError(f"{context}.behavior_test is not a valid unit-test node ID: {behavior_test!r}")
-        observable_via = _require_non_empty_string(raw_record, "observable_via", context)
+        observable_via = require_non_empty_string(raw_record, "observable_via", context)
         key = (record_path, symbol)
         if key in fail_open_keys:
             raise ValueError(f"duplicate fail_open policy for {record_path}::{symbol}")
@@ -396,6 +440,8 @@ def load_policy(path: Path) -> Policy:
         reviewed_version,
         expected_normal,
         expected_all,
+        expected_identities,
+        expected_categories,
         tuple(handlers),
         tuple(fail_open),
     )
@@ -425,19 +471,14 @@ def validate_policy(
             f"ignore-noqa Ruff {all_handlers.ruff_version}. Rerun both modes with one executable."
         )
         return errors
-    if normal.ruff_version != policy.reviewed_ruff_version:
-        errors.append(
-            f"Ruff version drift: reviewed {policy.reviewed_ruff_version}; actual {normal.ruff_version}. "
-            "Review and reclassify the complete inventory before updating policy metadata."
-        )
-
+    inventory_errors: list[str] = []
     if len(normal.diagnostics) != policy.expected_normal:
-        errors.append(
+        inventory_errors.append(
             f"normal count mismatch: expected {policy.expected_normal}, actual {len(normal.diagnostics)} "
             f"under reviewed {policy.reviewed_ruff_version} and actual {normal.ruff_version}"
         )
     if len(all_handlers.diagnostics) != policy.expected_all:
-        errors.append(
+        inventory_errors.append(
             f"ignore-noqa count mismatch: expected {policy.expected_all}, actual {len(all_handlers.diagnostics)} "
             f"under reviewed {policy.reviewed_ruff_version} and actual {all_handlers.ruff_version}"
         )
@@ -445,12 +486,12 @@ def validate_policy(
     normal_records = Counter(normal.diagnostics)
     all_records = Counter(all_handlers.diagnostics)
     if normal_records - all_records:
-        errors.append("normal diagnostics are not a subset of ignore-noqa diagnostics")
+        inventory_errors.append("normal diagnostics are not a subset of ignore-noqa diagnostics")
 
     normal_counts, normal_rows, normal_mapping_errors = _symbol_counts(repo_root, normal.diagnostics)
     all_counts, all_rows, all_mapping_errors = _symbol_counts(repo_root, all_handlers.diagnostics)
-    errors.extend(normal_mapping_errors)
-    errors.extend(error for error in all_mapping_errors if error not in normal_mapping_errors)
+    inventory_errors.extend(normal_mapping_errors)
+    inventory_errors.extend(error for error in all_mapping_errors if error not in normal_mapping_errors)
 
     expected_normal = {
         (handler.path, handler.symbol): handler.normal_count for handler in policy.handlers if handler.normal_count
@@ -458,8 +499,26 @@ def validate_policy(
     expected_all = {
         (handler.path, handler.symbol): handler.all_count for handler in policy.handlers if handler.all_count
     }
-    errors.extend(_count_mismatches("normal", expected_normal, normal_counts, normal_rows))
-    errors.extend(_count_mismatches("ignore-noqa", expected_all, all_counts, all_rows))
+    inventory_errors.extend(_count_mismatches("normal", expected_normal, normal_counts, normal_rows))
+    inventory_errors.extend(_count_mismatches("ignore-noqa", expected_all, all_counts, all_rows))
+
+    actual_categories = tuple(
+        sum(handler.category == category for handler in policy.handlers) for category in ("A", "B", "C")
+    )
+    if len(policy.handlers) != policy.expected_identities:
+        inventory_errors.append(
+            f"handler identity count mismatch: expected {policy.expected_identities}, actual {len(policy.handlers)}"
+        )
+    if actual_categories != policy.expected_categories:
+        inventory_errors.append(
+            f"category identity counts mismatch: expected {policy.expected_categories}, actual {actual_categories}"
+        )
+    if inventory_errors and normal.ruff_version != policy.reviewed_ruff_version:
+        errors.append(
+            f"Inventory drift measured under reviewed Ruff {policy.reviewed_ruff_version} and actual Ruff "
+            f"{normal.ruff_version}; review and reclassify the changed identities."
+        )
+    errors.extend(inventory_errors)
 
     category_c_keys = {(handler.path, handler.symbol) for handler in policy.handlers if handler.category == "C"}
     fail_open_keys = {(record.path, record.symbol) for record in policy.fail_open}
@@ -467,42 +526,11 @@ def validate_policy(
         errors.append(f"category C handler lacks fail_open policy: {item_path}::{symbol}")
     for item_path, symbol in sorted(fail_open_keys - category_c_keys):
         errors.append(f"stale fail_open policy for non-category-C handler: {item_path}::{symbol}")
+    for record in policy.fail_open:
+        node_error = behavior_node_error(repo_root, record.behavior_test)
+        if node_error is not None:
+            errors.append(f"unresolved behavior-test node {record.behavior_test}: {node_error}")
     return errors
-
-
-def _require_exact_keys(record: dict[str, Any], expected: set[str], context: str) -> None:
-    """Reject missing or unknown JSON object keys."""
-    actual = set(record)
-    missing = sorted(expected - actual)
-    unknown = sorted(actual - expected)
-    if missing or unknown:
-        raise ValueError(f"{context} has missing keys {missing} and unknown keys {unknown}")
-
-
-def _require_non_empty_string(record: dict[str, Any], key: str, context: str) -> str:
-    """Return one required non-empty string field."""
-    value = record[key]
-    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
-        raise ValueError(f"{context}.{key} must be a non-empty single-line string")
-    return value
-
-
-def _require_count(record: dict[str, Any], key: str, context: str) -> int:
-    """Return one required non-negative integer count."""
-    value = record[key]
-    if type(value) is not int or value < 0:
-        raise ValueError(f"{context}.{key} must be a non-negative integer")
-    return value
-
-
-def _require_relative_path(record: dict[str, Any], key: str, context: str) -> str:
-    """Return one normalized repository-relative POSIX path."""
-    value = _require_non_empty_string(record, key, context)
-    if Path(value).is_absolute():
-        raise ValueError(f"{context}.{key} must be relative")
-    if "\\" in value or any(part in {".", "..", ""} for part in value.split("/")):
-        raise ValueError(f"{context}.{key} contains parent traversal or a non-normal path component")
-    return value
 
 
 def _symbol_counts(

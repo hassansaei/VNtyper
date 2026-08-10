@@ -187,6 +187,18 @@ def test_mypy_runtime_and_test_scopes_are_deliberately_separate() -> None:
     assert "scripts/" not in recipes["type-check-all"]
 
 
+def test_ruff_recipes_terminate_options_before_repository_scopes() -> None:
+    """Every Ruff invocation treats RUFF_PATHS entries only as path operands."""
+    scoped_lines = [
+        line.strip()
+        for recipe in _recipes().values()
+        for line in recipe.splitlines()
+        if line.strip().startswith("ruff ") and "$(RUFF_PATHS)" in line
+    ]
+    assert scoped_lines
+    assert all(re.search(r"(?:^|\s)--\s+\$\(RUFF_PATHS\)(?:\s|$)", line) for line in scoped_lines), scoped_lines
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)

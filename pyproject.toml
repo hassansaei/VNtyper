@@ -247,7 +247,7 @@ ignore = [
 ]
 
 # Rules deliberately NOT selected, so the omission is a decision and not an oversight:
-#   BLE001 (blind-except) - deliberately unselected. The reviewed Ruff 0.16.1 baseline
+#   BLE001 (blind-except) - deliberately unselected. The reviewed Ruff 0.14.3 baseline
 #     is 103 normal diagnostics and 108 including five explicit suppressions. The
 #     executable inventory is scripts/ble001_policy.json plus
 #     tests/unit/test_ble001_policy.py; not every handler is a process boundary.

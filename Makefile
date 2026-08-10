@@ -123,25 +123,25 @@ RUFF_PATHS := vntyper/ docker/app/ tests/ scripts/ docs/
 
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
-	ruff check $(RUFF_PATHS)
+	ruff check -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 lint-stats:
 	@echo "$(BLUE)Running Ruff linter with statistics...$(RESET)"
-	ruff check $(RUFF_PATHS) --statistics
+	ruff check --statistics -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 format:
 	@echo "$(BLUE)Formatting code with Ruff...$(RESET)"
-	ruff format $(RUFF_PATHS)
+	ruff format -- $(RUFF_PATHS)
 	@echo "$(BLUE)Applying auto-fixes...$(RESET)"
-	ruff check $(RUFF_PATHS) --fix
+	ruff check --fix -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Formatting complete$(RESET)"
 
 format-check:
 	@echo "$(BLUE)Checking code formatting...$(RESET)"
-	ruff format $(RUFF_PATHS) --check
-	ruff check $(RUFF_PATHS)
+	ruff format --check -- $(RUFF_PATHS)
+	ruff check -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
 # Type checking targets

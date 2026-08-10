@@ -217,6 +217,10 @@ rather than invisible. The normal inventory must be an exact subset and total th
 pinned normal count. A diagnostic that cannot be mapped, maps to two entries, or is absent from
 the inventory fails the test.
 
+The reviewed schema separately pins 79 stable identities and identity-category totals A=30, B=16,
+and C=33. These are checked independently of diagnostic totals, so a category-only A-to-B change
+cannot pass merely because the same handlers and 103/108 diagnostic counts remain.
+
 Rows and columns appear only in failure output. Renaming or moving a symbol requires an explicit
 inventory change; merely adding blank lines does not.
 
@@ -242,9 +246,9 @@ generated; rationale and disposition are not.
 
 Behavior-test IDs may name top-level or class-qualified tests under any nested `tests/unit/`
 subdirectory, including parametrized suffixes. Paths outside `tests/unit/`, parent traversal,
-missing `test_` function components, and newline-bearing IDs are invalid. Every category-C record
-is complete before the full live validator is enabled; the validator is not run against a knowingly
-partial manifest.
+missing `test_` function components, and newline-bearing IDs are invalid. The source-read-only live
+validator resolves every frozen node immediately: before Tasks 4–9 create those nodes it exits 1
+and enumerates every unresolved ID, and it cannot report complete success until all IDs resolve.
 
 ### Behavior tests
 
@@ -279,8 +283,9 @@ Important seed contracts include:
 
 `pyproject.toml` remains the authority for Ruff rule selection and explanatory comments. The policy
 test is the authority for exact counts and classification. The Makefile's `RUFF_PATHS` remains the
-scope authority, and a test confirms that the policy measurement uses the same paths rather than a
-duplicated, drifting list.
+scope authority. Its tokens must be existing ordinary repository-relative paths, and every Ruff
+command places `--` before them so an option-shaped token cannot become an output or mutation
+option. A test confirms that policy measurement uses the same paths rather than a duplicated list.
 
 ## Interfaces, inputs, outputs, and invariants
 
@@ -328,11 +333,12 @@ Global invariants:
 
 1. Create one complete manifest record for every category-C symbol found by Phase 2, including
    disposition, exact outcome, rationale, behavior-test node ID, and observability.
-2. Run a diagnostic identity/count check while linked behavior nodes are being added; do not run or
-   claim the full live validator against unresolved nodes.
+2. Run the full live validator while linked behavior nodes are being added; require exit 1 with an
+   exhaustive unresolved-node list, and do not claim successful completion while any node is absent.
 3. Add or strengthen every linked behavior test, run unchanged characterization, and prove its exact
    assertion fails under a temporary mutation before restoring the source.
-4. Enable the full live validator only after every frozen C record's behavior node resolves.
+4. Require the already-enabled full live validator to pass only after every frozen C record's
+   behavior node resolves.
 5. For an existing contract that requires a different outcome, make only the focused semantic
    change needed to conform and test both the failure outcome and its caller-visible effect.
 6. Preserve every other current fallback explicitly; do not narrow category B as a side quest.

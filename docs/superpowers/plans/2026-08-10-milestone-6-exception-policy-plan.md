@@ -21,8 +21,9 @@
 - Classify every all-mode diagnostic exactly once as A controlled boundary, B enumerable candidate, or C fail-open/degraded continuation.
 - Identify handlers by relative path and qualified AST symbol, never by a persistent line number; module-level handlers use `<module>`.
 - Every category-C symbol has one disposition, exact outcome, domain rationale, behavior-test node ID, and observability channel.
-- Freeze every category-C `fail_open` record before any full live validator gate. Later behavior tasks create or
-  strengthen the already-linked nodes; no intermediate policy may contain a C handler without its complete record.
+- Freeze every category-C `fail_open` record before live validation. The live validator exits 1 and lists unresolved
+  nodes until later behavior tasks create or strengthen every linked node; no intermediate policy may claim complete
+  success or contain a C handler without its complete record.
 - A behavior node first characterizes unchanged production, then proves mutation sensitivity, and only then satisfies
   the full policy gate. A characterization expected to pass is never described as RED.
 - Preserve intentional fail-open behavior only with rationale and a behavior test. Change behavior only when existing documentation, configuration, tests, or caller contract supplies the replacement outcome.
@@ -39,6 +40,7 @@
 Create exactly these policy artifacts:
 
 - `scripts/ble001_policy.py`: typed measurement, AST mapping, JSON loading, validation, diagnostics, and CLI.
+- `scripts/ble001_policy_validation.py`: pure Ruff-scope containment, schema-field, and behavior-node resolution.
 - `scripts/ble001_policy.json`: hand-reviewed complete inventory and fail-open manifest.
 - `tests/unit/test_ble001_policy.py`: adapter unit tests, live exact guards, inventory completeness, negative mutations, Ruff configuration checks, and CLI tests.
 
@@ -86,6 +88,8 @@ class Policy:
     reviewed_ruff_version: str
     expected_normal: int
     expected_all: int
+    expected_identities: int
+    expected_categories: tuple[int, int, int]
     handlers: tuple[HandlerPolicy, ...]
     fail_open: tuple[FailOpenPolicy, ...]
 ```
@@ -105,7 +109,12 @@ The JSON shape is fixed:
 ```json
 {
   "reviewed_ruff_version": "ruff 0.14.3",
-  "expected_counts": {"normal": 103, "ignore_noqa": 108},
+  "expected_counts": {
+    "normal": 103,
+    "ignore_noqa": 108,
+    "identities": 79,
+    "categories": {"A": 30, "B": 16, "C": 33}
+  },
   "handlers": [
     {
       "path": "relative/path.py",
@@ -252,7 +261,9 @@ one JSON check, so the order is version, normal, version, all-mode. Assert the c
 ["ruff", "check", "--no-cache", "--select", "BLE001", "--output-format", "json"]
 ```
 
-and appends `--ignore-noqa` only for all-mode, followed by the five scope paths. Ruff result codes 0 and 1 are accepted; result code 2 raises `RuntimeError` containing stderr and actual version.
+and appends `--ignore-noqa` only for all-mode, then `--`, followed by the five scope paths. Reject option-shaped,
+non-path, absolute, missing, and repository-escaping `RUFF_PATHS` tokens before invoking Ruff. Ruff result codes 0 and
+1 are accepted; result code 2 raises `RuntimeError` containing stderr and actual version.
 
 - [ ] **Step 7: Implement measurement and diagnostics**
 
@@ -376,8 +387,9 @@ Expected: JSON arrays of 103 and 108 diagnostics. These temporary files are disc
 Set `reviewed_ruff_version` to `ruff 0.14.3`, expected counts to 103/108, and enter all 79 Appendix A rows with their
 exact normal/all counts and planned category. In the same edit, add one complete `fail_open` record for every C row,
 using the fixed Tasks 4–5 and Appendix B node IDs, exact outcomes, dispositions, rationales, and observability channels.
-Do not add an empty, illustrative, or deferred record. Some linked nodes are intentionally created in Tasks 4–9, so do
-not run the full policy CLI yet; Task 3 proves diagnostic identities/counts without claiming those future nodes resolve.
+Do not add an empty, illustrative, or deferred record. Some linked nodes are intentionally created in Tasks 4–9, so
+run the full policy CLI and require exit 1 with every unresolved node listed; Task 3 proves diagnostic
+identities/counts without claiming those future nodes resolve.
 
 - [ ] **Step 3: Verify and write Docker plus top-level-script rationales (2–5 min)**
 
@@ -453,13 +465,15 @@ def test_live_ble001_diagnostics_match_reviewed_handler_counts() -> None:
 
 Import `Counter` from `collections`. Add exact assertions that the current policy begins at 103/108, sums
 `normal_count`/`all_count` to those values, and `expected_all - expected_normal == 5` before later reviewed deltas. This
-test deliberately does not resolve future behavior nodes; the full `validate_policy` live gate lands only in Task 9.
+test deliberately does not require future behavior nodes to resolve; `validate_policy` already resolves and reports
+them, while the first passing full live gate remains Task 9.
 
 - [ ] **Step 13: Run live discovery until the fixed inventory matches**
 
 Run: `pytest -m unit tests/unit/test_ble001_policy.py::test_live_ble001_diagnostics_match_reviewed_handler_counts -vv`
 
-Expected: PASS with all 108 diagnostics mapped exactly once and exact one-to-one C records already present. A
+Expected: PASS with all 108 diagnostics mapped exactly once, all 79 identities pinned at A=30/B=16/C=33, and exact
+one-to-one C records already present. Then run the CLI and require exit 1 enumerating unresolved behavior nodes. A
 missing/stale symbol is a source-drift failure to reconcile against Appendix A, not permission to invent a new row
 during implementation. Do not claim behavior-node resolution yet.
 
@@ -855,7 +869,8 @@ def test_live_ble001_inventory_and_behavior_nodes_match_reviewed_policy() -> Non
 
 Run: `pytest -m unit tests/unit/test_ble001_policy.py -q && python scripts/ble001_policy.py --repo-root . --policy scripts/ble001_policy.json`.
 Expected: both PASS; `set(C symbols) == set(fail_open manifest symbols)` and every nested/top-level node resolves. This
-is the first full live validator gate because it is the first point at which every frozen behavior node exists.
+is the first **passing** full live validator gate because it is the first point at which every frozen behavior node
+exists; earlier Tasks 3–8 runs intentionally exit 1 and enumerate unresolved nodes.
 
 - [ ] **Step 7: Commit**
 

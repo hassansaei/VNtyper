@@ -1,8 +1,14 @@
 {
-  "reviewed_ruff_version": "ruff 0.16.1",
+  "reviewed_ruff_version": "ruff 0.14.3",
   "expected_counts": {
     "normal": 103,
-    "ignore_noqa": 108
+    "ignore_noqa": 108,
+    "identities": 79,
+    "categories": {
+      "A": 30,
+      "B": 16,
+      "C": 33
+    }
   },
   "handlers": [
     {
@@ -938,4 +944,3 @@
     }
   ]
 }
-
