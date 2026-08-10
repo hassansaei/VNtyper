@@ -1,0 +1,1586 @@
+{
+  "schema_version": 1,
+  "contracts": [
+    {
+      "suite": "bam_tests",
+      "test_name": "example_b178_hg19_subset_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 14690,
+          "r2": 14690,
+          "other": 0,
+          "single": 1
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7110,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.05869074492099323,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_a5c1_hg19_subset_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_a5c1_hg19_subset.bam",
+          "md5": "9969dd5ef7798104c633d96e032de882",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 20888,
+          "r2": 20888,
+          "other": 0,
+          "single": 3
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 93,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 9883,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.009410098148335525,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_66bf_hg19_subset_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_66bf_hg19_subset.bam",
+          "md5": "5bb148f9008dbb194d2a852aaaba4d21",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 19841,
+          "r2": 19841,
+          "other": 0,
+          "single": 3
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 491,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 22647,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.0217,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_7a61_hg19_subset_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_7a61_hg19_subset.bam",
+          "md5": "7f5e0a3d1ab97f8121412ff31cba77b8",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 2359,
+          "r2": 2359,
+          "other": 0,
+          "single": 8
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": "None",
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "Negative",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_dfc3_hg19_subset_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_dfc3_hg19_subset.bam",
+          "md5": "d8c9decd02ca0aa6c46385de66214c6f",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 31596,
+          "r2": 31596,
+          "other": 0,
+          "single": 53
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_dfc3_GRCh37_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/remapped/bwa/GRCh37/example_dfc3_GRCh37_bwa.bam",
+          "md5": "ad77aa9d4038aff8f218977dbb30f74d",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "GRCh37",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 31593,
+          "r2": 31593,
+          "other": 0,
+          "single": 2
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19182,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.010855817875210793,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_dfc3_GRCh38_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/remapped/bwa/GRCh38/example_dfc3_GRCh38_bwa.bam",
+          "md5": "b28320872047f009d36a142da9f02a66",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "GRCh38",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 31603,
+          "r2": 31603,
+          "other": 0,
+          "single": 2
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_dfc3_hg38_ensembl_fast",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/remapped/bwa/hg38_ensembl/example_dfc3_hg38_ensembl_bwa.bam",
+          "md5": "48bf0b19de4b466eb6715ba1574d0aad",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg38_ensembl",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 31603,
+          "r2": 31603,
+          "other": 0,
+          "single": 2
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_40cf_hg38_subset_fast_gdp_guard",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_40cf_hg38_subset.bam",
+          "md5": "ca4a47b964530ea65c1a72daa36bfaa4",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg38",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 3474,
+          "r2": 3474,
+          "other": 0,
+          "single": 93
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": "None",
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "Negative",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "advntr_tests",
+      "test_name": "example_a5c1_hg19_subset_advntr",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_a5c1_hg19_subset.bam",
+          "md5": "9969dd5ef7798104c633d96e032de882",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results",
+          "--advntr-max-coverage",
+          "300"
+        ],
+        "modules": [
+          "advntr"
+        ]
+      },
+      "routing": {
+        "records": {
+          "r1": 20888,
+          "r2": 20888,
+          "other": 0,
+          "single": 3
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "advntr/output_adVNTR_result.tsv"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {},
+        "advntr": {
+          "VID": {
+            "value": "25561",
+            "tolerance": null
+          },
+          "State": {
+            "value": "I22_2_G_LEN1",
+            "tolerance": null
+          },
+          "NumberOfSupportingReads": {
+            "value": 11,
+            "tolerance": null
+          },
+          "MeanCoverage": {
+            "value": 153.986111111,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 10
+            }
+          },
+          "Pvalue": {
+            "value": 6.78296229901e-07,
+            "tolerance": {
+              "kind": "log10",
+              "value": 2
+            }
+          }
+        },
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
+    },
+    {
+      "suite": "single_end_bam_tests",
+      "test_name": "example_b178_hg19_single_end",
+      "fixture": {
+        "name": "example_b178_hg19_single_end",
+        "kind": "single_end_bam",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16930,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_other.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "2b4597d8b57f8986f008baad6c2505359cebea76"
+    },
+    {
+      "suite": "single_end_bam_tests",
+      "test_name": "example_b178_hg19_single_end_keep",
+      "fixture": {
+        "name": "example_b178_hg19_single_end",
+        "kind": "single_end_bam",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--keep-intermediates"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16930,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_other.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "required_absent": [],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "2b4597d8b57f8986f008baad6c2505359cebea76"
+    },
+    {
+      "suite": "single_end_bam_tests",
+      "test_name": "example_b178_hg19_single_end_delete",
+      "fixture": {
+        "name": "example_b178_hg19_single_end",
+        "kind": "single_end_bam",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--delete-intermediates"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16930,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_other.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "2b4597d8b57f8986f008baad6c2505359cebea76"
+    },
+    {
+      "suite": "single_end_bam_tests",
+      "test_name": "example_b178_hg19_single_end_delete_overrides_keep",
+      "fixture": {
+        "name": "example_b178_hg19_single_end",
+        "kind": "single_end_bam",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--keep-intermediates",
+          "--delete-intermediates"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16930,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_other.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "2b4597d8b57f8986f008baad6c2505359cebea76"
+    },
+    {
+      "suite": "single_end_bam_tests",
+      "test_name": "example_b178_hg19_single_end_archive",
+      "fixture": {
+        "name": "example_b178_hg19_single_end",
+        "kind": "single_end_bam",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16930,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_other.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.9",
+      "provenance_commit": "2b4597d8b57f8986f008baad6c2505359cebea76"
+    },
+    {
+      "suite": "advntr_tests",
+      "test_name": "example_b178_hg19_bwa_advntr",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+          "md5": "37679cfba7007ade57ed7df28a1ec77e",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--advntr-max-coverage",
+          "300"
+        ],
+        "modules": [
+          "advntr"
+        ]
+      },
+      "routing": {
+        "records": {
+          "r1": 14689,
+          "r2": 14689,
+          "other": 0,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "advntr/output_adVNTR_result.tsv"
+        ],
+        "required_absent": [],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {},
+        "advntr": {
+          "VID": {
+            "value": "25561",
+            "tolerance": null
+          },
+          "State": {
+            "value": "I22_4_G_LEN1",
+            "tolerance": null
+          },
+          "NumberOfSupportingReads": {
+            "value": 39,
+            "tolerance": null
+          },
+          "MeanCoverage": {
+            "value": 70.3333333333,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 10
+            }
+          },
+          "Pvalue": {
+            "value": 5.774455097259999e-59,
+            "tolerance": {
+              "kind": "log10",
+              "value": 2
+            }
+          }
+        },
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.10",
+      "provenance_commit": "76d7ca48caec3677e3bc44b98f1024a98e36f78b"
+    },
+    {
+      "suite": "fastq_tests",
+      "test_name": "example_6449_hg19_subset_fastq_shark",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+          "md5": "9bb0811e9245de3b91c5e01f13128fc7",
+          "record_digest": null
+        },
+        {
+          "path": "tests/data/example_6449_hg19_subset_R2.fastq.gz",
+          "md5": "5eb5a1a7cd985fe652bbc7443b0688e6",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [],
+        "modules": [
+          "shark"
+        ]
+      },
+      "routing": {
+        "records": {
+          "r1": 40953,
+          "r2": 40953,
+          "other": 0,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ],
+        "required_absent": [],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 239,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 478,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Depth_Score": {
+            "value": 0.5,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.0-beta",
+      "provenance_commit": "164991247f80a354ead55c23de354198529f4534"
+    },
+    {
+      "suite": "fastq_tests",
+      "test_name": "example_6449_hg19_subset_single_fastq",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+          "md5": "9bb0811e9245de3b91c5e01f13128fc7",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 40202,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_other.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ],
+        "required_absent": [],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 262,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 1695,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Depth_Score": {
+            "value": 0.15457227138643068,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.10",
+      "provenance_commit": "9e3c392f9d86106317fa83689cf6cb3677765d97"
+    },
+    {
+      "suite": "fastq_tests",
+      "test_name": "example_b178_hg19_subset_paired_fastq_no_shark",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset_R1.fastq.gz",
+          "md5": "a91a13b29a8b3e2b1a54071d39b4ef24",
+          "record_digest": null
+        },
+        {
+          "path": "tests/data/example_b178_hg19_subset_R2.fastq.gz",
+          "md5": "8aac8f27328be367c74d2d78925c7502",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 4,
+        "log_level": "DEBUG",
+        "cli_options": [],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 11452,
+          "r2": 11452,
+          "other": 0,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ],
+        "required_absent": [],
+        "archive": false
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 125,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 1024,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Depth_Score": {
+            "value": 0.1220703125,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 0
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.10",
+      "provenance_commit": "01ecafcf9dec47584285dd0bd38156a7799b37b2"
+    }
+  ]
+}
