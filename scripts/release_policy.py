@@ -126,7 +126,17 @@ def classify_check_runs(
 
     Returns:
         The aggregate action and ordered verdict for every required check.
+
+    Raises:
+        ValueError: If the polling bounds are not positive integers or the attempt is outside them.
     """
+    if type(max_attempts) is not int or max_attempts < 1:
+        msg = "max_attempts must be a positive integer."
+        raise ValueError(msg)
+    if type(attempt) is not int or attempt < 1 or attempt > max_attempts:
+        msg = "attempt must be a one-based integer that does not exceed max_attempts."
+        raise ValueError(msg)
+
     latest_runs: dict[str, Mapping[str, object]] = {}
     latest_ids: dict[str, int] = {}
     for check_run in check_runs:
@@ -137,7 +147,7 @@ def classify_check_runs(
             continue
         name = check_run.get("name")
         check_run_id = check_run.get("id")
-        if not isinstance(name, str) or name not in REQUIRED_CHECK_NAMES or not isinstance(check_run_id, int):
+        if not isinstance(name, str) or name not in REQUIRED_CHECK_NAMES or type(check_run_id) is not int:
             continue
         if check_run_id > latest_ids.get(name, -1):
             latest_runs[name] = check_run

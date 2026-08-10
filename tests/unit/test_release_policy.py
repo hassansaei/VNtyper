@@ -1,8 +1,14 @@
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from scripts.release_policy import (
     REQUIRED_CHECK_NAMES,
     AliasState,
+    AliasUpdate,
+    CheckPoll,
+    CheckVerdict,
+    ReleaseVersion,
     classify_check_runs,
     parse_release_tag,
     plan_alias_updates,
@@ -40,9 +46,35 @@ def test_release_tag_produces_all_five_aliases_in_promotion_order() -> None:
     assert required_aliases(version) == ("v2.10.3", "2.10.3", "2.10", "2", "latest")
 
 
+def test_required_check_names_are_the_unique_literal_release_contract() -> None:
+    assert REQUIRED_CHECK_NAMES == (
+        "Lint (Ruff)",
+        "Type Check (mypy)",
+        "Unit Tests (Python 3.10)",
+        "Unit Tests (Python 3.11)",
+        "Unit Tests (Python 3.12)",
+        "Unit Tests (Python 3.13)",
+        "Docs build (strict)",
+        "CI Success",
+        "Build and test image",
+        "Docker Success",
+    )
+    assert len(REQUIRED_CHECK_NAMES) == len(set(REQUIRED_CHECK_NAMES)) == 10
+
+
 @pytest.mark.parametrize(
     "tag",
-    ("2.0.10", "v2.0", "v2.0.10-rc1", "v2.0.10+local", "v02.0.10", "v2.00.10", "v2.0.010", "v2.0.10;echo pwned"),
+    (
+        "2.0.10",
+        "v2.0",
+        "v1.2.3.4",
+        "v2.0.10-rc1",
+        "v2.0.10+local",
+        "v02.0.10",
+        "v2.00.10",
+        "v2.0.010",
+        "v2.0.10;echo pwned",
+    ),
 )
 def test_release_tag_rejects_every_non_strict_form(tag: str) -> None:
     with pytest.raises(ValueError, match="strict vMAJOR.MINOR.PATCH"):
@@ -57,16 +89,27 @@ def test_all_ten_latest_exact_sha_github_actions_checks_are_required() -> None:
     assert (poll.attempt, poll.elapsed_seconds) == (1, 0)
 
 
-def test_newest_same_name_check_run_controls_the_verdict() -> None:
-    successful = [_check(name) for name in REQUIRED_CHECK_NAMES]
+@pytest.mark.parametrize("newest_first", (False, True))
+def test_newest_same_name_check_run_controls_the_verdict_regardless_of_api_order(newest_first: bool) -> None:
+    successful = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docker Success"]
+    old = _check("Docker Success", run_id=1)
+    newest = _check("Docker Success", run_id=99, conclusion="failure")
+    duplicates = [newest, old] if newest_first else [old, newest]
     poll = classify_check_runs(
         SHA,
-        successful + [_check("Docker Success", run_id=99, conclusion="failure")],
+        successful + duplicates,
         attempt=1,
     )
     docker = poll.verdicts[-1]
     assert poll.action == "fail"
     assert (docker.state, docker.conclusion, docker.check_run_id) == ("failure", "failure", 99)
+
+
+def test_identical_duplicate_check_records_do_not_change_success() -> None:
+    successful = [_check(name) for name in REQUIRED_CHECK_NAMES]
+    poll = classify_check_runs(SHA, successful + [_check("Docs build (strict)")], attempt=1)
+    assert poll.action == "success"
+    assert poll.verdicts[6].check_run_id == 1
 
 
 def test_wrong_sha_and_external_checks_cannot_satisfy_a_missing_check() -> None:
@@ -88,6 +131,63 @@ def test_missing_check_times_out_at_the_polling_bound() -> None:
     poll = classify_check_runs(SHA, runs, attempt=120)
     assert poll.action == "timeout"
     assert (poll.attempt, poll.elapsed_seconds) == (120, 3570)
+
+
+def test_custom_polling_bound_waits_then_times_out() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docs build (strict)"]
+    before_bound = classify_check_runs(SHA, runs, attempt=2, max_attempts=3)
+    at_bound = classify_check_runs(SHA, runs, attempt=3, max_attempts=3)
+    assert (before_bound.action, before_bound.elapsed_seconds) == ("wait", 30)
+    assert (at_bound.action, at_bound.elapsed_seconds) == ("timeout", 60)
+
+
+def test_terminal_failure_wins_on_the_final_custom_attempt() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES]
+    runs.append(_check("Docker Success", run_id=99, conclusion="failure"))
+    poll = classify_check_runs(SHA, runs, attempt=3, max_attempts=3)
+    assert poll.action == "fail"
+
+
+@pytest.mark.parametrize(
+    ("attempt", "max_attempts", "message"),
+    (
+        (0, 3, "attempt"),
+        (4, 3, "attempt"),
+        (1, 0, "max_attempts"),
+        (True, 3, "attempt"),
+        (1, True, "max_attempts"),
+    ),
+)
+def test_polling_attempt_must_be_an_integer_within_the_configured_bound(
+    attempt: int,
+    max_attempts: int,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        classify_check_runs(SHA, [], attempt=attempt, max_attempts=max_attempts)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("app", None),
+        ("app", "github-actions"),
+        ("app", {}),
+        ("name", None),
+        ("name", "Docs build (strict) extra"),
+        ("id", None),
+        ("id", "99"),
+        ("id", True),
+    ),
+)
+def test_malformed_check_record_cannot_satisfy_a_required_check(field: str, value: object) -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docs build (strict)"]
+    malformed = _check("Docs build (strict)")
+    malformed[field] = value
+    poll = classify_check_runs(SHA, runs + [malformed], attempt=1)
+    docs = poll.verdicts[6]
+    assert poll.action == "wait"
+    assert (docs.state, docs.check_run_id) == ("missing", None)
 
 
 @pytest.mark.parametrize("conclusion", ("skipped", "neutral"))
@@ -124,6 +224,20 @@ def test_exact_aliases_create_noop_or_fail_but_never_advance() -> None:
         ("v2.0.10", "no-op", False),
         ("2.0.10", "fail-conflict", False),
     ]
+
+
+@pytest.mark.parametrize("alias", ("v2.0.10", "2.0.10"))
+@pytest.mark.parametrize("observed_version", ("1.9.9", "2.1.0", None, "malformed"))
+def test_both_exact_aliases_conflict_on_a_different_digest_regardless_of_observed_version(
+    alias: str,
+    observed_version: str | None,
+) -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(("v2.0.10", "2.0.10", "2.0", "2", "latest"))
+    current[alias] = AliasState("sha256:" + "b" * 64, observed_version)
+    update = next(item for item in plan_alias_updates(version, source, current, dry_run=False) if item.alias == alias)
+    assert (update.decision, update.execute) == ("fail-conflict", False)
 
 
 def test_floating_aliases_create_advance_or_skip_newer_without_downgrade() -> None:
@@ -212,3 +326,18 @@ def test_alias_plan_requires_exactly_all_five_alias_keys() -> None:
     current["main"] = None
     with pytest.raises(ValueError, match="exactly"):
         plan_alias_updates(version, source, current, dry_run=False)
+
+
+@pytest.mark.parametrize(
+    ("instance", "attribute"),
+    (
+        (ReleaseVersion("v1.2.3", "1.2.3", 1, 2, 3), "major"),
+        (CheckVerdict("check", "success", "success", 1, "https://example.test/check/1", "ok"), "state"),
+        (CheckPoll("success", (), 1, 0), "action"),
+        (AliasState("sha256:" + "a" * 64, "1.2.3"), "digest"),
+        (AliasUpdate("latest", "create", True, "absent"), "execute"),
+    ),
+)
+def test_release_policy_value_objects_are_frozen(instance: object, attribute: str) -> None:
+    with pytest.raises(FrozenInstanceError):
+        setattr(instance, attribute, None)
