@@ -252,11 +252,21 @@ def read_pipeline_case(output_dir: Path, log_dir: Path, rules: list[Rule]) -> di
     commands: list[str] = []
     commands_log = log_dir / "commands.jsonl"
     if commands_log.is_file():
-        commands = [
-            normalise.apply(json.loads(line)["command"], rules)
-            for line in commands_log.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        command_text = commands_log.read_text(encoding="utf-8")
+        command_lines = command_text.splitlines()
+        for position, line in enumerate(command_lines):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                is_trailing_partial = position == len(command_lines) - 1 and not command_text.endswith(("\n", "\r"))
+                if not is_trailing_partial:
+                    raise
+                logger.warning(f"Ignoring trailing partial command record in {commands_log}")
+                continue
+            command = record["command"]
+            commands.append(normalise.apply(command, rules))
 
     step_records = [normalise.apply_deep(normalise.strip_step_record(step), rules) for step in steps]
 

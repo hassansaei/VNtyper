@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,37 @@ def test_absolute_survival_reproduces_the_retired_mixed_state_result() -> None:
     assert kept_del.tolist() == [True]
 
 
+def test_real_generators_cover_every_changed_and_unchanged_state_family() -> None:
+    states = differential.generate_states()
+    unchanged_states = differential.unchanged_class_states()
+
+    assert len(states) == len(set(states)) == 52_511
+    assert len(unchanged_states) == len(set(unchanged_states)) == 13_277
+    assert Counter(map(differential.classify, unchanged_states)) == {
+        "no_len_token": 3_905,
+        "terminal_len_single_part": 12,
+        "terminal_len_compound": 9_360,
+    }
+    assert {
+        "I9_2_A_LEN9&",
+        "I9_2_A_LEN9&D50_2",
+        "I9_2_A_LEN9&I50_2",
+        "I9_2_A_LEN9&I50_2_A_LEN3",
+        "I9_2_A_LENX&I50_2_A_LEN3",
+    }.issubset(states)
+
+    variants = pd.Series(states)
+    old_len = differential.historic_insertion_len(variants)
+    new_len = variants.map(differential.advntr.sum_insertion_lengths).astype(int)
+    classes = variants.map(differential.classify)
+    assert Counter(classes[old_len != new_len]) == {
+        "material_after_first_len": 38_941,
+        "stray_len_literal": 2,
+    }
+    unchanged_mask = classes.isin(differential.UNCHANGED_CLASSES)
+    assert (old_len[unchanged_mask] == new_len[unchanged_mask]).all()
+
+
 def test_production_cross_check_reports_both_mismatch_directions(monkeypatch: pytest.MonkeyPatch) -> None:
     frame = differential.state_frame(["I9_2_A_LEN3", "D50_2"])
     modelled_ins = pd.Series([True, False])
@@ -119,6 +151,22 @@ def test_bounded_sweep_preserves_exhaustive_counts_and_caps_each_class(
     }
     recorded_by_class = pd.Series([record["class"] for record in result["differences"]]).value_counts()
     assert recorded_by_class.le(1).all()
+
+
+def test_bounded_sweep_records_exactly_the_cap_for_same_class_differences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    states = [
+        "I22_2_G_LEN1&D50_2",
+        "I80_2_A_LEN2&D50_2",
+        "I14_2_G_LEN14&D50_2",
+    ]
+    monkeypatch.setattr(differential, "generate_states", lambda: states)
+
+    result = differential.sweep(max_examples=2)
+
+    assert result["differing"] == 3
+    assert [record["state"] for record in result["differences"]] == states[:2]
 
 
 def test_main_writes_sorted_parseable_json_for_a_clean_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

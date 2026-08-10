@@ -133,6 +133,45 @@ def test_pipeline_case_collects_result_steps_commands_and_missing_artifacts(tmp_
     assert result["screening_summary"] is None
 
 
+def test_pipeline_case_recovers_prior_commands_from_a_trailing_partial_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    output = tmp_path / "output"
+    log = tmp_path / "log"
+    output.mkdir()
+    log.mkdir()
+    commands_log = log / "commands.jsonl"
+    commands_log.write_text('{"command": "first"}\n{"command": "second"}\n{"command":', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger=artifacts.__name__):
+        result = artifacts.read_pipeline_case(output, log, [])
+
+    assert result["executed_commands"] == ["first", "second"]
+    assert f"Ignoring trailing partial command record in {commands_log}" in caplog.text
+
+
+def test_pipeline_case_does_not_hide_a_complete_command_record_without_a_command(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    log = tmp_path / "log"
+    output.mkdir()
+    log.mkdir()
+    (log / "commands.jsonl").write_text('{"other": "complete JSON"}', encoding="utf-8")
+
+    with pytest.raises(KeyError, match="command"):
+        artifacts.read_pipeline_case(output, log, [])
+
+
+def test_pipeline_case_does_not_hide_a_newline_terminated_malformed_record(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    log = tmp_path / "log"
+    output.mkdir()
+    log.mkdir()
+    (log / "commands.jsonl").write_text('{"command":\n', encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        artifacts.read_pipeline_case(output, log, [])
+
+
 def test_cohort_case_collects_tables_donuts_exports_and_listing(tmp_path: Path) -> None:
     output = tmp_path / "output"
     log = tmp_path / "log"

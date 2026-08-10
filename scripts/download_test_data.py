@@ -218,18 +218,18 @@ def extract_archive(archive_path: Path, extract_to: Path) -> None:
         total_members = len([m for m in zip_ref.infolist() if not m.filename.endswith("/")])
 
         for member in zip_ref.infolist():
-            if member.filename.endswith("/"):  # Skip directory entries
-                continue
-
             original_path = member.filename
             member_path = member.filename.removeprefix(common_prefix) if common_prefix else member.filename
 
-            # Skip files not in dominant directory
+            # Skip entries not in the dominant directory, including its root marker.
             if common_prefix and (not member_path or member_path == member.filename):
                 logger.debug(f"Skipping: {member.filename} (not in dominant directory)")
                 continue
 
             target_path = _confined_archive_target(extract_to, Path(member_path))
+            if member.is_dir():
+                target_path.mkdir(parents=True, exist_ok=True)
+                continue
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Log progress for large extractions
@@ -384,12 +384,23 @@ Examples:
         return 1
 
     # Load config
-    with config_path.open("r") as f:
-        config = json.load(f)
+    try:
+        with config_path.open("r") as f:
+            config = json.load(f)
+    except (OSError, UnicodeError, ValueError) as exc:
+        logger.error(f"Could not load config file {config_path}: {exc}")
+        return 1
+    if not isinstance(config, dict):
+        logger.error(f"Could not load config file {config_path}: top-level value must be an object")
+        return 1
 
     archive_config = config.get("archive_file")
     if not archive_config:
         logger.error("No archive_file configuration found in test_data_config.json")
+        return 1
+    archive_url = archive_config.get("url") if isinstance(archive_config, dict) else None
+    if not isinstance(archive_url, str) or not archive_url.strip():
+        logger.error("Archive URL is missing or invalid in test_data_config.json")
         return 1
 
     # Verify only mode
@@ -410,12 +421,16 @@ Examples:
         need_download = True
 
     # Download archive
-    archive_url = archive_config["url"]
     extract_to = data_dir
 
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
-        tmp_path = Path(tmp_file.name)
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+    except OSError as exc:
+        logger.error(f"Could not create temporary archive: {exc}")
+        return 1
 
+    exit_code = 1
     try:
         logger.info("=" * 80)
         logger.info("DOWNLOADING TEST DATA")
@@ -438,28 +453,28 @@ Examples:
         logger.info("VERIFYING DATA")
         logger.info("=" * 80)
 
-        errors: list[str] = []
-        success, errors = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
+        success, _ = verify_test_data(config_path, data_dir, skip_md5=skip_md5)
 
         if not success:
             logger.error("Verification failed after extraction!")
-            return 1
-
-        logger.info("")
-        logger.info("=" * 80)
-        logger.info("✓ TEST DATA DOWNLOAD COMPLETE")
-        logger.info("=" * 80)
-        logger.info(f"Test data installed to: {data_dir}")
-        logger.info("You can now run tests with: make test")
-        return 0
+        else:
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info("✓ TEST DATA DOWNLOAD COMPLETE")
+            logger.info("=" * 80)
+            logger.info(f"Test data installed to: {data_dir}")
+            logger.info("You can now run tests with: make test")
+            exit_code = 0
 
     except Exception as e:
         logger.error(f"Download failed: {e}")
-        return 1
-    finally:
-        # Cleanup temp file
+    try:
         if tmp_path.exists():
             tmp_path.unlink()
+    except OSError as exc:
+        logger.error(f"Could not remove temporary archive {tmp_path}: {exc}")
+        return 1
+    return exit_code
 
 
 if __name__ == "__main__":

@@ -43,6 +43,28 @@ def test_extract_archive_handles_dominant_and_mixed_layouts(
         assert (output / "b/y").read_text() == "y"
 
 
+@pytest.mark.parametrize("dominant", [True, False])
+def test_extract_archive_preserves_safe_empty_directories_in_every_layout(tmp_path: Path, dominant: bool) -> None:
+    archive = tmp_path / "directories.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        if dominant:
+            handle.writestr("data/empty/nested/", "")
+            for index in range(10):
+                handle.writestr(f"data/file-{index}", str(index))
+            handle.writestr("README", "metadata")
+        else:
+            handle.writestr("a/empty/", "")
+            handle.writestr("a/file", "a")
+            handle.writestr("b/file", "b")
+            handle.writestr("root", "root")
+
+    output = tmp_path / "out"
+    dtd.extract_archive(archive, output)
+
+    expected = output / ("empty/nested" if dominant else "a/empty")
+    assert expected.is_dir()
+
+
 @pytest.mark.parametrize("member", ["data/../../escaped", "data/link/payload"])
 def test_extract_archive_rejects_members_that_escape_destination(tmp_path: Path, member: str) -> None:
     archive = tmp_path / "data.zip"
@@ -164,6 +186,94 @@ def test_main_returns_one_when_archive_config_is_missing(tmp_path: Path, monkeyp
     config.write_text("{}")
     monkeypatch.setattr(dtd, "__file__", str(script))
     assert dtd.main([]) == 1
+
+
+@pytest.mark.parametrize("contents", ["{broken", "[]"])
+def test_main_returns_one_and_diagnoses_invalid_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, contents: str
+) -> None:
+    script = tmp_path / "scripts/download_test_data.py"
+    script.parent.mkdir()
+    script.touch()
+    config = tmp_path / "tests/test_data_config.json"
+    config.parent.mkdir()
+    config.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(dtd, "__file__", str(script))
+
+    with caplog.at_level("ERROR", logger=dtd.__name__):
+        assert dtd.main([]) == 1
+    assert f"Could not load config file {config}:" in caplog.text
+
+
+def test_main_returns_one_and_diagnoses_missing_archive_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    script = tmp_path / "scripts/download_test_data.py"
+    script.parent.mkdir()
+    script.touch()
+    config = tmp_path / "tests/test_data_config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"archive_file": {"md5sum": "unused"}}), encoding="utf-8")
+    monkeypatch.setattr(dtd, "__file__", str(script))
+
+    with caplog.at_level("ERROR", logger=dtd.__name__):
+        assert dtd.main(["--force"]) == 1
+    assert "Archive URL is missing or invalid in test_data_config.json" in caplog.text
+
+
+def test_main_returns_one_and_diagnoses_temporary_archive_creation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    script = tmp_path / "scripts/download_test_data.py"
+    script.parent.mkdir()
+    script.touch()
+    config = tmp_path / "tests/test_data_config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"archive_file": {"url": "https://example.invalid/data.zip"}}), encoding="utf-8")
+    monkeypatch.setattr(dtd, "__file__", str(script))
+
+    def fail_temporary_file(**kwargs: object) -> None:
+        del kwargs
+        raise OSError("temporary storage unavailable")
+
+    monkeypatch.setattr(dtd.tempfile, "NamedTemporaryFile", fail_temporary_file)
+    with caplog.at_level("ERROR", logger=dtd.__name__):
+        assert dtd.main(["--force"]) == 1
+    assert "Could not create temporary archive: temporary storage unavailable" in caplog.text
+
+
+def test_main_returns_one_and_diagnoses_temporary_archive_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    script = tmp_path / "scripts/download_test_data.py"
+    script.parent.mkdir()
+    script.touch()
+    config = tmp_path / "tests/test_data_config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"archive_file": {"url": "https://example.invalid/data.zip"}}), encoding="utf-8")
+    temporary_archive = tmp_path / "named-temporary.zip"
+    temporary_archive.touch()
+    original_unlink = Path.unlink
+
+    def fail_cleanup(path: Path, missing_ok: bool = False) -> None:
+        if path == temporary_archive:
+            raise OSError("cleanup denied")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(dtd, "__file__", str(script))
+    monkeypatch.setattr(
+        dtd.tempfile,
+        "NamedTemporaryFile",
+        lambda **kwargs: nullcontext(SimpleNamespace(name=str(temporary_archive))),
+    )
+    monkeypatch.setattr(dtd, "download_file_requests", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dtd, "extract_archive", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dtd, "verify_test_data", lambda *args, **kwargs: (True, []))
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+
+    with caplog.at_level("ERROR", logger=dtd.__name__):
+        assert dtd.main(["--force"]) == 1
+    assert f"Could not remove temporary archive {temporary_archive}: cleanup denied" in caplog.text
 
 
 def test_force_download_succeeds_and_removes_temporary_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
