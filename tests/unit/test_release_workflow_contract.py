@@ -85,6 +85,7 @@ def _release_runtime(tmp_path: Path, fixture: Mapping[str, object]) -> dict[str,
     fixture_path = tmp_path / "fake-fixture.json"
     fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
     (tmp_path / "mutation.log").write_text("", encoding="utf-8")
+    (tmp_path / "create.log").write_text("", encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(
@@ -139,6 +140,41 @@ import sys
 
 fixture = json.loads(pathlib.Path(os.environ["FAKE_FIXTURE"]).read_text(encoding="utf-8"))
 args = sys.argv[1:]
+if args[:3] == ["buildx", "imagetools", "create"]:
+    create_log = pathlib.Path(os.environ["CREATE_LOG"])
+    with create_log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(args) + "\\n")
+    if "--prefer-index=false" not in args:
+        raise SystemExit(95)
+    positional = []
+    skip_next = False
+    for arg in args[3:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--tag":
+            skip_next = True
+            continue
+        if not arg.startswith("-"):
+            positional.append(arg)
+    if "--dry-run" in args:
+        if "--tag" in args or len(positional) != 1:
+            raise SystemExit(94)
+        print(json.dumps({"source": positional[0], "dry_run": True}))
+        raise SystemExit(0)
+    if "--tag" not in args or len(positional) != 1:
+        raise SystemExit(93)
+    target = args[args.index("--tag") + 1]
+    source = positional[0]
+    with pathlib.Path(os.environ["MUTATION_LOG"]).open("a", encoding="utf-8") as handle:
+        handle.write("docker " + " ".join(args) + "\\n")
+    source_record = fixture.get("docker", {}).get(source)
+    if source_record is None:
+        raise SystemExit(92)
+    if target not in fixture.get("fail_reinspect", []):
+        fixture.setdefault("docker", {})[target] = source_record
+        pathlib.Path(os.environ["FAKE_FIXTURE"]).write_text(json.dumps(fixture), encoding="utf-8")
+    raise SystemExit(0)
 if args[:3] != ["buildx", "imagetools", "inspect"]:
     with pathlib.Path(os.environ["MUTATION_LOG"]).open("a", encoding="utf-8") as handle:
         handle.write("docker " + " ".join(args) + "\\n")
@@ -158,6 +194,7 @@ else:
     _write_executable(fake_bin / "sleep", "#!/usr/bin/env bash\nexit 0\n")
     return {
         "COORDINATOR_ROOT": str(tmp_path / "controller"),
+        "CREATE_LOG": str(tmp_path / "create.log"),
         "FAKE_FIXTURE": str(fixture_path),
         "GH_TOKEN": "test-token",
         "GITHUB_OUTPUT": str(tmp_path / "github-output"),
@@ -170,6 +207,7 @@ else:
         "RELEASE_POLL_INTERVAL_SECONDS": "0",
         "SHA": "a" * 40,
         "SHORT_SHA": "a" * 7,
+        "SOURCE_DIGEST": "sha256:" + "b" * 64,
         "VERSION": "2.0.10",
         "IMAGE": "ghcr.io/hassansaei/vntyper",
     }
@@ -405,7 +443,7 @@ def test_release_trigger_uses_default_branch_repository_dispatch_for_production(
         "group": "release-${{ inputs.tag || github.event.client_payload.tag }}",
         "cancel-in-progress": "false",
     }
-    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates"}
+    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates", "promote-ghcr"}
     assert publish["jobs"]["validate-release"]["permissions"] == {"contents": "read"}
 
     commands = "\n".join(step.get("run", "") for job in publish["jobs"].values() for step in job.get("steps", []))
@@ -478,7 +516,7 @@ def test_dispatch_is_read_only_and_metadata_eligible_before_any_check_polling() 
     job = publish["jobs"]["validate-release"]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
 
-    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates"}
+    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates", "promote-ghcr"}
     assert job["permissions"] == {"contents": "read"}
     assert "id-token" not in job["permissions"]
     assert "packages" not in job["permissions"]
@@ -1090,3 +1128,236 @@ def test_evidence_step_fails_when_immutable_manifest_is_missing_and_preserves_ru
     assert payload["selected_run"]["html_url"] == "https://github.test/runs/41"
     assert payload["evidence"]["digest"] == "sha256:" + "b" * 64
     assert payload["image"]["available"] is False
+
+
+def _promotion_fixture(
+    aliases: Mapping[str, tuple[str, str | None]] | None = None,
+    *,
+    fail_reinspect: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """Return registry observations for executable promotion-step tests."""
+    image = "ghcr.io/hassansaei/vntyper"
+    source_digest = "sha256:" + "b" * 64
+    source_record = {
+        "digest": source_digest,
+        "image": {
+            "config": {
+                "Labels": {
+                    "org.opencontainers.image.revision": "a" * 40,
+                    "org.opencontainers.image.version": "2.0.10",
+                }
+            }
+        },
+    }
+    docker: dict[str, object] = {f"{image}@{source_digest}": source_record}
+    for alias, (digest, version) in (aliases or {}).items():
+        docker[f"{image}:{alias}"] = {
+            "digest": digest,
+            "image": {"config": {"Labels": {"org.opencontainers.image.version": version}}},
+        }
+    return {
+        "docker": docker,
+        "fail_reinspect": [f"{image}:{alias}" for alias in fail_reinspect],
+    }
+
+
+def _create_records(tmp_path: Path) -> list[list[str]]:
+    return [json.loads(line) for line in (tmp_path / "create.log").read_text().splitlines()]
+
+
+def test_ghcr_promotion_has_fixed_global_lock_exact_guard_and_digest_only_source() -> None:
+    """A release write must acquire one repository lock and copy only the verified digest."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["promote-ghcr"]
+    promote = _step_with_id(publish, "promote-ghcr", "promote")
+    header = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
+
+    assert job["needs"] == ["validate-release", "wait-for-release-gates"]
+    assert job["if"] == "${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}"
+    assert job["concurrency"] == {
+        "group": "vntyper-ghcr-release-promotion",
+        "cancel-in-progress": "false",
+    }
+    assert job["permissions"] == {"contents": "read", "packages": "write"}
+    assert "mutual-exclusion lock" in header
+    assert "not an unbounded queue" in header
+    assert "superseded pending" in header
+    assert "must be rerun" in header
+    assert "plan_alias_updates" in promote["run"]
+    assert 'for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest' in promote["run"]
+    assert 'docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS"' in promote["run"]
+    assert '"$IMAGE@$SOURCE_DIGEST"' in promote["run"]
+    assert '"$IMAGE:main"' not in promote["run"]
+
+
+def test_promotion_executes_five_digest_copies_and_rerun_converges_to_noops(tmp_path: Path) -> None:
+    """A complete rerun must observe the five prior writes and perform no new mutations."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _promotion_fixture())
+    source = f"ghcr.io/hassansaei/vntyper@{'sha256:' + 'b' * 64}"
+
+    first = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert first.returncode == 0, first.stderr
+    records = _create_records(tmp_path)
+    assert len(records) == 5
+    assert [record[record.index("--tag") + 1].rsplit(":", maxsplit=1)[1] for record in records] == [
+        "v2.0.10",
+        "2.0.10",
+        "2.0",
+        "2",
+        "latest",
+    ]
+    assert all(record[-1] == source for record in records)
+    progress = json.loads((tmp_path / "alias-progress.json").read_text())
+    assert len(progress) == 5
+    assert all(row["attempted"] and row["write_succeeded"] and row["verified"] for row in progress)
+    assert {row["final_digest"] for row in progress} == {"sha256:" + "b" * 64}
+
+    second = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert second.returncode == 0, second.stderr
+    assert len(_create_records(tmp_path)) == 5
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    assert [item["decision"] for item in plan["plan"]] == ["no-op"] * 5
+    assert (tmp_path / "alias-progress.json").read_text() == "[]"
+
+
+@pytest.mark.parametrize("conflicting_alias", ["v2.0.10", "latest"])
+def test_equal_version_digest_conflict_fails_before_any_alias_write(
+    tmp_path: Path,
+    conflicting_alias: str,
+) -> None:
+    """Conflicting immutable or floating identity must abort the whole plan before mutation."""
+    other_digest = "sha256:" + "c" * 64
+    source_digest = "sha256:" + "b" * 64
+    aliases = {
+        "v2.0.10": (source_digest, "2.0.10"),
+        "2.0.10": (source_digest, "2.0.10"),
+        "2.0": (source_digest, "2.0.10"),
+        "2": (source_digest, "2.0.10"),
+        "latest": (source_digest, "2.0.10"),
+    }
+    aliases[conflicting_alias] = (other_digest, "2.0.10")
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _promotion_fixture(aliases))
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert completed.returncode != 0
+    assert "release alias conflict" in completed.stderr
+    assert (tmp_path / "mutation.log").read_text() == ""
+    assert _create_records(tmp_path) == []
+
+
+@pytest.mark.parametrize("completed_prefix", range(6))
+def test_promotion_converges_after_every_completed_alias_prefix(tmp_path: Path, completed_prefix: int) -> None:
+    """Each partial prefix must safely converge without rewriting completed aliases."""
+    digest = "sha256:" + "b" * 64
+    ordered = ("v2.0.10", "2.0.10", "2.0", "2", "latest")
+    aliases = dict.fromkeys(ordered[:completed_prefix], (digest, "2.0.10"))
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _promotion_fixture(aliases))
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert completed.returncode == 0, completed.stderr
+    records = _create_records(tmp_path)
+    assert [record[record.index("--tag") + 1].rsplit(":", maxsplit=1)[1] for record in records] == list(
+        ordered[completed_prefix:]
+    )
+    registry = json.loads((tmp_path / "fake-fixture.json").read_text())["docker"]
+    assert all(registry[f"ghcr.io/hassansaei/vntyper:{alias}"]["digest"] == digest for alias in ordered)
+
+
+def test_newer_and_unorderable_floating_aliases_emit_notices_without_writes(tmp_path: Path) -> None:
+    """Fail-safe floating decisions must be observable without moving protected aliases."""
+    digest = "sha256:" + "b" * 64
+    aliases = {
+        "v2.0.10": (digest, "2.0.10"),
+        "2.0.10": (digest, "2.0.10"),
+        "2.0": (digest, "2.0.10"),
+        "2": (digest, None),
+        "latest": (digest, "2.1.0"),
+    }
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _promotion_fixture(aliases))
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "::notice title=GHCR alias 2::" in completed.stderr
+    assert "not strict MAJOR.MINOR.PATCH" in completed.stderr
+    assert "::notice title=GHCR alias latest::" in completed.stderr
+    assert "newer than candidate" in completed.stderr
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+def test_failed_reinspection_preserves_write_succeeded_without_verified(tmp_path: Path) -> None:
+    """A completed registry write must remain visible when post-write verification fails."""
+    digest = "sha256:" + "b" * 64
+    aliases = {
+        "v2.0.10": (digest, "2.0.10"),
+        "2.0.10": (digest, "2.0.10"),
+        "2": (digest, "2.0.10"),
+        "latest": (digest, "2.0.10"),
+    }
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _promotion_fixture(aliases, fail_reinspect=("2.0",)))
+
+    completed = _run_step(tmp_path, publish, "promote-ghcr", "promote", env)
+    summary = _run_step(
+        tmp_path,
+        publish,
+        "promote-ghcr",
+        "promote-result",
+        env | {"PROMOTE_OUTCOME": "failure"},
+    )
+
+    assert completed.returncode != 0
+    assert summary.returncode == 0, summary.stderr
+    progress = json.loads((tmp_path / "alias-progress.json").read_text())
+    assert progress == [
+        {
+            "alias": "2.0",
+            "decision": "create",
+            "reason": "Alias is absent and will be created.",
+            "previous_digest": None,
+            "previous_version": None,
+            "attempted": True,
+            "write_succeeded": True,
+            "verified": False,
+            "final_digest": None,
+        }
+    ]
+    output_name, encoded = (tmp_path / "github-output").read_text().strip().split("=", maxsplit=1)
+    assert output_name == "alias_summary_json"
+    assert json.loads(encoded)["alias_progress"] == progress
+
+
+def test_manual_alias_dry_run_executes_one_untagged_probe_and_zero_writes(tmp_path: Path) -> None:
+    """Manual mode may exercise Buildx carbon-copy validation but cannot tag any alias."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["wait-for-release-gates"]
+    step = _step_with_id(publish, "wait-for-release-gates", "dry-run-aliases")
+    env = _release_runtime(tmp_path, _promotion_fixture())
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "dry-run-aliases", env)
+
+    assert step["if"] == "${{ github.event_name == 'workflow_dispatch' }}"
+    assert job["outputs"]["dry_run_alias_summary_json"] == (
+        "${{ steps.dry-run-aliases.outputs.dry_run_alias_summary_json }}"
+    )
+    assert completed.returncode == 0, completed.stderr
+    records = _create_records(tmp_path)
+    assert len(records) == 1
+    assert "--dry-run" in records[0]
+    assert "--prefer-index=false" in records[0]
+    assert "--tag" not in records[0]
+    assert records[0][-1] == f"ghcr.io/hassansaei/vntyper@{'sha256:' + 'b' * 64}"
+    assert (tmp_path / "mutation.log").read_text() == ""
+    output_name, encoded = (tmp_path / "github-output").read_text().strip().split("=", maxsplit=1)
+    assert output_name == "dry_run_alias_summary_json"
+    summary = json.loads(encoded)
+    assert [item["alias"] for item in summary["plan"]] == ["v2.0.10", "2.0.10", "2.0", "2", "latest"]
+    assert not any(item["execute"] for item in summary["plan"])

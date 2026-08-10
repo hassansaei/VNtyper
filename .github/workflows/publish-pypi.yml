@@ -1,6 +1,8 @@
 # Production releases use the narrowly scoped vntyper_release repository dispatch so
 # policy is always loaded from the default branch. Manual dispatch validates an
 # existing tag in dry-run mode and performs no writes.
+# GHCR promotion uses one repository-wide mutual-exclusion lock, not an unbounded queue.
+# A superseded pending promotion performs no writes before acquiring it and must be rerun.
 name: Publish PyPI and promote GHCR
 
 on:
@@ -207,6 +209,7 @@ jobs:
       preflight_summary_json: ${{ steps.evidence-preflight-result.outputs.preflight_summary_json }}
       check_summary_json: ${{ steps.poll-result.outputs.check_summary_json }}
       evidence_summary_json: ${{ steps.evidence-result.outputs.evidence_summary_json }}
+      dry_run_alias_summary_json: ${{ steps.dry-run-aliases.outputs.dry_run_alias_summary_json }}
     env:
       COORDINATOR_ROOT: ${{ github.workspace }}/controller
       RELEASE_POLL_ATTEMPTS: "120"
@@ -557,3 +560,232 @@ jobs:
             --validated-evidence validated-evidence.json --image image-config.json \
             --output evidence-summary.json
           printf 'evidence_summary_json=%s\n' "$(cat evidence-summary.json)" >> "$GITHUB_OUTPUT"
+
+      - id: dry-run-aliases
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          IMAGE: ghcr.io/hassansaei/vntyper
+          SOURCE_DIGEST: ${{ steps.evidence.outputs.source_digest }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          OBS_DIR=$(mktemp -d)
+          trap 'rm -rf -- "$OBS_DIR"' EXIT
+          for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
+            SAFE_ALIAS=${ALIAS//./_}
+            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}' \
+                > "$OBS_DIR/$SAFE_ALIAS.digest"; then
+              docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Image}}' \
+                > "$OBS_DIR/$SAFE_ALIAS.image.json"
+            else
+              rm -f -- "$OBS_DIR/$SAFE_ALIAS.digest"
+            fi
+          done
+          docker buildx imagetools create --dry-run --prefer-index=false \
+            "$IMAGE@$SOURCE_DIGEST" > "$OBS_DIR/source-carbon-copy.json"
+          test -s "$OBS_DIR/source-carbon-copy.json"
+          SUMMARY=$(python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" <<'PY'
+          import dataclasses
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, str(pathlib.Path("controller").resolve()))
+          from scripts.release_policy import AliasState, parse_release_tag, plan_alias_updates, required_aliases
+
+          version = parse_release_tag("v" + sys.argv[1])
+          root = pathlib.Path(sys.argv[3])
+          observed = {}
+          for alias in required_aliases(version):
+              stem = alias.replace(".", "_")
+              digest_path = root / f"{stem}.digest"
+              if not digest_path.exists():
+                  observed[alias] = None
+                  continue
+              image = json.loads((root / f"{stem}.image.json").read_text(encoding="utf-8"))
+              labels = image.get("config", {}).get("Labels", {}) or {}
+              digest = digest_path.read_text(encoding="utf-8").strip()
+              if not digest.startswith("sha256:") or len(digest) != 71:
+                  raise SystemExit(f"invalid registry digest for {alias}: {digest}")
+              observed[alias] = AliasState(digest, labels.get("org.opencontainers.image.version"))
+          plan = plan_alias_updates(version, sys.argv[2], observed, dry_run=True)
+          if any(item.execute for item in plan):
+              raise SystemExit("dry-run policy attempted a write")
+          print(json.dumps({"source_digest": sys.argv[2],
+                            "observed": {key: None if value is None else dataclasses.asdict(value)
+                                         for key, value in observed.items()},
+                            "plan": [dataclasses.asdict(item) for item in plan]}, separators=(",", ":")))
+          PY
+          )
+          printf 'dry_run_alias_summary_json=%s\n' "$SUMMARY" >> "$GITHUB_OUTPUT"
+
+  promote-ghcr:
+    needs: [validate-release, wait-for-release-gates]
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: vntyper-ghcr-release-promotion
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      alias_summary_json: ${{ steps.promote-result.outputs.alias_summary_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: "false"
+          path: controller
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: promote
+        env:
+          IMAGE: ghcr.io/hassansaei/vntyper
+          SOURCE_DIGEST: ${{ needs.wait-for-release-gates.outputs.source_digest }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          OBS_DIR=$(mktemp -d)
+          trap 'rm -rf -- "$OBS_DIR"' EXIT
+          for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
+            SAFE_ALIAS=${ALIAS//./_}
+            if docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}' \
+                > "$OBS_DIR/$SAFE_ALIAS.digest"; then
+              docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Image}}' \
+                > "$OBS_DIR/$SAFE_ALIAS.image.json"
+            else
+              rm -f -- "$OBS_DIR/$SAFE_ALIAS.digest"
+            fi
+          done
+          python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" > plan.json <<'PY'
+          import dataclasses
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, str(pathlib.Path("controller").resolve()))
+          from scripts.release_policy import AliasState, parse_release_tag, plan_alias_updates, required_aliases
+
+          version = parse_release_tag("v" + sys.argv[1])
+          root = pathlib.Path(sys.argv[3])
+          observed = {}
+          for alias in required_aliases(version):
+              stem = alias.replace(".", "_")
+              digest_path = root / f"{stem}.digest"
+              if not digest_path.exists():
+                  observed[alias] = None
+                  continue
+              image = json.loads((root / f"{stem}.image.json").read_text(encoding="utf-8"))
+              labels = image.get("config", {}).get("Labels", {}) or {}
+              digest = digest_path.read_text(encoding="utf-8").strip()
+              if not digest.startswith("sha256:") or len(digest) != 71:
+                  raise SystemExit(f"invalid registry digest for {alias}: {digest}")
+              observed[alias] = AliasState(digest, labels.get("org.opencontainers.image.version"))
+          plan = plan_alias_updates(version, sys.argv[2], observed, dry_run=False)
+          summary = {
+              "source_digest": sys.argv[2],
+              "observed": {key: None if value is None else dataclasses.asdict(value)
+                           for key, value in observed.items()},
+              "plan": [dataclasses.asdict(item) for item in plan],
+          }
+          print(json.dumps(summary, separators=(",", ":")))
+          PY
+          python - plan.json > executable.tsv <<'PY'
+          import json
+          import sys
+
+          plan = json.load(open(sys.argv[1], encoding="utf-8"))["plan"]
+          conflicts = [item for item in plan if item["decision"] == "fail-conflict"]
+          if conflicts:
+              raise SystemExit("release alias conflict: " + json.dumps(conflicts, separators=(",", ":")))
+          for item in plan:
+              if item["decision"] in {"skip-newer", "skip-unorderable", "no-op"}:
+                  print(f"::notice title=GHCR alias {item['alias']}::{item['reason']}", file=sys.stderr)
+              if item["execute"]:
+                  print(f"{item['alias']}\t{item['decision']}")
+          PY
+          printf '[]' > alias-progress.json
+          record_progress() {
+            python - alias-progress.json plan.json "$1" "$2" "$3" <<'PY'
+          import json
+          import os
+          import sys
+          import tempfile
+
+          path, plan_path, alias, phase, final_digest = sys.argv[1:]
+          progress = json.load(open(path, encoding="utf-8"))
+          plan_payload = json.load(open(plan_path, encoding="utf-8"))
+          planned = next(item for item in plan_payload["plan"] if item["alias"] == alias)
+          observed = plan_payload["observed"].get(alias)
+          row = next((item for item in progress if item["alias"] == alias), None)
+          if row is None:
+              row = {
+                  "alias": alias,
+                  "decision": planned["decision"],
+                  "reason": planned["reason"],
+                  "previous_digest": None if observed is None else observed["digest"],
+                  "previous_version": None if observed is None else observed["version"],
+                  "attempted": False,
+                  "write_succeeded": False,
+                  "verified": False,
+                  "final_digest": None,
+              }
+              progress.append(row)
+          if phase == "attempted":
+              row["attempted"] = True
+          elif phase == "write-succeeded":
+              row["attempted"] = True
+              row["write_succeeded"] = True
+          elif phase == "verified":
+              row["attempted"] = True
+              row["write_succeeded"] = True
+              row["verified"] = True
+              row["final_digest"] = final_digest
+          else:
+              raise SystemExit(f"unknown promotion progress phase: {phase}")
+          fd, temp = tempfile.mkstemp(prefix=".alias-progress.", dir=".")
+          try:
+              with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                  json.dump(progress, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temp, path)
+          finally:
+              if os.path.exists(temp):
+                  os.unlink(temp)
+          PY
+          }
+          while IFS=$'\t' read -r ALIAS DECISION; do
+            case "$ALIAS" in "v$VERSION"|"$VERSION"|"${VERSION%.*}"|"${VERSION%%.*}"|latest) ;; *) exit 2 ;; esac
+            case "$DECISION" in create|advance) ;; *) exit 2 ;; esac
+            record_progress "$ALIAS" attempted ""
+            docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS" \
+              "$IMAGE@$SOURCE_DIGEST"
+            record_progress "$ALIAS" write-succeeded ""
+            FINAL_DIGEST=$(docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{.Manifest.Digest}}')
+            test "$FINAL_DIGEST" = "$SOURCE_DIGEST"
+            record_progress "$ALIAS" verified "$FINAL_DIGEST"
+          done < executable.tsv
+      - id: promote-result
+        if: ${{ always() }}
+        env:
+          PROMOTE_OUTCOME: ${{ steps.promote.outcome }}
+        run: |
+          set -euo pipefail
+          python - "$PROMOTE_OUTCOME" <<'PY' > alias-summary.json
+          import json
+          import pathlib
+          import sys
+
+          def load(path, fallback):
+              file = pathlib.Path(path)
+              return json.loads(file.read_text(encoding="utf-8")) if file.is_file() else fallback
+
+          print(json.dumps({"step_outcome": sys.argv[1], "plan": load("plan.json", {}),
+                            "alias_progress": load("alias-progress.json", [])}, separators=(",", ":")))
+          PY
+          printf 'alias_summary_json=%s\n' "$(cat alias-summary.json)" >> "$GITHUB_OUTPUT"
