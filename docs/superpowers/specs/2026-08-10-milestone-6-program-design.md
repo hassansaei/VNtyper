@@ -167,9 +167,13 @@ integration contracts remain explicit serialization points if a future skill ver
 ## Security and GitHub permission model
 
 - Default workflow permissions remain empty or read-only; permissions are granted per job.
-- Pull requests never publish images or packages. No `pull_request_target` is introduced.
-- Fork PR behavior for a missing Docker base image remains the explicit read-only-token failure documented by the repository.
-- The main Docker publisher alone receives `packages: write`; release inspection uses read-only metadata access, and promotion receives package write only for its job.
+- Pull requests never publish application images or packages through the milestone release paths. The preserved
+  same-repository missing-base bootstrap may publish its content-hash-addressed base image; fork PR behavior remains
+  the explicit read-only-token failure documented by the repository. No `pull_request_target` is introduced.
+- Docker `build-and-test` retains its existing job-level `packages: write` because the same job publishes tested
+  application tags on main pushes. PR execution contains no application-image registry-write step: cache export is
+  disabled and every application push/evidence step is guarded by exact push-to-main authority. Release inspection
+  uses read-only metadata access, and promotion receives package write only for its job.
 - The PyPI build job has `contents: read`, uses `persist-credentials: false`, and uploads a workflow artifact. The publish job has only `id-token: write`, uses environment `pypi`, and invokes the SHA-pinned PyPA publisher without secrets.
 - Workflow dispatch is a dry run over an already-existing tag. It must not create or move a production tag or publish aliases/packages.
 - Release validation prevents an arbitrary tag/ref from publishing by verifying strict format, package version, main ancestry, exact-SHA check-runs, and source image revision.

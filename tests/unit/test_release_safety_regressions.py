@@ -132,6 +132,19 @@ def test_release_contract_documents_nightly_immutability_and_legacy_alias_migrat
         assert "full: true" not in text
 
 
+def test_program_design_distinguishes_job_authority_from_pr_write_paths() -> None:
+    """The permission model must describe preserved Docker job authority without claiming false exclusivity."""
+    text = " ".join(
+        (ROOT / "docs" / "superpowers" / "specs" / "2026-08-10-milestone-6-program-design.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
+    assert "build-and-test` retains its existing job-level `packages: write`" in text
+    assert "PR execution contains no application-image registry-write step" in text
+    assert "same-repository missing-base bootstrap" in text
+    assert "main Docker publisher alone receives `packages: write`" not in text
+
+
 def test_release_spec_and_plan_use_fail_closed_manifest_and_repository_bound_downloads() -> None:
     """Executable release guidance must match the proven registry and repository boundaries."""
     paths = (
