@@ -1,10 +1,8 @@
-"""
-Unit tests for the advisory mutation harness, ``scripts/mutation_test.py``.
+"""Unit tests for the isolated advisory mutation harness.
 
-The harness rewrites production source in place, so two of its properties are worth
-pinning hard: it must only ever produce mutants that compile, and it must put the
-original file back. Both are asserted below against a throwaway module in ``tmp_path``;
-nothing here touches a real ``vntyper`` module.
+Two properties are pinned especially hard: it must only produce mutants that compile,
+and it must restore the exact disposable baseline. Both are asserted below against a
+throwaway module in ``tmp_path``; nothing here touches a real ``vntyper`` module.
 
 The third property is the one that made two earlier sweeps fictional and is the reason
 this file exists at all: byte-length-preserving mutants plus CPython's ``(mtime, size)``
@@ -646,25 +644,21 @@ def test_the_page_keeps_the_superseded_branch_coverage_claim_as_a_correction() -
     assert "It was not a prerequisite" in page, "and it must actually be refuted"
 
 
-def test_the_page_warns_against_building_from_the_tree_during_a_sweep() -> None:
-    """
-    The harness rewrites `vntyper/scripts/*.py` in place, so a build started mid-sweep
-    bakes a live mutant into its artefact.
-
-    This is not hypothetical: a Docker image built during a sweep crashed in the
-    container with a pandas `KeyError` in `motif_processing.py`, which reads exactly
-    like a production bug and cost a diagnosis cycle before it was traced back. The
-    `finally` restore protects the repository, not anything already built from it, so
-    the warning has to be on the page next to the `.pyc` one - both are "the result you
-    got is not the result you think you got".
-    """
+def test_the_page_documents_the_isolated_sweep_lifecycle() -> None:
+    """Generated operator copy must match the worktree implementation."""
     result = mutation_test.ModuleResult(path="vntyper/scripts/scoring.py", killed=4, survived=0)
 
     page = mutation_test.format_markdown([result], elapsed=1.0)
 
-    assert "in place" in page
-    assert "docker build" in page.lower()
-    assert "git diff --quiet -- vntyper/" in page
+    for phrase in (
+        "disposable detached worktree",
+        "current non-ignored working state",
+        "known-killed canary",
+        "real production source is never mutated",
+        "cleanup is best effort",
+    ):
+        assert phrase in page
+    assert "Writes each mutant over the real file" not in page
 
 
 def test_the_page_says_the_43_5_percent_baseline_is_not_directly_comparable() -> None:

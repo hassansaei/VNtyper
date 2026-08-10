@@ -11,15 +11,20 @@ in it went undetected by a fully green build.
 
 This harness makes that measurement reproducible. It:
 
-0. Refuses to start unless every target file is committed - it rewrites the live tree
-   and restores the text it read at the start, which is only the committed text if the
-   tree was clean. See ``mutation_guard``.
-0b. Refuses to start unless the tests it is about to judge mutants by **pass on the
-   unmutated tree**. See "The green-baseline preflight" below.
-1. Tokenizes each target module and generates one mutant per mutable token.
-2. Discards mutants that do not compile (e.g. ``*args`` -> ``/args``).
-3. Writes each mutant over the real file, runs the tests, and restores the original.
-4. Counts a mutant as **killed** if the tests fail, **survived** if they pass.
+0. Refuses to start unless each selected target and requested real output is clean. The
+   selected committed target bytes define the measurement, while real outputs are
+   replaced only after the measurement is complete. See ``mutation_guard``.
+1. Captures HEAD, creates a disposable detached worktree, and overlays the current
+   non-ignored working state except selected targets and requested output paths.
+2. Proves imports resolve inside that pinned workspace, then requires both a green
+   unmutated baseline and a known-killed canary before measuring ordinary mutants.
+3. Tokenizes each selected module and discards mutants that do not compile (for example,
+   ``*args`` -> ``/args``).
+4. Writes one mutant at a time only inside the disposable workspace, runs the tests,
+   and restores the exact post-overlay baseline after every attempt.
+5. Counts a mutant as **killed** if the tests fail and **survived** if they pass, installs
+   complete requested outputs atomically, removes the worktree, and verifies that real
+   production source retained its startup digests.
 
 A survivor is a defect the suite cannot see. The score is ``killed / total``.
 
@@ -65,8 +70,8 @@ number printed here. Use it to find untested decisions, not as a pass/fail thres
    Two mutation sweeps on this branch produced fictional results before this was found.
 
    **The invariant: no child process may load bytecode generated for a different
-   revision of a target module.** Everything below exists to hold that, and nothing
-   below is worth defending on its own terms.
+   revision of a target module.** Everything below exists to hold that inside the
+   disposable workspace, and nothing below is worth defending on its own terms.
 
    Why it is easy to break: CPython validates a cached ``.pyc`` against the source's
    **(mtime, size)** pair, and mtime has one-second granularity. A mutant that is
@@ -1088,24 +1093,25 @@ def format_markdown(results: list[ModuleResult], elapsed: float) -> str:
     out.append("    in depth for the parent process, which never imports a target module -")
     out.append("    it is not what holds the invariant, and the harness is safe without it.")
     out.append("")
-    out.append('!!! danger "Nothing may build or install from the tree while a sweep runs"')
+    out.append('!!! note "Each measurement runs in an isolated workspace"')
     out.append("")
-    out.append("    The harness rewrites `vntyper/scripts/*.py` **in place**, so for most of")
-    out.append("    a run the working tree holds a deliberately broken module. Anything")
-    out.append("    that snapshots source mid-sweep bakes that mutant into its artefact -")
-    out.append("    a docker build, `pip install`, `python -m build`, a tarball.")
+    out.append("    The harness captures HEAD in a disposable detached worktree and overlays")
+    out.append("    the current non-ignored working state, except selected mutation targets")
+    out.append("    and requested output paths. Selected targets therefore come from the")
+    out.append("    captured commit, while ordinary edits and new tests participate in the")
+    out.append("    measurement without being written back.")
     out.append("")
-    out.append("    This has happened: an image built during a sweep crashed in the")
-    out.append("    container at `motif_processing.py` with a pandas `KeyError`, which")
-    out.append("    reads exactly like a production bug and cost a full diagnosis cycle")
-    out.append("    before it was traced back to the sweep. Rebuilding from a clean tree")
-    out.append("    passed.")
+    out.append("    Import provenance is proved against the pinned worktree before testing.")
+    out.append("    A green baseline and a known-killed canary must then pass before ordinary")
+    out.append("    mutants are measured, and the post-overlay baseline is verified after")
+    out.append("    the canary and after every target.")
     out.append("")
-    out.append("    The `finally` restore protects the **repository**, not any artefact")
-    out.append("    already produced from it. Run `git diff --quiet -- vntyper/`")
-    out.append("    immediately before and after any build, package or install step; if it")
-    out.append("    reports a difference you did not make, a sweep is running and the")
-    out.append("    artefact is void.")
+    out.append("    Every mutant and bytecode-cache write is confined to that workspace;")
+    out.append("    real production source is never mutated. Requested report artifacts are")
+    out.append("    built completely and installed atomically in the real checkout.")
+    out.append("    The cleanup is best effort: SIGINT, SIGTERM, SIGHUP and SIGQUIT attempt")
+    out.append("    the common unwind path, while SIGKILL or a host crash can leave only an")
+    out.append("    orphan disposable worktree for later inspection and removal.")
     out.append("")
     out.append("## Related: branch coverage, now enabled")
     out.append("")
@@ -1358,11 +1364,13 @@ def main() -> int:
     Run the mutation sweep and print the report.
 
     Returns:
-        int: 0 when a sweep actually happened and the tree was restored afterwards.
+        int: 0 after measurement, output installation, workspace cleanup, and real-source
+            digest verification all complete.
             **Non-zero means no usable measurement was produced**, never "the score is
             too low": the refusals are a dirty working tree, a red baseline, a git that
-            cannot answer, and a target left unrestored. The score itself is advisory and
-            is not gated - see the module docstring for why gating on it would be wrong.
+            cannot answer, a disposable baseline that cannot be restored, failed cleanup,
+            or a changed real target. The score itself is advisory and is not gated - see
+            the module docstring for why gating on it would be wrong.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--module", help="Only mutate targets whose path contains this substring.")
@@ -1416,10 +1424,8 @@ def main() -> int:
         print(f"REFUSING TO WRITE: {exc}", file=sys.stderr)
         return 1
 
-    # Before a single byte is written; see `mutation_guard` for the three ways a sweep
-    # over uncommitted work goes wrong. Only the targets this run will actually rewrite
-    # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep -
-    # plus the files it will overwrite on the way out.
+    # Selected targets must identify committed baseline bytes; requested outputs must be
+    # safe to replace. `--module` narrows the target side exactly as far as the sweep.
     refusal = _refuse_if_dirty(targets, [output, results_json])
     if refusal is not None:
         print(refusal, file=sys.stderr)

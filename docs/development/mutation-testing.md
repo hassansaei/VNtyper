@@ -157,24 +157,25 @@ overwrites this page with the result.
     in depth for the parent process, which never imports a target module -
     it is not what holds the invariant, and the harness is safe without it.
 
-!!! danger "Nothing may build or install from the tree while a sweep runs"
+!!! note "Each measurement runs in an isolated workspace"
 
-    The harness rewrites `vntyper/scripts/*.py` **in place**, so for most of
-    a run the working tree holds a deliberately broken module. Anything
-    that snapshots source mid-sweep bakes that mutant into its artefact -
-    a docker build, `pip install`, `python -m build`, a tarball.
+    The harness captures HEAD in a disposable detached worktree and overlays
+    the current non-ignored working state, except selected mutation targets
+    and requested output paths. Selected targets therefore come from the
+    captured commit, while ordinary edits and new tests participate in the
+    measurement without being written back.
 
-    This has happened: an image built during a sweep crashed in the
-    container at `motif_processing.py` with a pandas `KeyError`, which
-    reads exactly like a production bug and cost a full diagnosis cycle
-    before it was traced back to the sweep. Rebuilding from a clean tree
-    passed.
+    Import provenance is proved against the pinned worktree before testing.
+    A green baseline and a known-killed canary must then pass before ordinary
+    mutants are measured, and the post-overlay baseline is verified after
+    the canary and after every target.
 
-    The `finally` restore protects the **repository**, not any artefact
-    already produced from it. Run `git diff --quiet -- vntyper/`
-    immediately before and after any build, package or install step; if it
-    reports a difference you did not make, a sweep is running and the
-    artefact is void.
+    Every mutant and bytecode-cache write is confined to that workspace;
+    real production source is never mutated. Requested report artifacts are
+    built completely and installed atomically in the real checkout.
+    The cleanup is best effort: SIGINT, SIGTERM, SIGHUP and SIGQUIT attempt
+    the common unwind path, while SIGKILL or a host crash can leave only an
+    orphan disposable worktree for later inspection and removal.
 
 ## Related: branch coverage, now enabled
 
