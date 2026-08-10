@@ -17,10 +17,37 @@ from pathlib import Path
 
 import pytest
 
-from tests.parametrization import get_advntr_test_cases, get_advntr_test_ids, get_bam_test_cases, get_bam_test_ids
-from tests.support.orchestration import ADVNTR_TIMEOUT_SECONDS, run_advntr_test_case, run_bam_test_case
+from tests.parametrization import (
+    get_advntr_test_cases,
+    get_advntr_test_ids,
+    get_bam_test_cases,
+    get_bam_test_ids,
+    get_fastq_test_cases,
+    get_fastq_test_ids,
+)
+from tests.support.orchestration import (
+    ADVNTR_TIMEOUT_SECONDS,
+    PipelineRequest,
+    PipelineRunResult,
+    run_advntr_test_case,
+    run_bam_test_case,
+    run_fastq_test_case,
+)
 
 from .conftest import run_vntyper_pipeline
+
+TEST_DATA_ROOT = Path(__file__).parent.parent / "data"
+
+
+def _docker_runner(container, output_mount_root: Path, request: PipelineRequest) -> PipelineRunResult:
+    """Execute one shared request with Docker-specific path mapping only."""
+    return run_vntyper_pipeline(
+        container,
+        request,
+        test_data_root=TEST_DATA_ROOT,
+        output_mount_root=output_mount_root,
+    )
+
 
 # ============================================================================
 # BAM Pipeline Tests
@@ -58,15 +85,9 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
     subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
 
     # Define Docker-specific runner
-    def docker_runner(bam_file: Path, reference: str, output_dir: Path) -> int:
+    def docker_runner(request: PipelineRequest) -> PipelineRunResult:
         """Execute pipeline in Docker container."""
-        return run_vntyper_pipeline(
-            container,
-            bam_file,
-            reference,
-            output_dir,
-            extra_modules=None,
-        )
+        return _docker_runner(container, output_dir, request)
 
     # Run test using SHARED orchestration logic
     # This is the SAME function used by local tests!
@@ -112,26 +133,30 @@ def test_docker_advntr_pipeline(test_case: dict, vntyper_container, tmp_path, en
     subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
 
     # Define Docker-specific runner
-    def docker_runner(
-        bam_file: Path,
-        reference: str,
-        output_dir: Path,
-        extra_modules: list[str],
-        extra_cli_options: list[str],
-    ) -> int:
+    def docker_runner(request: PipelineRequest) -> PipelineRunResult:
         """Execute pipeline with adVNTR in Docker container."""
-        return run_vntyper_pipeline(
-            container,
-            bam_file,
-            reference,
-            output_dir,
-            extra_modules=extra_modules,
-            extra_cli_options=extra_cli_options,
-        )
+        return _docker_runner(container, output_dir, request)
 
     # Run test using SHARED orchestration logic
     # Use test-specific subdirectory for isolation
     run_advntr_test_case(test_case, docker_runner, test_output_dir)
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("test_case", get_fastq_test_cases(), ids=get_fastq_test_ids())
+def test_docker_fastq_pipeline(test_case: dict, vntyper_container, ensure_test_data) -> None:
+    """Run the shared FASTQ request and validation through Docker's path mapper."""
+    import subprocess
+
+    container, output_dir = vntyper_container
+    test_output_dir = output_dir / test_case["test_name"]
+    test_output_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+
+    def docker_runner(request: PipelineRequest) -> PipelineRunResult:
+        return _docker_runner(container, output_dir, request)
+
+    run_fastq_test_case(test_case, docker_runner, test_output_dir)
 
 
 # ============================================================================

@@ -10,13 +10,16 @@ Fixtures:
 """
 
 import os
+import shlex
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from testcontainers.core.container import DockerContainer
+
+from tests.support.orchestration import PipelineRequest, PipelineRunResult, build_pipeline_argv
 
 
 def _exit_code(result: Any) -> int:
@@ -157,202 +160,108 @@ def vntyper_container(
     container.stop()
 
 
+class ContainerExecutor(Protocol):
+    """Structural subset of ``DockerContainer`` used by the pipeline runner."""
+
+    def exec(self, command: list[str]) -> Any:
+        """Execute one command in the running container."""
+
+
+def _map_registered_input(path: Path, test_data_root: Path) -> str:
+    root = test_data_root.resolve(strict=True)
+    try:
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(f"Path is not registered test data: {path}") from exc
+    if not resolved.is_file() or not resolved.is_relative_to(root):
+        raise ValueError(f"Path is not registered test data: {path}")
+    return f"/opt/vntyper/input/{resolved.relative_to(root).as_posix()}"
+
+
+def _map_case_output(path: Path, output_mount_root: Path) -> str:
+    root = output_mount_root.resolve(strict=True)
+    try:
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(f"Docker case output directory does not exist: {path}") from exc
+    if resolved == root:
+        raise ValueError("Parameterized Docker cases may not use the output mount root")
+    if not resolved.is_dir() or not resolved.is_relative_to(root):
+        raise ValueError(f"Docker case output directory escapes its mount root: {path}")
+    if any(resolved.iterdir()):
+        raise ValueError(f"Docker case output directory must be initially empty: {path}")
+    return f"/opt/vntyper/output/{resolved.relative_to(root).as_posix()}"
+
+
+def map_docker_request_path(
+    path: Path,
+    *,
+    request: PipelineRequest,
+    test_data_root: Path,
+    output_mount_root: Path,
+) -> str:
+    """Map one canonical request path into a registered read-only or isolated mount.
+
+    Args:
+        path: Host or image-relative path from ``request``.
+        request: Canonical request owning the path roles.
+        test_data_root: Host directory mounted read-only at ``/opt/vntyper/input``.
+        output_mount_root: Host directory mounted read-write at ``/opt/vntyper/output``.
+
+    Returns:
+        Container path preserving the resource's relative identity.
+
+    Raises:
+        ValueError: If a path is unregistered, escapes a mount, or targets shared output.
+    """
+    if path == request.output_dir:
+        return _map_case_output(path, output_mount_root)
+    if path == request.reference_fasta and not path.is_absolute():
+        if not path.parts or path.parts[0] != "reference" or ".." in path.parts:
+            raise ValueError(f"Image reference path is not registered: {path}")
+        return f"/opt/vntyper/{path.as_posix()}"
+    return _map_registered_input(path, test_data_root)
+
+
+def _exec_output(result: Any) -> str:
+    output = getattr(result, "output", b"")
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return str(output or "")
+
+
 def run_vntyper_pipeline(
-    container: DockerContainer,
-    bam_file: Path,
-    reference: str,
-    output_dir: Path,
-    extra_modules: list[str] | None = None,
-    extra_cli_options: list[str] | None = None,
-) -> int:
-    """
-    Execute VNtyper pipeline inside Docker container.
+    container: ContainerExecutor,
+    request: PipelineRequest,
+    *,
+    test_data_root: Path,
+    output_mount_root: Path,
+) -> PipelineRunResult:
+    """Execute one canonical pipeline request through Docker's path transport.
 
     Args:
-        container: Running Docker container
-        bam_file: BAM file path (will be mapped to /data)
-        reference: Reference assembly (hg19, hg38)
-        output_dir: Output directory path (host path where files will appear)
-        extra_modules: Optional list of extra modules (e.g., ["advntr"])
-        extra_cli_options: Optional list of additional CLI flags
-                           (e.g., ["--fast-mode", "--advntr-max-coverage", "300"])
+        container: Running container executor.
+        request: Transport-independent pipeline request.
+        test_data_root: Host input mount root.
+        output_mount_root: Host output mount root.
 
     Returns:
-        int: Exit code from pipeline execution
-
-    Notes:
-        The container has /opt/vntyper/output mounted to the fixture's output directory.
-        This function calculates the container path based on the host output_dir.
-        If output_dir is a subdirectory, the container path will reflect that structure.
+        Captured Docker exec exit and combined output.
     """
-    # Build command
-    # Since we bypassed the entrypoint for testing, we need to manually
-    # activate the conda environment and run vntyper
-    # Convert bam_file to absolute Path if it's a string or relative path
-    bam_file_path = Path(bam_file).resolve()
 
-    # Calculate relative path from tests/data/ to support subdirectories
-    project_root = Path(__file__).parent.parent.parent
-    test_data_dir = project_root / "tests" / "data"
-    bam_relative_path = bam_file_path.relative_to(test_data_dir)
+    def mapper(path: Path) -> str:
+        return map_docker_request_path(
+            path,
+            request=request,
+            test_data_root=test_data_root,
+            output_mount_root=output_mount_root,
+        )
 
-    # Determine the container output path
-    # The fixture's base output directory is mounted at /opt/vntyper/output
-    # If output_dir is a subdirectory, we need to preserve that structure
-    output_dir_abs = output_dir.resolve()
-
-    # Find the mounted base directory by looking for docker_output in the path
-    # This works because tmp_path_factory.mktemp("docker_output") creates the base
-    # Note: The actual directory may be "docker_output0", "docker_output1", etc.
-    parts = output_dir_abs.parts
-    container_output_path = "/opt/vntyper/output"
-
-    for i, part in enumerate(parts):
-        if "docker_output" in part:
-            # Everything after docker_output* is the subdirectory structure
-            subdir_parts = parts[i + 1 :]
-            if subdir_parts:
-                container_output_path = "/opt/vntyper/output/" + "/".join(subdir_parts)
-            break
-
-    # Create the test-specific subdirectory in the container if needed
-    # The subdirectory exists on the host, but we need to ensure it exists in the container too
-    if container_output_path != "/opt/vntyper/output":
-        mkdir_cmd = [
-            "mkdir",
-            "-p",
-            container_output_path,
-        ]
-        mkdir_result = container.exec(mkdir_cmd)
-        if mkdir_result.exit_code != 0:
-            print(
-                f"Failed to create output directory: {mkdir_result.output.decode() if mkdir_result.output else 'No output'}"
-            )
-            return _exit_code(mkdir_result)
-
-    # The BAM is read straight out of the read-only input mount. It used to be
-    # copied into the output directory first, because VNtyper derived two writes
-    # from the input path -- the `samtools quickcheck` log (#201) and, on the
-    # non-fast BAM path, a `.bai` (#210) -- and both failed on a read-only mount.
-    # Nothing in the `vntyper` package writes into the input tree any more
-    # (#162), so the copy is gone: with it in place this tier ran against a
-    # writable copy and could not have proved that.
-    input_bam_path = f"/opt/vntyper/input/{bam_relative_path}"
-
-    # Build vntyper command arguments
-    # Use correct paths as per Docker README documentation
-    vntyper_args = [
-        "pipeline",
-        "--bam",
-        input_bam_path,  # Read directly from the read-only input mount
-        "--reference-assembly",  # Full parameter name to avoid ambiguity
-        reference,
-        "--output-dir",  # Use --output-dir instead of --output
-        container_output_path,  # Write to test-specific subdirectory
-        "--threads",
-        "2",
-    ]
-
-    if extra_modules:
-        # The comma form relies on cli_handlers.normalise_extra_modules: before #179
-        # "advntr,shark" matched neither module and produced a silent Kestrel-only run.
-        vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
-
-    # Add remaining CLI options (e.g. --fast-mode, --advntr-max-coverage)
-    if extra_cli_options:
-        vntyper_args.extend(extra_cli_options)
-
-    # No copy step: the alignment and any index beside it are read in place. An
-    # index the fixture data already carries as `<bam>.bai` or `<stem>.bai` is
-    # resolved and reused; when there is none, the pipeline builds one into its
-    # own output directory rather than beside the input.
-
-    # Execute via conda run since we bypassed the entrypoint
-    # Use --no-capture-output to stream stdout/stderr properly
-    cmd = [
+    argv = build_pipeline_argv(request, mapper)
+    command = [
         "/bin/bash",
         "-c",
-        f"source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper vntyper {' '.join(vntyper_args)}",
+        "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper " + shlex.join(argv),
     ]
-
-    # Execute command
-    result = container.exec(cmd)
-
-    # Print output if command failed
-    if result.exit_code != 0:
-        print(f"\n=== VNTYPER BAM PIPELINE FAILED (exit code {result.exit_code}) ===")
-        print(f"Command: vntyper {' '.join(vntyper_args)}")
-        print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
-        print("=" * 80)
-
-    return _exit_code(result)
-
-
-def run_vntyper_fastq_pipeline(
-    container: DockerContainer,
-    fastq1: Path,
-    fastq2: Path | None,
-    reference: str,
-    output_dir: Path,
-    extra_modules: list[str] | None = None,
-) -> int:
-    """
-    Execute VNtyper FASTQ pipeline inside Docker container.
-
-    Args:
-        container: Running Docker container
-        fastq1: FASTQ file 1 path (will be mapped to /data)
-        fastq2: Optional FASTQ file 2 path
-        reference: Reference assembly
-        output_dir: Output directory path
-        extra_modules: Optional list of extra modules
-
-    Returns:
-        int: Exit code from pipeline execution
-    """
-    # Build command
-    # Since we bypassed the entrypoint for testing, we need to manually
-    # activate the conda environment and run vntyper
-    fastq1_name = fastq1.name
-
-    # Build vntyper command arguments
-    # Use correct paths as per Docker README documentation
-    vntyper_args = [
-        "pipeline",
-        "--fastq1",  # Use --fastq1 for first fastq file
-        f"/opt/vntyper/input/{fastq1_name}",
-        "--reference-assembly",  # Full parameter name to avoid ambiguity
-        reference,
-        "--output-dir",  # Use --output-dir instead of --output
-        "/opt/vntyper/output",  # Write directly to mounted output directory
-        "--threads",
-        "2",
-    ]
-
-    if fastq2:
-        vntyper_args.extend(["--fastq2", f"/opt/vntyper/input/{fastq2.name}"])
-
-    if extra_modules:
-        # The comma form relies on cli_handlers.normalise_extra_modules: before #179
-        # "advntr,shark" matched neither module and produced a silent Kestrel-only run.
-        vntyper_args.extend(["--extra-modules", ",".join(extra_modules)])
-
-    # Execute via conda run since we bypassed the entrypoint
-    # Use --no-capture-output to stream stdout/stderr properly
-    cmd = [
-        "/bin/bash",
-        "-c",
-        f"source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper vntyper {' '.join(vntyper_args)}",
-    ]
-
-    # Execute command
-    result = container.exec(cmd)
-
-    # Debug: print output if command failed
-    if result.exit_code != 0:
-        print(f"\n=== VNTYPER FASTQ PIPELINE FAILED (exit code {result.exit_code}) ===")
-        print(f"Command: vntyper {' '.join(vntyper_args)}")
-        print(f"Output:\n{result.output.decode() if result.output else 'No output'}")
-        print("=" * 80)
-
-    return _exit_code(result)
+    result = container.exec(command)
+    return PipelineRunResult(exit_code=_exit_code(result), stdout=_exec_output(result), stderr="")
