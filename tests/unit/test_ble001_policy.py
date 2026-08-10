@@ -15,10 +15,12 @@ from scripts.ble001_policy import (
     Measurement,
     Policy,
     enclosing_symbol,
+    load_policy,
     main,
     measure_ble001,
     normalize_diagnostics,
     read_ruff_paths,
+    validate_policy,
 )
 
 pytestmark = pytest.mark.unit
@@ -447,3 +449,12 @@ def test_adapter_supports_package_import_and_direct_script_execution() -> None:
     )
     assert executed.returncode == 0, executed.stderr
     assert "--repo-root" in executed.stdout
+
+
+def test_live_ble001_inventory_and_behavior_nodes_match_reviewed_policy() -> None:
+    """The frozen inventory and every category-C behavior node remain live."""
+    scope = read_ruff_paths(REPO_ROOT / "Makefile")
+    normal = measure_ble001(REPO_ROOT, scope, ignore_noqa=False)
+    all_handlers = measure_ble001(REPO_ROOT, scope, ignore_noqa=True)
+    policy = load_policy(REPO_ROOT / "scripts/ble001_policy.json")
+    assert validate_policy(REPO_ROOT, normal, all_handlers, policy) == []

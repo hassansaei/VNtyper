@@ -28,35 +28,6 @@ from scripts.ble001_policy_validation import behavior_node_error, validate_scope
 pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_RUFF_PATHS = ("vntyper/", "docker/app/", "tests/", "scripts/", "docs/")
-EXPECTED_UNRESOLVED_BEHAVIOR_NODES = {
-    "tests/unit/web/test_result_expiry.py::test_cleanup_continues_after_one_delete_error",
-    "tests/unit/web/test_tasks.py::test_input_cleanup_logs_one_error_and_attempts_every_owned_path",
-    "tests/unit/test_coverage_gate.py::test_coverage_read_failure_returns_none_and_fails_gate",
-    "tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure",
-    "tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none",
-    "tests/unit/test_cohort_exports.py::test_pseudonym_table_write_failure_is_logged",
-    "tests/unit/test_cohort_inputs.py::test_identity_read_failure_uses_directory_fallback",
-    "tests/unit/test_cohort_inputs.py::test_cleanup_attempts_all_directories_after_failure",
-    "tests/unit/test_cohort_inputs.py::test_bad_archive_is_skipped_and_other_inputs_continue",
-    "tests/unit/test_cohort_inputs.py::test_summary_read_failure_returns_three_empty_results",
-    "tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string",
-    "tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string",
-    "tests/unit/test_cohort_summary_oracle.py::test_report_config_failure_returns_empty_mapping",
-    "tests/unit/test_flagging.py::test_invalid_regex_is_false_and_observable",
-    "tests/unit/test_generate_report.py::test_kestrel_conversion_failure_preserves_both_frames",
-    "tests/unit/test_generate_report.py::test_igv_extraction_failure_returns_empty_fragment",
-    "tests/unit/test_generate_report.py::test_fastp_failure_returns_empty_mapping",
-    "tests/unit/test_generate_report.py::test_pipeline_log_failure_returns_failure_message",
-    "tests/unit/test_generate_report.py::test_pipeline_summary_failure_returns_empty_mapping",
-    "tests/unit/test_install_references.py::test_executable_probe_error_returns_false",
-    "tests/unit/test_screening_summary.py::test_report_config_failure_returns_empty_mapping",
-    "tests/unit/test_summary_parsers.py::test_md5_failure_returns_none",
-    "tests/unit/test_summary_parsers.py::test_csv_failure_returns_error_comment",
-    "tests/unit/test_summary_parsers.py::test_json_failure_returns_error_mapping",
-    "tests/unit/test_summary_parsers.py::test_tsv_failure_returns_error_comment",
-    "tests/unit/test_summary_record_step.py::test_parser_failure_is_recorded_and_step_is_appended",
-    "tests/unit/test_utils.py::test_tool_version_unexpected_failure_returns_unknown",
-}
 
 
 def _ruff_lint_values() -> tuple[list[str], list[str]]:
@@ -559,8 +530,8 @@ def test_live_ble001_diagnostics_match_reviewed_handler_counts() -> None:
     }
 
 
-def test_live_policy_cli_lists_unresolved_behavior_nodes_without_success() -> None:
-    """Tasks 0-3 remain visibly incomplete until every frozen behavior node exists."""
+def test_live_policy_cli_reports_success_after_every_behavior_node_resolves() -> None:
+    """Task 9 completes the frozen behavior evidence and releases the live CLI gate."""
     result = subprocess.run(
         [sys.executable, "scripts/ble001_policy.py", "--repo-root", ".", "--policy", "scripts/ble001_policy.json"],
         cwd=REPO_ROOT,
@@ -568,11 +539,9 @@ def test_live_policy_cli_lists_unresolved_behavior_nodes_without_success() -> No
         text=True,
         check=False,
     )
-    assert result.returncode == 1
-    actual = set(re.findall(r"(?m)^unresolved behavior-test node ([^:]+::[^:]+):", result.stdout))
-    assert actual == EXPECTED_UNRESOLVED_BEHAVIOR_NODES
-    assert result.stdout.count("unresolved behavior-test node") == len(EXPECTED_UNRESOLVED_BEHAVIOR_NODES)
-    assert "categories A/B/C:" not in result.stdout
+    assert result.returncode == 0
+    assert "unresolved behavior-test node" not in result.stdout
+    assert "categories A/B/C: 57/16/35" in result.stdout
 
 
 def test_ble001_and_g004_remain_deliberately_unselected() -> None:

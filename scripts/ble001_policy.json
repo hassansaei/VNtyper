@@ -585,7 +585,7 @@
       "normal_count": 1,
       "all_count": 1,
       "category": "C",
-      "rationale": "vntyper/scripts/summary.py::md5sum: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_parsers.py::test_md5_failure_returns_none and failure remains observable via ERROR log and None result"
+      "rationale": "vntyper/scripts/summary.py::md5sum: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_parsers.py::test_md5_failure_returns_none and failure remains observable via None result"
     },
     {
       "path": "vntyper/scripts/summary.py",
@@ -886,7 +886,7 @@
       "outcome": "Returns None when the artifact hash cannot be read.",
       "rationale": "An unavailable checksum must not be represented as a valid digest.",
       "behavior_test": "tests/unit/test_summary_parsers.py::test_md5_failure_returns_none",
-      "observable_via": "ERROR log and None result"
+      "observable_via": "None result"
     },
     {
       "path": "vntyper/scripts/summary.py",
