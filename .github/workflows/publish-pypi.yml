@@ -216,7 +216,7 @@ jobs:
   wait-for-release-gates:
     needs: validate-release
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: read
@@ -645,6 +645,14 @@ jobs:
           set -euo pipefail
           OBS_DIR=$(mktemp -d)
           trap 'rm -rf -- "$OBS_DIR"' EXIT
+          is_authoritative_manifest_absence() {
+            local alias=$1 error_path=$2
+            if grep -Eiq 'manifest unknown([[:space:]:]|$)' "$error_path"; then
+              return 0
+            fi
+            grep -Fqi "/manifests/${alias}:" "$error_path" && \
+              grep -Eiq 'unexpected status from (HEAD|GET) request.*(^|[^0-9])404([^0-9]|$)' "$error_path"
+          }
           inspect_alias() {
             local alias=$1 safe_alias=$2
             local saw_ambiguous_failure=false
@@ -660,11 +668,10 @@ jobs:
                   return 0
                 fi
                 saw_ambiguous_failure=true
-              elif grep -Eiq 'unauthori[sz]ed|authentication|forbidden|denied|timed?[ -]?out|timeout|network|dial tcp|connection|tls|temporary|service unavailable|too many requests|(^|[^0-9])(401|403|408|429|5[0-9]{2})([^0-9]|$)' \
+              elif grep -Eiq 'credential|executable|no such file|command not found|unauthori[sz]ed|authentication|forbidden|denied|timed?[ -]?out|timeout|network|dial tcp|connection|tls|temporary|service unavailable|too many requests|(^|[^0-9])(401|403|408|429|5[0-9]{2})([^0-9]|$)' \
                   "$error_path"; then
                 saw_ambiguous_failure=true
-              elif ! grep -Eiq 'manifest unknown|unexpected status.*404([^0-9]|$)|(^|[[:space:]:])not found([[:space:]]|$)' \
-                  "$error_path"; then
+              elif ! is_authoritative_manifest_absence "$alias" "$error_path"; then
                 saw_ambiguous_failure=true
               fi
               rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.image.json.tmp"
@@ -756,6 +763,14 @@ jobs:
           set -euo pipefail
           OBS_DIR=$(mktemp -d)
           trap 'rm -rf -- "$OBS_DIR"' EXIT
+          is_authoritative_manifest_absence() {
+            local alias=$1 error_path=$2
+            if grep -Eiq 'manifest unknown([[:space:]:]|$)' "$error_path"; then
+              return 0
+            fi
+            grep -Fqi "/manifests/${alias}:" "$error_path" && \
+              grep -Eiq 'unexpected status from (HEAD|GET) request.*(^|[^0-9])404([^0-9]|$)' "$error_path"
+          }
           inspect_alias() {
             local alias=$1 safe_alias=$2
             local saw_ambiguous_failure=false
@@ -771,11 +786,10 @@ jobs:
                   return 0
                 fi
                 saw_ambiguous_failure=true
-              elif grep -Eiq 'unauthori[sz]ed|authentication|forbidden|denied|timed?[ -]?out|timeout|network|dial tcp|connection|tls|temporary|service unavailable|too many requests|(^|[^0-9])(401|403|408|429|5[0-9]{2})([^0-9]|$)' \
+              elif grep -Eiq 'credential|executable|no such file|command not found|unauthori[sz]ed|authentication|forbidden|denied|timed?[ -]?out|timeout|network|dial tcp|connection|tls|temporary|service unavailable|too many requests|(^|[^0-9])(401|403|408|429|5[0-9]{2})([^0-9]|$)' \
                   "$error_path"; then
                 saw_ambiguous_failure=true
-              elif ! grep -Eiq 'manifest unknown|unexpected status.*404([^0-9]|$)|(^|[[:space:]:])not found([[:space:]]|$)' \
-                  "$error_path"; then
+              elif ! is_authoritative_manifest_absence "$alias" "$error_path"; then
                 saw_ambiguous_failure=true
               fi
               rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.image.json.tmp"

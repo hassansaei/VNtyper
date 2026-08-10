@@ -808,8 +808,10 @@ git commit -m "ci(release): validate existing tagged main commits"
 - [ ] **Step 1: Write RED permissions, names, and finite-poll assertions (2–5 min)**
 
 Assert `wait-for-release-gates.permissions` is exactly `contents: read`, `checks: read`, `actions: read`,
-`packages: read`; `timeout-minutes == "90"` (strictly greater than the 4,770-second worst poll/API retry sleep budget
-plus 10 minutes of command and runner overhead); workflow literals include all `REQUIRED_CHECK_NAMES`,
+`packages: read`; `timeout-minutes == "120"`. The executable assertion computes the full 5,470-second budget: 4,770
+seconds for polling and its API retries, 50 seconds for preflight/evidence run, artifact, and download retries, 50
+seconds for five alias reads, and 600 seconds of command and runner overhead. The two-hour timeout leaves 1,730 seconds
+of headroom. Workflow literals include all `REQUIRED_CHECK_NAMES`,
 `RELEASE_POLL_ATTEMPTS: "120"`, `RELEASE_POLL_INTERVAL_SECONDS: "30"`, `RELEASE_API_ATTEMPTS: "3"`, and
 `RELEASE_API_RETRY_SECONDS: "5"`; the polling step calls `classify_check_runs` with
 `max_attempts=int(...)`, has `env.GH_TOKEN == "${{ secrets.GITHUB_TOKEN }}"`, retries `gh api` at most three times,
@@ -877,7 +879,7 @@ with shell):
   wait-for-release-gates:
     needs: validate-release
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: read

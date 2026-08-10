@@ -794,14 +794,22 @@ def test_exact_sha_gate_has_bounded_polling_auth_and_read_only_permissions() -> 
     preflight = _step_with_id(publish, "wait-for-release-gates", "evidence-preflight")
     poll = _step_with_id(publish, "wait-for-release-gates", "poll")
     evidence = _step_with_id(publish, "wait-for-release-gates", "evidence")
+    dry_aliases = _step_with_id(publish, "wait-for-release-gates", "dry-run-aliases")
 
     assert job["needs"] == "validate-release"
     poll_attempts = int(job["env"]["RELEASE_POLL_ATTEMPTS"])
     poll_interval = int(job["env"]["RELEASE_POLL_INTERVAL_SECONDS"])
     api_attempts = int(job["env"]["RELEASE_API_ATTEMPTS"])
     api_retry = int(job["env"]["RELEASE_API_RETRY_SECONDS"])
+    alias_attempts = int(dry_aliases["env"]["RELEASE_ALIAS_INSPECT_ATTEMPTS"])
+    alias_retry = int(dry_aliases["env"]["RELEASE_ALIAS_INSPECT_RETRY_SECONDS"])
     worst_poll_and_retry_seconds = (poll_attempts - 1) * poll_interval + poll_attempts * (api_attempts - 1) * api_retry
-    assert int(job["timeout-minutes"]) * 60 > worst_poll_and_retry_seconds + 10 * 60
+    candidate_retry_groups = 5  # preflight runs/artifact plus evidence runs/artifact/download
+    candidate_retry_seconds = candidate_retry_groups * (api_attempts - 1) * api_retry
+    alias_retry_seconds = 5 * (alias_attempts - 1) * alias_retry
+    full_budget_seconds = worst_poll_and_retry_seconds + candidate_retry_seconds + alias_retry_seconds + 10 * 60
+    assert job["timeout-minutes"] == "120"
+    assert int(job["timeout-minutes"]) * 60 > full_budget_seconds
     assert job["permissions"] == {
         "actions": "read",
         "checks": "read",
@@ -1623,6 +1631,7 @@ def test_transient_inspection_cannot_hide_and_overwrite_existing_alias(
         "request timed out",
         "unexpected status from HEAD request: 503 Service Unavailable",
         "unexpected status from HEAD request: 503 Service Unavailable: repository not found",
+        "unexpected status from credentials endpoint: 404 Not Found",
     ],
 )
 def test_ambiguous_alias_inspection_failure_aborts_before_every_registry_write(
@@ -1653,7 +1662,10 @@ def test_authoritative_registry_404_may_plan_create_after_bounded_retries(tmp_pa
         inspect_failures={
             f"{image}:latest": {
                 "times": 3,
-                "stderr": "unexpected status from HEAD request: 404 Not Found",
+                "stderr": (
+                    "unexpected status from HEAD request to "
+                    "https://ghcr.io/v2/hassansaei/vntyper/manifests/latest: 404 Not Found"
+                ),
             }
         },
     )
@@ -1798,4 +1810,38 @@ def test_manual_alias_inspection_aborts_on_non_authoritative_failure_before_dry_
     assert completed.returncode != 0
     assert "alias inspection failed without authoritative not-found" in completed.stderr
     assert _create_records(tmp_path) == []
+    assert not (tmp_path / "github-output").exists()
+
+
+@pytest.mark.parametrize(
+    ("job", "step"),
+    [("promote-ghcr", "promote"), ("wait-for-release-gates", "dry-run-aliases")],
+)
+def test_missing_credential_executable_aborts_both_modes_before_create_or_probe(
+    tmp_path: Path,
+    job: str,
+    step: str,
+) -> None:
+    """A local credential failure containing ``not found`` never proves manifest absence."""
+    image = "ghcr.io/hassansaei/vntyper"
+    fixture = _promotion_fixture(
+        inspect_failures={
+            f"{image}:latest": {
+                "times": 3,
+                "stderr": (
+                    'error getting credentials - err: exec: "docker-credential-gh": '
+                    'executable file not found in $PATH, out: ""'
+                ),
+            }
+        }
+    )
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, job, step, env)
+
+    assert completed.returncode != 0
+    assert "alias inspection failed without authoritative not-found" in completed.stderr
+    assert _create_records(tmp_path) == []
+    assert (tmp_path / "mutation.log").read_text() == ""
     assert not (tmp_path / "github-output").exists()

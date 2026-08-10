@@ -206,6 +206,19 @@ Expected: one Conventional Commit; worktree clean before implementation begins.
 - Consumes: every bounded ledger completion and reviewed track commit.
 - Produces: final command/test/coverage/tier evidence for the exact HEAD.
 
+- [ ] **Step 0: Integrate the Task 7 release commit without closing #214**
+
+The bounded release commit `ae47b49` carries `Closes #214`, but that issue remains open until the first successful live
+release. Integrate its tree change without preserving that footer, then recreate the commit with a non-closing reference:
+
+```bash
+git cherry-pick --no-commit ae47b49
+git commit -m "ci(release): promote tested GHCR digests" -m "Refs #214"
+```
+
+Expected: the integrated Task 7 tree matches `ae47b49`, its new commit message contains `Refs #214`, and neither that
+commit nor any release-track integration commit contains `Closes #214`.
+
 - [ ] **Step 1: Inspect the complete diff and status**
 
 Run: `git diff --stat origin/main...HEAD && git diff --check origin/main...HEAD && git status --short`
