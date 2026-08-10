@@ -92,3 +92,11 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
 
     missing = [path for path in required if f"'{path}'" not in sample]
     assert not missing, f"base image hash does not cover: {missing}"
+
+
+def test_unit_coverage_matrix_and_patch_coverage_version_are_fixed() -> None:
+    workflow = (WORKFLOWS / "ci-tests.yml").read_text(encoding="utf-8")
+    assert "python-version: ['3.10', '3.11', '3.12', '3.13']" in workflow
+    assert "run: make test-unit-cov" in workflow
+    assert "matrix.python-version == '3.12'" in workflow
+    assert "PATCH_COVERAGE_BASE" in workflow

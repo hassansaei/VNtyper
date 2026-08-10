@@ -351,11 +351,12 @@ disallow_incomplete_defs = false
 [tool.coverage.run]
 # `source` must live here rather than on the CLI for relative_files to work.
 #
-# `docker/app` is the FastAPI + Celery web service. It is not an installed package, so
-# it is listed as a directory path rather than an importable name; coverage measures it
-# by file location either way, and `relative_files` keeps the reported paths anchored to
-# the repo root so the same data file reads identically in CI and locally.
-source = ["vntyper", "docker/app"]
+# `docker/app` is the FastAPI + Celery web service and root `scripts` contains the
+# project's validation instruments. Neither is an installed package, so both are listed
+# as directory paths rather than importable names; coverage measures them by file location
+# either way, and `relative_files` keeps the reported paths anchored to the repo root so
+# the same data file reads identically in CI and locally.
+source = ["vntyper", "docker/app", "scripts"]
 relative_files = true
 
 # Branch coverage. An `if` that is entered but never taken is not "covered" for
@@ -427,20 +428,3 @@ line-ending = "auto"
 # Format code examples in docstrings
 docstring-code-format = true
 docstring-code-line-length = 100
-
-# ===========================
-# Pytest Configuration
-# ===========================
-[tool.pytest.ini_options]
-minversion = "7.0"
-testpaths = ["tests"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
-markers = [
-    "unit: Unit tests",
-    "integration: Integration tests",
-    "docker: Docker container tests (requires Docker daemon)",
-    "slow: Slow-running tests (e.g., adVNTR module)",
-]
-addopts = "-v --tb=short"

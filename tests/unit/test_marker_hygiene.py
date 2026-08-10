@@ -25,6 +25,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 UNIT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = UNIT_DIR.parents[1]
 
 # A module defines tests if it has a top-level `def test_*` or a `class Test*`.
 _DEFINES_TESTS = re.compile(r"^\s*(?:async\s+def\s+test_|def\s+test_|class\s+Test)", re.MULTILINE)
@@ -77,3 +78,12 @@ def test_no_test_modules_outside_the_known_tiers() -> None:
         f"These test modules live outside tests/{{unit,integration,docker}}: {stray}. "
         "Move real tests into a tier; rename helpers so they do not start with 'test_'."
     )
+
+
+def test_root_pytest_ini_is_the_single_live_marker_authority() -> None:
+    pytest_ini = (REPO_ROOT / "pytest.ini").read_text(encoding="utf-8")
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "--strict-markers" in pytest_ini
+    for marker in ("unit", "integration", "docker", "smoke", "slow"):
+        assert f"{marker}:" in pytest_ini
+    assert "[tool.pytest.ini_options]" not in pyproject

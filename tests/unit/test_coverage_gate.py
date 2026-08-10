@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 
+import coverage
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -211,3 +212,12 @@ def test_scripts_only_coverage_scope_matches_the_repository_tree() -> None:
     assert "--cov=scripts" in makefile
     assert "--cov-omit" not in makefile
     assert all(path.startswith("scripts/") for path in scripts)
+
+
+def test_coverage_source_is_complete_and_has_no_script_omission() -> None:
+    config = coverage.Coverage(config_file=str(coverage_gate.PYPROJECT)).config
+    assert list(config.source) == ["vntyper", "docker/app", "scripts"]
+    script_paths = [str(path) for path in sorted(coverage_gate.REPO_ROOT.glob("scripts/**/*.py"))]
+    assert not config.run_omit
+    assert not config.report_omit
+    assert script_paths
