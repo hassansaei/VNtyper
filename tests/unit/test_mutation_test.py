@@ -190,6 +190,7 @@ def test_the_test_subprocess_disables_bytecode_writing(tmp_path: Path, monkeypat
         captured["command"] = command
         captured["env"] = kwargs["env"]
         captured["cwd"] = kwargs["cwd"]
+        captured["pass_fds"] = kwargs["pass_fds"]
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", real_root, raising=False)
@@ -207,9 +208,11 @@ def test_the_test_subprocess_disables_bytecode_writing(tmp_path: Path, monkeypat
     assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
     assert isinstance(captured["command"], list)
     assert "-B" in captured["command"]
-    assert captured["cwd"] == sweep_root
+    pass_fds = captured["pass_fds"]
+    assert isinstance(pass_fds, tuple) and len(pass_fds) == 1
+    assert captured["cwd"] == Path("/proc/self/fd") / str(pass_fds[0])
     python_path = environment["PYTHONPATH"].split(os.pathsep)
-    assert python_path[0] == str(sweep_root)
+    assert python_path[0] == str(captured["cwd"])
     assert str(real_root) not in python_path
     assert str(real_subdirectory) not in python_path
     assert run.returncode == 0
@@ -242,8 +245,8 @@ def test_no_bytecode_cache_survives_into_any_mutants_test_run(tmp_path, monkeypa
     _plant_stale_cache()
     caches_visible_to_each_run: list[list[Path]] = []
 
-    def fake_run_tests(_paths, _timeout, parallel=False, *, repo_root: Path):
-        assert repo_root == tmp_path
+    def fake_run_tests(_paths, _timeout, parallel=False, *, repo_root):
+        assert repo_root.path == tmp_path
         caches_visible_to_each_run.append(sorted(tmp_path.rglob("__pycache__")))
         _plant_stale_cache()
         return False  # killed, so the sweep moves straight on to the next mutant
@@ -313,12 +316,12 @@ def test_a_sweep_writes_and_clears_only_the_disposable_worktree(
     real_cache = real_root / "vntyper/__pycache__/sentinel.pyc"
     real_cache.parent.mkdir(parents=True)
     real_cache.write_bytes(b"real-cache")
-    cleared_roots: list[Path] = []
+    cleared_roots: list[tuple[Path, Path]] = []
 
     monkeypatch.setattr(mutation_test, "run_tests", lambda *_, **__: False)
 
     def record_cache_clear(root: Path) -> int:
-        cleared_roots.append(root)
+        cleared_roots.append((root, root.parent.resolve(strict=True) / root.name))
         return 0
 
     monkeypatch.setattr(mutation_test, "clear_bytecode_caches", record_cache_clear)
@@ -335,7 +338,9 @@ def test_a_sweep_writes_and_clears_only_the_disposable_worktree(
     assert (real_root / "sample.py").read_text(encoding="utf-8") == original
     assert (sweep_root / "sample.py").read_text(encoding="utf-8") == original
     assert real_cache.read_bytes() == b"real-cache"
-    assert cleared_roots and set(cleared_roots) == {sweep_root / "vntyper"}
+    assert cleared_roots
+    assert {resolved for _raw, resolved in cleared_roots} == {(sweep_root / "vntyper").resolve()}
+    assert all(raw.parts[:4] == ("/", "proc", "self", "fd") for raw, _resolved in cleared_roots)
 
 
 def test_the_original_file_is_restored_when_a_sweep_raises(tmp_path, monkeypatch) -> None:
@@ -371,8 +376,8 @@ def test_a_surviving_mutant_is_confirmed_against_the_full_tier(tmp_path, monkeyp
     monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     seen: list[tuple[tuple[str, ...], bool]] = []
 
-    def fake_run_tests(paths, _timeout, parallel=False, *, repo_root: Path):
-        assert repo_root == tmp_path
+    def fake_run_tests(paths, _timeout, parallel=False, *, repo_root):
+        assert repo_root.path == tmp_path
         seen.append((paths, parallel))
         # Pass the scoped run, fail the full tier: the mutant is killed on escalation.
         return paths != ("tests/unit",)
@@ -413,12 +418,17 @@ def test_canary_requires_the_exact_mutant_to_be_killed(
     unrelated.write_bytes(b"keep-overlay")
     calls: list[tuple[tuple[str, ...], int, Path]] = []
 
-    def fake_run_pytest(test_paths, timeout, parallel=False, *, repo_root: Path):
+    def fake_run_pytest(test_paths, timeout, parallel=False, *, repo_root):
         assert parallel is False
-        calls.append((test_paths, timeout, repo_root))
+        calls.append((test_paths, timeout, repo_root.path))
         return mutation_test.TestRun(
             passed=returncode == 0,
-            output="canary output",
+            output=(
+                f"FAILED {mutation_test.CANARY_EXPECTED_NODE}\n{mutation_test.CANARY_EXPECTED_ASSERTION}\n"
+                "1 failed in 0.01s\n"
+                if returncode == 1
+                else "canary output"
+            ),
             returncode=returncode,
             timed_out=timed_out,
         )

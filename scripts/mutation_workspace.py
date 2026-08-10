@@ -102,6 +102,11 @@ class MutationWorkspace:
     baseline_digests: dict[str, str]
     _root_capability: _RootCapability | None = field(default=None, repr=False, compare=False)
 
+    @property
+    def root_capability(self) -> _RootCapability | None:
+        """Return the pinned disposable-root capability when lifecycle-owned."""
+        return self._root_capability
+
     def target_path(self, relative: str) -> Path:
         """Return a validated target path in the disposable workspace.
 
