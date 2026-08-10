@@ -718,8 +718,73 @@ jobs:
           )
           printf 'dry_run_alias_summary_json=%s\n' "$SUMMARY" >> "$GITHUB_OUTPUT"
 
-  promote-ghcr:
+  build-package:
     needs: [validate-release, wait-for-release-gates]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      package_summary_json: ${{ steps.package-result.outputs.package_summary_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate-release.outputs.sha }}
+          persist-credentials: "false"
+          path: candidate
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - id: package
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          python3 -m venv .release-venv
+          .release-venv/bin/pip install build twine
+          .release-venv/bin/python -m build
+          .release-venv/bin/twine check dist/*
+          ARTIFACT_NAME="python-dist-${{ needs.validate-release.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          python - dist <<'PY'
+          import pathlib
+          import sys
+
+          files = sorted(path.name for path in pathlib.Path(sys.argv[1]).iterdir() if path.is_file())
+          if len(files) != 2 or not any(name.endswith(".whl") for name in files) or not any(
+              name.endswith(".tar.gz") for name in files
+          ):
+              raise SystemExit(f"expected one wheel and one sdist, got {files!r}")
+          PY
+          printf 'artifact_name=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: candidate/dist/
+          if-no-files-found: error
+          retention-days: "7"
+      - id: package-result
+        if: ${{ always() }}
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.artifact_name }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+
+          root = pathlib.Path("candidate/dist")
+          files = sorted(path.name for path in root.iterdir() if path.is_file()) if root.is_dir() else []
+          payload = {
+              "artifact_name": os.environ["ARTIFACT_NAME"] or None,
+              "files": files,
+              "step_outcome": os.environ["PACKAGE_OUTCOME"],
+          }
+          print("package_summary_json=" + json.dumps(payload, separators=(",", ":")))
+          PY
+
+  promote-ghcr:
+    needs: [validate-release, wait-for-release-gates, build-package]
     if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
     runs-on: ubuntu-24.04
     concurrency:
@@ -925,3 +990,59 @@ jobs:
           PY
           mv -- alias-summary.json.tmp alias-summary.json
           printf 'alias_summary_json=%s\n' "$(cat alias-summary.json)" >> "$GITHUB_OUTPUT"
+
+  publish-pypi:
+    needs: [validate-release, wait-for-release-gates, build-package, promote-ghcr]
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+    outputs:
+      publish_summary_json: ${{ steps.result.outputs.publish_summary_json }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.build-package.outputs.artifact_name }}
+          path: dist/
+      - id: existing
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            "https://pypi.org/pypi/vntyper/${VERSION}/json")
+          case "$STATUS" in
+            200) EXISTS=true ;;
+            404) EXISTS=false ;;
+            *) echo "PyPI lookup returned HTTP $STATUS" >&2; exit 1 ;;
+          esac
+          printf 'value=%s\n' "$EXISTS" >> "$GITHUB_OUTPUT"
+      # v1.14.2; verified 2026-08-10 against upstream release/v1
+      - id: publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        with:
+          packages-dir: dist/
+          skip-existing: "true"
+      - id: result
+        if: ${{ always() }}
+        env:
+          EXISTED_BEFORE: ${{ steps.existing.outputs.value }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        run: |
+          set -euo pipefail
+          python - "$EXISTED_BEFORE" "$PUBLISH_OUTCOME" <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import sys
+
+          existed = sys.argv[1] == "true"
+          if existed and sys.argv[2] == "success":
+              outcome = "already-existed-skip"
+          elif sys.argv[2] == "success":
+              outcome = "published"
+          else:
+              outcome = "failed"
+          payload = {"result": outcome, "step_outcome": sys.argv[2], "existed_before": existed}
+          print("publish_summary_json=" + json.dumps(payload, separators=(",", ":")))
+          PY

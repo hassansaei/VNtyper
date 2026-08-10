@@ -458,13 +458,176 @@ def test_release_trigger_uses_default_branch_repository_dispatch_for_production(
         "group": "release-${{ inputs.tag || github.event.client_payload.tag }}",
         "cancel-in-progress": "false",
     }
-    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates", "promote-ghcr"}
+    assert set(publish["jobs"]) == {
+        "validate-release",
+        "wait-for-release-gates",
+        "build-package",
+        "promote-ghcr",
+        "publish-pypi",
+    }
     assert publish["jobs"]["validate-release"]["permissions"] == {"contents": "read"}
 
     commands = "\n".join(step.get("run", "") for job in publish["jobs"].values() for step in job.get("steps", []))
     assert "git tag" not in commands
     assert "git push" not in commands
     assert "gh release create" not in commands
+
+
+def test_package_build_is_unprivileged_and_uploads_one_exact_artifact() -> None:
+    """Package construction must not share publication or registry authority."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["build-package"]
+    checkout = _step_using(publish, "build-package", "actions/checkout@v7")
+    setup_python = _step_using(publish, "build-package", "actions/setup-python@v7")
+    package = _step_with_id(publish, "build-package", "package")
+    upload = _step_using(publish, "build-package", "actions/upload-artifact@v5")
+
+    assert job["needs"] == ["validate-release", "wait-for-release-gates"]
+    assert job["permissions"] == {"contents": "read"}
+    assert "environment" not in job
+    assert job["outputs"] == {
+        "artifact_name": "${{ steps.package.outputs.artifact_name }}",
+        "package_summary_json": "${{ steps.package-result.outputs.package_summary_json }}",
+    }
+    assert checkout["with"] == {
+        "ref": "${{ needs.validate-release.outputs.sha }}",
+        "persist-credentials": "false",
+        "path": "candidate",
+    }
+    assert setup_python["with"]["python-version"] == "3.12"
+    assert package["working-directory"] == "candidate"
+    assert "python3 -m venv .release-venv" in package["run"]
+    assert ".release-venv/bin/python -m build" in package["run"]
+    assert ".release-venv/bin/twine check dist/*" in package["run"]
+    assert (
+        "python-dist-${{ needs.validate-release.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}"
+        in package["run"]
+    )
+    assert upload["with"] == {
+        "name": "${{ steps.package.outputs.artifact_name }}",
+        "path": "candidate/dist/",
+        "if-no-files-found": "error",
+        "retention-days": "7",
+    }
+    assert "secrets." not in json.dumps(job)
+    assert "id-token" not in json.dumps(job)
+    assert "packages" not in json.dumps(job["permissions"])
+    assert publish["jobs"]["promote-ghcr"]["needs"] == [
+        "validate-release",
+        "wait-for-release-gates",
+        "build-package",
+    ]
+
+
+def test_pypi_publish_is_protected_oidc_only_and_rerun_safe() -> None:
+    """Only the protected publisher may request OIDC, with no long-lived token path."""
+    workflow_path = ROOT / ".github" / "workflows" / "publish-pypi.yml"
+    raw = workflow_path.read_text(encoding="utf-8")
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["publish-pypi"]
+    download = _step_using(publish, "publish-pypi", "actions/download-artifact@v5")
+    publisher = _step_with_id(publish, "publish-pypi", "publish")
+
+    assert job["needs"] == ["validate-release", "wait-for-release-gates", "build-package", "promote-ghcr"]
+    assert job["if"] == (
+        "${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}"
+    )
+    assert job["environment"] == {"name": "pypi"}
+    assert job["permissions"] == {"id-token": "write"}
+    assert job["outputs"] == {"publish_summary_json": "${{ steps.result.outputs.publish_summary_json }}"}
+    assert download["with"] == {
+        "name": "${{ needs.build-package.outputs.artifact_name }}",
+        "path": "dist/",
+    }
+    assert publisher["uses"] == "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+    assert publisher["with"] == {"packages-dir": "dist/", "skip-existing": "true"}
+    assert "password" not in publisher["with"]
+    assert "user" not in publisher["with"]
+    assert "# v1.14.2; verified 2026-08-10 against upstream release/v1" in raw
+    for forbidden in (
+        "PYPI_API_TOKEN",
+        "TWINE_PASSWORD",
+        "TWINE_USERNAME",
+        "DOCKER_USERNAME",
+        "DOCKER_PASSWORD",
+    ):
+        assert forbidden not in raw
+    job_source = json.dumps(job)
+    assert "actions/checkout" not in job_source
+    assert "actions/setup-python" not in job_source
+    assert "python -m build" not in job_source
+    assert "pip install" not in job_source
+
+
+def test_package_result_preserves_partial_failure_state(tmp_path: Path) -> None:
+    """A failed build still reports the artifact identity and files it produced."""
+    publish = _workflow("publish-pypi.yml")
+    dist = tmp_path / "candidate" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "vntyper-2.0.10-py3-none-any.whl").write_bytes(b"partial")
+    output = tmp_path / "github-output"
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "build-package",
+        "package-result",
+        {
+            "ARTIFACT_NAME": "python-dist-2.0.10-41-2",
+            "GITHUB_OUTPUT": str(output),
+            "PACKAGE_OUTCOME": "failure",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output_name, encoded = output.read_text(encoding="utf-8").strip().split("=", maxsplit=1)
+    assert output_name == "package_summary_json"
+    assert json.loads(encoded) == {
+        "artifact_name": "python-dist-2.0.10-41-2",
+        "files": ["vntyper-2.0.10-py3-none-any.whl"],
+        "step_outcome": "failure",
+    }
+
+
+@pytest.mark.parametrize(
+    ("existed_before", "publish_outcome", "expected_result"),
+    (
+        ("false", "success", "published"),
+        ("true", "success", "already-existed-skip"),
+        ("false", "failure", "failed"),
+        ("true", "failure", "failed"),
+    ),
+)
+def test_publish_result_distinguishes_new_existing_and_failed_reruns(
+    tmp_path: Path,
+    existed_before: str,
+    publish_outcome: str,
+    expected_result: str,
+) -> None:
+    """Partial PyPI reruns must remain distinguishable from first publication and failure."""
+    publish = _workflow("publish-pypi.yml")
+    output = tmp_path / "github-output"
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "publish-pypi",
+        "result",
+        {
+            "EXISTED_BEFORE": existed_before,
+            "GITHUB_OUTPUT": str(output),
+            "PUBLISH_OUTCOME": publish_outcome,
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output_name, encoded = output.read_text(encoding="utf-8").strip().split("=", maxsplit=1)
+    assert output_name == "publish_summary_json"
+    assert json.loads(encoded) == {
+        "result": expected_result,
+        "step_outcome": publish_outcome,
+        "existed_before": existed_before == "true",
+    }
 
 
 def test_validate_release_resolves_in_controller_and_tests_exact_candidate() -> None:
@@ -531,7 +694,13 @@ def test_dispatch_is_read_only_and_metadata_eligible_before_any_check_polling() 
     job = publish["jobs"]["validate-release"]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
 
-    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates", "promote-ghcr"}
+    assert set(publish["jobs"]) == {
+        "validate-release",
+        "wait-for-release-gates",
+        "build-package",
+        "promote-ghcr",
+        "publish-pypi",
+    }
     assert job["permissions"] == {"contents": "read"}
     assert "id-token" not in job["permissions"]
     assert "packages" not in job["permissions"]
@@ -1502,7 +1671,7 @@ def test_ghcr_promotion_has_fixed_global_lock_exact_guard_and_digest_only_source
     promote = _step_with_id(publish, "promote-ghcr", "promote")
     header = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
 
-    assert job["needs"] == ["validate-release", "wait-for-release-gates"]
+    assert job["needs"] == ["validate-release", "wait-for-release-gates", "build-package"]
     assert job["if"] == "${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}"
     assert job["concurrency"] == {
         "group": "vntyper-ghcr-release-promotion",
