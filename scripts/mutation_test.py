@@ -123,6 +123,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning, writable_paths
+from mutation_output import atomic_write_text
 
 REAL_REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1194,15 +1195,23 @@ def write_outputs(results: list[ModuleResult], elapsed: float, output: Path | No
             other suffix renders the plain-text report.
         results_json (Path | None): Where to persist the raw results, if anywhere.
     """
+    rendered_output = None
     if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        rendered = format_markdown(results, elapsed) if output.suffix == ".md" else format_report(results, elapsed)
-        output.write_text(rendered, encoding="utf-8")
-        print(f"Report written to {output}")
+        rendered_output = (
+            format_markdown(results, elapsed) if output.suffix == ".md" else format_report(results, elapsed)
+        )
+    rendered_json = None
     if results_json:
+        rendered_json = json.dumps(results_to_dict(results, elapsed), indent=2) + "\n"
+
+    if results_json and rendered_json is not None:
         results_json.parent.mkdir(parents=True, exist_ok=True)
-        results_json.write_text(json.dumps(results_to_dict(results, elapsed), indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(results_json, rendered_json)
         print(f"Raw results written to {results_json}")
+    if output and rendered_output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(output, rendered_output)
+        print(f"Report written to {output}")
 
 
 def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> str | None:
@@ -1254,18 +1263,20 @@ def main() -> int:
         "only its presentation.",
     )
     args = parser.parse_args()
+    output = None if args.output is None else (REAL_REPO_ROOT / args.output).resolve(strict=False)
+    results_json = None if args.results_json is None else (REAL_REPO_ROOT / args.results_json).resolve(strict=False)
 
     # Re-render path: no mutation, no tests, no source rewritten - but `write_outputs()`
     # still overwrites the docs page wholesale, so the preflight applies here too. It is
     # narrower: only the outputs are at risk, because no target is touched.
     if args.render_only:
-        refusal = _refuse_if_dirty([], [args.output])
+        refusal = _refuse_if_dirty([], [output])
         if refusal is not None:
             print(refusal, file=sys.stderr)
             return 1
         results, elapsed = results_from_dict(json.loads(args.render_only.read_text(encoding="utf-8")))
         print(format_report(results, elapsed))
-        write_outputs(results, elapsed, args.output, None)
+        write_outputs(results, elapsed, output, None)
         return 0
 
     targets = {p: t for p, t in TARGETS.items() if not args.module or args.module in p}
@@ -1279,7 +1290,7 @@ def main() -> int:
     # over uncommitted work goes wrong. Only the targets this run will actually rewrite
     # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep -
     # plus the files it will overwrite on the way out.
-    refusal = _refuse_if_dirty(targets, [args.output, args.results_json])
+    refusal = _refuse_if_dirty(targets, [output, results_json])
     if refusal is not None:
         print(refusal, file=sys.stderr)
         return 1
@@ -1316,7 +1327,7 @@ def main() -> int:
 
     print()
     print(format_report(results, elapsed))
-    write_outputs(results, elapsed, args.output, args.results_json)
+    write_outputs(results, elapsed, output, results_json)
 
     # This harness rewrites production source in place, so it ends by proving it put
     # everything back. A restore that silently failed would otherwise be discovered by
