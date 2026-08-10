@@ -8,6 +8,37 @@ When both `--keep-intermediates` and `--delete-intermediates` are supplied,
 `--delete-intermediates` now wins as the CLI help has always documented. Earlier
 versions kept the intermediate BAM in this conflicting form.
 
+**The golden-cohort harness covers more outcome and input states.** Successful cases now
+assert both present and absent intermediate/archive artifacts, an independent paired b178
+FASTQ case runs without SHARK, and derived CRAM fixtures carry indexed/stream read-set
+evidence (#71, #226).
+
+**Runtime quality gates now measure the root scripts.** `make type-check` includes
+`scripts/` in mypy (#204), and all 35 Python files there are part of branch-inclusive
+coverage: the final measurements were 93.94% scripts-only and 89.17% combined across
+5,072 unit tests (#211).
+
+**Mutation sweeps are crash-safe for production source.** Each mutant runs in a
+disposable detached worktree over the current non-ignored working state, with import
+provenance and a known-killed canary checked before atomic reports are installed in the
+real checkout. Even an unhandled interruption can leave only the disposable worktree,
+not a live mutant in production source (#208).
+
+**Broad-exception behavior is measured rather than globally rewritten.** The reviewed
+BLE001 inventory is 103 diagnostics normally and 108 including explicit suppressions;
+fail-open handlers are classified by symbol and linked to behavior tests. BLE001 remains
+outside Ruff's global selection, with no global fallback behavior rewrite (#219).
+
+**Release automation is exact-commit and recoverable.** The controller verifies
+exact-SHA CI and Docker evidence, promotes the tested GHCR digest to semantic-version
+aliases with idempotent retry/recovery, and separates unprivileged package building from
+PyPI Trusted Publishing through OIDC (#214, #218). Publication and stable aliases remain
+pending the first gated release.
+
+**Presentation uses the generation name `VNtyper 2`.** Nine targeted `VNtyper 2.0`
+presentation labels now say `VNtyper 2`, while semantic versions, historical statements,
+identifiers and machine-readable names remain unchanged (#220).
+
 ## 2.0.10
 
 Milestone 4, "CRAM and input robustness": closes #213, #225, #209, #178, #165 and
