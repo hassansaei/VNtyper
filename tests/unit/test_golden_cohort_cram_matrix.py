@@ -68,8 +68,8 @@ def test_a_cram_case_is_built_for_each_declared_id_when_the_fixture_exists(tmp_p
     assert case["repeat_of"] == "b178_hg19_subset"
 
 
-def test_cram_cases_pin_candidate_rejection_and_recorded_read_set_evidence(tmp_path: Path) -> None:
-    """The CRAM gate must decide A-178-2, not merely serialize optional measurements."""
+def test_cram_cases_pin_success_and_recorded_read_set_evidence(tmp_path: Path) -> None:
+    """Lossless CRAM read sets now route to Kestrel and retain their evidence contract."""
     cram = _cram_cases(_build(_documented_data_dir(tmp_path)))
     indexed = cram["7a61_hg38_ensembl_indexed_cram"]
     stream = cram["7a61_hg38_ensembl_stream_cram"]
@@ -83,9 +83,10 @@ def test_cram_cases_pin_candidate_rejection_and_recorded_read_set_evidence(tmp_p
     }
 
     for case in (indexed, stream):
-        assert case["side_expectations"]["after"]["expect_exit"] == "nonzero"
-        assert case["side_expectations"]["after"]["required_artifacts"] == []
-        assert case["side_expectations"]["after"]["cram_evidence_expectation"] == {
+        assert case.get("side_expectations") is None
+        assert case["expect_exit"] == "zero"
+        assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
+        assert case["cram_evidence_expectation"] == {
             "placed_unmapped_guard_count": 11_571,
             "raw_indexed_read_set": expected_raw,
             "stream_read_set": expected_stream,
@@ -100,7 +101,8 @@ def test_cram_cases_pin_candidate_rejection_and_recorded_read_set_evidence(tmp_p
         "sorted_read_name_sha256": "d3aa88fe91c8964b2f9a1b053a672f2bc3d1896b71de986f5cde02999d552591",
     }
     for case_id in ("b178_hg19_indexed_cram", "b178_hg19_stream_cram"):
-        assert cram[case_id]["side_expectations"]["after"]["cram_evidence_expectation"] == {
+        assert cram[case_id].get("side_expectations") is None
+        assert cram[case_id]["cram_evidence_expectation"] == {
             "placed_unmapped_guard_count": 329,
             "raw_indexed_read_set": b178_expected_raw,
             "stream_read_set": b178_expected_stream,

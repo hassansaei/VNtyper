@@ -14,9 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from golden_cohort import runner  # noqa: E402
-from golden_cohort.case_expectations import MIXED_LAYOUT_FAILURE_DIAGNOSTIC  # noqa: E402
 
 from vntyper.scripts import pipeline_read_routing  # noqa: E402
+
+INVALID_LAYOUT_DIAGNOSTIC = "FASTQ layout 'invalid' cannot be consumed without dropping reads."
 
 
 def _case(case_id: str, **extra: object) -> dict[str, object]:
@@ -70,19 +71,19 @@ def test_side_expectation_rejects_malformed_outcome_fields(selected: object, pro
 @pytest.mark.parametrize(
     ("stderr", "expected_met"),
     [
-        (f"{MIXED_LAYOUT_FAILURE_DIAGNOSTIC} Produced FASTQs: ...", True),
+        (f"{INVALID_LAYOUT_DIAGNOSTIC} Produced FASTQs: ...", True),
         ("reference could not be decoded", False),
         ("", False),
     ],
 )
-def test_run_one_uses_actual_stderr_to_prove_the_declared_mixed_layout_failure(
+def test_run_one_uses_actual_stderr_to_prove_the_declared_invalid_layout_failure(
     tmp_path: Path, stderr: str, expected_met: bool
 ) -> None:
     """Exit one is causal evidence only when the declared diagnostic was emitted."""
     case = _case(
         "mixed",
         expect_exit="nonzero",
-        expected_stderr_contains=MIXED_LAYOUT_FAILURE_DIAGNOSTIC,
+        expected_stderr_contains=INVALID_LAYOUT_DIAGNOSTIC,
     )
     pipeline_result = mock.Mock(
         stdout=f"{runner.launcher.LAUNCH_PREFIX} verified\n",
@@ -110,7 +111,7 @@ def test_run_one_uses_actual_stderr_to_prove_the_declared_mixed_layout_failure(
     assert bool(record["expectation_problems"]) is not expected_met
 
 
-def test_production_mixed_layout_failure_starts_with_the_golden_diagnostic(
+def test_production_invalid_parity_failure_starts_with_the_golden_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The harness's causal oracle must stay tied to the production refusal."""
@@ -120,7 +121,7 @@ def test_production_mixed_layout_failure_starts_with_the_golden_diagnostic(
         "/other.fastq.gz",
         "/single.fastq.gz",
     )
-    counts = dict(zip(produced, (2, 2, 0, 1), strict=True))
+    counts = dict(zip(produced, (2, 1, 0, 0), strict=True))
     monkeypatch.setattr(
         pipeline_read_routing,
         "count_fastq_records",
@@ -130,4 +131,4 @@ def test_production_mixed_layout_failure_starts_with_the_golden_diagnostic(
     with pytest.raises(ValueError) as raised:
         pipeline_read_routing.route_converted_fastqs(produced, config={})
 
-    assert str(raised.value).startswith(f"{MIXED_LAYOUT_FAILURE_DIAGNOSTIC} Produced FASTQs:")
+    assert str(raised.value).startswith(f"{INVALID_LAYOUT_DIAGNOSTIC} Produced FASTQs:")

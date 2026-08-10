@@ -15,7 +15,10 @@ pytestmark = pytest.mark.unit
 
 
 def _write_fastq(path: Path, records: int, *, lines_per_record: int = 4) -> None:
-    text = "".join(f"line-{index}\n" for index in range(records * lines_per_record))
+    if lines_per_record == 4:
+        text = "".join(f"@read-{index}\nACGT\n+\n!!!!\n" for index in range(records))
+    else:
+        text = "".join(f"line-{index}\n" for index in range(records * lines_per_record))
     if path.suffix == ".gz":
         with gzip.open(path, "wt") as handle:
             handle.write(text)
@@ -101,23 +104,20 @@ def test_single_end_other_output_is_the_only_downstream_fastq(tmp_path: Path, ca
     with caplog.at_level(logging.INFO, logger=pipeline_read_routing.logger.name):
         routed = route_converted_fastqs(produced, config={})
 
-    assert routed == (produced[2], None)
+    assert routed == (produced[2],)
     assert any("single" in record.getMessage() for record in caplog.records)
 
 
 def test_replacement_configs_use_the_shipped_four_line_default(tmp_path: Path) -> None:
     produced = _paths(tmp_path, (0, 0, 2, 0))
 
-    assert route_converted_fastqs(produced, config={"utils": {}}) == (produced[2], None)
+    assert route_converted_fastqs(produced, config={"utils": {}}) == (produced[2],)
 
 
 def test_the_shipped_four_line_setting_counts_fastq_records(tmp_path: Path) -> None:
     produced = _paths(tmp_path, (0, 0, 3, 0), lines_per_record=4)
 
-    assert route_converted_fastqs(produced, config={"utils": {"fastq_validation_lines": 4}}) == (
-        produced[2],
-        None,
-    )
+    assert route_converted_fastqs(produced, config={"utils": {"fastq_validation_lines": 4}}) == (produced[2],)
 
 
 def test_fastq_record_structure_cannot_be_configured_away_from_four_lines(tmp_path: Path) -> None:
@@ -136,17 +136,68 @@ def test_invalid_lines_per_record_configuration_fails_closed(tmp_path: Path, bad
         route_converted_fastqs(produced, config={"utils": {"fastq_validation_lines": bad_value}})
 
 
-def test_mixed_layout_failure_names_every_file_and_its_record_count(tmp_path: Path) -> None:
-    produced = _paths(tmp_path, (3, 2, 1, 0))
+@pytest.mark.parametrize(
+    ("counts", "selected_indices", "expected_record"),
+    [
+        (
+            (3, 3, 0, 1),
+            (0, 1, 3),
+            'READ_SET_ROUTING {"counts":{"other":0,"r1":3,"r2":3,"single":1},"layout":"mixed",'
+            '"selected":["r1.fastq.gz","r2.fastq.gz","single.fastq.gz"]}',
+        ),
+        (
+            (3, 3, 2, 1),
+            (0, 1, 2, 3),
+            'READ_SET_ROUTING {"counts":{"other":2,"r1":3,"r2":3,"single":1},"layout":"mixed",'
+            '"selected":["r1.fastq.gz","r2.fastq.gz","other.fastq.gz","single.fastq.gz"]}',
+        ),
+        (
+            (0, 0, 2, 1),
+            (2, 3),
+            'READ_SET_ROUTING {"counts":{"other":2,"r1":0,"r2":0,"single":1},"layout":"mixed",'
+            '"selected":["other.fastq.gz","single.fastq.gz"]}',
+        ),
+    ],
+)
+def test_counted_mixed_layout_routes_every_file_and_emits_one_canonical_record(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    counts: tuple[int, int, int, int],
+    selected_indices: tuple[int, ...],
+    expected_record: str,
+) -> None:
+    produced = _paths(tmp_path, counts)
+
+    with caplog.at_level(logging.INFO, logger=pipeline_read_routing.logger.name):
+        routed = route_converted_fastqs(produced, config={})
+
+    assert routed == tuple(produced[index] for index in selected_indices)
+    records = [record.getMessage() for record in caplog.records if record.getMessage().startswith("READ_SET_ROUTING ")]
+    assert records == [expected_record]
+
+
+@pytest.mark.parametrize("counts", [(3, 2, 1, 0), (1, 0, 0, 0), (0, 1, 0, 0)])
+def test_invalid_layout_failure_names_every_file_and_its_record_count(
+    tmp_path: Path, counts: tuple[int, int, int, int]
+) -> None:
+    produced = _paths(tmp_path, counts)
 
     with pytest.raises(ValueError) as exc_info:
         route_converted_fastqs(produced, config={})
 
     message = str(exc_info.value)
-    assert "mixed" in message
-    for path, count in zip(produced, (3, 2, 1, 0), strict=True):
+    assert "invalid" in message
+    for path, count in zip(produced, counts, strict=True):
         assert path in message
         assert f"{count} records" in message
+
+
+def test_an_undecompressible_fastq_fails_closed_naming_the_file(tmp_path: Path) -> None:
+    corrupt = tmp_path / "corrupt.fastq.gz"
+    corrupt.write_text("not gzip", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=str(corrupt)):
+        count_fastq_records(corrupt, lines_per_record=4)
 
 
 def test_empty_layout_failure_names_every_file_with_zero_records(tmp_path: Path) -> None:

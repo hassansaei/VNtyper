@@ -50,14 +50,13 @@ def _run(vcf, tmp_path):
         None
     """
     kg.run_kestrel(
-        vcf,
-        str(tmp_path),
-        "r1.fq",
-        "r2.fq",
-        "ref.fa",
-        "kestrel.jar",
-        _config(),
-        "sample",
+        vcf_path=vcf,
+        output_dir=str(tmp_path),
+        fastq_files=("r1.fq", "r2.fq"),
+        reference_vntr="ref.fa",
+        kestrel_path="kestrel.jar",
+        config=_config(),
+        sample_name="sample",
     )
 
 
@@ -185,3 +184,37 @@ def test_a_kestrel_invocation_that_exits_non_zero_aborts_the_run(tmp_path, monke
         _run(tmp_path / "output.vcf", tmp_path)
 
     assert "kestrel_kmer_20.log" in caplog.text, "the error must name the log that holds the failure"
+
+
+def test_runner_receives_the_planned_command_log_criticality_and_cwd(tmp_path, monkeypatch):
+    """Extracting invocation planning must not change the execution boundary."""
+    vcf = tmp_path / "output.vcf"
+    calls = []
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        calls.append((command, log_file, kwargs))
+        vcf.write_text("fresh\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+    monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
+
+    kg.run_kestrel(
+        vcf_path=vcf,
+        output_dir=str(tmp_path),
+        fastq_files=("r1.fq", "r2.fq", "single.fq"),
+        reference_vntr="ref.fa",
+        kestrel_path="kestrel.jar",
+        config=_config(),
+        sample_name="sample",
+        log_level=logging.DEBUG,
+        cwd="/project/root",
+    )
+
+    assert len(calls) == 1
+    command, log_file, kwargs = calls[0]
+    assert "--loglevel DEBUG" in command
+    assert log_file == str(tmp_path / "kestrel_kmer_20.log")
+    assert kwargs == {"critical": True, "cwd": "/project/root"}
+    assert "-ssample r1.fq r2.fq single.fq --hapfmt" in command

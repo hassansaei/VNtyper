@@ -96,7 +96,6 @@ from typing import Any
 
 from golden_cohort.admissibility import PIPELINE_REQUIRED_ARTIFACTS
 from golden_cohort.case_expectations import (
-    declare_mixed_layout_outcome,
     materialize_side_expectation,
     without_side_expectations,
 )
@@ -235,21 +234,19 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
         sample = match.group("sample")
         assembly = match.group("assembly")
         cases.append(
-            declare_mixed_layout_outcome(
-                {
-                    "case_id": f"{_short(sample)}_{assembly}_subset",
-                    "kind": "pipeline",
-                    "group": "base",
-                    "sample": sample,
-                    "assembly": assembly,
-                    "source": "subset",
-                    "bam": str(bam.resolve()),
-                    "fast_mode": True,
-                    "advntr": False,
-                    "expect_exit": "zero",
-                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-                }
-            )
+            {
+                "case_id": f"{_short(sample)}_{assembly}_subset",
+                "kind": "pipeline",
+                "group": "base",
+                "sample": sample,
+                "assembly": assembly,
+                "source": "subset",
+                "bam": str(bam.resolve()),
+                "fast_mode": True,
+                "advntr": False,
+                "expect_exit": "zero",
+                "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+            }
         )
     log.append(f"subset BAMs: {sum(1 for c in cases if c['source'] == 'subset')}")
 
@@ -264,21 +261,19 @@ def derive_base_cases(data_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
                 continue
             sample = match.group("sample")
             cases.append(
-                declare_mixed_layout_outcome(
-                    {
-                        "case_id": f"{_short(sample)}_{assembly}_{aligner}",
-                        "kind": "pipeline",
-                        "group": "base",
-                        "sample": sample,
-                        "assembly": assembly,
-                        "source": f"remapped/{aligner}",
-                        "bam": str(bam.resolve()),
-                        "fast_mode": True,
-                        "advntr": False,
-                        "expect_exit": "zero",
-                        "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-                    }
-                )
+                {
+                    "case_id": f"{_short(sample)}_{assembly}_{aligner}",
+                    "kind": "pipeline",
+                    "group": "base",
+                    "sample": sample,
+                    "assembly": assembly,
+                    "source": f"remapped/{aligner}",
+                    "bam": str(bam.resolve()),
+                    "fast_mode": True,
+                    "advntr": False,
+                    "expect_exit": "zero",
+                    "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+                }
             )
         log.append(f"remapped BAMs: {sum(1 for c in cases if c['source'].startswith('remapped'))}")
     else:

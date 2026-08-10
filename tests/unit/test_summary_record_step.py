@@ -13,12 +13,14 @@ below: the golden-cohort harness compares whole step records, so an unconditiona
 present key would diff every step of every run for no behavioural reason.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
+from tests.support.pipeline_harness import run_pipeline_under_harness
 from vntyper.scripts.summary import record_step
 
 pytestmark = pytest.mark.unit
@@ -106,3 +108,18 @@ def test_parser_failure_is_recorded_and_step_is_appended(tmp_path):
     record_step(summary, "Later step", str(path), "tsv", "later command", _START, _END)
 
     assert [step["step"] for step in summary["steps"]] == ["Broken parser", "Later step"]
+
+
+def test_conversion_summary_uses_the_first_routed_fastq_from_the_nonempty_tuple(tmp_path):
+    """Tuple migration keeps the conversion artifact stable without a removed ``fastq1`` local."""
+    routed = ("/routed/R1.fastq.gz", "/routed/R2.fastq.gz", "/routed/single.fastq.gz")
+    output_dir = tmp_path / "out"
+    harness = run_pipeline_under_harness(
+        output_dir,
+        stage_side_effects={"route_converted_fastqs": lambda *args, **kwargs: routed},
+    )
+
+    assert harness.error is None
+    summary = json.loads((output_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
+    conversion = next(step for step in summary["steps"] if step["step"] == "BAM to FASTQ Conversion")
+    assert conversion["result_file"] == routed[0]

@@ -162,8 +162,8 @@ def test_every_derived_base_case_declares_the_pipeline_artefact_requirement(tmp_
         assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS), case["case_id"]
 
 
-def test_mixed_base_cases_declare_side_specific_fail_closed_outcomes(tmp_path: Path) -> None:
-    """The baseline may succeed only because it drops reads; the candidate must reject them."""
+def test_measured_mixed_base_cases_use_the_ordinary_success_contract(tmp_path: Path) -> None:
+    """Every measured mixed layout is now losslessly routed and must produce normal artifacts."""
     built = _build(_documented_data_dir(tmp_path))
     by_id = {case["case_id"]: case for case in built["cases"]}
     mixed_base_ids = {
@@ -201,33 +201,22 @@ def test_mixed_base_cases_declare_side_specific_fail_closed_outcomes(tmp_path: P
         "dfc3_hg38_ensembl_bwa",
     }
 
-    declared = {case_id for case_id, case in by_id.items() if case.get("side_expectations")}
-    base_ids = {case["case_id"] for case in built["cases"] if case["group"] == "base"}
-    assert declared.intersection(base_ids) == mixed_base_ids
     for case_id in mixed_base_ids:
-        assert by_id[case_id]["side_expectations"]["before"] == {
-            "expect_exit": "zero",
-            "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
-        }
-        assert by_id[case_id]["side_expectations"]["after"] == {
-            "expect_exit": "nonzero",
-            "required_artifacts": [],
-            "expected_stderr_contains": "FASTQ layout 'mixed' cannot be consumed without dropping reads.",
-        }
+        assert by_id[case_id].get("side_expectations") is None
+        assert by_id[case_id]["expect_exit"] == "zero"
+        assert by_id[case_id]["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
 
 
 def test_repeats_do_not_blindly_inherit_the_base_layout_outcome(tmp_path: Path) -> None:
-    """Non-fast extraction repairs layout, while fast adVNTR repeats retain the refusal."""
+    """Non-fast and adVNTR repeats inherit the now-ordinary successful outcome."""
     built = _build(_documented_data_dir(tmp_path))
     by_id = {case["case_id"]: case for case in built["cases"]}
 
     assert by_id["b178_hg19_nonfast"].get("side_expectations") is None
     assert by_id["b178_hg19_nonfast"]["expect_exit"] == "zero"
-    assert by_id["a5c1_hg19_advntr"]["side_expectations"]["after"] == {
-        "expect_exit": "nonzero",
-        "required_artifacts": [],
-        "expected_stderr_contains": "FASTQ layout 'mixed' cannot be consumed without dropping reads.",
-    }
+    assert by_id["a5c1_hg19_advntr"].get("side_expectations") is None
+    assert by_id["a5c1_hg19_advntr"]["expect_exit"] == "zero"
+    assert by_id["a5c1_hg19_advntr"]["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
 
 
 def test_a_probe_expected_to_fail_requires_no_artefacts(tmp_path: Path) -> None:
@@ -265,7 +254,7 @@ def test_cohorts_only_consume_cases_expected_to_write_candidate_summaries(tmp_pa
     }
 
     assert candidate_successes
-    assert len(candidate_successes) == 26
+    assert len(candidate_successes) == 64
     for cohort in built["cohort_cases"]:
         if cohort.get("empty_input_dir"):
             continue
@@ -283,11 +272,14 @@ def test_exporting_cohorts_receive_a_candidate_successful_advntr_case(tmp_path: 
     ]
 
     assert [(case["case_id"], case["repeat_of"]) for case in successful_advntr] == [
-        ("b178_hg19_advntr", "b178_hg19_bwa")
+        ("a5c1_hg19_advntr", "a5c1_hg19_subset"),
+        ("b178_hg19_advntr", "b178_hg19_bwa"),
+        ("dfc3_hg19_advntr", "dfc3_hg19_subset"),
     ]
+    successful_ids = {case["case_id"] for case in successful_advntr}
     for cohort in built["cohort_cases"]:
         if "cohort_advntr.tsv" in cohort["required_artifacts"]:
-            assert "b178_hg19_advntr" in cohort["inputs"]
+            assert successful_ids.intersection(cohort["inputs"])
 
 
 def test_the_cohort_cases_declare_their_exports_and_the_empty_one_declares_none() -> None:

@@ -69,7 +69,7 @@ def test_cram_preflight_transport_and_four_fastq_routing_coexist_in_one_run(tmp_
         reference_fasta=reference,
         stage_side_effects={
             "process_bam_to_fastq": lambda *args, **kwargs: produced,
-            "route_converted_fastqs": lambda paths, config: (routed_single, None),
+            "route_converted_fastqs": lambda paths, config: (routed_single,),
         },
     )
 
@@ -78,8 +78,7 @@ def test_cram_preflight_transport_and_four_fastq_routing_coexist_in_one_run(tmp_
     assert preflight["error_output_dir"] == str(tmp_path / "run" / "out")
     assert harness.positional("route_converted_fastqs")[0] == produced
     kestrel = harness.kwargs("run_kestrel")
-    assert kestrel["fastq_1"] == routed_single
-    assert kestrel["fastq_2"] is None
+    assert kestrel["fastq_files"] == (routed_single,)
 
 
 def test_merged_pipeline_guards_still_stop_conflicts_and_single_end_shark_before_stages(tmp_path: Path) -> None:

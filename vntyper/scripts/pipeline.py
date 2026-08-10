@@ -34,6 +34,7 @@ from vntyper.scripts.pipeline_alignment import (
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
+from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
@@ -57,7 +58,6 @@ from vntyper.scripts.summary_steps import (
     STEP_BAM_HEADER,
     STEP_COVERAGE,
     STEP_CROSS_MATCH,
-    STEP_KESTREL,
 )
 from vntyper.scripts.utils import (
     create_output_directories,
@@ -146,6 +146,9 @@ def run_pipeline(
     logger.info("Pipeline execution started.")
 
     input_type, input_files = resolve_pipeline_input(fastq1, fastq2, bam, cram, bwa_reference, extra_modules)
+    archive_protected_paths = tuple(
+        path for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference) if path
+    )
     previous_ref_path = None
     reference_resolution_pinned = False
     alignment_plan = None
@@ -243,7 +246,9 @@ def run_pipeline(
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
             )
-            fastq1, fastq2 = route_converted_fastqs(produced_fastqs, config)
+            kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
+            if not kestrel_fastq_files:
+                raise ValueError("FASTQ routing produced no inputs for Kestrel.")
             conversion_command = "process_bam_to_fastq(plan=alignment_plan, ...)"
 
             if input_type == "BAM":
@@ -266,7 +271,7 @@ def run_pipeline(
             record_step(
                 summary,
                 f"{input_type} to FASTQ Conversion",
-                str(fastq1),
+                str(kestrel_fastq_files[0]),
                 "fastq",
                 conversion_command,
                 conversion_start,
@@ -389,12 +394,14 @@ def run_pipeline(
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
             )
-            fastq1, fastq2 = route_converted_fastqs(produced_fastqs, config)
+            kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
+            if not kestrel_fastq_files:
+                raise ValueError("FASTQ routing produced no inputs for Kestrel.")
             conv2_end = datetime.now(timezone.utc).replace(tzinfo=None)
             record_step(
                 summary,
                 "BAM to FASTQ Conversion (Post-alignment)",
-                str(fastq1),
+                str(kestrel_fastq_files[0]),
                 "fastq",
                 "process_bam_to_fastq(plan=post_alignment_plan, ...)",
                 conv2_start,
@@ -428,39 +435,17 @@ def run_pipeline(
             write_summary_path=summary_file_path,
         )
 
-        # --- Kestrel Genotyping ---
         logger.info("Starting Kestrel genotyping.")
-        vcf_out = os.path.join(dirs["kestrel"], "output.vcf")
-        kestrel_path = config["tools"]["kestrel"]
-        reference_vntr = config["reference_data"]["muc1_reference_vntr"]
-
-        kestrel_start = datetime.now(timezone.utc).replace(tzinfo=None)
-        if fastq1:
-            run_kestrel(
-                vcf_path=Path(vcf_out),
-                output_dir=Path(dirs["kestrel"]),
-                fastq_1=fastq1,
-                fastq_2=fastq2,
-                reference_vntr=reference_vntr,
-                kestrel_path=kestrel_path,
-                config=config,
-                sample_name=sample_name,
-                log_level=log_level,
-                cwd=project_root,
-            )
-        else:
-            logger.error("FASTQ input required for Kestrel genotyping not provided.")
-            raise ValueError("FASTQ input required for Kestrel genotyping not provided.")
-        kestrel_end = datetime.now(timezone.utc).replace(tzinfo=None)
-        record_step(
-            summary,
-            STEP_KESTREL,
-            os.path.join(dirs["kestrel"], "kestrel_result.tsv"),
-            "tsv",
-            "run_kestrel(...)",
-            kestrel_start,
-            kestrel_end,
-            write_summary_path=summary_file_path,
+        run_kestrel_stage(
+            fastq_files=kestrel_fastq_files,
+            dirs=dirs,
+            config=config,
+            sample_name=sample_name or "sample",
+            log_level=log_level,
+            cwd=project_root,
+            summary=summary,
+            summary_file_path=summary_file_path,
+            runner=run_kestrel,
         )
         logger.info(
             "Kestrel genotyping completed."
@@ -629,14 +614,11 @@ def run_pipeline(
             formats = {"zip": "zip", "tar.gz": "gztar"}
             if archive_format not in formats:
                 raise ValueError(f"Unsupported archive format: {archive_format}")
-            protected_inputs = tuple(
-                path for path in (bam, cram, fastq1, fastq2, reference_fasta, bed_file, bwa_reference) if path
-            )
             archive_path = create_safe_archive(
                 archive_base_name(output_dir),
                 formats[archive_format],
                 output_dir,
-                protected_paths=protected_inputs,
+                protected_paths=archive_protected_paths,
             )
             logger.info(f"Results folder archived at: {archive_path}")
 

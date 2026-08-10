@@ -1,7 +1,7 @@
 """The pipeline-summary step-name contract (AGENTS.md trap 5).
 
-Five step names are matched by exact string comparison across `pipeline.py`
-(the producer) and `generate_report.py`, `cohort_inputs.py` and
+Five step names are matched by exact string comparison across `pipeline.py` and
+`pipeline_kestrel.py` (the producers) and `generate_report.py`, `cohort_inputs.py` and
 `cross_match.py` (the consumers). A typo in any one of them does not fail --
 it silently drops a section from the report.
 
@@ -44,6 +44,7 @@ SCRIPTS = REPO_ROOT / "vntyper" / "scripts"
 #: it has none.
 STEP_NAME_MODULES = (
     "pipeline.py",
+    "pipeline_kestrel.py",
     "generate_report.py",
     "cohort_summary.py",
     "cohort_inputs.py",
@@ -61,7 +62,8 @@ STEP_NAME_MODULES = (
 #: `MODULES_MATCHING_NO_STEP_NAME` below rather than being listed here with a zero,
 #: because a zero is a passing assertion about nothing.
 MINIMUM_CONSTANT_REFERENCES = {
-    "pipeline.py": 5,
+    "pipeline.py": 4,
+    "pipeline_kestrel.py": 1,
     "generate_report.py": 5,
     "cohort_inputs.py": 4,
     "cross_match.py": 2,
@@ -194,12 +196,15 @@ def _record_step_calls(tree: ast.Module) -> tuple[int, set[str]]:
 
 
 def _recorded_step_names() -> set[str]:
-    """Return every step name pipeline.py can record, f-strings expanded.
+    """Return every step name the pipeline producers can record, f-strings expanded.
 
     Returns:
         set[str]: The recorded names.
     """
-    return _record_step_calls(_parse("pipeline.py"))[1]
+    names: set[str] = set()
+    for module in ("pipeline.py", "pipeline_kestrel.py"):
+        names |= _record_step_calls(_parse(module))[1]
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -317,8 +322,10 @@ def test_each_module_actually_references_the_constants(module: str) -> None:
 
 def test_the_record_step_scan_actually_finds_call_sites() -> None:
     """Guard the guard: a scan that matches nothing makes the next test vacuous."""
-    call_count, recorded = _record_step_calls(_parse("pipeline.py"))
-    assert call_count >= 10, f"only found {call_count} record_step call sites in pipeline.py; the scan has drifted"
+    scanned = [_record_step_calls(_parse(module)) for module in ("pipeline.py", "pipeline_kestrel.py")]
+    call_count = sum(count for count, _ in scanned)
+    recorded = set().union(*(names for _, names in scanned))
+    assert call_count >= 10, f"only found {call_count} pipeline record_step call sites; the scan has drifted"
     assert len(recorded) >= call_count, (
         f"resolved only {len(recorded)} names from {call_count} call sites: {sorted(recorded)}. "
         "An argument form the resolver does not understand has appeared."
@@ -328,11 +335,11 @@ def test_the_record_step_scan_actually_finds_call_sites() -> None:
 def test_every_consumed_step_name_is_recorded_by_the_pipeline() -> None:
     """A constant no consumer can ever match is a section that never renders."""
     missing = sorted(summary_steps.STEP_NAMES - _recorded_step_names())
-    assert not missing, f"summary_steps declares step names pipeline.py never records: {missing}."
+    assert not missing, f"summary_steps declares step names the pipeline producers never record: {missing}."
 
 
 def test_pipeline_records_only_known_step_names() -> None:
-    """Every record_step name in pipeline.py must be a declared constant.
+    """Every pipeline producer's record_step name must be a declared constant.
 
     Catches a step renamed at the producer without updating the consumers.
     """
@@ -347,7 +354,7 @@ def test_pipeline_records_only_known_step_names() -> None:
     }
     unknown = _recorded_step_names() - summary_steps.STEP_NAMES - informational
     assert not unknown, (
-        f"pipeline.py records step names that no consumer knows about: {sorted(unknown)}. "
+        f"pipeline producers record step names that no consumer knows about: {sorted(unknown)}. "
         "Add them to summary_steps.STEP_NAMES or to the informational set in this test."
     )
 

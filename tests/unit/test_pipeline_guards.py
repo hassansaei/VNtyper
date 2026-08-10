@@ -263,6 +263,7 @@ def test_a_matching_bam_still_runs(tmp_path: Path) -> None:
     """
     harness = _run(tmp_path, header=_header(length=GRCH37_CHR1), reference_assembly="hg19")
     assert harness.stages["run_kestrel"].called
+    assert harness.kwargs("run_kestrel")["fastq_files"] == harness.stages["route_converted_fastqs"].return_value
 
 
 def test_a_mismatched_bam_stops_before_any_region_is_resolved(tmp_path: Path) -> None:

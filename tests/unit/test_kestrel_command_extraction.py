@@ -20,8 +20,7 @@ def test_extraction_preserves_the_existing_paired_command_byte_for_byte() -> Non
         kestrel_path="/opt/kestrel.jar",
         reference_vntr="/ref/muc1.fa",
         output_dir="/out",
-        fastq_1="/in/R1.fastq.gz",
-        fastq_2="/in/R2.fastq.gz",
+        fastq_files=("/in/R1.fastq.gz", "/in/R2.fastq.gz"),
         vcf_out="/out/output.vcf",
         java_path="/usr/bin/java",
         java_memory="12g",
@@ -39,3 +38,46 @@ def test_extraction_preserves_the_existing_paired_command_byte_for_byte() -> Non
         "--hapfmt sam -p /out/output.sam --logstderr --logstdout "
         "--loglevel INFO --temploc /out"
     )
+
+
+@pytest.mark.parametrize(
+    ("fastq_files", "expected_inputs"),
+    [
+        (("/in/R1.fastq.gz",), "/in/R1.fastq.gz"),
+        (
+            ("/in/R1.fastq.gz", "/in/R2.fastq.gz", "/in/other.fastq.gz"),
+            "/in/R1.fastq.gz /in/R2.fastq.gz /in/other.fastq.gz",
+        ),
+        (
+            ("/in/R1.fastq.gz", "/in/R2.fastq.gz", "/in/other.fastq.gz", "/in/single.fastq.gz"),
+            "/in/R1.fastq.gz /in/R2.fastq.gz /in/other.fastq.gz /in/single.fastq.gz",
+        ),
+    ],
+)
+def test_one_three_and_four_fastq_commands_preserve_exact_order(
+    fastq_files: tuple[str, ...], expected_inputs: str
+) -> None:
+    command = construct_kestrel_command(
+        kmer_size=20,
+        kestrel_path="/opt/kestrel.jar",
+        reference_vntr="/ref/muc1.fa",
+        output_dir="/out",
+        fastq_files=fastq_files,
+        vcf_out="/out/output.vcf",
+        java_path="/usr/bin/java",
+        java_memory="12g",
+        max_align_states=40,
+        max_hap_states=40,
+        log_level="info",
+        sample_name="SAMPLE1",
+    )
+
+    assert command == (
+        "/usr/bin/java -Xmx12g -jar /opt/kestrel.jar -k 20 "
+        "--maxalignstates 40 --maxhapstates 40 "
+        "-r /ref/muc1.fa -o /out/output.vcf "
+        f"-sSAMPLE1 {expected_inputs} "
+        "--hapfmt sam -p /out/output.sam --logstderr --logstdout "
+        "--loglevel INFO --temploc /out"
+    )
+    assert command.count("-sSAMPLE1") == 1
