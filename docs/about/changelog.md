@@ -12,10 +12,11 @@ When both `--keep-intermediates` and `--delete-intermediates` are supplied,
 `--delete-intermediates` now wins as the CLI help has always documented. Earlier
 versions kept the intermediate BAM in this conflicting form.
 
-**The golden-cohort harness covers more outcome and input states.** Successful cases now
-assert both present and absent intermediate/archive artifacts, run an independent paired
-b178 FASTQ case without SHARK, and carry indexed/stream read-set evidence in derived CRAM
-fixtures (#71, #226).
+**The integration test matrix covers more outcome and input states.** Successful cases now
+assert both present and absent intermediate/archive artifacts and run an independent paired
+b178 FASTQ case without SHARK (#71). Issue #226 closes from pre-existing
+reference-dependent CRAM fixture implementation and tests; 2.0.11 adds no duplicate fixture
+code.
 
 **Runtime quality gates now measure the root scripts.** `make type-check` includes
 `scripts/` in mypy (#204), and all 35 Python files there are part of branch-inclusive
@@ -34,10 +35,10 @@ fail-open handlers are classified by symbol and linked to behavior tests. BLE001
 outside Ruff's global selection, with no global fallback behavior rewrite (#219).
 
 **Release automation is exact-commit and recoverable.** The controller verifies
-exact-SHA CI and Docker evidence, promotes the tested GHCR digest to semantic-version
-aliases with idempotent retry/recovery, and separates unprivileged package building from
-PyPI Trusted Publishing through OIDC (#214, #218). Publication and stable aliases remain
-pending the first gated release.
+exact-SHA CI and Docker evidence, promotes the tested GHCR digest to semantic-version and
+`latest` aliases with idempotent retry/recovery, and separates unprivileged package building
+from PyPI Trusted Publishing through OIDC (#214, #218). Publication and stable aliases
+remain pending the first gated release.
 
 **Presentation uses the generation name `VNtyper 2`.** Nine targeted `VNtyper 2.0`
 presentation labels now say `VNtyper 2`, while semantic versions, historical statements,
