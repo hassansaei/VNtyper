@@ -15,12 +15,28 @@ from mutation_workspace_fs import assert_root_identity as _assert_root_identity
 from mutation_workspace_fs import captured_path_state as _captured_path_state
 from mutation_workspace_fs import copy_regular_file_at as _copy_regular_file_at
 from mutation_workspace_fs import entry_stat as _entry_stat
+from mutation_workspace_fs import git_capability_path as _git_capability_path
 from mutation_workspace_fs import open_root_capability as _open_root_capability
 from mutation_workspace_fs import parent_directory_fd as _parent_directory_fd
 from mutation_workspace_fs import relative_parts as _relative_parts
 from mutation_workspace_fs import remove_entry_at as _remove_entry_at
+from mutation_workspace_fs import remove_exact_root as _remove_exact_root
 from mutation_workspace_fs import remove_pinned_root_if_present as _remove_pinned_root_if_present
+from mutation_workspace_fs import symlink_target_relative as _symlink_target_relative
 from mutation_workspace_fs import using_root_capability as _using_root_capability
+from mutation_workspace_git import registered_worktree_roots as _registered_worktree_roots
+from mutation_workspace_git import run_git as _run_git_boundary
+
+
+def _run_git(
+    command: list[str],
+    *,
+    cwd: Path,
+    operation: str,
+    capability: _RootCapability | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return _run_git_boundary(command, cwd, operation, capability, subprocess.run)
+
 
 _PORCELAIN_V1_STATUS_PAIRS = frozenset(
     {
@@ -124,11 +140,12 @@ class MutationWorkspace:
                     raise RuntimeError(f"{relative}: content mismatch")
 
             _assert_root_identity(capability)
-            status_result = subprocess.run(
-                ["git", "-C", str(self.sweep_root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            git_root = _git_capability_path(capability)
+            status_result = _run_git(
+                ["git", "-C", str(git_root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
                 cwd=self.real_root,
-                capture_output=True,
-                check=False,
+                operation="disposable status",
+                capability=capability,
             )
             _assert_root_identity(capability)
             if status_result.returncode != 0:
@@ -141,40 +158,6 @@ class MutationWorkspace:
                 raise RuntimeError(
                     f"workspace status mismatch: baseline={self.baseline_status!r}, current={status_result.stdout!r}"
                 )
-
-
-def _registered_worktree_roots(payload: bytes) -> tuple[Path, ...]:
-    """Extract absolute worktree roots from Git's NUL-delimited porcelain output."""
-    if not payload:
-        return ()
-    if not payload.endswith(b"\0\0"):
-        raise RuntimeError("malformed worktree list: missing record terminator")
-    roots: list[Path] = []
-    for record in payload[:-2].split(b"\0\0"):
-        fields = record.split(b"\0")
-        if (
-            not fields
-            or not fields[0].startswith(b"worktree ")
-            or any(field.startswith(b"worktree ") for field in fields[1:])
-        ):
-            raise RuntimeError("malformed worktree list: invalid record")
-        root = Path(os.fsdecode(fields[0].removeprefix(b"worktree ")))
-        if not root.is_absolute():
-            raise RuntimeError(f"malformed worktree list: non-absolute root: {root}")
-        roots.append(root.resolve(strict=False))
-    return tuple(roots)
-
-
-def _symlink_target_relative(relative: str, link_text: str) -> str:
-    """Return a lexically confined target name for a copied relative symlink."""
-    if Path(link_text).is_absolute():
-        raise RuntimeError(f"workspace symlink escapes workspace root: {relative}")
-    target = Path(os.path.normpath(str(Path(relative).parent / link_text))).as_posix()
-    try:
-        _relative_parts(target)
-    except ValueError as exc:
-        raise RuntimeError(f"workspace symlink escapes workspace root: {relative}") from exc
-    return target
 
 
 @dataclass(frozen=True)
@@ -389,17 +372,29 @@ def _apply_overlay_changes(
 def _cleanup_detached_worktree(capability: _RootCapability, real_root: Path) -> None:
     """Deregister and remove only the exact pinned disposable worktree."""
     try:
-        _assert_root_identity(capability)
+        git_root = _git_capability_path(capability)
     except RuntimeError as exc:
-        raise RuntimeError(f"orphaned worktree: {capability.path}: workspace identity mismatch") from exc
+        raise RuntimeError(f"orphaned worktree: {capability.path}: cleanup command failed: {exc}") from exc
     try:
-        remove_result = subprocess.run(
-            ["git", "worktree", "remove", "--force", str(capability.path)],
+        repair_result = _run_git(
+            ["git", "worktree", "repair", str(git_root)],
             cwd=real_root,
-            capture_output=True,
-            check=False,
+            operation="worktree repair",
+            capability=capability,
         )
-    except (OSError, KeyboardInterrupt) as exc:
+    except (RuntimeError, KeyboardInterrupt) as exc:
+        raise RuntimeError(f"orphaned worktree: {capability.path}: cleanup command failed: {exc}") from exc
+    if repair_result.returncode != 0:
+        stderr = repair_result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"orphaned worktree: {capability.path}: {stderr}")
+    try:
+        remove_result = _run_git(
+            ["git", "worktree", "remove", "--force", str(git_root)],
+            cwd=real_root,
+            operation="worktree remove",
+            capability=capability,
+        )
+    except (RuntimeError, KeyboardInterrupt) as exc:
         raise RuntimeError(f"orphaned worktree: {capability.path}: cleanup command failed: {exc}") from exc
     if remove_result.returncode != 0:
         stderr = remove_result.stderr.decode("utf-8", errors="replace").strip()
@@ -408,7 +403,7 @@ def _cleanup_detached_worktree(capability: _RootCapability, real_root: Path) -> 
         _remove_pinned_root_if_present(capability)
     except RuntimeError as exc:
         raise RuntimeError(f"orphaned worktree: {capability.path}: workspace identity mismatch") from exc
-    except OSError as exc:
+    except (OSError, KeyboardInterrupt) as exc:
         raise RuntimeError(f"orphaned worktree: {capability.path}: direct cleanup failed: {exc}") from exc
 
 
@@ -434,36 +429,41 @@ def detached_head_workspace(
     @contextlib.contextmanager
     def workspace_context() -> Iterator[MutationWorkspace]:
         resolved_real_root = real_root.resolve(strict=True)
-        head_result = subprocess.run(
+        head_result = _run_git(
             ["git", "rev-parse", "--verify", "HEAD^{commit}"],
             cwd=resolved_real_root,
-            capture_output=True,
-            check=False,
+            operation="HEAD capture",
         )
         if head_result.returncode != 0:
             raise RuntimeError(head_result.stderr.decode("utf-8", errors="replace").strip())
         head = head_result.stdout.decode("ascii").strip()
 
         sweep_root = Path(tempfile.mkdtemp(prefix="vntyper-mutation-")).resolve(strict=True)
-        root_capability = _open_root_capability(sweep_root)
+        created_stat = os.stat(sweep_root, follow_symlinks=False)
+        created_identity = (created_stat.st_dev, created_stat.st_ino)
+        root_capability: _RootCapability | None = None
+        add_attempted = False
         try:
             try:
-                add_result = subprocess.run(
-                    ["git", "worktree", "add", "--detach", str(sweep_root), head],
-                    cwd=resolved_real_root,
-                    capture_output=True,
-                    check=False,
-                )
+                root_capability = _open_root_capability(sweep_root)
             except OSError as exc:
-                raise RuntimeError(f"git worktree add failed: {exc}") from exc
+                raise RuntimeError(f"workspace capability open failed: {exc}") from exc
+            git_root = _git_capability_path(root_capability)
+            add_attempted = True
+            add_result = _run_git(
+                ["git", "worktree", "add", "--detach", str(git_root), head],
+                cwd=resolved_real_root,
+                operation="worktree add",
+                capability=root_capability,
+            )
             _assert_root_identity(root_capability)
             if add_result.returncode != 0:
                 raise RuntimeError(add_result.stderr.decode("utf-8", errors="replace").strip())
-            disposable_head_result = subprocess.run(
-                ["git", "-C", str(sweep_root), "rev-parse", "--verify", "HEAD^{commit}"],
+            disposable_head_result = _run_git(
+                ["git", "-C", str(git_root), "rev-parse", "--verify", "HEAD^{commit}"],
                 cwd=resolved_real_root,
-                capture_output=True,
-                check=False,
+                operation="disposable HEAD verification",
+                capability=root_capability,
             )
             if disposable_head_result.returncode != 0:
                 raise RuntimeError(disposable_head_result.stderr.decode("utf-8", errors="replace").strip())
@@ -471,11 +471,10 @@ def detached_head_workspace(
             if disposable_head != head:
                 raise RuntimeError(f"disposable HEAD {disposable_head} differs from captured HEAD {head}")
 
-            real_status_result = subprocess.run(
+            real_status_result = _run_git(
                 ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
                 cwd=resolved_real_root,
-                capture_output=True,
-                check=False,
+                operation="source status",
             )
             if real_status_result.returncode != 0:
                 raise RuntimeError(real_status_result.stderr.decode("utf-8", errors="replace").strip())
@@ -484,11 +483,10 @@ def detached_head_workspace(
             except ValueError as exc:
                 raise RuntimeError(f"malformed porcelain rename or status: {exc}") from exc
 
-            worktree_list_result = subprocess.run(
+            worktree_list_result = _run_git(
                 ["git", "worktree", "list", "--porcelain", "-z"],
                 cwd=resolved_real_root,
-                capture_output=True,
-                check=False,
+                operation="worktree list",
             )
             if worktree_list_result.returncode != 0:
                 raise RuntimeError(worktree_list_result.stderr.decode("utf-8", errors="replace").strip())
@@ -502,11 +500,11 @@ def detached_head_workspace(
             )
 
             _assert_root_identity(root_capability)
-            sweep_status_result = subprocess.run(
-                ["git", "-C", str(sweep_root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            sweep_status_result = _run_git(
+                ["git", "-C", str(git_root), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
                 cwd=resolved_real_root,
-                capture_output=True,
-                check=False,
+                operation="disposable status",
+                capability=root_capability,
             )
             _assert_root_identity(root_capability)
             if sweep_status_result.returncode != 0:
@@ -528,10 +526,19 @@ def detached_head_workspace(
                 _root_capability=root_capability,
             )
         finally:
-            try:
-                _cleanup_detached_worktree(root_capability, resolved_real_root)
-            finally:
-                os.close(root_capability.descriptor)
+            if root_capability is None:
+                try:
+                    _remove_exact_root(sweep_root, created_identity)
+                except (OSError, RuntimeError, KeyboardInterrupt) as exc:
+                    raise RuntimeError(f"orphaned workspace root: {sweep_root}: direct cleanup failed: {exc}") from exc
+            else:
+                try:
+                    if add_attempted:
+                        _cleanup_detached_worktree(root_capability, resolved_real_root)
+                    else:
+                        _remove_pinned_root_if_present(root_capability)
+                finally:
+                    os.close(root_capability.descriptor)
 
     return workspace_context()
 

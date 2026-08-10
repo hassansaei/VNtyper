@@ -18,6 +18,10 @@ pytestmark = pytest.mark.unit
 GitCall = tuple[str, ...]
 
 
+def _public_command(command: list[str]) -> tuple[str, ...]:
+    return tuple(str(Path(part).resolve()) if part.startswith("/proc/self/fd/") else part for part in command)
+
+
 def _install_identity_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     real: Path,
@@ -37,26 +41,30 @@ def _install_identity_lifecycle(
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[bytes]:
         assert Path(cwd) == real
-        call = tuple(command)
+        call = _public_command(command)
         seen[call] += 1
         if command == ["git", "rev-parse", "--verify", "HEAD^{commit}"]:
             return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
-        if command == ["git", "worktree", "add", "--detach", str(sweep), head]:
+        if call == ("git", "worktree", "add", "--detach", str(sweep), head):
             return subprocess.CompletedProcess(command, 0, b"", b"")
-        if command == ["git", "-C", str(sweep), "rev-parse", "--verify", "HEAD^{commit}"]:
+        if call == ("git", "-C", str(sweep), "rev-parse", "--verify", "HEAD^{commit}"):
             return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
-        if command in (
-            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            ["git", "-C", str(sweep), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        if call in (
+            ("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+            ("git", "-C", str(sweep), "status", "--porcelain=v1", "-z", "--untracked-files=all"),
         ):
             return subprocess.CompletedProcess(command, 0, b"", b"")
         if command == ["git", "worktree", "list", "--porcelain", "-z"]:
             return subprocess.CompletedProcess(command, 0, b"", b"")
-        if command == ["git", "worktree", "remove", "--force", str(sweep)]:
+        if call[1:3] == ("worktree", "repair"):
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        if call[1:3] == ("worktree", "remove"):
             if on_remove is not None:
                 on_remove()
-            elif sweep.exists():
-                shutil.rmtree(sweep)
+            else:
+                opened_root = Path(command[-1]).resolve()
+                if opened_root.exists():
+                    shutil.rmtree(opened_root)
             return subprocess.CompletedProcess(command, 0, b"", b"")
         raise AssertionError(f"unexpected subprocess call: {command}")
 
@@ -87,8 +95,8 @@ def test_cleanup_rejects_an_ordinary_directory_root_substitution_without_touchin
 
     assert str(exc_info.value) == f"orphaned worktree: {sweep}: workspace identity mismatch"
     assert sentinel.read_text(encoding="utf-8") == "replacement\n"
-    assert displaced.exists()
-    assert seen[("git", "worktree", "remove", "--force", str(sweep))] == 0
+    assert not displaced.exists()
+    assert seen[("git", "worktree", "remove", "--force", str(displaced))] == 1
 
 
 def test_verify_baseline_rejects_root_substitution_before_reading_replacement(

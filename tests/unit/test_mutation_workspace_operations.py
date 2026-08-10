@@ -441,6 +441,7 @@ def test_lifecycle_rejects_malformed_disposable_status(tmp_path: Path, monkeypat
         cwd: Path,
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[bytes]:
+        command = [str(Path(part).resolve()) if part.startswith("/proc/self/fd/") else part for part in command]
         if command == ["git", "rev-parse", "--verify", "HEAD^{commit}"]:
             return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
         if command == ["git", "worktree", "add", "--detach", str(sweep), head]:
@@ -453,6 +454,8 @@ def test_lifecycle_rejects_malformed_disposable_status(tmp_path: Path, monkeypat
             return subprocess.CompletedProcess(command, 0, b"", b"")
         if command == ["git", "-C", str(sweep), "status", "--porcelain=v1", "-z", "--untracked-files=all"]:
             return subprocess.CompletedProcess(command, 0, b"R  renamed.py\0", b"")
+        if command == ["git", "worktree", "repair", str(sweep)]:
+            return subprocess.CompletedProcess(command, 0, b"", b"")
         if command == ["git", "worktree", "remove", "--force", str(sweep)]:
             shutil.rmtree(sweep)
             return subprocess.CompletedProcess(command, 0, b"", b"")

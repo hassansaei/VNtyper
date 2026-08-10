@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+PROC_SELF_FD = Path("/proc/self/fd")
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,29 @@ def relative_parts(relative: str) -> tuple[str, ...]:
     return candidate.parts
 
 
+def symlink_target_relative(relative: str, link_text: str) -> str:
+    """Return a lexically confined target name for a copied relative symlink.
+
+    Args:
+        relative: Repository-relative path of the symlink.
+        link_text: Exact relative link text to resolve lexically.
+
+    Returns:
+        The normalized repository-relative target path.
+
+    Raises:
+        RuntimeError: If the link is absolute or escapes the workspace.
+    """
+    if Path(link_text).is_absolute():
+        raise RuntimeError(f"workspace symlink escapes workspace root: {relative}")
+    target = Path(os.path.normpath(str(Path(relative).parent / link_text))).as_posix()
+    try:
+        relative_parts(target)
+    except ValueError as exc:
+        raise RuntimeError(f"workspace symlink escapes workspace root: {relative}") from exc
+    return target
+
+
 def open_root_capability(root: Path) -> RootCapability:
     """Open and pin one workspace root directory.
 
@@ -57,6 +81,51 @@ def open_root_capability(root: Path) -> RootCapability:
         os.close(descriptor)
         raise
     return capability
+
+
+def git_capability_path(capability: RootCapability) -> Path:
+    """Return the inherited proc-fd path that names the pinned root inode.
+
+    Args:
+        capability: Open workspace root whose descriptor must be inherited.
+
+    Returns:
+        The proc-fd path naming the same directory device and inode.
+
+    Raises:
+        RuntimeError: If this environment cannot expose the opened directory to Git.
+    """
+    proc_path = PROC_SELF_FD / str(capability.descriptor)
+    try:
+        proc_stat = os.stat(proc_path)
+        descriptor_stat = os.fstat(capability.descriptor)
+    except OSError as exc:
+        raise RuntimeError(f"proc/self/fd capability is unavailable: {proc_path}: {exc}") from exc
+    if (
+        not stat.S_ISDIR(proc_stat.st_mode)
+        or proc_stat.st_dev != descriptor_stat.st_dev
+        or proc_stat.st_ino != descriptor_stat.st_ino
+    ):
+        raise RuntimeError(f"proc/self/fd capability does not name the workspace root: {proc_path}")
+    return proc_path
+
+
+def remove_exact_root(root: Path, expected_identity: tuple[int, int]) -> None:
+    """Remove one created root only while its parent entry has the expected identity.
+
+    Args:
+        root: Exact created directory entry to remove.
+        expected_identity: Required device and inode for that entry.
+
+    Raises:
+        OSError: If anchored traversal or removal fails.
+        RuntimeError: If the public entry no longer has the expected identity.
+    """
+    parent_fd = os.open(root.parent, DIRECTORY_OPEN_FLAGS)
+    try:
+        remove_entry_at(parent_fd, root.name, expected_identity=expected_identity)
+    finally:
+        os.close(parent_fd)
 
 
 def assert_root_identity(capability: RootCapability) -> None:

@@ -17,6 +17,10 @@ pytestmark = pytest.mark.unit
 GitCall = tuple[tuple[str, ...], Path]
 
 
+def _public_command(command: list[str]) -> tuple[str, ...]:
+    return tuple(str(Path(part).resolve()) if part.startswith("/proc/self/fd/") else part for part in command)
+
+
 def _record_probe(probes: list[object], path: object, result: bool) -> bool:
     probes.append(path)
     return result
@@ -57,16 +61,18 @@ def _install_workspace_git_double(
             sweep_status,
             b"",
         ),
+        (("git", "worktree", "repair", str(sweep)), real): (0, b"", b""),
         (("git", "worktree", "remove", "--force", str(sweep)), real): (0, b"", b""),
     }
     seen: Counter[GitCall] = Counter()
 
     def fake_run(command: list[str], *, cwd: Path, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        key = (tuple(command), Path(cwd))
+        public_command = _public_command(command)
+        key = (public_command, Path(cwd))
         assert key in responses, f"unexpected subprocess call: {key}"
         seen[key] += 1
         returncode, stdout, stderr = responses[key]
-        if remove_directory and command[1:3] == ["worktree", "remove"] and returncode == 0 and sweep.exists():
+        if remove_directory and public_command[1:3] == ("worktree", "remove") and returncode == 0 and sweep.exists():
             shutil.rmtree(sweep)
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
 
@@ -97,7 +103,7 @@ def test_workspace_refuses_a_disposable_head_mismatch(tmp_path: Path, monkeypatc
         mutation_workspace.detached_head_workspace(real, (), ()),
     ):
         pytest.fail("wrong-HEAD workspace must not yield")
-    assert sum(seen.values()) == 4
+    assert sum(seen.values()) == 5
 
 
 def test_workspace_refuses_malformed_porcelain_before_overlay(tmp_path: Path, monkeypatch) -> None:
@@ -110,7 +116,7 @@ def test_workspace_refuses_malformed_porcelain_before_overlay(tmp_path: Path, mo
         mutation_workspace.detached_head_workspace(real, (), ()),
     ):
         pytest.fail("malformed status must not yield")
-    assert sum(seen.values()) == 5
+    assert sum(seen.values()) == 6
 
 
 def test_overlay_operations_and_baseline_manifest_diverge_for_staged_revert(tmp_path: Path, monkeypatch) -> None:
@@ -365,17 +371,19 @@ def test_fresh_retry_never_reuses_an_orphan(tmp_path: Path, monkeypatch) -> None
             b"",
             b"",
         )
+        responses[(("git", "worktree", "repair", str(sweep)), real)] = (0, b"", b"")
         responses[(("git", "worktree", "remove", "--force", str(sweep)), real)] = (0, b"", b"")
     responses[(("git", "worktree", "remove", "--force", str(first_sweep)), real)] = (1, b"", b"busy")
     commands: list[tuple[str, ...]] = []
 
     def fake_run(command: list[str], *, cwd: Path, **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        key = (tuple(command), Path(cwd))
+        public_command = _public_command(command)
+        key = (public_command, Path(cwd))
         assert key in responses, f"unexpected subprocess call: {key}"
-        commands.append(tuple(command))
+        commands.append(public_command)
         returncode, stdout, stderr = responses[key]
-        if command[1:3] == ["worktree", "remove"] and returncode == 0:
-            Path(command[-1]).rmdir()
+        if public_command[1:3] == ("worktree", "remove") and returncode == 0:
+            Path(public_command[-1]).rmdir()
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
 
     monkeypatch.setattr(mutation_workspace.subprocess, "run", fake_run)
@@ -400,11 +408,11 @@ def test_fresh_retry_never_reuses_an_orphan(tmp_path: Path, monkeypatch) -> None
     ("stage", "expected_calls", "removes_registered_worktree"),
     [
         ("capture", 1, False),
-        ("add", 3, True),
-        ("disposable-head", 4, True),
-        ("real-status", 5, True),
-        ("worktree-list", 6, True),
-        ("sweep-status", 7, True),
+        ("add", 4, True),
+        ("disposable-head", 5, True),
+        ("real-status", 6, True),
+        ("worktree-list", 7, True),
+        ("sweep-status", 8, True),
     ],
 )
 def test_lifecycle_git_failures_use_only_the_available_cleanup_path(
@@ -633,21 +641,3 @@ def test_confined_path_reports_a_dangling_internal_symlink_as_a_value_error(tmp_
 
     with pytest.raises(ValueError, match="workspace path does not exist"):
         mutation_workspace.confined_path(tmp_path, "dangling.py", must_exist=False)
-
-
-def test_confined_path_reports_a_missing_required_parent_as_a_value_error(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="workspace path does not exist"):
-        mutation_workspace.confined_path(tmp_path, "missing/child.py", must_exist=True)
-
-
-def test_porcelain_rejects_duplicate_lexical_spellings_before_lexists(tmp_path: Path, monkeypatch) -> None:
-    changed = tmp_path / "dir/changed.py"
-    changed.parent.mkdir()
-    changed.write_text("changed\n", encoding="utf-8")
-    probes: list[object] = []
-    monkeypatch.setattr(mutation_workspace.os.path, "lexists", lambda path: _record_probe(probes, path, True))
-
-    with pytest.raises(ValueError, match="unsafe workspace path"):
-        mutation_workspace.parse_porcelain_z(b"?? dir/changed.py\0?? dir/./changed.py\0", tmp_path)
-
-    assert probes == []

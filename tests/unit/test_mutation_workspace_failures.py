@@ -14,6 +14,10 @@ import mutation_workspace
 pytestmark = pytest.mark.unit
 
 
+def _public_command(command: list[str]) -> tuple[str, ...]:
+    return tuple(str(Path(part).resolve()) if part.startswith("/proc/self/fd/") else part for part in command)
+
+
 def _install_lifecycle_double(
     monkeypatch: pytest.MonkeyPatch,
     real: Path,
@@ -36,11 +40,11 @@ def _install_lifecycle_double(
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[bytes]:
         assert Path(cwd) == real
-        call = tuple(command)
+        call = _public_command(command)
         calls.append(call)
         if command[1:3] == ["worktree", "add"] and add_exception is not None:
             raise add_exception
-        if command[1:3] == ["worktree", "remove"]:
+        if call[1:3] == ("worktree", "remove"):
             if remove_exception is not None:
                 raise remove_exception
             if remove_returncode == 0 and sweep.exists():
@@ -48,14 +52,16 @@ def _install_lifecycle_double(
             return subprocess.CompletedProcess(command, remove_returncode, b"", remove_stderr)
         if command == ["git", "rev-parse", "--verify", "HEAD^{commit}"]:
             return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
-        if command == ["git", "worktree", "add", "--detach", str(sweep), head]:
+        if call == ("git", "worktree", "add", "--detach", str(sweep), head):
             return subprocess.CompletedProcess(command, 0, b"", b"")
-        if command == ["git", "-C", str(sweep), "rev-parse", "--verify", "HEAD^{commit}"]:
+        if call == ("git", "-C", str(sweep), "rev-parse", "--verify", "HEAD^{commit}"):
             return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
-        if command in (
-            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            ["git", "-C", str(sweep), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        if call in (
+            ("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+            ("git", "-C", str(sweep), "status", "--porcelain=v1", "-z", "--untracked-files=all"),
         ):
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        if call == ("git", "worktree", "repair", str(sweep)):
             return subprocess.CompletedProcess(command, 0, b"", b"")
         if command == ["git", "worktree", "list", "--porcelain", "-z"]:
             return subprocess.CompletedProcess(command, 0, b"", b"")
@@ -94,6 +100,7 @@ def test_add_subprocess_exception_still_forces_exact_cleanup(
     assert calls == [
         ("git", "rev-parse", "--verify", "HEAD^{commit}"),
         ("git", "worktree", "add", "--detach", str(sweep), "a" * 40),
+        ("git", "worktree", "repair", str(sweep)),
         ("git", "worktree", "remove", "--force", str(sweep)),
     ]
     assert not sweep.exists()
@@ -144,7 +151,12 @@ def test_cleanup_subprocess_exception_becomes_exact_orphan_runtime_error(
     with pytest.raises(RuntimeError) as exc_info, mutation_workspace.detached_head_workspace(real, (), ()):
         pass
 
-    assert str(exc_info.value) == f"orphaned worktree: {sweep}: cleanup command failed: {cleanup_exception}"
+    normalized = (
+        f"git worktree remove failed: {cleanup_exception}"
+        if isinstance(cleanup_exception, OSError)
+        else str(cleanup_exception)
+    )
+    assert str(exc_info.value) == f"orphaned worktree: {sweep}: cleanup command failed: {normalized}"
     assert calls[-1] == ("git", "worktree", "remove", "--force", str(sweep))
     assert sweep.exists()
 
