@@ -180,6 +180,10 @@ TARGETS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+#: Known high-signal mutant that the scoring unit tests must kill. The harness refuses
+#: a measurement unless this exact identity is present and pytest exits exactly 1.
+CANARY_KEY = ("vntyper/scripts/scoring.py", 74, "/", "*")
+
 #: Operator token substitutions. Each flips a decision without changing what the
 #: surrounding statement *is*, which is what makes an undetected one a real defect
 #: rather than a crash: `>=` -> `<` moves a threshold, it does not raise.
@@ -341,7 +345,7 @@ class ModuleResult:
         return 100.0 * self.killed / self.total if self.total else 0.0
 
 
-def generate_mutants(path: Path) -> list[Mutant]:
+def generate_mutants(path: Path, *, repo_root: Path) -> list[Mutant]:
     """
     Generate every compilable single-token mutant of a source file.
 
@@ -354,6 +358,7 @@ def generate_mutants(path: Path) -> list[Mutant]:
 
     Args:
         path (Path): The module to mutate.
+        repo_root (Path): Repository root used to make mutant paths relative.
 
     Returns:
         list[Mutant]: One mutant per mutable token whose mutated form still compiles.
@@ -398,7 +403,7 @@ def generate_mutants(path: Path) -> list[Mutant]:
 
         mutants.append(
             Mutant(
-                path=str(path.relative_to(REAL_REPO_ROOT)),
+                path=str(path.relative_to(repo_root)),
                 line=token.start[0],
                 original=token.string,
                 replacement=replacement,
@@ -643,7 +648,14 @@ def baseline_refusal(
     return None
 
 
-def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, verbose: bool) -> ModuleResult:
+def sweep_module(
+    path_str: str,
+    scoped_tests: tuple[str, ...],
+    timeout: int,
+    verbose: bool,
+    *,
+    repo_root: Path,
+) -> ModuleResult:
     """
     Run every mutant of one module and record which survived.
 
@@ -660,13 +672,14 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
         scoped_tests (tuple[str, ...]): Test files that exercise this module.
         timeout (int): Per-pytest-run timeout in seconds.
         verbose (bool): Print each mutant's outcome as it is decided.
+        repo_root (Path): Disposable repository root containing the mutation target.
 
     Returns:
         ModuleResult: Kill/survive counts and the surviving mutants.
     """
-    path = REAL_REPO_ROOT / path_str
+    path = repo_root / path_str
     original = path.read_text(encoding="utf-8")
-    mutants = generate_mutants(path)
+    mutants = generate_mutants(path, repo_root=repo_root)
     result = ModuleResult(path=path_str)
 
     # flush= throughout: a sweep is long enough that someone will watch the log, and an
@@ -681,13 +694,13 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
             # from the original, both of which can share this file's (mtime, size).
             # tests/unit/test_mutation_test.py::test_no_bytecode_cache_survives_into_any_mutants_test_run
             # is the only thing that notices if this line goes.
-            clear_bytecode_caches(REAL_REPO_ROOT / "vntyper")
+            clear_bytecode_caches(repo_root / "vntyper")
 
-            if not run_tests(scoped_tests, timeout, repo_root=REAL_REPO_ROOT):
+            if not run_tests(scoped_tests, timeout, repo_root=repo_root):
                 mutant.killed, mutant.killed_by = True, "scoped"
             # Survived the scoped tests - confirm against the whole tier before
             # believing it, so the score is not biased down by the scoping.
-            elif not run_tests(("tests/unit",), timeout, parallel=True, repo_root=REAL_REPO_ROOT):
+            elif not run_tests(("tests/unit",), timeout, parallel=True, repo_root=repo_root):
                 mutant.killed, mutant.killed_by = True, "full tier"
             else:
                 mutant.killed = False
@@ -705,12 +718,51 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
                 print(f"  [{index}/{len(mutants)}] {'.' if mutant.killed else 'S'}", end="", flush=True)
     finally:
         path.write_text(original, encoding="utf-8")
-        clear_bytecode_caches(REAL_REPO_ROOT / "vntyper")
+        clear_bytecode_caches(repo_root / "vntyper")
 
     if not verbose:
         print()
     print(f"  {result.killed}/{result.total} killed ({result.score:.1f}%)", flush=True)
     return result
+
+
+def canary_refusal(timeout: int, *, repo_root: Path) -> str | None:
+    """Prove one exact scoring mutant is killed for the expected reason.
+
+    Args:
+        timeout (int): Maximum seconds for the canary's scoped pytest run.
+        repo_root (Path): Disposable repository root containing the canary target.
+
+    Returns:
+        str | None: A refusal diagnostic, or ``None`` only when pytest exits exactly 1
+            without a harness timeout.
+    """
+    path_str, line, original_token, replacement = CANARY_KEY
+    path = repo_root / path_str
+    original_bytes = path.read_bytes()
+    mutants = generate_mutants(path, repo_root=repo_root)
+    canary = next((mutant for mutant in mutants if mutant.key == CANARY_KEY), None)
+    if canary is None:
+        return (
+            "REFUSING TO SWEEP: canary mutant is missing: "
+            f"path={path_str!r}, line={line}, original={original_token!r}, replacement={replacement!r}"
+        )
+
+    try:
+        path.write_text(canary.source, encoding="utf-8")
+        clear_bytecode_caches(repo_root / "vntyper")
+        run = run_pytest(TARGETS[path_str], timeout, repo_root=repo_root)
+    finally:
+        path.write_bytes(original_bytes)
+        clear_bytecode_caches(repo_root / "vntyper")
+
+    if run.timed_out:
+        return f"REFUSING TO SWEEP: canary timed out.\n{run.output}"
+    if run.returncode == 1:
+        return None
+    if run.returncode == 0:
+        return f"REFUSING TO SWEEP: canary survived.\n{run.output}"
+    return f"REFUSING TO SWEEP: canary infrastructure failure (pytest exit {run.returncode}).\n{run.output}"
 
 
 def format_report(results: list[ModuleResult], elapsed: float) -> str:
@@ -1259,7 +1311,7 @@ def main() -> int:
         return 1
 
     start = time.monotonic()
-    results = [sweep_module(p, t, args.timeout, args.verbose) for p, t in targets.items()]
+    results = [sweep_module(p, t, args.timeout, args.verbose, repo_root=REAL_REPO_ROOT) for p, t in targets.items()]
     elapsed = time.monotonic() - start
 
     print()
