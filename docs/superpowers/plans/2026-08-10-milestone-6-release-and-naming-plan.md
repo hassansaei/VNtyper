@@ -1907,7 +1907,7 @@ tag workflows become inert only after the post-OIDC token deletion.
 
 - [ ] **Step 2: Assert precise diagnostic categories (2–5 min)**
 
-Parse `release-summary` and require `if == "always()"`, `needs` exactly
+Parse `release-summary` and require `if == "${{ always() }}"`, `needs` exactly
 `[validate-release, wait-for-release-gates, build-package, promote-ghcr, publish-pypi]`, no OIDC/package permission,
 and environment/dataflow for every upstream result plus its JSON output. Require rendered fields for mode, tag, full SHA,
 main ancestry, observed package/citation/changelog versions and verdicts, structured preflight state/reason/candidates,
