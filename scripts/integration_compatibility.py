@@ -72,6 +72,27 @@ _ARTIFACT_KEYS = {"required_present", "required_absent", "archive"}
 _OUTCOME_KEYS = {"kestrel", "advntr", "cross_match"}
 _ASSERTION_KEYS = {"value", "tolerance"}
 _TOLERANCE_KEYS = {"kind", "value"}
+_SUPPORTED_SUITES = {"bam_tests", "cram_tests", "single_end_bam_tests", "fastq_tests", "advntr_tests"}
+_KESTREL_FIELDS = {
+    "Confidence",
+    "Estimated_Depth_AlternateVariant",
+    "Estimated_Depth_Variant_ActiveRegion",
+    "Depth_Score",
+}
+_ADVNTR_FIELDS = {"VID", "State", "NumberOfSupportingReads", "MeanCoverage", "Pvalue"}
+_CROSS_MATCH_FIELDS = {
+    "Kestrel_POS",
+    "Kestrel_REF",
+    "Kestrel_ALT",
+    "Kestrel_Allele_Change",
+    "Kestrel_Variant_Type",
+    "Advntr_POS",
+    "Advntr_REF",
+    "Advntr_ALT",
+    "Advntr_Allele_Change",
+    "Advntr_Variant_Type",
+    "Match",
+}
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _MD5_RE = re.compile(r"[0-9a-f]{32}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -278,7 +299,9 @@ def _validate_routing(value: object, label: str) -> None:
     _exact_keys(records, _COUNT_KEYS, f"{label}.records")
     for key in sorted(_COUNT_KEYS):
         _integer(records[key], f"{label}.records.{key}")
-    _string_list(routing["selected_basenames"], f"{label}.selected_basenames", basenames=True)
+    selected = _string_list(routing["selected_basenames"], f"{label}.selected_basenames", basenames=True)
+    if not selected:
+        raise ValueError(f"{label} must declare selected routing evidence")
 
 
 def _validate_artifacts(value: object, label: str) -> None:
@@ -346,6 +369,22 @@ def _validate_contract(
     _exact_keys(outcomes, _OUTCOME_KEYS, f"{label}.outcomes")
     for outcome in sorted(_OUTCOME_KEYS):
         _validate_assertions(outcomes[outcome], f"{label}.outcomes.{outcome}")
+    if suite not in _SUPPORTED_SUITES:
+        raise ValueError(f"{label}.suite is unsupported: {suite}")
+    if contract["routing"] is None:
+        raise ValueError(f"{label} suite {suite} requires routing evidence")
+    if not contract["artifacts"]["required_present"]:
+        raise ValueError(f"{label} must declare required artifacts")
+    if set(outcomes["kestrel"]) != _KESTREL_FIELDS:
+        raise ValueError(f"{label} must declare complete Kestrel fields")
+    has_advntr = "advntr" in contract["execution"]["modules"]
+    if suite == "advntr_tests" and not has_advntr:
+        raise ValueError(f"{label} advntr suite must declare the advntr module")
+    if has_advntr:
+        if set(outcomes["advntr"]) != _ADVNTR_FIELDS:
+            raise ValueError(f"{label} must declare complete advntr fields")
+        if set(outcomes["cross_match"]) != _CROSS_MATCH_FIELDS:
+            raise ValueError(f"{label} must declare complete cross_match fields")
     _string(contract["compatibility_since"], f"{label}.compatibility_since")
     provenance = contract["provenance_commit"]
     if not isinstance(provenance, str) or _SHA_RE.fullmatch(provenance) is None:
@@ -402,19 +441,39 @@ def _assertions_from_live(value: object) -> dict[str, dict[str, object]]:
     return result
 
 
+def _cross_match_from_live(value: object) -> dict[str, dict[str, object]]:
+    if value == {}:
+        return {}
+    result = _mapping(value, "live cross_match_assertions")
+    _exact_keys(result, {"comments", "data"}, "live cross_match_assertions")
+    if result["comments"] != []:
+        raise ValueError("live cross_match_assertions comments must be empty")
+    rows = result["data"]
+    if not isinstance(rows, list) or len(rows) != 1:
+        raise ValueError("live cross_match_assertions data must contain exactly one row")
+    row = _mapping(rows[0], "live cross_match_assertions data row")
+    if set(row) != _CROSS_MATCH_FIELDS:
+        raise ValueError("live cross_match_assertions must declare complete cross_match fields")
+    return _assertions_from_live(row)
+
+
 def _split_options(case: dict[str, Any], suite: str) -> tuple[list[str], list[str]]:
     options = case.get("cli_options", [])
-    if not isinstance(options, list):
-        raise ValueError(f"live case {case.get('test_name')} cli_options must be a list")
-    modules = ["advntr"] if suite == "advntr_tests" else []
+    options = _string_list(options, f"live case {case.get('test_name')} cli_options")
+    modules: list[str] = []
     normalized: list[str] = []
     index = 0
     while index < len(options):
         option = options[index]
         if option == "--extra-modules":
-            if index + 1 >= len(options) or not isinstance(options[index + 1], str):
+            if index + 1 >= len(options):
                 raise ValueError(f"live case {case.get('test_name')} has malformed --extra-modules")
-            modules.extend(module for module in options[index + 1].split(",") if module not in modules)
+            operands = options[index + 1].split(",")
+            if any(not module for module in operands) or len(set(operands)) != len(operands):
+                raise ValueError(f"live case {case.get('test_name')} has duplicate module operands")
+            if set(modules) & set(operands):
+                raise ValueError(f"live case {case.get('test_name')} has duplicate module operands")
+            modules.extend(operands)
             index += 2
         else:
             normalized.append(option)
@@ -457,7 +516,7 @@ def _live_inputs(case: dict[str, Any], suite: str, resource_config: dict[str, An
     return [fixture["source_path"]] if fixture else []
 
 
-def _default_artifacts(case: dict[str, Any], suite: str) -> list[str]:
+def _historical_artifacts(case: dict[str, Any], suite: str) -> list[str]:
     if suite == "advntr_tests":
         defaults = ["summary_report.html", "kestrel/kestrel_result.tsv", "advntr/output_adVNTR_result.tsv"]
     elif suite == "fastq_tests":
@@ -477,6 +536,56 @@ def _default_artifacts(case: dict[str, Any], suite: str) -> list[str]:
     return defaults
 
 
+def _validate_live_success(case: dict[str, Any], suite: str) -> None:
+    label = f"live case {case.get('test_name')}"
+    _integer(case.get("threads"), f"{label} threads", positive=True)
+    _string(case.get("log_level"), f"{label} log_level")
+    _string(case.get("reference_assembly"), f"{label} reference_assembly")
+    if suite == "fastq_tests":
+        _relative_path(case.get("fastq1"), f"{label} fastq1")
+        if case.get("fastq2") not in (None, ""):
+            _relative_path(case["fastq2"], f"{label} fastq2")
+    elif "fixture_name" in case:
+        _string(case.get("fixture_name"), f"{label} fixture_name")
+    else:
+        inputs = [case[key] for key in ("bam", "cram") if case.get(key) is not None]
+        if len(inputs) != 1:
+            raise ValueError(f"{label} must declare exactly one alignment input")
+        _relative_path(inputs[0], f"{label} input")
+    reference_path, reference_digest = case.get("reference_fasta"), case.get("fixture_reference_sha256")
+    if (reference_path is None) != (reference_digest is None):
+        raise ValueError(f"{label} reference path and digest must be declared together")
+    if reference_path is not None:
+        _relative_path(reference_path, f"{label} reference_fasta")
+        if not isinstance(reference_digest, str) or _SHA256_RE.fullmatch(reference_digest) is None:
+            raise ValueError(f"{label} fixture_reference_sha256 must be a lowercase SHA-256")
+    _, modules = _split_options(case, suite)
+    routing = {
+        "records": case.get("expected_fastq_records"),
+        "selected_basenames": case.get("expected_selected_fastqs"),
+    }
+    _validate_routing(routing, f"{label} routing")
+    present = _string_list(case.get("expected_files"), f"{label} expected_files", paths=True)
+    if not present:
+        raise ValueError(f"{label} must declare required artifacts")
+    _string_list(case.get("expected_absent"), f"{label} expected_absent", paths=True)
+    if not isinstance(case.get("expected_archive"), bool):
+        raise ValueError(f"{label} expected_archive must be a Boolean")
+    kestrel = _assertions_from_live(case.get("kestrel_assertions"))
+    if set(kestrel) != _KESTREL_FIELDS:
+        raise ValueError(f"{label} must declare complete Kestrel fields")
+    has_advntr = "advntr" in modules
+    if suite == "advntr_tests" and not has_advntr:
+        raise ValueError(f"{label} advntr suite must declare the advntr module")
+    if has_advntr:
+        advntr = _assertions_from_live(case.get("advntr_assertions"))
+        cross_match = _cross_match_from_live(case.get("cross_match_assertions"))
+        if set(advntr) != _ADVNTR_FIELDS:
+            raise ValueError(f"{label} must declare complete advntr fields")
+        if set(cross_match) != _CROSS_MATCH_FIELDS:
+            raise ValueError(f"{label} must declare complete cross_match fields")
+
+
 def _live_projection(case: dict[str, Any], suite: str, resource_config: dict[str, Any]) -> dict[str, Any]:
     options, modules = _split_options(case, suite)
     records = case.get("expected_fastq_records") or case.get("expected_mixed_fastq_records")
@@ -488,27 +597,46 @@ def _live_projection(case: dict[str, Any], suite: str, resource_config: dict[str
         "fixture": _live_fixture(case, resource_config),
         "input_paths": _live_inputs(case, suite, resource_config),
         "reference": {
-            "assembly": case.get("reference_assembly", "hg19"),
+            "assembly": case["reference_assembly"],
             "path": case.get("reference_fasta"),
             "sha256": case.get("fixture_reference_sha256"),
         },
         "execution": {
-            "threads": case.get("threads", 4),
-            "log_level": case.get("log_level", "DEBUG"),
+            "threads": case["threads"],
+            "log_level": case["log_level"],
             "cli_options": options,
             "modules": modules,
         },
         "routing": routing,
         "artifacts": {
-            "required_present": _default_artifacts(case, suite),
-            "required_absent": case.get("expected_absent", []),
-            "archive": case.get("expected_archive", "--archive-results" in options),
+            "required_present": case["expected_files"],
+            "required_absent": case["expected_absent"],
+            "archive": case["expected_archive"],
         },
         "outcomes": {
             "kestrel": _assertions_from_live(case.get("kestrel_assertions", {})),
             "advntr": _assertions_from_live(case.get("advntr_assertions", {})),
-            "cross_match": _assertions_from_live(case.get("cross_match_assertions", {})),
+            "cross_match": _cross_match_from_live(case.get("cross_match_assertions", {})),
         },
+    }
+
+
+def _historical_projection(case: dict[str, Any], suite: str, resource_config: dict[str, Any]) -> dict[str, Any]:
+    """Project only fields recorded by the pre-strict authoritative declaration."""
+    options, modules = _split_options(case, suite)
+    return {
+        "suite": suite,
+        "test_name": case["test_name"],
+        "input_paths": _live_inputs(case, suite, resource_config),
+        "reference": {"assembly": case["reference_assembly"], "path": None, "sha256": None},
+        "cli_options": options,
+        "modules": modules,
+        "artifacts": {
+            "required_present": _historical_artifacts(case, suite),
+            "required_absent": [],
+            "archive": "--archive-results" in options,
+        },
+        "advntr": _assertions_from_live(case.get("advntr_assertions", {})),
     }
 
 
@@ -526,18 +654,25 @@ def _contract_projection(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _live_successes(test_config: dict[str, Any]) -> dict[Identity, list[dict[str, Any]]]:
+def _live_successes(test_config: dict[str, Any], *, strict: bool = False) -> dict[Identity, list[dict[str, Any]]]:
     suites = test_config.get("integration_tests", {})
     if not isinstance(suites, dict):
         raise ValueError("live test config integration_tests must be an object")
     result: dict[Identity, list[dict[str, Any]]] = {}
-    for suite, cases in suites.items():
+    for suite_value, cases in suites.items():
+        suite = _string(suite_value, "live suite name")
+        if suite not in _SUPPORTED_SUITES:
+            raise ValueError(f"live suite is unsupported: {suite}")
         if not isinstance(cases, list):
             raise ValueError(f"live suite {suite} must be a list")
         for case_value in cases:
             case = _mapping(case_value, f"live suite {suite} case")
-            if case.get("expected_exit_code", 0) == 0:
-                identity = (suite, str(case.get("test_name")))
+            test_name = _string(case.get("test_name"), f"live suite {suite} case test_name")
+            exit_code = _integer(case.get("expected_exit_code", 0), f"live case {test_name} expected_exit_code")
+            if exit_code == 0:
+                if strict:
+                    _validate_live_success(case, suite)
+                identity = (suite, test_name)
                 result.setdefault(identity, []).append(case)
     return result
 
@@ -581,9 +716,19 @@ def validate_bootstrap_manifest(
             raise ValueError(f"bootstrap contract {identity} mutates authoritative routing")
         case = historical[identity][0]
         projection = _contract_projection(contract)
-        live = _live_projection(case, identity[0], resource_config)
-        for field in ("suite", "test_name", "input_paths", "reference", "execution", "artifacts", "outcomes"):
-            if projection[field] != live[field]:
+        historical_projection = _historical_projection(case, identity[0], resource_config)
+        comparisons = {
+            "suite": projection["suite"],
+            "test_name": projection["test_name"],
+            "input_paths": projection["input_paths"],
+            "reference": projection["reference"],
+            "cli_options": projection["execution"]["cli_options"],
+            "modules": projection["execution"]["modules"],
+            "artifacts": projection["artifacts"],
+            "advntr": projection["outcomes"]["advntr"],
+        }
+        for field, actual in comparisons.items():
+            if actual != historical_projection[field]:
                 raise ValueError(f"bootstrap contract {identity} mutates historical field {field}")
     return indexed
 
@@ -622,7 +767,7 @@ def check_compatibility(
         if mutated:
             raise ValueError(f"compatibility contracts were mutated: {mutated}")
 
-    successes = _live_successes(live_test_config)
+    successes = _live_successes(live_test_config, strict=True)
     duplicate = sorted(identity for identity, cases in successes.items() if len(cases) != 1)
     if duplicate:
         raise ValueError(f"manifest identities do not resolve exactly once: {duplicate}")

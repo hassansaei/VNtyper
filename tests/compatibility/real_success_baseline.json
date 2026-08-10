@@ -18,7 +18,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -102,7 +102,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -186,7 +186,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -270,7 +270,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -347,7 +347,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -430,7 +430,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -513,7 +513,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -596,7 +596,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -679,7 +679,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -756,7 +756,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -792,7 +792,33 @@
         "archive": true
       },
       "outcomes": {
-        "kestrel": {},
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 93,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 9883,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.009410098148335525,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision",
+            "tolerance": null
+          }
+        },
         "advntr": {
           "VID": {
             "value": "25561",
@@ -821,7 +847,19 @@
             }
           }
         },
-        "cross_match": {}
+        "cross_match": {
+          "Kestrel_POS": {"value": "67", "tolerance": null},
+          "Kestrel_REF": {"value": "G", "tolerance": null},
+          "Kestrel_ALT": {"value": "GG", "tolerance": null},
+          "Kestrel_Allele_Change": {"value": "G", "tolerance": null},
+          "Kestrel_Variant_Type": {"value": "Insertion", "tolerance": null},
+          "Advntr_POS": {"value": "22", "tolerance": null},
+          "Advntr_REF": {"value": "T", "tolerance": null},
+          "Advntr_ALT": {"value": "TG", "tolerance": null},
+          "Advntr_Allele_Change": {"value": "G", "tolerance": null},
+          "Advntr_Variant_Type": {"value": "Insertion", "tolerance": null},
+          "Match": {"value": "Yes", "tolerance": null}
+        }
       },
       "compatibility_since": "2.0.9",
       "provenance_commit": "47ce0b1168210e55841d07f280ba8134a073e96e"
@@ -849,7 +887,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -935,7 +973,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--keep-intermediates"
@@ -1021,7 +1059,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--delete-intermediates"
@@ -1108,7 +1146,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--keep-intermediates",
@@ -1196,7 +1234,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--archive-results"
@@ -1275,7 +1313,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
@@ -1309,7 +1347,33 @@
         "archive": false
       },
       "outcomes": {
-        "kestrel": {},
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7087,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Depth_Score": {
+            "value": 0.05869902638634119,
+            "tolerance": {
+              "kind": "percentage",
+              "value": 5
+            }
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
         "advntr": {
           "VID": {
             "value": "25561",
@@ -1338,7 +1402,19 @@
             }
           }
         },
-        "cross_match": {}
+        "cross_match": {
+          "Kestrel_POS": {"value": "67", "tolerance": null},
+          "Kestrel_REF": {"value": "G", "tolerance": null},
+          "Kestrel_ALT": {"value": "GG", "tolerance": null},
+          "Kestrel_Allele_Change": {"value": "G", "tolerance": null},
+          "Kestrel_Variant_Type": {"value": "Insertion", "tolerance": null},
+          "Advntr_POS": {"value": "22", "tolerance": null},
+          "Advntr_REF": {"value": "T", "tolerance": null},
+          "Advntr_ALT": {"value": "TG", "tolerance": null},
+          "Advntr_Allele_Change": {"value": "G", "tolerance": null},
+          "Advntr_Variant_Type": {"value": "Insertion", "tolerance": null},
+          "Match": {"value": "Yes", "tolerance": null}
+        }
       },
       "compatibility_since": "2.0.10",
       "provenance_commit": "76d7ca48caec3677e3bc44b98f1024a98e36f78b"
@@ -1365,7 +1441,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [],
         "modules": [
@@ -1443,7 +1519,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [],
         "modules": []
@@ -1523,7 +1599,7 @@
         "sha256": null
       },
       "execution": {
-        "threads": 4,
+        "threads": 2,
         "log_level": "DEBUG",
         "cli_options": [],
         "modules": []

@@ -89,7 +89,12 @@ def _contract(*, suite: str = "bam_tests", name: str = "case-a", path: str = "te
             "archive": False,
         },
         "outcomes": {
-            "kestrel": {"Confidence": _assertion("High_Precision*")},
+            "kestrel": {
+                "Confidence": _assertion("High_Precision*"),
+                "Estimated_Depth_AlternateVariant": _assertion(5),
+                "Estimated_Depth_Variant_ActiveRegion": _assertion(100),
+                "Depth_Score": _assertion(0.05),
+            },
             "advntr": {},
             "cross_match": {},
         },
@@ -118,7 +123,7 @@ def _live_case(contract: dict) -> dict:
         "threads": contract["execution"]["threads"],
         "log_level": contract["execution"]["log_level"],
         "cli_options": [*contract["execution"]["cli_options"]],
-        "expected_present": [*contract["artifacts"]["required_present"]],
+        "expected_files": [*contract["artifacts"]["required_present"]],
         "expected_absent": [*contract["artifacts"]["required_absent"]],
         "expected_archive": contract["artifacts"]["archive"],
         "expected_fastq_records": copy.deepcopy(contract["routing"]["records"]),
@@ -134,11 +139,44 @@ def _live_case(contract: dict) -> dict:
             }
             for field, value in contract["outcomes"]["kestrel"].items()
         },
+        "advntr_assertions": {field: value["value"] for field, value in contract["outcomes"]["advntr"].items()},
+        "cross_match_assertions": {
+            "comments": [],
+            "data": [{field: str(value["value"]) for field, value in contract["outcomes"]["cross_match"].items()}],
+        }
+        if contract["outcomes"]["cross_match"]
+        else {},
     }
     modules = contract["execution"]["modules"]
     if modules:
         case["cli_options"].extend(["--extra-modules", ",".join(modules)])
     return case
+
+
+def _advntr_contract() -> dict:
+    contract = _contract(suite="advntr_tests", name="case-advntr")
+    contract["execution"]["modules"] = ["advntr"]
+    contract["outcomes"]["advntr"] = {
+        "VID": _assertion("25561"),
+        "State": _assertion("I22_2_G_LEN1"),
+        "NumberOfSupportingReads": _assertion(11),
+        "MeanCoverage": _assertion(153.986111111),
+        "Pvalue": _assertion(6.78296229901e-7),
+    }
+    contract["outcomes"]["cross_match"] = {
+        "Kestrel_POS": _assertion("67"),
+        "Kestrel_REF": _assertion("G"),
+        "Kestrel_ALT": _assertion("GG"),
+        "Kestrel_Allele_Change": _assertion("G"),
+        "Kestrel_Variant_Type": _assertion("Insertion"),
+        "Advntr_POS": _assertion("22"),
+        "Advntr_REF": _assertion("T"),
+        "Advntr_ALT": _assertion("TG"),
+        "Advntr_Allele_Change": _assertion("G"),
+        "Advntr_Variant_Type": _assertion("Insertion"),
+        "Match": _assertion("Yes"),
+    }
+    return contract
 
 
 def test_validate_manifest_accepts_complete_contract() -> None:
@@ -150,6 +188,45 @@ def test_validate_manifest_accepts_complete_contract() -> None:
     indexed = module.validate_manifest(_manifest(contract), _resources("tests/data/input.bam"))
 
     assert indexed == {("bam_tests", "case-a"): contract}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda value: value.update(routing=None), "requires routing"),
+        (lambda value: value["routing"].update(selected_basenames=[]), "selected routing evidence"),
+        (lambda value: value["outcomes"].update(kestrel={}), "Kestrel fields"),
+        (lambda value: value["artifacts"].update(required_present=[]), "required artifacts"),
+    ],
+)
+def test_validate_manifest_requires_complete_kestrel_success_content(mutation: Any, message: str) -> None:
+    """Catch accepting a success row without routing, value, or artifact evidence."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    mutation(contract)
+
+    with pytest.raises(ValueError, match=message):
+        module.validate_manifest(_manifest(contract), _resources("tests/data/input.bam"))
+
+
+@pytest.mark.parametrize(
+    ("outcome", "mutation"),
+    [
+        ("advntr", lambda value: value.clear()),
+        ("cross_match", lambda value: value.clear()),
+        ("cross_match", lambda value: value.pop("Match")),
+    ],
+)
+def test_validate_manifest_requires_advntr_specific_outcomes(outcome: str, mutation: Any) -> None:
+    """Catch accepting an adVNTR module success without its module-specific value map."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _advntr_contract()
+    mutation(contract["outcomes"][outcome])
+
+    with pytest.raises(ValueError, match=f"{outcome} fields"):
+        module.validate_manifest(_manifest(contract), _resources("tests/data/input.bam"))
 
 
 @pytest.mark.parametrize(
@@ -200,8 +277,7 @@ def test_validate_manifest_allows_same_input_in_distinct_suites() -> None:
     module = _module()
     assert module is not None, "integration compatibility module is not implemented"
     bam = _contract()
-    advntr = _contract(suite="advntr_tests", name="case-advntr")
-    advntr["execution"]["modules"] = ["advntr"]
+    advntr = _advntr_contract()
 
     indexed = module.validate_manifest(_manifest(bam, advntr), _resources("tests/data/input.bam"))
 
@@ -294,6 +370,69 @@ def test_check_compatibility_rejects_base_deletion_and_mutation() -> None:
         module.check_compatibility(_manifest(contract), _manifest(changed), live, resources)
 
 
+@pytest.mark.parametrize("field", ["threads", "log_level"])
+def test_check_compatibility_requires_explicit_live_invocation_metadata(field: str) -> None:
+    """Catch restoring an implicit invocation default that can hide Task 5 declaration drift."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    case = _live_case(contract)
+    case.pop(field)
+    live = {"integration_tests": {"bam_tests": [case]}}
+
+    with pytest.raises(ValueError, match=f"live case .* {field}"):
+        module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
+
+
+def test_check_compatibility_accepts_explicit_task5_invocation_metadata() -> None:
+    """Catch accidentally rejecting the planned explicit two-thread DEBUG success declaration."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    live = {"integration_tests": {"bam_tests": [_live_case(contract)]}}
+
+    module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
+
+
+def test_check_compatibility_accepts_task5_cross_match_result_shape() -> None:
+    """Catch requiring a fabricated overall-match key instead of the exact summary row."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _advntr_contract()
+    live = {"integration_tests": {"advntr_tests": [_live_case(contract)]}}
+
+    module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda value: value.update(expected_exit_code=False), "expected_exit_code"),
+        (lambda value: value.update(expected_exit_code="0"), "expected_exit_code"),
+        (lambda value: value.update(threads=True), "threads"),
+        (lambda value: value.pop("test_name"), "test_name"),
+        (lambda value: value.update(test_name=None), "test_name"),
+        (lambda value: value.update(bam="/tmp/input.bam"), "normalized relative path"),
+        (lambda value: value.update(cli_options=[1]), "non-empty string"),
+        (
+            lambda value: value["cli_options"].extend(["--extra-modules", "shark,shark"]),
+            "duplicate module",
+        ),
+    ],
+)
+def test_check_compatibility_rejects_malformed_live_declarations(mutation: Any, message: str) -> None:
+    """Catch Boolean coercion, unnamed identities, and normalized-away module duplication."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    case = _live_case(contract)
+    mutation(case)
+    live = {"integration_tests": {"bam_tests": [case]}}
+
+    with pytest.raises(ValueError, match=message):
+        module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -327,7 +466,8 @@ def test_check_compatibility_rejects_live_contract_mutation(path: tuple[object, 
         target[leaf] = f"changed-{current}"
     live = {"integration_tests": {live_contract["suite"]: [_live_case(live_contract)]}}
 
-    with pytest.raises(ValueError, match=r"does not (?:resolve|match live declaration)"):
+    message = "unsupported" if path == ("suite",) else r"does not (?:resolve|match live declaration)"
+    with pytest.raises(ValueError, match=message):
         module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
 
 
