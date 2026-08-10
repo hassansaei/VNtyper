@@ -42,7 +42,8 @@ Create exactly these policy artifacts:
 - `scripts/ble001_policy.py`: typed measurement, AST mapping, JSON loading, validation, diagnostics, and CLI.
 - `scripts/ble001_policy_validation.py`: pure Ruff-scope containment, schema-field, and behavior-node resolution.
 - `scripts/ble001_policy.json`: hand-reviewed complete inventory and fail-open manifest.
-- `tests/unit/test_ble001_policy.py`: adapter unit tests, live exact guards, inventory completeness, negative mutations, Ruff configuration checks, and CLI tests.
+- `tests/unit/test_ble001_policy.py`: scope, measurement, normalization, and CLI-interface unit tests.
+- `tests/unit/test_ble001_policy_schema.py`: schema, stable-identity, live exact, Ruff-configuration, and unresolved-node CLI tests.
 
 The Python interface is fixed as follows:
 
@@ -261,9 +262,10 @@ one JSON check, so the order is version, normal, version, all-mode. Assert the c
 ["ruff", "check", "--no-cache", "--select", "BLE001", "--output-format", "json"]
 ```
 
-and appends `--ignore-noqa` only for all-mode, then `--`, followed by the five scope paths. Reject option-shaped,
-non-path, absolute, missing, and repository-escaping `RUFF_PATHS` tokens before invoking Ruff. Ruff result codes 0 and
-1 are accepted; result code 2 raises `RuntimeError` containing stderr and actual version.
+and appends `--ignore-noqa` only for all-mode, then `--`, followed by the five scope paths. Both `read_ruff_paths()`
+and `measure_ble001()` reject option-shaped, non-path, absolute, missing, symlinked, untracked, and
+repository-escaping scope tokens before invoking Ruff. Ruff result codes 0 and 1 are accepted; result code 2 raises
+`RuntimeError` containing stderr and actual version.
 
 - [ ] **Step 7: Implement measurement and diagnostics**
 

@@ -11,16 +11,35 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ble001_policy_validation import (
-    behavior_node_error,
-    require_count,
-    require_exact_keys,
-    require_non_empty_string,
-    require_relative_path,
-    validate_scope_paths,
-)
+if TYPE_CHECKING:
+    from scripts.ble001_policy_validation import (
+        behavior_node_error,
+        require_count,
+        require_exact_keys,
+        require_non_empty_string,
+        require_relative_path,
+        validate_scope_paths,
+    )
+elif __package__:
+    from .ble001_policy_validation import (
+        behavior_node_error,
+        require_count,
+        require_exact_keys,
+        require_non_empty_string,
+        require_relative_path,
+        validate_scope_paths,
+    )
+else:
+    from ble001_policy_validation import (
+        behavior_node_error,
+        require_count,
+        require_exact_keys,
+        require_non_empty_string,
+        require_relative_path,
+        validate_scope_paths,
+    )
 
 TEST_NODE_ID = re.compile(
     r"^tests/unit/(?:[A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_]+\.py"
@@ -114,7 +133,7 @@ def read_ruff_paths(makefile: Path) -> tuple[str, ...]:
     scope = tuple(assignments[0].split())
     if not scope:
         raise ValueError(f"Expected exactly one RUFF_PATHS assignment with at least one path in {makefile}")
-    validate_scope_paths(makefile, scope)
+    validate_scope_paths(makefile.parent, scope)
     return scope
 
 
@@ -197,6 +216,7 @@ def measure_ble001(
         RuntimeError: If Ruff is unavailable, its version is unusable, or its check fails operationally.
         ValueError: If Ruff emits malformed diagnostic JSON.
     """
+    validate_scope_paths(repo_root, scope)
     try:
         version_result = subprocess.run(
             [ruff_executable, "--version"],

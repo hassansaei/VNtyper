@@ -245,8 +245,9 @@ The manifest is hand-reviewed policy data, not generated from current code. Ruff
 generated; rationale and disposition are not.
 
 Behavior-test IDs may name top-level or class-qualified tests under any nested `tests/unit/`
-subdirectory, including parametrized suffixes. Paths outside `tests/unit/`, parent traversal,
-missing `test_` function components, and newline-bearing IDs are invalid. The source-read-only live
+subdirectory, including parametrized suffixes. Node evidence must be an ordinary Git-tracked source file; symlinked
+or untracked files, paths outside `tests/unit/`, parent traversal, missing `test_` function components, and
+newline-bearing IDs are invalid. The source-read-only live
 validator resolves every frozen node immediately: before Tasks 4–9 create those nodes it exits 1
 and enumerates every unresolved ID, and it cannot report complete success until all IDs resolve.
 
@@ -283,7 +284,9 @@ Important seed contracts include:
 
 `pyproject.toml` remains the authority for Ruff rule selection and explanatory comments. The policy
 test is the authority for exact counts and classification. The Makefile's `RUFF_PATHS` remains the
-scope authority. Its tokens must be existing ordinary repository-relative paths, and every Ruff
+scope authority. Its exact tuple is `vntyper/ docker/app/ tests/ scripts/ docs/`; every token must be an existing,
+ordinary, non-symlinked, Git-tracked repository-relative path. Both Makefile recipes and the policy adapter validate
+the boundary, and every Ruff
 command places `--` before them so an option-shaped token cannot become an output or mutation
 option. A test confirms that policy measurement uses the same paths rather than a duplicated list.
 
