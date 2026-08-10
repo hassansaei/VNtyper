@@ -247,9 +247,10 @@ ignore = [
 ]
 
 # Rules deliberately NOT selected, so the omission is a decision and not an oversight:
-#   BLE001 (blind-except) - `except Exception` at stage and process boundaries is the
-#     project's intended error-handling contract (log, then exit 1). Narrowing all 46
-#     handlers needs per-call knowledge of what each external tool raises.
+#   BLE001 (blind-except) - deliberately unselected. The reviewed Ruff 0.16.1 baseline
+#     is 103 normal diagnostics and 108 including five explicit suppressions. The
+#     executable inventory is scripts/ble001_policy.json plus
+#     tests/unit/test_ble001_policy.py; not every handler is a process boundary.
 #   G004 (logging-f-string) - f-strings in log calls are the established style across
 #     all ~600 log statements.
 

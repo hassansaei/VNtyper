@@ -1,9 +1,11 @@
 """Unit tests for the reviewed BLE001 exception-policy adapter."""
 
+import ast
 import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +53,25 @@ class Worker:
         except Exception:
             return 1
 """
+
+
+def _ruff_lint_values() -> tuple[list[str], list[str]]:
+    """Read only Ruff's selected rules and per-file ignore values."""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    lint_match = re.search(r"(?ms)^\[tool\.ruff\.lint\]\n(.*?)(?=^\[|\Z)", text)
+    ignores_match = re.search(r"(?ms)^\[tool\.ruff\.lint\.per-file-ignores\]\n(.*?)(?=^\[|\Z)", text)
+    if lint_match is None or ignores_match is None:
+        raise AssertionError("Ruff lint configuration sections are missing")
+    select_match = re.search(r"(?ms)^select\s*=\s*(\[.*?\])", lint_match.group(1))
+    if select_match is None:
+        raise AssertionError("Ruff select list is missing")
+    selected = ast.literal_eval(select_match.group(1))
+    ignored = [
+        rule
+        for value in re.findall(r"(?m)^\s*[^#\n=]+\s*=\s*(\[[^\n]*\])", ignores_match.group(1))
+        for rule in ast.literal_eval(value)
+    ]
+    return selected, ignored
 
 
 def test_read_ruff_paths_reads_the_single_make_authority(tmp_path: Path) -> None:
@@ -585,3 +606,43 @@ def test_validate_policy_reports_unreadable_or_unparseable_source(tmp_path: Path
         Policy("ruff 0.16.1", 1, 1, (), ()),
     )
     assert any("missing.py" in error and "read" in error for error in errors)
+
+
+def test_live_ble001_diagnostics_match_reviewed_handler_counts() -> None:
+    """Every live BLE001 diagnostic maps exactly once to the reviewed inventory."""
+    scope = read_ruff_paths(REPO_ROOT / "Makefile")
+    normal = measure_ble001(REPO_ROOT, scope, ignore_noqa=False)
+    all_handlers = measure_ble001(REPO_ROOT, scope, ignore_noqa=True)
+    policy = load_policy(REPO_ROOT / "scripts/ble001_policy.json")
+
+    assert policy.expected_normal == 103
+    assert policy.expected_all == 108
+    assert policy.expected_all - policy.expected_normal == 5
+    assert sum(row.normal_count for row in policy.handlers) == 103
+    assert sum(row.all_count for row in policy.handlers) == 108
+    assert len(normal.diagnostics) == policy.expected_normal
+    assert len(all_handlers.diagnostics) == policy.expected_all
+    expected_normal = {(row.path, row.symbol): row.normal_count for row in policy.handlers}
+    expected_all = {(row.path, row.symbol): row.all_count for row in policy.handlers}
+
+    def counts(measurement: Measurement) -> dict[tuple[str, str], int]:
+        found: Counter[tuple[str, str]] = Counter()
+        for diagnostic in measurement.diagnostics:
+            source = (REPO_ROOT / diagnostic.path).read_text(encoding="utf-8")
+            found[(diagnostic.path, enclosing_symbol(source, diagnostic.row))] += 1
+        return dict(found)
+
+    assert counts(normal) == {key: value for key, value in expected_normal.items() if value}
+    assert counts(all_handlers) == {key: value for key, value in expected_all.items() if value}
+    assert {(row.path, row.symbol) for row in policy.handlers if row.category == "C"} == {
+        (row.path, row.symbol) for row in policy.fail_open
+    }
+
+
+def test_ble001_and_g004_remain_deliberately_unselected() -> None:
+    """The frozen inventory must not silently become an enabled or ignored lint rule."""
+    selected, ignored = _ruff_lint_values()
+    assert "BLE001" not in selected
+    assert "BLE001" not in ignored
+    assert "G004" not in selected
+    assert "G004" not in ignored
