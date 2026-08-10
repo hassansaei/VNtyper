@@ -1072,6 +1072,16 @@
           "summary_report.html",
           "kestrel/kestrel_result.tsv"
         ]
+      },
+      {
+        "test_name": "example_b178_hg19_subset_paired_fastq_no_shark",
+        "fastq1": "tests/data/example_b178_hg19_subset_R1.fastq.gz",
+        "fastq2": "tests/data/example_b178_hg19_subset_R2.fastq.gz",
+        "reference_assembly": "hg19",
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
       }
     ]
   }

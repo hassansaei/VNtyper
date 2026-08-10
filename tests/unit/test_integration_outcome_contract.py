@@ -111,6 +111,20 @@ def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:
     ]
 
 
+def test_alternate_paired_fastq_uses_b178_and_omits_shark() -> None:
+    case = {case["test_name"]: case for case in get_fastq_test_cases()}[
+        "example_b178_hg19_subset_paired_fastq_no_shark"
+    ]
+    assert case["fastq1"] == "tests/data/example_b178_hg19_subset_R1.fastq.gz"
+    assert case["fastq2"] == "tests/data/example_b178_hg19_subset_R2.fastq.gz"
+    assert case["reference_assembly"] == "hg19"
+    assert case["expected_files"] == ["summary_report.html", "kestrel/kestrel_result.tsv"]
+    runner = mock.Mock(return_value=0)
+    with mock.patch.object(orchestration, "assert_required_files"):
+        orchestration.run_fastq_test_case(case, runner, Path("output"))
+    assert runner.call_args.args[4] == []
+
+
 def test_single_end_keep_case_names_the_real_unmapped_artifact() -> None:
     cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
     keep = cases["example_b178_hg19_single_end_keep"]
