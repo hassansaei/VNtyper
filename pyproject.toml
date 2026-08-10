@@ -46,6 +46,9 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3.0",  # Prevent stuck tests
     "pytest-xdist>=3.0",  # Parallel test execution (67-81% faster)
+    # Python 3.10 has no stdlib tomllib; the BLE001 policy guard uses this only
+    # while running the unit tier, so it belongs in the test-only extra.
+    "tomli>=2.0.1; python_version < '3.11'",
     "testcontainers>=4.0.0",  # Docker container testing
     "requests>=2.31.0",  # HTTP library for downloading test data
     # Scores coverage of CHANGED lines only (`make patch-coverage`, gated at 80% in CI).
@@ -247,9 +250,11 @@ ignore = [
 ]
 
 # Rules deliberately NOT selected, so the omission is a decision and not an oversight:
-#   BLE001 (blind-except) - `except Exception` at stage and process boundaries is the
-#     project's intended error-handling contract (log, then exit 1). Narrowing all 46
-#     handlers needs per-call knowledge of what each external tool raises.
+#   BLE001 (blind-except) - deliberately unselected. The reviewed Ruff 0.14.3 baseline
+#     is 103 normal diagnostics and 108 including five explicit suppressions. Final
+#     no-cache measurement under actual Ruff 0.16.1 matched the same 103/108 pair. The
+#     executable inventory and equality guard are scripts/ble001_policy.json plus
+#     tests/unit/test_ble001_policy.py; not every handler is a process boundary.
 #   G004 (logging-f-string) - f-strings in log calls are the established style across
 #     all ~600 log statements.
 
@@ -351,11 +356,12 @@ disallow_incomplete_defs = false
 [tool.coverage.run]
 # `source` must live here rather than on the CLI for relative_files to work.
 #
-# `docker/app` is the FastAPI + Celery web service. It is not an installed package, so
-# it is listed as a directory path rather than an importable name; coverage measures it
-# by file location either way, and `relative_files` keeps the reported paths anchored to
-# the repo root so the same data file reads identically in CI and locally.
-source = ["vntyper", "docker/app"]
+# `docker/app` is the FastAPI + Celery web service and root `scripts` contains the
+# project's validation instruments. Neither is an installed package, so both are listed
+# as directory paths rather than importable names; coverage measures them by file location
+# either way, and `relative_files` keeps the reported paths anchored to the repo root so
+# the same data file reads identically in CI and locally.
+source = ["vntyper", "docker/app", "scripts"]
 relative_files = true
 
 # Branch coverage. An `if` that is entered but never taken is not "covered" for
@@ -427,20 +433,3 @@ line-ending = "auto"
 # Format code examples in docstrings
 docstring-code-format = true
 docstring-code-line-length = 100
-
-# ===========================
-# Pytest Configuration
-# ===========================
-[tool.pytest.ini_options]
-minversion = "7.0"
-testpaths = ["tests"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
-markers = [
-    "unit: Unit tests",
-    "integration: Integration tests",
-    "docker: Docker container tests (requires Docker daemon)",
-    "slow: Slow-running tests (e.g., adVNTR module)",
-]
-addopts = "-v --tb=short"

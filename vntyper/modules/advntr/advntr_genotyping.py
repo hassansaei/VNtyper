@@ -456,13 +456,17 @@ def process_advntr_output(output_path, output, output_name, config=None):
 
     logger.info("Processing adVNTR result...")
 
-    with open(output_path) as file:
-        content = file.readlines()
+    try:
+        with open(output_path) as file:
+            content = file.readlines()
 
-    # Replace header to ensure consistency
-    content = [line.replace("#VID", "VID") if line.startswith("#VID") else line for line in content]
-    with open(output_path, "w") as file:
-        file.writelines(content)
+        # Replace header to ensure consistency
+        content = [line.replace("#VID", "VID") if line.startswith("#VID") else line for line in content]
+        with open(output_path, "w") as file:
+            file.writelines(content)
+    except OSError as e:
+        logger.error(f"Error reading adVNTR output: {e}")
+        return
 
     try:
         logger.info("Loading data into DataFrame...")

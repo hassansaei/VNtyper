@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases
+from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases, load_test_config
 from tests.support import orchestration
 
 pytestmark = pytest.mark.unit
@@ -50,14 +50,18 @@ def test_declared_failures_do_not_retain_unreachable_success_expectations() -> N
     """A case that stops at routing must not promise downstream reports or genotype fields."""
     success_only = {
         "expected_archive",
+        "expected_absent",
+        "expected_files",
+        "expected_present",
         "kestrel_assertions",
         "check_igv_report",
         "expected_vcf",
         "advntr_assertions",
     }
     stale = {}
-    for case in [*get_bam_test_cases(), *get_advntr_test_cases()]:
-        if case.get("expected_exit_code") == 1:
+    single_end_cases = load_test_config()["integration_tests"]["single_end_bam_tests"]
+    for case in [*get_bam_test_cases(), *get_advntr_test_cases(), *get_fastq_test_cases(), *single_end_cases]:
+        if case.get("expected_exit_code", 0) != 0:
             retained = sorted(success_only.intersection(case))
             if retained:
                 stale[case["test_name"]] = retained
@@ -107,6 +111,42 @@ def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:
     ]
 
 
+def test_alternate_paired_fastq_uses_b178_and_omits_shark() -> None:
+    case = {case["test_name"]: case for case in get_fastq_test_cases()}[
+        "example_b178_hg19_subset_paired_fastq_no_shark"
+    ]
+    assert case["fastq1"] == "tests/data/example_b178_hg19_subset_R1.fastq.gz"
+    assert case["fastq2"] == "tests/data/example_b178_hg19_subset_R2.fastq.gz"
+    assert case["reference_assembly"] == "hg19"
+    assert case["expected_files"] == ["summary_report.html", "kestrel/kestrel_result.tsv"]
+    runner = mock.Mock(return_value=0)
+    with mock.patch.object(orchestration, "assert_required_files"):
+        orchestration.run_fastq_test_case(case, runner, Path("output"))
+    assert runner.call_args.args[4] == []
+
+
+def test_single_end_keep_case_names_the_real_unmapped_artifact() -> None:
+    cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
+    keep = cases["example_b178_hg19_single_end_keep"]
+    assert keep["cli_options"] == ["--keep-intermediates"]
+    assert keep["expected_present"] == ["fastq_bam_processing/output_unmapped.bam"]
+    assert keep["expected_archive"] is False
+
+
+def test_single_end_cases_declare_the_negative_matrix_after_keep() -> None:
+    cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
+    artifact = "fastq_bam_processing/output_unmapped.bam"
+    assert cases["example_b178_hg19_single_end_delete"]["cli_options"] == ["--delete-intermediates"]
+    assert cases["example_b178_hg19_single_end_delete"]["expected_absent"] == [artifact]
+    assert cases["example_b178_hg19_single_end_delete_overrides_keep"]["cli_options"] == [
+        "--keep-intermediates",
+        "--delete-intermediates",
+    ]
+    assert cases["example_b178_hg19_single_end_delete_overrides_keep"]["expected_absent"] == [artifact]
+    assert cases["example_b178_hg19_single_end_archive"]["cli_options"] == ["--archive-results"]
+    assert cases["example_b178_hg19_single_end_archive"]["expected_archive"] is True
+
+
 def test_mixed_layout_diagnostic_renders_the_exact_dynamic_paths_and_counts(tmp_path: Path) -> None:
     """The contract must match the pipeline's full no-discard diagnostic, not a vague prefix."""
     expected = orchestration.mixed_layout_diagnostic(_negative_case(), tmp_path / "case-output")
@@ -128,6 +168,129 @@ def test_mixed_layout_diagnostic_rejects_an_incomplete_count_contract(tmp_path: 
 
     with pytest.raises(KeyError, match="single"):
         orchestration.mixed_layout_diagnostic(case, tmp_path)
+
+
+def test_declared_artifacts_assert_both_presence_and_absence(tmp_path: Path) -> None:
+    kept = tmp_path / "kept.txt"
+    kept.write_text("kept\n", encoding="utf-8")
+    case = {
+        "test_name": "artifact-case",
+        "expected_present": ["kept.txt"],
+        "expected_absent": ["removed.txt"],
+    }
+    orchestration.assert_declared_artifacts(case, tmp_path)
+
+    kept.unlink()
+    (tmp_path / "removed.txt").write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(AssertionError) as exc_info:
+        orchestration.assert_declared_artifacts(case, tmp_path)
+    assert f"case=artifact-case field=expected_present missing: {kept.resolve()}" in str(exc_info.value)
+    assert (
+        f"case=artifact-case field=expected_absent unexpectedly present: {(tmp_path / 'removed.txt').resolve()}"
+        in str(exc_info.value)
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"expected_present": "same.txt"},
+        {"expected_present": [None]},
+        {"expected_present": [""]},
+        {"expected_present": ["/absolute.txt"]},
+        {"expected_present": ["../escape.txt"]},
+        {"expected_present": ["nested/../../escape.txt"]},
+        {"expected_present": ["same.txt", "same.txt"]},
+        {"expected_present": ["same.txt"], "expected_absent": ["same.txt"]},
+    ],
+)
+def test_declared_artifacts_reject_invalid_paths(tmp_path: Path, case: dict) -> None:
+    with pytest.raises(ValueError, match="artifact|expected_"):
+        orchestration.assert_declared_artifacts(case, tmp_path)
+
+
+def test_declared_artifacts_reject_normalized_duplicate_paths(tmp_path: Path) -> None:
+    case = {"expected_present": ["same.txt", "./same.txt"]}
+    with pytest.raises(ValueError, match="invalid artifact"):
+        orchestration.assert_declared_artifacts(case, tmp_path)
+
+
+def test_declared_artifacts_reject_leaf_and_intermediate_symlink_escapes(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leaf.txt").write_text("outside\n", encoding="utf-8")
+    (output / "leaf.txt").symlink_to(outside / "leaf.txt")
+    (output / "linked-dir").symlink_to(outside, target_is_directory=True)
+
+    for declared in ("leaf.txt", "linked-dir/leaf.txt"):
+        with pytest.raises(ValueError, match="escapes output_dir"):
+            orchestration.assert_declared_artifacts({"expected_present": [declared]}, output)
+
+
+def test_declared_absence_rejects_a_dangling_symlink_entry(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "broken.txt").symlink_to(tmp_path / "missing.txt")
+    case = {"test_name": "broken-link", "expected_absent": ["broken.txt"]}
+    with pytest.raises(AssertionError, match="case=broken-link field=expected_absent unexpectedly present"):
+        orchestration.assert_declared_artifacts(case, output)
+
+
+def test_successful_bam_enforces_declared_artifacts(tmp_path: Path) -> None:
+    case = {
+        "test_name": "bam-artifact",
+        "bam": "clean.bam",
+        "reference_assembly": "hg19",
+        "kestrel_assertions": {},
+        "expected_present": ["must-exist.txt"],
+    }
+    with (
+        mock.patch.object(orchestration, "assert_required_files"),
+        mock.patch.object(orchestration, "validate_kestrel_output"),
+        mock.patch.object(orchestration, "validate_coverage_output", return_value={"mean_cov": 0}),
+        pytest.raises(AssertionError, match="case=bam-artifact field=expected_present"),
+    ):
+        orchestration.run_bam_test_case(case, mock.Mock(return_value=0), tmp_path)
+
+
+def test_declared_archive_distinguishes_omitted_false_and_true(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    archive = Path(f"{output}.zip")
+    orchestration.assert_declared_archive({"test_name": "omitted"}, output)
+    orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
+    with pytest.raises(AssertionError, match="case=present field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "present", "expected_archive": True}, output)
+    archive.write_bytes(b"zip")
+    orchestration.assert_declared_archive({"test_name": "present", "expected_archive": True}, output)
+    with pytest.raises(AssertionError, match="case=absent field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
+
+
+def test_declared_archive_rejects_invalid_boolean_and_broken_symlink(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    with pytest.raises(ValueError, match="case=invalid field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "invalid", "expected_archive": "false"}, output)
+    Path(f"{output}.zip").symlink_to(tmp_path / "missing.zip")
+    with pytest.raises(AssertionError, match="case=absent field=expected_archive"):
+        orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
+
+
+def test_declared_archive_skips_every_nonzero_outcome(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    orchestration.assert_declared_archive(
+        {"test_name": "usage", "expected_exit_code": 2, "expected_archive": True},
+        output,
+    )
+    Path(f"{output}.zip").write_bytes(b"zip")
+    orchestration.assert_declared_archive(
+        {"test_name": "failure", "expected_exit_code": 1, "expected_archive": False},
+        output,
+    )
 
 
 def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:

@@ -2,6 +2,12 @@
 
 All notable changes to VNtyper 2 are documented on this page.
 
+## Unreleased
+
+When both `--keep-intermediates` and `--delete-intermediates` are supplied,
+`--delete-intermediates` now wins as the CLI help has always documented. Earlier
+versions kept the intermediate BAM in this conflicting form.
+
 ## 2.0.10 (Current)
 
 Milestone 4, "CRAM and input robustness": closes #213, #225, #209, #178, #165 and

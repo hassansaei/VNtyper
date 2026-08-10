@@ -19,7 +19,9 @@ Nothing here launches a pipeline: ``_run_one`` and the git call are both replace
 
 import importlib.util
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -518,6 +520,227 @@ def test_load_side_rejects_a_non_object_record(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must contain a JSON object"):
         runner.load_side(tmp_path)
+
+
+def test_run_one_timeout_records_a_failed_expectation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case("timeout")
+    timeout = subprocess.TimeoutExpired(
+        ["golden-cohort-gate"],
+        60,
+        output=f"{runner.launcher.LAUNCH_PREFIX} side=after\n".encode(),
+        stderr=b"partial timeout diagnostic",
+    )
+
+    def raise_timeout(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise timeout
+
+    monkeypatch.setattr(runner.subprocess, "run", raise_timeout)
+    record = runner._run_one(
+        case=case,
+        argv=["pipeline", "--bam", case["bam"]],
+        tree=tmp_path / "tree",
+        side="after",
+        marker="vntyper.scripts.marker",
+        expect_marker=True,
+        output_dir=tmp_path / "output",
+        log_dir=tmp_path / "logs",
+        timeout=60,
+    )
+
+    assert record["exit_code"] == 99
+    assert record["timed_out"] is True
+    assert record["expectation_met"] is False
+    assert record["expectation_problems"] == [
+        "the run was killed on the harness timeout, so its exit code is not a pipeline result"
+    ]
+    assert (tmp_path / "logs/stdout.log").read_text(encoding="utf-8") == "GATE-LAUNCH side=after\n"
+    assert (tmp_path / "logs/stderr.log").read_text(encoding="utf-8") == "partial timeout diagnostic"
+
+
+def test_run_one_names_every_missing_required_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case("missing", required_artifacts=["pipeline_summary.json", "kestrel/kestrel_result.tsv"])
+    completed = subprocess.CompletedProcess(
+        ["golden-cohort-gate"],
+        0,
+        stdout=f"{runner.launcher.LAUNCH_PREFIX} side=after\n",
+        stderr="",
+    )
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: completed)
+
+    record = runner._run_one(
+        case=case,
+        argv=["pipeline", "--bam", case["bam"]],
+        tree=tmp_path / "tree",
+        side="after",
+        marker="vntyper.scripts.marker",
+        expect_marker=True,
+        output_dir=tmp_path / "output",
+        log_dir=tmp_path / "logs",
+        timeout=60,
+    )
+
+    assert record["missing_artifacts"] == ["pipeline_summary.json", "kestrel/kestrel_result.tsv"]
+    assert record["expectation_problems"] == [
+        "exited as expected but did not write 2 of 2 required artefact(s): "
+        "pipeline_summary.json, kestrel/kestrel_result.tsv"
+    ]
+    assert record["expectation_met"] is False
+
+
+def test_missing_launch_marker_makes_the_side_unverified_even_when_exit_is_expected(tmp_path: Path) -> None:
+    case = _case("expected-refusal", expect_exit="nonzero")
+    record = {**_ok_record(case["case_id"]), "exit_code": 1, "launch_verified": False}
+
+    side = _run_side(tmp_path, [case], {case["case_id"]: record})
+
+    assert side["expectations_met"] is True
+    assert side["launch_verified"] is False
+
+
+def test_parallel_results_retain_matrix_case_order(tmp_path: Path) -> None:
+    cases = [_case("slow"), _case("fast")]
+
+    def fake_run_one(*, case: dict, **_kwargs: object) -> dict:
+        if case["case_id"] == "slow":
+            time.sleep(0.02)
+        return _ok_record(case["case_id"])
+
+    with (
+        mock.patch.object(runner, "_run_one", side_effect=fake_run_one),
+        mock.patch.object(runner.admissibility, "describe_tree", return_value=CLEAN_REVISION),
+    ):
+        record = runner.run_side(
+            matrix=_matrix(cases),
+            tree=tmp_path,
+            run_root=tmp_path / "run",
+            side="after",
+            marker="vntyper.scripts.cohort_rules",
+            expect_marker=True,
+            threads=4,
+            advntr_threads=8,
+            jobs=2,
+            timeout=60,
+            skip_cohort=True,
+        )
+    assert list(record["pipeline_results"]) == ["slow", "fast"]
+
+
+def test_cohort_execution_is_skipped_only_when_requested(tmp_path: Path) -> None:
+    case = _case("pipeline")
+    cohort_record = {**_ok_record("cohort"), "blocked": False}
+    cohort_calls: list[bool] = []
+
+    def fake_cohorts(**_kwargs: object) -> dict[str, dict]:
+        cohort_calls.append(True)
+        return {"cohort": cohort_record}
+
+    records: list[dict] = []
+    for skip_cohort in (False, True):
+        with (
+            mock.patch.object(runner, "_run_one", return_value=_ok_record(case["case_id"])),
+            mock.patch.object(runner, "_run_cohorts", side_effect=fake_cohorts),
+            mock.patch.object(runner.admissibility, "describe_tree", return_value=CLEAN_REVISION),
+        ):
+            records.append(
+                runner.run_side(
+                    matrix=_matrix([case]),
+                    tree=tmp_path,
+                    run_root=tmp_path / f"run-{skip_cohort}",
+                    side="after",
+                    marker="vntyper.scripts.cohort_rules",
+                    expect_marker=True,
+                    threads=4,
+                    advntr_threads=8,
+                    jobs=1,
+                    timeout=60,
+                    skip_cohort=skip_cohort,
+                )
+            )
+
+    assert cohort_calls == [True]
+    assert records[0]["cohort_results"] == {"cohort": cohort_record}
+    assert records[1]["cohort_results"] == {}
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_load_side_rejects_missing_and_malformed_records(tmp_path: Path, malformed: bool) -> None:
+    if malformed:
+        (tmp_path / "side.json").write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"No side\.json under .* That side has not been run, so there is nothing to compare\.",
+    ):
+        runner.load_side(tmp_path)
+
+
+def test_run_cohorts_blocks_each_missing_pipeline_summary(tmp_path: Path) -> None:
+    cases_root = tmp_path / "cases"
+    matrix = {
+        "cohort_cases": [
+            {
+                "case_id": "cohort",
+                "inputs": ["sample-a", "sample-b"],
+                "required_artifacts": [],
+                "expect_exit": "zero",
+            }
+        ]
+    }
+
+    result = runner._run_cohorts(
+        matrix=matrix,
+        cases_root=cases_root,
+        run_root=tmp_path / "run",
+        logs_root=tmp_path / "logs",
+        tree=tmp_path / "tree",
+        side="after",
+        marker="vntyper.scripts.marker",
+        expect_marker=True,
+        timeout=60,
+    )["cohort"]
+
+    assert result["blocked"] is True
+    assert result["missing_inputs"] == [
+        str(cases_root / "sample-a"),
+        str(cases_root / "sample-b"),
+    ]
+    assert result["blocked_reason"].startswith("2 of 2 input directories have no pipeline_summary.json")
+
+
+def test_run_cohorts_can_measure_an_explicitly_allowed_partial_cohort(tmp_path: Path) -> None:
+    cases_root = tmp_path / "cases"
+    matrix = {
+        "cohort_cases": [
+            {
+                "case_id": "cohort",
+                "inputs": ["sample-a", "sample-b"],
+                "allow_missing_inputs": True,
+                "required_artifacts": [],
+                "expect_exit": "zero",
+            }
+        ]
+    }
+
+    with mock.patch.object(runner, "_run_one", return_value=_ok_record("cohort")):
+        result = runner._run_cohorts(
+            matrix=matrix,
+            cases_root=cases_root,
+            run_root=tmp_path / "run",
+            logs_root=tmp_path / "logs",
+            tree=tmp_path / "tree",
+            side="after",
+            marker="vntyper.scripts.marker",
+            expect_marker=True,
+            timeout=60,
+        )["cohort"]
+
+    assert result["blocked"] is False
+    assert result["missing_inputs"] == [
+        str(cases_root / "sample-a"),
+        str(cases_root / "sample-b"),
+    ]
+    assert result["input_count"] == 2
 
 
 # --------------------------------------------------------------------------------------

@@ -2,7 +2,9 @@
 
 import sys
 from pathlib import Path
+from unittest import mock
 
+import coverage
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -98,6 +100,16 @@ def test_read_floor_raises_when_fail_under_is_absent(monkeypatch, tmp_path) -> N
         coverage_gate.read_floor()
 
 
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_read_total_returns_none_for_missing_or_corrupt_coverage_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corrupt: bool
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if corrupt:
+        (tmp_path / ".coverage").write_bytes(b"not a coverage database")
+    assert coverage_gate.read_total() is None
+
+
 def _run_gate(monkeypatch, floor: float, total: float) -> str:
     """Run ``main()`` against a stubbed floor and coverage total.
 
@@ -141,3 +153,103 @@ def test_the_gate_fails_below_the_floor(monkeypatch) -> None:
     monkeypatch.setattr(coverage_gate, "read_total", lambda: 35.0)
     monkeypatch.setattr(sys, "argv", ["coverage_gate.py"])
     assert coverage_gate.main() == 1
+
+
+@pytest.mark.parametrize("failing_method", ["load", "report"])
+def test_coverage_read_failure_returns_none_and_fails_gate(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing_method: str
+) -> None:
+    """Coverage API read failures remain a ``None`` sentinel that the gate fails closed."""
+    fake_coverage = mock.Mock()
+    getattr(fake_coverage, failing_method).side_effect = OSError("unreadable")
+    monkeypatch.setattr(coverage, "Coverage", mock.Mock(return_value=fake_coverage))
+
+    assert coverage_gate.read_total() is None
+
+    monkeypatch.setattr(sys, "argv", ["coverage_gate.py"])
+    monkeypatch.setattr(coverage_gate, "read_floor", lambda: 86.0)
+    monkeypatch.setattr(coverage_gate, "read_total", lambda: None)
+    assert coverage_gate.main() == 1
+    assert "could not read" in capsys.readouterr().out.lower()
+
+
+def test_total_below_the_soft_target_is_warning_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["coverage_gate.py", "--target", "90", "--ratchet-margin", "100"])
+    monkeypatch.setattr(coverage_gate, "read_floor", lambda: 80.0)
+    monkeypatch.setattr(coverage_gate, "read_total", lambda: 85.0)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    assert coverage_gate.main() == 0
+    output = capsys.readouterr().out
+    assert "Coverage 85.00% is below the 90% target" in output
+    assert "Not a failure" in output
+
+
+def test_write_summary_is_a_noop_without_a_github_summary_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    coverage_gate.write_summary(87.5, 86.0, 90.0)
+    assert not summary.exists()
+
+
+def test_write_summary_appends_exact_github_markdown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("existing\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    coverage_gate.write_summary(87.5, 86.0, 90.0)
+
+    assert summary.read_text(encoding="utf-8") == (
+        "existing\n"
+        "### Unit test coverage\n\n"
+        "`███████████████████████████████████░░░░░` **87.50%**\n\n"
+        "| | % |\n| --- | --- |\n"
+        "| Measured | **87.50** |\n"
+        "| Hard floor (CI fails below) | 86 |\n"
+        "| Target | 90 — 🎯 below target |\n\n"
+    )
+
+
+def test_scripts_only_coverage_scope_matches_the_repository_tree() -> None:
+    scripts = sorted(
+        path.relative_to(coverage_gate.REPO_ROOT).as_posix() for path in coverage_gate.REPO_ROOT.glob("scripts/**/*.py")
+    )
+    makefile = (coverage_gate.REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert scripts
+    assert "--cov=scripts" in makefile
+    assert "--cov-omit" not in makefile
+    assert all(path.startswith("scripts/") for path in scripts)
+
+
+def test_coverage_source_is_complete_and_has_no_script_omission() -> None:
+    config = coverage.Coverage(config_file=str(coverage_gate.PYPROJECT)).config
+    assert config.source is not None
+    assert list(config.source) == ["vntyper", "docker/app", "scripts"]
+    script_paths = [str(path) for path in sorted(coverage_gate.REPO_ROOT.glob("scripts/**/*.py"))]
+    assert not config.run_omit
+    assert not config.report_omit
+    assert script_paths
+
+
+def test_contributor_docs_match_the_scripts_quality_scope() -> None:
+    agents = (coverage_gate.REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    mkdocs = (coverage_gate.REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    normalized_agents = " ".join(agents.split())
+    script_count = len(list(coverage_gate.REPO_ROOT.glob("scripts/**/*.py")))
+    assert "`scripts/` is linted and formatted but is not type-checked" not in agents
+    assert "`mypy vntyper/ docker/app/ scripts/`" in agents
+    assert "source = [`vntyper`, `docker/app`, `scripts`]" in agents
+    assert f"all {script_count} Python files" in normalized_agents
+    assert "6,004 of 6,391 measured units" in normalized_agents
+    assert "93.94% aggregate scripts-only branch-inclusive coverage" in normalized_agents
+    assert "89.17% combined branch-inclusive coverage across 5,072 unit tests" in normalized_agents
+    assert "every script was measured above" not in agents
+    assert "24 Python files" not in agents
+    assert "92.5166935298181%" not in agents
+    assert "~5000 statements" not in agents
+    assert "three untested lines moved it 0.03" not in agents
+    assert "dedicated ratchet change" in normalized_agents
+    assert "sustained by the Python 3.10–3.13 matrix" in normalized_agents
+    assert "  superpowers/" in mkdocs

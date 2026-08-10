@@ -1,0 +1,360 @@
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from scripts.release_policy import (
+    REQUIRED_CHECK_NAMES,
+    AliasState,
+    AliasUpdate,
+    CheckPoll,
+    CheckVerdict,
+    ReleaseVersion,
+    classify_check_runs,
+    parse_release_tag,
+    plan_alias_updates,
+    required_aliases,
+)
+
+pytestmark = pytest.mark.unit
+
+SHA = "a" * 40
+
+
+def _check(
+    name: str,
+    *,
+    sha: str = SHA,
+    run_id: int = 1,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    app: str = "github-actions",
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "head_sha": sha,
+        "id": run_id,
+        "status": status,
+        "conclusion": conclusion,
+        "html_url": f"https://example.test/check/{run_id}",
+        "app": {"slug": app},
+    }
+
+
+def test_release_tag_produces_all_five_aliases_in_promotion_order() -> None:
+    version = parse_release_tag("v2.10.3")
+    assert (version.plain, version.major, version.minor, version.patch) == ("2.10.3", 2, 10, 3)
+    assert required_aliases(version) == ("v2.10.3", "2.10.3", "2.10", "2", "latest")
+
+
+def test_required_check_names_are_the_unique_literal_release_contract() -> None:
+    assert REQUIRED_CHECK_NAMES == (
+        "Lint (Ruff)",
+        "Type Check (mypy)",
+        "Unit Tests (Python 3.10)",
+        "Unit Tests (Python 3.11)",
+        "Unit Tests (Python 3.12)",
+        "Unit Tests (Python 3.13)",
+        "Docs build (strict)",
+        "CI Success",
+        "Build and test image",
+        "Docker Success",
+    )
+    assert len(REQUIRED_CHECK_NAMES) == len(set(REQUIRED_CHECK_NAMES)) == 10
+
+
+@pytest.mark.parametrize(
+    "tag",
+    (
+        "2.0.10",
+        "v2.0",
+        "v1.2.3.4",
+        "v2.0.10-rc1",
+        "v2.0.10+local",
+        "v02.0.10",
+        "v2.00.10",
+        "v2.0.010",
+        "v2.0.10;echo pwned",
+    ),
+)
+def test_release_tag_rejects_every_non_strict_form(tag: str) -> None:
+    with pytest.raises(ValueError, match="strict vMAJOR.MINOR.PATCH"):
+        parse_release_tag(tag)
+
+
+def test_all_ten_latest_exact_sha_github_actions_checks_are_required() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES]
+    poll = classify_check_runs(SHA, runs, attempt=1)
+    assert poll.action == "success"
+    assert tuple(verdict.name for verdict in poll.verdicts) == REQUIRED_CHECK_NAMES
+    assert (poll.attempt, poll.elapsed_seconds) == (1, 0)
+
+
+@pytest.mark.parametrize("newest_first", (False, True))
+def test_newest_same_name_check_run_controls_the_verdict_regardless_of_api_order(newest_first: bool) -> None:
+    successful = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docker Success"]
+    old = _check("Docker Success", run_id=1)
+    newest = _check("Docker Success", run_id=99, conclusion="failure")
+    duplicates = [newest, old] if newest_first else [old, newest]
+    poll = classify_check_runs(
+        SHA,
+        successful + duplicates,
+        attempt=1,
+    )
+    docker = poll.verdicts[-1]
+    assert poll.action == "fail"
+    assert (docker.state, docker.conclusion, docker.check_run_id) == ("failure", "failure", 99)
+
+
+def test_identical_duplicate_check_records_do_not_change_success() -> None:
+    successful = [_check(name) for name in REQUIRED_CHECK_NAMES]
+    poll = classify_check_runs(SHA, successful + [_check("Docs build (strict)")], attempt=1)
+    assert poll.action == "success"
+    assert poll.verdicts[6].check_run_id == 1
+
+
+def test_wrong_sha_and_external_checks_cannot_satisfy_a_missing_check() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docs build (strict)"]
+    runs.extend(
+        (
+            _check("Docs build (strict)", sha="b" * 40, run_id=98),
+            _check("Docs build (strict)", app="external-ci", run_id=99),
+        )
+    )
+    poll = classify_check_runs(SHA, runs, attempt=119)
+    docs = poll.verdicts[6]
+    assert poll.action == "wait"
+    assert (docs.state, docs.check_run_id, docs.url) == ("missing", None, None)
+
+
+def test_missing_check_times_out_at_the_polling_bound() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docs build (strict)"]
+    poll = classify_check_runs(SHA, runs, attempt=120)
+    assert poll.action == "timeout"
+    assert (poll.attempt, poll.elapsed_seconds) == (120, 3570)
+
+
+def test_custom_polling_bound_waits_then_times_out() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docs build (strict)"]
+    before_bound = classify_check_runs(SHA, runs, attempt=2, max_attempts=3)
+    at_bound = classify_check_runs(SHA, runs, attempt=3, max_attempts=3)
+    assert (before_bound.action, before_bound.elapsed_seconds) == ("wait", 30)
+    assert (at_bound.action, at_bound.elapsed_seconds) == ("timeout", 60)
+
+
+def test_terminal_failure_wins_on_the_final_custom_attempt() -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES]
+    runs.append(_check("Docker Success", run_id=99, conclusion="failure"))
+    poll = classify_check_runs(SHA, runs, attempt=3, max_attempts=3)
+    assert poll.action == "fail"
+
+
+@pytest.mark.parametrize(
+    ("attempt", "max_attempts", "message"),
+    (
+        (0, 3, "attempt"),
+        (4, 3, "attempt"),
+        (1, 0, "max_attempts"),
+        (True, 3, "attempt"),
+        (1, True, "max_attempts"),
+    ),
+)
+def test_polling_attempt_must_be_an_integer_within_the_configured_bound(
+    attempt: int,
+    max_attempts: int,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        classify_check_runs(SHA, [], attempt=attempt, max_attempts=max_attempts)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("app", None),
+        ("app", "github-actions"),
+        ("app", {}),
+        ("name", None),
+        ("name", "Docs build (strict) extra"),
+        ("id", None),
+        ("id", "99"),
+        ("id", True),
+    ),
+)
+def test_malformed_check_record_cannot_satisfy_a_required_check(field: str, value: object) -> None:
+    runs = [_check(name) for name in REQUIRED_CHECK_NAMES if name != "Docs build (strict)"]
+    malformed = _check("Docs build (strict)")
+    malformed[field] = value
+    poll = classify_check_runs(SHA, runs + [malformed], attempt=1)
+    docs = poll.verdicts[6]
+    assert poll.action == "wait"
+    assert (docs.state, docs.check_run_id) == ("missing", None)
+
+
+@pytest.mark.parametrize("conclusion", ("skipped", "neutral"))
+def test_completed_non_success_component_is_a_terminal_failure(conclusion: str) -> None:
+    runs = [
+        _check(name, conclusion=conclusion if name == "Build and test image" else "success")
+        for name in REQUIRED_CHECK_NAMES
+    ]
+    poll = classify_check_runs(SHA, runs, attempt=1)
+    build = poll.verdicts[8]
+    assert poll.action == "fail"
+    assert (build.state, build.conclusion) == ("failure", conclusion)
+
+
+def test_incomplete_check_remains_pending() -> None:
+    runs = [
+        _check(name, status="in_progress", conclusion=None) if name == "CI Success" else _check(name)
+        for name in REQUIRED_CHECK_NAMES
+    ]
+    poll = classify_check_runs(SHA, runs, attempt=1)
+    aggregate = poll.verdicts[7]
+    assert poll.action == "wait"
+    assert (aggregate.state, aggregate.conclusion, aggregate.check_run_id) == ("pending", None, 1)
+
+
+def test_exact_aliases_create_noop_or_fail_but_never_advance() -> None:
+    version = parse_release_tag("v2.0.10")
+    current = dict.fromkeys(required_aliases(version))
+    source = "sha256:" + "a" * 64
+    current["v2.0.10"] = AliasState(source, "2.0.10")
+    current["2.0.10"] = AliasState("sha256:" + "b" * 64, "2.0.10")
+    updates = plan_alias_updates(version, source, current, dry_run=False)
+    assert [(update.alias, update.decision, update.execute) for update in updates[:2]] == [
+        ("v2.0.10", "no-op", False),
+        ("2.0.10", "fail-conflict", False),
+    ]
+
+
+@pytest.mark.parametrize("alias", ("v2.0.10", "2.0.10"))
+@pytest.mark.parametrize("observed_version", ("1.9.9", "2.1.0", None, "malformed"))
+def test_both_exact_aliases_conflict_on_a_different_digest_regardless_of_observed_version(
+    alias: str,
+    observed_version: str | None,
+) -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(("v2.0.10", "2.0.10", "2.0", "2", "latest"))
+    current[alias] = AliasState("sha256:" + "b" * 64, observed_version)
+    update = next(item for item in plan_alias_updates(version, source, current, dry_run=False) if item.alias == alias)
+    assert (update.decision, update.execute) == ("fail-conflict", False)
+
+
+def test_floating_aliases_create_advance_or_skip_newer_without_downgrade() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["2"] = AliasState("sha256:" + "b" * 64, "2.0.9")
+    current["latest"] = AliasState("sha256:" + "c" * 64, "2.1.0")
+    updates = plan_alias_updates(version, source, current, dry_run=False)
+    assert [(update.alias, update.decision, update.execute) for update in updates] == [
+        ("v2.0.10", "create", True),
+        ("2.0.10", "create", True),
+        ("2.0", "create", True),
+        ("2", "advance", True),
+        ("latest", "skip-newer", False),
+    ]
+
+
+@pytest.mark.parametrize("alias_index", (2, 3, 4))
+def test_floating_alias_with_legacy_main_version_advances(alias_index: int) -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    alias = required_aliases(version)[alias_index]
+    current[alias] = AliasState("sha256:" + "b" * 64, "main")
+
+    update = plan_alias_updates(version, source, current, dry_run=False)[alias_index]
+
+    assert (update.alias, update.decision, update.execute) == (alias, "advance", True)
+    assert "legacy rolling" in update.reason
+
+
+@pytest.mark.parametrize("observed_version", (None, "2.0", "v2.0.9", "nightly"))
+def test_floating_alias_with_unknown_unorderable_version_fails_closed(observed_version: str | None) -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["2.0"] = AliasState("sha256:" + "b" * 64, observed_version)
+
+    update = plan_alias_updates(version, source, current, dry_run=False)[2]
+
+    assert (update.alias, update.decision, update.execute) == ("2.0", "fail-conflict", False)
+    assert "cannot be ordered safely" in update.reason
+
+
+def test_equal_floating_version_with_a_different_digest_is_a_hard_conflict() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["latest"] = AliasState("sha256:" + "b" * 64, "2.0.10")
+    latest = plan_alias_updates(version, source, current, dry_run=False)[-1]
+    assert (latest.decision, latest.execute) == ("fail-conflict", False)
+
+
+def test_each_completed_alias_prefix_converges_to_noop_on_rerun() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    aliases = ("v2.0.10", "2.0.10", "2.0", "2", "latest")
+    for prefix_length in range(len(aliases) + 1):
+        current = dict.fromkeys(aliases)
+        for alias in aliases[:prefix_length]:
+            current[alias] = AliasState(source, "2.0.10")
+        updates = plan_alias_updates(version, source, current, dry_run=False)
+        expected = [
+            (alias, "no-op", False) if index < prefix_length else (alias, "create", True)
+            for index, alias in enumerate(aliases)
+        ]
+        assert [(update.alias, update.decision, update.execute) for update in updates] == expected
+
+
+def test_dry_run_preserves_decisions_but_disables_every_write() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current["2"] = AliasState("sha256:" + "b" * 64, "2.0.9")
+    current["latest"] = AliasState("sha256:" + "c" * 64, "2.1.0")
+    live = plan_alias_updates(version, source, current, dry_run=False)
+    dry = plan_alias_updates(version, source, current, dry_run=True)
+    assert [(update.alias, update.decision) for update in dry] == [
+        ("v2.0.10", "create"),
+        ("2.0.10", "create"),
+        ("2.0", "create"),
+        ("2", "advance"),
+        ("latest", "skip-newer"),
+    ]
+    assert [(update.alias, update.decision) for update in dry] == [(update.alias, update.decision) for update in live]
+    assert all(update.execute is False for update in dry)
+
+
+@pytest.mark.parametrize("source", ("not-a-digest", "sha256:" + "a" * 63, "sha256:" + "A" * 64))
+def test_alias_plan_rejects_noncanonical_source_digest(source: str) -> None:
+    version = parse_release_tag("v2.0.10")
+    current = dict.fromkeys(required_aliases(version))
+    with pytest.raises(ValueError, match="sha256"):
+        plan_alias_updates(version, source, current, dry_run=False)
+
+
+def test_alias_plan_requires_exactly_all_five_alias_keys() -> None:
+    version = parse_release_tag("v2.0.10")
+    source = "sha256:" + "a" * 64
+    current = dict.fromkeys(required_aliases(version))
+    current.pop("latest")
+    current["main"] = None
+    with pytest.raises(ValueError, match="exactly"):
+        plan_alias_updates(version, source, current, dry_run=False)
+
+
+@pytest.mark.parametrize(
+    ("instance", "attribute"),
+    (
+        (ReleaseVersion("v1.2.3", "1.2.3", 1, 2, 3), "major"),
+        (CheckVerdict("check", "success", "success", 1, "https://example.test/check/1", "ok"), "state"),
+        (CheckPoll("success", (), 1, 0), "action"),
+        (AliasState("sha256:" + "a" * 64, "1.2.3"), "digest"),
+        (AliasUpdate("latest", "create", True, "absent"), "execute"),
+    ),
+)
+def test_release_policy_value_objects_are_frozen(instance: object, attribute: str) -> None:
+    with pytest.raises(FrozenInstanceError):
+        setattr(instance, attribute, None)

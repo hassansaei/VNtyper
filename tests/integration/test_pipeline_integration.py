@@ -39,6 +39,7 @@ from tests.parametrization import (
 )
 from tests.support.orchestration import (
     ADVNTR_TIMEOUT_SECONDS,
+    assert_declared_archive,
     mixed_layout_diagnostic,
     run_advntr_test_case,
     run_bam_test_case,
@@ -188,16 +189,7 @@ def test_bam_input_with_kestrel_checks(tmp_path: Path, ensure_test_data: None, b
         return result.returncode
 
     run_bam_test_case(bam_case, local_runner, output_dir)
-
-    # --archive-results is a local-only flag (the Docker runner does not pass CLI
-    # options), so the archive assertion stays here rather than in the shared
-    # orchestration, where it would assert something the Docker tier never asks for.
-    if bam_case.get("expected_archive"):
-        archive_zip = Path(f"{output_dir}.zip")
-        logger.info("Looking for %s", archive_zip)
-        assert archive_zip.exists(), (
-            f"No archive created despite --archive-results.\nFiles in {tmp_path}: {list(tmp_path.iterdir())}"
-        )
+    assert_declared_archive(bam_case, output_dir)
 
 
 #

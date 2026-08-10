@@ -451,7 +451,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.data_root.is_dir():
         logger.error("no cohort at %s; run `make download-test-data` first", args.data_root)
-        return 2
+        return 1
+    if not args.data_config.is_file():
+        logger.error("test-data config not found: %s", args.data_config)
+        return 1
 
     summary = build_fixtures(
         args.samtools,

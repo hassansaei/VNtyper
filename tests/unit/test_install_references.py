@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import json
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
@@ -213,6 +214,21 @@ class TestCheckExecutableAvailable:
         result = check_executable_available("bwa")
 
         assert result is False
+
+
+@pytest.mark.unit
+def test_executable_probe_error_returns_false(monkeypatch, caplog):
+    """An unlaunchable availability probe is debug-visible and treated as absent."""
+    monkeypatch.setattr(
+        "vntyper.scripts.install_references.subprocess.run", Mock(side_effect=OSError("missing loader"))
+    )
+    caplog.set_level(logging.DEBUG, logger="vntyper.scripts.install_references")
+    caplog.clear()
+
+    assert check_executable_available("bwa") is False
+    assert [(record.name, record.levelno, record.getMessage()) for record in caplog.records] == [
+        ("vntyper.scripts.install_references", logging.DEBUG, "Error checking executable bwa: missing loader")
+    ]
 
 
 # =============================================================================

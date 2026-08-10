@@ -260,6 +260,80 @@ class TestPathsThatWriteNoFile:
         assert [r for r in caplog.records if r.levelno >= logging.ERROR], label
 
 
+def test_header_rewrite_oserror_logs_and_returns_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed header rewrite remains observable without claiming a result."""
+    source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
+    result_path = tmp_path / f"output{RESULT_SUFFIX}"
+    real_open = open
+
+    def fail_header_rewrite(path, mode="r", *args, **kwargs):
+        if Path(path) == source and mode == "w":
+            raise OSError("header rewrite blocked")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fail_header_rewrite)
+
+    with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        result = advntr.process_advntr_output(str(source), str(tmp_path), "output")
+
+    assert result is None
+    assert not result_path.exists()
+    errors = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == advntr.logger.name and record.levelno >= logging.ERROR
+    ]
+    assert errors == [(logging.ERROR, "Error reading adVNTR output: header rewrite blocked")]
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_message"),
+    [
+        ("dataframe_load", "Error loading data into DataFrame: unreadable result"),
+        ("variant_processing", "Error during processing of deletions and insertions: unreadable result"),
+    ],
+)
+def test_unreadable_advntr_output_logs_and_returns_none(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_stage: str,
+    expected_message: str,
+) -> None:
+    """Each broad parsing catch returns None without claiming a result artifact."""
+    source = write_advntr_output(tmp_path, ADVNTR_HEADER + CANONICAL_ROW)
+
+    def unreadable(*_args, **_kwargs):
+        raise OSError("unreadable result")
+
+    if failure_stage == "dataframe_load":
+        monkeypatch.setattr(advntr.pd, "read_csv", unreadable)
+    else:
+        monkeypatch.setattr(advntr, "advntr_processing_del", unreadable)
+
+    cleanup_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        advntr,
+        "cleanup_files",
+        lambda output, output_name: cleanup_calls.append((output, output_name)),
+    )
+
+    with caplog.at_level(logging.ERROR, logger=advntr.logger.name):
+        assert advntr.process_advntr_output(str(source), str(tmp_path), "output") is None
+
+    assert not (tmp_path / f"output{RESULT_SUFFIX}").exists()
+    assert cleanup_calls == []
+    errors = [
+        record for record in caplog.records if record.name == advntr.logger.name and record.levelno >= logging.ERROR
+    ]
+    assert [record.levelno for record in errors] == [logging.ERROR]
+    assert errors[0].getMessage() == expected_message
+
+
 # ---------------------------------------------------------------------------
 # E5 -- compound variants must not destroy the whole sample
 # ---------------------------------------------------------------------------

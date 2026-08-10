@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -23,16 +23,17 @@ help:
 	@echo "  make lint-stats       - Run Ruff linter with detailed statistics"
 	@echo "  make format           - Auto-format the same paths with Ruff"
 	@echo "  make format-check     - Check formatting and lint without changes"
-	@echo "  make type-check       - Run mypy type checker on vntyper/ and docker/app/"
+	@echo "  make type-check       - Run mypy type checker on vntyper/, docker/app/, and scripts/"
 	@echo "  make type-check-tests - Run mypy type checker on tests"
 	@echo ""
 	@echo "$(GREEN)Testing:$(RESET)"
 	@echo "  make download-test-data      - Download test data from Zenodo (1.1GB, ~10-30 min)"
 	@echo "  make verify-test-data        - Verify test data exists and has correct checksums"
 	@echo "  make test                    - Run all tests (needs test data + Docker)"
-	@echo "  make test-unit               - Run unit tests only (fast, ~0.5s)"
+	@echo "  make test-unit               - Run unit tests only"
 	@echo "  make test-fast               - Unit tests, fail-fast, last-failed first"
 	@echo "  make test-unit-cov           - Unit tests + coverage floor (CI gate)"
+	@echo "  make test-scripts-cov        - Measure scripts-only unit coverage"
 	@echo "  make patch-coverage          - Coverage of changed lines only (CI gate)"
 	@echo "  make mutation                - Advisory mutation score (not gated)"
 	@echo "  make test-integration        - Run integration tests only (sequential)"
@@ -43,7 +44,7 @@ help:
 	@echo "  make test-verbose            - Run tests with detailed output"
 	@echo ""
 	@echo "$(GREEN)Gates (run before opening a PR):$(RESET)"
-	@echo "  make check-all         - format + lint + mypy + unit tests (~4s)"
+	@echo "  make check-all         - format + lint + mypy + unit tests"
 	@echo "  make ci-local          - everything ci-tests.yml runs, locally"
 	@echo "  make ci-local-uv       - replicate CI's uv install path in a temp venv"
 	@echo "  make ci-local-docker   - everything docker-build.yml runs, locally"
@@ -115,35 +116,38 @@ install-dev:
 # formatter on them at all. The three checks that gate a PR (`check`, `check-all`,
 # `ci-local`) all reach ruff through these targets, so widening the variable widens
 # every gate at once.
+#
+# Ruff's production scope and mypy's runtime scope must be reviewed together. Tests are
+# checked in a separate mypy pass, while docs/ is Ruff-only.
 RUFF_PATHS := vntyper/ docker/app/ tests/ scripts/ docs/
 
 lint:
 	@echo "$(BLUE)Running Ruff linter...$(RESET)"
-	ruff check $(RUFF_PATHS)
+	ruff check -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 lint-stats:
 	@echo "$(BLUE)Running Ruff linter with statistics...$(RESET)"
-	ruff check $(RUFF_PATHS) --statistics
+	ruff check --statistics -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Linting complete$(RESET)"
 
 format:
 	@echo "$(BLUE)Formatting code with Ruff...$(RESET)"
-	ruff format $(RUFF_PATHS)
+	ruff format -- $(RUFF_PATHS)
 	@echo "$(BLUE)Applying auto-fixes...$(RESET)"
-	ruff check $(RUFF_PATHS) --fix
+	ruff check --fix -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Formatting complete$(RESET)"
 
 format-check:
 	@echo "$(BLUE)Checking code formatting...$(RESET)"
-	ruff format $(RUFF_PATHS) --check
-	ruff check $(RUFF_PATHS)
+	ruff format --check -- $(RUFF_PATHS)
+	ruff check -- $(RUFF_PATHS)
 	@echo "$(GREEN)✓ Format check complete$(RESET)"
 
 # Type checking targets
 type-check:
-	@echo "$(BLUE)Running mypy type checker on vntyper package and web service...$(RESET)"
-	mypy vntyper/ docker/app/
+	@echo "$(BLUE)Running mypy type checker on vntyper package, web service, and scripts...$(RESET)"
+	mypy vntyper/ docker/app/ scripts/
 	@echo "$(GREEN)✓ Type checking complete$(RESET)"
 
 type-check-tests:
@@ -207,7 +211,7 @@ test-fast:
 
 # Coverage for the fast tier.
 #
-# Two thresholds:
+# Two repository thresholds:
 #   HARD FLOOR - `fail_under` in pyproject.toml [tool.coverage.report]. CI fails below
 #                it. A ratchet: it only ever goes up.
 #   TARGET     - COVERAGE_TARGET below, what we are striving for. Falling short warns,
@@ -215,6 +219,10 @@ test-fast:
 # scripts/coverage_gate.py reports both and prints the exact edit to raise the floor
 # whenever coverage climbs past it. The current branch-inclusive target/floor is 86%.
 COVERAGE_TARGET ?= 86
+
+# The aggregate scripts-only proof keeps its fixed 88% bar and isolates its data file so
+# test-unit-cov remains the canonical coverage producer.
+SCRIPTS_COVERAGE_TARGET ?= 88
 
 # `--cov-report=xml` costs ~0.1s and writes coverage.xml, which `patch-coverage` below
 # consumes. Emitting it here rather than from a second pytest run keeps the patch gate
@@ -224,6 +232,13 @@ test-unit-cov:
 	pytest -m unit tests/unit -o log_cli=false --cov --cov-report=term-missing --cov-report=xml
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
 	@echo "$(GREEN)✓ Unit coverage complete$(RESET)"
+
+test-scripts-cov:
+	@tmp_dir="$$(mktemp -d)" || exit $$?; test -n "$$tmp_dir" || exit 1; coverage_file="$$tmp_dir/.coverage"; \
+	trap 'rm -rf -- "$$tmp_dir"' EXIT; \
+	COVERAGE_FILE="$$coverage_file" pytest -m unit tests/unit -o log_cli=false \
+		--cov=scripts --cov-config=pyproject.toml --cov-report=term-missing \
+		--cov-fail-under=$(SCRIPTS_COVERAGE_TARGET)
 
 coverage-report:
 	@python scripts/coverage_gate.py --target $(COVERAGE_TARGET)
@@ -301,12 +316,9 @@ patch-coverage:
 # Keeping the variable here costs nothing and documents the intent at the call site.
 # The full explanation is in that file's module docstring.
 #
-# While this runs, vntyper/scripts/*.py is REWRITTEN IN PLACE, so do not build, package
-# or install from the tree: a docker build, pip install or python -m build started
-# mid-sweep bakes a live mutant into its artefact. One image built this way crashed in
-# the container with a pandas KeyError that read exactly like a production bug. The
-# harness's finally-restore protects the repo, not anything already built from it.
-# Check with `git diff --quiet -- vntyper/` immediately before and after such a step.
+# The sweep mutates only a detached worktree overlaid with the current non-ignored
+# working state; real production source is never mutated. Catchable termination signals
+# attempt cleanup. An uncatchable crash can leave only an orphan disposable worktree.
 #
 # Takes ~15-30 min: every mutant is a separate pytest run. Use --module to scope it.
 mutation:

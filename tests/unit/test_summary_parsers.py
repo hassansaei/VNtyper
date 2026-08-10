@@ -13,14 +13,17 @@ plausible-looking partial record, and never allowed to discard the rest of the f
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from vntyper.scripts.summary import parse_csv, parse_tsv
+from vntyper.scripts.summary import md5sum, parse_csv, parse_json_file, parse_tsv
 
 pytestmark = pytest.mark.unit
+SUMMARY_LOGGER = "vntyper.scripts.summary"
 
 
 def _write(path: Path, text: str) -> str:
@@ -146,6 +149,43 @@ def test_parse_csv_reports_unreadable_file(tmp_path: Path) -> None:
 
     assert result["data"] == []
     assert any("Error parsing CSV file" in comment for comment in result["comments"])
+
+
+def test_md5_failure_returns_none(caplog: pytest.LogCaptureFixture) -> None:
+    """An unreadable artifact has no fabricated checksum or ERROR log."""
+    caplog.set_level(logging.ERROR, logger=SUMMARY_LOGGER)
+
+    with patch("vntyper.scripts.summary.open", side_effect=OSError("hash open failed")):
+        assert md5sum("artifact.tsv") is None
+
+    errors = [record for record in caplog.records if record.name == SUMMARY_LOGGER and record.levelno == logging.ERROR]
+    assert errors == []
+
+
+def test_csv_failure_returns_error_comment() -> None:
+    """An unreadable CSV remains visible through its exact structured comment."""
+    with patch("vntyper.scripts.summary.open", side_effect=OSError("csv open failed")):
+        result = parse_csv("broken.csv")
+
+    assert result == {"comments": ["Error parsing CSV file: csv open failed"], "data": []}
+
+
+def test_json_failure_returns_error_mapping() -> None:
+    """An invalid JSON artifact remains visible through its exact error mapping."""
+    error = json.JSONDecodeError("json decode failed", "not-json", 0)
+
+    with patch("vntyper.scripts.summary.open", side_effect=error):
+        result = parse_json_file("broken.json")
+
+    assert result == {"error": "Error reading JSON file: json decode failed: line 1 column 1 (char 0)"}
+
+
+def test_tsv_failure_returns_error_comment() -> None:
+    """An unreadable TSV remains visible through its exact structured comment."""
+    with patch("vntyper.scripts.summary.open", side_effect=OSError("tsv open failed")):
+        result = parse_tsv("broken.tsv")
+
+    assert result == {"comments": ["Error parsing TSV file: tsv open failed"], "data": []}
 
 
 def test_header_only_file_yields_no_rows(tmp_path: Path) -> None:

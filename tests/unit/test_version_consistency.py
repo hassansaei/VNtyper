@@ -18,8 +18,9 @@ Nothing makes them agree on its own, and disagreement is silent and expensive: s
 an interpreter the test matrix never exercises, or letting ruff accept syntax the
 declared floor cannot run. This test is the mechanism that keeps them in sync.
 
-Deliberately dependency-free (no tomllib - the 3.10 matrix leg has none, and tomli is
-not a dependency) and pure file reads, so it belongs in the fast unit tier.
+Deliberately dependency-free and pure file reads, so it belongs in the fast unit tier.
+The separate policy-schema test uses stdlib ``tomllib`` on Python 3.11+ and the
+test-only ``tomli`` backport on Python 3.10.
 """
 
 from __future__ import annotations
@@ -389,6 +390,18 @@ def optional_dependencies(extra: str) -> list[str]:
     match = re.search(rf"^{re.escape(extra)} = \[(.*?)^\]", _read(PYPROJECT), re.MULTILINE | re.DOTALL)
     assert match, f"could not find the optional-dependency group {extra!r} - has the file format changed?"
     return _requirement_strings(match.group(1))
+
+
+def test_dev_extra_declares_the_python_310_toml_backport() -> None:
+    """Policy tests receive tomli only where the standard parser is unavailable."""
+    from packaging.requirements import Requirement
+
+    tomli = [
+        Requirement(requirement) for requirement in optional_dependencies("dev") if requirement.startswith("tomli")
+    ]
+
+    assert len(tomli) == 1
+    assert str(tomli[0].marker) == 'python_version < "3.11"'
 
 
 def docker_app_third_party_imports() -> dict[str, list[str]]:

@@ -21,7 +21,7 @@ ARG BASE_IMAGE=ghcr.io/hassansaei/vntyper-base:latest
 FROM ${BASE_IMAGE} AS runtime
 
 LABEL org.opencontainers.image.title="VNtyper" \
-      org.opencontainers.image.description="VNtyper 2.0 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1" \
+      org.opencontainers.image.description="VNtyper 2 - MUC1 VNTR genotyping pipeline for ADTKD-MUC1" \
       org.opencontainers.image.vendor="VNtyper Project" \
       org.opencontainers.image.licenses="BSD-3-Clause" \
       org.opencontainers.image.source="https://github.com/hassansaei/VNtyper" \

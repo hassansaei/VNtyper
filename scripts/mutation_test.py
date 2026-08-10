@@ -11,15 +11,20 @@ in it went undetected by a fully green build.
 
 This harness makes that measurement reproducible. It:
 
-0. Refuses to start unless every target file is committed - it rewrites the live tree
-   and restores the text it read at the start, which is only the committed text if the
-   tree was clean. See ``mutation_guard``.
-0b. Refuses to start unless the tests it is about to judge mutants by **pass on the
-   unmutated tree**. See "The green-baseline preflight" below.
-1. Tokenizes each target module and generates one mutant per mutable token.
-2. Discards mutants that do not compile (e.g. ``*args`` -> ``/args``).
-3. Writes each mutant over the real file, runs the tests, and restores the original.
-4. Counts a mutant as **killed** if the tests fail, **survived** if they pass.
+0. Refuses to start unless each selected target and requested real output is clean. The
+   selected committed target bytes define the measurement, while real outputs are
+   replaced only after the measurement is complete. See ``mutation_guard``.
+1. Captures HEAD, creates a disposable detached worktree, and overlays the current
+   non-ignored working state except selected targets and requested output paths.
+2. Proves imports resolve inside that pinned workspace, then requires both a green
+   unmutated baseline and a known-killed canary before measuring ordinary mutants.
+3. Tokenizes each selected module and discards mutants that do not compile (for example,
+   ``*args`` -> ``/args``).
+4. Writes one mutant at a time only inside the disposable workspace, runs the tests,
+   and restores the exact post-overlay baseline after every attempt.
+5. Counts a mutant as **killed** if the tests fail and **survived** if they pass, installs
+   complete requested outputs atomically, removes the worktree, and verifies that real
+   production source retained its startup digests.
 
 A survivor is a defect the suite cannot see. The score is ``killed / total``.
 
@@ -65,8 +70,8 @@ number printed here. Use it to find untested decisions, not as a pass/fail thres
    Two mutation sweeps on this branch produced fictional results before this was found.
 
    **The invariant: no child process may load bytecode generated for a different
-   revision of a target module.** Everything below exists to hold that, and nothing
-   below is worth defending on its own terms.
+   revision of a target module.** Everything below exists to hold that inside the
+   disposable workspace, and nothing below is worth defending on its own terms.
 
    Why it is easy to break: CPython validates a cached ``.pyc`` against the source's
    **(mtime, size)** pair, and mtime has one-second granularity. A mutant that is
@@ -109,6 +114,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -118,13 +124,19 @@ import subprocess
 import sys
 import time
 import tokenize
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import FrameType
+from typing import NoReturn
 
-from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning, writable_paths
+from mutation_guard import dirty_paths, format_dirty_tree_refusal, writable_paths
+from mutation_output import atomic_write_text, validate_disjoint_paths
+from mutation_source import WorkspaceRoot, atomic_replace_source, read_source_bytes
+from mutation_workspace import detached_head_workspace, verify_import_provenance
+from mutation_workspace_fs import git_capability_path, using_root_capability
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REAL_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Target module -> the unit test files that exercise it.
 #:
@@ -179,6 +191,25 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "tests/unit/test_generate_report.py",
     ),
 }
+
+#: Known high-signal mutant that the scoring unit tests must kill. The harness refuses
+#: a measurement unless this exact identity produces its exact assertion failure and no
+#: infrastructure/plugin error while pytest exits exactly 1.
+CANARY_KEY = ("vntyper/scripts/scoring.py", 74, "/", "*")
+CANARY_EXPECTED_NODE = "tests/unit/test_scoring.py::test_split_depth_and_calculate_frame_score_no_frameshift"
+CANARY_EXPECTED_ASSERTION = "E       AssertionError: Frame_Score should be 1.0"
+CANARY_INFRASTRUCTURE_MARKERS = (
+    "INTERNALERROR",
+    "ERROR collecting",
+    "ERROR at setup",
+    "ERROR at teardown",
+    "ERROR:",
+    "ERROR ",
+    "ImportError",
+    "ModuleNotFoundError",
+    "PluginValidationError",
+    "Traceback (most recent call last)",
+)
 
 #: Operator token substitutions. Each flips a decision without changing what the
 #: surrounding statement *is*, which is what makes an undetected one a real defect
@@ -341,7 +372,7 @@ class ModuleResult:
         return 100.0 * self.killed / self.total if self.total else 0.0
 
 
-def generate_mutants(path: Path) -> list[Mutant]:
+def generate_mutants(path: Path, *, repo_root: Path, source: str | None = None) -> list[Mutant]:
     """
     Generate every compilable single-token mutant of a source file.
 
@@ -354,13 +385,17 @@ def generate_mutants(path: Path) -> list[Mutant]:
 
     Args:
         path (Path): The module to mutate.
+        repo_root (Path): Repository root used to make mutant paths relative.
+        source (str | None): Already anchored source text. Direct callers may omit it
+            to read ``path`` normally.
 
     Returns:
         list[Mutant]: One mutant per mutable token whose mutated form still compiles.
             Mutants that do not compile (``*args`` -> ``/args``) are dropped rather
             than counted, since a syntax error is not a defect a test could miss.
     """
-    source = path.read_text(encoding="utf-8")
+    if source is None:
+        source = path.read_text(encoding="utf-8")
     lines = source.splitlines(keepends=True)
     line_starts: list[int] = []
     offset = 0
@@ -398,7 +433,7 @@ def generate_mutants(path: Path) -> list[Mutant]:
 
         mutants.append(
             Mutant(
-                path=str(path.relative_to(REPO_ROOT)),
+                path=str(path.relative_to(repo_root)),
                 line=token.start[0],
                 original=token.string,
                 replacement=replacement,
@@ -444,9 +479,17 @@ class TestRun:
 
     passed: bool
     output: str
+    returncode: int | None
+    timed_out: bool
 
 
-def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> TestRun:
+def run_pytest(
+    test_paths: tuple[str, ...],
+    timeout: int,
+    parallel: bool = False,
+    *,
+    repo_root: WorkspaceRoot,
+) -> TestRun:
     """
     Run pytest over the given paths and return the outcome and the captured output.
 
@@ -456,6 +499,8 @@ def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False
         parallel (bool): Distribute across cores with xdist. Used for the full-tier
             escalation, which is the expensive path; the scoped runs are short enough
             that xdist's worker startup would cost more than it saves.
+        repo_root (WorkspaceRoot): Disposable repository root capability used as the
+            child CWD and first import path.
 
     Returns:
         TestRun: ``passed`` is True only if pytest exited 0. A timeout counts as a
@@ -471,48 +516,88 @@ def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False
         ``-o log_cli=false`` suppresses the live log pytest.ini turns on, which is pure
         overhead during the sweep itself.
     """
-    env = dict(os.environ)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    command = [
-        sys.executable,
-        "-B",
-        "-m",
-        "pytest",
-        "-m",
-        "unit",
-        "-x",
-        "-q",
-        "--no-header",
-        "-p",
-        "no:cacheprovider",
-        "-o",
-        "log_cli=false",
-        "--timeout=120",
-    ]
-    if parallel:
-        # Only whether ANY test failed matters here, so xdist's non-deterministic
-        # interaction with -x is irrelevant - it still reports a non-zero exit.
-        command += ["-n", "4", "--dist", "loadfile"]
-    command += [*test_paths]
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return TestRun(passed=False, output=f"pytest exceeded the {timeout}s timeout and was abandoned.")
+    for node in test_paths:
+        path_part = node.split("::", maxsplit=1)[0]
+        candidate = Path(path_part)
+        if not path_part or candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(f"pytest node must be workspace-relative: {node}")
+
+    with using_root_capability(repo_root) as capability:
+        child_root = git_capability_path(capability)
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        env.pop("PYTEST_ADDOPTS", None)
+        env.pop("PYTEST_PLUGINS", None)
+        resolved_real_root = REAL_REPO_ROOT.resolve(strict=True)
+        retained_python_path: list[str] = []
+        for entry in env.get("PYTHONPATH", "").split(os.pathsep):
+            if not entry:
+                continue
+            resolved_entry = Path(entry).resolve(strict=False)
+            if resolved_entry == resolved_real_root or resolved_entry.is_relative_to(resolved_real_root):
+                continue
+            retained_python_path.append(entry)
+        env["PYTHONPATH"] = os.pathsep.join((str(child_root), *retained_python_path))
+        command = [
+            sys.executable,
+            "-B",
+            "-m",
+            "pytest",
+            "-m",
+            "unit",
+            "-x",
+            "-q",
+            "--no-header",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "pytest_timeout",
+            "-o",
+            "log_cli=false",
+            "--timeout=120",
+        ]
+        if parallel:
+            # Only whether ANY test failed matters here, so xdist's non-deterministic
+            # interaction with -x is irrelevant - it still reports a non-zero exit.
+            command += ["-p", "xdist.plugin", "-n", "4", "--dist", "loadfile"]
+        command += [*test_paths]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=child_root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                pass_fds=(capability.descriptor,),
+            )
+        except subprocess.TimeoutExpired:
+            return TestRun(
+                passed=False,
+                output=f"pytest exceeded the {timeout}s timeout and was abandoned.",
+                returncode=None,
+                timed_out=True,
+            )
     # `or ""` because a subprocess double may leave these unset; a missing stream is not
     # a reason for the preflight to crash instead of reporting.
     output = (completed.stdout or "") + (completed.stderr or "")
-    return TestRun(passed=completed.returncode == 0, output=output)
+    return TestRun(
+        passed=completed.returncode == 0,
+        output=output,
+        returncode=completed.returncode,
+        timed_out=False,
+    )
 
 
-def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> bool:
+def run_tests(
+    test_paths: tuple[str, ...],
+    timeout: int,
+    parallel: bool = False,
+    *,
+    repo_root: WorkspaceRoot,
+) -> bool:
     """
     Run pytest and report only whether it passed.
 
@@ -523,11 +608,12 @@ def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False)
         test_paths (tuple[str, ...]): Test files or directories to run.
         timeout (int): Seconds before the run is abandoned.
         parallel (bool): Distribute across cores with xdist.
+        repo_root (WorkspaceRoot): Disposable repository root used by the pytest child.
 
     Returns:
         bool: True if every test passed.
     """
-    return run_pytest(test_paths, timeout, parallel).passed
+    return run_pytest(test_paths, timeout, parallel, repo_root=repo_root).passed
 
 
 def format_baseline_refusal(label: str, test_paths: tuple[str, ...], output: str) -> str:
@@ -564,7 +650,12 @@ def format_baseline_refusal(label: str, test_paths: tuple[str, ...], output: str
     )
 
 
-def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str | None:
+def baseline_refusal(
+    targets: dict[str, tuple[str, ...]],
+    timeout: int,
+    *,
+    repo_root: WorkspaceRoot,
+) -> str | None:
     """
     Run the sweep's own test invocations against the unmutated tree.
 
@@ -579,6 +670,8 @@ def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str |
         targets (dict[str, tuple[str, ...]]): The targets this run will sweep, mapped to
             their scoped test files. Narrowed by ``--module`` exactly as the sweep is.
         timeout (int): Per-pytest-run timeout in seconds.
+        repo_root (WorkspaceRoot): Disposable repository root used for every baseline
+            child.
 
     Returns:
         str | None: The refusal to print, or ``None`` when every check passed. Returned
@@ -592,14 +685,21 @@ def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str |
 
     for label, test_paths, parallel in checks:
         print(f"  baseline: {label} ...", end="", flush=True)
-        run = run_pytest(test_paths, timeout, parallel=parallel)
+        run = run_pytest(test_paths, timeout, parallel=parallel, repo_root=repo_root)
         print(" ok" if run.passed else " FAILED", flush=True)
         if not run.passed:
             return format_baseline_refusal(label, test_paths, run.output)
     return None
 
 
-def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, verbose: bool) -> ModuleResult:
+def sweep_module(
+    path_str: str,
+    scoped_tests: tuple[str, ...],
+    timeout: int,
+    verbose: bool,
+    *,
+    repo_root: WorkspaceRoot,
+) -> ModuleResult:
     """
     Run every mutant of one module and record which survived.
 
@@ -616,57 +716,122 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
         scoped_tests (tuple[str, ...]): Test files that exercise this module.
         timeout (int): Per-pytest-run timeout in seconds.
         verbose (bool): Print each mutant's outcome as it is decided.
+        repo_root (WorkspaceRoot): Disposable repository root containing the mutation
+            target.
 
     Returns:
         ModuleResult: Kill/survive counts and the surviving mutants.
     """
-    path = REPO_ROOT / path_str
-    original = path.read_text(encoding="utf-8")
-    mutants = generate_mutants(path)
-    result = ModuleResult(path=path_str)
+    with using_root_capability(repo_root) as capability:
+        child_root = git_capability_path(capability)
+        path = child_root / path_str
+        original_bytes = read_source_bytes(capability, path_str)
+        original = original_bytes.decode("utf-8")
+        mutants = generate_mutants(path, repo_root=child_root, source=original)
+        result = ModuleResult(path=path_str)
 
-    # flush= throughout: a sweep is long enough that someone will watch the log, and an
-    # interrupted run should still show how far it got.
-    print(f"\n{path_str}: {len(mutants)} mutants", flush=True)
-    try:
-        for index, mutant in enumerate(mutants, start=1):
-            path.write_text(mutant.source, encoding="utf-8")
-            # Between writing the mutant and running its tests, every time - not once at
-            # the start. This is half the `.pyc` invariant in the module docstring: the
-            # child must not be able to load bytecode built from the previous mutant, or
-            # from the original, both of which can share this file's (mtime, size).
-            # tests/unit/test_mutation_test.py::test_no_bytecode_cache_survives_into_any_mutants_test_run
-            # is the only thing that notices if this line goes.
-            clear_bytecode_caches(REPO_ROOT / "vntyper")
+        # flush= throughout: a sweep is long enough that someone will watch the log, and an
+        # interrupted run should still show how far it got.
+        print(f"\n{path_str}: {len(mutants)} mutants", flush=True)
+        try:
+            for index, mutant in enumerate(mutants, start=1):
+                atomic_replace_source(capability, path_str, mutant.source.encode("utf-8"))
+                # Between writing the mutant and running its tests, every time - not once at
+                # the start. This is half the `.pyc` invariant in the module docstring: the
+                # child must not be able to load bytecode built from the previous mutant, or
+                # from the original, both of which can share this file's (mtime, size).
+                # tests/unit/test_mutation_test.py::test_no_bytecode_cache_survives_into_any_mutants_test_run
+                # is the only thing that notices if this line goes.
+                clear_bytecode_caches(child_root / "vntyper")
 
-            if not run_tests(scoped_tests, timeout):
-                mutant.killed, mutant.killed_by = True, "scoped"
-            # Survived the scoped tests - confirm against the whole tier before
-            # believing it, so the score is not biased down by the scoping.
-            elif not run_tests(("tests/unit",), timeout, parallel=True):
-                mutant.killed, mutant.killed_by = True, "full tier"
-            else:
-                mutant.killed = False
+                if not run_tests(scoped_tests, timeout, repo_root=capability):
+                    mutant.killed, mutant.killed_by = True, "scoped"
+                # Survived the scoped tests - confirm against the whole tier before
+                # believing it, so the score is not biased down by the scoping.
+                elif not run_tests(("tests/unit",), timeout, parallel=True, repo_root=capability):
+                    mutant.killed, mutant.killed_by = True, "full tier"
+                else:
+                    mutant.killed = False
 
-            if mutant.killed:
-                result.killed += 1
-            else:
-                result.survived += 1
-                result.survivors.append(mutant)
+                if mutant.killed:
+                    result.killed += 1
+                else:
+                    result.survived += 1
+                    result.survivors.append(mutant)
 
-            if verbose:
-                status = f"killed ({mutant.killed_by})" if mutant.killed else "SURVIVED"
-                print(f"  [{index}/{len(mutants)}] {mutant.describe()} -> {status}", flush=True)
-            else:
-                print(f"  [{index}/{len(mutants)}] {'.' if mutant.killed else 'S'}", end="", flush=True)
-    finally:
-        path.write_text(original, encoding="utf-8")
-        clear_bytecode_caches(REPO_ROOT / "vntyper")
+                if verbose:
+                    status = f"killed ({mutant.killed_by})" if mutant.killed else "SURVIVED"
+                    print(f"  [{index}/{len(mutants)}] {mutant.describe()} -> {status}", flush=True)
+                else:
+                    print(f"  [{index}/{len(mutants)}] {'.' if mutant.killed else 'S'}", end="", flush=True)
+        finally:
+            atomic_replace_source(capability, path_str, original_bytes)
+            clear_bytecode_caches(child_root / "vntyper")
 
     if not verbose:
         print()
     print(f"  {result.killed}/{result.total} killed ({result.score:.1f}%)", flush=True)
     return result
+
+
+def canary_refusal(timeout: int, *, repo_root: WorkspaceRoot) -> str | None:
+    """Prove one exact scoring mutant is killed for the expected reason.
+
+    Args:
+        timeout (int): Maximum seconds for the canary's scoped pytest run.
+        repo_root (WorkspaceRoot): Disposable repository root containing the canary
+            target.
+
+    Returns:
+        str | None: A refusal diagnostic, or ``None`` only when pytest exits exactly 1
+            and prints the expected node and assertion evidence.
+    """
+    path_str, line, original_token, replacement = CANARY_KEY
+    with using_root_capability(repo_root) as capability:
+        child_root = git_capability_path(capability)
+        path = child_root / path_str
+        original_bytes = read_source_bytes(capability, path_str)
+        original = original_bytes.decode("utf-8")
+        mutants = generate_mutants(path, repo_root=child_root, source=original)
+        canary = next((mutant for mutant in mutants if mutant.key == CANARY_KEY), None)
+        if canary is None:
+            return (
+                "REFUSING TO SWEEP: canary mutant is missing: "
+                f"path={path_str!r}, line={line}, original={original_token!r}, replacement={replacement!r}"
+            )
+
+        try:
+            atomic_replace_source(capability, path_str, canary.source.encode("utf-8"))
+            clear_bytecode_caches(child_root / "vntyper")
+            run = run_pytest(TARGETS[path_str], timeout, repo_root=capability)
+        finally:
+            atomic_replace_source(capability, path_str, original_bytes)
+            clear_bytecode_caches(child_root / "vntyper")
+
+    if run.timed_out:
+        return f"REFUSING TO SWEEP: canary timed out.\n{run.output}"
+    output_lines = run.output.splitlines()
+    failure_summaries = [line for line in output_lines if line.startswith("FAILED ")]
+    expected_failure_summary = f"FAILED {CANARY_EXPECTED_NODE}"
+    expected_evidence = (
+        CANARY_EXPECTED_NODE in run.output
+        and CANARY_EXPECTED_ASSERTION in run.output
+        and len(failure_summaries) == 1
+        and (
+            failure_summaries[0] == expected_failure_summary
+            or failure_summaries[0].startswith(f"{expected_failure_summary} ")
+        )
+        and any(line.strip("= ").startswith("1 failed") for line in output_lines)
+        and not any(marker in run.output for marker in CANARY_INFRASTRUCTURE_MARKERS)
+    )
+    if run.returncode == 1 and expected_evidence:
+        return None
+    if run.returncode == 0:
+        return f"REFUSING TO SWEEP: canary survived.\n{run.output}"
+    return (
+        f"REFUSING TO SWEEP: canary infrastructure failure (pytest exit {run.returncode}); "
+        f"expected {CANARY_EXPECTED_NODE!r} and {CANARY_EXPECTED_ASSERTION!r}.\n{run.output}"
+    )
 
 
 def format_report(results: list[ModuleResult], elapsed: float) -> str:
@@ -928,24 +1093,25 @@ def format_markdown(results: list[ModuleResult], elapsed: float) -> str:
     out.append("    in depth for the parent process, which never imports a target module -")
     out.append("    it is not what holds the invariant, and the harness is safe without it.")
     out.append("")
-    out.append('!!! danger "Nothing may build or install from the tree while a sweep runs"')
+    out.append('!!! note "Each measurement runs in an isolated workspace"')
     out.append("")
-    out.append("    The harness rewrites `vntyper/scripts/*.py` **in place**, so for most of")
-    out.append("    a run the working tree holds a deliberately broken module. Anything")
-    out.append("    that snapshots source mid-sweep bakes that mutant into its artefact -")
-    out.append("    a docker build, `pip install`, `python -m build`, a tarball.")
+    out.append("    The harness captures HEAD in a disposable detached worktree and overlays")
+    out.append("    the current non-ignored working state, except selected mutation targets")
+    out.append("    and requested output paths. Selected targets therefore come from the")
+    out.append("    captured commit, while ordinary edits and new tests participate in the")
+    out.append("    measurement without being written back.")
     out.append("")
-    out.append("    This has happened: an image built during a sweep crashed in the")
-    out.append("    container at `motif_processing.py` with a pandas `KeyError`, which")
-    out.append("    reads exactly like a production bug and cost a full diagnosis cycle")
-    out.append("    before it was traced back to the sweep. Rebuilding from a clean tree")
-    out.append("    passed.")
+    out.append("    Import provenance is proved against the pinned worktree before testing.")
+    out.append("    A green baseline and a known-killed canary must then pass before ordinary")
+    out.append("    mutants are measured, and the post-overlay baseline is verified after")
+    out.append("    the canary and after every target.")
     out.append("")
-    out.append("    The `finally` restore protects the **repository**, not any artefact")
-    out.append("    already produced from it. Run `git diff --quiet -- vntyper/`")
-    out.append("    immediately before and after any build, package or install step; if it")
-    out.append("    reports a difference you did not make, a sweep is running and the")
-    out.append("    artefact is void.")
+    out.append("    Every mutant and bytecode-cache write is confined to that workspace;")
+    out.append("    real production source is never mutated. Requested report artifacts are")
+    out.append("    built completely and installed atomically in the real checkout.")
+    out.append("    The cleanup is best effort: SIGINT, SIGTERM, SIGHUP and SIGQUIT attempt")
+    out.append("    the common unwind path, while SIGKILL or a host crash can leave only an")
+    out.append("    orphan disposable worktree for later inspection and removal.")
     out.append("")
     out.append("## Related: branch coverage, now enabled")
     out.append("")
@@ -1098,15 +1264,25 @@ def write_outputs(results: list[ModuleResult], elapsed: float, output: Path | No
             other suffix renders the plain-text report.
         results_json (Path | None): Where to persist the raw results, if anywhere.
     """
+    validate_disjoint_paths((("report output", output), ("results JSON", results_json)))
+
+    rendered_output = None
     if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        rendered = format_markdown(results, elapsed) if output.suffix == ".md" else format_report(results, elapsed)
-        output.write_text(rendered, encoding="utf-8")
-        print(f"Report written to {output}")
+        rendered_output = (
+            format_markdown(results, elapsed) if output.suffix == ".md" else format_report(results, elapsed)
+        )
+    rendered_json = None
     if results_json:
+        rendered_json = json.dumps(results_to_dict(results, elapsed), indent=2) + "\n"
+
+    if results_json and rendered_json is not None:
         results_json.parent.mkdir(parents=True, exist_ok=True)
-        results_json.write_text(json.dumps(results_to_dict(results, elapsed), indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(results_json, rendered_json)
         print(f"Raw results written to {results_json}")
+    if output and rendered_output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(output, rendered_output)
+        print(f"Report written to {output}")
 
 
 def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> str | None:
@@ -1125,12 +1301,62 @@ def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> 
             point, and both fail closed: a dirty file refuses, and so does an
             indeterminate answer from git.
     """
-    guarded = writable_paths(REPO_ROOT, targets, outputs)
+    guarded = writable_paths(REAL_REPO_ROOT, targets, outputs)
     try:
-        dirty = dirty_paths(REPO_ROOT, guarded)
+        dirty = dirty_paths(REAL_REPO_ROOT, guarded)
     except RuntimeError as exc:
         return str(exc)
     return format_dirty_tree_refusal(dirty) if dirty else None
+
+
+def _real_target_digests(real_root: Path, targets: Mapping[str, object]) -> dict[str, str]:
+    """Capture SHA-256 digests for exactly the selected real-checkout targets.
+
+    Args:
+        real_root: Immutable real repository root.
+        targets: Selected repository-relative mutation targets.
+
+    Returns:
+        A target-to-digest mapping captured before workspace creation.
+
+    Raises:
+        OSError: If a selected target cannot be read.
+        RuntimeError: If a selected target is not a regular file.
+    """
+    return {relative: hashlib.sha256(read_source_bytes(real_root, relative)).hexdigest() for relative in targets}
+
+
+def _verify_real_target_digests(real_root: Path, expected: Mapping[str, str]) -> None:
+    """Require selected real-checkout targets to retain their startup bytes.
+
+    Args:
+        real_root: Immutable real repository root.
+        expected: Target digests captured before workspace creation.
+
+    Raises:
+        OSError: If a selected target cannot be read.
+        RuntimeError: If a target is not regular or its bytes changed.
+    """
+    for relative, expected_digest in expected.items():
+        current_digest = hashlib.sha256(read_source_bytes(real_root, relative)).hexdigest()
+        if current_digest != expected_digest:
+            raise RuntimeError(f"real mutation target changed during sweep: {relative}")
+
+
+def _terminate(signum: int, _frame: FrameType | None) -> NoReturn:
+    """Convert a catchable termination signal into the common unwind path."""
+    raise KeyboardInterrupt(f"terminated by signal {signum}")
+
+
+def _install_signal_handlers() -> tuple[int, ...]:
+    """Install cleanup-aware handlers without replacing Python's SIGINT behavior."""
+    registered: list[int] = []
+    for name in ("SIGTERM", "SIGHUP", "SIGQUIT"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            signal.signal(signum, _terminate)
+            registered.append(signum)
+    return tuple(registered)
 
 
 def main() -> int:
@@ -1138,11 +1364,13 @@ def main() -> int:
     Run the mutation sweep and print the report.
 
     Returns:
-        int: 0 when a sweep actually happened and the tree was restored afterwards.
+        int: 0 after measurement, output installation, workspace cleanup, and real-source
+            digest verification all complete.
             **Non-zero means no usable measurement was produced**, never "the score is
             too low": the refusals are a dirty working tree, a red baseline, a git that
-            cannot answer, and a target left unrestored. The score itself is advisory and
-            is not gated - see the module docstring for why gating on it would be wrong.
+            cannot answer, a disposable baseline that cannot be restored, failed cleanup,
+            or a changed real target. The score itself is advisory and is not gated - see
+            the module docstring for why gating on it would be wrong.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--module", help="Only mutate targets whose path contains this substring.")
@@ -1158,18 +1386,26 @@ def main() -> int:
         "only its presentation.",
     )
     args = parser.parse_args()
+    output = None if args.output is None else (REAL_REPO_ROOT / args.output).resolve(strict=False)
+    results_json = None if args.results_json is None else (REAL_REPO_ROOT / args.results_json).resolve(strict=False)
+    render_input = None if args.render_only is None else (REAL_REPO_ROOT / args.render_only).resolve(strict=False)
 
     # Re-render path: no mutation, no tests, no source rewritten - but `write_outputs()`
     # still overwrites the docs page wholesale, so the preflight applies here too. It is
     # narrower: only the outputs are at risk, because no target is touched.
-    if args.render_only:
-        refusal = _refuse_if_dirty([], [args.output])
+    if render_input is not None:
+        try:
+            validate_disjoint_paths((("render input", render_input), ("report output", output)))
+        except ValueError as exc:
+            print(f"REFUSING TO WRITE: {exc}", file=sys.stderr)
+            return 1
+        refusal = _refuse_if_dirty([], [output])
         if refusal is not None:
             print(refusal, file=sys.stderr)
             return 1
-        results, elapsed = results_from_dict(json.loads(args.render_only.read_text(encoding="utf-8")))
-        print(format_report(results, elapsed))
-        write_outputs(results, elapsed, args.output, None)
+        render_results, elapsed = results_from_dict(json.loads(render_input.read_text(encoding="utf-8")))
+        print(format_report(render_results, elapsed))
+        write_outputs(render_results, elapsed, output, None)
         return 0
 
     targets = {p: t for p, t in TARGETS.items() if not args.module or args.module in p}
@@ -1179,65 +1415,78 @@ def main() -> int:
             print(f"  {path_str}", file=sys.stderr)
         return 0
 
-    # Before a single byte is written; see `mutation_guard` for the three ways a sweep
-    # over uncommitted work goes wrong. Only the targets this run will actually rewrite
-    # are checked, so `--module` narrows the guard exactly as far as it narrows the sweep -
-    # plus the files it will overwrite on the way out.
-    refusal = _refuse_if_dirty(targets, [args.output, args.results_json])
+    try:
+        validate_disjoint_paths(
+            (("report output", output), ("results JSON", results_json)),
+            tuple((path_str, REAL_REPO_ROOT / path_str) for path_str in targets),
+        )
+    except ValueError as exc:
+        print(f"REFUSING TO WRITE: {exc}", file=sys.stderr)
+        return 1
+
+    # Selected targets must identify committed baseline bytes; requested outputs must be
+    # safe to replace. `--module` narrows the target side exactly as far as the sweep.
+    refusal = _refuse_if_dirty(targets, [output, results_json])
     if refusal is not None:
         print(refusal, file=sys.stderr)
         return 1
 
-    # SIGINT already unwinds through the `finally` in sweep_module() as a
-    # KeyboardInterrupt, but SIGTERM terminates the interpreter outright - which would
-    # leave a MUTATED MODULE ON DISK in a repo someone is about to commit from.
-    # Turning it into an exception makes both paths restore.
-    def _terminate(signum, _frame):
-        raise KeyboardInterrupt(f"terminated by signal {signum}")
-
-    signal.signal(signal.SIGTERM, _terminate)
-
-    # Before anything else. See the `.pyc` warning in the module docstring: a stale
-    # cache from an earlier sweep is enough on its own to make every mutant "survive".
-    removed = clear_bytecode_caches(REPO_ROOT / "vntyper")
-    print(f"Cleared {removed} __pycache__ directories before starting.")
-
-    # A mutant is "killed" whenever pytest exits non-zero, so a suite that is already red
-    # scores every mutant as a kill and publishes a fictional 100%. Prove the tests pass
-    # on the unmutated tree first, using the same invocations the sweep will use. This
-    # runs AFTER the cache clear so the baseline is measured under the same conditions
-    # the mutants will be, and BEFORE `time.monotonic()` so its cost is not reported as
-    # sweep duration.
-    print("Checking the baseline: the tests must pass on the UNMUTATED tree.")
-    refusal = baseline_refusal(targets, args.timeout)
-    if refusal is not None:
-        print(f"\n{refusal}", file=sys.stderr)
-        return 1
-
-    start = time.monotonic()
-    results = [sweep_module(p, t, args.timeout, args.verbose) for p, t in targets.items()]
-    elapsed = time.monotonic() - start
-
-    print()
-    print(format_report(results, elapsed))
-    write_outputs(results, elapsed, args.output, args.results_json)
-
-    # This harness rewrites production source in place, so it ends by proving it put
-    # everything back. A restore that silently failed would otherwise be discovered by
-    # someone committing a mutant. The preflight above is what makes this check
-    # meaningful: the tree was clean when the sweep started, so anything dirty now came
-    # from the sweep rather than from the maintainer.
+    status = 0
+    real_digests: dict[str, str] | None = None
     try:
-        unrestored = dirty_paths(REPO_ROOT, targets)
-    except RuntimeError as exc:
-        # git answered before the sweep and cannot now. The sources may hold a mutant and
-        # nothing here can prove otherwise, so say so rather than exit 0.
+        real_digests = _real_target_digests(REAL_REPO_ROOT, targets)
+        _install_signal_handlers()
+        excluded_outputs = tuple(path for path in (output, results_json) if path is not None)
+        with detached_head_workspace(REAL_REPO_ROOT, tuple(targets), excluded_outputs) as workspace:
+            print(f"Captured HEAD: {workspace.head}")
+            print(f"Disposable worktree: {workspace.sweep_root}")
+            verify_import_provenance(workspace, tuple(targets))
+            execution_root = workspace.root_capability or workspace.sweep_root
+
+            with using_root_capability(execution_root) as capability:
+                removed = clear_bytecode_caches(git_capability_path(capability) / "vntyper")
+            print(f"Cleared {removed} __pycache__ directories before starting.")
+
+            print("Checking the baseline: the tests must pass on the UNMUTATED tree.")
+            refusal = baseline_refusal(targets, args.timeout, repo_root=execution_root)
+            if refusal is not None:
+                raise RuntimeError(refusal)
+
+            refusal = canary_refusal(args.timeout, repo_root=execution_root)
+            if refusal is not None:
+                raise RuntimeError(refusal)
+            print("Known-killed canary: killed (scoped)")
+            workspace.verify_baseline()
+
+            start = time.monotonic()
+            results: list[ModuleResult] = []
+            for path_str, scoped_tests in targets.items():
+                results.append(
+                    sweep_module(
+                        path_str,
+                        scoped_tests,
+                        args.timeout,
+                        args.verbose,
+                        repo_root=execution_root,
+                    )
+                )
+                workspace.verify_baseline()
+            elapsed = time.monotonic() - start
+
+            print()
+            print(format_report(results, elapsed))
+            write_outputs(results, elapsed, output, results_json)
+    except (RuntimeError, OSError, KeyboardInterrupt) as exc:
         print(f"\n{exc}", file=sys.stderr)
-        return 1
-    if unrestored:
-        print(f"\n{format_unrestored_warning(unrestored)}", file=sys.stderr)
-        return 1
-    return 0
+        status = 1
+    finally:
+        if real_digests is not None:
+            try:
+                _verify_real_target_digests(REAL_REPO_ROOT, real_digests)
+            except (RuntimeError, OSError, KeyboardInterrupt) as exc:
+                print(f"\n{exc}", file=sys.stderr)
+                status = 1
+    return status
 
 
 if __name__ == "__main__":

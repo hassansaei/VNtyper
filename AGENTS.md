@@ -41,6 +41,7 @@ Neither exists — use the commands above.
 | Fast tests (what CI runs) | `make test-unit` |
 | Inner loop (fail-fast) | `make test-fast` |
 | Unit coverage + floor | `make test-unit-cov` |
+| Scripts-only coverage proof | `make test-scripts-cov` |
 | Coverage of changed lines | `make patch-coverage` |
 | Advisory mutation score | `make mutation` |
 | Integration tests (needs 1.1 GB data) | `make test-integration` |
@@ -49,8 +50,8 @@ Neither exists — use the commands above.
 | Docs build (CI-equivalent) | `make docs-build` |
 
 Always run `make check-all` before opening a PR. It gates on the **unit** tier only
-(~0.5 s) so it is runnable on a fresh clone; use `make check-full` when you also want the
-tiers that need the 1.1 GB Zenodo archive.
+so it is runnable on a fresh clone; use `make check-full` when you also want the tiers
+that need the 1.1 GB Zenodo archive.
 
 **If you changed anything under `.github/workflows/`, `make check-all` is not enough —
 run `make ci-local`.** It mirrors `ci-tests.yml` job for job (actionlint, format, lint,
@@ -108,8 +109,8 @@ collection time, so any other CWD breaks collection, including `-m unit`.
 - `vntyper/modules/{advntr,shark}/` — optional `--extra-modules` stages.
 - `docker/app/` — the FastAPI + Celery web service. It is *not* part of the `vntyper`
   package, but it **is** gated: `RUFF_PATHS` covers it and `make type-check` runs
-  `mypy vntyper/ docker/app/` (#194). `scripts/` is linted and formatted but is still in
-  no mypy target — see trap 16.
+  `mypy vntyper/ docker/app/ scripts/` (#194, #204). The root `scripts/` validation
+  instruments are also part of the canonical coverage source — see trap 16.
 - `vntyper/dependencies/kestrel/` — vendored JARs, never hand-edit.
 
 ## Code style
@@ -121,6 +122,9 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
+  The reviewed BLE001 policy is 103 normal/108 including suppressions; its executable
+  inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
+  handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
   Its `python_version`, ruff's `target-version` and `requires-python` are pinned to the
   same floor, and `tests/unit/test_version_consistency.py` fails the build if they drift.
@@ -174,14 +178,14 @@ Three thresholds enforce this, and they are deliberately different:
 
 | | Where | Behaviour |
 | --- | --- | --- |
-| **Hard floor: 86** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it when coverage climbs, never lower it to make a build pass. |
+| **Hard floor: 86** | `fail_under` in `pyproject.toml` | CI **fails** below it. A ratchet — raise it only in a dedicated ratchet change after the rounded integer is sustained by the Python 3.10–3.13 matrix; never lower it to make a build pass. |
 | **Patch gate: 80%** | `PATCH_COVERAGE_TARGET` in the `Makefile` | CI **fails a PR** whose *changed lines* fall below it. Not a ratchet, and not an average — it scores your diff and nothing else. |
 | **Target: 86%** | `COVERAGE_TARGET` in the `Makefile` | **Warns** only. This is what the project is working towards. |
 
 **The floor is branch-inclusive.** `branch = true` was enabled in `[tool.coverage.run]`
 by #196, so `fail_under` is measured against statements *and* branch arcs. That makes the
 number strictly harder to move than the statement-only figure the older floors were set
-against. The fresh milestone-4 gate measured **86.14% branch-inclusive across 4,303 unit
+against. The final milestone-4 gate measured **86.14% branch-inclusive across 4,303 unit
 tests**. Historically, the #171-#212 suite measured 81.70% after the floor moved from the
 earlier 80.24%; statement-only coverage at that earlier branch-coverage rollout was
 80.77%.
@@ -195,12 +199,11 @@ merge accident: they measure the same figure for different purposes, so the targ
 a warning and keeps its headroom above the gate. Do not collapse them.
 
 **The patch gate is what makes this rule enforceable.** The hard floor is an average over
-~5000 statements, so a PR can add a hundred untested lines and move it by less than a
-point — measured: three untested lines moved it 0.03. It has never once failed a PR for
-shipping untested code, and it cannot. `make patch-coverage` runs `diff-cover` over the
-lines your branch changed and fails below 80%, so an untested new function fails its own
-PR regardless of what the repo total is doing. The patch bar remains independently fixed
-at 80%; making every PR meet it helps the whole-repository average climb toward the
+thousands of statement and branch units, so a PR can add untested lines without moving
+the rounded repository total enough to fail. `make patch-coverage` runs `diff-cover` over
+the lines your branch changed and fails below 80%, so an untested new function fails its
+own PR regardless of what the repo total is doing. The patch bar remains independently
+fixed at 80%; making every PR meet it helps the whole-repository average climb toward the
 current 86% target.
 
 It scores against the **merge base**, so commits landing on `main` while your PR is open
@@ -228,9 +231,10 @@ prove the round trip leaves the committed file byte-identical.
 When you add tests to clear the patch gate, write them to kill mutants — assert on the
 values, not just that the call returned.
 
-`make test-unit-cov` reports both and prints the exact edit to raise the floor whenever
-coverage exceeds it. Never lower the floor to make a build pass — add the test instead.
-The gap between the two is real work, and rule 2 explains why it exists.
+`make test-unit-cov` reports both and prints the candidate edit when local coverage crosses
+an integer. Raise the floor only in a dedicated ratchet change after that integer is
+sustained by the Python 3.10–3.13 matrix. Never lower the floor to make a build pass — add
+the test instead. The gap between the two is real work, and rule 2 explains why it exists.
 
 **When raising the floor, use the number `make test-unit-cov` prints — never the `TOTAL`
 column of the coverage table.** Both that column and `coverage report --format=total`
@@ -332,8 +336,8 @@ limit.
 - The Docker tier runs at three depths, chosen by how much signal each buys for its
   runtime: PRs get `test-docker-quick` (4 tests, ~10 s), pushes to `main` get
   `test-docker-fast` (everything except `slow`, ~1.5 min locally), and a nightly
-  schedule plus `workflow_dispatch` with `full: true` runs `test-docker` including
-  adVNTR. adVNTR is off the merge path on purpose: one test costing 15-25 min on a
+  schedule plus every `workflow_dispatch` runs `test-docker` including adVNTR.
+  adVNTR is off the merge path on purpose: one test costing 15-25 min on a
   2-core runner - more than the rest of the pipeline combined - for an optional
   module. Both adVNTR tests carry `@pytest.mark.timeout(ADVNTR_TIMEOUT_SECONDS)`,
   overriding the global 600 s; that global timeout is right for everything else and CI
@@ -353,8 +357,68 @@ limit.
 - Copilot and Sourcery AI review PRs. The established pattern is a follow-up commit
   addressing their comments, not a force-push.
 - CI gates on PRs: `make lint`, `make type-check-all`, `make test-unit` across 3.10–3.13,
-  plus a Docker image build and quick Docker tests. Formatting is *not* gated in CI —
-  run `make format-check` yourself.
+  plus a Docker image build and quick Docker tests. PR path filters remain, while every
+  push to `main` is treated as substantive and runs both required-check workflows.
+  Formatting is *not* gated in CI — run `make format-check` yourself.
+
+## Release workflow
+
+Production release policy lives on the default branch in
+`.github/workflows/publish-pypi.yml`. An operator first creates the existing tag outside
+the workflow, then sends an authenticated `repository_dispatch` of type `vntyper_release` whose
+`client_payload.tag` is that strict `vX.Y.Z` tag. There is deliberately no production
+`push.tags` trigger: the default-branch controller validates the tagged commit, but the
+workflow never creates or moves a tag and historical workflow code cannot select the
+current production policy. A manual invocation such as
+`gh workflow run publish-pypi.yml -f tag=vX.Y.Z` validates an existing tag as a dry run
+and performs no production writes.
+
+The release accepts only a tag on `main` ancestry after these exact ten checks succeed
+for the full tagged SHA: `Lint (Ruff)`, `Type Check (mypy)`, `Unit Tests (Python 3.10)`,
+`Unit Tests (Python 3.11)`, `Unit Tests (Python 3.12)`, `Unit Tests (Python 3.13)`,
+`Docs build (strict)`, `CI Success`, `Build and test image`, and `Docker Success`.
+For each exact name and SHA, the newest GitHub Actions check is authoritative even when it
+came from a scheduled or manual rerun. A newer failure intentionally supersedes an older
+success; recover by rerunning that exact SHA to a newer green check, never by selecting the
+stale success.
+The Docker `sha-<7>` tag is only a convenience reference: contract-v1 evidence binds
+the full SHA and immutable digest, and the image labels
+`org.opencontainers.image.revision` and `org.opencontainers.image.version` must match
+that full revision and release version. A proven short-prefix collision continues from
+the evidence digest, while ambiguous short-tag drift fails closed.
+The push of `main` is the only event allowed to publish the application `main` and
+short-SHA tags and their evidence; scheduled and manual Docker validation never publish application tags.
+
+Promotion copies the evidence-verified digest, never rebuilds it. Exact `vX.Y.Z` and
+`X.Y.Z` aliases are immutable; floating `X.Y`, `X`, and `latest` advance monotonically
+and never downgrade. `main` remains rolling/unreleased and is never a release alias.
+For floating aliases, legacy rolling `main` is the one recognized pre-semver version
+state and advances to the verified release digest. A missing or unrecognized version label
+fails closed before any alias write and requires the operator to repair or remove that
+floating alias before retrying.
+GHCR mutation is serialized by the fixed `vntyper-ghcr-release-promotion` group. If a
+pending promotion is canceled or superseded before it acquires that lock, rerun it; if
+Docker evidence is missing, rerun the existing exact-SHA Docker Build run. A partial
+promotion is idempotent, and a PyPI retry uses `skip-existing` while reporting whether
+the version was newly published or already existed.
+
+PyPI publication uses Trusted Publishing in the protected `pypi` environment with only
+`id-token: write`; there is no package token in the current controller.
+Do not delete `PYPI_API_TOKEN` until the first successful OIDC release has proved the
+publisher configuration. The owner must then delete it separately. Until that deletion, do not
+create a release tag pointing at a pre-milestone commit: historical tagged commits
+still contain a legacy token workflow, and those workflows become inert only after the
+owner removes the obsolete token.
+
+```text
+phase | job | permissions | retry/recovery
+validation | validate-release | contents: read | fix identity or ancestry, then rerun the existing tag
+gates | wait-for-release-gates | actions: read, checks: read, contents: read, packages: read | rerun missing exact-SHA checks or the existing Docker Build run
+build | build-package | contents: read | rebuild the exact candidate wheel and sdist artifact
+promotion | promote-ghcr | contents: read, packages: write | rerun; verified aliases no-op and partial progress converges
+publish | publish-pypi | id-token: write | rerun safely; skip-existing distinguishes an existing release
+summary | release-summary | none | always records success, failure, skipped jobs, and unavailable partial outputs
+```
 
 ## Traps
 
@@ -448,8 +512,16 @@ limit.
     arguments `generate_summary_report()` does not accept — and now lives in
     `cli_report.py` with its call contract pinned by a signature-binding spy.)
 12. **Version lives in three places**: `vntyper/version.py` (authoritative),
-    `CITATION.cff`, and `docs/about/changelog.md`. `publish-pypi.yml` refuses to publish
-    if the pushed tag disagrees with `vntyper/version.py`.
+    `CITATION.cff`, and `docs/about/changelog.md`. The default-branch release controller
+    requires all three to equal the existing strict tag, requires the tag commit to be
+    on `main`, waits for the exact ten full-SHA checks, and validates contract-v1 Docker
+    evidence before any write. The `sha-<7>` image is accepted only when its digest and
+    full `org.opencontainers.image.revision`/`org.opencontainers.image.version` labels
+    match that evidence. A short-prefix collision proven by those identities continues
+    from the evidence digest; ambiguous drift fails closed. Promotion copies the immutable
+    digest to exact and monotonic floating aliases. Reruns converge after
+    partial GHCR progress and PyPI uses `skip-existing`, but an identity conflict never
+    overwrites an existing exact alias.
 13. **The package and the image must declare the same versions, and a test enforces it.**
     `conda/environment_vntyper.yml` is what the Docker image *runs*; `pyproject.toml` is
     what the PyPI package *declares*. When they disagree, `pip install .` inside the
@@ -476,25 +548,34 @@ limit.
     files no longer *conflict* (`pyproject.toml` pins `numpy>=1.26.0`, the env installs
     `numpy=2.0.2`, which satisfies it) — but they are still resolved by two different
     solvers, so `--no-deps` stays.
-16. **`scripts/` is linted and formatted but is not type-checked.** `RUFF_PATHS` covers
-    `vntyper/ docker/app/ tests/ scripts/ docs/`, but `make type-check-all` runs
-    `mypy vntyper/ docker/app/` and then `mypy vntyper/ tests/` — `scripts/` appears in
-    neither, so nothing under it is type-checked by any gate. That is now **over 5,000
-    lines** — re-measure with `find scripts -name '*.py' | xargs wc -l`; it read 5,048
-    across 13 files when this was written, and it is still growing. Roughly 3,200 of
-    those arrived on this branch (`git diff --numstat origin/main...HEAD -- scripts/`:
-    3,212 added, 45 removed) — the golden-cohort harness, the adVNTR `LEN` differential
-    and the mutation runner's growth; the coverage gate, the test-data downloader and
-    `mutation_guard.py` predate it. The figure quoted here has been wrong before, which
-    is why the command is given rather than just the number.
-    Adding `scripts/` to the first mypy invocation is a one-line
-    change and still surfaces exactly one pre-existing error
-    (`scripts/download_test_data.py:147: Need type annotation for "dir_counts"`);
-    fix that first, then widen the target.
+16. **`scripts/` is in both runtime quality gates.** `RUFF_PATHS` covers
+    `vntyper/ docker/app/ tests/ scripts/ docs/`, and `make type-check` runs
+    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 129 source files.
+    `make type-check-all` then adds the deliberately separate `mypy vntyper/ tests/`
+    pass, which checked 282 test sources. Do not claim `scripts/` is part of that tests
+    invocation or collapse the two.
+
+    Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
+    appended only after the scripts aggregate exceeded the separate 88% threshold. The
+    final 2026-08-10 verification measured all 35 Python files at 6,004 of 6,391 measured
+    units, or 93.94% aggregate scripts-only branch-inclusive coverage, and 89.17% combined
+    branch-inclusive coverage across 5,072 unit tests in both the maintained Python 3.12
+    environment and `ci-local`'s clean Python 3.13 rebuild. The Python 3.10–3.13 GitHub
+    matrix remains the authoritative cross-version gate. These figures do not change the
+    independent gate semantics:
+    `[tool.coverage.report].fail_under = 86` is the hard floor,
+    `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
+    lines, and `SCRIPTS_COVERAGE_TARGET ?= 88` is the isolated pre-source proof. The
+    existing `exclude_also` entry ignores only mechanical direct-execution bootstrap
+    guards; callable `main(...)` functions, exit policy and substantive CLI branches
+    remain measured. Add no scripts omit entry to improve any of these numbers.
 
 ## Never
 
-- Never push a `v*.*.*` tag. It publishes to PyPI immediately and irreversibly.
+- Never create, move, or push a release tag as an agent. A tag alone no longer starts
+  current production policy, but operators must create the reviewed existing tag before
+  sending the authenticated `vntyper_release` dispatch; historical tag workflows retain
+  legacy behavior until the owner completes the token-deletion follow-up.
 - Never commit into `tests/data/`, `reference/`, `out/`, `download/`, `vntyper.egg-info/`
   or the local `adVNTR/` clone — all are generated or downloaded.
 - Never hand-edit `vntyper/dependencies/kestrel/*.jar` or anything in `vntyper.egg-info/`.

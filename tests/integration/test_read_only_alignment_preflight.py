@@ -90,6 +90,7 @@ def test_indexed_bam_recovery_handles_a_nonempty_all_unplaced_alignment(tmp_path
         plan=plan,
         fast_mode=False,
         keep_intermediates=True,
+        delete_intermediates=False,
         bed_file=bed,
     )
     plan.close()

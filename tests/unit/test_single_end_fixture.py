@@ -78,8 +78,8 @@ def test_the_single_end_fixture_and_integration_case_are_registered() -> None:
     assert spec.source_bam == Path("tests/data/example_b178_hg19_subset.bam")
     assert spec.output_bam == Path("tests/data/derived/single_end/example_b178_hg19_single_end.bam")
     cases = config["integration_tests"]["single_end_bam_tests"]
-    assert [case["fixture_name"] for case in cases] == [spec.name, spec.name]
-    assert ["--fast-mode" in case.get("cli_options", []) for case in cases] == [True, False]
+    assert [case["fixture_name"] for case in cases] == [spec.name] * 5
+    assert ["--fast-mode" in case.get("cli_options", []) for case in cases] == [True, False, False, False, False]
 
 
 @pytest.mark.parametrize(

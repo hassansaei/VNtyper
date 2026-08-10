@@ -41,6 +41,7 @@ from pathlib import Path
 
 import pytest
 
+from vntyper.scripts import cohort_inputs
 from vntyper.scripts.cohort_inputs import (
     cleanup_temp_dirs,
     discover_sample_directories,
@@ -427,25 +428,27 @@ def test_a_zip_holding_no_summary_is_reported_and_its_temp_dir_still_tracked(tmp
         cleanup_temp_dirs(temp_dirs)
 
 
-def test_a_corrupt_zip_is_reported_and_leaves_no_temporary_directory(tmp_path, caplog) -> None:
-    """A damaged upload must not leave the extraction directory behind.
+def test_bad_archive_is_skipped_and_other_inputs_continue(tmp_path, caplog, monkeypatch) -> None:
+    """A malformed archive does not prevent discovery of later valid inputs."""
+    caplog.set_level(logging.WARNING, logger="vntyper.scripts.cohort_inputs")
+    broken = _zip_of(tmp_path, "broken.zip", {"pipeline_summary.json": "{}"})
+    valid = _write_summary(tmp_path / "valid")
+    original_extractall = zipfile.ZipFile.extractall
 
-    The archive's central directory is left intact so `is_zipfile` still accepts it -
-    that is the interesting case, because a file rejected outright never reaches the
-    extraction path at all - and its first local file header is zeroed, so
-    `extractall` raises `BadZipFile` partway through.
-    """
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_inputs")
-    archive = _zip_of(tmp_path, "broken.zip", {"pipeline_summary.json": "{}"})
-    raw = bytearray(archive.read_bytes())
-    raw[0:4] = b"\x00\x00\x00\x00"
-    archive.write_bytes(bytes(raw))
-    assert zipfile.is_zipfile(archive)
+    def _blocked_extractall(self, *args, **kwargs):
+        if self.filename == str(broken):
+            raise zipfile.BadZipFile("blocked")
+        return original_extractall(self, *args, **kwargs)
 
-    dirs, temp_dirs = discover_sample_directories([str(archive)])
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", _blocked_extractall)
 
-    assert dirs == []
+    dirs, temp_dirs = discover_sample_directories([str(broken), str(valid)])
+
+    assert [sample.identity for sample in dirs] == ["valid"]
     assert temp_dirs == []
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_inputs"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
     assert "Bad zip file" in caplog.text
 
 
@@ -480,13 +483,25 @@ def test_cleanup_removes_every_temporary_directory(tmp_path) -> None:
     assert not second.exists()
 
 
-def test_cleanup_reports_a_directory_it_cannot_remove_rather_than_raising(tmp_path, caplog) -> None:
-    """One undeletable temporary directory must not abort the run after the report has
-    already been written."""
-    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_inputs")
+def test_cleanup_attempts_all_directories_after_failure(tmp_path, caplog, monkeypatch) -> None:
+    """Cleanup keeps attempting later directories after one filesystem failure."""
+    caplog.set_level(logging.WARNING, logger="vntyper.scripts.cohort_inputs")
+    first = str(tmp_path / "first")
+    second = str(tmp_path / "second")
+    attempted: list[str] = []
 
-    cleanup_temp_dirs([str(tmp_path / "never-existed")])
+    def _blocked_rmtree(path: str) -> None:
+        attempted.append(path)
+        if path == first:
+            raise OSError("blocked")
 
+    monkeypatch.setattr(cohort_inputs.shutil, "rmtree", _blocked_rmtree)
+
+    cleanup_temp_dirs([first, second])
+    assert attempted == [first, second]
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_inputs"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
     assert "Failed to remove temporary directory" in caplog.text
 
 
@@ -614,15 +629,42 @@ def test_a_sample_directory_with_no_summary_yields_three_empties(tmp_path, caplo
     assert "Pipeline summary file not found" in caplog.text
 
 
-def test_an_unreadable_summary_yields_three_empties_rather_than_aborting_the_cohort(tmp_path, caplog) -> None:
-    """One corrupt sample must not take the other 40 down with it."""
+def test_summary_read_failure_returns_three_empty_results(tmp_path, caplog, monkeypatch) -> None:
+    """One unreadable summary leaves a structured empty result for that sample."""
     caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_inputs")
     sample = tmp_path / "sample_one"
     sample.mkdir()
-    (sample / "pipeline_summary.json").write_text("{not json", encoding="utf-8")
+    (sample / "pipeline_summary.json").write_text("{}", encoding="utf-8")
+
+    def _blocked_open(*args, **kwargs):
+        raise OSError("blocked")
+
+    monkeypatch.setattr(cohort_inputs, "open", _blocked_open, raising=False)
 
     assert load_pipeline_summary_for_sample(sample) == ([], [], {})
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_inputs"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
     assert "Error loading pipeline summary" in caplog.text
+
+
+def test_identity_read_failure_uses_directory_fallback(tmp_path, caplog, monkeypatch) -> None:
+    """A root archive sample keeps the supplied fallback when its summary is unreadable."""
+    caplog.set_level(logging.WARNING, logger="vntyper.scripts.cohort_inputs")
+    sample = tmp_path / "sample_one"
+    sample.mkdir()
+    (sample / "pipeline_summary.json").write_text("{}", encoding="utf-8")
+
+    def _blocked_open(*args, **kwargs):
+        raise OSError("blocked")
+
+    monkeypatch.setattr(cohort_inputs, "open", _blocked_open, raising=False)
+
+    assert cohort_inputs._identity_from_summary(sample, "archive_fallback") == "archive_fallback"
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_inputs"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert "Could not read the recorded inputs" in caplog.text
 
 
 def test_a_malformed_timestamp_yields_three_empties_today(tmp_path, caplog) -> None:

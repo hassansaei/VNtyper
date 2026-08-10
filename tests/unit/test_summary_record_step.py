@@ -15,6 +15,7 @@ present key would diff every step of every run for no behavioural reason.
 
 import logging
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -85,3 +86,23 @@ def test_record_step_still_records_the_rest_of_the_step_when_the_file_is_missing
     assert record["result_file"] == str(missing)
     assert record["md5sum"] is None
     assert record["parsed_result"]["data"] == []
+
+
+def test_parser_failure_is_recorded_and_step_is_appended(tmp_path):
+    """A parser failure remains in its step and does not block later summary records."""
+    path = tmp_path / "result.tsv"
+    path.write_text("A\n", encoding="utf-8")
+    summary = {"steps": []}
+
+    with patch("vntyper.scripts.summary.parse_tsv", side_effect=ValueError("parser failed")):
+        record_step(summary, "Broken parser", str(path), "tsv", "first command", _START, _END)
+
+    assert len(summary["steps"]) == 1
+    failed_step = summary["steps"][0]
+    assert failed_step["step"] == "Broken parser"
+    assert failed_step["result_file"] == str(path)
+    assert failed_step["parsed_result"] == {"error": "Error parsing file: parser failed"}
+
+    record_step(summary, "Later step", str(path), "tsv", "later command", _START, _END)
+
+    assert [step["step"] for step in summary["steps"]] == ["Broken parser", "Later step"]

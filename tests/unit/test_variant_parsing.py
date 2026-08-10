@@ -327,7 +327,9 @@ def test_read_vcf_without_comments_unreadable_path_returns_empty_dataframe(tmp_p
 
     assert out.empty
     assert list(out.columns) == []
-    assert any("Error reading VCF file" in r.message for r in caplog.records)
+    records = [record for record in caplog.records if "Error reading VCF file" in record.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
 
 
 def test_read_vcf_without_comments_no_header_line_returns_empty_dataframe(tmp_path):
@@ -402,7 +404,7 @@ def test_meta_comment_after_the_header_is_still_skipped_not_captured(tmp_path):
     assert out.iloc[0]["#CHROM"] == "chr1", "The '##' comment row must not be captured as data."
 
 
-def test_header_only_no_data_rows_returns_a_columnless_empty_dataframe(tmp_path):
+def test_header_only_no_data_rows_returns_a_columnless_empty_dataframe(tmp_path, caplog):
     """Kills the line 68 `if data and header:` `and` -> `or` mutant.
 
     Truth-table case D=False, H=True (see module docstring): a file with a
@@ -417,9 +419,11 @@ def test_header_only_no_data_rows_returns_a_columnless_empty_dataframe(tmp_path)
     vcf_path = tmp_path / "header_only.vcf"
     _write_vcf(vcf_path, [HEADER_LINE], gzipped=False)
 
-    out = read_vcf_without_comments(str(vcf_path))
+    with caplog.at_level(logging.ERROR, logger="vntyper.scripts.variant_parsing"):
+        out = read_vcf_without_comments(str(vcf_path))
 
     assert out.empty
     assert list(out.columns) == [], (
         "A header with no data rows must produce a columnless empty DataFrame, not one carrying the header's columns."
     )
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]

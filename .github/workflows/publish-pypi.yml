@@ -1,85 +1,1148 @@
-# Publish to PyPI when a version tag (v*.*.*) is pushed.
-#
-# Usage:
-#   git tag -a v2.0.5 -m "Release 2.0.5"
-#   git push origin v2.0.5
-#
-# Currently authenticates with the PYPI_API_TOKEN repository secret.
-#
-# RECOMMENDED FOLLOW-UP - migrate to Trusted Publishing (OIDC):
-#   PyPI now recommends Trusted Publishing over long-lived API tokens: the credential is
-#   short-lived, scoped to this project, and cannot leak from the secret store. It also
-#   turns on PEP 740 attestations by default.
-#
-#   This is a two-part change and MUST be done in this order, or the next release fails:
-#     1. On pypi.org: Manage project -> Publishing -> add a GitHub publisher with
-#        owner=hassansaei, repo=VNtyper, workflow=publish-pypi.yml, environment=pypi
-#     2. In this file: add `id-token: write` to the publish job's permissions, replace
-#        the twine step with `uses: pypa/gh-action-pypi-publish@release/v1` (no
-#        `password:`), and delete the PYPI_API_TOKEN secret.
-#   Deliberately not done unilaterally here, because step 2 without step 1 breaks
-#   publishing.
-name: Publish to PyPI
+# Production starts only from an authenticated repository_dispatch with event type
+# vntyper_release and client_payload.tag naming an existing strict release tag. GitHub
+# loads this controller from the default branch, so old tagged workflow code cannot
+# select production policy. There is deliberately no production push.tags trigger, and
+# this workflow never creates or moves a tag.
+# Inspect an existing tag without writes with:
+#   gh workflow run publish-pypi.yml -f tag=vX.Y.Z
+# The Docker Build run for the exact full SHA must already have emitted matching
+# evidence. If evidence or its image is missing, rerun that existing Docker Build run.
+# Production promotes the verified digest to immutable vX.Y.Z/X.Y.Z and monotonic
+# floating X.Y/X/latest aliases; main remains the rolling unreleased image.
+# GHCR promotion uses the fixed vntyper-ghcr-release-promotion mutual-exclusion lock,
+# not an unbounded queue. A canceled/superseded pending promotion performs no writes
+# before acquiring it and must be rerun. A partial PyPI retry is safe: the publisher
+# uses skip-existing and the summary distinguishes a new upload from an existing file.
+name: Publish PyPI and promote GHCR
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  repository_dispatch:
+    types: [vntyper_release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing strict vMAJOR.MINOR.PATCH tag to inspect without writes
+        required: true
+        type: string
 
 permissions: {}
 
+concurrency:
+  group: release-${{ inputs.tag || github.event.client_payload.tag }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-publish:
-    name: Build and publish to PyPI
+  validate-release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     permissions:
       contents: read
-    # NOTE: no `environment:` here yet. It is required for Trusted Publishing and is
-    # added as part of that migration (see the header), together with the matching
-    # environment name in the PyPI publisher config. Adding it now would only introduce
-    # a new failure mode on the release path without any benefit.
-
+    outputs:
+      mode: ${{ steps.resolve.outputs.mode }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      short_sha: ${{ steps.resolve.outputs.short_sha }}
+      summary_json: ${{ steps.validate-result.outputs.summary_json }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      # The controller is current workflow policy. The candidate checkout below is the
+      # exact tagged commit whose package metadata must be validated independently.
+      - uses: actions/checkout@v7
         with:
-          persist-credentials: false
+          fetch-depth: "0"
+          persist-credentials: "false"
+          path: controller
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Install build tools
-        run: python -m pip install --upgrade pip build twine
-
-      # Publishing is irreversible: a version can never be re-uploaded to PyPI. Catch a
-      # tag/version mismatch here rather than after burning the version number.
-      - name: Verify tag matches vntyper.version.__version__
+      - id: resolve
+        working-directory: controller
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_NAME: ${{ github.event_name }}
+          PRODUCTION_TAG: ${{ github.event.client_payload.tag }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
-          # Execute version.py and read __version__, rather than regexing the first
-          # quoted string: that would silently pick the wrong value if the literal ever
-          # changes quoting, becomes an expression, or gains a neighbouring string.
-          # runpy avoids importing the whole vntyper package (and its dependencies).
-          PKG=$(python -c "import runpy; print(runpy.run_path('vntyper/version.py')['__version__'])")
-          echo "tag=$TAG  package=$PKG"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::Tag v$TAG does not match vntyper/version.py ($PKG). Fix the version and re-tag."
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            MODE=dry-run
+            TAG=$DISPATCH_TAG
+          elif [ "$EVENT_NAME" = "repository_dispatch" ] && [ "$EVENT_ACTION" = "vntyper_release" ]; then
+            MODE=production
+            TAG=$PRODUCTION_TAG
+          else
+            echo "::error::Unsupported release event: ${EVENT_NAME}/${EVENT_ACTION}"
             exit 1
           fi
+          VERSION=$(python - "$TAG" <<'PY'
+          import sys
+          from scripts.release_policy import parse_release_tag
+          print(parse_release_tag(sys.argv[1]).plain)
+          PY
+          )
+          SHA=$(git rev-parse "refs/tags/${TAG}^{commit}")
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SHA" origin/main
+          SHORT_SHA=${SHA:0:7}
+          for pair in "mode=$MODE" "tag=$TAG" "version=$VERSION" "sha=$SHA" "short_sha=$SHORT_SHA"; do
+            printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
+          done
 
-      - name: Build package
-        run: python -m build
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          persist-credentials: "false"
+          path: candidate
 
-      - name: Check package
-        run: twine check dist/*
-
-      - name: Publish to PyPI
+      - id: candidate
+        working-directory: candidate
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        # --skip-existing so a re-run after a partial failure is not a hard error.
-        run: twine upload --skip-existing dist/*
+          MODE: ${{ steps.resolve.outputs.mode }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import runpy
+          import tempfile
+          from pathlib import Path
+
+          expected = os.environ["VERSION"]
+          package = runpy.run_path("vntyper/version.py")["__version__"]
+          citation_match = re.search(
+              r'^version:\s*"([^"]+)"',
+              Path("CITATION.cff").read_text(encoding="utf-8"),
+              re.MULTILINE,
+          )
+          changelog_match = re.search(
+              r"^##\s+([0-9]+\.[0-9]+\.[0-9]+)(?:\s|$)",
+              Path("docs/about/changelog.md").read_text(encoding="utf-8"),
+              re.MULTILINE,
+          )
+          if citation_match is None or changelog_match is None:
+              raise SystemExit("candidate release metadata format is unreadable")
+          observed = {
+              "expected_version": expected,
+              "package": {"observed": package, "matches": package == expected},
+              "citation": {
+                  "observed": citation_match.group(1),
+                  "matches": citation_match.group(1) == expected,
+              },
+              "changelog": {
+                  "observed": changelog_match.group(1),
+                  "matches": changelog_match.group(1) == expected,
+              },
+              "version_test_exit_code": None,
+              "version_test_passed": False,
+          }
+          path = Path("candidate-version-observations.json")
+          descriptor, temporary = tempfile.mkstemp(prefix=".candidate-version-observations.", dir=".")
+          try:
+              with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                  json.dump(observed, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
+          PY
+          python3 -m venv .release-venv
+          .release-venv/bin/pip install pytest packaging PyYAML requests
+          set +e
+          .release-venv/bin/pytest -m unit tests/unit/test_version_consistency.py -q
+          TEST_STATUS=$?
+          set -e
+          python - "$TEST_STATUS" <<'PY'
+          import json
+          import os
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          path = Path("candidate-version-observations.json")
+          observed = json.loads(path.read_text(encoding="utf-8"))
+          test_status = int(sys.argv[1])
+          observed["version_test_exit_code"] = test_status
+          observed["version_test_passed"] = test_status == 0
+          descriptor, temporary = tempfile.mkstemp(prefix=".candidate-version-observations.", dir=".")
+          try:
+              with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                  json.dump(observed, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
+          if not all(observed[source]["matches"] for source in ("package", "citation", "changelog")):
+              raise SystemExit("candidate release metadata does not match the requested tag version")
+          raise SystemExit(test_status)
+          PY
+
+      - id: validate-result
+        if: ${{ always() }}
+        env:
+          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
+          MODE: ${{ steps.resolve.outputs.mode }}
+          RESOLVE_OUTCOME: ${{ steps.resolve.outcome }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+
+          observations_path = pathlib.Path("candidate/candidate-version-observations.json")
+          fallback = {
+              "expected_version": os.environ["VERSION"] or None,
+              "package": {"observed": None, "matches": False},
+              "citation": {"observed": None, "matches": False},
+              "changelog": {"observed": None, "matches": False},
+              "version_test_exit_code": None,
+              "version_test_passed": False,
+          }
+          try:
+              loaded = json.loads(observations_path.read_text(encoding="utf-8"))
+          except (OSError, ValueError):
+              loaded = None
+          observations = loaded if isinstance(loaded, dict) else fallback
+          payload = {
+              "mode": os.environ["MODE"] or "unresolved",
+              "tag": os.environ["TAG"] or None,
+              "version": os.environ["VERSION"] or None,
+              "sha": os.environ["SHA"] or None,
+              "main_ancestor": os.environ["RESOLVE_OUTCOME"] == "success",
+              "resolve_outcome": os.environ["RESOLVE_OUTCOME"],
+              "candidate_outcome": os.environ["CANDIDATE_OUTCOME"],
+              "version_validation": observations,
+          }
+          print("summary_json=" + json.dumps(payload, separators=(",", ":")))
+          PY
+
+  wait-for-release-gates:
+    needs: validate-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      packages: read
+    outputs:
+      source_ref: ${{ steps.evidence.outputs.source_ref }}
+      source_digest: ${{ steps.evidence.outputs.source_digest }}
+      source_revision: ${{ steps.evidence.outputs.source_revision }}
+      source_version: ${{ steps.evidence.outputs.source_version }}
+      evidence_contract_version: ${{ steps.evidence.outputs.evidence_contract_version }}
+      short_tag_collision: ${{ steps.evidence.outputs.short_tag_collision }}
+      source_run_id: ${{ steps.evidence.outputs.source_run_id }}
+      source_run_attempt: ${{ steps.evidence.outputs.source_run_attempt }}
+      source_run_url: ${{ steps.evidence.outputs.source_run_url }}
+      source_artifact_name: ${{ steps.evidence.outputs.source_artifact_name }}
+      source_artifact_url: ${{ steps.evidence.outputs.source_artifact_url }}
+      source_artifact_download_url: ${{ steps.evidence.outputs.source_artifact_download_url }}
+      recovery_instruction: ${{ steps.evidence.outputs.recovery_instruction }}
+      preflight_summary_json: ${{ steps.evidence-preflight-result.outputs.preflight_summary_json }}
+      check_summary_json: ${{ steps.poll-result.outputs.check_summary_json }}
+      evidence_summary_json: ${{ steps.evidence-result.outputs.evidence_summary_json }}
+      dry_run_alias_summary_json: ${{ steps.dry-run-aliases.outputs.dry_run_alias_summary_json }}
+    env:
+      COORDINATOR_ROOT: ${{ github.workspace }}/controller
+      RELEASE_POLL_ATTEMPTS: "120"
+      RELEASE_POLL_INTERVAL_SECONDS: "30"
+      RELEASE_API_ATTEMPTS: "3"
+      RELEASE_API_RETRY_SECONDS: "5"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: "false"
+          path: controller
+
+      - id: evidence-preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          api_json() {
+            local endpoint=$1 output=$2
+            for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+              if gh api --paginate --slurp "$endpoint" > "$output.tmp"; then
+                mv -- "$output.tmp" "$output"
+                return 0
+              fi
+              rm -f -- "$output.tmp"
+              if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+            done
+            return 1
+          }
+          write_preflight_state() {
+            python - "$SHA" "$1" "$2" "${3:-}" "${4:-}" "${5:-}" <<'PY' > preflight-state.json.tmp
+          import json
+          import pathlib
+          import sys
+
+          sha, state, reason, run_id, run_attempt, run_url = sys.argv[1:]
+          eligible_path = pathlib.Path("eligible-runs.json")
+          eligible = json.loads(eligible_path.read_text(encoding="utf-8")) if eligible_path.is_file() else []
+          selected = None if not run_id else {
+              "id": int(run_id), "run_attempt": int(run_attempt), "html_url": run_url or None
+          }
+          print(json.dumps({"sha": sha, "state": state, "reason": reason,
+                            "eligible_runs": eligible, "selected_run": selected}, separators=(",", ":")))
+          PY
+            mv -- preflight-state.json.tmp preflight-state.json
+          }
+          if ! api_json \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-build.yml/runs?head_sha=${SHA}&per_page=100" \
+              preflight-runs.json; then
+            write_preflight_state infrastructure-failure \
+              "GitHub workflow-runs API failed after ${RELEASE_API_ATTEMPTS} attempts"
+            exit 1
+          fi
+          python controller/scripts/release_evidence.py eligible-runs preflight-runs.json --sha "$SHA" \
+            > eligible-runs.json.tmp
+          mv -- eligible-runs.json.tmp eligible-runs.json
+          COUNT=$(python -c 'import json; print(len(json.load(open("eligible-runs.json"))))')
+          if [ "$COUNT" -eq 0 ]; then
+            write_preflight_state pending "no completed successful exact-SHA main-push Docker Build run exists yet"
+            exit 0
+          fi
+          FOUND=false; SELECTED_ID=; SELECTED_ATTEMPT=; SELECTED_URL=
+          python -c 'import json; [print("{}\t{}\t{}".format(r["id"], r["run_attempt"], r.get("html_url", ""))) for r in json.load(open("eligible-runs.json"))]' \
+            > eligible-runs.tsv
+          while IFS=$'\t' read -r RUN_ID RUN_ATTEMPT RUN_URL; do
+            if ! api_json "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+                "artifacts-${RUN_ID}.json"; then
+              write_preflight_state infrastructure-failure \
+                "GitHub artifacts API failed after ${RELEASE_API_ATTEMPTS} attempts for Docker Build run ${RUN_ID}" \
+                "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL"
+              exit 1
+            fi
+            if python controller/scripts/release_evidence.py artifact-present "artifacts-${RUN_ID}.json" \
+                --name "docker-release-evidence-${SHA}-${RUN_ATTEMPT}"; then
+              FOUND=true; SELECTED_ID=$RUN_ID; SELECTED_ATTEMPT=$RUN_ATTEMPT; SELECTED_URL=$RUN_URL
+              break
+            fi
+          done < eligible-runs.tsv
+          if [ "$FOUND" != true ]; then
+            write_preflight_state ineligible \
+              "successful exact-SHA main-push Docker Build runs exist but none has its exact attempt-qualified contract-v1 artifact"
+            while IFS=$'\t' read -r RUN_ID RUN_ATTEMPT RUN_URL; do
+              echo "Docker Build run ${RUN_ID} attempt ${RUN_ATTEMPT} for exact SHA ${SHA}: ${RUN_URL}" >&2
+            done < eligible-runs.tsv
+            echo "Candidate $SHA is pre-contract/ineligible: rerun this existing Docker Build run after the " \
+                 "milestone evidence workflow is present; no production write was attempted." >&2
+            exit 1
+          fi
+          write_preflight_state eligible "exact attempt-qualified Docker evidence artifact found" \
+            "$SELECTED_ID" "$SELECTED_ATTEMPT" "$SELECTED_URL"
+
+      - id: evidence-preflight-result
+        if: ${{ always() }}
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.evidence-preflight.outcome }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python - "$PREFLIGHT_OUTCOME" "$SHA" <<'PY' > preflight-state.json.tmp
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path("preflight-state.json")
+          try:
+              loaded = json.loads(path.read_text(encoding="utf-8"))
+          except (OSError, ValueError):
+              loaded = None
+          payload = dict(loaded) if isinstance(loaded, dict) else {
+              "sha": sys.argv[2],
+              "state": "infrastructure-failure",
+              "reason": "preflight ended before structured state was written",
+              "eligible_runs": [],
+              "selected_run": None,
+          }
+          payload["step_outcome"] = sys.argv[1]
+          print(json.dumps(payload, separators=(",", ":")))
+          PY
+          mv -- preflight-state.json.tmp preflight-state.json
+          printf 'preflight_summary_json=%s\n' "$(cat preflight-state.json)" >> "$GITHUB_OUTPUT"
+
+      - id: poll
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Exact required check names: Lint (Ruff), Type Check (mypy),
+          # Unit Tests (Python 3.10), Unit Tests (Python 3.11),
+          # Unit Tests (Python 3.12), Unit Tests (Python 3.13),
+          # Docs build (strict), CI Success, Build and test image, Docker Success.
+          for attempt in $(seq 1 "$RELEASE_POLL_ATTEMPTS"); do
+            API_OK=false
+            for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+              if gh api --paginate --slurp \
+                  "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" \
+                  > checks-pages.json.tmp; then
+                mv -- checks-pages.json.tmp checks-pages.json
+                API_OK=true
+                break
+              fi
+              rm -f -- checks-pages.json.tmp
+              if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+            done
+            if [ "$API_OK" != true ]; then
+              python - "$attempt" "$RELEASE_API_ATTEMPTS" <<'PY' > poll.json.tmp
+          import json
+          import sys
+          print(json.dumps({"action": "fail", "attempt": int(sys.argv[1]), "elapsed_seconds": 0,
+                            "verdicts": [], "infrastructure_error":
+                            f"Check Runs API failed after {sys.argv[2]} attempts"}, separators=(",", ":")))
+          PY
+              mv -- poll.json.tmp poll.json
+              cat poll.json >&2
+              exit 1
+            fi
+            PYTHONPATH="$COORDINATOR_ROOT" python - "$SHA" "$attempt" "$RELEASE_POLL_ATTEMPTS" \
+                checks-pages.json poll.json.tmp <<'PY'
+          import dataclasses
+          import json
+          import sys
+
+          from scripts.release_policy import classify_check_runs
+
+          pages = json.load(open(sys.argv[4], encoding="utf-8"))
+          runs = [run for page in pages for run in page.get("check_runs", [])]
+          poll = classify_check_runs(
+              sys.argv[1], runs, attempt=int(sys.argv[2]), max_attempts=int(sys.argv[3])
+          )
+          with open(sys.argv[5], "w", encoding="utf-8") as handle:
+              json.dump(dataclasses.asdict(poll), handle, separators=(",", ":"))
+          PY
+            mv -- poll.json.tmp poll.json
+            ACTION=$(python -c 'import json; print(json.load(open("poll.json"))["action"])')
+            if [ "$ACTION" = success ]; then
+              exit 0
+            fi
+            if [ "$ACTION" = fail ] || [ "$ACTION" = timeout ]; then
+              cat poll.json >&2
+              exit 1
+            fi
+            sleep "$RELEASE_POLL_INTERVAL_SECONDS"
+          done
+          echo "release poll exhausted without a terminal classifier result" >&2
+          test -s poll.json && cat poll.json >&2
+          exit 1
+
+      - id: poll-result
+        if: ${{ always() }}
+        env:
+          POLL_OUTCOME: ${{ steps.poll.outcome }}
+        run: |
+          set -euo pipefail
+          python - "$POLL_OUTCOME" <<'PY' > poll.json.tmp
+          import json
+          import pathlib
+          import sys
+
+          def load_mapping(path):
+              try:
+                  payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  return None
+              return payload if isinstance(payload, dict) else None
+
+          poll = load_mapping("poll.json")
+          preflight_path = pathlib.Path("preflight-state.json")
+          preflight = load_mapping(preflight_path)
+          preflight_state = None if preflight is None else preflight.get("state")
+          if poll is not None:
+              payload = dict(poll)
+              payload["step_outcome"] = sys.argv[1]
+          elif preflight_state in {"ineligible", "infrastructure-failure"}:
+              payload = {
+                  "action": "not-run",
+                  "attempt": 0,
+                  "elapsed_seconds": 0,
+                  "verdicts": [],
+                  "preflight_state": preflight_state,
+                  "preflight_reason": preflight.get("reason"),
+                  "step_outcome": sys.argv[1],
+              }
+          else:
+              payload = {
+                  "action": "fail",
+                  "attempt": 0,
+                  "elapsed_seconds": 0,
+                  "verdicts": [],
+                  "infrastructure_error": "poll step ended before a Check Runs snapshot",
+                  "step_outcome": sys.argv[1],
+              }
+          print(json.dumps(payload, separators=(",", ":")))
+          PY
+          mv -- poll.json.tmp poll.json
+          printf 'check_summary_json=%s\n' "$(cat poll.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR for production inspection
+        if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+          SHORT_SHA: ${{ needs.validate-release.outputs.short_sha }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+          IMAGE: ghcr.io/hassansaei/vntyper
+        run: |
+          set -euo pipefail
+          api_json() {
+            local endpoint=$1 output=$2
+            for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+              if gh api --paginate --slurp "$endpoint" > "$output.tmp"; then
+                mv -- "$output.tmp" "$output"
+                return 0
+              fi
+              rm -f -- "$output.tmp"
+              if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+            done
+            return 1
+          }
+          recovery_error() {
+            echo "Docker Build exact SHA ${SHA}, run ${RUN_ID:-unavailable}: ${RUN_URL:-run URL unavailable}; " \
+                 "rerun this existing Docker Build run. $1" >&2
+          }
+          if ! api_json \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-build.yml/runs?head_sha=${SHA}&per_page=100" \
+              evidence-runs.json; then
+            echo "GitHub workflow-runs API failed after ${RELEASE_API_ATTEMPTS} attempts" >&2
+            exit 1
+          fi
+          python controller/scripts/release_evidence.py eligible-runs evidence-runs.json --sha "$SHA" \
+            > evidence-eligible-runs.json.tmp
+          mv -- evidence-eligible-runs.json.tmp evidence-eligible-runs.json
+          python -c 'import json; [print("{}\t{}\t{}".format(r["id"], r["run_attempt"], r.get("html_url", ""))) for r in json.load(open("evidence-eligible-runs.json"))]' \
+            > evidence-eligible-runs.tsv
+          RUN_ID=; RUN_ATTEMPT=; RUN_URL=
+          while IFS=$'\t' read -r CANDIDATE_RUN CANDIDATE_ATTEMPT CANDIDATE_URL; do
+            if ! api_json "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN}/artifacts?per_page=100" \
+                "evidence-artifacts-${CANDIDATE_RUN}.json"; then
+              echo "GitHub artifacts API failed after ${RELEASE_API_ATTEMPTS} attempts for Docker Build run ${CANDIDATE_RUN}" >&2
+              exit 1
+            fi
+            if python controller/scripts/release_evidence.py select-artifact \
+                "evidence-artifacts-${CANDIDATE_RUN}.json" \
+                --name "docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}" \
+                > selected-artifact.json.tmp; then
+              mv -- selected-artifact.json.tmp selected-artifact.json
+              RUN_ID=$CANDIDATE_RUN; RUN_ATTEMPT=$CANDIDATE_ATTEMPT; RUN_URL=$CANDIDATE_URL
+              break
+            fi
+            rm -f -- selected-artifact.json.tmp
+          done < evidence-eligible-runs.tsv
+          if [ -z "$RUN_ID" ]; then
+            echo "No eligible exact-SHA Docker evidence artifact for ${SHA}." >&2
+            while IFS=$'\t' read -r CANDIDATE_RUN CANDIDATE_ATTEMPT CANDIDATE_URL; do
+              echo "Rerun existing Docker Build run ${CANDIDATE_RUN} attempt ${CANDIDATE_ATTEMPT}: " \
+                   "${CANDIDATE_URL}; expected artifact docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}." >&2
+            done < evidence-eligible-runs.tsv
+            exit 1
+          fi
+          python - "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL" <<'PY' > selected-run.json.tmp
+          import json
+          import sys
+          print(json.dumps({"id": int(sys.argv[1]), "run_attempt": int(sys.argv[2]),
+                            "html_url": sys.argv[3] or None}, separators=(",", ":")))
+          PY
+          mv -- selected-run.json.tmp selected-run.json
+          RUN_ID=$(python -c 'import json; print(json.load(open("selected-run.json"))["id"])')
+          RUN_ATTEMPT=$(python -c 'import json; print(json.load(open("selected-run.json"))["run_attempt"])')
+          DEST=; DOWNLOADED=false
+          for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+            CANDIDATE_DEST="evidence-${RUN_ID}-${RUN_ATTEMPT}-${API_ATTEMPT}"
+            if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+                -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" \
+                -D "$CANDIDATE_DEST"; then
+              DEST=$CANDIDATE_DEST
+              DOWNLOADED=true
+              break
+            fi
+            if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+          done
+          if [ "$DOWNLOADED" != true ]; then
+            recovery_error "Exact Docker evidence download failed after ${RELEASE_API_ATTEMPTS} attempts."
+            exit 1
+          fi
+          EVIDENCE_PATH="$DEST/docker-release-evidence.json"
+          rm -f -- validated-evidence.json validated-evidence.json.tmp
+          if ! python controller/scripts/release_evidence.py validate-evidence "$EVIDENCE_PATH" \
+              --sha "$SHA" --version "$VERSION" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+              > validated-evidence.json.tmp; then
+            rm -f -- validated-evidence.json.tmp
+            recovery_error "Downloaded contract-v1 evidence did not match the selected run."
+            exit 1
+          fi
+          mv -- validated-evidence.json.tmp validated-evidence.json
+          DIGEST=$(python -c 'import json; print(json.load(open("validated-evidence.json"))["digest"])')
+          if ! docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Manifest}}' \
+              > immutable-manifest.json.tmp; then
+            recovery_error "The immutable evidence manifest is unavailable."
+            exit 1
+          fi
+          if ! IMMUTABLE_DIGEST=$(python controller/scripts/release_manifest.py digest immutable-manifest.json.tmp); then
+            rm -f -- immutable-manifest.json.tmp
+            recovery_error "The immutable evidence manifest descriptor is invalid."
+            exit 1
+          fi
+          mv -- immutable-manifest.json.tmp immutable-manifest.json
+          if [ "$IMMUTABLE_DIGEST" != "$DIGEST" ]; then
+            recovery_error "The immutable manifest digest does not match evidence digest ${DIGEST}."
+            exit 1
+          fi
+          if ! docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Image}}' \
+              > image-config.json.tmp; then
+            rm -f -- image-config.json.tmp
+            recovery_error "The immutable image configuration is unavailable."
+            exit 1
+          fi
+          mv -- image-config.json.tmp image-config.json
+          if ! docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" --format '{{json .Manifest}}' \
+              > short-manifest.json.tmp; then
+            recovery_error "The exact short-SHA image tag is unavailable."
+            exit 1
+          fi
+          if ! SHORT_DIGEST=$(python controller/scripts/release_manifest.py digest short-manifest.json.tmp); then
+            rm -f -- short-manifest.json.tmp
+            recovery_error "The short-SHA image manifest descriptor is invalid."
+            exit 1
+          fi
+          mv -- short-manifest.json.tmp short-manifest.json
+          if ! docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" \
+              --format '{{json .Image}}' > short-image-config.json.tmp; then
+            rm -f -- short-image-config.json.tmp
+            recovery_error "The short-SHA image configuration is unavailable."
+            exit 1
+          fi
+          mv -- short-image-config.json.tmp short-image-config.json
+          if ! python controller/scripts/release_evidence.py validate-image validated-evidence.json image-config.json \
+              short-image-config.json --immutable-digest "$IMMUTABLE_DIGEST" --short-digest "$SHORT_DIGEST" \
+              --image "$IMAGE" --selected-run selected-run.json --selected-artifact selected-artifact.json \
+              --state-output validated-image.json.tmp --output "$GITHUB_OUTPUT"; then
+            rm -f -- validated-image.json.tmp
+            recovery_error "OCI identity validation failed."
+            exit 1
+          fi
+          mv -- validated-image.json.tmp validated-image.json
+
+      - id: evidence-result
+        if: ${{ always() }}
+        env:
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python controller/scripts/release_evidence.py summarize \
+            --sha "$SHA" --step-outcome "$EVIDENCE_OUTCOME" --selected-run selected-run.json \
+            --validated-evidence validated-evidence.json --image image-config.json \
+            --candidate-runs evidence-eligible-runs.json --selected-artifact selected-artifact.json \
+            --validated-image validated-image.json \
+            --output evidence-summary.json
+          printf 'evidence_summary_json=%s\n' "$(cat evidence-summary.json)" >> "$GITHUB_OUTPUT"
+
+      - id: dry-run-aliases
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          IMAGE: ghcr.io/hassansaei/vntyper
+          RELEASE_ALIAS_INSPECT_ATTEMPTS: "3"
+          RELEASE_ALIAS_INSPECT_RETRY_SECONDS: "5"
+          SOURCE_DIGEST: ${{ steps.evidence.outputs.source_digest }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          OBS_DIR=$(mktemp -d)
+          trap 'rm -rf -- "$OBS_DIR"' EXIT
+          inspect_alias() {
+            local alias=$1 safe_alias=$2
+            local saw_ambiguous_failure=false
+            rm -f -- "$OBS_DIR/$safe_alias.digest" "$OBS_DIR/$safe_alias.image.json"
+            for INSPECT_ATTEMPT in $(seq 1 "$RELEASE_ALIAS_INSPECT_ATTEMPTS"); do
+              local error_path="$OBS_DIR/$safe_alias.$INSPECT_ATTEMPT.stderr"
+              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Manifest}}' \
+                  > "$OBS_DIR/$safe_alias.manifest.json.tmp" 2> "$error_path"; then
+                if python controller/scripts/release_manifest.py digest \
+                    "$OBS_DIR/$safe_alias.manifest.json.tmp" > "$OBS_DIR/$safe_alias.digest.tmp" \
+                    2>> "$error_path" && \
+                    docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
+                    > "$OBS_DIR/$safe_alias.image.json.tmp" 2>> "$error_path"; then
+                  mv -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.digest"
+                  mv -- "$OBS_DIR/$safe_alias.manifest.json.tmp" "$OBS_DIR/$safe_alias.manifest.json"
+                  mv -- "$OBS_DIR/$safe_alias.image.json.tmp" "$OBS_DIR/$safe_alias.image.json"
+                  return 0
+                fi
+                saw_ambiguous_failure=true
+              elif ! python controller/scripts/release_registry.py classify-absence "$IMAGE:$alias" "$error_path"; then
+                saw_ambiguous_failure=true
+              fi
+              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.manifest.json.tmp" \
+                "$OBS_DIR/$safe_alias.image.json.tmp"
+              if [ "$INSPECT_ATTEMPT" -lt "$RELEASE_ALIAS_INSPECT_ATTEMPTS" ]; then
+                sleep "$RELEASE_ALIAS_INSPECT_RETRY_SECONDS"
+              fi
+            done
+            if [ "$saw_ambiguous_failure" = false ]; then
+              return 0
+            fi
+            echo "::error title=GHCR alias ${alias}::alias inspection failed without authoritative not-found " \
+                 "after ${RELEASE_ALIAS_INSPECT_ATTEMPTS} attempts; no alias write was attempted" >&2
+            cat "$OBS_DIR/$safe_alias.$RELEASE_ALIAS_INSPECT_ATTEMPTS.stderr" >&2
+            return 1
+          }
+          for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
+            SAFE_ALIAS=${ALIAS//./_}
+            inspect_alias "$ALIAS" "$SAFE_ALIAS"
+          done
+          docker buildx imagetools create --dry-run --prefer-index=false \
+            "$IMAGE@$SOURCE_DIGEST" > "$OBS_DIR/source-carbon-copy.json"
+          test -s "$OBS_DIR/source-carbon-copy.json"
+          SUMMARY=$(python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" <<'PY'
+          import dataclasses
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, str(pathlib.Path("controller").resolve()))
+          from scripts.release_policy import AliasState, parse_release_tag, plan_alias_updates, required_aliases
+
+          version = parse_release_tag("v" + sys.argv[1])
+          root = pathlib.Path(sys.argv[3])
+          observed = {}
+          for alias in required_aliases(version):
+              stem = alias.replace(".", "_")
+              digest_path = root / f"{stem}.digest"
+              if not digest_path.exists():
+                  observed[alias] = None
+                  continue
+              image = json.loads((root / f"{stem}.image.json").read_text(encoding="utf-8"))
+              labels = image.get("config", {}).get("Labels", {}) or {}
+              digest = digest_path.read_text(encoding="utf-8").strip()
+              if not digest.startswith("sha256:") or len(digest) != 71:
+                  raise SystemExit(f"invalid registry digest for {alias}: {digest}")
+              observed[alias] = AliasState(digest, labels.get("org.opencontainers.image.version"))
+          plan = plan_alias_updates(version, sys.argv[2], observed, dry_run=True)
+          if any(item.execute for item in plan):
+              raise SystemExit("dry-run policy attempted a write")
+          conflicts = [item.alias for item in plan if item.decision == "fail-conflict"]
+          if conflicts:
+              raise SystemExit(f"dry-run alias conflict: {', '.join(conflicts)}")
+          print(json.dumps({"source_digest": sys.argv[2],
+                            "observed": {key: None if value is None else dataclasses.asdict(value)
+                                         for key, value in observed.items()},
+                            "plan": [dataclasses.asdict(item) for item in plan]}, separators=(",", ":")))
+          PY
+          )
+          printf 'dry_run_alias_summary_json=%s\n' "$SUMMARY" >> "$GITHUB_OUTPUT"
+
+  build-package:
+    needs: [validate-release, wait-for-release-gates]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      package_summary_json: ${{ steps.package-result.outputs.package_summary_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate-release.outputs.sha }}
+          persist-credentials: "false"
+          path: candidate
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - id: package
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          python3 -m venv .release-venv
+          .release-venv/bin/pip install build twine
+          .release-venv/bin/python -m build
+          .release-venv/bin/twine check dist/*
+          ARTIFACT_NAME="python-dist-${{ needs.validate-release.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          python - dist <<'PY'
+          import pathlib
+          import sys
+
+          files = sorted(path.name for path in pathlib.Path(sys.argv[1]).iterdir() if path.is_file())
+          if len(files) != 2 or not any(name.endswith(".whl") for name in files) or not any(
+              name.endswith(".tar.gz") for name in files
+          ):
+              raise SystemExit(f"expected one wheel and one sdist, got {files!r}")
+          PY
+          printf 'artifact_name=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: candidate/dist/
+          if-no-files-found: error
+          retention-days: "7"
+      - id: package-result
+        if: ${{ always() }}
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.artifact_name }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+
+          root = pathlib.Path("candidate/dist")
+          files = sorted(path.name for path in root.iterdir() if path.is_file()) if root.is_dir() else []
+          payload = {
+              "artifact_name": os.environ["ARTIFACT_NAME"] or None,
+              "files": files,
+              "step_outcome": os.environ["PACKAGE_OUTCOME"],
+          }
+          print("package_summary_json=" + json.dumps(payload, separators=(",", ":")))
+          PY
+
+  promote-ghcr:
+    needs: [validate-release, wait-for-release-gates, build-package]
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: vntyper-ghcr-release-promotion
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      alias_summary_json: ${{ steps.promote-result.outputs.alias_summary_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: "false"
+          path: controller
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: promote
+        env:
+          IMAGE: ghcr.io/hassansaei/vntyper
+          RELEASE_ALIAS_INSPECT_ATTEMPTS: "3"
+          RELEASE_ALIAS_INSPECT_RETRY_SECONDS: "5"
+          SOURCE_DIGEST: ${{ needs.wait-for-release-gates.outputs.source_digest }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          OBS_DIR=$(mktemp -d)
+          trap 'rm -rf -- "$OBS_DIR"' EXIT
+          inspect_alias() {
+            local alias=$1 safe_alias=$2
+            local saw_ambiguous_failure=false
+            rm -f -- "$OBS_DIR/$safe_alias.digest" "$OBS_DIR/$safe_alias.image.json"
+            for INSPECT_ATTEMPT in $(seq 1 "$RELEASE_ALIAS_INSPECT_ATTEMPTS"); do
+              local error_path="$OBS_DIR/$safe_alias.$INSPECT_ATTEMPT.stderr"
+              if docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Manifest}}' \
+                  > "$OBS_DIR/$safe_alias.manifest.json.tmp" 2> "$error_path"; then
+                if python controller/scripts/release_manifest.py digest \
+                    "$OBS_DIR/$safe_alias.manifest.json.tmp" > "$OBS_DIR/$safe_alias.digest.tmp" \
+                    2>> "$error_path" && \
+                    docker buildx imagetools inspect "$IMAGE:$alias" --format '{{json .Image}}' \
+                    > "$OBS_DIR/$safe_alias.image.json.tmp" 2>> "$error_path"; then
+                  mv -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.digest"
+                  mv -- "$OBS_DIR/$safe_alias.manifest.json.tmp" "$OBS_DIR/$safe_alias.manifest.json"
+                  mv -- "$OBS_DIR/$safe_alias.image.json.tmp" "$OBS_DIR/$safe_alias.image.json"
+                  return 0
+                fi
+                saw_ambiguous_failure=true
+              elif ! python controller/scripts/release_registry.py classify-absence "$IMAGE:$alias" "$error_path"; then
+                saw_ambiguous_failure=true
+              fi
+              rm -f -- "$OBS_DIR/$safe_alias.digest.tmp" "$OBS_DIR/$safe_alias.manifest.json.tmp" \
+                "$OBS_DIR/$safe_alias.image.json.tmp"
+              if [ "$INSPECT_ATTEMPT" -lt "$RELEASE_ALIAS_INSPECT_ATTEMPTS" ]; then
+                sleep "$RELEASE_ALIAS_INSPECT_RETRY_SECONDS"
+              fi
+            done
+            if [ "$saw_ambiguous_failure" = false ]; then
+              return 0
+            fi
+            echo "::error title=GHCR alias ${alias}::alias inspection failed without authoritative not-found " \
+                 "after ${RELEASE_ALIAS_INSPECT_ATTEMPTS} attempts; no alias write was attempted" >&2
+            cat "$OBS_DIR/$safe_alias.$RELEASE_ALIAS_INSPECT_ATTEMPTS.stderr" >&2
+            return 1
+          }
+          for ALIAS in "v$VERSION" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
+            SAFE_ALIAS=${ALIAS//./_}
+            inspect_alias "$ALIAS" "$SAFE_ALIAS"
+          done
+          python - "$VERSION" "$SOURCE_DIGEST" "$OBS_DIR" > plan.json.tmp <<'PY'
+          import dataclasses
+          import json
+          import pathlib
+          import sys
+
+          sys.path.insert(0, str(pathlib.Path("controller").resolve()))
+          from scripts.release_policy import AliasState, parse_release_tag, plan_alias_updates, required_aliases
+
+          version = parse_release_tag("v" + sys.argv[1])
+          root = pathlib.Path(sys.argv[3])
+          observed = {}
+          for alias in required_aliases(version):
+              stem = alias.replace(".", "_")
+              digest_path = root / f"{stem}.digest"
+              if not digest_path.exists():
+                  observed[alias] = None
+                  continue
+              image = json.loads((root / f"{stem}.image.json").read_text(encoding="utf-8"))
+              labels = image.get("config", {}).get("Labels", {}) or {}
+              digest = digest_path.read_text(encoding="utf-8").strip()
+              if not digest.startswith("sha256:") or len(digest) != 71:
+                  raise SystemExit(f"invalid registry digest for {alias}: {digest}")
+              observed[alias] = AliasState(digest, labels.get("org.opencontainers.image.version"))
+          plan = plan_alias_updates(version, sys.argv[2], observed, dry_run=False)
+          summary = {
+              "source_digest": sys.argv[2],
+              "observed": {key: None if value is None else dataclasses.asdict(value)
+                           for key, value in observed.items()},
+              "plan": [dataclasses.asdict(item) for item in plan],
+          }
+          print(json.dumps(summary, separators=(",", ":")))
+          PY
+          mv -- plan.json.tmp plan.json
+          python - plan.json > executable.tsv <<'PY'
+          import json
+          import sys
+
+          plan = json.load(open(sys.argv[1], encoding="utf-8"))["plan"]
+          conflicts = [item for item in plan if item["decision"] == "fail-conflict"]
+          if conflicts:
+              raise SystemExit("release alias conflict: " + json.dumps(conflicts, separators=(",", ":")))
+          for item in plan:
+              if item["decision"] in {"skip-newer", "no-op"}:
+                  print(f"::notice title=GHCR alias {item['alias']}::{item['reason']}", file=sys.stderr)
+              if item["execute"]:
+                  print(f"{item['alias']}\t{item['decision']}")
+          PY
+          printf '[]' > alias-progress.json.tmp
+          mv -- alias-progress.json.tmp alias-progress.json
+          record_progress() {
+            python - alias-progress.json plan.json "$1" "$2" "$3" <<'PY'
+          import json
+          import os
+          import sys
+          import tempfile
+
+          path, plan_path, alias, phase, final_digest = sys.argv[1:]
+          progress = json.load(open(path, encoding="utf-8"))
+          plan_payload = json.load(open(plan_path, encoding="utf-8"))
+          planned = next(item for item in plan_payload["plan"] if item["alias"] == alias)
+          observed = plan_payload["observed"].get(alias)
+          row = next((item for item in progress if item["alias"] == alias), None)
+          if row is None:
+              row = {
+                  "alias": alias,
+                  "decision": planned["decision"],
+                  "reason": planned["reason"],
+                  "previous_digest": None if observed is None else observed["digest"],
+                  "previous_version": None if observed is None else observed["version"],
+                  "attempted": False,
+                  "write_succeeded": False,
+                  "verified": False,
+                  "final_digest": None,
+              }
+              progress.append(row)
+          if phase == "attempted":
+              row["attempted"] = True
+          elif phase == "write-succeeded":
+              row["attempted"] = True
+              row["write_succeeded"] = True
+          elif phase == "verified":
+              row["attempted"] = True
+              row["write_succeeded"] = True
+              row["verified"] = True
+              row["final_digest"] = final_digest
+          else:
+              raise SystemExit(f"unknown promotion progress phase: {phase}")
+          fd, temp = tempfile.mkstemp(prefix=".alias-progress.", dir=".")
+          try:
+              with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                  json.dump(progress, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temp, path)
+          finally:
+              if os.path.exists(temp):
+                  os.unlink(temp)
+          PY
+          }
+          while IFS=$'\t' read -r ALIAS DECISION; do
+            case "$ALIAS" in "v$VERSION"|"$VERSION"|"${VERSION%.*}"|"${VERSION%%.*}"|latest) ;; *) exit 2 ;; esac
+            case "$DECISION" in create|advance) ;; *) exit 2 ;; esac
+            record_progress "$ALIAS" attempted ""
+            docker buildx imagetools create --prefer-index=false --tag "$IMAGE:$ALIAS" \
+              "$IMAGE@$SOURCE_DIGEST"
+            record_progress "$ALIAS" write-succeeded ""
+            SAFE_ALIAS=${ALIAS//./_}
+            docker buildx imagetools inspect "$IMAGE:$ALIAS" --format '{{json .Manifest}}' \
+              > "$OBS_DIR/$SAFE_ALIAS.final-manifest.json"
+            FINAL_DIGEST=$(python controller/scripts/release_manifest.py digest \
+              "$OBS_DIR/$SAFE_ALIAS.final-manifest.json")
+            test "$FINAL_DIGEST" = "$SOURCE_DIGEST"
+            record_progress "$ALIAS" verified "$FINAL_DIGEST"
+          done < executable.tsv
+      - id: promote-result
+        if: ${{ always() }}
+        env:
+          PROMOTE_OUTCOME: ${{ steps.promote.outcome }}
+        run: |
+          set -euo pipefail
+          python - "$PROMOTE_OUTCOME" <<'PY' > alias-summary.json.tmp
+          import json
+          import pathlib
+          import sys
+
+          def load(path, expected_type, fallback):
+              file = pathlib.Path(path)
+              try:
+                  payload = json.loads(file.read_text(encoding="utf-8"))
+              except (OSError, ValueError):
+                  return fallback, False
+              return (payload, True) if isinstance(payload, expected_type) else (fallback, False)
+
+          plan, plan_available = load("plan.json", dict, {})
+          progress, progress_available = load("alias-progress.json", list, [])
+          print(json.dumps({"step_outcome": sys.argv[1], "plan_available": plan_available, "plan": plan,
+                            "alias_progress_available": progress_available,
+                            "alias_progress": progress}, separators=(",", ":")))
+          PY
+          mv -- alias-summary.json.tmp alias-summary.json
+          printf 'alias_summary_json=%s\n' "$(cat alias-summary.json)" >> "$GITHUB_OUTPUT"
+
+  publish-pypi:
+    needs: [validate-release, wait-for-release-gates, build-package, promote-ghcr]
+    if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+    outputs:
+      publish_summary_json: ${{ steps.result.outputs.publish_summary_json }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.build-package.outputs.artifact_name }}
+          path: dist/
+      - id: existing
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            "https://pypi.org/pypi/vntyper/${VERSION}/json")
+          case "$STATUS" in
+            200) EXISTS=true ;;
+            404) EXISTS=false ;;
+            *) echo "PyPI lookup returned HTTP $STATUS" >&2; exit 1 ;;
+          esac
+          printf 'value=%s\n' "$EXISTS" >> "$GITHUB_OUTPUT"
+      # v1.14.2; verified 2026-08-10 against upstream release/v1
+      - id: publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        with:
+          packages-dir: dist/
+          skip-existing: "true"
+      - id: result
+        if: ${{ always() }}
+        env:
+          EXISTED_BEFORE: ${{ steps.existing.outputs.value }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        run: |
+          set -euo pipefail
+          python - "$EXISTED_BEFORE" "$PUBLISH_OUTCOME" <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import sys
+
+          existed = sys.argv[1] == "true"
+          if existed and sys.argv[2] == "success":
+              outcome = "already-existed-skip"
+          elif sys.argv[2] == "success":
+              outcome = "published"
+          else:
+              outcome = "failed"
+          payload = {"result": outcome, "step_outcome": sys.argv[2], "existed_before": existed}
+          print("publish_summary_json=" + json.dumps(payload, separators=(",", ":")))
+          PY
+
+  release-summary:
+    needs: [validate-release, wait-for-release-gates, build-package, promote-ghcr, publish-pypi]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - id: summarize
+        env:
+          VALIDATE_RESULT: ${{ needs.validate-release.result }}
+          VALIDATE_JSON: ${{ needs.validate-release.outputs.summary_json }}
+          GATES_RESULT: ${{ needs.wait-for-release-gates.result }}
+          PREFLIGHT_JSON: ${{ needs.wait-for-release-gates.outputs.preflight_summary_json }}
+          CHECKS_JSON: ${{ needs.wait-for-release-gates.outputs.check_summary_json }}
+          EVIDENCE_JSON: ${{ needs.wait-for-release-gates.outputs.evidence_summary_json }}
+          BUILD_RESULT: ${{ needs.build-package.result }}
+          PACKAGE_JSON: ${{ needs.build-package.outputs.package_summary_json }}
+          PROMOTE_RESULT: ${{ needs.promote-ghcr.result }}
+          ALIASES_JSON: ${{ needs.promote-ghcr.outputs.alias_summary_json }}
+          DRY_ALIASES_JSON: ${{ needs.wait-for-release-gates.outputs.dry_run_alias_summary_json }}
+          PUBLISH_RESULT: ${{ needs.publish-pypi.result }}
+          PUBLISH_JSON: ${{ needs.publish-pypi.outputs.publish_summary_json }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+
+          sections = (
+              ("Validation", "VALIDATE_RESULT", "VALIDATE_JSON"),
+              ("Docker evidence preflight", "GATES_RESULT", "PREFLIGHT_JSON"),
+              ("Exact-SHA checks", "GATES_RESULT", "CHECKS_JSON"),
+              ("Docker evidence", "GATES_RESULT", "EVIDENCE_JSON"),
+              ("Package", "BUILD_RESULT", "PACKAGE_JSON"),
+              ("GHCR aliases", "PROMOTE_RESULT", "ALIASES_JSON"),
+              ("Dry-run aliases", "GATES_RESULT", "DRY_ALIASES_JSON"),
+              ("PyPI", "PUBLISH_RESULT", "PUBLISH_JSON"),
+          )
+          print("# Release summary")
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              print("\n> Dry run performed no production writes.")
+          for title, result_key, payload_key in sections:
+              result = os.environ.get(result_key, "not reached") or "not reached"
+              raw = os.environ.get(payload_key, "")
+              print(f"\n## {title}\n\nJob result: `{result}`")
+              if not raw:
+                  print("\nStructured output: unavailable (job was skipped, failed before output, or was not reached).")
+                  continue
+              try:
+                  payload = json.loads(raw)
+              except json.JSONDecodeError as exc:
+                  print(f"\nStructured output: invalid JSON ({exc.msg}); raw value intentionally not emitted.")
+                  continue
+              print("\n```json")
+              print(json.dumps(payload, indent=2, sort_keys=True))
+              print("```")
+          PY

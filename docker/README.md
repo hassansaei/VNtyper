@@ -48,18 +48,21 @@ with an explicit "base image does not exist" error rather than silently using a 
 
 ### **Pull Pre-built Image**
 
-```bash
-# From Docker Hub
-docker pull saei/vntyper:latest
+The GHCR `main` image is rolling and unreleased. Until the first gated release, it is
+the only published image documented for current use. Stable aliases (`latest`,
+`vX.Y.Z`, and `X.Y.Z`) become runnable only after that release gate succeeds. The
+legacy Docker Hub image is frozen and unsupported; it is retained only as historical
+prose, not as an installation source.
 
-# From GitHub Container Registry
-docker pull ghcr.io/hassansaei/vntyper:latest
+```bash
+# Rolling, unreleased image from GitHub Container Registry
+docker pull ghcr.io/hassansaei/vntyper:main
 ```
 
 ### **Generate Apptainer Image**
 
 ```bash
-apptainer pull docker://saei/vntyper:latest
+apptainer pull docker://ghcr.io/hassansaei/vntyper:main
 ```
 
 ## **Testing the Build**
@@ -95,13 +98,13 @@ pytest tests/docker/test_docker_pipeline.py::test_docker_container_health -v
 
 ```bash
 # Check VNtyper version
-docker run --rm vntyper:latest vntyper --version
+docker run --rm ghcr.io/hassansaei/vntyper:main vntyper --version
 
 # Check Java runtime
-docker run --rm vntyper:latest java -version
+docker run --rm ghcr.io/hassansaei/vntyper:main java -version
 
 # Check bioinformatics tools
-docker run --rm vntyper:latest samtools --version
+docker run --rm ghcr.io/hassansaei/vntyper:main samtools --version
 ```
 
 ## **Configuration**
@@ -139,7 +142,7 @@ Run docker interactively:
    docker run -w /opt/vntyper --rm \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:latest \
+    ghcr.io/hassansaei/vntyper:main \
     vntyper pipeline --bam /local/input/folder/filename.bam \
     -o /local/output/folder/filename/
 ```
@@ -164,7 +167,7 @@ Start the FastAPI server by running the container:
 docker run -d -p 8000:8000 \
     -v /local/input/folder/:/opt/vntyper/input \
     -v /local/output/folder/:/opt/vntyper/output \
-    vntyper:latest
+    ghcr.io/hassansaei/vntyper:main
 ```
 
 #### **2. Submit a Job via API**

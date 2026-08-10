@@ -891,12 +891,16 @@
         "check_igv_report": false
       },
       {
-        "test_name": "example_b178_hg19_single_end_default",
+        "test_name": "example_b178_hg19_single_end_keep",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
         "cli_options": [
           "--keep-intermediates"
         ],
+        "expected_present": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "expected_archive": false,
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
             "value": 416,
@@ -913,6 +917,88 @@
           "Confidence": "High_Precision*"
         },
         "check_igv_report": false
+      },
+      {
+        "test_name": "example_b178_hg19_single_end_delete",
+        "fixture_name": "example_b178_hg19_single_end",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--delete-intermediates"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false,
+        "expected_absent": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "expected_archive": false
+      },
+      {
+        "test_name": "example_b178_hg19_single_end_delete_overrides_keep",
+        "fixture_name": "example_b178_hg19_single_end",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--keep-intermediates",
+          "--delete-intermediates"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false,
+        "expected_absent": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "expected_archive": false
+      },
+      {
+        "test_name": "example_b178_hg19_single_end_archive",
+        "fixture_name": "example_b178_hg19_single_end",
+        "reference_assembly": "hg19",
+        "cli_options": [
+          "--archive-results"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 6111,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.0677466863033873,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "check_igv_report": false,
+        "expected_archive": true
       }
     ],
     "advntr_tests": [
@@ -981,6 +1067,16 @@
       {
         "test_name": "example_6449_hg19_subset_single_fastq",
         "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
+        "reference_assembly": "hg19",
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv"
+        ]
+      },
+      {
+        "test_name": "example_b178_hg19_subset_paired_fastq_no_shark",
+        "fastq1": "tests/data/example_b178_hg19_subset_R1.fastq.gz",
+        "fastq2": "tests/data/example_b178_hg19_subset_R2.fastq.gz",
         "reference_assembly": "hg19",
         "expected_files": [
           "summary_report.html",

@@ -303,14 +303,12 @@ def test_get_tool_version_returns_unknown_and_logs_on_malformed_tool_output(capl
     assert _logged(caplog.records, "Failed to parse version")
 
 
-def test_get_tool_version_returns_unknown_and_logs_on_unexpected_error(caplog):
-    """utils.py:197-199 -- the catch-all: an unbalanced quote in ``command`` makes
-    shlex.split raise ValueError before a process is ever started."""
+def test_tool_version_unexpected_failure_returns_unknown(caplog):
+    """utils.py:197-199 -- an unexpected subprocess failure remains observable."""
     caplog.set_level(logging.ERROR, logger=UTILS_LOGGER)
-    with patch("vntyper.scripts.utils.subprocess.run") as mock_run:
-        assert get_tool_version('fastp "unterminated', "") == "unknown"
-    mock_run.assert_not_called()
-    assert _logged(caplog.records, "Failed to get version for")
+    with patch("vntyper.scripts.utils.subprocess.run", side_effect=OSError("exec failed")):
+        assert get_tool_version("fastp", "--version") == "unknown"
+    assert _logged(caplog.records, "Failed to get version for fastp: exec failed")
 
 
 # ---------------------------------------------------------------------------

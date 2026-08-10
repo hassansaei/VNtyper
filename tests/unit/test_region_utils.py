@@ -5,11 +5,13 @@ Tests region string construction and chromosome-name freshness.
 """
 
 import logging
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from vntyper.scripts import region_utils
 from vntyper.scripts.region_utils import (
     build_region_string,
     get_region_string,
@@ -346,9 +348,17 @@ class TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain:
             "chr1:155184000-155194000"
         )
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(subprocess.CalledProcessError(1, "samtools"), id="called_process_error"),
+            pytest.param(FileNotFoundError("samtools"), id="missing_binary"),
+            pytest.param(OSError("permission denied"), id="os_error"),
+        ],
+    )
     @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
     @patch("vntyper.scripts.region_utils.get_region_string")
-    def test_an_unreadable_header_keeps_the_previous_behaviour(self, mock_get_region, mock_header):
+    def test_an_unreadable_header_keeps_the_previous_behaviour(self, mock_get_region, mock_header, error, caplog):
         """
         When the header cannot be read there is nothing to check against.
 
@@ -357,13 +367,21 @@ class TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain:
         the inability to verify is logged.
         """
         mock_get_region.side_effect = ValueError("Chromosome 1 not found in BAM file")
-        mock_header.side_effect = OSError("samtools not found")
+        mock_header.side_effect = error
 
         config = {"bam_processing": {"bam_region_hg38": "chr1:155184000-155194000"}}
 
-        result = get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config)
+        with caplog.at_level(logging.WARNING, logger="vntyper.scripts.region_utils"):
+            assert region_utils._bam_contig_names("sample.bam", config) == []
+            result = get_region_string_with_fallback("sample.bam", "hg38", "bam_region", config)
 
         assert result == "chr1:155184000-155194000"
+        assert mock_header.call_count == 2
+        records = [record for record in caplog.records if record.name == "vntyper.scripts.region_utils"]
+        header_read_records = [record for record in records if "Could not read the header" in record.message]
+        assert [record.levelno for record in header_read_records] == [logging.WARNING, logging.WARNING]
+        assert records[-1].levelno == logging.WARNING
+        assert "Cannot verify" in records[-1].message
 
     @patch("vntyper.scripts.fastq_bam_processing.extract_bam_header")
     @patch("vntyper.scripts.region_utils.get_region_string")

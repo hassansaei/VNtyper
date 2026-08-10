@@ -912,3 +912,53 @@ def test_an_export_written_after_the_report_carries_no_internal_columns(tmp_path
 
     assert kestrel_header == "Motif,Confidence,Flag,Sample"
     assert advntr_header == "VID,Flag,Sample"
+
+
+def test_image_encoding_failure_returns_empty_string(caplog, monkeypatch) -> None:
+    """An unreadable optional image becomes the report's empty image fragment."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_summary")
+
+    def _blocked_open(*args, **kwargs):
+        raise OSError("blocked")
+
+    monkeypatch.setattr(cohort_summary, "open", _blocked_open, raising=False)
+
+    assert cohort_summary.encode_image_to_base64("missing.png") == ""
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_summary"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert "Failed to encode image missing.png: blocked" in caplog.text
+
+
+def test_donut_failure_returns_empty_string(tmp_path, caplog, monkeypatch) -> None:
+    """A plotting failure neither emits an image nor claims a chart fragment."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_summary")
+    plot_path = tmp_path / "failed-chart.png"
+
+    def _blocked_pie(*args, **kwargs):
+        raise ValueError("blocked")
+
+    monkeypatch.setattr(cohort_summary.plt.Axes, "pie", _blocked_pie)
+
+    assert cohort_summary.generate_donut_chart([1], ["Positive"], 1, "Cohort", ["green"], plot_path=plot_path) == ""
+    assert not plot_path.exists()
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_summary"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert "Error generating donut chart: blocked" in caplog.text
+
+
+def test_report_config_failure_returns_empty_mapping(caplog, monkeypatch) -> None:
+    """Invalid report configuration uses the cohort's established empty mapping."""
+    caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_summary")
+
+    def _blocked_load(*args, **kwargs):
+        raise json.JSONDecodeError("blocked", "", 0)
+
+    monkeypatch.setattr(cohort_summary.json, "load", _blocked_load)
+
+    assert cohort_summary.load_report_config() == {}
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_summary"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert "Failed to load report config: blocked" in caplog.text

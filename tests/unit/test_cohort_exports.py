@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from vntyper.scripts import cohort_exports
 from vntyper.scripts.cohort_exports import (
     parse_output_formats,
     write_cohort_frame,
@@ -177,11 +179,21 @@ def test_an_empty_mapping_still_writes_the_header(tmp_path) -> None:
     assert (tmp_path / "pseudonymization_table.tsv").read_text(encoding="utf-8") == "Pseudonym\tOriginal\n"
 
 
-def test_a_table_that_cannot_be_written_is_reported_rather_than_raised(tmp_path, caplog) -> None:
-    """This runs after the report is already on disk, so failing here must not turn a
-    completed cohort into a traceback."""
+def test_pseudonym_table_write_failure_is_logged(tmp_path, caplog, monkeypatch) -> None:
+    """A failed optional export remains observable without claiming its output."""
     caplog.set_level(logging.ERROR, logger="vntyper.scripts.cohort_exports")
 
-    write_pseudonymization_table(Path(tmp_path) / "no-such-directory", {"a": "b"})
+    def _blocked_open(*args, **kwargs):
+        raise OSError("blocked")
 
-    assert "Failed to write pseudonymization table" in caplog.text
+    monkeypatch.setattr(cohort_exports, "open", _blocked_open, raising=False)
+
+    writer: Callable[[str | Path, dict[str, str]], object] = write_pseudonymization_table
+    result = writer(tmp_path, {"a": "b"})
+
+    assert result is None
+    assert not (tmp_path / "pseudonymization_table.tsv").exists()
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.cohort_exports"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert "Failed to write pseudonymization table: blocked" in caplog.text

@@ -16,11 +16,6 @@ on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
-    inputs:
-      full:
-        description: 'Run the full Docker suite including the slow adVNTR tests'
-        type: boolean
-        default: false
 
 concurrency:
   # A group was previously absent entirely, so two pushes inside the ~30 min build
@@ -38,7 +33,7 @@ concurrency:
   # idempotent - docker-base.yml skips immediately when the content hash is already
   # published. Cancellation was worth it when every build was half an hour; it is not
   # worth discarding a 25-minute base build to save 3 minutes of runner time.
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: docker-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: false
 
 permissions: {}
@@ -55,7 +50,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      image: ${{ steps.filter.outputs.image }}
+      image: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.image == 'true' }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -195,11 +190,29 @@ jobs:
         run: |
           set -euo pipefail
           REF="${{ steps.img.outputs.base }}:${{ steps.hash.outputs.tag }}"
-          if ! DIGEST=$(docker buildx imagetools inspect "$REF" --format '{{.Manifest.Digest}}' 2>/dev/null); then
+          if ! docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' \
+              > base-manifest.json.tmp 2>/dev/null; then
             echo "::error::Base image $REF is missing even though the build-base job did not fail. Check that job's logs, or re-run 'Docker Base Image' with force=true."
             exit 1
           fi
+          if ! DIGEST=$(python scripts/release_manifest.py digest base-manifest.json.tmp); then
+            echo "::error::Base image $REF returned an invalid manifest descriptor."
+            exit 1
+          fi
+          mv -- base-manifest.json.tmp base-manifest.json
           echo "ref=${{ steps.img.outputs.base }}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Read package and image identity
+        id: package
+        run: |
+          set -euo pipefail
+          VERSION=$(python -c "import runpy; print(runpy.run_path('vntyper/version.py')['__version__'])")
+          CREATED=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          {
+            printf 'created=%s\n' "$CREATED"
+            printf 'revision=%s\n' "$GITHUB_SHA"
+            printf 'version=%s\n' "$VERSION"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/metadata-action@v6
         id: meta
@@ -207,7 +220,6 @@ jobs:
           images: ${{ steps.img.outputs.app }}
           tags: |
             type=ref,event=branch
-            type=ref,event=tag
             type=ref,event=pr
             type=sha
 
@@ -222,7 +234,10 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ steps.base.outputs.ref }}
           tags: vntyper:test
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.package.outputs.created }}
+            org.opencontainers.image.revision=${{ steps.package.outputs.revision }}
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
           load: true
           cache-from: |
             type=registry,ref=${{ steps.img.outputs.app }}:buildcache-${{ github.ref_name }}
@@ -357,17 +372,19 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             make test-docker-quick
-          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.full }}" = "true" ]; then
+          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             make test-docker
           else
             make test-docker-fast
           fi
 
-      # Publish only now, once the image has actually passed its tests. The previous
-      # workflow pushed to ghcr before any test ran. PRs never publish: a fork PR's
-      # GITHUB_TOKEN is read-only, and a tag per PR accumulated multi-GB images forever.
+      # Publish only from an exact main push, once the image has actually passed its
+      # tests. Scheduled and manual runs still exercise the full validation tier, but
+      # cannot overwrite the push-bound main/short-SHA tags without matching evidence.
+      # PRs never publish: a fork PR's GITHUB_TOKEN is read-only, and a tag per PR
+      # accumulated multi-GB images forever.
       - name: Push image
-        if: github.event_name != 'pull_request'
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
           set -euo pipefail
           printf '%s\n' "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do
@@ -376,6 +393,82 @@ jobs:
             docker tag vntyper:test "$tag"
             docker push "$tag"
           done
+
+      - id: registry-digest
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          IMAGE: ghcr.io/hassansaei/vntyper
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA=${GITHUB_SHA:0:7}
+          for ATTEMPT in 1 2 3 4 5 6; do
+            rm -f -- pushed-manifest.json.tmp
+            if docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" \
+                --format '{{json .Manifest}}' > pushed-manifest.json.tmp && \
+                DIGEST=$(python scripts/release_manifest.py digest pushed-manifest.json.tmp); then
+              mv -- pushed-manifest.json.tmp pushed-manifest.json
+              break
+            fi
+            if [ "$ATTEMPT" -eq 6 ]; then echo "pushed short-SHA manifest was not observable" >&2; exit 1; fi
+            sleep 5
+          done
+          docker buildx imagetools inspect "$IMAGE:sha-$SHORT_SHA" --format '{{json .Image}}' > pushed-image.json
+          python - "$GITHUB_SHA" "$VERSION" pushed-image.json <<'PY'
+          import json, sys
+          image = json.load(open(sys.argv[3], encoding="utf-8"))
+          labels = image.get("config", {}).get("Labels", {}) or {}
+          if labels.get("org.opencontainers.image.revision") != sys.argv[1]:
+              raise SystemExit("pushed image revision label mismatch")
+          if labels.get("org.opencontainers.image.version") != sys.argv[2]:
+              raise SystemExit("pushed image version label mismatch")
+          PY
+          printf 'value=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - id: release-evidence
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          DIGEST: ${{ steps.registry-digest.outputs.value }}
+          REVISION: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import tempfile
+
+          sha = os.environ["REVISION"]
+          digest = os.environ["DIGEST"]
+          if re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+              raise SystemExit("invalid full revision")
+          if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+              raise SystemExit("invalid pushed image digest")
+          payload = {"contract_version": 1, "sha": sha, "digest": digest,
+                     "run_id": int(os.environ["RUN_ID"]), "run_attempt": int(os.environ["RUN_ATTEMPT"]),
+                     "revision": sha, "version": os.environ["VERSION"]}
+          descriptor, temporary = tempfile.mkstemp(prefix=".docker-release-evidence.", dir=".")
+          try:
+              with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                  json.dump(payload, handle, separators=(",", ":"))
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.replace(temporary, "docker-release-evidence.json")
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
+          PY
+
+      - uses: actions/upload-artifact@v5
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        with:
+          name: docker-release-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: docker-release-evidence.json
+          if-no-files-found: error
+          retention-days: "90"
 
   docker-success:
     name: Docker Success

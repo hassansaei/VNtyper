@@ -84,11 +84,15 @@ def test_an_unreadable_header_warns_and_yields_none(error: Exception, caplog) ->
     """
     with (
         mock.patch.object(pipeline_guards, "extract_bam_header", side_effect=error),
-        caplog.at_level(logging.WARNING),
+        caplog.at_level(logging.WARNING, logger="vntyper.scripts.pipeline_guards"),
     ):
         assert pipeline_guards.read_alignment_header("in.cram", {}) is None
+        verdict = pipeline_guards.enforce_declared_assembly("hg19", None)
 
-    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    assert verdict.status == STATUS_UNDETERMINED
+    records = [record for record in caplog.records if record.name == "vntyper.scripts.pipeline_guards"]
+    assert [record.levelno for record in records] == [logging.WARNING, logging.WARNING]
+    assert "Could not read the alignment header" in records[0].message
 
 
 # --------------------------------------------------------------------------------------

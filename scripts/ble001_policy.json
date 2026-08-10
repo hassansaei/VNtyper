@@ -1,0 +1,946 @@
+{
+  "reviewed_ruff_version": "ruff 0.14.3",
+  "expected_counts": {
+    "normal": 103,
+    "ignore_noqa": 108,
+    "identities": 79,
+    "categories": {
+      "A": 30,
+      "B": 16,
+      "C": 33
+    }
+  },
+  "handlers": [
+    {
+      "path": "docker/app/archive_delivery.py",
+      "symbol": "OwnedFileResponse.__call__",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "docker/app/archive_delivery.py::OwnedFileResponse.__call__: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/archive_delivery.py",
+      "symbol": "_close_snapshot_directory",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "A",
+      "rationale": "docker/app/archive_delivery.py::_close_snapshot_directory: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/archive_delivery.py",
+      "symbol": "snapshot_owned_archives",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "docker/app/archive_delivery.py::snapshot_owned_archives: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/cohorts.py",
+      "symbol": "_discard_partial_cohort",
+      "normal_count": 0,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "docker/app/cohorts.py::_discard_partial_cohort: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/tasks.py",
+      "symbol": "delete_old_results",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "C",
+      "rationale": "docker/app/tasks.py::delete_old_results: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/web/test_result_expiry.py::test_cleanup_continues_after_one_delete_error and failure remains observable via ERROR log"
+    },
+    {
+      "path": "docker/app/tasks.py",
+      "symbol": "remove_job_input_files",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "docker/app/tasks.py::remove_job_input_files: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/web/test_tasks.py::test_input_cleanup_logs_one_error_and_attempts_every_owned_path and failure remains observable via ERROR log"
+    },
+    {
+      "path": "docker/app/tasks.py",
+      "symbol": "run_cohort_analysis_job",
+      "normal_count": 7,
+      "all_count": 7,
+      "category": "A",
+      "rationale": "docker/app/tasks.py::run_cohort_analysis_job: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "docker/app/tasks.py",
+      "symbol": "run_vntyper_job",
+      "normal_count": 7,
+      "all_count": 7,
+      "category": "A",
+      "rationale": "docker/app/tasks.py::run_vntyper_job: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "scripts/coverage_gate.py",
+      "symbol": "read_total",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "scripts/coverage_gate.py::read_total: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_coverage_gate.py::test_coverage_read_failure_returns_none_and_fails_gate and failure remains observable via non-zero exit status and error output"
+    },
+    {
+      "path": "scripts/download_test_data.py",
+      "symbol": "main",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "scripts/download_test_data.py::main: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "scripts/golden_cohort/launcher.py",
+      "symbol": "launch",
+      "normal_count": 0,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "scripts/golden_cohort/launcher.py::launch: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "scripts/golden_cohort/launcher.py",
+      "symbol": "resolve",
+      "normal_count": 0,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "scripts/golden_cohort/launcher.py::resolve: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure and failure remains observable via structured error result"
+    },
+    {
+      "path": "scripts/golden_cohort/runner.py",
+      "symbol": "_run_one",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "scripts/golden_cohort/runner.py::_run_one: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "tests/benchmark/benchamrk_downsample.py",
+      "symbol": "parse_pipeline_log",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/benchamrk_downsample.py::parse_pipeline_log: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/benchamrk_downsample.py",
+      "symbol": "summarize_advntr_results",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/benchamrk_downsample.py::summarize_advntr_results: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/benchamrk_downsample.py",
+      "symbol": "summarize_vntr_results",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/benchamrk_downsample.py::summarize_vntr_results: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/benchmark_vntyper.py",
+      "symbol": "main",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/benchmark_vntyper.py::main: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/benchmark_vntyper.py",
+      "symbol": "summarize_vntyper_results",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/benchmark_vntyper.py::summarize_vntyper_results: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/plot_vntyper_summary.py",
+      "symbol": "get_advntr_call",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/plot_vntyper_summary.py::get_advntr_call: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/plot_vntyper_summary.py",
+      "symbol": "main",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/plot_vntyper_summary.py::main: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/benchmark/plot_vntyper_summary.py",
+      "symbol": "parse_advntr_result",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/benchmark/plot_vntyper_summary.py::parse_advntr_result: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/docker/image_probe.py",
+      "symbol": "_run",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/docker/image_probe.py::_run: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/support/data_utils.py",
+      "symbol": "ensure_test_data_downloaded",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/support/data_utils.py::ensure_test_data_downloaded: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/unit/test_pipeline_guards.py",
+      "symbol": "test_the_pure_verdict_function_still_has_no_policy",
+      "normal_count": 0,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/unit/test_pipeline_guards.py::test_the_pure_verdict_function_still_has_no_policy: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/unit/test_preflight_input_reads.py",
+      "symbol": "_bed_read_worker",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/unit/test_preflight_input_reads.py::_bed_read_worker: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/unit/test_preflight_input_reads.py",
+      "symbol": "_reference_reason_worker",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/unit/test_preflight_input_reads.py::_reference_reason_worker: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/unit/test_ref_path_is_pinned.py",
+      "symbol": "test_an_invalid_scope_does_not_block_the_next_thread.valid_scope",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/unit/test_ref_path_is_pinned.py::test_an_invalid_scope_does_not_block_the_next_thread.valid_scope: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/unit/test_ref_path_is_pinned.py",
+      "symbol": "test_overlapping_threads_cannot_reopen_ambient_reference_resolution.first_scope",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/unit/test_ref_path_is_pinned.py::test_overlapping_threads_cannot_reopen_ambient_reference_resolution.first_scope: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "tests/unit/test_ref_path_is_pinned.py",
+      "symbol": "test_overlapping_threads_cannot_reopen_ambient_reference_resolution.second_scope",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "B",
+      "rationale": "tests/unit/test_ref_path_is_pinned.py::test_overlapping_threads_cannot_reopen_ambient_reference_resolution.second_scope: test/benchmark-only audit candidate; production behavior is unaffected"
+    },
+    {
+      "path": "vntyper/cli.py",
+      "symbol": "load_config",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/cli.py::load_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/cli.py",
+      "symbol": "main",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/cli.py::main: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/modules/advntr/advntr_genotyping.py",
+      "symbol": "process_advntr_output",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "C",
+      "rationale": "vntyper/modules/advntr/advntr_genotyping.py::process_advntr_output: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none and failure remains observable via ERROR log and absent result artifact"
+    },
+    {
+      "path": "vntyper/modules/advntr/advntr_genotyping.py",
+      "symbol": "run_advntr",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "vntyper/modules/advntr/advntr_genotyping.py::run_advntr: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/alignment_binding.py",
+      "symbol": "AlignmentBinding.__del__",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/alignment_binding.py::AlignmentBinding.__del__: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/alignment_contract.py",
+      "symbol": "AlignmentPlan.close",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "vntyper/scripts/alignment_contract.py::AlignmentPlan.close: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/alignment_index_binding.py",
+      "symbol": "AlignmentIndexBinding.__del__",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/alignment_index_binding.py::AlignmentIndexBinding.__del__: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/archive_safety.py",
+      "symbol": "create_safe_archive",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "A",
+      "rationale": "vntyper/scripts/archive_safety.py::create_safe_archive: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/cohort_exports.py",
+      "symbol": "write_pseudonymization_table",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_exports.py::write_pseudonymization_table: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_exports.py::test_pseudonym_table_write_failure_is_logged and failure remains observable via ERROR log and absent output"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "_identity_from_summary",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_inputs.py::_identity_from_summary: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_identity_read_failure_uses_directory_fallback and failure remains observable via WARNING log and fallback identity"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "cleanup_temp_dirs",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_inputs.py::cleanup_temp_dirs: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_cleanup_attempts_all_directories_after_failure and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "discover_sample_directories",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_inputs.py::discover_sample_directories: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_bad_archive_is_skipped_and_other_inputs_continue and failure remains observable via ERROR log and continued discovery"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "load_pipeline_summary_for_sample",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_inputs.py::load_pipeline_summary_for_sample: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_inputs.py::test_summary_read_failure_returns_three_empty_results and failure remains observable via ERROR log and structured empty result"
+    },
+    {
+      "path": "vntyper/scripts/cohort_summary.py",
+      "symbol": "encode_image_to_base64",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_summary.py::encode_image_to_base64: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/cohort_summary.py",
+      "symbol": "generate_donut_chart",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_summary.py::generate_donut_chart: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string and failure remains observable via ERROR log and absent output"
+    },
+    {
+      "path": "vntyper/scripts/cohort_summary.py",
+      "symbol": "load_report_config",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/cohort_summary.py::load_report_config: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_cohort_summary_oracle.py::test_report_config_failure_returns_empty_mapping and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/flagging.py",
+      "symbol": "evaluate_condition",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/flagging.py::evaluate_condition: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_flagging.py::TestEvaluateConditionErrorPath::test_error_path_is_logged_at_error_level and failure remains observable via WARNING or ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/flagging.py",
+      "symbol": "regex_match",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/flagging.py::regex_match: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_flagging.py::test_invalid_regex_is_false_and_observable and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "build_kestrel_frames",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/generate_report.py::build_kestrel_frames: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_kestrel_conversion_failure_preserves_both_frames and failure remains observable via WARNING log and retained frames"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "extract_igv_content",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/generate_report.py::extract_igv_content: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_igv_extraction_failure_returns_empty_fragment and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "load_fastp_output",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/generate_report.py::load_fastp_output: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_fastp_failure_returns_empty_mapping and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "load_pipeline_log",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/generate_report.py::load_pipeline_log: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_pipeline_log_failure_returns_failure_message and failure remains observable via ERROR log and failure text"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "load_pipeline_summary",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/generate_report.py::load_pipeline_summary: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_generate_report.py::test_pipeline_summary_failure_returns_empty_mapping and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "calculate_md5",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::calculate_md5: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "check_executable_available",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/install_references.py::check_executable_available: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_install_references.py::test_executable_probe_error_returns_false and failure remains observable via diagnostic log"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "download_file",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::download_file: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "load_install_config",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::load_install_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "main",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::main: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "process_ucsc_references",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::process_ucsc_references: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "process_vntyper_references",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::process_vntyper_references: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "update_config",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::update_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "write_md5_checksums",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/install_references.py::write_md5_checksums: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/pipeline_guards.py",
+      "symbol": "read_alignment_header",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/pipeline_guards.py::read_alignment_header: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_pipeline_guards.py::test_an_unreadable_header_warns_and_yields_none and failure remains observable via WARNING log and undetermined verdict"
+    },
+    {
+      "path": "vntyper/scripts/preflight_error_io.py",
+      "symbol": "persist_preflight_failure",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/preflight_error_io.py::persist_preflight_failure: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/reference_binding.py",
+      "symbol": "ReferenceBinding.__del__",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/reference_binding.py::ReferenceBinding.__del__: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/reference_binding.py",
+      "symbol": "ReferenceBinding.__init__",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/reference_binding.py::ReferenceBinding.__init__: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/reference_binding.py",
+      "symbol": "ReferenceBinding.close",
+      "normal_count": 3,
+      "all_count": 3,
+      "category": "A",
+      "rationale": "vntyper/scripts/reference_binding.py::ReferenceBinding.close: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/reference_cache_binding.py",
+      "symbol": "PrivateReferenceCache.close",
+      "normal_count": 2,
+      "all_count": 2,
+      "category": "A",
+      "rationale": "vntyper/scripts/reference_cache_binding.py::PrivateReferenceCache.close: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/region_utils.py",
+      "symbol": "_bam_contig_names",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/region_utils.py::_bam_contig_names: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_region_utils.py::TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain::test_an_unreadable_header_keeps_the_previous_behaviour and failure remains observable via WARNING log and legacy fallback result"
+    },
+    {
+      "path": "vntyper/scripts/report_formatting.py",
+      "symbol": "parse_coverage_stats",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/report_formatting.py::parse_coverage_stats: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_report_formatting.py::test_parse_coverage_stats_survives_an_unreadable_value and failure remains observable via ERROR log and partial structured result"
+    },
+    {
+      "path": "vntyper/scripts/screening_summary.py",
+      "symbol": "build_screening_summary",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/screening_summary.py::build_screening_summary: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_screening_summary.py::test_a_broken_config_yields_the_unavailable_message and failure remains observable via ERROR log and structured unavailable state"
+    },
+    {
+      "path": "vntyper/scripts/screening_summary.py",
+      "symbol": "load_report_config",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/screening_summary.py::load_report_config: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_screening_summary.py::test_report_config_failure_returns_empty_mapping and failure remains observable via ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "md5sum",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/summary.py::md5sum: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_parsers.py::test_md5_failure_returns_none and failure remains observable via None result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "parse_csv",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/summary.py::parse_csv: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_parsers.py::test_csv_failure_returns_error_comment and failure remains observable via error comment in result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "parse_json_file",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/summary.py::parse_json_file: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_parsers.py::test_json_failure_returns_error_mapping and failure remains observable via error mapping in result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "parse_tsv",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/summary.py::parse_tsv: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_parsers.py::test_tsv_failure_returns_error_comment and failure remains observable via error comment in result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "record_step",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/summary.py::record_step: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_summary_record_step.py::test_parser_failure_is_recorded_and_step_is_appended and failure remains observable via structured error payload"
+    },
+    {
+      "path": "vntyper/scripts/utils.py",
+      "symbol": "get_tool_version",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/utils.py::get_tool_version: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_utils.py::test_tool_version_unexpected_failure_returns_unknown and failure remains observable via ERROR log and unknown sentinel"
+    },
+    {
+      "path": "vntyper/scripts/utils.py",
+      "symbol": "load_config",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "A",
+      "rationale": "vntyper/scripts/utils.py::load_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
+    },
+    {
+      "path": "vntyper/scripts/variant_parsing.py",
+      "symbol": "read_vcf_without_comments",
+      "normal_count": 1,
+      "all_count": 1,
+      "category": "C",
+      "rationale": "vntyper/scripts/variant_parsing.py::read_vcf_without_comments: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_variant_parsing.py::test_read_vcf_without_comments_unreadable_path_returns_empty_dataframe and failure remains observable via ERROR log"
+    }
+  ],
+  "fail_open": [
+    {
+      "path": "docker/app/tasks.py",
+      "symbol": "delete_old_results",
+      "disposition": "preserved-contract",
+      "outcome": "Logs one owned-path deletion failure and continues attempting remaining expired result paths without raising.",
+      "rationale": "Scheduled expiry must continue cleaning unrelated owned results after one filesystem failure.",
+      "behavior_test": "tests/unit/web/test_result_expiry.py::test_cleanup_continues_after_one_delete_error",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "docker/app/tasks.py",
+      "symbol": "remove_job_input_files",
+      "disposition": "preserved-contract",
+      "outcome": "Logs one owned-path deletion failure and continues attempting every remaining input path without raising.",
+      "rationale": "Task cleanup must not leak later owned inputs merely because one deletion fails.",
+      "behavior_test": "tests/unit/web/test_tasks.py::test_input_cleanup_logs_one_error_and_attempts_every_owned_path",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "scripts/coverage_gate.py",
+      "symbol": "read_total",
+      "disposition": "preserved-contract",
+      "outcome": "Returns None; main converts that sentinel into status 1 and an actionable message.",
+      "rationale": "Unreadable coverage data degrades parsing but must never let the CI coverage gate pass open.",
+      "behavior_test": "tests/unit/test_coverage_gate.py::test_coverage_read_failure_returns_none_and_fails_gate",
+      "observable_via": "non-zero exit status and error output"
+    },
+    {
+      "path": "scripts/golden_cohort/launcher.py",
+      "symbol": "resolve",
+      "disposition": "preserved-contract",
+      "outcome": "Returns a structured resolution with the exception in error, in_tree false, and vntyper_file None.",
+      "rationale": "Golden-cohort discovery reports an unavailable candidate without executing a broken import.",
+      "behavior_test": "tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure",
+      "observable_via": "structured error result"
+    },
+    {
+      "path": "vntyper/modules/advntr/advntr_genotyping.py",
+      "symbol": "process_advntr_output",
+      "disposition": "preserved-contract",
+      "outcome": "Returns None, logs the unreadable result, and writes no parsed result artifact.",
+      "rationale": "A failed optional adVNTR parse must remain distinguishable from a successfully written result.",
+      "behavior_test": "tests/unit/test_advntr_output_parsing.py::test_unreadable_advntr_output_logs_and_returns_none",
+      "observable_via": "ERROR log and absent result artifact"
+    },
+    {
+      "path": "vntyper/scripts/cohort_exports.py",
+      "symbol": "write_pseudonymization_table",
+      "disposition": "preserved-contract",
+      "outcome": "Returns None, logs the write failure, and does not claim a successful pseudonymization table.",
+      "rationale": "A cohort export failure is non-fatal but must remain visible to the operator.",
+      "behavior_test": "tests/unit/test_cohort_exports.py::test_pseudonym_table_write_failure_is_logged",
+      "observable_via": "ERROR log and absent output"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "_identity_from_summary",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the directory-derived identity fallback after an unreadable summary.",
+      "rationale": "Cohort discovery can retain a sample using its established directory identity when summary identity evidence is unavailable.",
+      "behavior_test": "tests/unit/test_cohort_inputs.py::test_identity_read_failure_uses_directory_fallback",
+      "observable_via": "WARNING log and fallback identity"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "cleanup_temp_dirs",
+      "disposition": "preserved-contract",
+      "outcome": "Logs one cleanup failure and continues attempting every remaining temporary directory.",
+      "rationale": "One filesystem cleanup error must not leak all later cohort extraction directories.",
+      "behavior_test": "tests/unit/test_cohort_inputs.py::test_cleanup_attempts_all_directories_after_failure",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "discover_sample_directories",
+      "disposition": "preserved-contract",
+      "outcome": "Skips a bad archive and continues discovering other supplied inputs.",
+      "rationale": "One malformed cohort archive must not erase independently valid sample inputs.",
+      "behavior_test": "tests/unit/test_cohort_inputs.py::test_bad_archive_is_skipped_and_other_inputs_continue",
+      "observable_via": "ERROR log and continued discovery"
+    },
+    {
+      "path": "vntyper/scripts/cohort_inputs.py",
+      "symbol": "load_pipeline_summary_for_sample",
+      "disposition": "preserved-contract",
+      "outcome": "Returns three empty result collections for an unreadable pipeline summary.",
+      "rationale": "Cohort rendering preserves the sample while marking all unavailable summary evidence empty.",
+      "behavior_test": "tests/unit/test_cohort_inputs.py::test_summary_read_failure_returns_three_empty_results",
+      "observable_via": "ERROR log and structured empty result"
+    },
+    {
+      "path": "vntyper/scripts/cohort_summary.py",
+      "symbol": "encode_image_to_base64",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the literal empty string when an image cannot be read or encoded.",
+      "rationale": "A missing optional image must not abort the cohort report and is represented by the established empty fragment.",
+      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_image_encoding_failure_returns_empty_string",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/cohort_summary.py",
+      "symbol": "generate_donut_chart",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the literal empty string and does not claim a chart output.",
+      "rationale": "A charting failure degrades only the optional visualization while remaining visible.",
+      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_donut_failure_returns_empty_string",
+      "observable_via": "ERROR log and absent output"
+    },
+    {
+      "path": "vntyper/scripts/cohort_summary.py",
+      "symbol": "load_report_config",
+      "disposition": "preserved-contract",
+      "outcome": "Returns an empty mapping for unreadable or invalid report configuration.",
+      "rationale": "The cohort report uses its established unavailable configuration fallback without inventing clinical text.",
+      "behavior_test": "tests/unit/test_cohort_summary_oracle.py::test_report_config_failure_returns_empty_mapping",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/flagging.py",
+      "symbol": "evaluate_condition",
+      "disposition": "preserved-contract",
+      "outcome": "Returns False for missing names and other evaluation failures.",
+      "rationale": "A malformed configured flag condition cannot invent a sample flag and remains visible at the established severity.",
+      "behavior_test": "tests/unit/test_flagging.py::TestEvaluateConditionErrorPath::test_error_path_is_logged_at_error_level",
+      "observable_via": "WARNING or ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/flagging.py",
+      "symbol": "regex_match",
+      "disposition": "preserved-contract",
+      "outcome": "Returns False for an invalid regular expression.",
+      "rationale": "An invalid configured regex cannot turn a non-match into a flagging match.",
+      "behavior_test": "tests/unit/test_flagging.py::test_invalid_regex_is_false_and_observable",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "build_kestrel_frames",
+      "disposition": "preserved-contract",
+      "outcome": "Returns both input-row frames; the matching frame remains unformatted and the display frame retains safe formatting.",
+      "rationale": "A display conversion failure must not discard the underlying Kestrel call rows.",
+      "behavior_test": "tests/unit/test_generate_report.py::test_kestrel_conversion_failure_preserves_both_frames",
+      "observable_via": "WARNING log and retained frames"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "extract_igv_content",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the exact tuple of three empty strings.",
+      "rationale": "IGV content is optional and its three-part caller contract must remain safe to unpack on read failure.",
+      "behavior_test": "tests/unit/test_generate_report.py::test_igv_extraction_failure_returns_empty_fragment",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "load_fastp_output",
+      "disposition": "preserved-contract",
+      "outcome": "Returns an empty mapping for unreadable fastp output.",
+      "rationale": "Unavailable optional fastp metrics must not abort report rendering.",
+      "behavior_test": "tests/unit/test_generate_report.py::test_fastp_failure_returns_empty_mapping",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "load_pipeline_log",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the literal message Failed to load pipeline log.",
+      "rationale": "The report keeps rendering while explicitly distinguishing a log read failure from an empty log.",
+      "behavior_test": "tests/unit/test_generate_report.py::test_pipeline_log_failure_returns_failure_message",
+      "observable_via": "ERROR log and failure text"
+    },
+    {
+      "path": "vntyper/scripts/generate_report.py",
+      "symbol": "load_pipeline_summary",
+      "disposition": "preserved-contract",
+      "outcome": "Returns an empty mapping for an unreadable pipeline summary.",
+      "rationale": "Report generation retains its established unavailable-summary state without fabricating result fields.",
+      "behavior_test": "tests/unit/test_generate_report.py::test_pipeline_summary_failure_returns_empty_mapping",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/install_references.py",
+      "symbol": "check_executable_available",
+      "disposition": "preserved-contract",
+      "outcome": "Returns False when the executable probe raises.",
+      "rationale": "An executable whose availability cannot be proven is treated as unavailable during reference installation.",
+      "behavior_test": "tests/unit/test_install_references.py::test_executable_probe_error_returns_false",
+      "observable_via": "diagnostic log"
+    },
+    {
+      "path": "vntyper/scripts/pipeline_guards.py",
+      "symbol": "read_alignment_header",
+      "disposition": "preserved-contract",
+      "outcome": "Returns None; assembly enforcement treats the header evidence as undetermined rather than agreement.",
+      "rationale": "An unreadable header supplies no assembly evidence and must remain visible without guessing agreement.",
+      "behavior_test": "tests/unit/test_pipeline_guards.py::test_an_unreadable_header_warns_and_yields_none",
+      "observable_via": "WARNING log and undetermined verdict"
+    },
+    {
+      "path": "vntyper/scripts/region_utils.py",
+      "symbol": "_bam_contig_names",
+      "disposition": "preserved-contract",
+      "outcome": "Returns an empty contig list so the caller retains the established legacy fallback when contrary evidence is unavailable.",
+      "rationale": "An unreadable BAM header is absence of contig evidence, not evidence that the configured region is wrong.",
+      "behavior_test": "tests/unit/test_region_utils.py::TestTheLegacyFallbackCannotReturnARegionTheBamDoesNotContain::test_an_unreadable_header_keeps_the_previous_behaviour",
+      "observable_via": "WARNING log and legacy fallback result"
+    },
+    {
+      "path": "vntyper/scripts/report_formatting.py",
+      "symbol": "parse_coverage_stats",
+      "disposition": "preserved-contract",
+      "outcome": "Returns every coverage key, preserves values converted before failure, and leaves the failed and later fields None.",
+      "rationale": "A partial coverage-stat parse is the established report degradation and must expose exactly which metrics remain unavailable.",
+      "behavior_test": "tests/unit/test_report_formatting.py::test_parse_coverage_stats_survives_an_unreadable_value",
+      "observable_via": "ERROR log and partial structured result"
+    },
+    {
+      "path": "vntyper/scripts/screening_summary.py",
+      "symbol": "build_screening_summary",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the established unavailable summary with is_positive, quality_metrics_pass, and matched_rule false and empty algorithm results.",
+      "rationale": "A screening-summary failure must never be styled as a positive finding or infer meaning from clinical-sounding text.",
+      "behavior_test": "tests/unit/test_screening_summary.py::test_a_broken_config_yields_the_unavailable_message",
+      "observable_via": "ERROR log and structured unavailable state"
+    },
+    {
+      "path": "vntyper/scripts/screening_summary.py",
+      "symbol": "load_report_config",
+      "disposition": "preserved-contract",
+      "outcome": "Returns an empty mapping when the report configuration cannot be read or decoded.",
+      "rationale": "Configuration failure must remain an explicit unavailable state and cannot authorize invented report wording.",
+      "behavior_test": "tests/unit/test_screening_summary.py::test_report_config_failure_returns_empty_mapping",
+      "observable_via": "ERROR log"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "md5sum",
+      "disposition": "preserved-contract",
+      "outcome": "Returns None when the artifact hash cannot be read.",
+      "rationale": "An unavailable checksum must not be represented as a valid digest.",
+      "behavior_test": "tests/unit/test_summary_parsers.py::test_md5_failure_returns_none",
+      "observable_via": "None result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "parse_csv",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the exact structured error comment for an unreadable CSV.",
+      "rationale": "Summary construction continues while preserving a caller-visible parse failure record.",
+      "behavior_test": "tests/unit/test_summary_parsers.py::test_csv_failure_returns_error_comment",
+      "observable_via": "error comment in result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "parse_json_file",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the exact structured error mapping for invalid or unreadable JSON.",
+      "rationale": "Summary construction continues while preserving a caller-visible JSON failure record.",
+      "behavior_test": "tests/unit/test_summary_parsers.py::test_json_failure_returns_error_mapping",
+      "observable_via": "error mapping in result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "parse_tsv",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the exact structured error comment for an unreadable TSV.",
+      "rationale": "Summary construction continues while preserving a caller-visible parse failure record.",
+      "behavior_test": "tests/unit/test_summary_parsers.py::test_tsv_failure_returns_error_comment",
+      "observable_via": "error comment in result"
+    },
+    {
+      "path": "vntyper/scripts/summary.py",
+      "symbol": "record_step",
+      "disposition": "preserved-contract",
+      "outcome": "Appends the named step and result path together with the exact parser-error payload, then allows later summary construction.",
+      "rationale": "A single artifact parser failure must remain in the summary without discarding later steps.",
+      "behavior_test": "tests/unit/test_summary_record_step.py::test_parser_failure_is_recorded_and_step_is_appended",
+      "observable_via": "structured error payload"
+    },
+    {
+      "path": "vntyper/scripts/utils.py",
+      "symbol": "get_tool_version",
+      "disposition": "preserved-contract",
+      "outcome": "Returns the literal string unknown for an unexpected version-probe failure.",
+      "rationale": "Tool metadata remains renderable while an unavailable version is explicitly distinguished from a real version.",
+      "behavior_test": "tests/unit/test_utils.py::test_tool_version_unexpected_failure_returns_unknown",
+      "observable_via": "ERROR log and unknown sentinel"
+    },
+    {
+      "path": "vntyper/scripts/variant_parsing.py",
+      "symbol": "read_vcf_without_comments",
+      "disposition": "preserved-no-authorized-alternative",
+      "outcome": "Returns an empty DataFrame for an unexpected VCF read or parse failure.",
+      "rationale": "No authorized alternate failure outcome exists; the current empty-frame fallback is preserved and distinguished in logs.",
+      "behavior_test": "tests/unit/test_variant_parsing.py::test_read_vcf_without_comments_unreadable_path_returns_empty_dataframe",
+      "observable_via": "ERROR log"
+    }
+  ]
+}

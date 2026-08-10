@@ -54,7 +54,7 @@ EXIT_ABORT = 97
 EXIT_UNHANDLED = 98
 
 
-def _record_commands(log_path: Path) -> None:
+def _record_commands(log_path: Path) -> Any:
     """Append every command the run executes to ``log_path`` as JSONL.
 
     ``subprocess.run``, ``check_output`` and ``call`` all construct a ``Popen``, so
@@ -62,6 +62,10 @@ def _record_commands(log_path: Path) -> None:
 
     Args:
         log_path: The JSONL file to append to.
+
+    Returns:
+        Any: The original ``subprocess.Popen.__init__`` method, for restoration after
+        the wrapped CLI returns.
     """
     original_init = subprocess.Popen.__init__
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +80,7 @@ def _record_commands(log_path: Path) -> None:
         original_init(self, args, *rest, **kwargs)
 
     subprocess.Popen.__init__ = recording_init  # type: ignore[method-assign]
+    return original_init
 
 
 def resolve(tree: Path, marker: str) -> dict[str, Any]:
@@ -160,44 +165,55 @@ def launch(
         int: The process exit code - the CLI's own, :data:`EXIT_ABORT` if the resolution
         disagreed with the side, or :data:`EXIT_UNHANDLED` if the CLI raised.
     """
+    original_cwd = Path.cwd()
+    original_path = sys.path.copy()
+    original_argv = sys.argv.copy()
+    original_popen_init: Any | None = None
     tree = tree.resolve()
-    os.chdir(tree)
-    sys.path.insert(0, str(tree))
-
-    info = resolve(tree, marker)
-    print(_launch_line(side, info, expect_marker), flush=True)
-
-    if info["error"] is not None and info["vntyper_file"] is None:
-        print(f"{ABORT_PREFIX} reason=import-failed detail={info['error']}", flush=True)
-        return EXIT_ABORT
-    if not info["in_tree"]:
-        print(
-            f"{ABORT_PREFIX} reason=wrong-tree resolved={info['vntyper_file']} expected-under={tree}",
-            flush=True,
-        )
-        return EXIT_ABORT
-    if info["marker_present"] is not expect_marker:
-        print(
-            f"{ABORT_PREFIX} reason=marker-mismatch marker={marker} "
-            f"got={info['marker_present']} expected={expect_marker}",
-            flush=True,
-        )
-        return EXIT_ABORT
-
-    if commands_log is not None:
-        _record_commands(commands_log)
-
-    from vntyper.cli import main  # noqa: PLC0415 - deliberately after the resolution check
-
-    sys.argv = ["vntyper", *argv]
     try:
-        main()
-    except SystemExit as exc:
-        code = exc.code
-        if code is None:
-            return 0
-        return code if isinstance(code, int) else 1
-    except Exception:  # noqa: BLE001 - the harness records failures, it does not raise them
-        traceback.print_exc()
-        return EXIT_UNHANDLED
-    return 0
+        os.chdir(tree)
+        sys.path.insert(0, str(tree))
+
+        info = resolve(tree, marker)
+        print(_launch_line(side, info, expect_marker), flush=True)
+
+        if info["error"] is not None and info["vntyper_file"] is None:
+            print(f"{ABORT_PREFIX} reason=import-failed detail={info['error']}", flush=True)
+            return EXIT_ABORT
+        if not info["in_tree"]:
+            print(
+                f"{ABORT_PREFIX} reason=wrong-tree resolved={info['vntyper_file']} expected-under={tree}",
+                flush=True,
+            )
+            return EXIT_ABORT
+        if info["marker_present"] is not expect_marker:
+            print(
+                f"{ABORT_PREFIX} reason=marker-mismatch marker={marker} "
+                f"got={info['marker_present']} expected={expect_marker}",
+                flush=True,
+            )
+            return EXIT_ABORT
+
+        if commands_log is not None:
+            original_popen_init = _record_commands(commands_log)
+
+        from vntyper.cli import main  # noqa: PLC0415 - deliberately after the resolution check
+
+        sys.argv[:] = ["vntyper", *argv]
+        try:
+            main()
+        except SystemExit as exc:
+            code = exc.code
+            if code is None:
+                return 0
+            return code if isinstance(code, int) else 1
+        except Exception:  # noqa: BLE001 - the harness records failures, it does not raise them
+            traceback.print_exc()
+            return EXIT_UNHANDLED
+        return 0
+    finally:
+        if original_popen_init is not None:
+            subprocess.Popen.__init__ = original_popen_init  # type: ignore[method-assign]
+        sys.argv[:] = original_argv
+        sys.path[:] = original_path
+        os.chdir(original_cwd)

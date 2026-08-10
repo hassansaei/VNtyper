@@ -191,6 +191,27 @@ def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("delete_intermediates", "keep_intermediates", "expected_exists"),
+    [(False, False, True), (False, True, True), (True, False, False), (True, True, False)],
+)
+def test_delete_intermediates_overrides_keep(
+    tmp_path: Path,
+    delete_intermediates: bool,
+    keep_intermediates: bool,
+    expected_exists: bool,
+) -> None:
+    unmapped = tmp_path / "output_unmapped.bam"
+    unmapped.write_bytes(b"intermediate")
+    _run_bam_to_fastq(
+        tmp_path,
+        fast_mode=False,
+        delete_intermediates=delete_intermediates,
+        keep_intermediates=keep_intermediates,
+    )
+    assert unmapped.exists() is expected_exists
+
+
 def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
     """A valid all-unplaced BAM has no BAI chunk offset for the custom reader."""
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)

@@ -1044,6 +1044,41 @@ def test_cleanup_logs_but_does_not_raise_when_removing_the_alignment_fails(
     assert f"Error deleting input file {bam_path}: permission denied" in caplog.text
 
 
+def test_input_cleanup_logs_one_error_and_attempts_every_owned_path(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One blocked owned input does not prevent cleanup of its other indexes."""
+    from app import tasks
+
+    attempted: list[str] = []
+    monkeypatch.setattr(tasks.os.path, "exists", lambda _path: True)
+
+    def remove(path: str) -> None:
+        attempted.append(path)
+        if path.endswith("sample.bam"):
+            raise OSError("blocked")
+
+    monkeypatch.setattr(tasks.os, "remove", remove)
+
+    with caplog.at_level(logging.ERROR, logger=tasks.logger.name):
+        tasks.remove_job_input_files("/jobs/1/sample.bam", "/jobs/1/sample.bam.bai")
+
+    assert attempted == list(
+        dict.fromkeys(
+            (
+                "/jobs/1/sample.bam",
+                "/jobs/1/sample.bam.bai",
+                *tasks.derived_index_paths("/jobs/1/sample.bam"),
+            )
+        )
+    )
+    errors = [
+        record for record in caplog.records if record.name == tasks.logger.name and record.levelno >= logging.ERROR
+    ]
+    assert [record.levelno for record in errors] == [logging.ERROR]
+    assert "blocked" in caplog.text
+
+
 def test_cleanup_logs_but_does_not_raise_when_removing_the_input_directory_fails(
     monkeypatch: pytest.MonkeyPatch,
     redis_mocks: SimpleNamespace,

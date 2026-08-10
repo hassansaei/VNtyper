@@ -17,6 +17,7 @@ copyright: Copyright &copy; 2023–2026 Hassan Saei, Bernt Popp
 # `{#...}` (a GitHub issue list such as `{#209, #178}` is a Jinja comment to it).
 exclude_docs: |
   plans/
+  superpowers/
 
 theme:
   name: material
