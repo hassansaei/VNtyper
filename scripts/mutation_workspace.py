@@ -5,6 +5,47 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+_PORCELAIN_V1_STATUS_PAIRS = frozenset(
+    {
+        b" M",
+        b" T",
+        b" A",
+        b" D",
+        b" R",
+        b" C",
+        b"M ",
+        b"MM",
+        b"MT",
+        b"MD",
+        b"T ",
+        b"TM",
+        b"TT",
+        b"TD",
+        b"A ",
+        b"AM",
+        b"AT",
+        b"AD",
+        b"D ",
+        b"R ",
+        b"RM",
+        b"RT",
+        b"RD",
+        b"C ",
+        b"CM",
+        b"CT",
+        b"CD",
+        b"DD",
+        b"AU",
+        b"UD",
+        b"UA",
+        b"DU",
+        b"AA",
+        b"UU",
+        b"??",
+        b"!!",
+    }
+)
+
 
 @dataclass(frozen=True)
 class OverlayChange:
@@ -29,17 +70,35 @@ def confined_path(root: Path, relative: str, *, must_exist: bool) -> Path:
         ValueError: If the name is unsafe, escapes the root, or must exist but does not.
     """
     candidate = Path(relative)
-    if relative in {"", "."} or candidate.is_absolute() or ".." in candidate.parts or ".git" in candidate.parts:
+    if (
+        relative in {"", "."}
+        or candidate.is_absolute()
+        or candidate.as_posix() != relative
+        or ".." in candidate.parts
+        or ".git" in candidate.parts
+    ):
         raise ValueError(f"unsafe workspace path: {relative}")
     resolved_root = root.resolve()
     lexical = resolved_root / candidate
-    resolved_parent = lexical.parent.resolve(strict=must_exist)
+    try:
+        resolved_parent = lexical.parent.resolve(strict=must_exist)
+    except FileNotFoundError:
+        raise ValueError(f"workspace path does not exist: {relative}") from None
     if not resolved_parent.is_relative_to(resolved_root):
         raise ValueError(f"workspace path escapes workspace root: {relative}")
+    if ".git" in resolved_parent.relative_to(resolved_root).parts:
+        raise ValueError(f"unsafe workspace path: {relative}")
     if must_exist and not os.path.lexists(lexical):
         raise ValueError(f"workspace path does not exist: {relative}")
-    if lexical.is_symlink() and not lexical.resolve(strict=True).is_relative_to(resolved_root):
-        raise ValueError(f"workspace path escapes workspace root: {relative}")
+    if lexical.is_symlink():
+        try:
+            resolved = lexical.resolve(strict=True)
+        except FileNotFoundError:
+            raise ValueError(f"workspace path does not exist: {relative}") from None
+        if not resolved.is_relative_to(resolved_root):
+            raise ValueError(f"workspace path escapes workspace root: {relative}")
+        if ".git" in resolved.relative_to(resolved_root).parts:
+            raise ValueError(f"unsafe workspace path: {relative}")
     return lexical
 
 
@@ -77,6 +136,8 @@ def _affected_paths_from_porcelain_z(payload: bytes) -> tuple[str, ...]:
         rename_fields = sum(field in b"RC" for field in status)
         if rename_fields > 1:
             raise ValueError("conflicting rename encoding")
+        if status not in _PORCELAIN_V1_STATUS_PAIRS:
+            raise ValueError(f"invalid porcelain status: {os.fsdecode(status)}")
 
         affected.append(os.fsdecode(record[3:]))
         if rename_fields == 1:

@@ -100,6 +100,13 @@ def test_affected_paths_rejects_conflicting_rename_encoding() -> None:
         mutation_workspace._affected_paths_from_porcelain_z(b"RC renamed.py\0original.py\0")
 
 
+@pytest.mark.parametrize("status", [b"XX", b"  ", b"?M", b"MR"])
+def test_affected_paths_rejects_invalid_porcelain_status_pairs(status: bytes) -> None:
+    payload = status + b" changed.py\0original.py\0"
+    with pytest.raises(ValueError, match="invalid porcelain status"):
+        mutation_workspace._affected_paths_from_porcelain_z(payload)
+
+
 def test_affected_paths_rejects_a_rename_without_an_original_path() -> None:
     with pytest.raises(ValueError, match="missing original path"):
         mutation_workspace._affected_paths_from_porcelain_z(b"R  renamed.py\0")
@@ -131,3 +138,77 @@ def test_confined_path_rejects_a_parent_symlink_escape(tmp_path: Path) -> None:
     (tmp_path / "link").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="escapes workspace root"):
         mutation_workspace.confined_path(tmp_path, "link/child.py", must_exist=False)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"?? safe.py\0?? ../outside.py\0",
+        b"R  renamed.py\0../original.py\0",
+    ],
+)
+def test_porcelain_validates_every_path_before_lexists(tmp_path: Path, monkeypatch, payload: bytes) -> None:
+    (tmp_path / "safe.py").write_text("safe\n", encoding="utf-8")
+    (tmp_path / "renamed.py").write_text("renamed\n", encoding="utf-8")
+    probes: list[object] = []
+    monkeypatch.setattr(mutation_workspace.os.path, "lexists", lambda path: probes.append(path) or True)
+
+    with pytest.raises(ValueError, match="unsafe workspace path"):
+        mutation_workspace.parse_porcelain_z(payload, tmp_path)
+
+    assert probes == []
+
+
+def test_confined_path_rejects_a_final_symlink_into_git_metadata(tmp_path: Path) -> None:
+    metadata = tmp_path / ".git"
+    metadata.mkdir()
+    config = metadata / "config"
+    config.write_text("metadata\n", encoding="utf-8")
+    (tmp_path / "config-link").symlink_to(config)
+
+    with pytest.raises(ValueError, match="unsafe workspace path"):
+        mutation_workspace.confined_path(tmp_path, "config-link", must_exist=True)
+
+
+def test_confined_path_accepts_an_internal_symlink_outside_git_metadata(tmp_path: Path) -> None:
+    target = tmp_path / "target.py"
+    target.write_text("target\n", encoding="utf-8")
+    link = tmp_path / "link.py"
+    link.symlink_to(target)
+
+    assert mutation_workspace.confined_path(tmp_path, "link.py", must_exist=True) == link
+
+
+def test_confined_path_rejects_a_parent_symlink_into_git_metadata(tmp_path: Path) -> None:
+    metadata = tmp_path / ".git"
+    metadata.mkdir()
+    (metadata / "config").write_text("metadata\n", encoding="utf-8")
+    (tmp_path / "metadata-link").symlink_to(metadata, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="unsafe workspace path"):
+        mutation_workspace.confined_path(tmp_path, "metadata-link/config", must_exist=True)
+
+
+def test_confined_path_reports_a_dangling_internal_symlink_as_a_value_error(tmp_path: Path) -> None:
+    (tmp_path / "dangling.py").symlink_to(tmp_path / "missing.py")
+
+    with pytest.raises(ValueError, match="workspace path does not exist"):
+        mutation_workspace.confined_path(tmp_path, "dangling.py", must_exist=False)
+
+
+def test_confined_path_reports_a_missing_required_parent_as_a_value_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="workspace path does not exist"):
+        mutation_workspace.confined_path(tmp_path, "missing/child.py", must_exist=True)
+
+
+def test_porcelain_rejects_duplicate_lexical_spellings_before_lexists(tmp_path: Path, monkeypatch) -> None:
+    changed = tmp_path / "dir/changed.py"
+    changed.parent.mkdir()
+    changed.write_text("changed\n", encoding="utf-8")
+    probes: list[object] = []
+    monkeypatch.setattr(mutation_workspace.os.path, "lexists", lambda path: probes.append(path) or True)
+
+    with pytest.raises(ValueError, match="unsafe workspace path"):
+        mutation_workspace.parse_porcelain_z(b"?? dir/changed.py\0?? dir/./changed.py\0", tmp_path)
+
+    assert probes == []
