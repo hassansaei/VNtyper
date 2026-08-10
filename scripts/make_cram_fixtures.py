@@ -53,6 +53,7 @@ import json
 import logging
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -68,6 +69,43 @@ CRAM_WRITE_OPTIONS = ("no_ref=1",)
 #: Where derived fixtures are written, mirroring the source layout underneath.
 DEFAULT_FIXTURE_ROOT = Path("tests/data/cram")
 DEFAULT_DATA_CONFIG = Path("tests/test_data_config.json")
+DEFAULT_REFERENCE_COMPRESSED_SOURCE = Path("tests/data/example_b178_hg19_subset.bam")
+DEFAULT_REFERENCE_COMPRESSED_FASTA = Path("reference/alignment/chr1.hg19.fa")
+HG19_CHR1_REFERENCE_SHA256 = "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338"
+REFERENCE_VALIDATION_REGION = "chr1:155160500-155162000"
+
+# UCSC hg19 primary-contig identities. The registered BAM lacks M5 tags; without
+# these htslib treats the chr1-only FASTA as an incomplete reference and silently
+# falls back to embedded/non-reference CRAM slices, whose zero spans break CRAI
+# retrieval. Non-chr1 containers still fall back individually because their
+# sequences are intentionally absent, while chr1 remains externally referenced.
+HG19_PRIMARY_CONTIGS: dict[str, tuple[int, str]] = {
+    "chr1": (249250621, "1b22b98cdeb4a9304cb5d48026a85128"),
+    "chr2": (243199373, "a0d9851da00400dec1098a9255ac712e"),
+    "chr3": (198022430, "641e4338fa8d52a5b781bd2a2c08d3c3"),
+    "chr4": (191154276, "23dccd106897542ad87d2765d28a19a1"),
+    "chr5": (180915260, "0740173db9ffd264d728f32784845cd7"),
+    "chr6": (171115067, "1d3a93a248d92a729ee764823acbbc6b"),
+    "chr7": (159138663, "618366e953d6aaad97dbe4777c29375e"),
+    "chr8": (146364022, "96f514a9929e410c6651697bded59aec"),
+    "chr9": (141213431, "3e273117f15e0a400f01055d9f393768"),
+    "chr10": (135534747, "988c28e000e84c26d552359af1ea2e1d"),
+    "chr11": (135006516, "98c59049a2df285c76ffb1c6db8f8b96"),
+    "chr12": (133851895, "51851ac0e1a115847ad36449b0015864"),
+    "chr13": (115169878, "283f8d7892baa81b510a015719ca7b0b"),
+    "chr14": (107349540, "98f3cae32b2a2e9524bc19813927542e"),
+    "chr15": (102531392, "e5645a794a8238215b2cd77acb95a078"),
+    "chr16": (90354753, "fc9b1a7b42b97a864f56b348b06095e6"),
+    "chr17": (81195210, "351f64d4f4f9ddd45b35336ad97aa6de"),
+    "chr18": (78077248, "b15d4b2d29dde9d3e4f93d1d0f2cbc9c"),
+    "chr19": (59128983, "1aacd71f30db8e561810913e0b72636d"),
+    "chr20": (63025520, "0dec9660ec1efaaf33281c0d5ea2560f"),
+    "chr21": (48129895, "2979a6085bfe28e3ad6f552f361ed74d"),
+    "chr22": (51304566, "a718acaa6135fdca8357d5bfe94211dd"),
+    "chrX": (155270560, "7e0e2e580297b7764e31dbc80c2540dd"),
+    "chrY": (59373566, "1e86411d73e6f00a10590f976be01623"),
+    "chrM": (16571, "d2ed829b8a1628d16cbeee88e88e39eb"),
+}
 
 # Pysam's typed interface exposes ``AlignmentFile`` but not its htslib-command wrappers.
 # Purpose-built fixtures use the latter deliberately so the unit tier never needs PATH's
@@ -121,6 +159,44 @@ class Summary:
 
 
 @dataclass(frozen=True)
+class ReferenceCompressedFixture:
+    """One explicitly referenced CRAM and its reproducibility evidence."""
+
+    source_bam: Path
+    cram: Path
+    reference: Path
+    records: int
+    source_record_digest: str
+    decoded_record_digest: str
+    indexed_region: str
+    indexed_region_records: int
+    source_indexed_region_digest: str
+    decoded_indexed_region_digest: str
+    reference_sha256: str
+    source_bytes: int
+    cram_bytes: int
+
+    def as_manifest_entry(self) -> dict[str, object]:
+        """Return stable JSON-ready provenance for the fixture."""
+        return {
+            "encoding": "reference-compressed",
+            "source_bam": str(self.source_bam),
+            "cram": str(self.cram),
+            "reference_fasta": str(self.reference),
+            "records": self.records,
+            "source_record_digest": self.source_record_digest,
+            "decoded_record_digest": self.decoded_record_digest,
+            "indexed_region": self.indexed_region,
+            "indexed_region_records": self.indexed_region_records,
+            "source_indexed_region_digest": self.source_indexed_region_digest,
+            "decoded_indexed_region_digest": self.decoded_indexed_region_digest,
+            "reference_sha256": self.reference_sha256,
+            "source_bytes": self.source_bytes,
+            "cram_bytes": self.cram_bytes,
+        }
+
+
+@dataclass(frozen=True)
 class ReferenceDependentFixture:
     """A reference-compressed CRAM and the local reference named by its header."""
 
@@ -150,6 +226,15 @@ def _run(argv: list[str]) -> str:
     return completed.stdout
 
 
+def _run_to_file(argv: list[str], output: Path) -> None:
+    """Run a command whose binary stdout is the requested output file."""
+    with output.open("wb") as handle:
+        completed = subprocess.run(argv, stdout=handle, stderr=subprocess.PIPE, check=False)
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode() if isinstance(completed.stderr, bytes) else completed.stderr
+        raise RuntimeError(f"{' '.join(argv)} exited {completed.returncode}: {stderr.strip()}")
+
+
 def _record_digest(samtools: str, alignment: Path) -> tuple[str, int]:
     """Digest every decoded record of an alignment, with no reference supplied.
 
@@ -176,6 +261,61 @@ def _record_digest(samtools: str, alignment: Path) -> tuple[str, int]:
         proc.wait()
     if proc.returncode != 0:
         raise RuntimeError(f"samtools view {alignment} exited {proc.returncode}: {stderr.strip()}")
+    return digest.hexdigest(), count
+
+
+def _normalized_record_digest(
+    samtools: str,
+    alignment: Path,
+    explicit_reference: Path | None = None,
+    *,
+    region: str | None = None,
+) -> tuple[str, int]:
+    """Digest decoded SAM records while ignoring optional-tag ordering.
+
+    htslib may reorder optional fields when a record falls outside the supplied
+    chr1-only FASTA and is stored in an embedded/non-reference CRAM block. Optional SAM
+    field order has no meaning, so sorting only those fields proves record equivalence
+    without treating that serialization detail as data loss.
+
+    Args:
+        samtools: The samtools executable.
+        alignment: BAM or CRAM whose decoded records are digested.
+        explicit_reference: FASTA passed with ``-T`` for CRAM decoding.
+        region: Optional indexed region appended to the samtools query.
+
+    Returns:
+        The normalized SHA-256 digest and record count.
+
+    Raises:
+        RuntimeError: If samtools cannot decode the alignment.
+    """
+    argv = [samtools, "view"]
+    if explicit_reference is not None:
+        argv.extend(["-T", str(explicit_reference)])
+    argv.append(str(alignment))
+    if region is not None:
+        argv.append(region)
+
+    digest = hashlib.sha256()
+    count = 0
+    with subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1024 * 1024,
+    ) as proc:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            fields = line.rstrip("\n").split("\t")
+            normalized = "\t".join(fields[:11] + sorted(fields[11:])) + "\n"
+            digest.update(normalized.encode())
+            count += 1
+        stderr = proc.stderr.read() if proc.stderr else ""
+        proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"{' '.join(argv)} exited {proc.returncode}: {stderr.strip()}")
     return digest.hexdigest(), count
 
 
@@ -263,6 +403,153 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
         unmapped_reads=unmapped,
         record_digest=bam_digest,
         source_bytes=bam.stat().st_size,
+        cram_bytes=cram.stat().st_size,
+    )
+
+
+def _header_with_hg19_m5(header_text: str) -> str:
+    """Add verified UCSC hg19 M5 tags without changing the sequence dictionary.
+
+    Raises:
+        ValueError: If a sequence is unknown, has the wrong length, or conflicts
+            with its pinned M5 identity.
+    """
+    output: list[str] = []
+    sequences = 0
+    for line in header_text.splitlines():
+        if not line.startswith("@SQ\t"):
+            output.append(line)
+            continue
+        fields = line.split("\t")
+        tags = {field[:2]: field[3:] for field in fields[1:] if len(field) > 3 and field[2] == ":"}
+        name = tags.get("SN", "")
+        if name not in HG19_PRIMARY_CONTIGS:
+            raise ValueError(f"Reference-compressed source header has unsupported hg19 sequence: {name or line}")
+        expected_length, expected_m5 = HG19_PRIMARY_CONTIGS[name]
+        if tags.get("LN") != str(expected_length):
+            raise ValueError(
+                f"Reference-compressed source header length mismatch for {name}: "
+                f"expected {expected_length}, observed {tags.get('LN', '<missing>')}"
+            )
+        if "M5" in tags and tags["M5"] != expected_m5:
+            raise ValueError(
+                f"Reference-compressed source header M5 mismatch for {name}: "
+                f"expected {expected_m5}, observed {tags['M5']}"
+            )
+        if "M5" not in tags:
+            fields.append(f"M5:{expected_m5}")
+        output.append("\t".join(fields))
+        sequences += 1
+    if sequences == 0:
+        raise ValueError("Reference-compressed source header contains no @SQ sequences")
+    return "\n".join(output) + "\n"
+
+
+def derive_reference_compressed_cram(
+    samtools: str,
+    source_bam: Path,
+    reference: Path,
+    fixture_root: Path,
+    *,
+    expected_reference_sha256: str = HG19_CHR1_REFERENCE_SHA256,
+) -> ReferenceCompressedFixture:
+    """Derive and prove a real-read CRAM decoded with an explicit FASTA.
+
+    Args:
+        samtools: The samtools executable.
+        source_bam: Registered b178 BAM used as the record source.
+        reference: Exact chr1 hg19 FASTA used for encoding and decoding.
+        fixture_root: Root beneath which the fixture is regenerated.
+        expected_reference_sha256: Required identity of the reference bytes.
+
+    Returns:
+        The derived fixture and stable digest evidence.
+
+    Raises:
+        FileNotFoundError: If the explicit reference does not exist.
+        ValueError: If the supplied reference is not the pinned chr1 hg19 FASTA.
+        LossyConversionError: If decoded records or record counts differ.
+        RuntimeError: If encoding, indexing, or decoding fails.
+    """
+    if not reference.is_file():
+        raise FileNotFoundError(f"Reference FASTA does not exist: {reference}")
+
+    reference_hasher = hashlib.sha256()
+    with reference.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            reference_hasher.update(chunk)
+    reference_sha256 = reference_hasher.hexdigest()
+    if reference_sha256 != expected_reference_sha256:
+        msg = (
+            f"Reference FASTA SHA-256 mismatch for {reference}: "
+            f"expected {expected_reference_sha256}, observed {reference_sha256}."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
+
+    cram = fixture_root / "reference-compressed" / f"{source_bam.stem}.cram"
+    cram.parent.mkdir(parents=True, exist_ok=True)
+    source_header = _run([samtools, "view", "-H", "--no-PG", str(source_bam)])
+    prepared_header = _header_with_hg19_m5(source_header)
+    with tempfile.TemporaryDirectory(prefix="reference-compressed-", dir=cram.parent) as temp_dir:
+        temp_root = Path(temp_dir)
+        header_path = temp_root / "header.sam"
+        prepared_bam = temp_root / source_bam.name
+        header_path.write_text(prepared_header, encoding="utf-8")
+        _run_to_file([samtools, "reheader", "-P", str(header_path), str(source_bam)], prepared_bam)
+        _run(
+            [
+                samtools,
+                "view",
+                "-C",
+                "-T",
+                str(reference),
+                "--no-PG",
+                "-o",
+                str(cram),
+                str(prepared_bam),
+            ]
+        )
+    _run([samtools, "index", str(cram)])
+
+    source_digest, source_records = _normalized_record_digest(samtools, source_bam)
+    decoded_digest, decoded_records = _normalized_record_digest(samtools, cram, reference)
+    if source_digest != decoded_digest or source_records != decoded_records:
+        raise LossyConversionError(
+            f"{source_bam} -> {cram} reference-compressed CRAM is not lossless: "
+            f"{source_records} source records digest {source_digest[:16]}, "
+            f"{decoded_records} decoded records digest {decoded_digest[:16]}"
+        )
+
+    source_region_digest, source_region_records = _normalized_record_digest(
+        samtools, source_bam, region=REFERENCE_VALIDATION_REGION
+    )
+    decoded_region_digest, decoded_region_records = _normalized_record_digest(
+        samtools,
+        cram,
+        reference,
+        region=REFERENCE_VALIDATION_REGION,
+    )
+    if source_region_digest != decoded_region_digest or source_region_records != decoded_region_records:
+        raise LossyConversionError(
+            f"{source_bam} -> {cram} indexed region {REFERENCE_VALIDATION_REGION} is not lossless: "
+            f"{source_region_records} source records digest {source_region_digest[:16]}, "
+            f"{decoded_region_records} decoded records digest {decoded_region_digest[:16]}"
+        )
+
+    return ReferenceCompressedFixture(
+        source_bam=source_bam,
+        cram=cram,
+        reference=reference,
+        records=source_records,
+        source_record_digest=source_digest,
+        decoded_record_digest=decoded_digest,
+        indexed_region=REFERENCE_VALIDATION_REGION,
+        indexed_region_records=source_region_records,
+        source_indexed_region_digest=source_region_digest,
+        decoded_indexed_region_digest=decoded_region_digest,
+        reference_sha256=reference_sha256,
+        source_bytes=source_bam.stat().st_size,
         cram_bytes=cram.stat().st_size,
     )
 
@@ -423,15 +710,22 @@ def build_indexed_safe_fixture(fixture_root: Path) -> IndexedSafeFixture:
     return IndexedSafeFixture(cram=cram)
 
 
-def write_manifest(summary: Summary, manifest_path: Path) -> None:
+def write_manifest(
+    summary: Summary,
+    manifest_path: Path,
+    *,
+    reference_compressed: ReferenceCompressedFixture | None = None,
+) -> None:
     """Record what was derived, so a gate run can cite it rather than re-derive it."""
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, object] = {
         "encoding": list(CRAM_WRITE_OPTIONS),
         "verified": "every fixture's decoded record stream digests identically to its source BAM",
         "fixtures": [f.as_manifest_entry() for f in summary.fixtures],
         "skipped": [{"bam": str(p), "reason": r} for p, r in summary.skipped],
     }
+    if reference_compressed is not None:
+        payload["reference_compressed"] = reference_compressed.as_manifest_entry()
     manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     logger.info("wrote manifest with %d fixtures to %s", len(summary.fixtures), manifest_path)
 
@@ -464,10 +758,20 @@ def main(argv: list[str] | None = None) -> int:
         data_config=args.data_config,
         include_all=args.all,
     )
+    reference_compressed = derive_reference_compressed_cram(
+        args.samtools,
+        DEFAULT_REFERENCE_COMPRESSED_SOURCE,
+        DEFAULT_REFERENCE_COMPRESSED_FASTA,
+        args.fixture_root,
+    )
     build_reference_dependent_fixture(args.fixture_root)
     build_placed_flag12_fixture(args.fixture_root)
     build_indexed_safe_fixture(args.fixture_root)
-    write_manifest(summary, args.manifest or args.fixture_root / "manifest.json")
+    write_manifest(
+        summary,
+        args.manifest or args.fixture_root / "manifest.json",
+        reference_compressed=reference_compressed,
+    )
 
     if not summary.fixtures or summary.skipped:
         logger.error(
