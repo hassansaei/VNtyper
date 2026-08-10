@@ -124,7 +124,7 @@ from pathlib import Path
 
 from mutation_guard import dirty_paths, format_dirty_tree_refusal, format_unrestored_warning, writable_paths
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REAL_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Target module -> the unit test files that exercise it.
 #:
@@ -398,7 +398,7 @@ def generate_mutants(path: Path) -> list[Mutant]:
 
         mutants.append(
             Mutant(
-                path=str(path.relative_to(REPO_ROOT)),
+                path=str(path.relative_to(REAL_REPO_ROOT)),
                 line=token.start[0],
                 original=token.string,
                 replacement=replacement,
@@ -444,9 +444,17 @@ class TestRun:
 
     passed: bool
     output: str
+    returncode: int | None
+    timed_out: bool
 
 
-def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> TestRun:
+def run_pytest(
+    test_paths: tuple[str, ...],
+    timeout: int,
+    parallel: bool = False,
+    *,
+    repo_root: Path,
+) -> TestRun:
     """
     Run pytest over the given paths and return the outcome and the captured output.
 
@@ -456,6 +464,8 @@ def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False
         parallel (bool): Distribute across cores with xdist. Used for the full-tier
             escalation, which is the expensive path; the scoped runs are short enough
             that xdist's worker startup would cost more than it saves.
+        repo_root (Path): Disposable repository root used as the child CWD and first
+            import path.
 
     Returns:
         TestRun: ``passed`` is True only if pytest exited 0. A timeout counts as a
@@ -473,6 +483,17 @@ def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False
     """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    resolved_repo_root = repo_root.resolve(strict=True)
+    resolved_real_root = REAL_REPO_ROOT.resolve(strict=True)
+    retained_python_path: list[str] = []
+    for entry in env.get("PYTHONPATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        resolved_entry = Path(entry).resolve(strict=False)
+        if resolved_entry == resolved_real_root or resolved_entry.is_relative_to(resolved_real_root):
+            continue
+        retained_python_path.append(entry)
+    env["PYTHONPATH"] = os.pathsep.join((str(resolved_repo_root), *retained_python_path))
     command = [
         sys.executable,
         "-B",
@@ -497,7 +518,7 @@ def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False
     try:
         completed = subprocess.run(
             command,
-            cwd=REPO_ROOT,
+            cwd=resolved_repo_root,
             env=env,
             capture_output=True,
             text=True,
@@ -505,14 +526,30 @@ def run_pytest(test_paths: tuple[str, ...], timeout: int, parallel: bool = False
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return TestRun(passed=False, output=f"pytest exceeded the {timeout}s timeout and was abandoned.")
+        return TestRun(
+            passed=False,
+            output=f"pytest exceeded the {timeout}s timeout and was abandoned.",
+            returncode=None,
+            timed_out=True,
+        )
     # `or ""` because a subprocess double may leave these unset; a missing stream is not
     # a reason for the preflight to crash instead of reporting.
     output = (completed.stdout or "") + (completed.stderr or "")
-    return TestRun(passed=completed.returncode == 0, output=output)
+    return TestRun(
+        passed=completed.returncode == 0,
+        output=output,
+        returncode=completed.returncode,
+        timed_out=False,
+    )
 
 
-def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False) -> bool:
+def run_tests(
+    test_paths: tuple[str, ...],
+    timeout: int,
+    parallel: bool = False,
+    *,
+    repo_root: Path,
+) -> bool:
     """
     Run pytest and report only whether it passed.
 
@@ -523,11 +560,12 @@ def run_tests(test_paths: tuple[str, ...], timeout: int, parallel: bool = False)
         test_paths (tuple[str, ...]): Test files or directories to run.
         timeout (int): Seconds before the run is abandoned.
         parallel (bool): Distribute across cores with xdist.
+        repo_root (Path): Disposable repository root used by the pytest child.
 
     Returns:
         bool: True if every test passed.
     """
-    return run_pytest(test_paths, timeout, parallel).passed
+    return run_pytest(test_paths, timeout, parallel, repo_root=repo_root).passed
 
 
 def format_baseline_refusal(label: str, test_paths: tuple[str, ...], output: str) -> str:
@@ -564,7 +602,12 @@ def format_baseline_refusal(label: str, test_paths: tuple[str, ...], output: str
     )
 
 
-def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str | None:
+def baseline_refusal(
+    targets: dict[str, tuple[str, ...]],
+    timeout: int,
+    *,
+    repo_root: Path,
+) -> str | None:
     """
     Run the sweep's own test invocations against the unmutated tree.
 
@@ -579,6 +622,7 @@ def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str |
         targets (dict[str, tuple[str, ...]]): The targets this run will sweep, mapped to
             their scoped test files. Narrowed by ``--module`` exactly as the sweep is.
         timeout (int): Per-pytest-run timeout in seconds.
+        repo_root (Path): Disposable repository root used for every baseline child.
 
     Returns:
         str | None: The refusal to print, or ``None`` when every check passed. Returned
@@ -592,7 +636,7 @@ def baseline_refusal(targets: dict[str, tuple[str, ...]], timeout: int) -> str |
 
     for label, test_paths, parallel in checks:
         print(f"  baseline: {label} ...", end="", flush=True)
-        run = run_pytest(test_paths, timeout, parallel=parallel)
+        run = run_pytest(test_paths, timeout, parallel=parallel, repo_root=repo_root)
         print(" ok" if run.passed else " FAILED", flush=True)
         if not run.passed:
             return format_baseline_refusal(label, test_paths, run.output)
@@ -620,7 +664,7 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
     Returns:
         ModuleResult: Kill/survive counts and the surviving mutants.
     """
-    path = REPO_ROOT / path_str
+    path = REAL_REPO_ROOT / path_str
     original = path.read_text(encoding="utf-8")
     mutants = generate_mutants(path)
     result = ModuleResult(path=path_str)
@@ -637,13 +681,13 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
             # from the original, both of which can share this file's (mtime, size).
             # tests/unit/test_mutation_test.py::test_no_bytecode_cache_survives_into_any_mutants_test_run
             # is the only thing that notices if this line goes.
-            clear_bytecode_caches(REPO_ROOT / "vntyper")
+            clear_bytecode_caches(REAL_REPO_ROOT / "vntyper")
 
-            if not run_tests(scoped_tests, timeout):
+            if not run_tests(scoped_tests, timeout, repo_root=REAL_REPO_ROOT):
                 mutant.killed, mutant.killed_by = True, "scoped"
             # Survived the scoped tests - confirm against the whole tier before
             # believing it, so the score is not biased down by the scoping.
-            elif not run_tests(("tests/unit",), timeout, parallel=True):
+            elif not run_tests(("tests/unit",), timeout, parallel=True, repo_root=REAL_REPO_ROOT):
                 mutant.killed, mutant.killed_by = True, "full tier"
             else:
                 mutant.killed = False
@@ -661,7 +705,7 @@ def sweep_module(path_str: str, scoped_tests: tuple[str, ...], timeout: int, ver
                 print(f"  [{index}/{len(mutants)}] {'.' if mutant.killed else 'S'}", end="", flush=True)
     finally:
         path.write_text(original, encoding="utf-8")
-        clear_bytecode_caches(REPO_ROOT / "vntyper")
+        clear_bytecode_caches(REAL_REPO_ROOT / "vntyper")
 
     if not verbose:
         print()
@@ -1125,9 +1169,9 @@ def _refuse_if_dirty(targets: Iterable[str], outputs: Sequence[Path | None]) -> 
             point, and both fail closed: a dirty file refuses, and so does an
             indeterminate answer from git.
     """
-    guarded = writable_paths(REPO_ROOT, targets, outputs)
+    guarded = writable_paths(REAL_REPO_ROOT, targets, outputs)
     try:
-        dirty = dirty_paths(REPO_ROOT, guarded)
+        dirty = dirty_paths(REAL_REPO_ROOT, guarded)
     except RuntimeError as exc:
         return str(exc)
     return format_dirty_tree_refusal(dirty) if dirty else None
@@ -1199,7 +1243,7 @@ def main() -> int:
 
     # Before anything else. See the `.pyc` warning in the module docstring: a stale
     # cache from an earlier sweep is enough on its own to make every mutant "survive".
-    removed = clear_bytecode_caches(REPO_ROOT / "vntyper")
+    removed = clear_bytecode_caches(REAL_REPO_ROOT / "vntyper")
     print(f"Cleared {removed} __pycache__ directories before starting.")
 
     # A mutant is "killed" whenever pytest exits non-zero, so a suite that is already red
@@ -1209,7 +1253,7 @@ def main() -> int:
     # the mutants will be, and BEFORE `time.monotonic()` so its cost is not reported as
     # sweep duration.
     print("Checking the baseline: the tests must pass on the UNMUTATED tree.")
-    refusal = baseline_refusal(targets, args.timeout)
+    refusal = baseline_refusal(targets, args.timeout, repo_root=REAL_REPO_ROOT)
     if refusal is not None:
         print(f"\n{refusal}", file=sys.stderr)
         return 1
@@ -1228,7 +1272,7 @@ def main() -> int:
     # meaningful: the tree was clean when the sweep started, so anything dirty now came
     # from the sweep rather than from the maintainer.
     try:
-        unrestored = dirty_paths(REPO_ROOT, targets)
+        unrestored = dirty_paths(REAL_REPO_ROOT, targets)
     except RuntimeError as exc:
         # git answered before the sweep and cannot now. The sources may hold a mutant and
         # nothing here can prove otherwise, so say so rather than exit 0.

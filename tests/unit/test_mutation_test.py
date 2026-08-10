@@ -14,6 +14,7 @@ both halves are pinned here so a future edit cannot quietly drop one.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -76,7 +77,7 @@ def test_every_generated_mutant_compiles(tmp_path, monkeypatch) -> None:
     mutable operator token, but the result does not parse, so it must be dropped rather
     than counted as an uncaught mutant.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     path = _write_module(
         tmp_path,
         "def f(*args, **kwargs):\n    return len(args) + len(kwargs)\n",
@@ -91,7 +92,7 @@ def test_every_generated_mutant_compiles(tmp_path, monkeypatch) -> None:
 
 def test_comparison_and_boolean_operators_are_mutated(tmp_path, monkeypatch) -> None:
     """The decision-flipping operators are the point of the exercise."""
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     path = _write_module(tmp_path, "def f(a, b):\n    return a >= 1 and b\n")
 
     swaps = {(m.original, m.replacement) for m in mutation_test.generate_mutants(path)}
@@ -108,7 +109,7 @@ def test_not_is_deleted_rather_than_replaced(tmp_path, monkeypatch) -> None:
     That is the highest-signal operator for this codebase's "stages mark, they do not
     filter" logic, and the empty replacement has to still produce parseable source.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     path = _write_module(tmp_path, "def f(a):\n    if not a:\n        return 0\n    return 1\n")
 
     mutants = [m for m in mutation_test.generate_mutants(path) if m.original == "not"]
@@ -126,7 +127,7 @@ def test_strings_and_comments_are_never_mutated(tmp_path, monkeypatch) -> None:
     Tokenizing gives this for free - both arrive as their own token types - and this
     test is what stops someone "simplifying" the generator into a regex over the source.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     path = _write_module(
         tmp_path,
         '"""Docstring with and, or, True and 1 < 2."""\n# comment with and or True 1 < 2\nX = 5\n',
@@ -139,7 +140,7 @@ def test_strings_and_comments_are_never_mutated(tmp_path, monkeypatch) -> None:
 
 def test_the_reported_line_number_is_the_mutated_token_s_line(tmp_path, monkeypatch) -> None:
     """The survivor list is only actionable if the line numbers are right."""
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     path = _write_module(tmp_path, "A = 1\n\n\nB = 2 and 3\n")
 
     lines = {m.line for m in mutation_test.generate_mutants(path) if m.original == "and"}
@@ -172,7 +173,7 @@ def test_clear_bytecode_caches_removes_every_pycache(tmp_path) -> None:
     assert (tmp_path / "pkg" / "keep.py").exists(), "only caches are removed"
 
 
-def test_the_test_subprocess_disables_bytecode_writing(monkeypatch) -> None:
+def test_the_test_subprocess_disables_bytecode_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     One half of the defence, pinned so it cannot be dropped in a refactor.
 
@@ -184,19 +185,40 @@ def test_the_test_subprocess_disables_bytecode_writing(monkeypatch) -> None:
     real invariant was broken (see the test below, which was written after inducing
     exactly that). Keep both.
     """
-    captured: dict = {}
+    real_root = tmp_path / "real"
+    sweep_root = tmp_path / "sweep"
+    real_root.mkdir()
+    sweep_root.mkdir()
+    captured: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
         captured["command"] = command
         captured["env"] = kwargs["env"]
-        return subprocess.CompletedProcess(command, 0)
+        captured["cwd"] = kwargs["cwd"]
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", real_root, raising=False)
     monkeypatch.setattr(mutation_test.subprocess, "run", fake_run)
+    real_subdirectory = real_root / "scripts"
+    monkeypatch.setenv(
+        "PYTHONPATH",
+        os.pathsep.join((str(real_root), str(real_subdirectory), str(tmp_path / "dependency"))),
+    )
 
-    mutation_test.run_tests(("tests/unit/test_scoring.py",), timeout=60)
+    run = mutation_test.run_pytest(("tests/unit/test_scoring.py",), timeout=60, repo_root=sweep_root)
 
-    assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert isinstance(captured["command"], list)
     assert "-B" in captured["command"]
+    assert captured["cwd"] == sweep_root
+    python_path = environment["PYTHONPATH"].split(os.pathsep)
+    assert python_path[0] == str(sweep_root)
+    assert str(real_root) not in python_path
+    assert str(real_subdirectory) not in python_path
+    assert run.returncode == 0
+    assert run.timed_out is False
 
 
 def test_no_bytecode_cache_survives_into_any_mutants_test_run(tmp_path, monkeypatch) -> None:
@@ -215,7 +237,7 @@ def test_no_bytecode_cache_survives_into_any_mutants_test_run(tmp_path, monkeypa
     The double re-creates the cache on every call, which is what makes this test about
     clearing *between* mutants rather than once at the start.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     cache = tmp_path / "vntyper" / "scripts" / "__pycache__"
 
     def _plant_stale_cache() -> None:
@@ -225,7 +247,8 @@ def test_no_bytecode_cache_survives_into_any_mutants_test_run(tmp_path, monkeypa
     _plant_stale_cache()
     caches_visible_to_each_run: list[list[Path]] = []
 
-    def fake_run_tests(_paths, _timeout, parallel=False):
+    def fake_run_tests(_paths, _timeout, parallel=False, *, repo_root: Path):
+        assert repo_root == tmp_path
         caches_visible_to_each_run.append(sorted(tmp_path.rglob("__pycache__")))
         _plant_stale_cache()
         return False  # killed, so the sweep moves straight on to the next mutant
@@ -244,7 +267,7 @@ def test_no_bytecode_cache_survives_into_any_mutants_test_run(tmp_path, monkeypa
     assert not list(tmp_path.rglob("__pycache__")), "the finally-restore must clear the cache too"
 
 
-def test_a_timed_out_test_run_counts_as_a_kill(monkeypatch) -> None:
+def test_a_timed_out_test_run_counts_as_a_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A mutant that hangs the suite has been detected, not missed."""
 
     def fake_run(command, **kwargs):
@@ -252,7 +275,11 @@ def test_a_timed_out_test_run_counts_as_a_kill(monkeypatch) -> None:
 
     monkeypatch.setattr(mutation_test.subprocess, "run", fake_run)
 
-    assert mutation_test.run_tests(("tests/unit",), timeout=1) is False
+    run = mutation_test.run_pytest(("tests/unit",), timeout=1, repo_root=tmp_path)
+
+    assert run.passed is False
+    assert run.returncode is None
+    assert run.timed_out is True
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +294,7 @@ def test_the_original_file_is_restored_after_a_sweep(tmp_path, monkeypatch) -> N
     Every mutant here is reported as killed, so the sweep runs its full loop and still
     has to leave the file byte-identical.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     monkeypatch.setattr(mutation_test, "run_tests", lambda *_, **__: False)
     original = "def f(a):\n    return a >= 1 and a\n"
     _write_module(tmp_path, original)
@@ -286,7 +313,7 @@ def test_the_original_file_is_restored_when_a_sweep_raises(tmp_path, monkeypatch
     without the ``finally`` it would leave production source silently wrong in a
     working tree someone is about to commit from.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
 
     def explode(*_args, **_kwargs):
         raise KeyboardInterrupt
@@ -308,10 +335,11 @@ def test_a_surviving_mutant_is_confirmed_against_the_full_tier(tmp_path, monkeyp
     A mutant that the module's own tests miss is re-run against the whole unit tier
     before it is recorded as a survivor, so "survived" means survived everything.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     seen: list[tuple[tuple[str, ...], bool]] = []
 
-    def fake_run_tests(paths, _timeout, parallel=False):
+    def fake_run_tests(paths, _timeout, parallel=False, *, repo_root: Path):
+        assert repo_root == tmp_path
         seen.append((paths, parallel))
         # Pass the scoped run, fail the full tier: the mutant is killed on escalation.
         return paths != ("tests/unit",)
@@ -554,9 +582,9 @@ def test_every_declared_target_and_its_tests_exist() -> None:
     Both failures look like a healthy run, so the paths are checked against the repo.
     """
     for module, test_paths in mutation_test.TARGETS.items():
-        assert (mutation_test.REPO_ROOT / module).is_file(), module
+        assert (mutation_test.REAL_REPO_ROOT / module).is_file(), module
         for test_path in test_paths:
-            assert (mutation_test.REPO_ROOT / test_path).is_file(), test_path
+            assert (mutation_test.REAL_REPO_ROOT / test_path).is_file(), test_path
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +645,7 @@ def _prepare_main(
     Returns:
         list[list[str]]: Mutated in place with every command issued.
     """
-    monkeypatch.setattr(mutation_test, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mutation_test, "REAL_REPO_ROOT", tmp_path)
     monkeypatch.setattr(mutation_test, "TARGETS", {"sample.py": ("tests/unit/x.py",)})
     monkeypatch.setattr(mutation_test.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(sys, "argv", argv or ["mutation_test.py"])
@@ -865,7 +893,7 @@ def test_the_pytest_output_is_kept_rather_than_discarded(monkeypatch) -> None:
 
     monkeypatch.setattr(mutation_test.subprocess, "run", fake_run)
 
-    run = mutation_test.run_pytest(("tests/unit",), timeout=5)
+    run = mutation_test.run_pytest(("tests/unit",), timeout=5, repo_root=mutation_test.REAL_REPO_ROOT)
 
     assert run.passed is False
     assert "1 failed, 0 passed" in run.output
@@ -880,7 +908,7 @@ def test_a_timed_out_run_reports_the_timeout_rather_than_an_empty_string(monkeyp
 
     monkeypatch.setattr(mutation_test.subprocess, "run", fake_run)
 
-    run = mutation_test.run_pytest(("tests/unit",), timeout=7)
+    run = mutation_test.run_pytest(("tests/unit",), timeout=7, repo_root=mutation_test.REAL_REPO_ROOT)
 
     assert run.passed is False
     assert "7" in run.output and "timeout" in run.output.lower()
@@ -896,13 +924,14 @@ def test_the_baseline_runs_the_same_invocations_the_sweep_judges_mutants_by(monk
     """
     seen: list[tuple[tuple[str, ...], bool]] = []
 
-    def fake_run_pytest(paths, _timeout, parallel=False):
+    def fake_run_pytest(paths, _timeout, parallel=False, *, repo_root: Path):
+        assert repo_root == mutation_test.REAL_REPO_ROOT
         seen.append((paths, parallel))
-        return mutation_test.TestRun(passed=True, output="")
+        return mutation_test.TestRun(passed=True, output="", returncode=0, timed_out=False)
 
     monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
 
-    refusal = mutation_test.baseline_refusal(_ONE_TARGET, timeout=60)
+    refusal = mutation_test.baseline_refusal(_ONE_TARGET, timeout=60, repo_root=mutation_test.REAL_REPO_ROOT)
 
     assert refusal is None
     assert (("tests/unit/test_scoring.py",), False) in seen, "the scoped kill check, serial"
@@ -912,12 +941,18 @@ def test_the_baseline_runs_the_same_invocations_the_sweep_judges_mutants_by(monk
 def test_the_baseline_refusal_quotes_the_failure_and_names_what_it_ran(monkeypatch) -> None:
     """The next action is to fix the failing test, so the refusal has to show it."""
 
-    def fake_run_pytest(_paths, _timeout, parallel=False):
-        return mutation_test.TestRun(passed=False, output="E   ModuleNotFoundError: No module named 'pysam'")
+    def fake_run_pytest(_paths, _timeout, parallel=False, *, repo_root: Path):
+        assert repo_root == mutation_test.REAL_REPO_ROOT
+        return mutation_test.TestRun(
+            passed=False,
+            output="E   ModuleNotFoundError: No module named 'pysam'",
+            returncode=1,
+            timed_out=False,
+        )
 
     monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
 
-    refusal = mutation_test.baseline_refusal(_ONE_TARGET, timeout=60)
+    refusal = mutation_test.baseline_refusal(_ONE_TARGET, timeout=60, repo_root=mutation_test.REAL_REPO_ROOT)
 
     assert refusal is not None
     assert "ModuleNotFoundError" in refusal
@@ -980,9 +1015,10 @@ def test_the_baseline_is_narrowed_by_module_exactly_as_the_sweep_is(tmp_path, mo
     )
     checked: list[tuple[str, ...]] = []
 
-    def fake_run_pytest(paths, _timeout, parallel=False):
+    def fake_run_pytest(paths, _timeout, parallel=False, *, repo_root: Path):
+        assert repo_root == tmp_path
         checked.append(paths)
-        return mutation_test.TestRun(passed=True, output="")
+        return mutation_test.TestRun(passed=True, output="", returncode=0, timed_out=False)
 
     monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
     monkeypatch.setattr(
@@ -1004,7 +1040,7 @@ def test_a_green_baseline_lets_the_sweep_run(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         mutation_test,
         "run_pytest",
-        lambda *_a, **_k: mutation_test.TestRun(passed=True, output=""),
+        lambda *_a, **_k: mutation_test.TestRun(passed=True, output="", returncode=0, timed_out=False),
     )
     swept: list[str] = []
 
@@ -1032,9 +1068,10 @@ def test_the_baseline_runs_only_after_the_dirty_tree_refusal(tmp_path, monkeypat
     _prepare_main(tmp_path, monkeypatch, [" M sample.py\n"], stub_baseline=False)
     baseline_calls: list[tuple[str, ...]] = []
 
-    def fake_run_pytest(paths, _timeout, parallel=False):
+    def fake_run_pytest(paths, _timeout, parallel=False, *, repo_root: Path):
+        assert repo_root == tmp_path
         baseline_calls.append(paths)
-        return mutation_test.TestRun(passed=True, output="")
+        return mutation_test.TestRun(passed=True, output="", returncode=0, timed_out=False)
 
     monkeypatch.setattr(mutation_test, "run_pytest", fake_run_pytest)
 

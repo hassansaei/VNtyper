@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from mutation_provenance import verify_import_provenance as verify_import_provenance
 from mutation_workspace_fs import RootCapability as _RootCapability
 from mutation_workspace_fs import assert_root_identity as _assert_root_identity
 from mutation_workspace_fs import captured_path_state as _captured_path_state
