@@ -97,7 +97,8 @@ def build_fastp_command(
 
     Args:
         fastp_path (str): fastp invocation from ``config["tools"]["fastp"]``.
-        threads (int): Thread count.
+        threads (int): Requested thread count. Deduplication is serialized to one
+            fastp worker; without deduplication this value is used unchanged.
         fastq_1 (str | Path): Input R1.
         fastq_2 (str | Path | None): Optional input R2.
         output (str | Path): Output directory.
@@ -113,6 +114,13 @@ def build_fastp_command(
         str: The complete fastp command.
 
     Note:
+        fastp 0.23.4 workers share an atomic Bloom-filter duplicate table. The
+        first worker to set a key keeps that read, so parallel scheduling changes
+        which representative survives and makes downstream coverage
+        nondeterministic. Using one fastp worker when ``deduplication`` is enabled
+        makes read membership reproducible; it does not change the thread count
+        requested from BWA or samtools.
+
         The base command ends with a trailing space and each optional flag is
         appended with a leading one, so both flags on produces a double space
         before ``--disable_adapter_trimming``. That is preserved from the
@@ -129,8 +137,9 @@ def build_fastp_command(
         input_fragment += f"--in2 {quote_path(fastq_2)} "
         output_fragment += f"--out2 {quote_path(out_2)} "
 
+    fastp_threads = 1 if deduplication else threads
     command = (
-        f"{fastp_path} --thread {quote_path(threads)} "
+        f"{fastp_path} --thread {quote_path(fastp_threads)} "
         f"{input_fragment}"
         f"{output_fragment}"
         f"--compression {quote_path(compression_level)} "

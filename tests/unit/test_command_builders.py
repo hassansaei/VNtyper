@@ -94,7 +94,7 @@ def _tokens(command: str) -> list[str]:
 
 def test_the_fastp_command_is_pinned_with_both_flags_on():
     """
-    Both optional flags append after the base command.
+    Deduplication is serialized even when the caller requests more workers.
 
     The double space before ``--disable_adapter_trimming`` is not a typo: the base
     command ends with a trailing space and each flag is appended with a leading
@@ -116,7 +116,7 @@ def test_the_fastp_command_is_pinned_with_both_flags_on():
     )
 
     assert command == (
-        "fastp --thread 4 --in1 /data/in_R1.fq.gz --in2 /data/in_R2.fq.gz "
+        "fastp --thread 1 --in1 /data/in_R1.fq.gz --in2 /data/in_R2.fq.gz "
         "--out1 /out/output_R1.fastq.gz --out2 /out/output_R2.fastq.gz "
         "--compression 6 "
         "--qualified_quality_phred 20 "
@@ -129,7 +129,7 @@ def test_the_fastp_command_is_pinned_with_both_flags_on():
 
 
 def test_the_fastp_command_omits_both_optional_flags_when_disabled():
-    """With both switches off the command ends at the trailing space, as before."""
+    """Without deduplication, fastp retains the caller's requested concurrency."""
     command = build_fastp_command(
         fastp_path=FASTP,
         threads=4,
@@ -145,6 +145,7 @@ def test_the_fastp_command_omits_both_optional_flags_when_disabled():
         deduplication=False,
     )
 
+    assert command.startswith("fastp --thread 4 ")
     assert command.endswith("--json /out/output.json ")
     assert "--disable_adapter_trimming" not in command
     assert "--dedup" not in command

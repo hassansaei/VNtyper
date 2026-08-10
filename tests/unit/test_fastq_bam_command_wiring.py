@@ -10,7 +10,7 @@ hand-rolls its own string next to it.
 Every expected string here was captured from the code as it stood *before*
 ``command_builders`` existed, so this file doubles as the proof that the
 extraction is behaviour-preserving. The only differences from that capture are the
-four deliberate fixes:
+five deliberate fixes:
 
 * ``set -o pipefail; `` on the three multi-stage pipes,
 * the CRAM unmapped-read extractor calling the configured samtools instead of a
@@ -19,7 +19,9 @@ four deliberate fixes:
   needs no quoting - hence the byte-identical strings below,
 * the CRAM unmapped-read extractor writing through a plain pipe rather than a
   ``tee >(...)`` process substitution the shell does not wait for - see the
-  section on that path below for the measurement.
+  section on that path below for the measurement, and
+* dedup-enabled fastp commands using one worker so the shared atomic duplicate
+  table retains a reproducible representative.
 
 ``run_command`` is mocked throughout; nothing here starts a process.
 """
@@ -107,14 +109,14 @@ def _run_bam_to_fastq(tmp_path, **overrides):
 
 
 def test_process_fastq_emits_the_pinned_fastp_command(tmp_path):
-    """Byte-identical to the pre-extraction command, trailing space and all."""
+    """The caller requests four threads, but dedup-enabled fastp is serialized."""
     recorder = _Recorder()
 
     with patch.object(fastq_bam_processing, "run_command", recorder):
         fastq_bam_processing.process_fastq("/data/in_R1.fq.gz", "/data/in_R2.fq.gz", 4, str(tmp_path), "output", CONFIG)
 
     assert recorder.commands == [
-        f"fastp --thread 4 --in1 /data/in_R1.fq.gz --in2 /data/in_R2.fq.gz "
+        f"fastp --thread 1 --in1 /data/in_R1.fq.gz --in2 /data/in_R2.fq.gz "
         f"--out1 {tmp_path}/output_R1.fastq.gz --out2 {tmp_path}/output_R2.fastq.gz "
         f"--compression 6 "
         f"--qualified_quality_phred 20 "
