@@ -61,14 +61,14 @@ def _declared_artifact_paths(test_case: dict, field: str, output_dir: Path) -> l
         raise ValueError(f"case={test_name} field={field} must be a list of relative artifact paths")
     root = output_dir.resolve()
     result: list[Path] = []
-    seen: set[str] = set()
+    seen: set[Path] = set()
     for raw in raw_paths:
         if not isinstance(raw, str) or not raw:
             raise ValueError(f"case={test_name} field={field} contains an empty or non-string artifact path")
         relative = Path(raw)
-        if relative.is_absolute() or ".." in relative.parts or raw in seen:
+        if relative.is_absolute() or ".." in relative.parts or relative in seen:
             raise ValueError(f"case={test_name} field={field} invalid artifact: {raw}")
-        seen.add(raw)
+        seen.add(relative)
         candidate = root / relative
         resolved_parent = candidate.parent.resolve(strict=False)
         if not resolved_parent.is_relative_to(root):
@@ -118,7 +118,7 @@ def assert_declared_archive(test_case: dict, output_dir: Path) -> None:
         AssertionError: If the sibling archive has the wrong filesystem state.
         ValueError: If ``expected_archive`` is not a Boolean.
     """
-    if "expected_archive" not in test_case:
+    if test_case.get("expected_exit_code", 0) != 0 or "expected_archive" not in test_case:
         return
     case_id = str(test_case.get("test_name", "<unnamed>"))
     expected = test_case["expected_archive"]

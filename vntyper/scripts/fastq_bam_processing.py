@@ -104,9 +104,9 @@ def process_bam_to_fastq(
         fast_mode (bool, optional): If True, skips filtering of unmapped and partially
             mapped reads. Defaults to False.
         delete_intermediates (bool, optional): If True, deletes intermediate files after
-            processing. Defaults to True.
+            processing, overriding ``keep_intermediates``. Defaults to True.
         keep_intermediates (bool, optional): If True, keeps intermediate files for later
-            use. Defaults to False.
+            use unless ``delete_intermediates`` is True. Defaults to False.
         bed_file (Path, optional): Path to a BED file specifying regions for MUC1 analysis.
     Returns:
         tuple: Paths to the generated FASTQ files (R1, R2, other, single).
@@ -236,7 +236,7 @@ def process_bam_to_fastq(
     logger.info("BAM to FASTQ conversion completed.")
 
     # Clean up intermediates if requested
-    if delete_intermediates and not keep_intermediates:
+    if delete_intermediates:
         logger.info("Removing intermediate BAM files...")
         intermediate_files = [
             Path(output) / f"{output_name}_unmapped.bam",

@@ -51,6 +51,7 @@ def test_declared_failures_do_not_retain_unreachable_success_expectations() -> N
     success_only = {
         "expected_archive",
         "expected_absent",
+        "expected_files",
         "expected_present",
         "kestrel_assertions",
         "check_igv_report",
@@ -58,8 +59,9 @@ def test_declared_failures_do_not_retain_unreachable_success_expectations() -> N
         "advntr_assertions",
     }
     stale = {}
-    for case in [*get_bam_test_cases(), *get_advntr_test_cases()]:
-        if case.get("expected_exit_code") == 1:
+    single_end_cases = load_test_config()["integration_tests"]["single_end_bam_tests"]
+    for case in [*get_bam_test_cases(), *get_advntr_test_cases(), *get_fastq_test_cases(), *single_end_cases]:
+        if case.get("expected_exit_code", 0) != 0:
             retained = sorted(success_only.intersection(case))
             if retained:
                 stale[case["test_name"]] = retained
@@ -164,6 +166,8 @@ def test_declared_artifacts_assert_both_presence_and_absence(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     "case",
     [
+        {"expected_present": "same.txt"},
+        {"expected_present": [None]},
         {"expected_present": [""]},
         {"expected_present": ["/absolute.txt"]},
         {"expected_present": ["../escape.txt"]},
@@ -174,6 +178,12 @@ def test_declared_artifacts_assert_both_presence_and_absence(tmp_path: Path) -> 
 )
 def test_declared_artifacts_reject_invalid_paths(tmp_path: Path, case: dict) -> None:
     with pytest.raises(ValueError, match="artifact|expected_"):
+        orchestration.assert_declared_artifacts(case, tmp_path)
+
+
+def test_declared_artifacts_reject_normalized_duplicate_paths(tmp_path: Path) -> None:
+    case = {"expected_present": ["same.txt", "./same.txt"]}
+    with pytest.raises(ValueError, match="invalid artifact"):
         orchestration.assert_declared_artifacts(case, tmp_path)
 
 
@@ -239,6 +249,20 @@ def test_declared_archive_rejects_invalid_boolean_and_broken_symlink(tmp_path: P
     Path(f"{output}.zip").symlink_to(tmp_path / "missing.zip")
     with pytest.raises(AssertionError, match="case=absent field=expected_archive"):
         orchestration.assert_declared_archive({"test_name": "absent", "expected_archive": False}, output)
+
+
+def test_declared_archive_skips_every_nonzero_outcome(tmp_path: Path) -> None:
+    output = tmp_path / "result"
+    output.mkdir()
+    orchestration.assert_declared_archive(
+        {"test_name": "usage", "expected_exit_code": 2, "expected_archive": True},
+        output,
+    )
+    Path(f"{output}.zip").write_bytes(b"zip")
+    orchestration.assert_declared_archive(
+        {"test_name": "failure", "expected_exit_code": 1, "expected_archive": False},
+        output,
+    )
 
 
 def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:
