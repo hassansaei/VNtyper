@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from scripts.ble001_policy_validation import (
+    from ble001_policy_validation import (
         behavior_node_error,
         require_count,
         require_exact_keys,
