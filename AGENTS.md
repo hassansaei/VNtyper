@@ -377,6 +377,10 @@ The release accepts only a tag on `main` ancestry after these exact ten checks s
 for the full tagged SHA: `Lint (Ruff)`, `Type Check (mypy)`, `Unit Tests (Python 3.10)`,
 `Unit Tests (Python 3.11)`, `Unit Tests (Python 3.12)`, `Unit Tests (Python 3.13)`,
 `Docs build (strict)`, `CI Success`, `Build and test image`, and `Docker Success`.
+For each exact name and SHA, the newest GitHub Actions check is authoritative even when it
+came from a scheduled or manual rerun. A newer failure intentionally supersedes an older
+success; recover by rerunning that exact SHA to a newer green check, never by selecting the
+stale success.
 The Docker `sha-<7>` tag is only a convenience reference: contract-v1 evidence binds
 the full SHA and immutable digest, and the image labels
 `org.opencontainers.image.revision` and `org.opencontainers.image.version` must match

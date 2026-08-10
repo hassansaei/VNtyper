@@ -58,8 +58,15 @@ def _evaluate_image_output(expression: str, *, event_name: str, filtered: bool) 
 
 def _image_job_gate_accepts(condition: str, normalized_output: str) -> bool:
     """Evaluate the shared image-output requirement with all other terms satisfied."""
-    assert "needs.changes.outputs.image == 'true'" in condition
-    return normalized_output == "true"
+    normalized_condition = " ".join(condition.split())
+    accepted_conditions = {
+        "needs.changes.outputs.image == 'true'",
+        (
+            "always() && needs.changes.outputs.image == 'true' && needs.base-status.result == 'success' "
+            "&& needs.build-base.result != 'failure' && needs.build-base.result != 'cancelled'"
+        ),
+    }
+    return normalized_output == "true" and normalized_condition in accepted_conditions
 
 
 @pytest.mark.parametrize(
@@ -90,6 +97,13 @@ def test_validation_events_force_normalized_image_output_before_job_gates(
     assert normalized == expected
     assert _image_job_gate_accepts(base_gate, normalized) is (expected == "true")
     assert _image_job_gate_accepts(application_gate, normalized) is (expected == "true")
+
+
+def test_image_job_gate_harness_rejects_an_event_exclusion_mutation() -> None:
+    """The gate evaluator must detect a schedule exclusion even with normalized image=true."""
+    restrictive_gate = "needs.changes.outputs.image == 'true' && github.event_name != 'schedule'"
+
+    assert _image_job_gate_accepts(restrictive_gate, "true") is False
 
 
 def test_only_exact_main_push_may_publish_release_authoritative_application_tags() -> None:

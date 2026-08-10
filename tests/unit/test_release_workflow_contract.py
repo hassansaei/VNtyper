@@ -2175,6 +2175,30 @@ def test_manual_alias_dry_run_executes_one_untagged_probe_and_zero_writes(tmp_pa
     assert not any(item["execute"] for item in summary["plan"])
 
 
+def test_manual_alias_dry_run_fails_when_any_alias_conflicts(tmp_path: Path) -> None:
+    """Read-only mode must not report success for a plan production would reject."""
+    source_digest = "sha256:" + "b" * 64
+    conflicting_digest = "sha256:" + "c" * 64
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(
+        tmp_path,
+        _promotion_fixture({"latest": (conflicting_digest, "2.0.10")}),
+    )
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "dry-run-aliases", env)
+
+    assert completed.returncode != 0
+    assert "dry-run alias conflict" in completed.stderr
+    assert "latest" in completed.stderr
+    assert (tmp_path / "mutation.log").read_text() == ""
+    assert not (tmp_path / "github-output").exists()
+    records = _create_records(tmp_path)
+    assert len(records) == 1
+    assert "--dry-run" in records[0]
+    assert "--tag" not in records[0]
+    assert records[0][-1] == f"ghcr.io/hassansaei/vntyper@{source_digest}"
+
+
 def test_manual_alias_inspection_aborts_on_non_authoritative_failure_before_dry_run_probe(tmp_path: Path) -> None:
     """Dry-run planning must not describe an uncertain registry observation as absence."""
     image = "ghcr.io/hassansaei/vntyper"

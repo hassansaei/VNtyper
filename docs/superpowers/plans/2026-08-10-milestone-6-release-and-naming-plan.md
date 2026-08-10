@@ -264,6 +264,8 @@ assert classify_check_runs(SHA, with_skipped_build_component, attempt=1).action 
 ```
 
 Also inject successful same-name records with another `head_sha` and `app.slug="external-ci"`; assert neither can satisfy a missing required check.
+Pin the fail-closed cross-event recovery rule: a newer scheduled/manual failure for the exact SHA supersedes an older
+push success, and the operator must rerun that exact SHA to produce a newer successful check rather than select stale evidence.
 Assert the timeout result records `(attempt, elapsed_seconds) == (120, 3570)`.
 
 - [ ] **Step 3: Run RED and confirm the behavioral failure (2–5 min)**
@@ -1657,6 +1659,9 @@ write:
           plan = plan_alias_updates(version, sys.argv[2], observed, dry_run=True)
           if any(item.execute for item in plan):
               raise SystemExit("dry-run policy attempted a write")
+          conflicts = [item.alias for item in plan if item.decision == "fail-conflict"]
+          if conflicts:
+              raise SystemExit(f"dry-run alias conflict: {', '.join(conflicts)}")
           print(json.dumps({"source_digest": sys.argv[2],
                             "observed": {key: None if value is None else dataclasses.asdict(value)
                                          for key, value in observed.items()},
@@ -1668,7 +1673,8 @@ write:
 
 Change the job output to `${{ steps.dry-run-aliases.outputs.dry_run_alias_summary_json }}`. The workflow contract test
 executes this checked-in step with the fake Docker command and asserts exactly one untagged
-`imagetools create --dry-run --prefer-index=false` record and zero mutating create records.
+`imagetools create --dry-run --prefer-index=false` record and zero mutating create records. A dry-run plan containing
+any `fail-conflict` exits nonzero and emits no successful summary, matching the production eligibility decision.
 
 - [ ] **Step 6: Run GREEN plus policy prefix-rerun suite (2–5 min)**
 

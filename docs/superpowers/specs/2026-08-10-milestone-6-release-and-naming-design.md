@@ -355,7 +355,10 @@ The required contract is the GitHub Actions check-runs named exactly:
 
 For each name the coordinator reads check-runs for the full candidate SHA, filters to the GitHub
 Actions app, and evaluates the newest run attempt. A success from a different SHA, older attempt,
-or similarly named job is irrelevant.
+or similarly named job is irrelevant. This is deliberately fail-closed across workflow events: a
+newer scheduled or manual failure supersedes an older successful push check for the same SHA.
+Recovery is to rerun the failing workflow for that exact SHA and obtain a newer successful check,
+never to select the stale success.
 
 Polling is bounded to 120 attempts at 30-second intervals: no more than 60 minutes of deliberate sleep. The job timeout
 is at least 65 minutes so setup/API overhead cannot preempt the policy timeout.
@@ -592,7 +595,8 @@ Unit tests must prove:
 - recognized legacy `main` advances, while every other missing/unparseable label hard-fails before writes;
 - equal-version floating aliases cover same-digest no-op and different-digest hard conflict;
 - a rerun after every possible prefix of completed alias operations converges on the same digest;
-- dry-run plans contain the same decisions but no executable mutation operations.
+- dry-run plans contain the same decisions but no executable mutation operations, and any
+  `fail-conflict` decision makes the dry run fail rather than report production eligibility.
 
 ### 11.2 Workflow contract tests
 

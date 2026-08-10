@@ -28,7 +28,7 @@ These are intentional, verified, and listed so nothing arrives as a surprise.
 | A2 | Image numpy 1.26.4 → 2.0.2 | The old image only ran 1.26.4 because `pip install .` downgraded conda's numpy; 2.0.2 is what the recipe always declared | numpy 2 semantics differ in edge cases; only the unit tier and one pipeline case are covered |
 | A3 | `requires-python` >=3.9 → >=3.10 | 3.9 is EOL (2025-10-31) | Users pinned to 3.9 cannot `pip install` the new version |
 | A4 | numpy upper bound `<2.0.0` removed | Needed to stop pip clobbering conda's numpy; 330 tests pass on numpy 2.5.1 | PyPI users may now resolve numpy versions CI does not test |
-| A5 | adVNTR moved off the merge path | Nightly cron + `workflow_dispatch full: true` still run it | An adVNTR regression is caught within a day, not at merge |
+| A5 | adVNTR moved off the merge path | Nightly cron + every `workflow_dispatch` run still execute the full Docker tier | An adVNTR regression is caught within a day, not at merge |
 | A6 | Local conda env must be recreated | `conda/environment_vntyper.yml` changed interpreter | `mamba env create -f conda/environment_vntyper.yml` then `pip install -e ".[dev,docs]"` |
 
 **A1 residual risk — RESOLVED (#179).** At the time this was written `generate_report.py`
