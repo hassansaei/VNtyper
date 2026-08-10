@@ -506,7 +506,7 @@ git commit -m "test(ci): freeze reviewed BLE001 inventory"
 - Consumes: `flagging.regex_match`, `flagging.evaluate_condition`, `variant_parsing.read_vcf_without_comments`.
 - Produces: exact C-manifest records and behavior-test node IDs for those three seed symbols.
 
-- [ ] **Step 1: Add unchanged-production log/outcome characterizations**
+- [x] **Step 1: Add unchanged-production log/outcome characterizations**
 
 Extend existing tests so invalid regex returns `False` and logs ERROR containing `Error in regex_match`; missing name returns `False` and logs WARNING containing the missing name; a non-NameError evaluation failure returns `False` and logs ERROR. Use a fixed synthetic Series and expression; do not expand eval builtins.
 
@@ -517,7 +517,7 @@ def test_invalid_regex_is_false_and_observable(caplog: pytest.LogCaptureFixture)
     assert "Error in regex_match" in caplog.text
 ```
 
-- [ ] **Step 2: Run focused behavior tests**
+- [x] **Step 2: Run focused behavior tests**
 
 Run: `pytest -m unit tests/unit/test_flagging.py -k 'invalid_regex or invalid_pattern or missing_column or evaluation_error' -q`
 
@@ -527,24 +527,24 @@ Temporarily change the `regex_match` exception fallback from `False` to `True`, 
 `tests/unit/test_flagging.py::test_invalid_regex_is_false_and_observable`, and observe failure on the returned value.
 Restore the exact production line immediately and use `git diff` to prove the mutation is gone before touching policy.
 
-- [ ] **Step 3: Strengthen VCF three-way distinction**
+- [x] **Step 3: Strengthen VCF three-way distinction**
 
 Keep the existing valid-empty, missing-file, and unreadable-path cases. Assert all return empty frames, but missing logs `VCF file not found`, unexpected failure logs `Error reading VCF file`, and a valid empty VCF emits neither error. This characterizes current behavior without inventing an exception outcome.
 
-- [ ] **Step 4: Verify the frozen fail-open JSON records**
+- [x] **Step 4: Verify the frozen fail-open JSON records**
 
 For each of the three symbols, verify the Task 3 record has the deterministic disposition, structured outcome (`False`
 or empty `DataFrame`), domain rationale, exact now-existing test node ID, and log observability. The inventory category
 must be C. Change a record only when the characterization proves the frozen fact is wrong and the existing contract
 authorizes the corrected outcome.
 
-- [ ] **Step 5: Run policy and behavior GREEN**
+- [x] **Step 5: Run policy and behavior GREEN**
 
 Run: `pytest -m unit tests/unit/test_flagging.py tests/unit/test_variant_parsing.py tests/unit/test_ble001_policy.py -q`
 
 Expected: PASS; live counts remain unchanged unless a contract-backed handler edit was made.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/ble001_policy.json tests/unit/test_flagging.py tests/unit/test_variant_parsing.py vntyper/scripts/flagging.py vntyper/scripts/variant_parsing.py

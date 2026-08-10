@@ -56,6 +56,13 @@ class TestRegexMatch:
         assert regex_match(r"[invalid", "test") is False
 
 
+def test_invalid_regex_is_false_and_observable(caplog: pytest.LogCaptureFixture) -> None:
+    """An invalid configured regex fails closed and leaves an ERROR breadcrumb."""
+    with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
+        assert regex_match("[", "value") is False
+    assert "Error in regex_match" in caplog.text
+
+
 # --- evaluate_condition tests ---
 
 
@@ -72,9 +79,12 @@ class TestEvaluateCondition:
         row = pd.Series({"Motif": "5"})
         assert evaluate_condition(row, "Motif in ['1', '2', '3']") is False
 
-    def test_missing_column_returns_false(self):
+    def test_missing_column_returns_false(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A missing condition name fails closed and records its name at WARNING."""
         row = pd.Series({"Motif": "2"})
-        assert evaluate_condition(row, "NonExistent > 0") is False
+        with caplog.at_level(logging.WARNING, logger="vntyper.scripts.flagging"):
+            assert evaluate_condition(row, "NonExistent > 0") is False
+        assert "NonExistent" in caplog.text
 
     def test_combined_and_condition(self):
         row = pd.Series({"Depth_Score": 0.3, "Motif": "2"})
@@ -275,13 +285,12 @@ class TestEvaluateConditionErrorPath:
         row = pd.Series({"Depth_Score": 0.0, "Motif": "2"})
         assert evaluate_condition(row, "1 / Depth_Score > 1") is False
 
-    def test_error_path_is_logged_at_error_level(self, caplog):
+    def test_error_path_is_logged_at_error_level(self, caplog: pytest.LogCaptureFixture) -> None:
         """The failing condition is reported at ERROR, not merely DEBUG (kills 89)."""
         row = pd.Series({"Depth_Score": "n/a"})
         with caplog.at_level(logging.ERROR, logger="vntyper.scripts.flagging"):
             assert evaluate_condition(row, "Depth_Score < 0.4") is False
-        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
-        assert errors, "an unevaluatable condition must be logged at ERROR"
+        assert "Error evaluating condition" in caplog.text
 
     def test_a_broken_rule_cannot_invent_a_flag(self):
         """End to end: a rule that cannot be evaluated leaves the row unflagged (kills 89)."""
