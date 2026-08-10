@@ -290,6 +290,102 @@ def test_direct_cleanup_keyboard_interrupt_is_an_orphan_error(
         os.close(capability.descriptor)
 
 
+def test_cleanup_capability_lookup_keyboard_interrupt_is_an_orphan_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sweep = tmp_path / "sweep"
+    head = "a" * 40
+    original_git_capability_path = mutation_workspace._git_capability_path
+    capability_lookups = 0
+
+    def make_root(**_kwargs: object) -> str:
+        sweep.mkdir()
+        return str(sweep)
+
+    def interrupt_second_lookup(capability: mutation_workspace_fs.RootCapability) -> Path:
+        nonlocal capability_lookups
+        capability_lookups += 1
+        if capability_lookups == 2:
+            raise KeyboardInterrupt("interrupted")
+        return original_git_capability_path(capability)
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        if command == ["git", "rev-parse", "--verify", "HEAD^{commit}"]:
+            return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
+        if command[-3:] == ["rev-parse", "--verify", "HEAD^{commit}"]:
+            return subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b"")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(mutation_workspace.tempfile, "mkdtemp", make_root)
+    monkeypatch.setattr(mutation_workspace.subprocess, "run", fake_run)
+    monkeypatch.setattr(mutation_workspace, "_git_capability_path", interrupt_second_lookup)
+
+    with (
+        pytest.raises(
+            RuntimeError,
+            match=rf"orphaned worktree: {sweep}: cleanup command failed: interrupted",
+        ),
+        mutation_workspace.detached_head_workspace(repo, (), ()),
+    ):
+        pass
+
+    assert capability_lookups == 2
+    assert sweep.exists()
+    shutil.rmtree(sweep)
+
+
+@pytest.mark.parametrize(
+    "cleanup_exception",
+    [OSError("blocked"), RuntimeError("changed"), KeyboardInterrupt("interrupted")],
+    ids=["oserror", "runtime-error", "keyboard-interrupt"],
+)
+def test_pre_add_cleanup_failure_is_an_orphan_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_exception: BaseException,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sweep = tmp_path / "sweep"
+    head = "a" * 40
+
+    def make_root(**_kwargs: object) -> str:
+        sweep.mkdir()
+        return str(sweep)
+
+    monkeypatch.setattr(mutation_workspace.tempfile, "mkdtemp", make_root)
+    monkeypatch.setattr(
+        mutation_workspace.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, f"{head}\n".encode(), b""),
+    )
+    monkeypatch.setattr(
+        mutation_workspace,
+        "_git_capability_path",
+        lambda _capability: (_ for _ in ()).throw(RuntimeError("proc blocked")),
+    )
+    monkeypatch.setattr(
+        mutation_workspace,
+        "_remove_pinned_root_if_present",
+        lambda _capability: (_ for _ in ()).throw(cleanup_exception),
+    )
+
+    with (
+        pytest.raises(
+            RuntimeError,
+            match=rf"orphaned workspace root: {sweep}: direct cleanup failed: {cleanup_exception}",
+        ),
+        mutation_workspace.detached_head_workspace(repo, (), ()),
+    ):
+        pytest.fail("a workspace without a Git capability must not yield")
+
+    assert sweep.exists()
+    shutil.rmtree(sweep)
+
+
 def test_proc_fd_capability_rejects_a_path_to_a_different_inode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

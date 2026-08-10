@@ -373,7 +373,7 @@ def _cleanup_detached_worktree(capability: _RootCapability, real_root: Path) -> 
     """Deregister and remove only the exact pinned disposable worktree."""
     try:
         git_root = _git_capability_path(capability)
-    except RuntimeError as exc:
+    except (RuntimeError, KeyboardInterrupt) as exc:
         raise RuntimeError(f"orphaned worktree: {capability.path}: cleanup command failed: {exc}") from exc
     try:
         repair_result = _run_git(
@@ -536,7 +536,12 @@ def detached_head_workspace(
                     if add_attempted:
                         _cleanup_detached_worktree(root_capability, resolved_real_root)
                     else:
-                        _remove_pinned_root_if_present(root_capability)
+                        try:
+                            _remove_pinned_root_if_present(root_capability)
+                        except (OSError, RuntimeError, KeyboardInterrupt) as exc:
+                            raise RuntimeError(
+                                f"orphaned workspace root: {sweep_root}: direct cleanup failed: {exc}"
+                            ) from exc
                 finally:
                     os.close(root_capability.descriptor)
 
