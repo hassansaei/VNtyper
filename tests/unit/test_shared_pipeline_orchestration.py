@@ -217,6 +217,63 @@ def test_expected_failure_diagnostic_is_found_across_captured_streams(tmp_path: 
         )
 
 
+@pytest.mark.parametrize(
+    "module_options",
+    [["--extra-modules", "shark"], ["--extra-modules=shark,advntr,shark"]],
+)
+def test_advntr_orchestration_merges_an_additional_module_into_the_typed_request(
+    tmp_path: Path, module_options: list[str]
+) -> None:
+    """An additional module must not displace the adVNTR stage owned by this orchestration path."""
+    case = {
+        "test_name": "advntr-with-shark",
+        "bam": "tests/data/sample.bam",
+        "reference_assembly": "hg19",
+        "cli_options": ["--fast-mode", *module_options, "--archive-results"],
+        "expected_exit_code": 1,
+        "expected_diagnostic": "known refusal",
+    }
+    received: list[orchestration.PipelineRequest] = []
+
+    def runner(request: orchestration.PipelineRequest) -> orchestration.PipelineRunResult:
+        received.append(request)
+        return orchestration.PipelineRunResult(1, "", "known refusal")
+
+    orchestration.run_advntr_test_case(case, runner, tmp_path)
+
+    assert received[0].cli_options == (
+        "--fast-mode",
+        "--archive-results",
+        "--extra-modules",
+        "advntr,shark",
+    )
+
+
+@pytest.mark.parametrize(
+    "cli_options",
+    [
+        ["--extra-modules"],
+        ["--extra-modules", "--fast-mode"],
+        ["--extra-modules", "shark", "--extra-modules=advntr"],
+        ["--extra-modules="],
+    ],
+)
+def test_advntr_orchestration_rejects_ambiguous_module_declarations(tmp_path: Path, cli_options: list[str]) -> None:
+    """A missing, empty, or duplicate module value must fail before transport execution."""
+    case = {
+        "bam": "tests/data/sample.bam",
+        "reference_assembly": "hg19",
+        "cli_options": cli_options,
+    }
+
+    with pytest.raises(ValueError, match="extra-modules"):
+        orchestration.run_advntr_test_case(
+            case,
+            lambda _request: pytest.fail("invalid request reached the transport"),
+            tmp_path,
+        )
+
+
 def test_current_failure_adapter_is_limited_to_live_nonzero_mixed_declarations() -> None:
     """Task 5 can delete this named seam when the current valid-mixed failures become successes."""
     from tests.parametrization import get_advntr_test_cases, get_bam_test_cases

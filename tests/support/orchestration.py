@@ -309,6 +309,40 @@ def _request_from_case(
     )
 
 
+def _merge_required_advntr(cli_options: tuple[str, ...]) -> tuple[str, ...]:
+    """Return one canonical extra-modules option with adVNTR first."""
+    retained: list[str] = []
+    declared_modules: str | None = None
+    index = 0
+    while index < len(cli_options):
+        option = cli_options[index]
+        if option == "--extra-modules":
+            if declared_modules is not None:
+                raise ValueError("--extra-modules may be declared only once")
+            if index + 1 >= len(cli_options) or cli_options[index + 1].startswith("-"):
+                raise ValueError("--extra-modules requires a non-empty value")
+            declared_modules = cli_options[index + 1]
+            index += 2
+            continue
+        if option.startswith("--extra-modules="):
+            if declared_modules is not None:
+                raise ValueError("--extra-modules may be declared only once")
+            declared_modules = option.partition("=")[2]
+            index += 1
+            continue
+        retained.append(option)
+        index += 1
+
+    extras = [] if declared_modules is None else [module.strip() for module in declared_modules.split(",")]
+    if any(not module for module in extras):
+        raise ValueError("--extra-modules requires non-empty comma-separated module names")
+    modules = ["advntr"]
+    for module in extras:
+        if module not in modules:
+            modules.append(module)
+    return (*retained, "--extra-modules", ",".join(modules))
+
+
 def assert_read_set_routing(
     result: PipelineRunResult,
     *,
@@ -551,21 +585,21 @@ def run_advntr_test_case(
 
     Raises:
         AssertionError: If any declared outcome differs.
+        ValueError: If the extra-module declaration is ambiguous or malformed.
     """
     bam_file = Path(test_case["bam"])
 
     request = _request_from_case(test_case, "bam", (bam_file,), output_dir)
-    if "--extra-modules" not in request.cli_options:
-        request = PipelineRequest(
-            input_kind=request.input_kind,
-            input_paths=request.input_paths,
-            reference_assembly=request.reference_assembly,
-            output_dir=request.output_dir,
-            threads=request.threads,
-            log_level=request.log_level,
-            cli_options=(*request.cli_options, "--extra-modules", "advntr"),
-            reference_fasta=request.reference_fasta,
-        )
+    request = PipelineRequest(
+        input_kind=request.input_kind,
+        input_paths=request.input_paths,
+        reference_assembly=request.reference_assembly,
+        output_dir=request.output_dir,
+        threads=request.threads,
+        log_level=request.log_level,
+        cli_options=_merge_required_advntr(request.cli_options),
+        reference_fasta=request.reference_fasta,
+    )
 
     result = runner(request)
     success, captured = _assert_expected_exit(test_case, result, label="adVNTR")
