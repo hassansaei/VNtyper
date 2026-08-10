@@ -189,3 +189,371 @@ jobs:
           }
           print("summary_json=" + json.dumps(payload, separators=(",", ":")))
           PY
+
+  wait-for-release-gates:
+    needs: validate-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      packages: read
+    outputs:
+      source_ref: ${{ steps.evidence.outputs.source_ref }}
+      source_digest: ${{ steps.evidence.outputs.source_digest }}
+      source_revision: ${{ steps.evidence.outputs.source_revision }}
+      source_version: ${{ steps.evidence.outputs.source_version }}
+      preflight_summary_json: ${{ steps.evidence-preflight-result.outputs.preflight_summary_json }}
+      check_summary_json: ${{ steps.poll-result.outputs.check_summary_json }}
+      evidence_summary_json: ${{ steps.evidence-result.outputs.evidence_summary_json }}
+    env:
+      COORDINATOR_ROOT: ${{ github.workspace }}/controller
+      RELEASE_POLL_ATTEMPTS: "120"
+      RELEASE_POLL_INTERVAL_SECONDS: "30"
+      RELEASE_API_ATTEMPTS: "3"
+      RELEASE_API_RETRY_SECONDS: "5"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: "false"
+          path: controller
+
+      - id: evidence-preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          api_json() {
+            local endpoint=$1 output=$2
+            for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+              if gh api --paginate --slurp "$endpoint" > "$output.tmp"; then
+                mv -- "$output.tmp" "$output"
+                return 0
+              fi
+              rm -f -- "$output.tmp"
+              if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+            done
+            return 1
+          }
+          write_preflight_state() {
+            python - "$SHA" "$1" "$2" "${3:-}" "${4:-}" "${5:-}" <<'PY' > preflight-state.json
+          import json
+          import pathlib
+          import sys
+
+          sha, state, reason, run_id, run_attempt, run_url = sys.argv[1:]
+          eligible_path = pathlib.Path("eligible-runs.json")
+          eligible = json.loads(eligible_path.read_text(encoding="utf-8")) if eligible_path.is_file() else []
+          selected = None if not run_id else {
+              "id": int(run_id), "run_attempt": int(run_attempt), "html_url": run_url or None
+          }
+          print(json.dumps({"sha": sha, "state": state, "reason": reason,
+                            "eligible_runs": eligible, "selected_run": selected}, separators=(",", ":")))
+          PY
+          }
+          if ! api_json \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-build.yml/runs?head_sha=${SHA}&per_page=100" \
+              preflight-runs.json; then
+            write_preflight_state infrastructure-failure \
+              "GitHub workflow-runs API failed after ${RELEASE_API_ATTEMPTS} attempts"
+            exit 1
+          fi
+          python controller/scripts/release_evidence.py eligible-runs preflight-runs.json --sha "$SHA" \
+            > eligible-runs.json
+          COUNT=$(python -c 'import json; print(len(json.load(open("eligible-runs.json"))))')
+          if [ "$COUNT" -eq 0 ]; then
+            write_preflight_state pending "no completed successful exact-SHA main-push Docker Build run exists yet"
+            exit 0
+          fi
+          FOUND=false; SELECTED_ID=; SELECTED_ATTEMPT=; SELECTED_URL=
+          python -c 'import json; [print("{}\t{}\t{}".format(r["id"], r["run_attempt"], r.get("html_url", ""))) for r in json.load(open("eligible-runs.json"))]' \
+            > eligible-runs.tsv
+          while IFS=$'\t' read -r RUN_ID RUN_ATTEMPT RUN_URL; do
+            if ! api_json "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+                "artifacts-${RUN_ID}.json"; then
+              write_preflight_state infrastructure-failure \
+                "GitHub artifacts API failed after ${RELEASE_API_ATTEMPTS} attempts for Docker Build run ${RUN_ID}" \
+                "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL"
+              exit 1
+            fi
+            if python controller/scripts/release_evidence.py artifact-present "artifacts-${RUN_ID}.json" \
+                --name "docker-release-evidence-${SHA}-${RUN_ATTEMPT}"; then
+              FOUND=true; SELECTED_ID=$RUN_ID; SELECTED_ATTEMPT=$RUN_ATTEMPT; SELECTED_URL=$RUN_URL
+              break
+            fi
+          done < eligible-runs.tsv
+          if [ "$FOUND" != true ]; then
+            write_preflight_state ineligible \
+              "successful exact-SHA main-push Docker Build runs exist but none has its exact attempt-qualified contract-v1 artifact"
+            while IFS=$'\t' read -r RUN_ID RUN_ATTEMPT RUN_URL; do
+              echo "Docker Build run ${RUN_ID} attempt ${RUN_ATTEMPT} for exact SHA ${SHA}: ${RUN_URL}" >&2
+            done < eligible-runs.tsv
+            echo "Candidate $SHA is pre-contract/ineligible: rerun this existing Docker Build run after the " \
+                 "milestone evidence workflow is present; no production write was attempted." >&2
+            exit 1
+          fi
+          write_preflight_state eligible "exact attempt-qualified Docker evidence artifact found" \
+            "$SELECTED_ID" "$SELECTED_ATTEMPT" "$SELECTED_URL"
+
+      - id: evidence-preflight-result
+        if: ${{ always() }}
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.evidence-preflight.outcome }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python - "$PREFLIGHT_OUTCOME" "$SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path("preflight-state.json")
+          payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {
+              "sha": sys.argv[2], "state": "infrastructure-failure",
+              "reason": "preflight ended before structured state was written",
+              "eligible_runs": [], "selected_run": None,
+          }
+          payload["step_outcome"] = sys.argv[1]
+          path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+          PY
+          printf 'preflight_summary_json=%s\n' "$(cat preflight-state.json)" >> "$GITHUB_OUTPUT"
+
+      - id: poll
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Exact required check names: Lint (Ruff), Type Check (mypy),
+          # Unit Tests (Python 3.10), Unit Tests (Python 3.11),
+          # Unit Tests (Python 3.12), Unit Tests (Python 3.13),
+          # Docs build (strict), CI Success, Build and test image, Docker Success.
+          for attempt in $(seq 1 "$RELEASE_POLL_ATTEMPTS"); do
+            API_OK=false
+            for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+              if gh api --paginate --slurp \
+                  "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" \
+                  > checks-pages.json.tmp; then
+                mv -- checks-pages.json.tmp checks-pages.json
+                API_OK=true
+                break
+              fi
+              rm -f -- checks-pages.json.tmp
+              if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+            done
+            if [ "$API_OK" != true ]; then
+              python - "$attempt" "$RELEASE_API_ATTEMPTS" <<'PY' > poll.json
+          import json
+          import sys
+          print(json.dumps({"action": "fail", "attempt": int(sys.argv[1]), "elapsed_seconds": 0,
+                            "verdicts": [], "infrastructure_error":
+                            f"Check Runs API failed after {sys.argv[2]} attempts"}, separators=(",", ":")))
+          PY
+              cat poll.json >&2
+              exit 1
+            fi
+            PYTHONPATH="$COORDINATOR_ROOT" python - "$SHA" "$attempt" "$RELEASE_POLL_ATTEMPTS" \
+                checks-pages.json poll.json <<'PY'
+          import dataclasses
+          import json
+          import sys
+
+          from scripts.release_policy import classify_check_runs
+
+          pages = json.load(open(sys.argv[4], encoding="utf-8"))
+          runs = [run for page in pages for run in page.get("check_runs", [])]
+          poll = classify_check_runs(
+              sys.argv[1], runs, attempt=int(sys.argv[2]), max_attempts=int(sys.argv[3])
+          )
+          with open(sys.argv[5], "w", encoding="utf-8") as handle:
+              json.dump(dataclasses.asdict(poll), handle, separators=(",", ":"))
+          PY
+            ACTION=$(python -c 'import json; print(json.load(open("poll.json"))["action"])')
+            if [ "$ACTION" = success ]; then
+              exit 0
+            fi
+            if [ "$ACTION" = fail ] || [ "$ACTION" = timeout ]; then
+              cat poll.json >&2
+              exit 1
+            fi
+            sleep "$RELEASE_POLL_INTERVAL_SECONDS"
+          done
+          echo "release poll exhausted without a terminal classifier result" >&2
+          test -s poll.json && cat poll.json >&2
+          exit 1
+
+      - id: poll-result
+        if: ${{ always() }}
+        env:
+          POLL_OUTCOME: ${{ steps.poll.outcome }}
+        run: |
+          set -euo pipefail
+          if [ ! -s poll.json ]; then
+            python - "$POLL_OUTCOME" <<'PY' > poll.json
+          import json
+          import pathlib
+          import sys
+
+          preflight_path = pathlib.Path("preflight-state.json")
+          preflight = json.loads(preflight_path.read_text(encoding="utf-8")) if preflight_path.is_file() else None
+          preflight_state = None if preflight is None else preflight.get("state")
+          if preflight_state in {"ineligible", "infrastructure-failure"}:
+              payload = {
+                  "action": "not-run",
+                  "attempt": 0,
+                  "elapsed_seconds": 0,
+                  "verdicts": [],
+                  "preflight_state": preflight_state,
+                  "preflight_reason": preflight.get("reason"),
+                  "step_outcome": sys.argv[1],
+              }
+          else:
+              payload = {
+                  "action": "fail",
+                  "attempt": 0,
+                  "elapsed_seconds": 0,
+                  "verdicts": [],
+                  "infrastructure_error": "poll step ended before a Check Runs snapshot",
+                  "step_outcome": sys.argv[1],
+              }
+          print(json.dumps(payload, separators=(",", ":")))
+          PY
+          fi
+          printf 'check_summary_json=%s\n' "$(cat poll.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR for production inspection
+        if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+          SHORT_SHA: ${{ needs.validate-release.outputs.short_sha }}
+          VERSION: ${{ needs.validate-release.outputs.version }}
+          IMAGE: ghcr.io/hassansaei/vntyper
+        run: |
+          set -euo pipefail
+          api_json() {
+            local endpoint=$1 output=$2
+            for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+              if gh api --paginate --slurp "$endpoint" > "$output.tmp"; then
+                mv -- "$output.tmp" "$output"
+                return 0
+              fi
+              rm -f -- "$output.tmp"
+              if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+            done
+            return 1
+          }
+          recovery_error() {
+            echo "Docker Build exact SHA ${SHA}, run ${RUN_ID:-unavailable}: ${RUN_URL:-run URL unavailable}; " \
+                 "rerun this existing Docker Build run. $1" >&2
+          }
+          if ! api_json \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-build.yml/runs?head_sha=${SHA}&per_page=100" \
+              evidence-runs.json; then
+            echo "GitHub workflow-runs API failed after ${RELEASE_API_ATTEMPTS} attempts" >&2
+            exit 1
+          fi
+          python controller/scripts/release_evidence.py eligible-runs evidence-runs.json --sha "$SHA" \
+            > evidence-eligible-runs.json
+          python -c 'import json; [print("{}\t{}\t{}".format(r["id"], r["run_attempt"], r.get("html_url", ""))) for r in json.load(open("evidence-eligible-runs.json"))]' \
+            > evidence-eligible-runs.tsv
+          RUN_ID=; RUN_ATTEMPT=; RUN_URL=
+          while IFS=$'\t' read -r CANDIDATE_RUN CANDIDATE_ATTEMPT CANDIDATE_URL; do
+            if ! api_json "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN}/artifacts?per_page=100" \
+                "evidence-artifacts-${CANDIDATE_RUN}.json"; then
+              echo "GitHub artifacts API failed after ${RELEASE_API_ATTEMPTS} attempts for Docker Build run ${CANDIDATE_RUN}" >&2
+              exit 1
+            fi
+            if python controller/scripts/release_evidence.py artifact-present \
+                "evidence-artifacts-${CANDIDATE_RUN}.json" \
+                --name "docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}"; then
+              RUN_ID=$CANDIDATE_RUN; RUN_ATTEMPT=$CANDIDATE_ATTEMPT; RUN_URL=$CANDIDATE_URL
+              break
+            fi
+          done < evidence-eligible-runs.tsv
+          if [ -z "$RUN_ID" ]; then
+            echo "No eligible exact-SHA Docker evidence artifact for ${SHA}; run URL unavailable; " \
+                 "rerun this existing Docker Build run." >&2
+            exit 1
+          fi
+          python - "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL" <<'PY' > selected-run.json
+          import json
+          import sys
+          print(json.dumps({"id": int(sys.argv[1]), "run_attempt": int(sys.argv[2]),
+                            "html_url": sys.argv[3] or None}, separators=(",", ":")))
+          PY
+          RUN_ID=$(python -c 'import json; print(json.load(open("selected-run.json"))["id"])')
+          RUN_ATTEMPT=$(python -c 'import json; print(json.load(open("selected-run.json"))["run_attempt"])')
+          DEST=; DOWNLOADED=false
+          for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS"); do
+            CANDIDATE_DEST="evidence-${RUN_ID}-${RUN_ATTEMPT}-${API_ATTEMPT}"
+            if gh run download "$RUN_ID" -n "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" \
+                -D "$CANDIDATE_DEST"; then
+              DEST=$CANDIDATE_DEST
+              DOWNLOADED=true
+              break
+            fi
+            if [ "$API_ATTEMPT" -lt "$RELEASE_API_ATTEMPTS" ]; then sleep "$RELEASE_API_RETRY_SECONDS"; fi
+          done
+          if [ "$DOWNLOADED" != true ]; then
+            recovery_error "Exact Docker evidence download failed after ${RELEASE_API_ATTEMPTS} attempts."
+            exit 1
+          fi
+          EVIDENCE_PATH="$DEST/docker-release-evidence.json"
+          if ! python controller/scripts/release_evidence.py validate-evidence "$EVIDENCE_PATH" \
+              --sha "$SHA" --version "$VERSION" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+              > validated-evidence.json; then
+            recovery_error "Downloaded contract-v1 evidence did not match the selected run."
+            exit 1
+          fi
+          DIGEST=$(python -c 'import json; print(json.load(open("validated-evidence.json"))["digest"])')
+          if ! IMMUTABLE_DIGEST=$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{.Manifest.Digest}}'); then
+            recovery_error "The immutable evidence manifest is unavailable."
+            exit 1
+          fi
+          if [ "$IMMUTABLE_DIGEST" != "$DIGEST" ]; then
+            recovery_error "The immutable manifest digest does not match evidence digest ${DIGEST}."
+            exit 1
+          fi
+          if ! docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Image}}' > image-config.json; then
+            recovery_error "The immutable image configuration is unavailable."
+            exit 1
+          fi
+          if ! SHORT_DIGEST=$(docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" --format '{{.Manifest.Digest}}'); then
+            recovery_error "The exact short-SHA image tag is unavailable."
+            exit 1
+          fi
+          if ! docker buildx imagetools inspect "$IMAGE:sha-${SHORT_SHA}" \
+              --format '{{json .Image}}' > short-image-config.json; then
+            recovery_error "The short-SHA image configuration is unavailable."
+            exit 1
+          fi
+          if ! python controller/scripts/release_evidence.py validate-image validated-evidence.json image-config.json \
+              short-image-config.json --immutable-digest "$IMMUTABLE_DIGEST" --short-digest "$SHORT_DIGEST" \
+              --image "$IMAGE" --output "$GITHUB_OUTPUT"; then
+            recovery_error "OCI identity validation failed."
+            exit 1
+          fi
+
+      - id: evidence-result
+        if: ${{ always() }}
+        env:
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          SHA: ${{ needs.validate-release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python controller/scripts/release_evidence.py summarize \
+            --sha "$SHA" --step-outcome "$EVIDENCE_OUTCOME" --selected-run selected-run.json \
+            --validated-evidence validated-evidence.json --image image-config.json \
+            --output evidence-summary.json
+          printf 'evidence_summary_json=%s\n' "$(cat evidence-summary.json)" >> "$GITHUB_OUTPUT"

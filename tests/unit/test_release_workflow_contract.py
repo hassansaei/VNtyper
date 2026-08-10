@@ -2,8 +2,10 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,25 @@ def _step_using(workflow: dict[str, Any], job: str, action: str) -> dict[str, An
     return next(step for step in workflow["jobs"][job]["steps"] if step.get("uses") == action)
 
 
+def _run_step(
+    tmp_path: Path,
+    workflow: dict[str, Any],
+    job: str,
+    step_id: str,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Execute one checked-in shell step with controlled external observations."""
+    step = _step_with_id(workflow, job, step_id)
+    return subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env={**os.environ, **env},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _heredoc_python(run: str, invocation: str = "python - <<'PY'") -> str:
     after_invocation = run.split(invocation + "\n", maxsplit=1)[1]
     return after_invocation.split("\nPY", maxsplit=1)[0]
@@ -48,6 +69,147 @@ def _heredoc_pythons(run: str) -> list[str]:
             body.append(body_line)
         scripts.append("\n".join(body))
     return scripts
+
+
+def _write_executable(path: Path, source: str) -> None:
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _release_runtime(tmp_path: Path, fixture: Mapping[str, object]) -> dict[str, str]:
+    """Install deterministic GitHub/registry fakes for executable release-step tests."""
+    controller_scripts = tmp_path / "controller" / "scripts"
+    controller_scripts.mkdir(parents=True)
+    shutil.copy2(ROOT / "scripts" / "release_policy.py", controller_scripts)
+    shutil.copy2(ROOT / "scripts" / "release_evidence.py", controller_scripts)
+    fixture_path = tmp_path / "fake-fixture.json"
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    (tmp_path / "mutation.log").write_text("", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "gh",
+        """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+fixture_path = pathlib.Path(os.environ["FAKE_FIXTURE"])
+fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+counter_path = fixture_path.with_name("fake-counts.json")
+counts = json.loads(counter_path.read_text(encoding="utf-8")) if counter_path.is_file() else {}
+args = sys.argv[1:]
+if args and args[0] == "api":
+    endpoint = next(arg for arg in args if arg.startswith("repos/"))
+    if "/check-runs" in endpoint:
+        key = "checks"
+    elif "/actions/workflows/docker-build.yml/runs" in endpoint:
+        key = "runs"
+    else:
+        run_id = endpoint.split("/actions/runs/", 1)[1].split("/", 1)[0]
+        key = f"artifacts:{run_id}"
+    counts[key] = counts.get(key, 0) + 1
+    counter_path.write_text(json.dumps(counts), encoding="utf-8")
+    if counts[key] <= fixture.get("failures", {}).get(key, 0):
+        raise SystemExit(1)
+    print(json.dumps(fixture.get("payloads", {}).get(key, [])))
+    raise SystemExit(0)
+if args[:2] == ["run", "download"]:
+    run_id = args[2]
+    destination = pathlib.Path(args[args.index("-D") + 1])
+    evidence = fixture.get("downloads", {}).get(run_id)
+    if evidence is None:
+        raise SystemExit(1)
+    destination.mkdir(parents=True)
+    (destination / "docker-release-evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+    raise SystemExit(0)
+with pathlib.Path(os.environ["MUTATION_LOG"]).open("a", encoding="utf-8") as handle:
+    handle.write("gh " + " ".join(args) + "\\n")
+raise SystemExit(97)
+""",
+    )
+    _write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+fixture = json.loads(pathlib.Path(os.environ["FAKE_FIXTURE"]).read_text(encoding="utf-8"))
+args = sys.argv[1:]
+if args[:3] != ["buildx", "imagetools", "inspect"]:
+    with pathlib.Path(os.environ["MUTATION_LOG"]).open("a", encoding="utf-8") as handle:
+        handle.write("docker " + " ".join(args) + "\\n")
+    raise SystemExit(97)
+record = fixture.get("docker", {}).get(args[3])
+if record is None:
+    raise SystemExit(1)
+format_value = args[args.index("--format") + 1]
+if format_value == "{{.Manifest.Digest}}":
+    print(record["digest"])
+elif format_value == "{{json .Image}}":
+    print(json.dumps(record["image"]))
+else:
+    raise SystemExit(96)
+""",
+    )
+    _write_executable(fake_bin / "sleep", "#!/usr/bin/env bash\nexit 0\n")
+    return {
+        "COORDINATOR_ROOT": str(tmp_path / "controller"),
+        "FAKE_FIXTURE": str(fixture_path),
+        "GH_TOKEN": "test-token",
+        "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+        "GITHUB_REPOSITORY": "hassansaei/VNtyper",
+        "MUTATION_LOG": str(tmp_path / "mutation.log"),
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "RELEASE_API_ATTEMPTS": "3",
+        "RELEASE_API_RETRY_SECONDS": "0",
+        "RELEASE_POLL_ATTEMPTS": "1",
+        "RELEASE_POLL_INTERVAL_SECONDS": "0",
+        "SHA": "a" * 40,
+        "SHORT_SHA": "a" * 7,
+        "VERSION": "2.0.10",
+        "IMAGE": "ghcr.io/hassansaei/vntyper",
+    }
+
+
+def _docker_run(
+    run_id: int,
+    *,
+    attempt: int = 1,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    event: str = "push",
+    branch: str = "main",
+    sha: str = "a" * 40,
+) -> dict[str, object]:
+    return {
+        "id": run_id,
+        "run_attempt": attempt,
+        "head_sha": sha,
+        "head_branch": branch,
+        "event": event,
+        "status": status,
+        "conclusion": conclusion,
+        "html_url": f"https://github.test/runs/{run_id}",
+    }
+
+
+def _check_runs(*, conclusion: str = "success", status: str = "completed") -> list[dict[str, object]]:
+    return [
+        {
+            "id": index,
+            "name": name,
+            "head_sha": "a" * 40,
+            "status": status,
+            "conclusion": conclusion if status == "completed" else None,
+            "html_url": f"https://github.test/checks/{index}",
+            "app": {"slug": "github-actions"},
+        }
+        for index, name in enumerate(REQUIRED_CHECK_NAMES, start=1)
+    ]
 
 
 def test_main_push_forces_every_substantive_ci_and_docker_scope_true() -> None:
@@ -243,7 +405,7 @@ def test_release_trigger_uses_default_branch_repository_dispatch_for_production(
         "group": "release-${{ inputs.tag || github.event.client_payload.tag }}",
         "cancel-in-progress": "false",
     }
-    assert set(publish["jobs"]) == {"validate-release"}
+    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates"}
     assert publish["jobs"]["validate-release"]["permissions"] == {"contents": "read"}
 
     commands = "\n".join(step.get("run", "") for job in publish["jobs"].values() for step in job.get("steps", []))
@@ -311,12 +473,12 @@ def test_validate_release_resolves_in_controller_and_tests_exact_candidate() -> 
 
 
 def test_dispatch_is_read_only_and_metadata_eligible_before_any_check_polling() -> None:
-    """Pre-milestone tags must complete dry-run validation without production polling or writes."""
+    """Validation stays read-only while later exact-SHA gates own polling and registry reads."""
     publish = _workflow("publish-pypi.yml")
     job = publish["jobs"]["validate-release"]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
 
-    assert set(publish["jobs"]) == {"validate-release"}
+    assert set(publish["jobs"]) == {"validate-release", "wait-for-release-gates"}
     assert job["permissions"] == {"contents": "read"}
     assert "id-token" not in job["permissions"]
     assert "packages" not in job["permissions"]
@@ -518,3 +680,413 @@ def test_resolve_rejects_wrong_events_and_hostile_tags_before_git(
     assert completed.returncode != 0
     assert not git_log.exists()
     assert not injection_marker.exists()
+
+
+def test_exact_sha_gate_has_bounded_polling_auth_and_read_only_permissions() -> None:
+    """Missing auth, skipped checks, or an unbounded loop must never release a candidate."""
+    publish = _workflow("publish-pypi.yml")
+    job = publish["jobs"]["wait-for-release-gates"]
+    preflight = _step_with_id(publish, "wait-for-release-gates", "evidence-preflight")
+    poll = _step_with_id(publish, "wait-for-release-gates", "poll")
+    evidence = _step_with_id(publish, "wait-for-release-gates", "evidence")
+
+    assert job["needs"] == "validate-release"
+    assert job["timeout-minutes"] == "70"
+    assert job["permissions"] == {
+        "actions": "read",
+        "checks": "read",
+        "contents": "read",
+        "packages": "read",
+    }
+    assert job["env"] == {
+        "COORDINATOR_ROOT": "${{ github.workspace }}/controller",
+        "RELEASE_POLL_ATTEMPTS": "120",
+        "RELEASE_POLL_INTERVAL_SECONDS": "30",
+        "RELEASE_API_ATTEMPTS": "3",
+        "RELEASE_API_RETRY_SECONDS": "5",
+    }
+    assert preflight["env"]["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert poll["env"]["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert evidence["env"]["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert "while true" not in poll["run"]
+    assert 'for attempt in $(seq 1 "$RELEASE_POLL_ATTEMPTS")' in poll["run"]
+    assert 'for API_ATTEMPT in $(seq 1 "$RELEASE_API_ATTEMPTS")' in poll["run"]
+    assert "max_attempts=int(sys.argv[3])" in poll["run"]
+    assert poll["run"].rstrip().endswith("exit 1")
+    for name in REQUIRED_CHECK_NAMES:
+        assert name in poll["run"]
+
+
+def test_production_registry_login_precedes_inspection_and_manual_dispatch_cannot_login() -> None:
+    """Only the authenticated production event may receive registry credentials."""
+    publish = _workflow("publish-pypi.yml")
+    steps = publish["jobs"]["wait-for-release-gates"]["steps"]
+    login_index = next(index for index, step in enumerate(steps) if step.get("uses") == "docker/login-action@v4")
+    evidence_index = next(index for index, step in enumerate(steps) if step.get("id") == "evidence")
+    login = steps[login_index]
+
+    assert login_index < evidence_index
+    assert (
+        login["if"] == "${{ github.event_name == 'repository_dispatch' && github.event.action == 'vntyper_release' }}"
+    )
+    assert login["with"] == {
+        "registry": "ghcr.io",
+        "username": "${{ github.actor }}",
+        "password": "${{ secrets.GITHUB_TOKEN }}",
+    }
+    assert "docker buildx imagetools inspect" in steps[evidence_index]["run"]
+    assert "docker login" not in steps[evidence_index]["run"]
+
+
+def test_source_recovery_uses_only_exact_sha_attempt_artifacts_and_digest_inspection() -> None:
+    """Fallback may change the evidence run, never the candidate SHA or provenance digest."""
+    publish = _workflow("publish-pypi.yml")
+    preflight = _step_with_id(publish, "wait-for-release-gates", "evidence-preflight")["run"]
+    evidence = _step_with_id(publish, "wait-for-release-gates", "evidence")["run"]
+
+    assert "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" in preflight
+    assert "docker-release-evidence-${SHA}-${RUN_ATTEMPT}" in evidence
+    assert "docker-release-evidence-${SHA}-${CANDIDATE_ATTEMPT}" in evidence
+    assert 'gh run download "$RUN_ID"' in evidence
+    assert '"$IMAGE@$DIGEST"' in evidence
+    assert '"$IMAGE:sha-${SHORT_SHA}"' in evidence
+    assert "sha-${SHORT_SHA}" in evidence
+    assert ":main" not in evidence
+    assert "rerun this existing Docker Build run" in evidence
+
+
+def test_preflight_retries_api_and_falls_back_to_older_exact_artifact(tmp_path: Path) -> None:
+    """A missing newest artifact must recover through the next eligible run in numeric order."""
+    sha = "a" * 40
+    fixture: dict[str, object] = {
+        "failures": {"runs": 2},
+        "payloads": {
+            "runs": [{"workflow_runs": [_docker_run(41, attempt=3), _docker_run(42, attempt=2)]}],
+            "artifacts:42": [{"artifacts": []}],
+            "artifacts:41": [{"artifacts": [{"name": f"docker-release-evidence-{sha}-3", "expired": False}]}],
+        },
+    }
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence-preflight", env)
+    result = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "evidence-preflight-result",
+        env | {"PREFLIGHT_OUTCOME": "success"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert result.returncode == 0, result.stderr
+    summary = json.loads((tmp_path / "preflight-state.json").read_text(encoding="utf-8"))
+    assert set(summary) == {"sha", "state", "reason", "eligible_runs", "selected_run", "step_outcome"}
+    assert summary["state"] == "eligible"
+    assert [run["id"] for run in summary["eligible_runs"]] == [42, 41]
+    assert summary["selected_run"] == {
+        "id": 41,
+        "run_attempt": 3,
+        "html_url": "https://github.test/runs/41",
+    }
+    assert json.loads((tmp_path / "fake-counts.json").read_text())["runs"] == 3
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected_state", "reason_fragment"),
+    [
+        (
+            {
+                "payloads": {
+                    "runs": [{"workflow_runs": [_docker_run(42)]}],
+                    "artifacts:42": [{"artifacts": []}],
+                }
+            },
+            "ineligible",
+            "none has its exact attempt-qualified",
+        ),
+        (
+            {"failures": {"runs": 3}, "payloads": {}},
+            "infrastructure-failure",
+            "failed after 3 attempts",
+        ),
+    ],
+)
+def test_preflight_terminal_failures_are_structured_and_poll_is_not_run(
+    tmp_path: Path,
+    fixture: dict[str, object],
+    expected_state: str,
+    reason_fragment: str,
+) -> None:
+    """Deterministic ineligibility and API exhaustion need distinct recovery semantics."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    preflight = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence-preflight", env)
+    serialized = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "evidence-preflight-result",
+        env | {"PREFLIGHT_OUTCOME": "failure"},
+    )
+    poll = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "poll-result",
+        env | {"POLL_OUTCOME": "skipped"},
+    )
+
+    assert preflight.returncode != 0
+    assert serialized.returncode == 0, serialized.stderr
+    assert poll.returncode == 0, poll.stderr
+    summary = json.loads((tmp_path / "preflight-state.json").read_text())
+    poll_summary = json.loads((tmp_path / "poll.json").read_text())
+    assert set(summary) == {"sha", "state", "reason", "eligible_runs", "selected_run", "step_outcome"}
+    assert summary["state"] == expected_state
+    assert reason_fragment in summary["reason"]
+    assert poll_summary["action"] == "not-run"
+    assert poll_summary["preflight_state"] == expected_state
+    assert poll_summary["preflight_reason"] == summary["reason"]
+    assert "infrastructure_error" not in poll_summary
+
+
+def test_poll_serializer_reserves_missing_snapshot_diagnostic_for_nonterminal_preflight(tmp_path: Path) -> None:
+    """An unexplained missing poll after pending preflight must not be mislabeled not-run."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, {"payloads": {}})
+    (tmp_path / "preflight-state.json").write_text(
+        json.dumps(
+            {
+                "sha": "a" * 40,
+                "state": "pending",
+                "reason": "Docker Build is still running",
+                "eligible_runs": [],
+                "selected_run": None,
+                "step_outcome": "success",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "poll-result",
+        env | {"POLL_OUTCOME": "skipped"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads((tmp_path / "poll.json").read_text())
+    assert payload["action"] == "fail"
+    assert payload["infrastructure_error"] == "poll step ended before a Check Runs snapshot"
+    assert "preflight_state" not in payload
+
+
+def test_ineligible_preflight_prints_exact_run_recovery_context(tmp_path: Path) -> None:
+    """Operators need the exact run URL and rerun action, not a generic rebuild suggestion."""
+    fixture = {
+        "payloads": {
+            "runs": [{"workflow_runs": [_docker_run(42)]}],
+            "artifacts:42": [{"artifacts": []}],
+        }
+    }
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence-preflight", env)
+
+    assert completed.returncode != 0
+    assert "Docker Build" in completed.stderr
+    assert "a" * 40 in completed.stderr
+    assert "https://github.test/runs/42" in completed.stderr
+    assert "rerun this existing Docker Build run" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("checks", "failures", "expected_action", "expected_returncode", "expected_calls"),
+    [
+        (_check_runs(), 2, "success", 0, 3),
+        (_check_runs(conclusion="skipped"), 0, "fail", 1, 1),
+        (_check_runs(status="in_progress"), 0, "timeout", 1, 1),
+        (_check_runs(), 3, "fail", 1, 3),
+    ],
+)
+def test_poll_executes_retry_skip_timeout_and_api_exhaustion_paths(
+    tmp_path: Path,
+    checks: list[dict[str, object]],
+    failures: int,
+    expected_action: str,
+    expected_returncode: int,
+    expected_calls: int,
+) -> None:
+    """The actual shell must fail closed for skipped, timed-out, and unavailable checks."""
+    fixture = {"failures": {"checks": failures}, "payloads": {"checks": [{"check_runs": checks}]}}
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "poll", env)
+
+    assert completed.returncode == expected_returncode
+    payload = json.loads((tmp_path / "poll.json").read_text())
+    assert payload["action"] == expected_action
+    if failures == 3:
+        assert payload["infrastructure_error"] == "Check Runs API failed after 3 attempts"
+    assert json.loads((tmp_path / "fake-counts.json").read_text())["checks"] == expected_calls
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+def _successful_evidence_fixture(**evidence_overrides: object) -> dict[str, Any]:
+    sha = "a" * 40
+    digest = "sha256:" + "b" * 64
+    evidence = {
+        "contract_version": 1,
+        "sha": sha,
+        "digest": digest,
+        "run_id": 41,
+        "run_attempt": 3,
+        "revision": sha,
+        "version": "2.0.10",
+    }
+    evidence.update(evidence_overrides)
+    image = {
+        "config": {
+            "Labels": {
+                "org.opencontainers.image.revision": sha,
+                "org.opencontainers.image.version": "2.0.10",
+            }
+        }
+    }
+    return {
+        "payloads": {
+            "runs": [{"workflow_runs": [_docker_run(41, attempt=3), _docker_run(42, attempt=2)]}],
+            "artifacts:42": [{"artifacts": []}],
+            "artifacts:41": [{"artifacts": [{"name": f"docker-release-evidence-{sha}-3", "expired": False}]}],
+        },
+        "downloads": {"41": evidence},
+        "docker": {
+            f"ghcr.io/hassansaei/vntyper@{digest}": {"digest": digest, "image": image},
+            "ghcr.io/hassansaei/vntyper:sha-aaaaaaa": {"digest": digest, "image": image},
+        },
+    }
+
+
+def test_evidence_step_selects_fallback_run_and_exports_exact_digest_identity(tmp_path: Path) -> None:
+    """The executable workflow must bind outputs to the older run that owns exact evidence."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _successful_evidence_fixture())
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads((tmp_path / "selected-run.json").read_text()) == {
+        "id": 41,
+        "run_attempt": 3,
+        "html_url": "https://github.test/runs/41",
+    }
+    output = (tmp_path / "github-output").read_text().splitlines()
+    digest = "sha256:" + "b" * 64
+    assert output == [
+        f"source_ref=ghcr.io/hassansaei/vntyper@{digest}",
+        f"source_digest={digest}",
+        f"source_revision={'a' * 40}",
+        "source_version=2.0.10",
+        "short_tag_collision=false",
+    ]
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_fragment"),
+    [
+        ({"contract_version": 2}, "contract_version"),
+        ({"revision": "c" * 40}, "revision"),
+        ({"version": "2.0.9"}, "version"),
+    ],
+)
+def test_evidence_step_rejects_wrong_contract_digest_revision_and_version(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    error_fragment: str,
+) -> None:
+    """Downloaded JSON cannot redirect release provenance away from validated identity."""
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, _successful_evidence_fixture(**overrides))
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+
+    assert completed.returncode != 0
+    assert error_fragment in completed.stderr
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+def test_evidence_step_rejects_registry_digest_mismatch(tmp_path: Path) -> None:
+    """A registry manifest digest cannot differ from the evidence provenance digest."""
+    fixture = _successful_evidence_fixture()
+    immutable_ref = f"ghcr.io/hassansaei/vntyper@{'sha256:' + 'b' * 64}"
+    fixture["docker"][immutable_ref]["digest"] = "sha256:" + "c" * 64
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+
+    assert completed.returncode != 0
+    assert "manifest digest does not match evidence digest" in completed.stderr
+    assert "https://github.test/runs/41" in completed.stderr
+    assert (tmp_path / "mutation.log").read_text() == ""
+
+
+def test_evidence_step_reports_short_prefix_collision_without_substitution(tmp_path: Path) -> None:
+    """A colliding short tag is allowed only after immutable evidence has been validated."""
+    fixture = _successful_evidence_fixture()
+    other_sha = "a" * 7 + "d" * 33
+    short_ref = "ghcr.io/hassansaei/vntyper:sha-aaaaaaa"
+    fixture["docker"][short_ref] = {
+        "digest": "sha256:" + "d" * 64,
+        "image": {
+            "config": {
+                "Labels": {
+                    "org.opencontainers.image.revision": other_sha,
+                    "org.opencontainers.image.version": "2.0.9",
+                }
+            }
+        },
+    }
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "short_tag_collision=true" in (tmp_path / "github-output").read_text()
+    assert f"source_digest={'sha256:' + 'b' * 64}" in (tmp_path / "github-output").read_text()
+
+
+def test_evidence_step_fails_when_immutable_manifest_is_missing_and_preserves_run_url(tmp_path: Path) -> None:
+    """Missing source images must identify the existing Docker Build run to rerun."""
+    fixture = _successful_evidence_fixture()
+    fixture["docker"] = {}
+    publish = _workflow("publish-pypi.yml")
+    env = _release_runtime(tmp_path, fixture)
+
+    completed = _run_step(tmp_path, publish, "wait-for-release-gates", "evidence", env)
+    summary = _run_step(
+        tmp_path,
+        publish,
+        "wait-for-release-gates",
+        "evidence-result",
+        env | {"EVIDENCE_OUTCOME": "failure"},
+    )
+
+    assert completed.returncode != 0
+    assert "https://github.test/runs/41" in completed.stderr
+    assert "rerun this existing Docker Build run" in completed.stderr
+    assert summary.returncode == 0, summary.stderr
+    payload = json.loads((tmp_path / "evidence-summary.json").read_text())
+    assert payload["state"] == "failed"
+    assert payload["selected_run"]["html_url"] == "https://github.test/runs/41"
+    assert payload["evidence"]["digest"] == "sha256:" + "b" * 64
+    assert payload["image"]["available"] is False
