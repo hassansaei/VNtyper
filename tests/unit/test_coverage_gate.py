@@ -242,9 +242,9 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "`mypy vntyper/ docker/app/ scripts/`" in agents
     assert "source = [`vntyper`, `docker/app`, `scripts`]" in agents
     assert f"all {script_count} Python files" in normalized_agents
-    assert "6,004 of 6,391 measured units" in normalized_agents
-    assert "93.94% aggregate scripts-only branch-inclusive coverage" in normalized_agents
-    assert "89.17% combined branch-inclusive coverage across 5,072 unit tests" in normalized_agents
+    assert "6,909 of 7,457 measured units" in normalized_agents
+    assert "92.65% aggregate scripts-only branch-inclusive coverage" in normalized_agents
+    assert "88.99% combined branch-inclusive coverage across 5,279 unit tests" in normalized_agents
     assert "every script was measured above" not in agents
     assert "24 Python files" not in agents
     assert "92.5166935298181%" not in agents

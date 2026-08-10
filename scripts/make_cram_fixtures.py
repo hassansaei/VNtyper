@@ -1,47 +1,14 @@
 #!/usr/bin/env python3
-"""Derive CRAM fixtures from the BAM test cohort, and prove the derivation is lossless.
+"""Derive lossless CRAM fixtures from the BAM test cohort.
 
-Why this exists
----------------
-VNtyper accepts CRAM but no CRAM has ever been exercised by a test (#188), so the CRAM
-branch of ``process_bam_to_fastq`` -- including its whole-file unmapped-read scan and the
-merge that follows it -- has never run against real data. Every claim about the CRAM path
-has therefore been an argument from source reading.
+Most fixtures use ``no_ref=1`` because the cohort BAM headers lack M5 tags. This stores
+sequences verbatim and exercises CRAM decoding, CRAI indexing, and unmapped-read recovery
+without a hidden reference dependency. The registered b178 fixture separately exercises
+ordinary reference compression with an explicit FASTA and a pinned indexed-region oracle.
+Purpose-built fixtures cover unavailable-reference and placed-unmapped failure modes.
 
-Why the fixtures are derived rather than committed
---------------------------------------------------
-``/tests/data/`` is git-ignored; the cohort ships as a Zenodo archive. A committed CRAM
-would need a new archive, new checksums, and a second copy of every read. Deriving each
-CRAM from the BAM beside it costs about a second per sample and buys a much stronger
-assertion than a standalone fixture ever could:
-
-    the same sample, as BAM and as CRAM, must produce the same genotype.
-
-That is a real equivalence test. A shipped CRAM fixture could only be compared against a
-recorded expectation, which is exactly the kind of evidence this repository has learned
-not to trust.
-
-Why ``no_ref=1``
-----------------
-The cohort's BAM headers carry no ``M5`` tags, so htslib cannot resolve a reference by
-digest: no ``REF_PATH``/``REF_CACHE`` lookup and no refget request can succeed. A
-conventionally reference-compressed CRAM would therefore need an explicit ``-T`` at read
-time. The pipeline now probes explicit and configured reference candidates before using
-one, but these lossless cohort fixtures deliberately exercise the reference-free path.
-``no_ref=1`` stores sequences verbatim, needs no reference to write or read, and
-round-trips byte-for-byte.
-
-``embed_ref=2`` was measured and rejected: htslib cannot derive a consensus reference from
-a region subset, warns, falls back to non-ref mode part-way through a container, and the
-round trip is **not** lossless.
-
-What this script does NOT establish
------------------------------------
-A ``no_ref`` CRAM exercises the container format, the CRAM decoder, ``.crai`` indexing and
-the unmapped-read scan. It does **not** exercise reference resolution, because it needs
-none. The separate failure mode of a CRAM whose reference is unavailable -- the ordinary
-externally-referenced CRAM a diagnostic lab would send -- is a different fixture and a
-different test; see ``build_reference_dependent_fixture``.
+Fixtures are derived under ignored ``tests/data`` rather than committed because the cohort
+ships separately and BAM/CRAM equivalence is stronger evidence than a standalone CRAM.
 """
 
 from __future__ import annotations
@@ -54,11 +21,33 @@ import logging
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 import pysam
+
+if __package__:
+    from .cram_reference_contract import (
+        HG19_CHR1_REFERENCE_SHA256,
+        REFERENCE_VALIDATION_REGION,
+        LossyConversionError,
+        ReferenceCompressedFixture,
+        header_with_hg19_m5,
+        normalize_sam_record,
+        validate_registered_b178_index_evidence,
+    )
+else:
+    from cram_reference_contract import (  # type: ignore[no-redef]
+        HG19_CHR1_REFERENCE_SHA256,
+        REFERENCE_VALIDATION_REGION,
+        LossyConversionError,
+        ReferenceCompressedFixture,
+        header_with_hg19_m5,
+        normalize_sam_record,
+        validate_registered_b178_index_evidence,
+    )
 
 logger = logging.getLogger("cram_fixtures")
 
@@ -71,50 +60,9 @@ DEFAULT_FIXTURE_ROOT = Path("tests/data/cram")
 DEFAULT_DATA_CONFIG = Path("tests/test_data_config.json")
 DEFAULT_REFERENCE_COMPRESSED_SOURCE = Path("tests/data/example_b178_hg19_subset.bam")
 DEFAULT_REFERENCE_COMPRESSED_FASTA = Path("reference/alignment/chr1.hg19.fa")
-HG19_CHR1_REFERENCE_SHA256 = "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338"
-REFERENCE_VALIDATION_REGION = "chr1:155160500-155162000"
 
-# UCSC hg19 primary-contig identities. The registered BAM lacks M5 tags; without
-# these htslib treats the chr1-only FASTA as an incomplete reference and silently
-# falls back to embedded/non-reference CRAM slices, whose zero spans break CRAI
-# retrieval. Non-chr1 containers still fall back individually because their
-# sequences are intentionally absent, while chr1 remains externally referenced.
-HG19_PRIMARY_CONTIGS: dict[str, tuple[int, str]] = {
-    "chr1": (249250621, "1b22b98cdeb4a9304cb5d48026a85128"),
-    "chr2": (243199373, "a0d9851da00400dec1098a9255ac712e"),
-    "chr3": (198022430, "641e4338fa8d52a5b781bd2a2c08d3c3"),
-    "chr4": (191154276, "23dccd106897542ad87d2765d28a19a1"),
-    "chr5": (180915260, "0740173db9ffd264d728f32784845cd7"),
-    "chr6": (171115067, "1d3a93a248d92a729ee764823acbbc6b"),
-    "chr7": (159138663, "618366e953d6aaad97dbe4777c29375e"),
-    "chr8": (146364022, "96f514a9929e410c6651697bded59aec"),
-    "chr9": (141213431, "3e273117f15e0a400f01055d9f393768"),
-    "chr10": (135534747, "988c28e000e84c26d552359af1ea2e1d"),
-    "chr11": (135006516, "98c59049a2df285c76ffb1c6db8f8b96"),
-    "chr12": (133851895, "51851ac0e1a115847ad36449b0015864"),
-    "chr13": (115169878, "283f8d7892baa81b510a015719ca7b0b"),
-    "chr14": (107349540, "98f3cae32b2a2e9524bc19813927542e"),
-    "chr15": (102531392, "e5645a794a8238215b2cd77acb95a078"),
-    "chr16": (90354753, "fc9b1a7b42b97a864f56b348b06095e6"),
-    "chr17": (81195210, "351f64d4f4f9ddd45b35336ad97aa6de"),
-    "chr18": (78077248, "b15d4b2d29dde9d3e4f93d1d0f2cbc9c"),
-    "chr19": (59128983, "1aacd71f30db8e561810913e0b72636d"),
-    "chr20": (63025520, "0dec9660ec1efaaf33281c0d5ea2560f"),
-    "chr21": (48129895, "2979a6085bfe28e3ad6f552f361ed74d"),
-    "chr22": (51304566, "a718acaa6135fdca8357d5bfe94211dd"),
-    "chrX": (155270560, "7e0e2e580297b7764e31dbc80c2540dd"),
-    "chrY": (59373566, "1e86411d73e6f00a10590f976be01623"),
-    "chrM": (16571, "d2ed829b8a1628d16cbeee88e88e39eb"),
-}
-
-# Pysam's typed interface exposes ``AlignmentFile`` but not its htslib-command wrappers.
-# Purpose-built fixtures use the latter deliberately so the unit tier never needs PATH's
-# external samtools binary.
+# Pysam's typed interface omits its htslib-command wrappers.
 pysam_any: Any = pysam
-
-
-class LossyConversionError(RuntimeError):
-    """A derived CRAM did not round-trip to the records of its source BAM."""
 
 
 @dataclass
@@ -156,44 +104,6 @@ class Summary:
     @property
     def total_cram_bytes(self) -> int:
         return sum(f.cram_bytes for f in self.fixtures)
-
-
-@dataclass(frozen=True)
-class ReferenceCompressedFixture:
-    """One explicitly referenced CRAM and its reproducibility evidence."""
-
-    source_bam: Path
-    cram: Path
-    reference: Path
-    records: int
-    source_record_digest: str
-    decoded_record_digest: str
-    indexed_region: str
-    indexed_region_records: int
-    source_indexed_region_digest: str
-    decoded_indexed_region_digest: str
-    reference_sha256: str
-    source_bytes: int
-    cram_bytes: int
-
-    def as_manifest_entry(self) -> dict[str, object]:
-        """Return stable JSON-ready provenance for the fixture."""
-        return {
-            "encoding": "reference-compressed",
-            "source_bam": str(self.source_bam),
-            "cram": str(self.cram),
-            "reference_fasta": str(self.reference),
-            "records": self.records,
-            "source_record_digest": self.source_record_digest,
-            "decoded_record_digest": self.decoded_record_digest,
-            "indexed_region": self.indexed_region,
-            "indexed_region_records": self.indexed_region_records,
-            "source_indexed_region_digest": self.source_indexed_region_digest,
-            "decoded_indexed_region_digest": self.decoded_indexed_region_digest,
-            "reference_sha256": self.reference_sha256,
-            "source_bytes": self.source_bytes,
-            "cram_bytes": self.cram_bytes,
-        }
 
 
 @dataclass(frozen=True)
@@ -241,26 +151,30 @@ def _record_digest(samtools: str, alignment: Path) -> tuple[str, int]:
     Reading the CRAM with no ``-T`` is the point: it is what the pipeline does. If the
     fixture needed a reference this call would fail rather than quietly succeed.
     """
+    return _stream_record_digest([samtools, "view", str(alignment)], lambda line: line.encode())
+
+
+def _stream_record_digest(argv: list[str], normalize: Callable[[str], bytes]) -> tuple[str, int]:
+    """Digest command stdout while draining arbitrary stderr without a pipe deadlock."""
     digest = hashlib.sha256()
     count = 0
-    with subprocess.Popen(
-        [samtools, "view", str(alignment)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1024 * 1024,
-    ) as proc:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            digest.update(line.encode())
-            count += 1
-        stderr = proc.stderr.read() if proc.stderr else ""
-        # Wait before reading returncode: draining stdout does not reap the child, and an
-        # unreaped child reports returncode None, which would compare unequal to 0 and
-        # turn every success into a spurious failure.
-        proc.wait()
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        with subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+            bufsize=1024 * 1024,
+        ) as proc:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                digest.update(normalize(line))
+                count += 1
+            proc.wait()
+        stderr_file.seek(0)
+        stderr = stderr_file.read()
     if proc.returncode != 0:
-        raise RuntimeError(f"samtools view {alignment} exited {proc.returncode}: {stderr.strip()}")
+        raise RuntimeError(f"{' '.join(argv)} exited {proc.returncode}: {stderr.strip()}")
     return digest.hexdigest(), count
 
 
@@ -273,22 +187,11 @@ def _normalized_record_digest(
 ) -> tuple[str, int]:
     """Digest decoded SAM records while ignoring optional-tag ordering.
 
-    htslib may reorder optional fields when a record falls outside the supplied
-    chr1-only FASTA and is stored in an embedded/non-reference CRAM block. Optional SAM
-    field order has no meaning, so sorting only those fields proves record equivalence
-    without treating that serialization detail as data loss.
-
     Args:
         samtools: The samtools executable.
         alignment: BAM or CRAM whose decoded records are digested.
         explicit_reference: FASTA passed with ``-T`` for CRAM decoding.
         region: Optional indexed region appended to the samtools query.
-
-    Returns:
-        The normalized SHA-256 digest and record count.
-
-    Raises:
-        RuntimeError: If samtools cannot decode the alignment.
     """
     argv = [samtools, "view"]
     if explicit_reference is not None:
@@ -297,26 +200,7 @@ def _normalized_record_digest(
     if region is not None:
         argv.append(region)
 
-    digest = hashlib.sha256()
-    count = 0
-    with subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1024 * 1024,
-    ) as proc:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            fields = line.rstrip("\n").split("\t")
-            normalized = "\t".join(fields[:11] + sorted(fields[11:])) + "\n"
-            digest.update(normalized.encode())
-            count += 1
-        stderr = proc.stderr.read() if proc.stderr else ""
-        proc.wait()
-    if proc.returncode != 0:
-        raise RuntimeError(f"{' '.join(argv)} exited {proc.returncode}: {stderr.strip()}")
-    return digest.hexdigest(), count
+    return _stream_record_digest(argv, normalize_sam_record)
 
 
 def discover_source_bams(data_root: Path, fixture_root: Path) -> list[Path]:
@@ -407,44 +291,6 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
     )
 
 
-def _header_with_hg19_m5(header_text: str) -> str:
-    """Add verified UCSC hg19 M5 tags without changing the sequence dictionary.
-
-    Raises:
-        ValueError: If a sequence is unknown, has the wrong length, or conflicts
-            with its pinned M5 identity.
-    """
-    output: list[str] = []
-    sequences = 0
-    for line in header_text.splitlines():
-        if not line.startswith("@SQ\t"):
-            output.append(line)
-            continue
-        fields = line.split("\t")
-        tags = {field[:2]: field[3:] for field in fields[1:] if len(field) > 3 and field[2] == ":"}
-        name = tags.get("SN", "")
-        if name not in HG19_PRIMARY_CONTIGS:
-            raise ValueError(f"Reference-compressed source header has unsupported hg19 sequence: {name or line}")
-        expected_length, expected_m5 = HG19_PRIMARY_CONTIGS[name]
-        if tags.get("LN") != str(expected_length):
-            raise ValueError(
-                f"Reference-compressed source header length mismatch for {name}: "
-                f"expected {expected_length}, observed {tags.get('LN', '<missing>')}"
-            )
-        if "M5" in tags and tags["M5"] != expected_m5:
-            raise ValueError(
-                f"Reference-compressed source header M5 mismatch for {name}: "
-                f"expected {expected_m5}, observed {tags['M5']}"
-            )
-        if "M5" not in tags:
-            fields.append(f"M5:{expected_m5}")
-        output.append("\t".join(fields))
-        sequences += 1
-    if sequences == 0:
-        raise ValueError("Reference-compressed source header contains no @SQ sequences")
-    return "\n".join(output) + "\n"
-
-
 def derive_reference_compressed_cram(
     samtools: str,
     source_bam: Path,
@@ -488,13 +334,16 @@ def derive_reference_compressed_cram(
         raise ValueError(msg)
 
     cram = fixture_root / "reference-compressed" / f"{source_bam.stem}.cram"
+    crai = Path(f"{cram}.crai")
     cram.parent.mkdir(parents=True, exist_ok=True)
     source_header = _run([samtools, "view", "-H", "--no-PG", str(source_bam)])
-    prepared_header = _header_with_hg19_m5(source_header)
+    prepared_header = header_with_hg19_m5(source_header)
     with tempfile.TemporaryDirectory(prefix="reference-compressed-", dir=cram.parent) as temp_dir:
         temp_root = Path(temp_dir)
         header_path = temp_root / "header.sam"
         prepared_bam = temp_root / source_bam.name
+        staged_cram = temp_root / cram.name
+        staged_crai = Path(f"{staged_cram}.crai")
         header_path.write_text(prepared_header, encoding="utf-8")
         _run_to_file([samtools, "reheader", "-P", str(header_path), str(source_bam)], prepared_bam)
         _run(
@@ -506,36 +355,40 @@ def derive_reference_compressed_cram(
                 str(reference),
                 "--no-PG",
                 "-o",
-                str(cram),
+                str(staged_cram),
                 str(prepared_bam),
             ]
         )
-    _run([samtools, "index", str(cram)])
+        _run([samtools, "index", str(staged_cram)])
+        if not staged_crai.is_file():
+            raise RuntimeError(f"samtools index did not create expected CRAI: {staged_crai}")
 
-    source_digest, source_records = _normalized_record_digest(samtools, source_bam)
-    decoded_digest, decoded_records = _normalized_record_digest(samtools, cram, reference)
-    if source_digest != decoded_digest or source_records != decoded_records:
-        raise LossyConversionError(
-            f"{source_bam} -> {cram} reference-compressed CRAM is not lossless: "
-            f"{source_records} source records digest {source_digest[:16]}, "
-            f"{decoded_records} decoded records digest {decoded_digest[:16]}"
-        )
+        source_digest, source_records = _normalized_record_digest(samtools, source_bam)
+        decoded_digest, decoded_records = _normalized_record_digest(samtools, staged_cram, reference)
+        if source_digest != decoded_digest or source_records != decoded_records:
+            raise LossyConversionError(
+                f"{source_bam} -> {cram} reference-compressed CRAM is not lossless: "
+                f"{source_records} source records digest {source_digest[:16]}, "
+                f"{decoded_records} decoded records digest {decoded_digest[:16]}"
+            )
 
-    source_region_digest, source_region_records = _normalized_record_digest(
-        samtools, source_bam, region=REFERENCE_VALIDATION_REGION
-    )
-    decoded_region_digest, decoded_region_records = _normalized_record_digest(
-        samtools,
-        cram,
-        reference,
-        region=REFERENCE_VALIDATION_REGION,
-    )
-    if source_region_digest != decoded_region_digest or source_region_records != decoded_region_records:
-        raise LossyConversionError(
-            f"{source_bam} -> {cram} indexed region {REFERENCE_VALIDATION_REGION} is not lossless: "
-            f"{source_region_records} source records digest {source_region_digest[:16]}, "
-            f"{decoded_region_records} decoded records digest {decoded_region_digest[:16]}"
+        source_region_digest, source_region_records = _normalized_record_digest(
+            samtools, source_bam, region=REFERENCE_VALIDATION_REGION
         )
+        decoded_region_digest, decoded_region_records = _normalized_record_digest(
+            samtools,
+            staged_cram,
+            reference,
+            region=REFERENCE_VALIDATION_REGION,
+        )
+        validate_registered_b178_index_evidence(
+            source_region_digest,
+            source_region_records,
+            decoded_region_digest,
+            decoded_region_records,
+        )
+        staged_crai.replace(crai)
+        staged_cram.replace(cram)
 
     return ReferenceCompressedFixture(
         source_bam=source_bam,

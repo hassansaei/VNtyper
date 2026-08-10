@@ -557,11 +557,11 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
     Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-10 verification measured all 37 Python files at 6,004 of 6,391 measured
-    units, or 93.94% aggregate scripts-only branch-inclusive coverage, and 89.17% combined
-    branch-inclusive coverage across 5,072 unit tests in both the maintained Python 3.12
-    environment and `ci-local`'s clean Python 3.13 rebuild. The Python 3.10–3.13 GitHub
-    matrix remains the authoritative cross-version gate. These figures do not change the
+    final 2026-08-11 verification measured all 38 Python files at 6,909 of 7,457 measured
+    units, or 92.65% aggregate scripts-only branch-inclusive coverage, and 88.99% combined
+    branch-inclusive coverage across 5,279 unit tests in the maintained Python 3.12
+    environment. `ci-local`'s clean Python 3.13 rebuild and the Python 3.10–3.13 GitHub
+    matrix remain the authoritative cross-version gates. These figures do not change the
     independent gate semantics:
     `[tool.coverage.report].fail_under = 86` is the hard floor,
     `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
