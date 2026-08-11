@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import zlib
 from pathlib import Path
 
 import pytest
@@ -206,6 +207,29 @@ def test_an_undecompressible_fastq_fails_closed_naming_the_file(tmp_path: Path) 
 
     with pytest.raises(ValueError, match=str(corrupt)):
         count_fastq_records(corrupt, lines_per_record=4)
+
+
+def test_a_gzip_with_a_corrupt_deflate_body_fails_closed_with_path_cause_and_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    corrupt = tmp_path / "body-corrupt.fastq.gz"
+    compressed = bytearray(gzip.compress(b"@read-0\nACGT\n+\n!!!!\n", mtime=0))
+    compressed[10] = (compressed[10] & ~0x07) | 0x07
+    corrupt.write_bytes(compressed)
+
+    with (
+        caplog.at_level(logging.ERROR, logger=pipeline_read_routing.logger.name),
+        pytest.raises(ValueError) as exc_info,
+    ):
+        count_fastq_records(corrupt, lines_per_record=4)
+
+    message = str(exc_info.value)
+    assert message.startswith(f"Could not count FASTQ records in {corrupt}:")
+    assert "invalid block type" in message
+    assert isinstance(exc_info.value.__cause__, zlib.error)
+    assert str(exc_info.value.__cause__) in message
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR] == [message]
 
 
 def test_empty_layout_failure_names_every_file_with_zero_records(tmp_path: Path) -> None:

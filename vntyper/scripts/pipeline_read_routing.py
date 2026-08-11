@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import zlib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
@@ -50,7 +51,7 @@ def count_fastq_records(path: str | Path, *, lines_per_record: int) -> int:
             return 0
         with _open_fastq(fastq_path) as handle:
             line_count = sum(1 for _ in handle)
-    except (OSError, EOFError, UnicodeError) as exc:
+    except (OSError, EOFError, UnicodeError, zlib.error) as exc:
         msg = f"Could not count FASTQ records in {fastq_path}: {exc}"
         logger.error(msg)
         raise ValueError(msg) from exc
