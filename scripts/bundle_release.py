@@ -91,6 +91,19 @@ def sha256_of(path: Path) -> str:
 #: Every asset is named `vntyper-references-<tag>-<suffix>.tar.gz`.
 ASSET_PREFIX = "vntyper-references"
 
+#: The trust anchor, read **by path** rather than by importing `vntyper`. The workflow
+#: runs this file as `python vntyper/scripts/bundle_release.py` out of a second checkout,
+#: where `sys.path[0]` is `scripts/` and `import vntyper` resolves only if the package
+#: happens to be installed - which would make the check below depend on step ordering.
+#: Assigned to a module attribute so a test can point it at a fixture.
+COMMITTED_CONFIG = Path(__file__).resolve().parents[1] / "vntyper" / "scripts" / "install_references_config.json"
+
+#: Where `install_references_config.json` keeps its downloadable genomes.
+CONFIG_GENOME_SECTIONS = ("ucsc_references", "ncbi_references", "ensembl_references")
+
+#: The fields a spec source and a config entry must agree on, if both declare them.
+PINNED_SOURCE_FIELDS = ("url", "source_sha256")
+
 #: Physical reference id -> asset suffix. The suffix is **source-prefixed**, which is not
 #: the same string as the physical id (`hg19_ensembl` -> `ensembl-hg19`), so this mapping
 #: is load-bearing: Task 10 commits an `asset_sha256` against each of these names, and a
@@ -564,6 +577,103 @@ def spec_source(spec: dict[str, Any], reference_id: str) -> dict[str, Any]:
     return entry
 
 
+def committed_source_pins(config_path: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Read the URL and digest VNtyper commits for every downloadable genome.
+
+    Args:
+        config_path: Override for `COMMITTED_CONFIG`, for tests.
+
+    Returns:
+        dict[str, dict[str, Any]]: Physical reference id -> that reference's section of
+        `install_references_config.json`.
+
+    Raises:
+        ValueError: If the file is missing, unreadable or not a JSON object. An
+            unreadable trust anchor is a broken checkout, not a reason to skip the
+            cross-check below and publish an unreviewed pin.
+    """
+    path = COMMITTED_CONFIG if config_path is None else config_path
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        message = f"cannot read VNtyper's committed reference config {path}: {error}"
+        logger.error(message)
+        raise ValueError(message) from error
+    except json.JSONDecodeError as error:
+        message = f"VNtyper's committed reference config {path} is not valid JSON: {error}"
+        logger.error(message)
+        raise ValueError(message) from error
+    if not isinstance(document, dict):
+        message = f"VNtyper's committed reference config {path} must be a JSON object"
+        logger.error(message)
+        raise ValueError(message)
+
+    return {
+        reference_id: entry
+        for section in CONFIG_GENOME_SECTIONS
+        for reference_id, entry in (document.get(section) or {}).items()
+        if isinstance(entry, dict)
+    }
+
+
+def cross_check_sources(spec: dict[str, Any], references: Sequence[str], config_path: Path | None = None) -> None:
+    """Refuse a spec whose sources contradict the pins committed in VNtyper.
+
+    `install_references.resolve_source_location` merges the two field by field and
+    `verify_tree` then checks the downloaded bytes against the **spec's** digest, so
+    without this both layers agree with each other and neither ever consults
+    `install_references_config.json`. A spec naming Ensembl release-115 while VNtyper
+    documents release-116 would build, verify green, and freeze a provenance statement
+    that does not describe the published bytes into an immutable release.
+
+    §4.1 of the design says why the direction of authority is this way round: the trust
+    anchor lives in VNtyper, not next to the assets. So moving a future release to a
+    newer upstream requires a reviewed VNtyper commit - which is a base-image content
+    hash change anyway.
+
+    A reference the config does not pin keeps whatever the spec says; there is nothing
+    to contradict.
+
+    Args:
+        spec: A parsed release spec.
+        references: Physical reference ids this build packages.
+        config_path: Override for `COMMITTED_CONFIG`, for tests.
+
+    Raises:
+        ValueError: On any disagreement, naming the reference, both values and the file
+            each came from.
+    """
+    pins = committed_source_pins(config_path)
+    anchor = COMMITTED_CONFIG if config_path is None else config_path
+
+    disagreements: list[str] = []
+    for reference_id in references:
+        entry = spec_source(spec, reference_id)
+        committed = pins.get(reference_id)
+        if committed is None:
+            continue
+        for field in PINNED_SOURCE_FIELDS:
+            declared = entry.get(field)
+            pinned = committed.get(field)
+            if not declared or not pinned or declared == pinned:
+                continue
+            disagreements.append(
+                f"reference '{reference_id}' field '{field}': the release spec says {declared!r} "
+                f"but {anchor.name} pins {pinned!r}"
+            )
+
+    if disagreements:
+        message = (
+            f"{len(disagreements)} source pin(s) in the release spec contradict the values committed in "
+            f"{anchor}:\n  " + "\n  ".join(disagreements) + "\nThe trust anchor is VNtyper's committed "
+            "config, not the spec beside the assets: a spec that silently wins would publish an immutable "
+            "release whose provenance does not describe its bytes. Move the upstream in "
+            "install_references_config.json first, in a reviewed commit, then match the spec to it."
+        )
+        logger.error(message)
+        raise ValueError(message)
+
+
 def validate_spec(spec: dict[str, Any], tag: str, references: Sequence[str]) -> None:
     """Reject a spec that cannot describe this build, before anything is downloaded.
 
@@ -578,11 +688,11 @@ def validate_spec(spec: dict[str, Any], tag: str, references: Sequence[str]) -> 
 
     Raises:
         ValueError: If the spec omits or contradicts the tag, names no usable source for
-            a requested reference, does not pin all four seeds, or does not fully declare
-            every derivation. The spec is hand-written once and then frozen into an
-            immutable release, so this is strict to the point of pedantry: a permissive
-            preflight only moves the discovery of a typo from minute one to hour three,
-            or past publication.
+            a requested reference, contradicts a source pin committed in VNtyper, does
+            not pin all four seeds, or does not fully declare every derivation. The spec
+            is hand-written once and then frozen into an immutable release, so this is
+            strict to the point of pedantry: a permissive preflight only moves the
+            discovery of a typo from minute one to hour three, or past publication.
     """
     declared = spec.get("release_tag")
     if not declared:
@@ -596,6 +706,7 @@ def validate_spec(spec: dict[str, Any], tag: str, references: Sequence[str]) -> 
 
     for reference_id in references:
         spec_source(spec, reference_id)
+    cross_check_sources(spec, references)
 
     missing_seeds = [seed for seed in REQUIRED_SEEDS if seed not in spec_seed_digests(spec)]
     if missing_seeds:

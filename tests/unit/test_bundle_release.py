@@ -44,6 +44,11 @@ import bundle_release  # noqa: E402
 #: real subprocess probe gets it back rather than the pinned stand-in.
 _REAL_CAPTURE = bundle_release._capture
 
+#: Same reasoning for the trust anchor: an autouse fixture redirects it at a config that
+#: agrees with the fixture spec, and `TestSourcePinsAgreeWithTheCommittedConfig` puts the
+#: real one back.
+_REAL_COMMITTED_CONFIG = bundle_release.COMMITTED_CONFIG
+
 #: Physical reference id -> the extracted chromosome FASTA `--from-source` leaves behind.
 #: NCBI ships `.fna`, everyone else `.fa`; both spellings have to survive the grouper.
 GENOMES = {
@@ -161,6 +166,32 @@ def spec(tmp_path: Path, refs: Path) -> Path:
     path = tmp_path / "refs-v1.json"
     path.write_text(json.dumps(_spec_document(refs), indent=2), encoding="utf-8")
     return path
+
+
+@pytest.fixture(autouse=True)
+def _committed_config_matches_the_fixture_spec(tmp_path: Path, refs: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the source cross-check at a config that agrees with `_spec_document`.
+
+    `validate_spec` now refuses a spec whose `url` or `source_sha256` contradicts
+    VNtyper's committed `install_references_config.json`. The fixture tree is made of
+    eight-byte FASTAs, so its digests cannot possibly equal the real ones - without this
+    every build test would fail on the cross-check instead of on what it is testing.
+    `TestSourcePinsAgreeWithTheCommittedConfig` deliberately does not use this fixture
+    and reads the real file.
+    """
+    document = _spec_document(refs)
+    config = tmp_path / "install_references_config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "ucsc_references": {ref: document["sources"][ref] for ref in ("hg19", "hg38")},
+                "ncbi_references": {ref: document["sources"][ref] for ref in ("GRCh37", "GRCh38")},
+                "ensembl_references": {ref: document["sources"][ref] for ref in ("hg19_ensembl", "hg38_ensembl")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bundle_release, "COMMITTED_CONFIG", config)
 
 
 @pytest.fixture(autouse=True)
@@ -482,10 +513,13 @@ class TestFailClosed:
     def test_a_source_archive_that_does_not_match_the_spec_stops_the_build(
         self, tmp_path: Path, refs: Path, spec: Path
     ) -> None:
-        def mutate(document: dict[str, Any]) -> None:
-            document["sources"]["GRCh38"]["source_sha256"] = "0" * 64
+        """The retained download is re-hashed, so tampered bytes cannot reach an asset.
 
-        self._rewrite_spec(spec, mutate)
+        The tree is mutated rather than the spec: rewriting the spec's digest would now
+        be caught a step earlier by the cross-check against VNtyper's committed config,
+        and this test is about `verify_tree`'s source-archive check being fatal.
+        """
+        _write(refs / "alignment" / "chr1.GRCh38.fna.gz", b"not the bytes the release spec pins")
         assert bundle_release.main(_argv(refs, spec, tmp_path / "dist")) == 1
 
     def test_a_spec_that_does_not_name_a_source_fails_by_reference_id(
@@ -718,6 +752,128 @@ class TestSpecPreflight:
             bundle_release.file_provenance("unexpected_member.db", muc1, _spec_document(refs))
 
 
+class TestSourcePinsAgreeWithTheCommittedConfig:
+    """A release spec must not be able to silently retarget the build.
+
+    `resolve_source_location` merged the two field by field, and `verify_tree` then
+    checked the downloaded bytes against the **spec's** digest - so both layers agreed
+    with each other and neither ever read `install_references_config.json`. The plan's
+    own Task 6 template names Ensembl release-115 while the shipped config pins
+    release-116, so this was one hand-written spec away from freezing a provenance
+    statement that does not describe the published bytes into an immutable release.
+
+    Design §4.1: "The trust anchor must live in VNtyper, not next to the assets."
+    """
+
+    #: What the plan's template wrote, against the release-116 URL the config pins.
+    STALE_ENSEMBL_URL = (
+        "https://ftp.ensembl.org/pub/grch37/release-115/fasta/homo_sapiens/dna/"
+        "Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz"
+    )
+
+    @pytest.fixture
+    def committed(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, Any]]:
+        """Undo the module-wide redirect and read VNtyper's real committed config."""
+        if not _REAL_COMMITTED_CONFIG.exists():
+            pytest.skip("install_references_config.json is not present in this checkout")
+        monkeypatch.setattr(bundle_release, "COMMITTED_CONFIG", _REAL_COMMITTED_CONFIG)
+        return bundle_release.committed_source_pins()
+
+    def test_the_real_config_pins_a_url_and_a_digest_for_every_packaged_reference(
+        self, committed: dict[str, dict[str, Any]]
+    ) -> None:
+        for reference_id in bundle_release.GENOME_ASSETS:
+            assert reference_id in committed, f"{reference_id} is packaged but not pinned"
+            assert committed[reference_id].get("url")
+            assert committed[reference_id].get("source_sha256")
+
+    def _spec_from(self, committed: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "sources": {
+                reference_id: {
+                    "url": committed[reference_id]["url"],
+                    "source_sha256": committed[reference_id]["source_sha256"],
+                }
+                for reference_id in bundle_release.GENOME_ASSETS
+            }
+        }
+
+    def test_a_spec_that_repeats_the_committed_pins_is_accepted(self, committed: dict[str, dict[str, Any]]) -> None:
+        bundle_release.cross_check_sources(self._spec_from(committed), list(bundle_release.GENOME_ASSETS))
+
+    def test_the_plans_stale_ensembl_url_is_rejected_and_both_values_are_named(
+        self, committed: dict[str, dict[str, Any]]
+    ) -> None:
+        spec = self._spec_from(committed)
+        spec["sources"]["hg19_ensembl"]["url"] = self.STALE_ENSEMBL_URL
+
+        with pytest.raises(ValueError) as excinfo:
+            bundle_release.cross_check_sources(spec, list(bundle_release.GENOME_ASSETS))
+
+        message = str(excinfo.value)
+        assert "hg19_ensembl" in message
+        assert "release-115" in message
+        assert "release-116" in message
+        assert "install_references_config.json" in message
+
+    def test_a_contradicted_digest_is_rejected(self, committed: dict[str, dict[str, Any]]) -> None:
+        spec = self._spec_from(committed)
+        spec["sources"]["hg38"]["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValueError) as excinfo:
+            bundle_release.cross_check_sources(spec, list(bundle_release.GENOME_ASSETS))
+
+        assert "hg38" in str(excinfo.value)
+        assert "source_sha256" in str(excinfo.value)
+
+    def test_every_disagreement_is_reported_at_once(self, committed: dict[str, dict[str, Any]]) -> None:
+        """An operator fixing one typo per three-hour build is not a workable loop."""
+        spec = self._spec_from(committed)
+        spec["sources"]["hg19"]["url"] = "https://elsewhere.invalid/chr1.fa.gz"
+        spec["sources"]["GRCh38"]["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValueError) as excinfo:
+            bundle_release.cross_check_sources(spec, list(bundle_release.GENOME_ASSETS))
+
+        assert "hg19" in str(excinfo.value)
+        assert "GRCh38" in str(excinfo.value)
+
+    def test_a_reference_the_config_does_not_pin_keeps_whatever_the_spec_says(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"ucsc_references": {}}), encoding="utf-8")
+        spec = {"sources": {"hg19": {"url": "https://only-in-the-spec.invalid/chr1.gz", "source_sha256": "a" * 64}}}
+        bundle_release.cross_check_sources(spec, ["hg19"], config_path=config)
+
+    def test_a_config_field_the_spec_omits_is_not_a_disagreement(self, tmp_path: Path) -> None:
+        """`spec_source` already requires both fields; this pins that the comparison
+        itself treats an absent value as "nothing to contradict" rather than a mismatch."""
+        config = tmp_path / "config.json"
+        config.write_text(
+            json.dumps({"ucsc_references": {"hg19": {"url": "https://ucsc.invalid/chr1.gz"}}}), encoding="utf-8"
+        )
+        spec = {"sources": {"hg19": {"url": "https://ucsc.invalid/chr1.gz", "source_sha256": "a" * 64}}}
+        bundle_release.cross_check_sources(spec, ["hg19"], config_path=config)
+
+    @pytest.mark.parametrize("payload", [None, "{ not json", "[]"])
+    def test_an_unusable_committed_config_fails_closed(self, tmp_path: Path, payload: str | None) -> None:
+        """An unreadable trust anchor is a broken checkout, not permission to skip."""
+        config = tmp_path / "config.json"
+        if payload is not None:
+            config.write_text(payload, encoding="utf-8")
+        with pytest.raises(ValueError, match="committed reference config"):
+            bundle_release.committed_source_pins(config)
+
+    def test_the_preflight_catches_a_contradiction_in_minute_one(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+        """End-to-end through `--check-spec-only`, which is what the workflow runs
+        before three hours of downloading and BWA-indexing."""
+        document = json.loads(spec.read_text(encoding="utf-8"))
+        document["sources"]["hg19_ensembl"]["url"] = self.STALE_ENSEMBL_URL
+        spec.write_text(json.dumps(document), encoding="utf-8")
+        empty = tmp_path / "not-built-yet"
+        empty.mkdir(exist_ok=True)
+        assert bundle_release.main(_argv(empty, spec, tmp_path / "dist", "--check-spec-only")) == 1
+
+
 class TestPruning:
     def test_pruning_removes_each_asset_only_after_its_archive_is_written(
         self, tmp_path: Path, refs: Path, spec: Path
@@ -809,6 +965,47 @@ class TestWorkflowAgreement:
 
     def test_the_release_is_published_as_a_draft(self) -> None:
         assert "--draft" in self._run_text()
+
+    def test_the_tag_is_created_at_the_commit_that_was_actually_built(self) -> None:
+        """`gh release create` without `--target` creates a missing tag at the DEFAULT
+        BRANCH's latest commit, not at the checked-out one. Every manifest records
+        DATA_SHA, so after a two-hour build the tag could resolve elsewhere and
+        publishing the draft would freeze the mismatch."""
+        run = self._run_text()
+        assert "gh release create" in run
+        assert '--target "$DATA_SHA"' in run
+
+    def test_the_builder_commit_is_asserted_against_the_workflow_commit(self) -> None:
+        """`uses:` pins this file at one SHA; `source_commit` chooses the code that runs.
+
+        Nothing else ties them together, so a caller could pin a reviewed builder and
+        then check out a different one - and every `expected_sha256` and both scripts
+        would come from the unreviewed commit.
+        """
+        steps = self._steps()
+        guard = steps[0]
+        assert guard["env"] == {
+            "SOURCE_COMMIT": "${{ inputs.source_commit }}",
+            "JOB_WORKFLOW_SHA": "${{ github.job_workflow_sha }}",
+        }
+        run = str(guard["run"])
+        assert '"$SOURCE_COMMIT" != "$JOB_WORKFLOW_SHA"' in run
+        assert "exit 1" in run
+
+    def test_the_builder_assertion_precedes_both_checkouts(self) -> None:
+        """It must fail closed before anything expensive, and before either checkout."""
+        names = [str(step.get("name", "")) for step in self._steps()]
+        guard = next(index for index, name in enumerate(names) if "Assert the builder commit" in name)
+        checkouts = [index for index, step in enumerate(self._steps()) if "checkout" in str(step.get("uses", ""))]
+        assert checkouts
+        assert guard < min(checkouts)
+
+    def test_the_workflow_commit_is_not_used_directly_as_a_checkout_ref(self) -> None:
+        """An empty `github.job_workflow_sha` as `ref:` silently checks out the default
+        branch; an equality assertion fails closed instead."""
+        for step in self._steps():
+            with_block = step.get("with") or {}
+            assert "job_workflow_sha" not in str(with_block.get("ref", ""))
 
     def test_untrusted_inputs_are_passed_through_the_environment(self) -> None:
         """`${{ inputs.* }}` interpolated straight into a `run:` block is a script
