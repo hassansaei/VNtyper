@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -43,8 +44,9 @@ def _touch(path: Path, content: str = "x") -> Path:
     return path
 
 
-def _stub_reference_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cram_fixtures, "validate_reference_fasta", mock.Mock(return_value=mock.sentinel.authority))
+def _stub_reference_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = mock.Mock(side_effect=lambda *_args, **_kwargs: nullcontext(mock.sentinel.authority))
+    monkeypatch.setattr(cram_fixtures, "snapshot_reference_fasta", snapshot)
 
 
 def _paired_source_bam(path: Path) -> Path:
@@ -578,7 +580,7 @@ def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_
 
     monkeypatch.chdir(repository_root)
     monkeypatch.setattr(cram_fixtures, "derive_cram", fake_derive_cram)
-    _stub_reference_validation(monkeypatch)
+    _stub_reference_snapshot(monkeypatch)
     monkeypatch.setattr(
         cram_fixtures,
         "derive_reference_compressed_cram",
@@ -727,7 +729,7 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
         return mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"})
 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", fake_build)
-    _stub_reference_validation(monkeypatch)
+    _stub_reference_snapshot(monkeypatch)
     monkeypatch.setattr(
         "scripts.make_cram_fixtures.derive_reference_compressed_cram",
         record_reference_fixture,
@@ -774,7 +776,7 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     summary = Summary(fixtures=[fixture], skipped=[(data_root / "broken.bam", "truncated")])
 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", lambda *_args, **_kwargs: summary)
-    _stub_reference_validation(monkeypatch)
+    _stub_reference_snapshot(monkeypatch)
     monkeypatch.setattr(
         "scripts.make_cram_fixtures.derive_reference_compressed_cram",
         lambda *_args, **_kwargs: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
@@ -802,7 +804,7 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
         raise LossyConversionError("not lossless")
 
     monkeypatch.setattr(cram_fixtures, "build_fixtures", fail_build)
-    _stub_reference_validation(monkeypatch)
+    _stub_reference_snapshot(monkeypatch)
     with pytest.raises(LossyConversionError, match="not lossless"):
         cram_fixtures.main(
             [

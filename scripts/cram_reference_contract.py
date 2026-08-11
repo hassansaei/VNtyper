@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 HG19_CHR1_REFERENCE_SHA256 = "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338"
+HG19_CHR1_FASTA_INDEX = "chr1\t249250621\t6\t50\t51\n"
 REFERENCE_VALIDATION_REGION = "chr1:155160500-155162000"
 REGISTERED_B178_INDEXED_REGION_RECORDS = 13_868
 REGISTERED_B178_INDEXED_REGION_DIGEST = "748b2aea22748d0277857b5ecbe641f85fed0e3dfd280aa62def0b71728e07a0"
@@ -51,11 +55,36 @@ class LossyConversionError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class ValidatedReferenceFasta:
-    """A reference path whose bytes match a required SHA-256 identity."""
+class ValidatedReferenceSnapshot:
+    """An immutable FASTA snapshot plus its logical provenance and identity."""
 
-    path: Path
+    logical_path: Path
+    snapshot_path: Path
     sha256: str
+    source_uri: str
+
+    def tool_path_for(self, logical_path: Path, expected_sha256: str) -> Path:
+        """Return the snapshot after verifying its logical provenance contract.
+
+        Args:
+            logical_path: Logical reference path expected by the caller.
+            expected_sha256: Reference identity required by the caller.
+
+        Returns:
+            The immutable snapshot path to pass to external tools.
+
+        Raises:
+            ValueError: If path provenance or required identity differs.
+        """
+        if self.logical_path != logical_path:
+            raise ValueError(
+                f"Validated reference path mismatch: expected {logical_path}, observed {self.logical_path}."
+            )
+        if self.sha256 != expected_sha256:
+            raise ValueError(
+                f"Validated reference SHA-256 mismatch: expected {expected_sha256}, observed {self.sha256}."
+            )
+        return self.snapshot_path
 
 
 @dataclass(frozen=True)
@@ -96,55 +125,53 @@ class ReferenceCompressedFixture:
         }
 
 
-def validate_reference_fasta(
+@contextmanager
+def snapshot_reference_fasta(
     reference: Path,
     expected_sha256: str = HG19_CHR1_REFERENCE_SHA256,
     *,
-    validated_reference: ValidatedReferenceFasta | None = None,
-) -> ValidatedReferenceFasta:
-    """Validate a reference FASTA once and return its path-bound authority.
+    temporary_root: Path | None = None,
+) -> Iterator[ValidatedReferenceSnapshot]:
+    """Copy and validate a reference once, yielding an immutable temporary snapshot.
 
     Args:
-        reference: FASTA path whose bytes must be identified.
+        reference: Logical FASTA path whose bytes must be snapshotted.
         expected_sha256: Required SHA-256 identity.
-        validated_reference: Optional authority to bind without reading the FASTA again.
+        temporary_root: Optional test-only parent for the temporary snapshot directory.
 
-    Returns:
-        The validated reference path and observed identity.
+    Yields:
+        The logical provenance, read-only snapshot path, and observed identity.
 
     Raises:
         FileNotFoundError: If the reference does not exist.
         ValueError: If the reference bytes do not match the required identity.
     """
-    if validated_reference is not None:
-        if validated_reference.path != reference:
-            msg = f"Validated reference path mismatch: expected {reference}, observed {validated_reference.path}."
-            logger.error(msg)
-            raise ValueError(msg)
-        if validated_reference.sha256 != expected_sha256:
+    temporary_parent = str(temporary_root) if temporary_root is not None else None
+    with tempfile.TemporaryDirectory(prefix="vntyper-reference-snapshot-", dir=temporary_parent) as temp_dir:
+        snapshot = Path(temp_dir) / reference.name
+        hasher = hashlib.sha256()
+        try:
+            with reference.open("rb") as source, snapshot.open("xb") as destination:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    hasher.update(chunk)
+                    destination.write(chunk)
+        except (FileNotFoundError, IsADirectoryError) as exc:
+            raise FileNotFoundError(f"Reference FASTA does not exist: {reference}") from exc
+
+        observed_sha256 = hasher.hexdigest()
+        if observed_sha256 != expected_sha256:
             msg = (
-                f"Validated reference SHA-256 mismatch for {reference}: "
-                f"expected {expected_sha256}, observed {validated_reference.sha256}."
+                f"Reference FASTA SHA-256 mismatch for {reference}: "
+                f"expected {expected_sha256}, observed {observed_sha256}."
             )
             logger.error(msg)
             raise ValueError(msg)
-        return validated_reference
 
-    if not reference.is_file():
-        raise FileNotFoundError(f"Reference FASTA does not exist: {reference}")
-
-    hasher = hashlib.sha256()
-    with reference.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    observed_sha256 = hasher.hexdigest()
-    if observed_sha256 != expected_sha256:
-        msg = (
-            f"Reference FASTA SHA-256 mismatch for {reference}: expected {expected_sha256}, observed {observed_sha256}."
-        )
-        logger.error(msg)
-        raise ValueError(msg)
-    return ValidatedReferenceFasta(reference, observed_sha256)
+        snapshot_index = Path(f"{snapshot}.fai")
+        snapshot_index.write_text(HG19_CHR1_FASTA_INDEX, encoding="utf-8")
+        snapshot.chmod(0o444)
+        snapshot_index.chmod(0o444)
+        yield ValidatedReferenceSnapshot(reference, snapshot, observed_sha256, str(reference.absolute()))
 
 
 def normalize_sam_record(line: str) -> bytes:
@@ -153,8 +180,12 @@ def normalize_sam_record(line: str) -> bytes:
     return ("\t".join(fields[:11] + sorted(fields[11:])) + "\n").encode()
 
 
-def header_with_hg19_m5(header_text: str) -> str:
-    """Add verified UCSC hg19 M5 tags without changing the sequence dictionary.
+def header_with_hg19_m5(header_text: str, reference_uri: str | None = None) -> str:
+    """Add verified UCSC hg19 M5 tags and an optional stable reference URI.
+
+    Args:
+        header_text: Source SAM header.
+        reference_uri: Logical provenance URI to replace any physical tool path.
 
     Raises:
         ValueError: If a sequence is unknown, has the wrong length, or conflicts
@@ -184,6 +215,9 @@ def header_with_hg19_m5(header_text: str) -> str:
             )
         if "M5" not in tags:
             fields.append(f"M5:{expected_m5}")
+        if reference_uri is not None:
+            fields = [field for field in fields if not field.startswith("UR:")]
+            fields.append(f"UR:{reference_uri}")
         output.append("\t".join(fields))
         sequences += 1
     if sequences == 0:

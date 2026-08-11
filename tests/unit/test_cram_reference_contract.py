@@ -14,7 +14,7 @@ from scripts.cram_reference_contract import (
     LossyConversionError,
     header_with_hg19_m5,
     normalize_sam_record,
-    validate_reference_fasta,
+    snapshot_reference_fasta,
     validate_registered_b178_index_evidence,
 )
 
@@ -24,32 +24,57 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROVENANCE = REPO_ROOT / "scripts/ucsc_hg19_primary_contigs.tsv"
 
 
-def test_validate_reference_fasta_returns_path_bound_digest(tmp_path: Path) -> None:
-    reference = tmp_path / "reference.fa"
-    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
-    expected_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
+@pytest.mark.parametrize("source_mutation", ["delete", "replace", "retarget"])
+def test_reference_snapshot_is_read_only_and_independent_of_later_source_changes(
+    tmp_path: Path, source_mutation: str
+) -> None:
+    original = tmp_path / "original.fa"
+    original_bytes = b">chr1\nACGT\n"
+    original.write_bytes(original_bytes)
+    logical_reference = tmp_path / "reference.fa"
+    if source_mutation == "retarget":
+        logical_reference.symlink_to(original)
+    else:
+        logical_reference.write_bytes(original_bytes)
+    expected_sha256 = hashlib.sha256(original_bytes).hexdigest()
+    snapshot_root = tmp_path / "snapshots"
+    snapshot_root.mkdir()
 
-    authority = validate_reference_fasta(reference, expected_sha256)
+    with snapshot_reference_fasta(
+        logical_reference,
+        expected_sha256,
+        temporary_root=snapshot_root,
+    ) as authority:
+        snapshot = authority.snapshot_path
+        assert authority.logical_path == logical_reference
+        assert authority.source_uri == str(logical_reference.absolute())
+        assert authority.sha256 == expected_sha256
+        assert snapshot.read_bytes() == original_bytes
+        assert snapshot.stat().st_mode & 0o222 == 0
+        assert Path(f"{snapshot}.fai").read_text() == "chr1\t249250621\t6\t50\t51\n"
 
-    assert authority.path == reference
-    assert authority.sha256 == expected_sha256
+        if source_mutation == "delete":
+            logical_reference.unlink()
+        elif source_mutation == "replace":
+            logical_reference.write_bytes(b">chr1\nTTTT\n")
+        else:
+            replacement = tmp_path / "replacement.fa"
+            replacement.write_bytes(b">chr1\nTTTT\n")
+            logical_reference.unlink()
+            logical_reference.symlink_to(replacement)
 
+        assert snapshot.read_bytes() == original_bytes
+        assert hashlib.sha256(snapshot.read_bytes()).hexdigest() == authority.sha256
 
-def test_validate_reference_fasta_reuses_bound_authority_without_reading_again(tmp_path: Path) -> None:
-    reference = tmp_path / "reference.fa"
-    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
-    expected_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
-    authority = validate_reference_fasta(reference, expected_sha256)
-    reference.unlink()
-
-    reused = validate_reference_fasta(reference, expected_sha256, validated_reference=authority)
-
-    assert reused is authority
+    assert not snapshot.exists()
+    assert list(snapshot_root.iterdir()) == []
 
 
 @pytest.mark.parametrize("reference_state", ["missing", "wrong"])
-def test_validate_reference_fasta_rejects_unidentified_bytes(tmp_path: Path, reference_state: str) -> None:
+def test_reference_snapshot_rejects_unidentified_bytes_and_cleans_up(tmp_path: Path, reference_state: str) -> None:
     reference = tmp_path / "reference.fa"
+    snapshot_root = tmp_path / "snapshots"
+    snapshot_root.mkdir()
     if reference_state == "wrong":
         reference.write_text(">chr1\nA\n", encoding="utf-8")
         error: type[Exception] = ValueError
@@ -58,8 +83,10 @@ def test_validate_reference_fasta_rejects_unidentified_bytes(tmp_path: Path, ref
         error = FileNotFoundError
         message = "does not exist"
 
-    with pytest.raises(error, match=message):
-        validate_reference_fasta(reference)
+    with pytest.raises(error, match=message), snapshot_reference_fasta(reference, temporary_root=snapshot_root):
+        pytest.fail("invalid reference yielded a snapshot")
+
+    assert list(snapshot_root.iterdir()) == []
 
 
 def test_normalize_sam_record_sorts_only_optional_fields() -> None:
@@ -76,6 +103,16 @@ def test_hg19_header_adds_exact_primary_contig_m5_tags() -> None:
         "@SQ\tSN:chr1\tLN:249250621\tM5:1b22b98cdeb4a9304cb5d48026a85128\n"
         "@SQ\tLN:243199373\tSN:chr2\tM5:a0d9851da00400dec1098a9255ac712e\n"
         "@RG\tID:sample\n"
+    )
+
+
+def test_hg19_header_records_stable_logical_uri_instead_of_tool_snapshot() -> None:
+    header = "@SQ\tSN:chr1\tLN:249250621\tUR:/tmp/stale-snapshot.fa\n"
+
+    prepared = header_with_hg19_m5(header, "/logical/reference/chr1.hg19.fa")
+
+    assert prepared == (
+        "@SQ\tSN:chr1\tLN:249250621\tM5:1b22b98cdeb4a9304cb5d48026a85128\tUR:/logical/reference/chr1.hg19.fa\n"
     )
 
 

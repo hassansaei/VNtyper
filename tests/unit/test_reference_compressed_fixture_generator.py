@@ -6,6 +6,7 @@ import hashlib
 import io
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -34,6 +35,8 @@ class _ReferenceSamtools:
         self.failure = failure
         self.create_index = create_index
         self.commands: list[list[str]] = []
+        self.reference_inputs: list[tuple[Path, bytes]] = []
+        self.prepared_headers: list[str] = []
 
     def __call__(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         self.commands.append(argv)
@@ -51,11 +54,15 @@ class _ReferenceSamtools:
             header = "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:249250621\n@SQ\tSN:chr2\tLN:243199373\n"
             return subprocess.CompletedProcess(argv, 0, stdout=header, stderr="")
         if operation == "reheader":
+            self.prepared_headers.append(Path(argv[3]).read_text(encoding="utf-8"))
             output = kwargs["stdout"]
             assert hasattr(output, "name")
-            Path(output.name).write_bytes(b"reheadered bam")
+            content = b"reference-compressed cram" if Path(argv[4]).suffix == ".cram" else b"reheadered bam"
+            Path(output.name).write_bytes(content)
         elif operation == "encode":
-            Path(argv[argv.index("-o") + 1]).write_bytes(b"reference-compressed cram")
+            reference = Path(argv[argv.index("-T") + 1])
+            self.reference_inputs.append((reference, reference.read_bytes()))
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"encoded cram with physical reference URI")
         elif operation == "index" and self.create_index:
             Path(f"{argv[-1]}.crai").write_bytes(b"reference-compressed crai")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
@@ -113,11 +120,11 @@ def test_main_forwards_selected_reference_fasta_unchanged(
 ) -> None:
     data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
     authority = mock.sentinel.validated_reference
-    validate = mock.Mock(return_value=authority)
+    snapshot = mock.Mock(return_value=nullcontext(authority))
     derive = mock.Mock(return_value=mock.Mock(as_manifest_entry=dict))
     summary = mock.Mock(fixtures=[mock.sentinel.fixture], skipped=[], total_cram_bytes=1, total_source_bytes=1)
     monkeypatch.setattr(generator, "build_fixtures", lambda *_args, **_kwargs: summary)
-    monkeypatch.setattr(generator, "validate_reference_fasta", validate)
+    monkeypatch.setattr(generator, "snapshot_reference_fasta", snapshot)
     monkeypatch.setattr(generator, "derive_reference_compressed_cram", derive)
     monkeypatch.setattr(generator, "build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr(generator, "build_placed_flag12_fixture", lambda _root: None)
@@ -137,7 +144,7 @@ def test_main_forwards_selected_reference_fasta_unchanged(
     )
 
     assert exit_code == 0
-    validate.assert_called_once_with(expected_reference)
+    snapshot.assert_called_once_with(expected_reference)
     assert derive.call_args.args == (
         "samtools",
         generator.DEFAULT_REFERENCE_COMPRESSED_SOURCE,
@@ -279,14 +286,16 @@ def test_derivation_rejects_authority_bound_to_another_reference(tmp_path: Path)
     reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
     other_reference = _touch(tmp_path / "other.fa", ">chr1\nACGT\n")
     digest = hashlib.sha256(other_reference.read_bytes()).hexdigest()
-    authority = generator.validate_reference_fasta(other_reference, digest)
-
-    with pytest.raises(ValueError, match="Validated reference path mismatch"):
+    with (
+        generator.snapshot_reference_fasta(other_reference, digest) as authority,
+        pytest.raises(ValueError, match="Validated reference path mismatch"),
+    ):
         generator.derive_reference_compressed_cram(
             "samtools",
             source,
             reference,
             tmp_path / "cram",
+            expected_reference_sha256=digest,
             validated_reference=authority,
         )
 
@@ -297,9 +306,10 @@ def test_derivation_rejects_authority_for_another_required_digest(tmp_path: Path
     source = _touch(tmp_path / "source.bam")
     reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
     digest = hashlib.sha256(reference.read_bytes()).hexdigest()
-    authority = generator.validate_reference_fasta(reference, digest)
-
-    with pytest.raises(ValueError, match="Validated reference SHA-256 mismatch"):
+    with (
+        generator.snapshot_reference_fasta(reference, digest) as authority,
+        pytest.raises(ValueError, match="Validated reference SHA-256 mismatch"),
+    ):
         generator.derive_reference_compressed_cram(
             "samtools",
             source,
@@ -331,15 +341,73 @@ def test_derivation_stages_then_publishes_explicit_reference_artifacts(
     )
 
     final_cram = root / "reference-compressed/source.cram"
-    staged_cram = Path(fake.commands[2][fake.commands[2].index("-o") + 1])
+    encoded_cram = Path(fake.commands[2][fake.commands[2].index("-o") + 1])
+    staged_cram = Path(fake.commands[4][-1])
+    snapshot_path, snapshot_bytes = fake.reference_inputs[0]
     assert staged_cram != final_cram
-    assert fake.commands[2][0:6] == ["samtools", "view", "-C", "-T", str(reference), "--no-PG"]
-    assert fake.commands[3] == ["samtools", "index", str(staged_cram)]
+    assert fake.commands[2][0:6] == ["samtools", "view", "-C", "-T", str(snapshot_path), "--no-PG"]
+    assert snapshot_path != reference
+    assert snapshot_bytes == reference.read_bytes()
+    assert not snapshot_path.exists()
+    assert f"UR:{reference.absolute()}" in fake.prepared_headers[0]
+    assert str(snapshot_path) not in fake.prepared_headers[0]
+    assert fake.commands[3] == ["samtools", "reheader", "-P", fake.commands[1][3], str(encoded_cram)]
+    assert fake.commands[4] == ["samtools", "index", str(staged_cram)]
+    assert digest.call_args_list[1].args[2] == snapshot_path
+    assert digest.call_args_list[3].args[2] == snapshot_path
     assert fixture.cram == final_cram
+    assert fixture.reference == reference
+    assert fixture.reference_sha256 == hashlib.sha256(reference.read_bytes()).hexdigest()
     assert final_cram.read_bytes() == b"reference-compressed cram"
     assert Path(f"{final_cram}.crai").read_bytes() == b"reference-compressed crai"
     assert fixture.indexed_region_records == REGISTERED_B178_INDEXED_REGION_RECORDS
     assert fixture.source_indexed_region_digest == REGISTERED_B178_INDEXED_REGION_DIGEST
+
+
+@pytest.mark.parametrize("source_mutation", ["delete", "replace", "retarget"])
+def test_derivation_uses_snapshot_after_logical_reference_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_mutation: str,
+) -> None:
+    source = _touch(tmp_path / "source.bam", "source bam")
+    original = _touch(tmp_path / "original.fa", ">chr1\nACGT\n")
+    reference = tmp_path / "reference.fa"
+    if source_mutation == "retarget":
+        reference.symlink_to(original)
+    else:
+        reference.write_bytes(original.read_bytes())
+    original_bytes = reference.read_bytes()
+    expected_sha256 = hashlib.sha256(original_bytes).hexdigest()
+    fake = _ReferenceSamtools()
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", _registered_digest)
+
+    with generator.snapshot_reference_fasta(reference, expected_sha256) as authority:
+        snapshot_path = authority.snapshot_path
+        if source_mutation == "delete":
+            reference.unlink()
+        elif source_mutation == "replace":
+            reference.write_text(">chr1\nTTTT\n", encoding="utf-8")
+        else:
+            replacement = _touch(tmp_path / "replacement.fa", ">chr1\nTTTT\n")
+            reference.unlink()
+            reference.symlink_to(replacement)
+
+        fixture = generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            expected_reference_sha256=expected_sha256,
+            validated_reference=authority,
+        )
+
+        assert fake.reference_inputs == [(snapshot_path, original_bytes)]
+        assert fixture.reference == reference
+        assert fixture.reference_sha256 == authority.sha256 == expected_sha256
+
+    assert not snapshot_path.exists()
 
 
 def test_index_failure_aborts_before_decode_or_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -360,6 +428,7 @@ def test_index_failure_aborts_before_decode_or_publication(tmp_path: Path, monke
         )
 
     digest.assert_not_called()
+    assert not fake.reference_inputs[0][0].exists()
     assert not (tmp_path / "cram/reference-compressed/source.cram").exists()
 
 
