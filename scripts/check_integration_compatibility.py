@@ -73,8 +73,20 @@ def resolve_base_revision(repo_root: Path, revision: str | None, *, ci: bool) ->
         raise ValueError(f"invalid base revision {revision!r}: {resolved.stderr.strip()}")
     ancestry = _git(repo_root, ["merge-base", "--is-ancestor", sha, "HEAD"])
     if ancestry.returncode == 1:
-        raise ValueError(f"base revision is not an ancestor of HEAD: {sha}")
-    if ancestry.returncode != 0:
+        behind = _git(repo_root, ["merge-base", "--is-ancestor", "HEAD", sha])
+        if behind.returncode == 0:
+            raise ValueError(f"base revision is not an ancestor of HEAD: {sha}")
+        if behind.returncode != 1:
+            raise ValueError(f"Git ancestry check failed for HEAD and {sha}: {behind.stderr.strip()}")
+        merged = _git(repo_root, ["merge-base", sha, "HEAD"])
+        merge_bases = [line for line in merged.stdout.splitlines() if line]
+        if merged.returncode != 0 or len(merge_bases) != 1 or len(merge_bases[0]) != 40:
+            raise ValueError(f"base revision has no exact merge base with HEAD: {sha}: {merged.stderr.strip()}")
+        sha = merge_bases[0]
+        merge_ancestry = _git(repo_root, ["merge-base", "--is-ancestor", sha, "HEAD"])
+        if merge_ancestry.returncode != 0:
+            raise ValueError(f"Git merge-base ancestry check failed for {sha}: {merge_ancestry.stderr.strip()}")
+    elif ancestry.returncode != 0:
         raise ValueError(f"Git ancestry check failed for {sha}: {ancestry.stderr.strip()}")
     return sha
 
@@ -164,6 +176,18 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
         base_manifest = read_json_at_revision(repo_root, base_revision, args.manifest, allow_absent=True)
         historical = None
         if base_manifest is None:
+            if args.manifest != DEFAULT_MANIFEST:
+                default_base_manifest = read_json_at_revision(
+                    repo_root,
+                    base_revision,
+                    DEFAULT_MANIFEST,
+                    allow_absent=True,
+                )
+                if default_base_manifest is not None:
+                    raise ValueError(
+                        f"custom manifest {args.manifest!r} is absent at {base_revision}; "
+                        "default manifest already exists at base, so bootstrap is forbidden"
+                    )
             historical = read_json_at_revision(repo_root, BOOTSTRAP_REVISION, args.test_config)
         check_compatibility(
             base_manifest,

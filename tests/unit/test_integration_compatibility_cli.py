@@ -95,7 +95,7 @@ def test_local_fallback_prints_local_only_evidence(tmp_path: Path, capsys: pytes
     assert "local-only evidence" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("revision", ["0" * 40, "missing-revision"])
+@pytest.mark.parametrize("revision", ["", "0" * 40, "missing-revision"])
 def test_main_fails_closed_for_invalid_base(tmp_path: Path, capsys: pytest.CaptureFixture[str], revision: str) -> None:
     """Catch treating missing, unreachable, or all-zero event bases as an empty bootstrap."""
     module = _module()
@@ -132,6 +132,28 @@ def test_read_json_at_revision_distinguishes_absent_path(tmp_path: Path) -> None
         module.read_json_at_revision(repo, head, "absent.json")
 
 
+def test_main_rejects_absent_custom_manifest_when_default_exists_at_base(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catch treating a missing custom manifest as permission to re-enter bootstrap."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo, base, _ = _repository(tmp_path)
+    custom_manifest = "tests/compatibility/custom.json"
+    custom_path = repo / custom_manifest
+    custom_path.write_text((repo / module.DEFAULT_MANIFEST).read_text())
+
+    exit_code = module.main(
+        ["--base-revision", base, "--repo-root", str(repo), "--manifest", custom_manifest],
+        environ={"CI": "true"},
+    )
+
+    assert exit_code == 1
+    error = capsys.readouterr().err
+    assert custom_manifest in error
+    assert "default manifest already exists at base" in error
+
+
 def test_resolve_base_rejects_shallow_repository(tmp_path: Path) -> None:
     """Catch accepting incomplete history where append-only evidence cannot be proven."""
     module = _module()
@@ -159,6 +181,79 @@ def test_main_fails_closed_when_branch_is_behind_supplied_base(
 
     assert module.main(["--base-revision", head, "--repo-root", str(repo)], environ={"CI": "true"}) == 1
     assert "base revision is not an ancestor of HEAD" in capsys.readouterr().err
+
+
+def test_resolve_base_uses_merge_base_when_supplied_base_tip_advanced(tmp_path: Path) -> None:
+    """Catch rejecting a feature branch only because its explicit base branch advanced."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo, base, feature_head = _repository(tmp_path)
+    _git(repo, "branch", "feature", feature_head)
+    _git(repo, "checkout", "-q", "-b", "advanced-base", base)
+    _git(repo, "commit", "--allow-empty", "-qm", "advance base")
+    advanced_base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "feature")
+
+    assert module.resolve_base_revision(repo, advanced_base, ci=True) == base
+
+
+def test_resolve_base_rejects_unrelated_history(tmp_path: Path) -> None:
+    """Catch treating a resolved commit with no common history as usable evidence."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo, _, feature_head = _repository(tmp_path)
+    _git(repo, "checkout", "-q", "--orphan", "unrelated")
+    _git(repo, "commit", "-qm", "unrelated root")
+    unrelated = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", feature_head)
+
+    with pytest.raises(ValueError, match="no exact merge base"):
+        module.resolve_base_revision(repo, unrelated, ci=True)
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("initial-ancestry", "Git ancestry check failed"),
+        ("reverse-ancestry", "Git ancestry check failed for HEAD"),
+        ("merge-output", "no exact merge base"),
+        ("merge-ancestry", "Git merge-base ancestry check failed"),
+    ],
+)
+def test_resolve_base_fails_closed_for_inconsistent_git_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    """Catch accepting subprocess errors or a merge base Git cannot prove is an ancestor."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    supplied = "a" * 40
+    common = "b" * 40
+
+    def fake_git(_repo_root: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        result = subprocess.CompletedProcess(["git", *arguments], 0, "", "")
+        if arguments == ["rev-parse", "--is-shallow-repository"]:
+            result.stdout = "false\n"
+        elif arguments == ["rev-parse", "--verify", f"{supplied}^{{commit}}"]:
+            result.stdout = f"{supplied}\n"
+        elif arguments == ["merge-base", "--is-ancestor", supplied, "HEAD"]:
+            result.returncode = 2 if failure == "initial-ancestry" else 1
+        elif arguments == ["merge-base", "--is-ancestor", "HEAD", supplied]:
+            result.returncode = 2 if failure == "reverse-ancestry" else 1
+        elif arguments == ["merge-base", supplied, "HEAD"]:
+            result.stdout = "invalid\n" if failure == "merge-output" else f"{common}\n"
+        elif arguments == ["merge-base", "--is-ancestor", common, "HEAD"]:
+            result.returncode = 1 if failure == "merge-ancestry" else 0
+        else:  # pragma: no cover - the assertion exposes an unexpected production command
+            raise AssertionError(f"unexpected Git command: {arguments}")
+        return result
+
+    monkeypatch.setattr(module, "_git", fake_git)
+
+    with pytest.raises(ValueError, match=message):
+        module.resolve_base_revision(tmp_path, supplied, ci=True)
 
 
 def test_git_boundaries_fail_for_missing_worktree_and_inconsistent_tree_output(tmp_path: Path) -> None:
