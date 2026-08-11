@@ -631,3 +631,82 @@ class TestTheGuardUsesTheSameReferenceTheRunWill:
         )
         with pytest.raises(ValueError):
             validate_pipeline_log_destination(str(sidecar), args, config)
+
+
+class TestAConfiguredButNotYetInstalledBwaReferenceIsStillProtected:
+    """Parked finding (was #246 item 1): the guard used to resolve the BWA reference
+    with ``required=False``, which degrades a *missing* configured file to None
+    (`cli_handlers.select_bwa_reference`'s own documented contract for that flag) - so a
+    reference that is configured but not yet installed fell out of the protected-path
+    set entirely. `--log-file` pointed at that exact path then sailed through the guard,
+    and `setup_logging` created a regular file there in append mode: a log file sitting
+    where a FASTA belongs, indistinguishable to a later existence check from a genuine,
+    if empty, reference.
+    """
+
+    def test_a_missing_configured_bwa_reference_cannot_be_used_as_the_log_file(self, tmp_path):
+        from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
+
+        # Deliberately never created - this is the "not yet installed by this run" case.
+        missing_reference = tmp_path / "refs" / "chr1.fa"
+        config = {"reference_data": {"bwa_reference_hg19": str(missing_reference)}}
+        args = argparse.Namespace(
+            fastq1="r1.fq",
+            fastq2=None,
+            bam=None,
+            cram=None,
+            bed_file=None,
+            reference_fasta=None,
+            reference_assembly="hg19",
+            log_file=str(missing_reference),
+        )
+
+        with pytest.raises(ValueError, match="chr1.fa"):
+            validate_pipeline_log_destination(str(missing_reference), args, config)
+
+    def test_the_end_to_end_cli_path_fails_closed_before_setup_logging_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mirrors `test_configured_reference_is_protected_without_validating_probe_order`
+        but for the FASTQ/BWA branch: `setup_logging` and the handler must never run."""
+        inputs = tmp_path / "inputs"
+        inputs.mkdir()
+        fastq = inputs / "reads.fastq.gz"
+        fastq.write_bytes(b"operator-fastq")
+        missing_reference = tmp_path / "refs" / "chr1.fa"
+        config = {
+            "cli_defaults": {"log_level": "INFO", "log_file": None},
+            "default_values": {"reference_assembly": "hg19"},
+            "reference_data": {"bwa_reference_hg19": str(missing_reference)},
+        }
+        events: list[str] = []
+        monkeypatch.setattr(cli, "load_config", lambda _path=None: config)
+        monkeypatch.setattr(cli, "setup_logging", lambda **_kwargs: events.append("setup"))
+        monkeypatch.setitem(cli.HANDLERS, "pipeline", lambda *args, **kwargs: events.append("handler"))
+
+        with pytest.raises(SystemExit) as raised:
+            cli.main(["--log-file", str(missing_reference), "pipeline", "--fastq1", str(fastq)])
+
+        assert raised.value.code == 1
+        assert events == []
+        assert not missing_reference.exists(), "the guard must fire before any file is created at this path"
+
+    def test_a_present_and_disabled_bwa_reference_has_nothing_to_protect(self, tmp_path):
+        """Complement: an explicit `null` is deliberately disabled (Important 11), not a
+        path - the guard must not synthesize one to protect, and must not crash either."""
+        from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
+
+        log_file = tmp_path / "pipeline.log"
+        config = {"reference_data": {"bwa_reference_hg19": None}}
+        args = argparse.Namespace(
+            fastq1="r1.fq",
+            fastq2=None,
+            bam=None,
+            cram=None,
+            bed_file=None,
+            reference_fasta=None,
+            reference_assembly="hg19",
+            log_file=str(log_file),
+        )
+
+        validate_pipeline_log_destination(str(log_file), args, config)  # must not raise
