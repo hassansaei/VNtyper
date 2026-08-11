@@ -560,10 +560,10 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
     Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-11 verification measured all 38 Python files at 7,135 of 7,666 measured
-    units, or 93.07% aggregate scripts-only branch-inclusive coverage, and 17,195 of
-    19,276 measured units, or 89.20% combined branch-inclusive coverage. All 5,373 unit
-    tests passed with no skips and 145 warnings in the maintained Python 3.12.13
+    final 2026-08-11 verification measured all 38 Python files at 7,166 of 7,698 measured
+    units, or 93.09% aggregate scripts-only branch-inclusive coverage, and 17,227 of
+    19,309 measured units, or 89.22% combined branch-inclusive coverage. All 5,384 unit
+    tests passed with no skips and 154 warnings in the maintained Python 3.12.13
     environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:
