@@ -1,5 +1,15 @@
 # Reference folder for vntyper
 
+> **Milestone 5 note:** the files this section describes -
+> `MUC1_motifs_Rev_com.fa`, `filter_config.json`, `generate_vntr_reference.py` and
+> `vntr_db_advntr.zip` - no longer live in this directory. They moved to
+> [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/`
+> directory, alongside the release spec that pins their digests. `reference/` (this
+> directory) now populates at runtime from that repository's published bundle via
+> `vntyper install-references`; only this README and the two pseudonymization scripts
+> below stay tracked here. The rest of this section documents the generator's logic and
+> history and remains accurate as documentation - only the file locations changed.
+
 ## 1. VNTR Reference Generator
 
 This repository contains a Python script `generate_vntr_reference.py` which generates pairwise combinations of VNTR motifs from a given input FASTA file and writes them out to a new FASTA file. The script also uses a JSON configuration file to filter out certain disallowed motif combinations.

@@ -486,11 +486,11 @@ summary | release-summary | none | always records success, failure, skipped jobs
 10. **The image is split in two, and the halves are bound by a content hash.**
     `docker/Dockerfile.base` holds the conda envs, adVNTR and the reference genomes and
     is rebuilt only by `docker-base.yml` when `conda/**`, `requirements-web.txt`,
-    `install_references*` or `dependencies/advntr/**` change. `docker/Dockerfile` holds
-    only the application and builds on top in ~3 min. Both workflows compute the same
-    `hashFiles()` tag, so a base input can never be changed and then silently built
-    against a stale base. What happens when the tag is missing depends on **who is
-    running the workflow**, and the two paths are very different:
+    `install_references*`, `reference_bundle.py` or `dependencies/advntr/**` change.
+    `docker/Dockerfile` holds only the application and builds on top in ~3 min. Both
+    workflows compute the same `hashFiles()` tag, so a base input can never be changed
+    and then silently built against a stale base. What happens when the tag is missing
+    depends on **who is running the workflow**, and the two paths are very different:
     - **Same-repository run** (push, or a PR from a branch in this repo): the
       `base-status` job records `missing=true`, the `build-base` job calls the reusable
       `./.github/workflows/docker-base.yml` and publishes the base, and `build-and-test`
@@ -507,6 +507,14 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
     (The split replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
+
+    `reference/**` is **not** a base input, and has not been since milestone 5: reference
+    data comes from a published, checksummed bundle in `berntpopp/vntyper-data` rather
+    than from tracked files, and `reference/` holds only `README.md`, `pseudonymize.py`
+    and `pseudonymize_config.json`. Changing a reference byte now means publishing a new
+    bundle release and updating the `asset`/`asset_sha256` pins in
+    `install_references_config.json` — which *is* still a base input, so that pin change
+    is what triggers the rebuild instead.
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
     table; `report_formatting.py` owns the icons, the column projections and the IGV
