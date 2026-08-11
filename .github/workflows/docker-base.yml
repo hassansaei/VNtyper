@@ -15,6 +15,7 @@ on:
       - 'docker/requirements-web.txt'
       - 'vntyper/scripts/install_references.py'
       - 'vntyper/scripts/install_references_config.json'
+      - 'vntyper/scripts/reference_bundle.py'
       - 'vntyper/dependencies/advntr/**'
       # The tracked reference files are COPYed into the base, and .dockerignore
       # decides which of them reach the build context at all. Omitting these two was
