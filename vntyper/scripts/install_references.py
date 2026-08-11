@@ -730,6 +730,49 @@ def merge_pairwise_motifs(seed_fasta: Path, filter_config: Path, destination: Pa
     return destination
 
 
+def _missing_seed_message(output: str, missing: list[str], output_dir: Path) -> str:
+    """Compose the one message both the preflight and the derivation loop raise.
+
+    Args:
+        output: The derivation output that cannot be produced.
+        missing: Seed file names that are not in ``output_dir``.
+        output_dir: Reference tree being populated.
+
+    Returns:
+        str: The operator-facing message.
+    """
+    return (
+        f"cannot derive {output}: seed(s) {', '.join(missing)} are not present in {output_dir}. "
+        "The bundle build stages the seeds into the reference tree before running --from-source."
+    )
+
+
+def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path) -> None:
+    """Fail on a missing literal-derivation seed before a single genome is downloaded.
+
+    :func:`run_derivations` already names a missing ``filter_config.json`` well, but only
+    after every genome has been downloaded, decompressed and BWA-indexed - three hours
+    into a build that a one-line edit to the workflow's staging step could have broken.
+    This file's philosophy is preflight first; this is the same check, moved to where it
+    costs a second, and it uses the same message so the two cannot drift apart.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Reference tree being populated.
+
+    Raises:
+        RuntimeError: If a ``literal`` derivation names a seed that is not present.
+    """
+    for spec in install_config.get("derivations", []):
+        if spec.get("kind") != "literal":
+            continue
+        missing = [name for name in spec.get("from_seeds", []) if not (output_dir / name).exists()]
+        if missing:
+            message = _missing_seed_message(spec.get("output", "<unnamed derivation>"), missing, output_dir)
+            logger.error(message)
+            raise RuntimeError(message)
+
+
 def run_derivations(
     install_config: dict[str, Any],
     output_dir: Path,
@@ -804,10 +847,7 @@ def run_derivations(
             seeds = [output_dir / name for name in seed_names]
             missing = [seed.name for seed in seeds if not seed.exists()]
             if missing:
-                message = (
-                    f"cannot derive {output}: seed(s) {', '.join(missing)} are not present in {output_dir}. "
-                    "The bundle build stages the seeds into the reference tree before running --from-source."
-                )
+                message = _missing_seed_message(output, missing, output_dir)
                 logger.error(message)
                 raise RuntimeError(message)
             merge_pairwise_motifs(seeds[0], seeds[1], destination)
@@ -831,9 +871,15 @@ def run_derivations(
 def resolve_source_location(ref_id: str, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> tuple[str, str]:
     """Decide where one genome is fetched from and what it must hash to.
 
-    A release spec's ``sources`` block overrides the shipped config field by field; a
-    reference the spec does not name keeps the URL and digest committed in
-    install_references_config.json, both of which are pinned there.
+    A release spec's ``sources`` block may **fill in** a field the shipped config leaves
+    blank, but it may not contradict one. The trust anchor is
+    install_references_config.json, which lives in this repository and is a base-image
+    content-hash input; a spec lives beside the assets it describes, so letting it win
+    would let a release publish bytes that VNtyper's own committed provenance does not
+    describe. Moving a future release to a newer upstream therefore takes a reviewed
+    VNtyper commit. ``scripts/bundle_release.py`` runs the same comparison in its
+    ``--check-spec-only`` preflight, so the disagreement surfaces in minute one rather
+    than three hours in.
 
     Args:
         ref_id: Physical reference id, e.g. ``hg19``.
@@ -844,10 +890,25 @@ def resolve_source_location(ref_id: str, entry: dict[str, Any], release_spec: di
         tuple[str, str]: The URL to download and the expected SHA-256.
 
     Raises:
-        ValueError: If either the URL or the digest is missing. ``--from-source``
-            never installs bytes it cannot verify.
+        ValueError: If the spec and the config both declare a field and disagree, or if
+            either the URL or the digest is missing. ``--from-source`` never installs
+            bytes it cannot verify.
     """
     pinned: dict[str, Any] = (release_spec or {}).get("sources", {}).get(ref_id, {})
+
+    for field in ("url", "source_sha256"):
+        declared = pinned.get(field)
+        committed = entry.get(field)
+        if declared and committed and declared != committed:
+            message = (
+                f"reference '{ref_id}': the release spec pins {field} {declared!r} but "
+                f"install_references_config.json pins {committed!r}. The committed config is the "
+                "trust anchor; change it in a reviewed commit and match the spec to it rather than "
+                "publishing a release whose provenance does not describe its bytes."
+            )
+            logger.error(message)
+            raise ValueError(message)
+
     url = pinned.get("url") or entry.get("url")
     digest = pinned.get("source_sha256") or entry.get("source_sha256")
 
@@ -914,7 +975,8 @@ def install_from_source(
     ones, so ``--references`` does not gate them - see the comment at the call site.
     ``filter_config.json`` is not downloadable and must already be in the tree - the
     bundle build stages the seeds before calling this, and a checkout has them tracked.
-    :func:`run_derivations` says so by name if one is absent.
+    :func:`_preflight_literal_seeds` says so by name **before** the first download, so a
+    staging-step mistake costs a second rather than three hours.
 
     Args:
         install_config: The parsed install_references_config.json.
@@ -933,13 +995,16 @@ def install_from_source(
         :func:`run_derivations`.
 
     Raises:
-        RuntimeError: If a download fails, or if a selected derivation source is missing.
-        ValueError: If an entry has no ``target_path``, no URL or no digest, or if a
-            download or derivation does not match its expected digest.
+        RuntimeError: If a download fails, if any aligner index fails, or if a selected
+            derivation source or literal seed is missing.
+        ValueError: If an entry has no ``target_path``, no URL or no digest, if the
+            release spec contradicts a committed pin, or if a download or derivation does
+            not match its expected digest.
     """
     samtools = install_config.get("samtools_path", "samtools")
     selected = set(references)
     installed: dict[str, Path] = {}
+    _preflight_literal_seeds(install_config, output_dir)
 
     for section in GENOME_SECTIONS:
         for ref_id, entry in install_config.get(section, {}).items():
@@ -981,7 +1046,23 @@ def install_from_source(
             fasta = decompress_source(archive)
             index_fasta_with_samtools(fasta, samtools)
             if aligners:
-                index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=False)
+                results = index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=False)
+                # The legacy path logs a failure and carries on, which is right for an
+                # operator installing locally. It is wrong here. `execute_aligner_index`
+                # returns False on a CalledProcessError, and `bundle_release.verify_tree`
+                # only checks that each sidecar `is_file()` - so `bwa index` running out
+                # of disk 7 GB into a 14 GB runner would leave some sidecar names present,
+                # let the build continue, and archive a truncated index into an immutable
+                # release that cannot be patched.
+                failed = sorted(name for name, ok in results.items() if not ok)
+                if failed:
+                    message = (
+                        f"indexing {ref_id} ({fasta.name}) failed for aligner(s) {', '.join(failed)}. "
+                        "--from-source refuses to package an incomplete index: the sidecar files a failed "
+                        "run leaves behind still exist, so nothing downstream would notice."
+                    )
+                    logger.error(message)
+                    raise RuntimeError(message)
 
             installed[ref_id] = fasta
 

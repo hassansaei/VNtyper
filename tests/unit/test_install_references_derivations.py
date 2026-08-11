@@ -370,12 +370,44 @@ class TestResolveSourceLocation:
         )
         assert (url, digest) == ("https://ucsc/chr1.fa.gz", "a" * 64)
 
-    def test_a_release_spec_overrides_both_fields(self):
-        spec = {"sources": {"hg19": {"url": "https://pinned/chr1.fa.gz", "source_sha256": "b" * 64}}}
+    def test_a_release_spec_that_agrees_with_the_config_is_accepted(self):
+        spec = {"sources": {"hg19": {"url": "https://ucsc/chr1.fa.gz", "source_sha256": "a" * 64}}}
         url, digest = install_references.resolve_source_location(
             "hg19", {"url": "https://ucsc/chr1.fa.gz", "source_sha256": "a" * 64}, spec
         )
-        assert (url, digest) == ("https://pinned/chr1.fa.gz", "b" * 64)
+        assert (url, digest) == ("https://ucsc/chr1.fa.gz", "a" * 64)
+
+    def test_a_release_spec_may_fill_in_a_field_the_config_leaves_blank(self):
+        """Filling a gap is not contradicting a pin, so it stays allowed."""
+        spec = {"sources": {"hg19": {"source_sha256": "b" * 64}}}
+        url, digest = install_references.resolve_source_location("hg19", {"url": "https://ucsc/chr1.fa.gz"}, spec)
+        assert (url, digest) == ("https://ucsc/chr1.fa.gz", "b" * 64)
+
+    @pytest.mark.parametrize(
+        ("field", "declared", "committed"),
+        [
+            ("url", "https://pinned/release-115/chr1.fa.gz", "https://ucsc/release-116/chr1.fa.gz"),
+            ("source_sha256", "b" * 64, "a" * 64),
+        ],
+    )
+    def test_a_release_spec_contradicting_a_committed_pin_is_refused(self, field, declared, committed):
+        """The spec lives beside the assets; the config lives in this repository.
+
+        Preferring the spec field by field let a release publish Ensembl release-115
+        bytes while VNtyper's committed provenance documented release-116, with both
+        layers agreeing with each other and neither ever reading the config.
+        """
+        entry = {"url": "https://ucsc/chr1.fa.gz", "source_sha256": "a" * 64, field: committed}
+        spec = {"sources": {"hg19": {field: declared}}}
+
+        with pytest.raises(ValueError) as excinfo:
+            install_references.resolve_source_location("hg19", entry, spec)
+
+        message = str(excinfo.value)
+        assert "hg19" in message
+        assert declared in message
+        assert committed in message
+        assert "install_references_config.json" in message
 
     def test_a_reference_the_spec_does_not_name_falls_back_to_the_config(self):
         spec = {"sources": {"hg38": {"url": "https://pinned/other.gz"}}}
@@ -667,22 +699,48 @@ class TestInstallFromSource:
         assert urls == ["https://hgdownload.example/hg19/chr1.fa.gz"]
         assert (tmp_path / "alignment" / "chr1.hg19.fa.fai").exists()
 
-    def test_a_release_spec_overrides_the_config_url(self, tmp_path, monkeypatch):
+    def test_a_release_spec_supplies_a_url_the_config_leaves_blank(self, tmp_path, monkeypatch):
+        urls: list[str] = []
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, urls))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        config = self._config(digest)
+        del config["ucsc_references"]["hg19"]["url"]
+
+        install_references.install_from_source(
+            config,
+            tmp_path,
+            ["hg19"],
+            {},
+            index_threads=1,
+            release_spec={"sources": {"hg19": {"url": "https://pinned.example/chr1.fa.gz"}}},
+        )
+
+        assert urls == ["https://pinned.example/chr1.fa.gz"]
+
+    def test_a_release_spec_contradicting_the_committed_url_stops_before_any_download(self, tmp_path, monkeypatch):
+        """The spec cannot quietly retarget a build at a different upstream.
+
+        `verify_tree` checks the downloaded bytes against the *spec's* digest, so the two
+        layers would corroborate each other and a release would freeze provenance that
+        does not describe its own bytes.
+        """
         urls: list[str] = []
         digest = self._gz_digest(tmp_path, self.GENOME)
         monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, urls))
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
 
-        install_references.install_from_source(
-            self._config("a" * 64),
-            tmp_path,
-            ["hg19"],
-            {},
-            index_threads=1,
-            release_spec={"sources": {"hg19": {"url": "https://pinned.example/chr1.fa.gz", "source_sha256": digest}}},
-        )
+        with pytest.raises(ValueError, match="trust anchor"):
+            install_references.install_from_source(
+                self._config(digest),
+                tmp_path,
+                ["hg19"],
+                {},
+                index_threads=1,
+                release_spec={"sources": {"hg19": {"url": "https://pinned.example/chr1.fa.gz"}}},
+            )
 
-        assert urls == ["https://pinned.example/chr1.fa.gz"]
+        assert urls == [], "a contradicted pin must stop the build before anything is fetched"
 
     def test_a_digest_mismatch_fails_before_any_decompression_or_indexing(self, tmp_path, monkeypatch):
         urls: list[str] = []
@@ -704,6 +762,102 @@ class TestInstallFromSource:
         assert not (tmp_path / "alignment" / "chr1.hg19.fa").exists(), "decompression ran despite a bad digest"
         assert calls == [], "samtools ran despite a bad digest"
         assert aligner_calls == [], "an aligner ran despite a bad digest"
+
+    def test_a_failed_aligner_index_stops_the_build(self, tmp_path, monkeypatch):
+        """A truncated index must never reach an immutable release.
+
+        `execute_aligner_index` returns False on a `CalledProcessError` and the legacy
+        path only logs it, which is right for a local install. Here it is not:
+        `bundle_release.verify_tree` checks each BWA sidecar with `is_file()` and not for
+        integrity, so `bwa index` running out of disk part-way through would leave some
+        sidecar names present and the build would archive the corrupt index.
+        """
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, []))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        monkeypatch.setattr(
+            install_references,
+            "index_reference_with_aligners",
+            lambda ref_path, aligners, threads=4, force_reindex=False: {"bwa": False, "bowtie2": True},
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            install_references.install_from_source(
+                self._config(digest), tmp_path, ["hg19"], {"bwa": {}, "bowtie2": {}}, index_threads=1
+            )
+
+        message = str(excinfo.value)
+        assert "hg19" in message
+        assert "bwa" in message
+        assert "bowtie2" not in message, "only the aligner that failed should be named"
+
+    def test_a_successful_aligner_index_does_not_stop_the_build(self, tmp_path, monkeypatch):
+        """The complement of the test above: a green index result must not raise."""
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, []))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        monkeypatch.setattr(
+            install_references,
+            "index_reference_with_aligners",
+            lambda ref_path, aligners, threads=4, force_reindex=False: {"bwa": True},
+        )
+
+        installed = install_references.install_from_source(
+            self._config(digest), tmp_path, ["hg19"], {"bwa": {}}, index_threads=1
+        )
+
+        assert installed == {"hg19": tmp_path / "alignment" / "chr1.hg19.fa"}
+
+    def test_a_missing_literal_seed_is_named_before_anything_is_downloaded(self, tmp_path, monkeypatch):
+        """`run_derivations` says this perfectly well - three hours too late.
+
+        The genome loop runs first, so without a preflight the operator learns that the
+        staging step forgot `filter_config.json` only after six genomes have been
+        downloaded, decompressed and BWA-indexed.
+        """
+        urls: list[str] = []
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, urls))
+        config = self._config(
+            self._gz_digest(tmp_path, self.GENOME),
+            derivations=[
+                {
+                    "kind": "literal",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                    "expected_sha256": "a" * 64,
+                }
+            ],
+        )
+        (tmp_path / "MUC1_motifs_Rev_com.fa").write_text(">A\nAAA\n", encoding="utf-8")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
+
+        assert "filter_config.json" in str(excinfo.value)
+        assert "MUC1_motifs_Rev_com.fa" not in str(excinfo.value), "only the absent seed should be named"
+        assert urls == [], "the preflight must run before the first download"
+
+    def test_a_shark_derivation_does_not_trip_the_seed_preflight(self, tmp_path, monkeypatch):
+        """Only `literal` derivations read seeds; a region cut reads an installed genome."""
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, []))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        config = self._config(
+            digest,
+            derivations=[
+                {
+                    "kind": "shark",
+                    "output": "muc1_region_hg38.fa",
+                    "from": "hg38",
+                    "region": "chr1:1-2",
+                    "expected_sha256": "a" * 64,
+                }
+            ],
+        )
+
+        installed = install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
+
+        assert installed == {"hg19": tmp_path / "alignment" / "chr1.hg19.fa"}
 
     def test_a_digest_mismatch_removes_the_archive_so_a_retry_downloads_again(self, tmp_path, monkeypatch):
         """Otherwise the bad bytes are sticky and every later run fails identically.
@@ -852,12 +1006,26 @@ class TestInstallFromSource:
             "own_repository_references": {"raw_files": [{"url": "https://x/merged.fa", "target_path": "merged.fa"}]},
             "derivations": [{"kind": "literal", "output": "merged.fa", "from_seeds": ["a", "b"]}],
         }
+        # Staged so the run reaches the digest check rather than stopping at the seed
+        # preflight; this test is about the raw-file list, not about missing seeds.
+        (tmp_path / "a").write_text(">A\nAAA\n", encoding="utf-8")
+        (tmp_path / "b").write_text("{}", encoding="utf-8")
 
         with pytest.raises(ValueError, match="expected_sha256"):
             install_references.install_from_source(config, tmp_path, [], {}, index_threads=1)
 
-    def test_a_selected_vntyper_reference_is_installed_alongside_the_genomes(self, tmp_path, monkeypatch):
-        """The adVNTR database zip is selected by the same `--references` list."""
+    def test_the_vntyper_references_install_regardless_of_the_selection(self, tmp_path, monkeypatch):
+        """The adVNTR database is a common asset, so `--references` must NOT gate it.
+
+        The legacy path filters `vntyper_references` by the same list, and nobody ever
+        names `vntr_db_advntr` there because it is not an assembly - which is how a
+        six-genome bundle build came to produce a release with no adVNTR database in it.
+        That filter's removal was the most expensive defect this PR fixed.
+
+        The selection below deliberately **excludes** `vntr_db_advntr`. An earlier
+        version of this test passed it by name, so restoring the filter would have left
+        the test green while reintroducing the bug.
+        """
         seen: list[str] = []
         monkeypatch.setattr(
             install_references,
@@ -870,7 +1038,7 @@ class TestInstallFromSource:
             }
         }
 
-        install_references.install_from_source(config, tmp_path, ["vntr_db_advntr"], {}, index_threads=1)
+        install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
 
         assert seen == ["vntr_db_advntr"]
 
