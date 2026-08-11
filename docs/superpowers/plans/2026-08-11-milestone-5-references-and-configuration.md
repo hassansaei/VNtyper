@@ -1075,7 +1075,9 @@ for f in seeds/*; do
 done
 ```
 
-The recorded digests, for `releases/refs-v1.json`'s `seeds` block:
+The recorded digests of all seven committed files. **Only four of them belong in
+`releases/refs-v1.json`'s `seeds` block** — see Step 3; the two `.fai` files and
+`generate_vntr_reference.py` must be left out of it:
 
 ```
 7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47  MUC1_motifs_Rev_com.fa
@@ -1088,28 +1090,53 @@ d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085  filter_config.
 ```
 ```
 
-Those digests go into the spec's `seeds` block in the next step.
+The first, third, fifth and sixth of those — `MUC1_motifs_Rev_com.fa`,
+`code-adVNTR_RUs.fa`, `vntr_db_advntr.zip` and `filter_config.json` — go into the spec's
+`seeds` block in the next step. The other three do not.
 
 - [ ] **Step 3: Write the release spec**
 
 `releases/refs-v1.json`, following `berntpopp/phentrieve-data/releases/*.json`. Pin
-Ensembl to an **explicit release**, never `current` — `install_references_config.json:72,78`
-currently track `current`, which is why no existing base image records which Ensembl
-release it contains. Fill `sha256` for each source by downloading it once and hashing it.
+Ensembl to an **explicit release**, never `current` — the mutable path is why no existing
+base image records which Ensembl release it contains. The newest release serving both
+files is **116**, which is what `install_references_config.json` pins and what
+`tests/unit/test_install_references_config.py` asserts.
+
+Three things the enforced schema requires, each of which a hand-written spec gets wrong
+by default:
+
+- **Key `sources` by physical reference id** (`hg19`, `hg38`, `GRCh37`, `GRCh38`,
+  `hg19_ensembl`, `hg38_ensembl`) and spell the digest field **`source_sha256`**, not
+  `sha256`. `install_references.resolve_source_location` reads those exact names, and
+  `bundle_release.spec_source` rejects the other spellings by name because the installer
+  would otherwise silently ignore them.
+- **Copy `url` and `source_sha256` verbatim out of
+  `vntyper/scripts/install_references_config.json`.** Do not hash the downloads again and
+  do not "update" an upstream here: `bundle_release.cross_check_sources` fails
+  `--check-spec-only` on any disagreement, because the trust anchor is the committed
+  config and not the spec beside the assets. A newer upstream needs a reviewed VNtyper
+  commit first.
+- **Pin exactly four seeds and nothing else** — `MUC1_motifs_Rev_com.fa`,
+  `code-adVNTR_RUs.fa`, `vntr_db_advntr.zip`, `filter_config.json`. Step 2 records seven
+  digests; the two `.fai` files and `generate_vntr_reference.py` must **not** go into the
+  `seeds` block. The workflow deliberately does not stage the `.fai` files because the
+  build regenerates them with its own samtools, so pinning them would compare regenerated
+  bytes against a committed digest as a **fatal** check, three hours in, over a samtools
+  formatting difference.
 
 ```json
 {
   "release_tag": "refs-v1",
   "source_commit": "<BUILDER_SHA from step 1>",
-  "bwa_version": "<bwa 2>&1 | head -3>",
-  "samtools_version": "<samtools --version | head -1>",
+  "bwa_version": "0.7.18-r1243-dirty",
+  "samtools_version": "1.20",
   "sources": {
-    "hg19":         {"url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz", "sha256": "..."},
-    "hg38":         {"url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr1.fa.gz", "sha256": "..."},
-    "GRCh37":       {"url": "https://ftp.ncbi.nlm.nih.gov/.../GCF_000001405.25_GRCh37.p13/.../chr1.fna.gz", "sha256": "..."},
-    "GRCh38":       {"url": "https://ftp.ncbi.nlm.nih.gov/.../GCF_000001405.40_GRCh38.p14/.../chr1.fna.gz", "sha256": "..."},
-    "hg19_ensembl": {"url": "https://ftp.ensembl.org/pub/grch37/release-115/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz", "sha256": "..."},
-    "hg38_ensembl": {"url": "https://ftp.ensembl.org/pub/release-115/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.1.fa.gz", "sha256": "..."}
+    "hg19":         {"url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz", "source_sha256": "..."},
+    "hg38":         {"url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr1.fa.gz", "source_sha256": "..."},
+    "GRCh37":       {"url": "https://ftp.ncbi.nlm.nih.gov/.../GCF_000001405.25_GRCh37.p13/.../chr1.fna.gz", "source_sha256": "..."},
+    "GRCh38":       {"url": "https://ftp.ncbi.nlm.nih.gov/.../GCF_000001405.40_GRCh38.p14/.../chr1.fna.gz", "source_sha256": "..."},
+    "hg19_ensembl": {"url": "https://ftp.ensembl.org/pub/grch37/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz", "source_sha256": "..."},
+    "hg38_ensembl": {"url": "https://ftp.ensembl.org/pub/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.1.fa.gz", "source_sha256": "..."}
   },
   "seeds": {
     "MUC1_motifs_Rev_com.fa": {"sha256": "..."},
