@@ -408,15 +408,18 @@ the version was newly published or already existed.
 
 PyPI publication uses Trusted Publishing in the protected `pypi` environment with only
 `id-token: write`; there is no package token in the current controller.
-Do not delete `PYPI_API_TOKEN` until the first successful OIDC release has proved the
-publisher configuration. The owner must then delete it separately. Until that deletion, do not
-create a release tag pointing at a pre-milestone commit: historical tagged commits
-still contain a legacy token workflow, and those workflows become inert only after the
-owner removes the obsolete token.
+The environment must be reviewer-free, have no wait timer, use custom branch policies for the
+exact branch `main`, and have no custom deployment-protection rules. The controller preflights
+exactly the environment, deployment-branch-policy, and custom-deployment-protection-rule API
+responses and fails before package or registry writes when they drift; follow #236 to repair the
+environment rather than bypassing it. The absence of environment secrets is separately verified
+live administrator state, not controller-enforced. OIDC is the only publisher: never reintroduce
+`PYPI_API_TOKEN`. `PYPI_API_TOKEN` has been deleted after the green OIDC releases, so historical
+tagged commits cannot retrieve the obsolete credential.
 
 ```text
 phase | job | permissions | retry/recovery
-validation | validate-release | contents: read | fix identity or ancestry, then rerun the existing tag
+validation | validate-release | actions: read, contents: read | fix identity or ancestry, then rerun the existing tag
 gates | wait-for-release-gates | actions: read, checks: read, contents: read, packages: read | rerun missing exact-SHA checks or the existing Docker Build run
 build | build-package | contents: read | rebuild the exact candidate wheel and sdist artifact
 promotion | promote-ghcr | contents: read, packages: write | rerun; verified aliases no-op and partial progress converges
@@ -559,11 +562,11 @@ summary | release-summary | none | always records success, failure, skipped jobs
     pass, which checked 295 test sources. Do not claim `scripts/` is part of that tests
     invocation or collapse the two.
 
-    Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
+    Coverage uses ``source = [`vntyper`, `docker/app`, `scripts`]``, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-11 verification measured all 38 Python files at 7,166 of 7,698 measured
-    units, or 93.09% aggregate scripts-only branch-inclusive coverage, and 17,227 of
-    19,309 measured units, or 89.22% combined branch-inclusive coverage. All 5,385 unit
+    final 2026-08-11 verification measured all 39 Python files at 7,249 of 7,781 measured
+    units, or 93.16% aggregate scripts-only branch-inclusive coverage, and 17,310 of
+    19,392 measured units, or 89.26% combined branch-inclusive coverage. All 5,432 unit
     tests passed with no skips and 163 warnings in the maintained Python 3.12.13
     environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
@@ -595,8 +598,8 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
 - Never create, move, or push a release tag as an agent. A tag alone no longer starts
   current production policy, but operators must create the reviewed existing tag before
-  sending the authenticated `vntyper_release` dispatch; historical tag workflows retain
-  legacy behavior until the owner completes the token-deletion follow-up.
+  sending the authenticated `vntyper_release` dispatch; `PYPI_API_TOKEN` has been deleted
+  after the green OIDC releases, so historical token workflows cannot retrieve it.
 - Never commit into `tests/data/`, `reference/`, `out/`, `download/`, `vntyper.egg-info/`
   or the local `adVNTR/` clone — all are generated or downloaded.
 - Never hand-edit `vntyper/dependencies/kestrel/*.jar` or anything in `vntyper.egg-info/`.
