@@ -8,8 +8,19 @@
 #   conda/**                                    (the three conda environments)
 #   docker/requirements-web.txt                 (FastAPI/Celery stack)
 #   docker/Dockerfile.base                      (this file)
+#   vntyper/__init__.py                         (package init, imported by python -m)
+#   vntyper/scripts/__init__.py                 (package init, imported by python -m)
 #   vntyper/scripts/install_references*.{py,json}  (reference genomes + BWA indexes)
+#   vntyper/scripts/reference_bundle.py         (digest verification + safe extraction)
 #   vntyper/dependencies/advntr/**              (adVNTR build)
+#   reference/**                                (the tracked reference files COPYed below)
+#   .dockerignore                               (decides which of them reach the context)
+#
+# Keep this list identical to the hashFiles() expressions in docker-base.yml and
+# docker-build.yml, docker-base.yml's push paths: filter, and the Makefile's
+# BASE_INPUTS. A stale copy of it here is exactly how `reference/**` came to be
+# missing from the hash: three config-declared files were dropped from the image
+# without changing the tag, so nothing rebuilt.
 #
 # Everything here is independent of application source, so editing vntyper/ or
 # docker/app/ never triggers a rebuild. The per-commit image (docker/Dockerfile)
@@ -83,9 +94,12 @@ FROM envs AS refs
 # the repo into the image; they now come from the build context.
 COPY reference/ /opt/refs/
 
-COPY vntyper/scripts/install_references.py \
-     vntyper/scripts/install_references_config.json \
-     /opt/ir/
+COPY vntyper/__init__.py                            /opt/ir/vntyper/__init__.py
+COPY vntyper/scripts/__init__.py                    /opt/ir/vntyper/scripts/__init__.py
+COPY vntyper/scripts/install_references.py          /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/install_references_config.json /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/reference_bundle.py            /opt/ir/vntyper/scripts/
+ENV PYTHONPATH=/opt/ir
 
 # No --config-path: the shipped config.json already carries correct RELATIVE reference
 # paths for this image's layout, and the ucsc_*/ncbi_* absolute keys it would add are
@@ -94,7 +108,7 @@ COPY vntyper/scripts/install_references.py \
 # Files copied above are detected as already present and skipped. The two chr1 genomes
 # are downloaded and BWA-indexed here - the single most expensive step in the build,
 # and the main reason this image is separated from the per-commit one.
-RUN conda run -n vntyper python /opt/ir/install_references.py \
+RUN conda run -n vntyper python -m vntyper.scripts.install_references \
         --output-dir /opt/refs \
         --threads 4 && \
     if [ -f /opt/refs/vntr_db_advntr.zip ] && [ ! -d /opt/refs/vntr_db_advntr ]; then \

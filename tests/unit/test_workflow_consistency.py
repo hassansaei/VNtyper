@@ -35,6 +35,29 @@ WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
 # not the unrelated test-data cache key that also uses hashFiles().
 _BASE_HASH = re.compile(r"hashFiles\((\s*'conda/\*\*'.*?)\)", re.DOTALL)
 
+# docker-base.yml has exactly one `paths:` key (under `on: push:`); capture everything
+# between it and the next top-level `workflow_dispatch:` sibling, then pull the quoted
+# path entries out of that block. Reading `on:` with a YAML parser is a known trap -
+# PyYAML 1.1 treats the bare word `on` as the boolean `True`, so this stays regex-based
+# like `_BASE_HASH` above rather than switching to `yaml.safe_load()` for this one field.
+_PUSH_PATHS_BLOCK = re.compile(r"paths:\n(.*?)\n\s*workflow_dispatch:", re.DOTALL)
+
+
+def _docker_base_push_paths() -> list[str]:
+    """Collect the quoted path entries from docker-base.yml's push `paths:` filter.
+
+    Returns:
+        list[str]: Path patterns in file order, or `[]` if the file or the filter is
+        absent.
+    """
+    path = WORKFLOWS / "docker-base.yml"
+    if not path.exists():
+        return []
+    match = _PUSH_PATHS_BLOCK.search(path.read_text(encoding="utf-8"))
+    if not match:
+        return []
+    return re.findall(r"'([^']+)'", match.group(1))
+
 
 def _base_hash_expressions() -> dict[str, list[str]]:
     """Collect every base-image hashFiles() argument list, keyed by file name.
@@ -74,7 +97,10 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
 
     `.dockerignore` and `reference/**` are easy to forget and were genuinely missed:
     excluding all of reference/ dropped three config-declared files from the image
-    without changing the tag, so no rebuild was triggered.
+    without changing the tag, so no rebuild was triggered. The two `__init__.py` files
+    were the sixth defect found at this seam: the `refs` stage COPYs them and
+    `python -m vntyper.scripts.install_references` imports both, so they are image
+    content, and they were in none of the five mirrors of this list.
 
     Raises:
         AssertionError: If a required path is absent from the hash inputs.
@@ -83,8 +109,11 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
         "conda/**",
         "docker/Dockerfile.base",
         "docker/requirements-web.txt",
+        "vntyper/__init__.py",
+        "vntyper/scripts/__init__.py",
         "vntyper/scripts/install_references.py",
         "vntyper/scripts/install_references_config.json",
+        "vntyper/scripts/reference_bundle.py",
         "vntyper/dependencies/advntr/**",
         "reference/**",
         ".dockerignore",
@@ -96,6 +125,74 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
 
     missing = [path for path in required if f"'{path}'" not in sample]
     assert not missing, f"base image hash does not cover: {missing}"
+
+
+def test_docker_base_push_paths_cover_every_hash_input() -> None:
+    """docker-base.yml's push `paths:` filter must list every base-image hash input.
+
+    `test_base_image_hash_inputs_are_identical` only compares the three `hashFiles(...)`
+    expressions to each other, so a path all three omitted together would still pass it -
+    and nothing else compares the push `paths:` filter to the hash at all. If a hash
+    input is missing from `paths:`, a commit touching only that file changes the content
+    hash but does not fire `docker-base.yml` on push to `main`; the base then gets built
+    lazily by the next `docker-build.yml` run instead of proactively.
+
+    This is a subset check, not an equality check: `paths:` legitimately also lists
+    `.github/workflows/docker-base.yml` itself, which is not a hash input.
+
+    Raises:
+        AssertionError: If a hash input is absent from the push paths filter.
+    """
+    expressions = _base_hash_expressions()
+    if not expressions:
+        pytest.skip("no GitHub Actions workflows present in this tree")
+
+    hash_paths = re.findall(r"'([^']+)'", next(iter(expressions.values()))[0])
+    push_paths = _docker_base_push_paths()
+    assert push_paths, "docker-base.yml has no push paths: filter to compare against"
+
+    missing = [path for path in hash_paths if path not in push_paths]
+    assert not missing, (
+        f"docker-base.yml's push paths: filter is missing hash input(s) {missing} - "
+        "a commit touching only those files changes the content-addressed base tag "
+        "without triggering a proactive rebuild on push to main"
+    )
+
+
+def test_makefile_base_inputs_mirror_every_hash_input() -> None:
+    """`BASE_INPUTS` is the fifth mirror of the base-image input list, and the only one
+    nothing compared to the hash.
+
+    `make ci-local-docker` uses it to refuse building against the published `:latest`
+    base when a base input has changed locally. A path missing from it means that guard
+    silently stops firing for that file, and the local Docker check gives false
+    assurance about an image CI will build differently.
+
+    Globs are normalised away: the workflows hash `conda/**`, the Makefile passes `conda`
+    to `git diff`, and those mean the same set of files.
+
+    Raises:
+        AssertionError: If a hash input has no counterpart in `BASE_INPUTS`.
+    """
+    makefile = WORKFLOWS.parents[1] / "Makefile"
+    if not makefile.exists():
+        pytest.skip("no Makefile present in this tree")
+    expressions = _base_hash_expressions()
+    if not expressions:
+        pytest.skip("no GitHub Actions workflows present in this tree")
+
+    block = re.search(
+        r"^BASE_INPUTS :=(.*?)(?=\n[^\t\s])", makefile.read_text(encoding="utf-8"), re.DOTALL | re.MULTILINE
+    )
+    assert block, "Makefile has no BASE_INPUTS assignment to compare against"
+    base_inputs = set(block.group(1).replace("\\\n", " ").split())
+
+    hash_paths = re.findall(r"'([^']+)'", next(iter(expressions.values()))[0])
+    missing = [path for path in hash_paths if path.removesuffix("/**") not in base_inputs]
+    assert not missing, (
+        f"Makefile BASE_INPUTS is missing base-image hash input(s) {missing} - "
+        "`make ci-local-docker` would not notice that you changed them"
+    )
 
 
 def test_unit_coverage_matrix_and_patch_coverage_version_are_fixed() -> None:

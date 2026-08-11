@@ -564,11 +564,14 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
     Coverage uses ``source = [`vntyper`, `docker/app`, `scripts`]``, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-11 verification measured all 39 Python files at 7,249 of 7,781 measured
+    2026-08-11 verification measured 39 Python files at 7,249 of 7,781 measured
     units, or 93.16% aggregate scripts-only branch-inclusive coverage, and 17,310 of
     19,392 measured units, or 89.26% combined branch-inclusive coverage. All 5,432 unit
     tests passed with no skips and 163 warnings in the maintained Python 3.12.13
-    environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
+    environment. Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
+    builder) took the directory to all 40 Python files and `make test-scripts-cov` to
+    7,806 of 8,340 measured units, or 93.60%, over 5,665 passing unit tests.
+    `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:
     `[tool.coverage.report].fail_under = 86` is the hard floor,

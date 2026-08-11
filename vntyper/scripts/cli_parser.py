@@ -315,6 +315,24 @@ def build_parser() -> argparse.ArgumentParser:
             "Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). Default: hg19 hg38 (UCSC references only)."
         ),
     )
+    parser_install.add_argument(
+        "--from-source",
+        action="store_true",
+        help=(
+            "Build references from their upstream sources instead of downloading the "
+            "published bundle. Slower (downloads and BWA-indexes six chromosome FASTAs) "
+            "and it needs the MUC1 seed files (MUC1_motifs_Rev_com.fa, filter_config.json) "
+            "already present in the output directory, which the bundle build workflow "
+            "stages before it runs. This is the path that workflow itself runs."
+        ),
+    )
+    parser_install.add_argument(
+        "--release-spec",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=("Release builds only: take every source URL and digest from this file. Requires --from-source."),
+    )
 
     # Subcommand: online
     parser_online = subparsers.add_parser(

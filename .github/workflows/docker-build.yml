@@ -93,7 +93,7 @@ jobs:
       - name: Check for the content-addressed base tag
         id: check
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/__init__.py', 'vntyper/scripts/__init__.py', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           if [ -z "$HASH" ]; then
@@ -165,7 +165,7 @@ jobs:
       - name: Compute expected base image tag
         id: hash
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/__init__.py', 'vntyper/scripts/__init__.py', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           if [ -z "$HASH" ]; then

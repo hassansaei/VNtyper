@@ -1,0 +1,21 @@
+# actionlint configuration.
+#
+# `make lint-actions` is the only thing that runs actionlint - no CI job does - so this
+# file exists purely to keep that local gate honest rather than silenced.
+#
+# The single ignore below is a gap in actionlint's built-in model of the `github`
+# context, not a problem with the workflow. `github.job_workflow_sha` is a documented
+# context property (GitHub Actions "Contexts" reference): for a job that runs a reusable
+# workflow it is the commit SHA of that reusable workflow file. actionlint 1.7.12 still
+# omits it from its `github` object type, so every use is reported as undefined.
+#
+# build-reference-bundles.yml needs exactly that value: it is the only way to assert that
+# the builder commit the caller passed as `source_commit` is the same commit the caller
+# pinned this workflow file at. Without the assertion, `uses:` and `source_commit:` can
+# drift and a release is built by a commit nobody reviewed as the builder.
+#
+# Keep the pattern narrow. If actionlint learns the property, this whole file should go.
+paths:
+  .github/workflows/build-reference-bundles.yml:
+    ignore:
+      - 'property "job_workflow_sha" is not defined'
