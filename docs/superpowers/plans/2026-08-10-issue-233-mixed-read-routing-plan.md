@@ -77,7 +77,7 @@ def run_kestrel_stage(
     sample_name: str,
     log_level: int,
     cwd: str,
-    summary: list[dict[str, Any]],
+    summary: dict[str, Any],
     summary_file_path: str,
     runner: Callable[..., None],
 ) -> None: ...
