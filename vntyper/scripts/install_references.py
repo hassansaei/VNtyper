@@ -120,6 +120,13 @@ def execute_index_command(index_command: str, fasta_path: Path):
     """
     Execute the indexing command for a FASTA file.
 
+    No shell is involved - the command is parsed into an argv list, not run through
+    `/bin/bash` - so this is a correctness bug, not an injection one. The path is
+    substituted quoted (:func:`_quote`) and the result parsed with `shlex.split`
+    rather than `str.split`, so a path containing whitespace (e.g.
+    ``--output-dir "/data/my refs"``) still reaches the aligner as one argv element
+    instead of being shredded across two.
+
     Args:
         index_command (str): The indexing command with a placeholder for the file path.
         fasta_path (Path): Path to the FASTA file to index.
@@ -127,10 +134,10 @@ def execute_index_command(index_command: str, fasta_path: Path):
     Raises:
         SystemExit: If the indexing fails.
     """
-    command = index_command.format(path=str(fasta_path))
+    command = index_command.format(path=_quote(fasta_path))
     logger.info(f"Executing indexing command: {command}")
     try:
-        args = command.split()
+        args = shlex.split(command)
         subprocess.run(args, check=True, capture_output=True)
         logger.info(f"Successfully executed: {command}")
     except subprocess.CalledProcessError as e:
@@ -1537,8 +1544,12 @@ def _reindex_if_bwa_version_differs(
         logger.error(message)
         raise ValueError(message)
 
-    command = index_command_template.format(path=str(fasta))
-    completed = subprocess.run(command.split(), capture_output=True, text=True, check=False)
+    # `_quote` + `shlex.split` rather than `str()` + `str.split`: an unquoted path
+    # containing whitespace (e.g. `--output-dir "/data/my refs"`) would otherwise be
+    # shredded across two argv elements and abort an otherwise valid install. No shell
+    # is involved here, so this is a correctness fix, not an injection one.
+    command = index_command_template.format(path=_quote(fasta))
+    completed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         message = f"{ref_id}: re-indexing {fasta.name} failed: {completed.stderr.strip()}"
         logger.error(message)

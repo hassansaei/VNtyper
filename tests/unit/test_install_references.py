@@ -17,11 +17,13 @@ from unittest.mock import Mock, patch
 import pytest
 
 from vntyper.scripts.install_references import (
+    _reindex_if_bwa_version_differs,
     calculate_md5,
     check_executable_available,
     check_index_exists,
     detect_index_conflicts,
     download_file,
+    execute_index_command,
     get_enabled_aligners,
     load_install_config,
 )
@@ -461,6 +463,58 @@ class TestInstallReferencesIntegration:
         # BWA is enabled and available
         assert "bwa" in enabled
         assert enabled["bwa"]["executable"] == "bwa"
+
+
+@pytest.mark.unit
+class TestExecuteIndexCommandHandlesPathsWithSpaces:
+    """Parked finding (was #246 item 2): `command.split()` shreds a path containing
+    whitespace into multiple argv elements. No shell is involved, so this is not an
+    injection - it is a correctness bug that aborts an otherwise valid install whenever
+    `--output-dir` (or any ancestor of the reference tree) contains a space.
+    """
+
+    @patch("vntyper.scripts.install_references.subprocess.run")
+    def test_a_space_in_the_path_still_reaches_the_aligner_as_one_argument(self, mock_run, tmp_path):
+        mock_run.return_value = Mock(returncode=0)
+        roomy_dir = tmp_path / "my refs"
+        roomy_dir.mkdir()
+        fasta_path = roomy_dir / "chr1.fa"
+        fasta_path.write_text(">chr1\nACGT\n")
+
+        execute_index_command("bwa index {path}", fasta_path)
+
+        called_args = mock_run.call_args[0][0]
+        assert called_args == ["bwa", "index", str(fasta_path)], (
+            f"the path must survive as a single argv element, got {called_args!r}"
+        )
+
+
+@pytest.mark.unit
+class TestReindexIfBwaVersionDiffersHandlesPathsWithSpaces:
+    """Same finding as above, in the bundle re-index path (`install_from_bundle`).
+    `_reindex_if_bwa_version_differs` builds its own command string and used to split
+    it with `str.split`, independently of `execute_index_command`.
+    """
+
+    @patch("vntyper.scripts.install_references._local_bwa_version", return_value="0.7.18")
+    @patch("vntyper.scripts.install_references.subprocess.run")
+    def test_a_space_in_the_staging_path_still_reaches_bwa_as_one_argument(
+        self, mock_run, _mock_local_version, tmp_path
+    ):
+        mock_run.return_value = Mock(returncode=0, stderr="")
+        staging = tmp_path / "my refs"
+        staging.mkdir()
+        fasta_name = "chr1.GRCh38.fna"
+        (staging / fasta_name).write_text(">chr1\nACGT\n")
+        entry = {"installed_path": fasta_name, "index_command": "bwa index {path}"}
+        build_info = {"bwa_version": "0.7.17"}
+
+        _reindex_if_bwa_version_differs(staging, entry, build_info, "GRCh38")
+
+        called_args = mock_run.call_args[0][0]
+        assert called_args == ["bwa", "index", str(staging / fasta_name)], (
+            f"the staging path must survive as a single argv element, got {called_args!r}"
+        )
 
 
 if __name__ == "__main__":
