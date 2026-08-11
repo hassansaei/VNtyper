@@ -178,18 +178,26 @@ def test_counted_mixed_layout_routes_every_file_and_emits_one_canonical_record(
 
 @pytest.mark.parametrize("counts", [(3, 2, 1, 0), (1, 0, 0, 0), (0, 1, 0, 0)])
 def test_invalid_layout_failure_names_every_file_and_its_record_count(
-    tmp_path: Path, counts: tuple[int, int, int, int]
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    counts: tuple[int, int, int, int],
 ) -> None:
     produced = _paths(tmp_path, counts)
 
-    with pytest.raises(ValueError) as exc_info:
+    with (
+        caplog.at_level(logging.ERROR, logger=pipeline_read_routing.logger.name),
+        pytest.raises(ValueError) as exc_info,
+    ):
         route_converted_fastqs(produced, config={})
 
     message = str(exc_info.value)
     assert "invalid" in message
+    assert "mate outputs are inconsistent" in message
+    assert "cannot be consumed without dropping reads" not in message
     for path, count in zip(produced, counts, strict=True):
         assert path in message
         assert f"{count} records" in message
+    assert [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR] == [message]
 
 
 def test_an_undecompressible_fastq_fails_closed_naming_the_file(tmp_path: Path) -> None:
@@ -208,6 +216,8 @@ def test_empty_layout_failure_names_every_file_with_zero_records(tmp_path: Path)
 
     message = str(exc_info.value)
     assert "empty" in message
+    assert "cannot be consumed without dropping reads" in message
+    assert "mate outputs are inconsistent" not in message
     for path in produced:
         assert path in message
     assert message.count("0 records") == 4
@@ -227,3 +237,5 @@ def test_a_stranded_path_from_the_router_is_never_ignored(tmp_path: Path, monkey
     message = str(exc_info.value)
     assert produced[2] in message
     assert "0 records" in message
+    assert "cannot be consumed without dropping reads" in message
+    assert "mate outputs are inconsistent" not in message

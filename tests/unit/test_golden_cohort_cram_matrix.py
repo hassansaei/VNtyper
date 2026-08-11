@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-from golden_cohort import cram_cases, matrix  # noqa: E402
+from golden_cohort import admissibility, cram_cases, cram_evidence, matrix  # noqa: E402
 from golden_cohort.admissibility import PIPELINE_REQUIRED_ARTIFACTS  # noqa: E402
 
 from tests.unit import test_golden_cohort_matrix as matrix_fixtures  # noqa: E402
@@ -63,13 +63,14 @@ def test_a_cram_case_is_built_for_each_declared_id_when_the_fixture_exists(tmp_p
     case = cram["b178_hg19_indexed_cram"]
     assert case["kind"] == "pipeline"
     assert case["alignment_kind"] == "cram"
-    assert case["expect_exit"] == "zero"
-    assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
+    assert case["expect_exit"] == "nonzero"
+    assert case["required_artifacts"] == []
+    assert case["expected_stderr_contains"] == "idxstats reports 329 placed-unmapped reads; using stream scan"
     assert case["repeat_of"] == "b178_hg19_subset"
 
 
-def test_cram_cases_pin_success_and_recorded_read_set_evidence(tmp_path: Path) -> None:
-    """Lossless CRAM read sets now route to Kestrel and retain their evidence contract."""
+def test_cram_cases_pin_forced_index_refusal_and_stream_success_evidence(tmp_path: Path) -> None:
+    """Unsafe forced-index cases fail causally while their lossless stream twins succeed."""
     cram = _cram_cases(_build(_documented_data_dir(tmp_path)))
     indexed = cram["7a61_hg38_ensembl_indexed_cram"]
     stream = cram["7a61_hg38_ensembl_stream_cram"]
@@ -82,10 +83,15 @@ def test_cram_cases_pin_success_and_recorded_read_set_evidence(tmp_path: Path) -
         "sorted_read_name_sha256": "b7f75d19497698f12d6dbbc38afc12702b2d262670a4c893b39f95967ebf7b7b",
     }
 
+    assert indexed.get("side_expectations") is None
+    assert indexed["expect_exit"] == "nonzero"
+    assert indexed["required_artifacts"] == []
+    assert indexed["expected_stderr_contains"] == "idxstats reports 11571 placed-unmapped reads; using stream scan"
+    assert stream.get("side_expectations") is None
+    assert stream["expect_exit"] == "zero"
+    assert stream["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
+    assert "expected_stderr_contains" not in stream
     for case in (indexed, stream):
-        assert case.get("side_expectations") is None
-        assert case["expect_exit"] == "zero"
-        assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
         assert case["cram_evidence_expectation"] == {
             "placed_unmapped_guard_count": 11_571,
             "raw_indexed_read_set": expected_raw,
@@ -100,13 +106,56 @@ def test_cram_cases_pin_success_and_recorded_read_set_evidence(tmp_path: Path) -
         "count": 4_807,
         "sorted_read_name_sha256": "d3aa88fe91c8964b2f9a1b053a672f2bc3d1896b71de986f5cde02999d552591",
     }
-    for case_id in ("b178_hg19_indexed_cram", "b178_hg19_stream_cram"):
-        assert cram[case_id].get("side_expectations") is None
-        assert cram[case_id]["cram_evidence_expectation"] == {
+    b178_indexed = cram["b178_hg19_indexed_cram"]
+    b178_stream = cram["b178_hg19_stream_cram"]
+    assert b178_indexed["expect_exit"] == "nonzero"
+    assert b178_indexed["required_artifacts"] == []
+    assert b178_indexed["expected_stderr_contains"] == ("idxstats reports 329 placed-unmapped reads; using stream scan")
+    assert b178_stream["expect_exit"] == "zero"
+    assert b178_stream["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
+    assert "expected_stderr_contains" not in b178_stream
+    for case in (b178_indexed, b178_stream):
+        assert case.get("side_expectations") is None
+        assert case["cram_evidence_expectation"] == {
             "placed_unmapped_guard_count": 329,
             "raw_indexed_read_set": b178_expected_raw,
             "stream_read_set": b178_expected_stream,
         }
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["b178_hg19_indexed_cram", "7a61_hg38_ensembl_indexed_cram"],
+)
+def test_forced_indexed_outcome_agrees_with_its_read_set_evidence(tmp_path: Path, case_id: str) -> None:
+    """The ordinary outcome oracle and A-178-2 evidence must accept the same guard refusal."""
+    case = _cram_cases(_build(_documented_data_dir(tmp_path)))[case_id]
+    expectation = case["cram_evidence_expectation"]
+    guard_count = expectation["placed_unmapped_guard_count"]
+    record = {
+        "exit_code": 1,
+        "aborted": False,
+        "timed_out": False,
+        "raw_indexed_read_set": expectation["raw_indexed_read_set"],
+        "unmapped_read_set": None,
+        "raw_indexed_loss": None,
+        "placed_unmapped_guard_count": guard_count,
+        "observed_unmapped_scan": None,
+        "observed_unmapped_command": None,
+        "scan_observation_problems": ["A-178-2 did not observe exactly one executed CRAM unmapped-extraction mode"],
+    }
+
+    ordinary = admissibility.check_case(
+        case,
+        record,
+        tmp_path,
+        stderr=f"idxstats reports {guard_count} placed-unmapped reads; using stream scan",
+    )
+    evidence_case = {**case, "effective_unmapped_scan": "indexed"}
+
+    assert ordinary["expectation_met"] is True
+    assert ordinary["expectation_problems"] == []
+    assert cram_evidence.validate_cram_evidence(evidence_case, record) == []
 
 
 def test_indexed_safe_cram_cases_require_nonempty_authorized_scan_equivalence(tmp_path: Path) -> None:

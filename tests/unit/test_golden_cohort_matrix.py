@@ -254,7 +254,12 @@ def test_cohorts_only_consume_cases_expected_to_write_candidate_summaries(tmp_pa
     }
 
     assert candidate_successes
-    assert len(candidate_successes) == 64
+    all_case_ids = {case["case_id"] for case in built["cases"]}
+    assert all_case_ids - candidate_successes == {
+        "7a61_hg38_ensembl_indexed_cram",
+        "b178_hg19_indexed_cram",
+    }
+    assert len(candidate_successes) == 62
     for cohort in built["cohort_cases"]:
         if cohort.get("empty_input_dir"):
             continue

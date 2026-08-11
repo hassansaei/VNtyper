@@ -17,7 +17,7 @@ from golden_cohort import runner  # noqa: E402
 
 from vntyper.scripts import pipeline_read_routing  # noqa: E402
 
-INVALID_LAYOUT_DIAGNOSTIC = "FASTQ layout 'invalid' cannot be consumed without dropping reads."
+INVALID_LAYOUT_DIAGNOSTIC = "FASTQ layout 'invalid': mate outputs are inconsistent."
 
 
 def _case(case_id: str, **extra: object) -> dict[str, object]:

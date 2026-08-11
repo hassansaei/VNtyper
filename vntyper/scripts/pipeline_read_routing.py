@@ -105,7 +105,12 @@ def route_converted_fastqs(
     consumed, stranded = route_fastqs(layout, paths, counts)
     details = ", ".join(f"{paths[key]}: {counts[key]} records" for key in _FASTQ_KEYS)
 
-    if layout in {"invalid", "empty"} or stranded or not 1 <= len(consumed) <= 4:
+    if layout == "invalid":
+        msg = f"FASTQ layout 'invalid': mate outputs are inconsistent. Produced FASTQs: {details}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if layout == "empty" or stranded or not 1 <= len(consumed) <= 4:
         msg = f"FASTQ layout '{layout}' cannot be consumed without dropping reads. Produced FASTQs: {details}"
         logger.error(msg)
         raise ValueError(msg)
