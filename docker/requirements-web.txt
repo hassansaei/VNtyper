@@ -13,5 +13,5 @@ celery==5.4.0
 python-multipart==0.0.31
 fastapi-limiter==0.1.6
 email_validator==2.2.0
-passlib[bcrypt]==1.7.4
+bcrypt==5.0.0
 pydantic==2.10.0

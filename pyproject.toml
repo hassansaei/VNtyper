@@ -84,7 +84,7 @@ dev = [
     # (`from fastapi_limiter import FastAPILimiter`).
     "fastapi-limiter==0.1.6",
     "email_validator==2.2.0",
-    "passlib[bcrypt]==1.7.4",
+    "bcrypt==5.0.0",
     "pydantic==2.10.0",
     # The one deliberate exception to the mirror above: test-only, so the image
     # has no reason to carry it and requirements-web.txt does not list it.
@@ -104,7 +104,7 @@ web = [
     "python-multipart==0.0.31",
     "fastapi-limiter==0.1.6",
     "email_validator==2.2.0",
-    "passlib[bcrypt]==1.7.4",
+    "bcrypt==5.0.0",
     "pydantic==2.10.0",
 ]
 docs = [
