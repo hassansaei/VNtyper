@@ -1478,6 +1478,23 @@ def install_from_bundle(install_config: dict[str, Any], output_dir: Path, refere
     through (a bad download, a digest mismatch, a manifest disagreement) leaves any
     previously installed tree untouched rather than half-replaced.
 
+    That guarantee covers every failure `staged_install` can catch, which is every
+    ordinary Python exception - it does not cover an uncatchable one. `staged_install`
+    activates with two renames (the live tree aside to `.output_dir.previous.*`, then
+    the finished staging tree into `output_dir`) that cannot be made atomic together
+    without an OS-level directory-swap primitive this codebase does not use. A SIGKILL
+    landing in the narrow window between those two renames skips its `except
+    BaseException` handler entirely - there is no Python code left running to catch
+    anything - and leaves **`output_dir` absent** while **both** `.output_dir.previous.*`
+    (the old tree, moved aside but never restored) **and** `.output_dir.staging.*` (the
+    new tree, fully built but never activated) survive on disk as orphans, with nothing
+    logged. This is deliberately left as an operator-diagnosable state rather than
+    auto-recovered on the next run's startup: the next full `install-references` call
+    self-heals by rebuilding `output_dir` from scratch (`main`'s `output_dir.mkdir(...,
+    exist_ok=True)` tolerates its absence), but the two siblings are not swept or
+    reported by this codebase, and nothing else on the machine can tell which of them
+    (if either) is safe to delete without an operator looking at both.
+
     ``release-manifest.json`` and ``BUILD_INFO.json`` are read from *inside* each
     already-verified archive, never fetched separately: a loose metadata file sitting
     beside the asset has no committed digest to check it against, so trusting it would
@@ -1530,14 +1547,20 @@ def write_md5_checksums(md5_dict: dict[str, str], output_dir: Path):
         sys.exit(1)
 
 
-def setup_logging(output_dir: Path):
+def setup_logging(output_dir: Path, log_file: Path | None = None):
     """
-    Setup logging to output to both stdout and a log file in the output directory.
+    Setup logging to output to both stdout and a log file.
 
     Args:
-        output_dir (Path): Directory where logs will be stored.
+        output_dir (Path): Directory where logs will be stored, when `log_file` is not
+            given explicitly.
+        log_file (Path, optional): Exact path to write the log to. Defaults to
+            ``output_dir / "install_references.log"``. `main` passes a path *outside*
+            `output_dir` (see `_staging_safe_log_path`) and moves the finished file into
+            place itself once `output_dir` is no longer subject to being replaced by a
+            `staged_install` activation.
     """
-    log_file = output_dir / "install_references.log"
+    log_file = log_file or (output_dir / "install_references.log")
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -1559,6 +1582,77 @@ def setup_logging(output_dir: Path):
     root_logger.addHandler(f_handler)
 
     logger.info(f"Logging initialized. Logs will be saved to {log_file}")
+
+
+def _staging_safe_log_path(output_dir: Path) -> Path:
+    """Choose a log location that a `staged_install` activation cannot lose.
+
+    Both install paths `main` can take stage their work in a temporary directory beside
+    `output_dir` and activate by renaming it into place. A log file written directly
+    into `output_dir` would be caught by that rename dance in a way that loses most of
+    a run's own log, regardless of which side of the swap it ends up on:
+
+    - If `staged_install`'s `seed_from_existing` copies `output_dir` into staging (the
+      default, so an install of one assembly does not erase another), the log file gets
+      seeded too - but only as of whatever it contained at that exact moment, typically
+      just "Logging initialized..." and "Processing references: ...". Every line logged
+      afterwards keeps going to the *original* file descriptor, which is what gets
+      renamed to `.previous.*` and then deleted once activation succeeds - taking the
+      complete log with it. The tree left at `output_dir` ends up with only the seeded,
+      truncated copy.
+    - If the log were excluded from seeding instead, `output_dir` would end up with no
+      log file at all after activation, for the same reason: nothing ever writes into
+      the *new* directory at that path, and the complete one is still the file that gets
+      deleted.
+
+    Writing beside `output_dir` instead sidesteps both failure modes: nothing this
+    function's log depends on ever needs to survive a `staged_install` rename. `main`
+    moves the finished file into `output_dir / "install_references.log"` itself, in
+    `_finalize_install_log`, once `output_dir` has settled.
+
+    Args:
+        output_dir: The install's final destination.
+
+    Returns:
+        Path: A sibling of `output_dir`, named after it so an operator can tell which
+        run a stray file belongs to if `_finalize_install_log` is ever unable to move it
+        into place.
+    """
+    return output_dir.parent / f".{output_dir.name}.install-references.log"
+
+
+def _finalize_install_log(log_file: Path, output_dir: Path) -> None:
+    """Move a run's log into its final home now that `output_dir` has settled.
+
+    Called from a `finally` block in `main`, so this runs whether the install
+    succeeded, raised, or hit an early `sys.exit` - the log is worth keeping either way,
+    and a failed run is exactly when an operator most wants to read it.
+
+    A rename rather than a copy-then-delete: the log's `FileHandler` keeps writing
+    through the same open file descriptor no matter what path is used to reach it (POSIX
+    rename does not invalidate open file descriptors), so this is both cheaper than a
+    copy and leaves no window where the handler points at nothing.
+
+    Args:
+        log_file: Where `setup_logging` was pointed - `_staging_safe_log_path`'s return
+            value.
+        output_dir: The install's final destination.
+    """
+    if not log_file.exists():
+        return
+    if not output_dir.exists():
+        # The run failed before anything was ever activated, or activation itself
+        # failed and `staged_install` could not even restore `output_dir`. Either way
+        # there is nowhere to move the log into; leave it at its sibling path and say
+        # so, rather than silently dropping a log that is still complete up to the
+        # point of failure.
+        logger.error(f"install run did not produce {output_dir}; its log remains at {log_file}")
+        return
+    destination = output_dir / "install_references.log"
+    try:
+        log_file.rename(destination)
+    except OSError as error:
+        logger.error(f"could not move install log {log_file} into {destination}: {error}")
 
 
 def main(
@@ -1616,31 +1710,81 @@ def main(
         logger.error(f"Failed to create output directory {output_dir}: {e}")
         sys.exit(1)
 
-    setup_logging(output_dir)
+    # Written outside `output_dir` for the whole run and moved into place at the very
+    # end, in `finally` below - see `_staging_safe_log_path`'s docstring for why a log
+    # written directly into `output_dir` would lose most of its own content to the
+    # `staged_install` rename dance both branches below go through.
+    log_file = _staging_safe_log_path(output_dir)
+    setup_logging(output_dir, log_file=log_file)
 
-    # Filter references (after logging is set up)
-    # Default to hg19 and hg38 (UCSC) for backward compatibility
-    if references_to_process is None:
-        references_to_process = ["hg19", "hg38"]
-        logger.info("No references specified, using default: hg19, hg38")
+    try:
+        # Filter references (after logging is set up)
+        # Default to hg19 and hg38 (UCSC) for backward compatibility
+        if references_to_process is None:
+            references_to_process = ["hg19", "hg38"]
+            logger.info("No references specified, using default: hg19, hg38")
 
-    all_available_refs = (
-        set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
-    )
-    requested_refs = set(references_to_process)
-    found_refs = requested_refs & all_available_refs
-    missing_refs = requested_refs - all_available_refs
+        all_available_refs = (
+            set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
+        )
+        requested_refs = set(references_to_process)
+        found_refs = requested_refs & all_available_refs
+        missing_refs = requested_refs - all_available_refs
 
-    if missing_refs:
-        logger.warning(f"Requested references not found in config: {', '.join(sorted(missing_refs))}")
-        logger.warning(f"Available references: {', '.join(sorted(all_available_refs))}")
+        if missing_refs:
+            logger.warning(f"Requested references not found in config: {', '.join(sorted(missing_refs))}")
+            logger.warning(f"Available references: {', '.join(sorted(all_available_refs))}")
 
-    if not found_refs:
-        logger.error("None of the requested references were found in the configuration.")
-        sys.exit(1)
+        if not found_refs:
+            logger.error("None of the requested references were found in the configuration.")
+            sys.exit(1)
 
-    logger.info(f"Processing references: {', '.join(sorted(found_refs))}")
+        logger.info(f"Processing references: {', '.join(sorted(found_refs))}")
 
+        _install_references(
+            install_config,
+            output_dir,
+            config_path,
+            skip_indexing,
+            index_threads,
+            aligners_to_use,
+            found_refs,
+            from_source,
+            release_spec_path,
+            aligner_config,
+        )
+    finally:
+        _finalize_install_log(log_file, output_dir)
+
+
+def _install_references(
+    install_config: dict[str, Any],
+    output_dir: Path,
+    config_path: Path | None,
+    skip_indexing: bool,
+    index_threads: int,
+    aligners_to_use: list[str] | None,
+    found_refs: set[str],
+    from_source: bool,
+    release_spec_path: Path | None,
+    aligner_config: dict[str, Any],
+) -> None:
+    """Run the selected install path and update config.json - the part of `main` that
+    needs no `finally`, split out so the log-finalisation wrapper in `main` stays small.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Directory where references are installed.
+        config_path: Path to the main config.json to update, or None to skip.
+        skip_indexing: Whether to skip indexing. Only affects ``--from-source``.
+        index_threads: Threads for indexing. Only affects ``--from-source``.
+        aligners_to_use: Specific aligners to use. Only affects ``--from-source``.
+        found_refs: Physical reference ids this run will install.
+        from_source: Build from upstream sources instead of fetching the release bundle.
+        release_spec_path: Release builds only - source URLs/digests to use instead of
+            the shipped config. Requires `from_source`.
+        aligner_config: The install config's ``aligners`` section.
+    """
     if from_source:
         # Initialize aligners. Only `--from-source` reads this: the bundle path in the
         # `else` branch below always installs the BWA index the release already carries,
@@ -1714,7 +1858,11 @@ def main(
         # download, a failed derivation, a `bwa index` that runs out of disk mid-genome -
         # now leaves any previously installed tree untouched instead of a partially
         # rebuilt one, the same guarantee the bundle path gets from `install_from_bundle`
-        # below.
+        # below - including the same inherent exception to it: a SIGKILL landing between
+        # `staged_install`'s two activation renames leaves `output_dir` absent and both
+        # `.previous.*`/`.staging.*` siblings orphaned with nothing logged, deliberately
+        # left for manual inspection rather than auto-recovered. See
+        # `install_from_bundle`'s docstring for the full explanation.
         release_spec = load_install_config(release_spec_path) if release_spec_path else None
         if release_spec is not None:
             logger.info(f"Taking source URLs and digests from {release_spec_path}")

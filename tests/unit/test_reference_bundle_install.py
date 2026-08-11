@@ -208,6 +208,28 @@ def _fake_download_from(release_dir: Path):
 COMMON_ASSET_NAME = "vntyper-references-refs-v1-muc1.tar.gz"
 
 
+@pytest.fixture(autouse=True)
+def _restore_root_logging():
+    """`install_references.main` calls `setup_logging`, which re-points the root logger
+    at a file; put it back afterwards so later tests in the session do not keep writing
+    into a deleted `tmp_path`. Only `TestInstallLogSurvivesActivation` below calls `main`
+    rather than `install_from_bundle` directly, but this is autouse (matching the
+    identical fixture in test_install_references_derivations.py) so it protects every
+    test in this module against ever gaining one that does.
+    """
+    root = logging.getLogger()
+    handlers = root.handlers[:]
+    level = root.level
+    yield
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        if handler not in handlers:
+            handler.close()
+    for handler in handlers:
+        root.addHandler(handler)
+    root.setLevel(level)
+
+
 # =============================================================================
 # Happy path
 # =============================================================================
@@ -286,10 +308,14 @@ class TestInstallFromBundleDigestMismatch:
         assert actual_sha256 in message
         assert not output_dir.exists()
 
-    def test_the_common_asset_is_checked_before_extraction_too(self, tmp_path, monkeypatch):
-        """Carry-forward from the Task 3 review: `verify_sha256` runs before
-        `safe_extract` for *every* asset, common included, not only the first one a run
-        happens to process."""
+    def test_the_common_asset_mismatch_installs_nothing_either(self, tmp_path, monkeypatch):
+        """A mismatch on the *second* (common) asset must not leave the *first*
+        (genome) asset's already-extracted bytes activated: the whole run is one staged
+        install. This pins the outcome, not the call order - `staged_install` deletes
+        the staging tree on any exception regardless of which line raised it, so this
+        test alone would pass identically even with `verify_sha256` and `safe_extract`
+        swapped. `TestInstallFromBundleVerifyBeforeExtract` below pins the order itself.
+        """
         release_dir = tmp_path / "release"
         output_dir = tmp_path / "refs"
         hg19_asset = "vntyper-references-refs-v1-ucsc-hg19.tar.gz"
@@ -311,6 +337,58 @@ class TestInstallFromBundleDigestMismatch:
         # The genome asset that verified fine must not have been left activated either:
         # the whole run is one staged install.
         assert not output_dir.exists()
+
+
+# =============================================================================
+# Carry-forward #1 (Task 3 review): the digest is checked *before* a single byte of the
+# archive is extracted, for every asset. The two tests above establish the outcome under
+# a mismatch - nothing gets installed - but not the mechanism, because `staged_install`'s
+# `except BaseException: if not activated: shutil.rmtree(staging, ...)` deletes the
+# staged tree on any exception regardless of which line raised it. Swap `verify_sha256`
+# and `safe_extract` in `_install_bundle_asset` and both tests above still pass. This one
+# does not: it spies on `verify_sha256` and refuses to let `safe_extract` run for an
+# asset it has not yet recorded a successful digest check for.
+# =============================================================================
+
+
+class TestInstallFromBundleVerifyBeforeExtract:
+    def test_verify_sha256_is_called_before_safe_extract_for_every_asset(self, tmp_path, monkeypatch):
+        release_dir = tmp_path / "release"
+        output_dir = tmp_path / "refs"
+        hg19_asset = "vntyper-references-refs-v1-ucsc-hg19.tar.gz"
+        hg19_sha256 = _write_bundle_asset(release_dir, hg19_asset, _genome_files("hg19"), reference_id="hg19")
+        common_sha256 = _write_bundle_asset(release_dir, COMMON_ASSET_NAME, _common_files(), reference_id=None)
+        config = _install_config(
+            ucsc={"hg19": _genome_entry("hg19", hg19_asset, hg19_sha256)},
+            bundle=_bundle_pointer(common_asset=COMMON_ASSET_NAME, common_asset_sha256=common_sha256),
+        )
+        monkeypatch.setattr(install_references, "download_file", _fake_download_from(release_dir))
+
+        real_verify_sha256 = install_references.verify_sha256
+        real_safe_extract = install_references.safe_extract
+        digest_verified: set[str] = set()
+
+        def _spy_verify_sha256(path, expected):
+            # Runs the real check first: a spy that always "passes" would let a real
+            # ordering bug slip through as easily as no spy at all.
+            real_verify_sha256(path, expected)
+            digest_verified.add(path.name)
+
+        def _extract_only_after_verified(archive, destination):
+            assert archive.name in digest_verified, (
+                f"safe_extract was called for {archive.name} before verify_sha256 "
+                "recorded a successful check for it - the archive's digest must be "
+                "checked before any of its bytes are extracted"
+            )
+            return real_safe_extract(archive, destination)
+
+        monkeypatch.setattr(install_references, "verify_sha256", _spy_verify_sha256)
+        monkeypatch.setattr(install_references, "safe_extract", _extract_only_after_verified)
+
+        install_references.install_from_bundle(config, output_dir, ["hg19"])
+
+        # Both whole-archive digests were actually checked, not merely permitted to be.
+        assert {hg19_asset, COMMON_ASSET_NAME} <= digest_verified
 
 
 # =============================================================================
@@ -647,3 +725,62 @@ class TestInstallFromBundleConfiguration:
         )
         with pytest.raises(ValueError, match="hg19"):
             install_references.install_from_bundle(config, tmp_path / "refs", ["hg19"])
+
+
+# =============================================================================
+# Regression: the run's log must survive `staged_install`'s activation.
+#
+# `main()` calls `setup_logging(output_dir)` before routing into `install_from_bundle`,
+# which wraps the whole install in `staged_install(output_dir)`. `staged_install`'s
+# default `seed_from_existing` copies whatever is in `output_dir` into its staging
+# directory *before* the install runs - the log's first two lines - while every
+# subsequent line keeps going to the file descriptor still open on the *original*
+# `output_dir`, which gets renamed to a `.previous.*` sibling and deleted once
+# activation succeeds. The result: a successful run prints everything to the console but
+# leaves only "Logging initialized..." and "Processing references: ..." on disk.
+#
+# This has to be tested by reading the log *file*, not `caplog` - `caplog` intercepts at
+# the logging-record level, upstream of any handler, so it cannot see a bug that is
+# entirely about which file a `FileHandler` ends up pointed at.
+# =============================================================================
+
+
+class TestInstallLogSurvivesActivation:
+    def test_the_log_on_disk_contains_lines_emitted_late_in_a_successful_run(self, tmp_path, monkeypatch):
+        release_dir = tmp_path / "release"
+        output_dir = tmp_path / "refs"
+
+        hg19_asset = "vntyper-references-refs-v1-ucsc-hg19.tar.gz"
+        hg19_sha256 = _write_bundle_asset(release_dir, hg19_asset, _genome_files("hg19"), reference_id="hg19")
+        common_sha256 = _write_bundle_asset(release_dir, COMMON_ASSET_NAME, _common_files(), reference_id=None)
+        config = _install_config(
+            ucsc={"hg19": _genome_entry("hg19", hg19_asset, hg19_sha256)},
+            bundle=_bundle_pointer(common_asset=COMMON_ASSET_NAME, common_asset_sha256=common_sha256),
+        )
+
+        # `main()` always loads install_references_config.json from disk by path; this
+        # is the seam that lets it run end-to-end against a fixture config instead of
+        # the real ~350 MB genomes, exactly like every other test in this module already
+        # does one level down, through `install_from_bundle` directly.
+        monkeypatch.setattr(install_references, "load_install_config", lambda _path: config)
+        monkeypatch.setattr(install_references, "download_file", _fake_download_from(release_dir))
+        monkeypatch.setattr(install_references, "_local_bwa_version", lambda: "9.9.9")
+
+        install_references.main(output_dir, references_to_process=["hg19"])
+
+        log_path = output_dir / "install_references.log"
+        assert log_path.exists(), "the log must end up at output_dir/install_references.log"
+        contents = log_path.read_text(encoding="utf-8")
+
+        # Logged before staged_install's seeding copytree runs - present even before the
+        # fix, so on its own this line would not catch the regression.
+        assert "Processing references: hg19" in contents
+        # Logged only after every asset has downloaded, verified and extracted, and
+        # again only after activation and the config-update step - exactly the content
+        # the bug silently dropped.
+        assert f"verified {hg19_asset}" in contents
+        assert f"verified {COMMON_ASSET_NAME}" in contents
+        assert "All references have been installed and configured successfully." in contents
+
+        # No orphaned sibling log file left beside output_dir.
+        assert not list(tmp_path.glob(".refs.install-references.log"))
