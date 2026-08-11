@@ -55,3 +55,29 @@ def test_the_pipeline_itself_selects_the_right_database(label):
         }
     }
     assert select_advntr_reference(config, label).endswith(f"{EXPECTED[label]}_muc1.db")
+
+
+class TestMissingOrDisabledReferenceData:
+    """`resolve_from_mapping`'s null/absent behaviour was, until now, exercised only for
+    the `bwa` kind (`test_reference_resolution.py::TestResolveFromMapping`).
+    `select_advntr_reference` is the reader whose original bug - the four-entry dict with
+    `.get(label, "hg19")` this module's docstring describes - motivated the milestone, so
+    it needs its own direct coverage of the same two membership-vs-truthiness cases
+    rather than relying on the generic `resolve_from_mapping` tests to stand in for it.
+    """
+
+    @pytest.mark.parametrize("label", sorted(EXPECTED))
+    def test_a_missing_reference_data_section_resolves_to_none(self, label):
+        from vntyper.scripts.pipeline import select_advntr_reference
+
+        assert select_advntr_reference({}, label) is None
+
+    @pytest.mark.parametrize("label", sorted(EXPECTED))
+    def test_a_present_but_null_database_key_resolves_to_none_not_the_string_null(self, label):
+        from vntyper.scripts.pipeline import select_advntr_reference
+        from vntyper.scripts.reference_registry import reference_keys
+
+        (key,) = reference_keys("advntr", label)
+        config = {"reference_data": {key: None}}
+
+        assert select_advntr_reference(config, label) is None
