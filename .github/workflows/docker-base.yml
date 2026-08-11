@@ -13,6 +13,11 @@ on:
       - 'conda/**'
       - 'docker/Dockerfile.base'
       - 'docker/requirements-web.txt'
+      # `python -m vntyper.scripts.install_references` in the refs stage imports both
+      # package inits, and the stage COPYs them, so they are image content like any
+      # other file below.
+      - 'vntyper/__init__.py'
+      - 'vntyper/scripts/__init__.py'
       - 'vntyper/scripts/install_references.py'
       - 'vntyper/scripts/install_references_config.json'
       - 'vntyper/scripts/reference_bundle.py'
@@ -64,7 +69,7 @@ jobs:
       - name: Compute base image tag
         id: hash
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/__init__.py', 'vntyper/scripts/__init__.py', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           # hashFiles() returns "" when nothing matched, which would silently produce the

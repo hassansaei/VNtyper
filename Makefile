@@ -518,6 +518,7 @@ ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-cove
 # with the hashFiles() list in docker-base.yml (tests/unit/test_version_consistency.py
 # and test_workflow_consistency.py guard the pieces that can drift).
 BASE_INPUTS := conda docker/Dockerfile.base docker/requirements-web.txt \
+	vntyper/__init__.py vntyper/scripts/__init__.py \
 	vntyper/scripts/install_references.py vntyper/scripts/install_references_config.json \
 	vntyper/scripts/reference_bundle.py \
 	vntyper/dependencies/advntr reference .dockerignore

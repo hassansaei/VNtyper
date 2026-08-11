@@ -8,8 +8,19 @@
 #   conda/**                                    (the three conda environments)
 #   docker/requirements-web.txt                 (FastAPI/Celery stack)
 #   docker/Dockerfile.base                      (this file)
+#   vntyper/__init__.py                         (package init, imported by python -m)
+#   vntyper/scripts/__init__.py                 (package init, imported by python -m)
 #   vntyper/scripts/install_references*.{py,json}  (reference genomes + BWA indexes)
+#   vntyper/scripts/reference_bundle.py         (digest verification + safe extraction)
 #   vntyper/dependencies/advntr/**              (adVNTR build)
+#   reference/**                                (the tracked reference files COPYed below)
+#   .dockerignore                               (decides which of them reach the context)
+#
+# Keep this list identical to the hashFiles() expressions in docker-base.yml and
+# docker-build.yml, docker-base.yml's push paths: filter, and the Makefile's
+# BASE_INPUTS. A stale copy of it here is exactly how `reference/**` came to be
+# missing from the hash: three config-declared files were dropped from the image
+# without changing the tag, so nothing rebuilt.
 #
 # Everything here is independent of application source, so editing vntyper/ or
 # docker/app/ never triggers a rebuild. The per-commit image (docker/Dockerfile)
