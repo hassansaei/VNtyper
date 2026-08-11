@@ -103,8 +103,8 @@ The default-branch release controller preflights exactly the environment,
 deployment-branch-policy, and custom-deployment-protection-rule API responses during
 `validate-release`, before package building or registry mutation, and invokes the pure validator.
 API failures and policy mismatches fail with #236 and the owner command/UI path. This turns future
-drift into an immediate diagnostic rather than a late waiting deployment. Zero environment secrets
-is separately verified live administrator state, not controller-enforced.
+drift into an immediate diagnostic rather than a late waiting deployment. The absence of
+environment secrets is separately verified live administrator state, not controller-enforced.
 
 The workflow adds only the read permission required for this inspection. The
 `publish-pypi` job remains the sole job with `id-token: write`; it retains no `contents`,
@@ -113,8 +113,8 @@ The workflow adds only the read permission required for this inspection. The
 Maintainer guidance records the same contract: the environment is reviewer-free, has no wait
 timer, uses custom branch policies for the exact branch `main`, and has no custom
 deployment-protection rules. A mismatch cites #236 and fails before package or registry writes.
-OIDC remains the only publisher; never reintroduce `PYPI_API_TOKEN`. Zero environment secrets is
-separately verified live administrator state, not controller-enforced.
+OIDC remains the only publisher; never reintroduce `PYPI_API_TOKEN`. The absence of environment
+secrets is separately verified live administrator state, not controller-enforced.
 
 ### 3. Completed v2.0.11 recovery
 

@@ -412,8 +412,8 @@ The environment must be reviewer-free, have no wait timer, use custom branch pol
 exact branch `main`, and have no custom deployment-protection rules. The controller preflights
 exactly the environment, deployment-branch-policy, and custom-deployment-protection-rule API
 responses and fails before package or registry writes when they drift; follow #236 to repair the
-environment rather than bypassing it. Zero environment secrets is separately verified live
-administrator state, not controller-enforced. OIDC is the only publisher: never reintroduce
+environment rather than bypassing it. The absence of environment secrets is separately verified
+live administrator state, not controller-enforced. OIDC is the only publisher: never reintroduce
 `PYPI_API_TOKEN`. `PYPI_API_TOKEN` has been deleted after the green OIDC releases, so historical
 tagged commits cannot retrieve the obsolete credential.
 

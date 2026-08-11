@@ -17,9 +17,9 @@
 - Keep the environment reviewer-free with no timer, custom policies for the exact branch `main`,
   and no custom deployment-protection rules. The controller preflights exactly the environment,
   deployment-branch-policy, and custom-deployment-protection-rule API responses; it fails before
-  package or registry writes and cites #236 on a mismatch. Zero environment secrets is separately
-  verified live administrator state, not controller-enforced. OIDC remains the only publisher, so
-  never reintroduce `PYPI_API_TOKEN`.
+  package or registry writes and cites #236 on a mismatch. The absence of environment secrets is
+  separately verified live administrator state, not controller-enforced. OIDC remains the only
+  publisher, so never reintroduce `PYPI_API_TOKEN`.
 - Keep `publish-pypi` as the only job with `id-token: write`; keep GHCR permissions, ten release checks, tag/ancestry validation, immutable evidence, concurrency, and retries unchanged.
 - Preserve Python 3.10 compatibility and the repository's 120-character Ruff line length.
 - Every behavioral edit follows RED, causal failure, minimal GREEN, refactor, verification, commit, and independent review.
@@ -290,7 +290,7 @@ Require the same selected policy in AGENTS, the design, and the plan. Run the te
 State that the `pypi` environment must have zero reviewers/timer, custom branch policies, and
 exactly branch `main`; the controller preflights exactly the environment, deployment-branch-policy,
 and custom-deployment-protection-rule API responses; mismatches point to #236 and fail before
-writes; zero environment secrets is separately verified live administrator state, not
+writes; the absence of environment secrets is separately verified live administrator state, not
 controller-enforced; OIDC remains the only publisher.
 
 - [ ] **Step 3: Run documentation and focused GREEN**

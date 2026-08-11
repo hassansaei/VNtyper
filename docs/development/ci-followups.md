@@ -134,8 +134,8 @@ The `pypi` environment is reviewer-free, has no wait timer, and uses custom bran
 the exact branch `main` with no custom deployment-protection rules. The controller preflights
 exactly the environment, deployment-branch-policy, and custom-deployment-protection-rule API
 responses and fails before package or registry writes on a mismatch; use #236 to repair the
-environment. Zero environment secrets is separately verified live administrator state, not
-controller-enforced. OIDC remains the only publisher: never reintroduce `PYPI_API_TOKEN`.
+environment. The absence of environment secrets is separately verified live administrator state,
+not controller-enforced. OIDC remains the only publisher: never reintroduce `PYPI_API_TOKEN`.
 
 Cleanup is complete: OIDC production runs `31465885545` (2.0.11) and `31464328451` (2.0.12)
 are green, PyPI 2.0.12 is published, and `PYPI_API_TOKEN has been deleted`. Historical tagged

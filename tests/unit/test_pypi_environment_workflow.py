@@ -133,6 +133,7 @@ def test_maintainer_guidance_records_the_pypi_environment_contract() -> None:
         "#236",
         "never reintroduce `PYPI_API_TOKEN`",
         "preflights exactly the environment, deployment-branch-policy, and custom-deployment-protection-rule API responses",
+        "The absence of environment secrets is separately verified live administrator state, not controller-enforced.",
         "not controller-enforced",
     )
 

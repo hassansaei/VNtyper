@@ -53,7 +53,17 @@ def test_custom_rule_rows_are_rejected_even_when_total_count_is_zero() -> None:
 @pytest.mark.parametrize(
     ("environment", "policies", "custom_rules", "field"),
     (
-        ({**VALID_ENVIRONMENT, "name": "testpypi"}, VALID_POLICIES, VALID_CUSTOM_RULES, "environment name"),
+        (
+            (
+                {**VALID_ENVIRONMENT, "name": "testpypi"},
+                {key: value for key, value in VALID_ENVIRONMENT.items() if key != "name"},
+                {**VALID_ENVIRONMENT, "name": None},
+                {**VALID_ENVIRONMENT, "name": 1},
+            ),
+            VALID_POLICIES,
+            VALID_CUSTOM_RULES,
+            "environment name",
+        ),
         (
             {**VALID_ENVIRONMENT, "protection_rules": [{"type": "required_reviewers"}]},
             VALID_POLICIES,
@@ -226,14 +236,19 @@ def test_custom_rule_rows_are_rejected_even_when_total_count_is_zero() -> None:
     ),
 )
 def test_hostile_environment_or_policy_schema_is_rejected(
-    environment: dict[str, object], policies: dict[str, object], custom_rules: dict[str, object], field: str
+    environment: dict[str, object] | tuple[dict[str, object], ...],
+    policies: dict[str, object],
+    custom_rules: dict[str, object],
+    field: str,
 ) -> None:
     """Every relaxed, malformed, or non-main policy must fail closed."""
-    with pytest.raises(ValueError) as error:
-        validate_pypi_environment(deepcopy(environment), deepcopy(policies), deepcopy(custom_rules))
+    environments = environment if isinstance(environment, tuple) else (environment,)
+    for hostile_environment in environments:
+        with pytest.raises(ValueError) as error:
+            validate_pypi_environment(deepcopy(hostile_environment), deepcopy(policies), deepcopy(custom_rules))
 
-    assert field in str(error.value)
-    assert ISSUE_URL in str(error.value)
+        assert field in str(error.value)
+        assert ISSUE_URL in str(error.value)
 
 
 def test_main_accepts_valid_environment_and_policy_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
