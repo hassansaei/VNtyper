@@ -527,6 +527,7 @@ def process_vntyper_references(
     bwa_path: str,
     skip_indexing: bool,
     md5_dict: dict[str, str],
+    release_spec: dict[str, Any] | None = None,
 ):
     """
     Process VNtyper references by downloading and extracting.
@@ -537,6 +538,15 @@ def process_vntyper_references(
         bwa_path (str): Path to the bwa executable.
         skip_indexing (bool): Whether to skip the indexing step.
         md5_dict (dict): Dictionary to store MD5 checksums.
+        release_spec (dict, optional): Parsed ``--release-spec`` contents, or None. A
+            digest it names must agree with the one committed in
+            install_references_config.json (see :func:`resolve_seed_digest`); it is
+            never allowed to override it.
+
+    Raises:
+        ValueError: If a seed - ``vntr_db_advntr.zip`` is the one this function
+            downloads - has no committed or spec-pinned digest, or if the downloaded or
+            already-present bytes do not match it (MAJOR 3, milestone-5 PR-2 review).
     """
     for ref_name, ref_info in vntyper_refs.items():
         url = ref_info.get("url")
@@ -551,6 +561,11 @@ def process_vntyper_references(
         target_path = output_dir / target_path_str
 
         download_file(url, target_path)
+        # Verified whether this call just downloaded the file or found it already
+        # present: `download_file` skips an existing destination, so a stale or
+        # corrupted `vntr_db_advntr.zip` from an earlier partial run must not be
+        # extracted and activated unchecked.
+        verify_seed(target_path_str, target_path, ref_info, release_spec)
 
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
@@ -589,6 +604,7 @@ def process_own_repository_references(
     output_dir: Path,
     skip_indexing: bool,
     md5_dict: dict[str, str],
+    release_spec: dict[str, Any] | None = None,
 ):
     """
     Process own repository references by downloading specific FASTA files.
@@ -598,6 +614,16 @@ def process_own_repository_references(
         output_dir (Path): Base output directory.
         skip_indexing (bool): Whether to skip the indexing step.
         md5_dict (dict): Dictionary to store MD5 checksums.
+        release_spec (dict, optional): Parsed ``--release-spec`` contents, or None. A
+            digest it names must agree with the one committed in
+            install_references_config.json (see :func:`resolve_seed_digest`); it is
+            never allowed to override it.
+
+    Raises:
+        ValueError: If a seed this function downloads (``MUC1_motifs_Rev_com.fa``,
+            ``code-adVNTR_RUs.fa`` or ``filter_config.json``) has no committed or
+            spec-pinned digest, or if the downloaded or already-present bytes do not
+            match it (MAJOR 3, milestone-5 PR-2 review).
     """
     raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
     for file_info in raw_files:
@@ -612,6 +638,11 @@ def process_own_repository_references(
         target_path = output_dir / target_path_str
 
         download_file(url, target_path)
+        # Verified whether this call just downloaded the file or found it already
+        # present: `download_file` skips an existing destination, so a stale or
+        # corrupted seed from an earlier partial run must not be indexed and activated
+        # unchecked.
+        verify_seed(target_path_str, target_path, file_info, release_spec)
 
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
@@ -1019,6 +1050,86 @@ def resolve_source_location(ref_id: str, entry: dict[str, Any], release_spec: di
     return url, digest
 
 
+def resolve_seed_digest(name: str, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> str:
+    """Decide the SHA-256 a seed file must match, refusing a spec that disagrees.
+
+    Mirrors :func:`resolve_source_location`'s trust model for the four seeds
+    ``--from-source`` cannot derive (``MUC1_motifs_Rev_com.fa``, ``code-adVNTR_RUs.fa``,
+    ``vntr_db_advntr.zip``, ``filter_config.json``, i.e. ``bundle_release.REQUIRED_SEEDS``):
+    the digest committed in install_references_config.json is the trust anchor, and a
+    ``--release-spec``'s ``seeds`` block - read directly here rather than via
+    ``bundle_release.spec_seed_digests``, since this module may import nothing from the
+    package but ``reference_bundle`` - may only corroborate it, never override it.
+
+    Args:
+        name: Seed file name, keyed the same way in the install config's
+            ``target_path`` and in a release spec's ``seeds`` block (e.g.
+            ``"code-adVNTR_RUs.fa"``).
+        entry: This seed's section of the install config.
+        release_spec: Parsed ``--release-spec`` contents, or None.
+
+    Returns:
+        str: Lowercase hex SHA-256 the seed must match, whether freshly downloaded or
+        already present in the output tree.
+
+    Raises:
+        ValueError: If the spec and the config both declare a digest and disagree, or if
+            neither declares one at all - ``--from-source`` never installs a seed it
+            cannot verify.
+    """
+    seeds_block = (release_spec or {}).get("seeds", {})
+    spec_entry = seeds_block.get(name) if isinstance(seeds_block, dict) else None
+    declared = spec_entry.get("sha256") if isinstance(spec_entry, dict) else spec_entry
+    committed = entry.get("source_sha256")
+
+    if declared and committed and declared != committed:
+        message = (
+            f"seed '{name}': the release spec pins sha256 {declared!r} but "
+            f"install_references_config.json pins {committed!r}. The committed config is the "
+            "trust anchor; change it in a reviewed commit and match the spec to it rather than "
+            "publishing a release whose provenance does not describe its bytes."
+        )
+        logger.error(message)
+        raise ValueError(message)
+
+    digest = committed or declared
+    if not digest:
+        message = f"no source_sha256 configured for seed '{name}'; --from-source refuses to install unverified bytes"
+        logger.error(message)
+        raise ValueError(message)
+    return digest
+
+
+def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> None:
+    """Verify a seed against its committed digest, whether just downloaded or reused.
+
+    ``download_file`` skips a destination that already exists, so without this a stale
+    or corrupted seed left over from an earlier partial run - or planted there - would be
+    extracted, indexed and activated without complaint (MAJOR 3, milestone-5 PR-2
+    review). Calling this unconditionally after every ``download_file`` closes that gap
+    for both the freshly-downloaded and the already-present case alike.
+
+    Args:
+        name: Seed file name, as used by :func:`resolve_seed_digest`.
+        target_path: Where the seed landed in the output tree.
+        entry: This seed's section of the install config.
+        release_spec: Parsed ``--release-spec`` contents, or None.
+
+    Raises:
+        ValueError: If no digest is configured, or if the file's bytes do not match it.
+            On a mismatch the file is removed so a retry re-downloads it, matching
+            :func:`install_from_source`'s genome verification.
+    """
+    expected = resolve_seed_digest(name, entry, release_spec)
+    try:
+        verify_sha256(target_path, expected)
+    except ValueError as mismatch:
+        target_path.unlink(missing_ok=True)
+        message = f"{mismatch}; removed {target_path.name} so a retry downloads it again"
+        logger.error(message)
+        raise ValueError(message) from mismatch
+
+
 def decompress_source(archive: Path) -> Path:
     """Expand a downloaded genome, or hand back a file that needs no expanding.
 
@@ -1159,7 +1270,7 @@ def install_from_source(
 
             installed[ref_id] = fasta
 
-    _install_source_seeds(install_config, output_dir, skip_indexing)
+    _install_source_seeds(install_config, output_dir, skip_indexing, release_spec)
 
     # Unconditional, unlike the legacy path, which filters this by `--references` and so
     # installs no adVNTR database at all unless someone asks for `vntr_db_advntr` by name -
@@ -1171,13 +1282,25 @@ def install_from_source(
     vntyper_refs = install_config.get("vntyper_references", {})
     if vntyper_refs:
         logger.info("Installing common VNtyper references (not selectable: every install needs them)...")
-        process_vntyper_references(vntyper_refs, output_dir, install_config.get("bwa_path", "bwa"), skip_indexing, {})
+        process_vntyper_references(
+            vntyper_refs,
+            output_dir,
+            install_config.get("bwa_path", "bwa"),
+            skip_indexing,
+            {},
+            release_spec=release_spec,
+        )
 
     run_derivations(install_config, output_dir, installed, selected)
     return installed
 
 
-def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip_indexing: bool = False) -> None:
+def _install_source_seeds(
+    install_config: dict[str, Any],
+    output_dir: Path,
+    skip_indexing: bool = False,
+    release_spec: dict[str, Any] | None = None,
+) -> None:
     """Fetch the common seed files, skipping anything a derivation produces.
 
     ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is still listed as a
@@ -1188,6 +1311,9 @@ def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip
         install_config: The parsed install_references_config.json.
         output_dir: Reference tree to populate.
         skip_indexing: Skip the seeds' ``samtools faidx`` step.
+        release_spec: Parsed ``--release-spec`` contents, or None. Forwarded to
+            :func:`process_own_repository_references` so a seed's digest can be
+            corroborated, never overridden, by the spec.
     """
     own_repo_refs = install_config.get("own_repository_references", {})
     raw_files = own_repo_refs.get("raw_files", [])
@@ -1200,7 +1326,7 @@ def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip
         return
 
     logger.info("Installing common seed files...")
-    process_own_repository_references({"raw_files": seeds}, output_dir, skip_indexing, {})
+    process_own_repository_references({"raw_files": seeds}, output_dir, skip_indexing, {}, release_spec=release_spec)
 
 
 ###############################################################################

@@ -124,6 +124,7 @@
     "vntr_db_advntr": {
       "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/vntr_db_advntr.zip",
       "target_path": "vntr_db_advntr.zip",
+      "source_sha256": "90a619f6aa2ee7d038b6d8703a5736d92fd483e8b4bfad4a5ad07480bf8f7ff1",
       "extract_to": "."
     }
   },
@@ -138,16 +139,19 @@
       {
         "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/MUC1_motifs_Rev_com.fa",
         "target_path": "MUC1_motifs_Rev_com.fa",
+        "source_sha256": "7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47",
         "index_command": "samtools faidx {path}"
       },
       {
         "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/code-adVNTR_RUs.fa",
         "target_path": "code-adVNTR_RUs.fa",
+        "source_sha256": "c21d631cf894e388c8cb76d7bbd2a51ebf4a27cd1a9158f50971cd831d8aa26e",
         "index_command": "samtools faidx {path}"
       },
       {
         "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/filter_config.json",
-        "target_path": "filter_config.json"
+        "target_path": "filter_config.json",
+        "source_sha256": "d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085"
       }
     ]
   },

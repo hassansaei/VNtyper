@@ -48,6 +48,19 @@ SOURCE_SHA256 = {
     "hg38_ensembl": "05d4d42ed292962055afb9774a1a29a691d7b285fd85dbf9069c050a273e0d3c",
 }
 
+#: The four non-derivable seeds (MAJOR 3, milestone-5 PR-2 review) - the only reference
+#: bytes a bundle build cannot reproduce from an upstream source, and so the only ones
+#: whose provenance rests on a commit rather than on a download. Fetched from the pinned
+#: commit `install_references_config.json` still names, and cross-checked byte-for-byte
+#: against the already-installed local `reference/` tree (itself downloaded from the
+#: published, checksummed bundle) before being committed here.
+SEED_SHA256 = {
+    "MUC1_motifs_Rev_com.fa": "7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47",
+    "code-adVNTR_RUs.fa": "c21d631cf894e388c8cb76d7bbd2a51ebf4a27cd1a9158f50971cd831d8aa26e",
+    "filter_config.json": "d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085",
+    "vntr_db_advntr.zip": "90a619f6aa2ee7d038b6d8703a5736d92fd483e8b4bfad4a5ad07480bf8f7ff1",
+}
+
 
 @pytest.fixture(autouse=True)
 def _restore_root_logging():
@@ -428,6 +441,128 @@ class TestResolveSourceLocation:
             install_references.resolve_source_location("hg19", {"source_sha256": "a" * 64}, None)
 
         assert "hg19" in str(excinfo.value)
+
+
+# =============================================================================
+# resolve_seed_digest / verify_seed (MAJOR 3, milestone-5 PR-2 review)
+# =============================================================================
+#
+# `--from-source` used to compute MD5 for logging only, never comparing a seed
+# (`MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr.zip`,
+# `filter_config.json`) against a committed digest or a `--release-spec`'s `seeds`
+# block - and `download_file` skips a destination that already exists, so a stale or
+# corrupted seed sitting in the output tree was extracted, indexed and activated
+# without complaint. These pin the fix: `resolve_seed_digest` mirrors
+# `resolve_source_location`'s "committed config is the trust anchor, a spec may only
+# corroborate it" rule, and `verify_seed` is the gate every seed download now passes
+# through, whether freshly fetched or already present.
+
+
+class TestResolveSeedDigest:
+    def test_without_a_spec_the_committed_digest_is_used(self):
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, None)
+        assert digest == "a" * 64
+
+    def test_a_release_spec_that_agrees_with_the_config_is_accepted(self):
+        spec = {"seeds": {"code-adVNTR_RUs.fa": {"sha256": "a" * 64}}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, spec)
+        assert digest == "a" * 64
+
+    def test_a_release_spec_may_use_the_flat_string_form(self):
+        """`bundle_release.spec_seed_digests` accepts both spellings; so must this."""
+        spec = {"seeds": {"code-adVNTR_RUs.fa": "a" * 64}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, spec)
+        assert digest == "a" * 64
+
+    def test_a_release_spec_may_fill_in_a_digest_the_config_leaves_blank(self):
+        """Filling a gap is not contradicting a pin, so it stays allowed."""
+        spec = {"seeds": {"code-adVNTR_RUs.fa": {"sha256": "b" * 64}}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {}, spec)
+        assert digest == "b" * 64
+
+    def test_a_release_spec_contradicting_the_committed_digest_is_refused(self):
+        """The spec lives beside the assets; install_references_config.json lives here.
+
+        Preferring the spec would let a release publish a seed VNtyper's own committed
+        provenance does not describe - the exact failure `resolve_source_location`
+        already refuses for the six genomes.
+        """
+        entry = {"source_sha256": "a" * 64}
+        spec = {"seeds": {"code-adVNTR_RUs.fa": {"sha256": "b" * 64}}}
+
+        with pytest.raises(ValueError) as excinfo:
+            install_references.resolve_seed_digest("code-adVNTR_RUs.fa", entry, spec)
+
+        message = str(excinfo.value)
+        assert "code-adVNTR_RUs.fa" in message
+        assert "a" * 64 in message
+        assert "b" * 64 in message
+        assert "install_references_config.json" in message
+
+    def test_a_seed_the_spec_does_not_name_falls_back_to_the_config(self):
+        spec = {"seeds": {"other.fa": {"sha256": "b" * 64}}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, spec)
+        assert digest == "a" * 64
+
+    def test_a_missing_digest_everywhere_is_refused_rather_than_installed_unverified(self):
+        with pytest.raises(ValueError) as excinfo:
+            install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {}, None)
+
+        assert "code-adVNTR_RUs.fa" in str(excinfo.value)
+        assert "source_sha256" in str(excinfo.value)
+
+    def test_a_seeds_block_that_is_not_a_mapping_is_ignored_not_crashed_on(self):
+        """A malformed `--release-spec` must not stop the committed digest from working."""
+        digest = install_references.resolve_seed_digest(
+            "code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, {"seeds": "not a mapping"}
+        )
+        assert digest == "a" * 64
+
+
+class TestVerifySeed:
+    def test_a_matching_seed_passes_silently(self, tmp_path):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"the real seed bytes")
+        digest = hashlib.sha256(b"the real seed bytes").hexdigest()
+
+        install_references.verify_seed("code-adVNTR_RUs.fa", target, {"source_sha256": digest}, None)
+
+        assert target.exists(), "a matching seed must not be touched"
+
+    def test_a_mismatching_seed_is_removed_and_the_message_names_both_digests(self, tmp_path):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"tampered bytes")
+
+        with pytest.raises(ValueError) as excinfo:
+            install_references.verify_seed("code-adVNTR_RUs.fa", target, {"source_sha256": "a" * 64}, None)
+
+        message = str(excinfo.value)
+        assert "code-adVNTR_RUs.fa" in message
+        assert "a" * 64 in message
+        assert "removed" in message, "the message must say how to recover: delete it and re-run"
+        assert not target.exists(), "a tampered seed must not be left for a retry to silently reuse"
+
+    def test_a_preexisting_stale_file_is_verified_too_not_only_a_fresh_download(self, tmp_path):
+        """MAJOR 3's specific failure: `download_file` skips an existing destination, so
+        a stale or corrupted seed left over from an earlier partial run reaches this
+        function exactly as a freshly-downloaded one does - and must be rejected the
+        same way, not treated as already trusted because it predates this run."""
+        target = tmp_path / "vntr_db_advntr.zip"
+        target.write_bytes(b"stale-from-a-previous-partial-run")
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.verify_seed("vntr_db_advntr.zip", target, {"source_sha256": "a" * 64}, None)
+
+        assert not target.exists()
+
+    def test_an_unconfigured_seed_is_refused_before_any_digest_comparison(self, tmp_path):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"anything")
+
+        with pytest.raises(ValueError, match="source_sha256"):
+            install_references.verify_seed("code-adVNTR_RUs.fa", target, {}, None)
+
+        assert target.exists(), "an unconfigured digest is a config error, not a reason to delete the file"
 
 
 # =============================================================================
@@ -923,7 +1058,13 @@ class TestInstallFromSource:
             ],
         )
         config["own_repository_references"] = {
-            "raw_files": [{"url": "https://x/seed.fa", "target_path": "MUC1_motifs_Rev_com.fa"}]
+            "raw_files": [
+                {
+                    "url": "https://x/seed.fa",
+                    "target_path": "MUC1_motifs_Rev_com.fa",
+                    "source_sha256": hashlib.sha256(seed_payload).hexdigest(),
+                }
+            ]
         }
 
         installed = install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
@@ -1069,7 +1210,9 @@ class TestInstallFromSource:
         monkeypatch.setattr(
             install_references,
             "process_own_repository_references",
-            lambda refs, out, skip, md5: requested.extend(f["target_path"] for f in refs["raw_files"]),
+            lambda refs, out, skip, md5, release_spec=None: requested.extend(
+                f["target_path"] for f in refs["raw_files"]
+            ),
         )
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
         config = {
@@ -1125,7 +1268,7 @@ class TestInstallFromSource:
         monkeypatch.setattr(
             install_references,
             "process_vntyper_references",
-            lambda refs, out, bwa, skip, md5: seen.extend(refs),
+            lambda refs, out, bwa, skip, md5, release_spec=None: seen.extend(refs),
         )
         config = {
             "vntyper_references": {
@@ -1136,6 +1279,185 @@ class TestInstallFromSource:
         install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
 
         assert seen == ["vntr_db_advntr"]
+
+
+# =============================================================================
+# Seed digest verification wired into the real download paths
+# (MAJOR 3, milestone-5 PR-2 review)
+# =============================================================================
+
+
+class TestProcessOwnRepositoryReferencesVerifiesSeeds:
+    def test_a_freshly_downloaded_seed_matching_its_digest_is_indexed(self, tmp_path, monkeypatch):
+        payload = b"the real seed bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+        calls: list[str] = []
+
+        def _download(url, dest_path):
+            dest_path.write_bytes(payload)
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
+        config = {
+            "raw_files": [
+                {
+                    "url": "https://x/code-adVNTR_RUs.fa",
+                    "target_path": "code-adVNTR_RUs.fa",
+                    "source_sha256": digest,
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert (tmp_path / "code-adVNTR_RUs.fa").read_bytes() == payload
+        assert len(calls) == 1, "indexing must still run for a verified seed"
+
+    def test_a_freshly_downloaded_seed_failing_its_digest_is_rejected_before_indexing(self, tmp_path, monkeypatch):
+        def _download(url, dest_path):
+            dest_path.write_bytes(b"wrong bytes entirely")
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        calls: list[str] = []
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
+        config = {
+            "raw_files": [
+                {
+                    "url": "https://x/code-adVNTR_RUs.fa",
+                    "target_path": "code-adVNTR_RUs.fa",
+                    "source_sha256": "a" * 64,
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert calls == [], "a rejected seed must never be indexed"
+        assert not (tmp_path / "code-adVNTR_RUs.fa").exists()
+
+    def test_a_stale_preexisting_seed_is_rejected_not_silently_extracted_and_indexed(self, tmp_path, monkeypatch):
+        """The literal MAJOR 3 scenario: `download_file` skips a destination that
+        already exists, so a stale or corrupted `code-adVNTR_RUs.fa` sitting in the
+        output tree from an earlier partial run must not be indexed and activated
+        without complaint. `download_file` is deliberately left un-mocked here: since
+        the target already exists, its real `if dest_path.exists(): return` guard is
+        what makes this scenario possible in production, and the fix must hold even
+        when nothing else intercepts the call.
+        """
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"stale, corrupted from an earlier partial run")
+        calls: list[str] = []
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
+        config = {
+            "raw_files": [
+                {
+                    # A URL that would fail loudly if ever actually requested - proving
+                    # the rejection comes from the digest check, not from the network.
+                    "url": "https://seed.invalid/code-adVNTR_RUs.fa",
+                    "target_path": "code-adVNTR_RUs.fa",
+                    "source_sha256": hashlib.sha256(b"the real seed bytes").hexdigest(),
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert calls == [], "a stale seed must never reach indexing"
+        assert not target.exists(), "the stale seed must be removed, not left for a retry to reuse silently"
+
+    def test_a_release_spec_seed_digest_is_honoured_when_it_agrees(self, tmp_path, monkeypatch):
+        payload = b"the real seed bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        config = {
+            "raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa", "source_sha256": digest}]
+        }
+
+        install_references.process_own_repository_references(
+            config, tmp_path, True, {}, release_spec={"seeds": {"code-adVNTR_RUs.fa": {"sha256": digest}}}
+        )
+
+        assert (tmp_path / "code-adVNTR_RUs.fa").read_bytes() == payload
+
+    def test_a_release_spec_seed_digest_that_disagrees_is_refused(self, tmp_path, monkeypatch):
+        payload = b"the real seed bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        config = {
+            "raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa", "source_sha256": digest}]
+        }
+
+        with pytest.raises(ValueError, match="trust anchor"):
+            install_references.process_own_repository_references(
+                config, tmp_path, True, {}, release_spec={"seeds": {"code-adVNTR_RUs.fa": {"sha256": "f" * 64}}}
+            )
+
+
+class TestProcessVntyperReferencesVerifiesSeeds:
+    @staticmethod
+    def _zip_bytes() -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("vntr_db_advntr/hg19_muc1.db", "hg19 db")
+        return buffer.getvalue()
+
+    def test_a_freshly_downloaded_database_matching_its_digest_is_extracted(self, tmp_path, monkeypatch):
+        payload = self._zip_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://x/db.zip",
+                "target_path": "db.zip",
+                "source_sha256": digest,
+                "extract_to": ".",
+            }
+        }
+
+        install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
+
+        assert (tmp_path / "vntr_db_advntr" / "hg19_muc1.db").exists()
+
+    def test_a_stale_preexisting_database_is_rejected_not_silently_extracted(self, tmp_path, monkeypatch):
+        """MAJOR 3 names `vntr_db_advntr.zip` explicitly: a stale or corrupted copy
+        already in the output tree must not be extracted and activated unchecked."""
+        target = tmp_path / "vntr_db_advntr.zip"
+        target.write_bytes(b"stale, corrupted from an earlier partial run")
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://seed.invalid/db.zip",
+                "target_path": "vntr_db_advntr.zip",
+                "source_sha256": hashlib.sha256(self._zip_bytes()).hexdigest(),
+                "extract_to": ".",
+            }
+        }
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
+
+        assert not target.exists()
+        assert not (tmp_path / "vntr_db_advntr").exists(), "a rejected archive must never be extracted"
+
+
+class TestInstallSourceSeedsThreadsTheReleaseSpec:
+    def test_the_release_spec_reaches_process_own_repository_references(self, tmp_path, monkeypatch):
+        seen: dict = {}
+        monkeypatch.setattr(
+            install_references,
+            "process_own_repository_references",
+            lambda refs, out, skip, md5, release_spec=None: seen.update(release_spec=release_spec),
+        )
+        config = {"own_repository_references": {"raw_files": [{"url": "https://x/seed.fa", "target_path": "seed.fa"}]}}
+        spec = {"seeds": {"seed.fa": {"sha256": "a" * 64}}}
+
+        install_references._install_source_seeds(config, tmp_path, release_spec=spec)
+
+        assert seen["release_spec"] == spec
 
 
 # =============================================================================
@@ -1227,6 +1549,24 @@ class TestPartialSelectionAgainstTheShippedConfig:
             "run",
             _fake_samtools({"chr1:155158000-155163000": self.HG19_REGION_PAYLOAD}, []),
         )
+
+        # MAJOR 3 (milestone-5 PR-2 review): `--from-source` now verifies every seed
+        # against a committed digest, including one it finds already present - see
+        # `_download` above. The fake bytes this fixture stages or fabricates for each
+        # seed must therefore match the digest this test hands back to the caller, or
+        # every test built on this fixture would fail the new check instead of
+        # exercising what it is actually about.
+        seed_digests = {
+            "MUC1_motifs_Rev_com.fa": hashlib.sha256((tmp_path / "MUC1_motifs_Rev_com.fa").read_bytes()).hexdigest(),
+            "filter_config.json": hashlib.sha256((tmp_path / "filter_config.json").read_bytes()).hexdigest(),
+            "code-adVNTR_RUs.fa": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
+            "vntr_db_advntr.zip": hashlib.sha256(advntr_zip).hexdigest(),
+        }
+        for entry in config["own_repository_references"]["raw_files"]:
+            digest = seed_digests.get(entry["target_path"])
+            if digest is not None:
+                entry["source_sha256"] = digest
+        config["vntyper_references"]["vntr_db_advntr"]["source_sha256"] = seed_digests["vntr_db_advntr.zip"]
 
         probe = tmp_path / "probe.gz"
         _gz(probe, genome)
@@ -1571,6 +1911,20 @@ class TestShippedConfig:
                 digests[ref_id] = entry.get("source_sha256")
 
         assert digests == SOURCE_SHA256
+
+    def test_every_committed_seed_carries_a_source_digest(self):
+        """MAJOR 3: `--from-source` refuses to install a seed with no committed digest,
+        so the four the review named must actually carry one in the shipped config."""
+        config = _shipped_config()
+        raw_files = {
+            entry["target_path"]: entry.get("source_sha256")
+            for entry in config["own_repository_references"]["raw_files"]
+        }
+        digests = {name: raw_files[name] for name in ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")}
+        digests["filter_config.json"] = raw_files["filter_config.json"]
+        digests["vntr_db_advntr.zip"] = config["vntyper_references"]["vntr_db_advntr"]["source_sha256"]
+
+        assert digests == SEED_SHA256
 
     def test_ensembl_is_pinned_to_an_explicit_release_not_current(self):
         """A digest beside a mutable `current` URL rots at the next Ensembl release."""
