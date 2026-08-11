@@ -6,7 +6,35 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.12 (Current)
+## 2.0.13 (Current)
+
+**One reference resolver, and reference data from verified bundles (#217, #163, #152, #193).**
+
+Three genotype-affecting bugs are fixed. `--reference-assembly hg38_ncbi` and `hg38_ensembl`
+silently loaded the **GRCh37** adVNTR database, because an incomplete map defaulted every
+unrecognised label to hg19. SHARK filtered against the hg19 MUC1 region regardless of
+`--reference-assembly` (#152): 40.6% of the hg38 region's canonical 17-mers are absent from the
+hg19 region, and the correct reference retains 3.2-34.7% more reads across seven cohort samples.
+And after `install-references --output-dir`, `config.json` kept its shipped relative paths, so the
+run died (#163) - the installer wrote keys nothing reads while the seven keys the pipeline does
+read were never updated.
+
+Eight assembly labels now resolve through one registry to six physical genome files, plus two
+adVNTR databases and two MUC1 region FASTAs keyed by coordinate system. All five readers and the
+one writer go through it, so the writer and the readers cannot disagree again.
+
+Reference data moved out of this repository into versioned, checksummed release bundles published
+from `berntpopp/vntyper-data`. `install-references` downloads each asset, verifies it against the
+digest committed here, extracts it with a hardened extractor and activates it atomically; a
+per-file provenance ledger records what was verified, and only files with a record are written
+into `config.json`. `--from-source` still rebuilds everything from upstream.
+
+**A fresh clone has no reference data** and must run `vntyper install-references`. The Docker image
+installs the bundle at build time and now carries all six physical references, so every assembly
+label works out of the box; it is correspondingly larger. A configured-but-missing reference now
+fails immediately, naming the assembly, the key, the missing path and the command that fixes it.
+
+## 2.0.12
 
 **Valid mixed alignment conversions are now routed losslessly (#233).** When R1 and R2
 contain equal non-zero record counts, every non-empty R1, R2, `other`, and singleton
