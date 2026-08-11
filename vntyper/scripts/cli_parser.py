@@ -321,9 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Build references from their upstream sources instead of downloading the "
             "published bundle. Slower (downloads and BWA-indexes six chromosome FASTAs) "
-            "and it needs the MUC1 seed files (MUC1_motifs_Rev_com.fa, filter_config.json) "
-            "already present in the output directory, which the bundle build workflow "
-            "stages before it runs. This is the path that workflow itself runs."
+            "and it needs four seed files (MUC1_motifs_Rev_com.fa, code-adVNTR_RUs.fa, "
+            "vntr_db_advntr.zip, filter_config.json), fetched automatically into the "
+            "output directory from berntpopp/vntyper-data unless already staged there - "
+            "which is what the bundle build workflow does before running this same path."
         ),
     )
     parser_install.add_argument(

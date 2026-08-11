@@ -31,12 +31,16 @@ with in a way a loose `SHA256SUMS` sitting beside it would also fail to reflect.
 
 `--from-source` rebuilds every requested reference from its original upstream source (UCSC,
 NCBI, Ensembl) rather than fetching the bundle. It is slower — it downloads and BWA-indexes
-up to six chromosome FASTAs itself — and it requires the MUC1 seed files
-(`MUC1_motifs_Rev_com.fa`, `filter_config.json`) to already be present in the output
-directory; the workflow that builds the published release stages those first and is itself
-the thing that runs `--from-source`. Most users installing references for a pipeline run do
-not need this flag — it exists for reproducing or auditing a release, not as the default
-install path.
+up to six chromosome FASTAs itself — and it needs four seed files that VNtyper itself does
+not carry: `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr.zip` and
+`filter_config.json`. All four are fetched automatically from
+[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/` directory
+(pinned to an immutable commit in `install_references_config.json`, never a mutable branch)
+when they are not already present in the output directory — a seed staged there ahead of
+time always wins over a download, which is what lets the workflow that builds the published
+release stage all four first and run `--from-source` against them without any network access
+for the seeds themselves. Most users installing references for a pipeline run do not need
+this flag — it exists for reproducing or auditing a release, not as the default install path.
 
 ## What Gets Downloaded
 
@@ -88,7 +92,7 @@ Download all supported physical references, including NCBI and Ensembl naming:
 vntyper install-references -d ./references --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl
 ```
 
-Rebuild from upstream sources instead of the published bundle (slower; needs the MUC1 seed files already staged):
+Rebuild from upstream sources instead of the published bundle (slower; fetches the four MUC1/adVNTR seed files from `berntpopp/vntyper-data` unless already staged):
 
 ```bash
 vntyper install-references -d ./references --from-source

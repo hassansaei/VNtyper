@@ -1516,7 +1516,9 @@ class TestCliSurface:
             cli_handlers.handle_install_references(args, {}, build_parser(), 20, None)
 
     def test_the_from_source_help_does_not_promise_more_than_it_delivers(self):
-        """`filter_config.json` has no download source, so the flag needs staged seeds."""
+        """The seeds are fetched automatically now, but `--from-source` still needs
+        network access for them (and for the genomes), so the help must not claim
+        otherwise."""
         help_text = _install_option_help("--from-source")
 
         assert "needs no access to the reference release" not in help_text

@@ -30,7 +30,7 @@ vntyper [global-options] install-references
 | `-t, --threads` | int | `4` | Threads for indexing. Only affects `--from-source` |
 | `--aligners` | list | `bwa` only | `--from-source` only: aligners to build indices for (e.g., `bwa`, `bwa-mem2`, `minimap2`) |
 | `--references` | list | `hg19 hg38` | Physical references to install: `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ensembl`, `hg38_ensembl`. `GRCh37` and `GRCh38` are the files a `hg19_ncbi`/`hg38_ncbi` run also uses — see [Reference Assemblies](../user-guide/reference-assemblies.md) |
-| `--from-source` | flag | off | Build every selected reference from its upstream source instead of fetching the published bundle. Slower — downloads and BWA-indexes each selected chromosome FASTA itself — and requires the MUC1 seed files (`MUC1_motifs_Rev_com.fa`, `filter_config.json`) already present in the output directory |
+| `--from-source` | flag | off | Build every selected reference from its upstream source instead of fetching the published bundle. Slower — downloads and BWA-indexes each selected chromosome FASTA itself — and needs four seed files (`MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr.zip`, `filter_config.json`). All four are fetched automatically from [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/` directory when not already staged in the output directory — a staged local copy always wins over a download |
 | `--release-spec` | path | (none) | `--from-source` only: take every source URL and digest from this file instead of the shipped `install_references_config.json`. Used for release builds |
 
 Whatever `--references` you select, the run also installs the MUC1 motif FASTAs and both

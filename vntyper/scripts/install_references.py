@@ -839,9 +839,11 @@ def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path) -
     A seed such as ``MUC1_motifs_Rev_com.fa`` is a downloadable ``raw_files`` entry that
     :func:`_install_source_seeds` fetches later in the *same* run, after the genome loop.
     Requiring it here too would reject a fresh, unstaged ``output_dir`` that is about to
-    succeed - the only reason this has never fired is that every shipped path stages all
-    four seeds before calling ``--from-source``. Only a seed with no download source at
-    all, such as ``filter_config.json``, has to exist before this preflight passes.
+    succeed. In the shipped config every literal-derivation seed, including
+    ``filter_config.json``, now has a download source (a pinned commit under
+    ``berntpopp/vntyper-data``'s ``seeds/``), so this preflight passes for a fresh,
+    unstaged ``output_dir`` too - it only still raises for a seed that names no download
+    source at all in whatever ``install_config`` a caller supplies.
 
     Args:
         install_config: The parsed install_references_config.json.
@@ -1525,26 +1527,6 @@ def install_from_bundle(install_config: dict[str, Any], output_dir: Path, refere
     ):
         for asset in assets:
             _install_bundle_asset(bundle["repository"], bundle["release_tag"], asset, Path(download_dir), staging)
-
-
-def write_md5_checksums(md5_dict: dict[str, str], output_dir: Path):
-    """
-    Write the MD5 checksums to a file in the output directory.
-
-    Args:
-        md5_dict (dict): Dictionary mapping file paths to their MD5 checksums.
-        output_dir (Path): Base output directory.
-    """
-    checksum_file = output_dir / "md5_checksums.txt"
-    try:
-        with checksum_file.open("w") as f:
-            for file_path, md5 in md5_dict.items():
-                relative_path = file_path.replace(str(output_dir) + "/", "")
-                f.write(f"{md5}  {relative_path}\n")
-        logger.info(f"MD5 checksums written to {checksum_file}")
-    except Exception as e:
-        logger.error(f"Failed to write MD5 checksums to {checksum_file}: {e}")
-        sys.exit(1)
 
 
 def setup_logging(output_dir: Path, log_file: Path | None = None):

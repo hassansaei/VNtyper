@@ -1,14 +1,19 @@
 # Reference folder for vntyper
 
 > **Milestone 5 note:** the files this section describes -
-> `MUC1_motifs_Rev_com.fa`, `filter_config.json`, `generate_vntr_reference.py` and
-> `vntr_db_advntr.zip` - no longer live in this directory. They moved to
+> `MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `filter_config.json`,
+> `generate_vntr_reference.py` and `vntr_db_advntr.zip` - no longer live in this
+> directory. They moved to
 > [`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data)'s `seeds/`
 > directory, alongside the release spec that pins their digests. `reference/` (this
 > directory) now populates at runtime from that repository's published bundle via
 > `vntyper install-references`; only this README and the two pseudonymization scripts
 > below stay tracked here. The rest of this section documents the generator's logic and
 > history and remains accurate as documentation - only the file locations changed.
+> `--from-source` fetches all four seeds (everything above except
+> `generate_vntr_reference.py`, which is build tooling rather than reference data)
+> automatically from a pinned commit in that `seeds/` directory when they are not
+> already staged in the output directory.
 
 ## 1. Reference genomes, MUC1 motifs and adVNTR databases
 
