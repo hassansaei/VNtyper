@@ -160,6 +160,22 @@
             </p>
         {% endif %}
 
+        <!-- Display the BWA reference actually resolved for this run (#163) -->
+        {% if reference_assembly_requested %}
+            <div class="header-info">
+                <p><strong>Reference assembly requested:</strong> {{ reference_assembly_requested }}</p>
+                {% if reference_key_used %}
+                    <p><strong>Reference key used:</strong> {{ reference_key_used }}</p>
+                {% endif %}
+                {% if reference_path %}
+                    <p><strong>Reference path:</strong> {{ reference_path }}</p>
+                {% endif %}
+                {% if reference_source_effective %}
+                    <p><strong>Effective reference source:</strong> {{ reference_source_effective }}</p>
+                {% endif %}
+            </div>
+        {% endif %}
+
         <!-- Display Combined Header Information if available -->
         {% if alignment_pipeline or assembly_text or assembly_contig or header_warning %}
             <div class="header-info">

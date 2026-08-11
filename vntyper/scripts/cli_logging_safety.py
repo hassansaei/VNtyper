@@ -10,7 +10,6 @@ from typing import Any
 
 from vntyper.scripts.alignment_contract import index_candidate_names
 from vntyper.scripts.alignment_target_io import bwa_index_paths, reference_index_paths
-from vntyper.scripts.reference_registry import get_coordinate_system
 from vntyper.scripts.reference_resolution import configured_reference_candidates
 
 
@@ -41,14 +40,19 @@ def _alignment_input_trees(args: argparse.Namespace) -> tuple[Path, ...]:
 
 
 def _selected_bwa_reference(args: argparse.Namespace, config: dict[str, Any]) -> Path | None:
+    """The reference the run will actually use, resolved exactly as `cli_handlers` does.
+
+    Returns None when nothing resolves; the caller's other checks still apply and the
+    run itself will fail closed later with a clearer message.
+    """
+    from vntyper.scripts.cli_handlers import select_bwa_reference
+
     assembly = args.reference_assembly or config.get("default_values", {}).get("reference_assembly", "hg19")
-    try:
-        coordinate_system = get_coordinate_system(assembly)
-    except ValueError:
-        coordinate_system = "GRCh37"
-    ucsc_assembly = {"GRCh37": "hg19", "GRCh38": "hg38"}.get(coordinate_system, "hg19")
-    reference = config.get("reference_data", {}).get(f"bwa_reference_{ucsc_assembly}")
-    return Path(reference) if isinstance(reference, str) and reference else None
+    # required=False turns "nothing configured" into None. An unknown assembly still
+    # raises and MUST propagate: swallowing it fails the guard open, and the guard runs
+    # before setup_logging opens the log file in append mode.
+    selected = select_bwa_reference(config, assembly, required=False)
+    return Path(selected) if selected else None
 
 
 def _pipeline_operator_paths(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Path, ...]:

@@ -23,21 +23,47 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
-def start_summary(version=None, input_files=None):
+def start_summary(
+    version=None,
+    input_files=None,
+    reference_assembly_requested=None,
+    reference_key_used=None,
+    reference_path=None,
+    reference_source_effective=None,
+):
     """
     Initializes a new pipeline summary.
+
+    The four ``reference_*`` fields record how the run's BWA reference was actually
+    resolved (#163): a UCSC-family fallback is otherwise invisible to the operator once
+    the run has finished, since nothing downstream re-derives it from the reference path
+    alone. They are optional and default to `None` so a caller that has not resolved a
+    BWA reference (or does not use one) still gets a normal summary.
 
     Args:
         version (str, optional): vntyper version. Defaults to "unknown" if not provided.
         input_files (dict, optional): Dictionary of input files. Defaults to empty dict.
+        reference_assembly_requested (str, optional): The ``--reference-assembly`` label
+            the run was asked for.
+        reference_key_used (str, optional): The ``reference_data`` config key that
+            supplied the BWA reference actually used.
+        reference_path (str, optional): The BWA reference path actually used.
+        reference_source_effective (str, optional): The reference source ("ucsc",
+            "ncbi" or "ensembl") the run actually used, which can differ from the
+            requested assembly's own source when a UCSC-family fallback was taken.
 
     Returns:
-        dict: A summary dictionary with pipeline start timestamp, version, input files, and an empty steps list.
+        dict: A summary dictionary with pipeline start timestamp, version, input files,
+        the effective reference selection, and an empty steps list.
     """
     return {
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
+        "reference_assembly_requested": reference_assembly_requested,
+        "reference_key_used": reference_key_used,
+        "reference_path": reference_path,
+        "reference_source_effective": reference_source_effective,
         "steps": [],
     }
 

@@ -83,6 +83,8 @@ def run_pipeline(
     reference_fasta=None,
     threads=4,
     reference_assembly="hg19",
+    reference_key_used=None,
+    reference_source_effective=None,
     fast_mode=False,
     keep_intermediates=False,
     delete_intermediates=False,
@@ -111,6 +113,14 @@ def run_pipeline(
         reference_fasta (Path, optional): Explicit reference FASTA for CRAM decoding.
         threads (int, optional): Number of threads to use. Default is 4.
         reference_assembly (str, optional): Reference assembly ("hg19" or "hg38").
+        reference_key_used (str, optional): The `reference_data` config key that
+            supplied `bwa_reference`, as resolved by
+            :func:`vntyper.scripts.cli_handlers.select_bwa_reference`. Recorded in the
+            run summary so a UCSC-family fallback is visible in the report.
+        reference_source_effective (str, optional): The reference source
+            ("ucsc", "ncbi" or "ensembl") the run actually used, which can differ from
+            `reference_assembly`'s own source when a fallback was taken. Recorded in
+            the run summary alongside `reference_key_used`.
         fast_mode (bool, optional): Skip filtering steps if True.
         keep_intermediates (bool, optional): Keep intermediate files.
         delete_intermediates (bool, optional): Delete intermediate files after processing.
@@ -220,7 +230,14 @@ def run_pipeline(
         tool_versions = get_tool_versions(config)
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
-        summary = start_summary(version=VERSION, input_files=input_files)
+        summary = start_summary(
+            version=VERSION,
+            input_files=input_files,
+            reference_assembly_requested=reference_assembly,
+            reference_key_used=reference_key_used,
+            reference_path=bwa_reference,
+            reference_source_effective=reference_source_effective,
+        )
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         if input_type in ["BAM", "CRAM"]:
             logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
