@@ -36,6 +36,7 @@ from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
+from vntyper.scripts.reference_resolution import resolve_from_mapping
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
@@ -68,6 +69,20 @@ from vntyper.scripts.utils import (
 from vntyper.version import __version__ as VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def select_advntr_reference(config: dict, reference_assembly: str) -> str | None:
+    """The adVNTR database for an assembly, by coordinate system.
+
+    Args:
+        config: Pipeline configuration.
+        reference_assembly: Supported assembly label.
+
+    Returns:
+        str | None: Database path, or None when no key is configured.
+    """
+    resolved = resolve_from_mapping("advntr", reference_assembly, config.get("reference_data", {}))
+    return resolved.value if resolved is not None else None
 
 
 def run_pipeline(
@@ -467,15 +482,7 @@ def run_pipeline(
             advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
 
             if not advntr_reference:
-                ref_map = {
-                    "hg19": "hg19",
-                    "GRCh37": "hg19",
-                    "hg38": "hg38",
-                    "GRCh38": "hg38",
-                }
-                ucsc_style_ref = ref_map.get(reference_assembly, "hg19")
-                advntr_key = f"advntr_reference_vntr_{ucsc_style_ref}"
-                advntr_reference = config.get("reference_data", {}).get(advntr_key)
+                advntr_reference = select_advntr_reference(config, reference_assembly)
             else:
                 if advntr_reference == "hg19":
                     advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")
