@@ -975,12 +975,10 @@ class TestWorkflowAgreement:
         assert "gh release create" in run
         assert '--target "$DATA_SHA"' in run
 
-    def test_the_builder_commit_is_asserted_against_the_workflow_commit(self) -> None:
-        """`uses:` pins this file at one SHA; `source_commit` chooses the code that runs.
-
-        Nothing else ties them together, so a caller could pin a reviewed builder and
-        then check out a different one - and every `expected_sha256` and both scripts
-        would come from the unreviewed commit.
+    def test_the_builder_commit_must_be_a_full_immutable_sha(self) -> None:
+        """`source_commit` chooses the code that runs - both scripts and every committed
+        digest. A branch or tag can move under a published release, so only a full
+        40-character SHA is reproducible.
         """
         steps = self._steps()
         guard = steps[0]
@@ -989,7 +987,31 @@ class TestWorkflowAgreement:
             "JOB_WORKFLOW_SHA": "${{ github.job_workflow_sha }}",
         }
         run = str(guard["run"])
+        assert "[0-9a-f]{40}" in run
+        assert "exit 1" in run
+
+    def test_the_uses_pin_is_verified_when_the_runner_supplies_it(self) -> None:
+        """`github.job_workflow_sha` would tie `uses:` and `source_commit:` together, but
+        measured 2026-08-11 it is empty inside a called workflow (ubuntu-24.04, runner
+        2.336.0). Asserting it unconditionally fails every build, so the tie is checked
+        when the value is present and reported when it is not - never silently dropped.
+        """
+        run = str(self._steps()[0]["run"])
+        assert '[ -z "$JOB_WORKFLOW_SHA" ]' in run, "an absent value must be handled explicitly"
+        assert "::warning::" in run, "an unverifiable tie must be reported, not ignored"
         assert '"$SOURCE_COMMIT" != "$JOB_WORKFLOW_SHA"' in run
+        assert run.index('[ -z "$JOB_WORKFLOW_SHA" ]') < run.index('"$SOURCE_COMMIT" != "$JOB_WORKFLOW_SHA"')
+
+    def test_the_checkout_is_proven_to_be_the_requested_commit(self) -> None:
+        """The pin-shape check proves `source_commit` looks immutable; this proves the
+        checkout actually landed on it. Together they hold even on a runner that never
+        populates `github.job_workflow_sha`.
+        """
+        step = next(s for s in self._steps() if "prove the builder is the one requested" in str(s.get("name", "")))
+        run = str(step["run"])
+        assert step["env"] == {"SOURCE_COMMIT": "${{ inputs.source_commit }}"}
+        assert "git -C vntyper rev-parse HEAD" in run
+        assert '"$builder" != "$SOURCE_COMMIT"' in run
         assert "exit 1" in run
 
     def test_the_builder_assertion_precedes_both_checkouts(self) -> None:
