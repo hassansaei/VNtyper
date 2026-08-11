@@ -210,6 +210,11 @@ fastp.json
 /.worktrees/
 .mcp.local.json
 
+# Design-critique snapshots written by the impeccable skill. They are a local
+# backlog keyed to one developer's run, not a shared artifact; the reviewed
+# outcome belongs in docs/superpowers/ and in the issue, which are tracked.
+.impeccable/
+
 # local clone of the upstream adVNTR source tree (installed, not vendored)
 /adVNTR/
 
