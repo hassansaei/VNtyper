@@ -180,6 +180,12 @@ EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "vntr_db_advntr.zip",
         "source archive for vntr_db_advntr/*.db, which ship extracted; shipping both duplicates them",
     ),
+    (
+        "install_provenance.json",
+        "installer's own per-file verification ledger (reference_provenance.py), written into every "
+        "--from-source run's working tree including this build's; a ledger for the installer, never a "
+        "release artifact - each asset's own release-manifest.json is the trust anchor a consumer reads",
+    ),
 )
 
 #: Glob-matched exclusions, same contract as EXCLUSIONS.

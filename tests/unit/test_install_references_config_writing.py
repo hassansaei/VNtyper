@@ -84,6 +84,84 @@ class TestSchemaValidationRaisesOnAMissingField:
             canonical_reference_keys(config, tmp_path)
 
 
+class TestAnUnverifiedRetainedFileIsNotBlessed:
+    """Parked finding (was issue #244): `canonical_reference_keys` used to write
+    `config.json[key]` for *any* path that existed under `output_dir`, with no check
+    that this or any earlier `install-references` run had ever verified it.
+
+    `staged_install` seeds a new run's staging directory from whatever tree already
+    exists there, precisely so a partial install (`--references hg19`) does not erase a
+    different assembly a previous run installed. That seeding step also used to carry
+    forward a file nobody had ever verified: an old, hand-copied or tampered
+    `alignment/chr1.GRCh38.fna` sitting in the output directory. A
+    `--reference-assembly GRCh38` run would then read that file as authoritative,
+    entirely unverified.
+    """
+
+    def test_a_present_but_unverified_genome_file_is_not_written_as_a_key(self, tmp_path, install_config):
+        """RED before the fix: the fixture's own hg38 entry is real and verified, but a
+        second, GRCh38 entry is added here pointing at a file that exists on disk with
+        no install_provenance.json record at all - exactly the "old file sitting in the
+        output directory" scenario. Before item 1's fix this was blessed into the
+        returned mapping identically to every verified entry; after it, it must be
+        omitted.
+        """
+        install_config["ucsc_references"]["GRCh38_unverified"] = {"installed_path": "alignment/unverified.fa"}
+        unverified = tmp_path / "alignment" / "unverified.fa"
+        unverified.parent.mkdir(parents=True, exist_ok=True)
+        unverified.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+        keys = canonical_reference_keys(install_config, tmp_path)
+
+        assert "bwa_reference_GRCh38_unverified" not in keys, (
+            "a file with no provenance record must never be written into config.json, even though it exists on disk"
+        )
+        # The fixture's real, provenance-backed entries are unaffected.
+        assert "bwa_reference_hg38" in keys
+
+    def test_the_same_file_is_written_once_a_provenance_record_exists(self, tmp_path, install_config):
+        """Complement: once the file is actually recorded as verified (what a real
+        install does), it resolves exactly like every other entry."""
+        from vntyper.scripts.reference_provenance import build_record, merge
+
+        install_config["ucsc_references"]["GRCh38_now_verified"] = {"installed_path": "alignment/verified.fa"}
+        verified = tmp_path / "alignment" / "verified.fa"
+        verified.parent.mkdir(parents=True, exist_ok=True)
+        verified.write_text(">chr1\nACGT\n", encoding="utf-8")
+        merge(
+            tmp_path,
+            {"alignment/verified.fa": build_record(sha256="c" * 64, source="from-source", source_url="https://x")},
+        )
+
+        keys = canonical_reference_keys(install_config, tmp_path)
+
+        assert "bwa_reference_GRCh38_now_verified" in keys
+
+    def test_the_warning_names_the_file_and_the_remedy(self, tmp_path, install_config, caplog):
+        install_config["ucsc_references"]["hg19_unverified"] = {"installed_path": "alignment/stale.fa"}
+        stale = tmp_path / "alignment" / "stale.fa"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            canonical_reference_keys(install_config, tmp_path)
+
+        message = " ".join(record.getMessage() for record in caplog.records)
+        assert "stale.fa" in message
+        assert "--references hg19_unverified" in message
+
+    def test_a_common_reference_with_no_provenance_is_not_blessed(self, tmp_path, install_config):
+        """The same gate applies to a common/adVNTR-style entry, not only a genome."""
+        install_config["common_references"].append(
+            {"config_key": "some_unverified_common_asset", "installed_path": "stray.db"}
+        )
+        (tmp_path / "stray.db").write_text("not actually installed by anything", encoding="utf-8")
+
+        keys = canonical_reference_keys(install_config, tmp_path)
+
+        assert "some_unverified_common_asset" not in keys
+
+
 class TestUpdateConfigIsAtomic:
     def test_a_write_failure_leaves_the_previous_config_intact(self, tmp_path, monkeypatch):
         from vntyper.scripts import install_references

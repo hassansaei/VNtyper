@@ -12,6 +12,7 @@
 #   vntyper/scripts/__init__.py                 (package init, imported by python -m)
 #   vntyper/scripts/install_references*.{py,json}  (fetches + verifies the reference bundle)
 #   vntyper/scripts/reference_bundle.py         (digest verification + safe extraction)
+#   vntyper/scripts/reference_provenance.py     (per-file install ledger; see below)
 #   vntyper/dependencies/advntr/**              (adVNTR build)
 #   .dockerignore                               (decides which context files reach the build)
 #
@@ -95,19 +96,23 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
 # conda env or adVNTR change does not force a bundle re-fetch.
 FROM envs AS refs
 
-# Only two Python files are needed. install_references.py imports nothing from vntyper
-# at module scope except reference_bundle, by design (see the file header comment
-# above); tests/unit/test_docker_installer_imports.py fails the build guard if either
-# module ever grows a module-scope import this stage does not COPY for. The two package
-# __init__.py files are required because `python -m` walks the package chain to reach
-# the module. reference_registry is deliberately NOT copied here: canonical_reference_keys
-# imports it function-locally, and this stage passes no --config-path, so that code path
-# never runs in the image.
+# Three Python files are needed, not two. install_references.py imports nothing from
+# vntyper at module scope except reference_bundle, by design (see the file header
+# comment above); tests/unit/test_docker_installer_imports.py fails the build guard if
+# either module ever grows a module-scope import this stage does not COPY for. The two
+# package __init__.py files are required because `python -m` walks the package chain to
+# reach the module. reference_registry is deliberately NOT copied here:
+# canonical_reference_keys imports it function-locally, and this stage passes no
+# --config-path, so that code path never runs in the image. reference_provenance IS
+# copied, unlike reference_registry: _install_bundle_asset calls it unconditionally, for
+# every asset, regardless of --config-path - it is a real runtime dependency of this
+# stage's actual invocation below, not one gated behind a flag this stage never passes.
 COPY vntyper/__init__.py                            /opt/ir/vntyper/__init__.py
 COPY vntyper/scripts/__init__.py                    /opt/ir/vntyper/scripts/__init__.py
 COPY vntyper/scripts/install_references.py          /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/install_references_config.json /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/reference_bundle.py            /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/reference_provenance.py        /opt/ir/vntyper/scripts/
 ENV PYTHONPATH=/opt/ir
 
 # No --config-path: the shipped config.json already carries correct RELATIVE reference

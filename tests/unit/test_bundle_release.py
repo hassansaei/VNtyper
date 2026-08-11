@@ -311,6 +311,7 @@ class TestEveryFileIsAccountedFor:
             "filter_config.json",
             "vntr_db_advntr.zip",
             "alignment/chr1.hg38.fa.gz",
+            "install_provenance.json",
         ],
     )
     def test_the_exclusion_list_is_explicit_and_reasoned(self, relative: str) -> None:

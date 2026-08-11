@@ -834,6 +834,33 @@ class TestInstallFromSource:
         assert urls == ["https://hgdownload.example/hg19/chr1.fa.gz"]
         assert (tmp_path / "alignment" / "chr1.hg19.fa.fai").exists()
 
+    def test_the_installed_fasta_is_recorded_and_satisfies_the_provenance_gate(self, tmp_path, monkeypatch):
+        """Parked finding (was issue #244): `canonical_reference_keys` now requires a
+        `reference_provenance` record, so the `--from-source` path must actually write
+        one for the genome FASTA it installs, not only the bundle path."""
+        from vntyper.scripts.reference_provenance import load_provenance
+
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, []))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        monkeypatch.setattr(
+            install_references,
+            "index_reference_with_aligners",
+            lambda ref_path, aligners, threads=4, force_reindex=False: {},
+        )
+        config = self._config(digest)
+        config["ucsc_references"]["hg19"]["installed_path"] = "alignment/chr1.hg19.fa"
+
+        install_references.install_from_source(config, tmp_path, ["hg19"], {"bwa": {}}, index_threads=1)
+
+        records = load_provenance(tmp_path)
+        assert "alignment/chr1.hg19.fa" in records
+        assert records["alignment/chr1.hg19.fa"]["source"] == "from-source"
+        assert records["alignment/chr1.hg19.fa"]["source_url"] == "https://hgdownload.example/hg19/chr1.fa.gz"
+
+        keys = install_references.canonical_reference_keys(config, tmp_path)
+        assert "bwa_reference_hg19" in keys
+
     def test_a_release_spec_supplies_a_url_the_config_leaves_blank(self, tmp_path, monkeypatch):
         urls: list[str] = []
         digest = self._gz_digest(tmp_path, self.GENOME)
@@ -925,6 +952,39 @@ class TestInstallFromSource:
         assert "hg19" in message
         assert "bwa" in message
         assert "bowtie2" not in message, "only the aligner that failed should be named"
+
+    def test_the_genome_loop_always_forces_a_reindex(self, tmp_path, monkeypatch):
+        """Parked finding (was issue #245): `staged_install` seeds a fresh staging
+        directory with whatever BWA sidecars (`.amb`/`.ann`/`.bwt`/`.pac`/`.sa`) an
+        earlier install left beside this exact FASTA path, and
+        `index_reference_with_aligners` treats their mere presence as proof the index
+        already matches the FASTA - it never actually compares them. Just above this
+        call, `decompress_source` unconditionally rewrites the FASTA from the just
+        -verified archive on every pass through this loop (see its own docstring), so
+        after a maintainer repins this genome's `source_sha256`, a `force_reindex=False`
+        call here would leave the *old* index sitting beside the *new* sequence. This
+        pins the fix: the genome loop must always force a reindex, since it always just
+        replaced the FASTA.
+        """
+        urls: list[str] = []
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, urls))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            install_references,
+            "index_reference_with_aligners",
+            lambda ref_path, aligners, threads=4, force_reindex=False: (
+                calls.append({"ref_path": ref_path, "force_reindex": force_reindex}) or {}
+            ),
+        )
+
+        install_references.install_from_source(self._config(digest), tmp_path, ["hg19"], {"bwa": {}}, index_threads=2)
+
+        assert len(calls) == 1
+        assert calls[0]["force_reindex"] is True, (
+            "a stale BWA index left beside a freshly-replaced FASTA must always be rebuilt"
+        )
 
     def test_a_successful_aligner_index_does_not_stop_the_build(self, tmp_path, monkeypatch):
         """The complement of the test above: a green index result must not raise."""

@@ -278,6 +278,70 @@ class TestInstallFromBundleHappyPath:
         assert not (output_dir / "BUILD_INFO.json").exists()
 
 
+class TestInstallFromBundleRecordsProvenance:
+    """Parked finding (was issue #244): `canonical_reference_keys` now requires a
+    `reference_provenance` record for a path before writing it into `config.json`.
+    `install_from_bundle` must actually write one for every file it verifies.
+    """
+
+    def test_the_fasta_and_common_files_are_recorded_but_bwa_sidecars_are_not(self, tmp_path, monkeypatch):
+        from vntyper.scripts.reference_provenance import load_provenance
+
+        release_dir = tmp_path / "release"
+        output_dir = tmp_path / "refs"
+        hg19_asset = "vntyper-references-refs-v1-ucsc-hg19.tar.gz"
+        hg19_sha256 = _write_bundle_asset(release_dir, hg19_asset, _genome_files("hg19"), reference_id="hg19")
+        common_sha256 = _write_bundle_asset(release_dir, COMMON_ASSET_NAME, _common_files(), reference_id=None)
+        config = _install_config(
+            ucsc={"hg19": _genome_entry("hg19", hg19_asset, hg19_sha256)},
+            bundle=_bundle_pointer(common_asset=COMMON_ASSET_NAME, common_asset_sha256=common_sha256),
+        )
+        monkeypatch.setattr(install_references, "download_file", _fake_download_from(release_dir))
+        monkeypatch.setattr(install_references, "_local_bwa_version", lambda: "9.9.9")
+
+        install_references.install_from_bundle(config, output_dir, ["hg19"])
+
+        records = load_provenance(output_dir)
+        assert "alignment/chr1.hg19.fa" in records
+        assert records["alignment/chr1.hg19.fa"]["source"] == "bundle"
+        assert records["alignment/chr1.hg19.fa"]["asset"] == hg19_asset
+        assert records["alignment/chr1.hg19.fa"]["release_tag"] == "refs-v1"
+
+        for common_path in ("MUC1_motifs_Rev_com.fa", "vntr_db_advntr/hg19_muc1.db", "vntr_db_advntr/hg38_muc1.db"):
+            assert common_path in records, f"{common_path} must be recorded from the common asset's manifest"
+
+        for sidecar in ("amb", "ann", "bwt", "pac", "sa"):
+            assert f"alignment/chr1.hg19.fa.{sidecar}" not in records, (
+                "a BWA sidecar must never be recorded - a bwa-version reindex can rewrite it moments later"
+            )
+
+    def test_canonical_reference_keys_accepts_what_install_from_bundle_just_verified(self, tmp_path, monkeypatch):
+        """End-to-end: the exact output of a bundle install must satisfy the provenance
+        gate item 1 added to `canonical_reference_keys`, not merely produce a ledger."""
+        release_dir = tmp_path / "release"
+        output_dir = tmp_path / "refs"
+        hg19_asset = "vntyper-references-refs-v1-ucsc-hg19.tar.gz"
+        hg19_sha256 = _write_bundle_asset(release_dir, hg19_asset, _genome_files("hg19"), reference_id="hg19")
+        common_sha256 = _write_bundle_asset(release_dir, COMMON_ASSET_NAME, _common_files(), reference_id=None)
+        config = _install_config(
+            ucsc={"hg19": _genome_entry("hg19", hg19_asset, hg19_sha256)},
+            bundle=_bundle_pointer(common_asset=COMMON_ASSET_NAME, common_asset_sha256=common_sha256),
+        )
+        config["common_references"] = [
+            {"config_key": "muc1_motifs_rev_com", "installed_path": "MUC1_motifs_Rev_com.fa"},
+            {"config_key": "advntr_reference_vntr_hg19", "installed_path": "vntr_db_advntr/hg19_muc1.db"},
+        ]
+        monkeypatch.setattr(install_references, "download_file", _fake_download_from(release_dir))
+        monkeypatch.setattr(install_references, "_local_bwa_version", lambda: "9.9.9")
+
+        install_references.install_from_bundle(config, output_dir, ["hg19"])
+        keys = install_references.canonical_reference_keys(config, output_dir)
+
+        assert "bwa_reference_hg19" in keys
+        assert "muc1_motifs_rev_com" in keys
+        assert "advntr_reference_vntr_hg19" in keys
+
+
 # =============================================================================
 # asset_sha256 mismatch
 # =============================================================================

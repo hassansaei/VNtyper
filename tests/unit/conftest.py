@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from vntyper.scripts.reference_provenance import build_record
+from vntyper.scripts.reference_provenance import merge as merge_provenance
+
 _REAL_INSTALL_CONFIG = Path(__file__).resolve().parents[2] / "vntyper" / "scripts" / "install_references_config.json"
 
 
@@ -26,9 +29,13 @@ def install_config(tmp_path: Path) -> dict:
     same built-in fixture share the one instance for that test node), and every file
     `canonical_reference_keys` can name - each genome's `installed_path`, every
     `common_references` entry, every derivation's `output` - is created here (empty)
-    first. `canonical_reference_keys` only names a reference whose installed file
-    actually exists, which is the same partial-install correctness #163 needed; without
-    this staging, every test built on this fixture would see an empty result on a fresh
+    and given a provenance record (see `reference_provenance`), so this fixture models
+    a *verified* complete install, not merely a present one. `canonical_reference_keys`
+    now requires a provenance record for a path, not just that it exists (the fix for
+    the parked finding this fixture's own docstring used to warn about: a fixture that
+    touches every path but records no provenance is exactly the shape that let an
+    unverified retained file get blessed into `config.json` unnoticed); without staging
+    both, every test built on this fixture would see an empty result on a fresh
     `tmp_path` regardless of what the config says.
 
     Args:
@@ -38,15 +45,22 @@ def install_config(tmp_path: Path) -> dict:
         dict: The parsed install config, unmodified.
     """
     config = json.loads(_REAL_INSTALL_CONFIG.read_text(encoding="utf-8"))
+    records: dict[str, dict] = {}
+
+    def _touch_and_record(relative: str) -> None:
+        _touch(tmp_path / relative)
+        records[relative] = build_record(sha256="0" * 64, source="from-source", source_url="https://example.com/test")
 
     for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
         for entry in config.get(section, {}).values():
-            _touch(tmp_path / entry["installed_path"])
+            _touch_and_record(entry["installed_path"])
 
     for entry in config.get("common_references", []):
-        _touch(tmp_path / entry["installed_path"])
+        _touch_and_record(entry["installed_path"])
 
     for spec in config.get("derivations", []):
-        _touch(tmp_path / spec["output"])
+        _touch_and_record(spec["output"])
+
+    merge_provenance(tmp_path, records)
 
     return config

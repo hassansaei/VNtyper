@@ -21,6 +21,7 @@ on:
       - 'vntyper/scripts/install_references.py'
       - 'vntyper/scripts/install_references_config.json'
       - 'vntyper/scripts/reference_bundle.py'
+      - 'vntyper/scripts/reference_provenance.py'
       - 'vntyper/dependencies/advntr/**'
       # reference/** left this list at milestone 5: reference data now comes from a
       # published, checksummed bundle in berntpopp/vntyper-data rather than tracked
@@ -70,7 +71,7 @@ jobs:
       - name: Compute base image tag
         id: hash
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/__init__.py', 'vntyper/scripts/__init__.py', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/dependencies/advntr/**', '.dockerignore') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/__init__.py', 'vntyper/scripts/__init__.py', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/scripts/reference_provenance.py', 'vntyper/dependencies/advntr/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           # hashFiles() returns "" when nothing matched, which would silently produce the

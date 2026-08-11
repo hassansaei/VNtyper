@@ -26,7 +26,7 @@ from urllib.request import urlretrieve
 # here joins the base-image content hash. `reference_bundle` is therefore the only
 # `vntyper` import allowed at module scope; anything else is inlined below or imported
 # inside the function that needs it.
-from vntyper.scripts.reference_bundle import safe_extract, staged_install, verify_sha256
+from vntyper.scripts.reference_bundle import safe_extract, sha256_of, staged_install, verify_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,7 @@ def index_reference_with_aligners(
 
 
 def canonical_reference_keys(install_config: dict[str, Any], output_dir: Path) -> dict[str, Path]:
-    """Map every installed reference onto the config key the pipeline reads.
+    """Map every installed, *verified* reference onto the config key the pipeline reads.
 
     Reads exactly the schema fixed for the installer and nothing else. Genome keys are
     derived from the registry rather than written by hand, so the writer and the readers
@@ -361,6 +361,27 @@ def canonical_reference_keys(install_config: dict[str, Any], output_dir: Path) -
     module alone into a build stage and runs it by path without installing the package,
     and `tests/unit/test_docker_installer_imports.py` fails the build guard if a sibling
     the Dockerfile does not COPY is imported at module scope.
+
+    Parked finding (was #244): a path being *present* under `output_dir` used to be
+    enough. `staged_install` seeds a new run's staging directory from whatever tree is
+    already there (`reference_bundle.staged_install`, `seed_from_existing=True`) so that
+    a partial install (`--references hg19`) does not erase a different assembly a
+    previous run installed - that is deliberate accumulation, not a bug. But the same
+    seeding step carried forward a file this or any earlier `install-references` run
+    never verified at all: an old, hand-copied or tampered FASTA sitting in the output
+    directory before the very first real install. This now requires a
+    :mod:`reference_provenance` record for the path instead - written at install time by
+    `_install_bundle_asset`/`_record_bundle_provenance` (bundle path) and
+    `_record_source_provenance` (`--from-source` path) once that specific file's bytes
+    have actually been checked against a committed or upstream digest. Presence with no
+    record is reported by name, together with the `--references <label>` (or plain
+    `install-references`, for a common asset installed on every run) that installs and
+    verifies it, and left out of the mapping - neither silently dropped nor silently
+    trusted.
+
+    This never re-hashes a file to decide: it only checks whether a ledger key exists,
+    so a 700 MB genome FASTA costs nothing extra on every `config.json` write, no matter
+    how many times this runs.
 
     Args:
         install_config: The parsed install_references_config.json.
@@ -373,29 +394,55 @@ def canonical_reference_keys(install_config: dict[str, Any], output_dir: Path) -
         KeyError: If an entry is missing a required schema field. Failing here is
             correct - a silently skipped entry is a silently missing reference.
     """
+    from vntyper.scripts.reference_provenance import has_record, load_provenance, relative_posix
     from vntyper.scripts.reference_registry import REFERENCE_KINDS, reference_keys
 
     prefix = REFERENCE_KINDS["bwa"]["prefix"]
     written: dict[str, Path] = {}
+    remedies: dict[str, str] = {}
+    common_remedy = "vntyper install-references (installs common assets on every run)"
 
     for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
         for physical_id, entry in install_config.get(section, {}).items():
-            written[f"{prefix}_{physical_id}"] = (output_dir / entry["installed_path"]).resolve()
+            key = f"{prefix}_{physical_id}"
+            written[key] = (output_dir / entry["installed_path"]).resolve()
+            remedies[key] = f"vntyper install-references --references {physical_id}"
 
     for entry in install_config.get("common_references", []):
-        written[entry["config_key"]] = (output_dir / entry["installed_path"]).resolve()
+        key = entry["config_key"]
+        written[key] = (output_dir / entry["installed_path"]).resolve()
+        remedies[key] = common_remedy
 
     for spec in install_config.get("derivations", []):
         if spec["kind"] == "shark":
             (key,) = reference_keys("shark", spec["assembly"])
+            remedies[key] = f"vntyper install-references --references {spec['from']}"
         else:
             key = spec["config_key"]
+            remedies[key] = common_remedy
         written[key] = (output_dir / spec["output"]).resolve()
 
-    # Only name files that are actually there. A partial install (`--references hg38`)
-    # must not write a key pointing at an hg19 FASTA nobody downloaded - that is the
-    # same class of defect as #163 itself, just from the other direction.
-    return {key: path for key, path in written.items() if path.exists()}
+    # Only consider files that are actually there. A partial install (`--references
+    # hg38`) must not write a key pointing at an hg19 FASTA nobody downloaded - that is
+    # the same class of defect as #163 itself, just from the other direction.
+    provenance = load_provenance(output_dir)
+    result: dict[str, Path] = {}
+    for key, path in written.items():
+        if not path.exists():
+            continue
+        try:
+            relative = relative_posix(path, output_dir)
+        except ValueError:
+            relative = None
+        if relative is not None and has_record(provenance, relative):
+            result[key] = path
+        else:
+            logger.warning(
+                f"{path} exists but has no install provenance record; not writing "
+                f"config.json[{key!r}] to point at an unverified file. Run "
+                f"`{remedies.get(key, 'vntyper install-references')}` to install and verify it."
+            )
+    return result
 
 
 def update_config(config_path: Path, references: dict[str, Path]):
@@ -572,7 +619,8 @@ def process_vntyper_references(
         # present: `download_file` skips an existing destination, so a stale or
         # corrupted `vntr_db_advntr.zip` from an earlier partial run must not be
         # extracted and activated unchecked.
-        verify_seed(target_path_str, target_path, ref_info, release_spec)
+        expected = verify_seed(target_path_str, target_path, ref_info, release_spec)
+        _record_source_provenance(output_dir, target_path, expected, url)
 
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
@@ -581,10 +629,17 @@ def process_vntyper_references(
         if extract_to:
             extract_dir = output_dir / extract_to
             extract_dir.mkdir(parents=True, exist_ok=True)
+            # `canonical_reference_keys` looks common assets like the adVNTR VNTR
+            # databases up by their *extracted* path, not the archive's - the archive's
+            # own digest is what was actually verified above, so every member this
+            # archive is known (from its own listing) to have produced inherits it as
+            # its provenance record rather than going unrecorded.
+            extracted_members: list[str] = []
             if target_path.suffix == ".zip":
                 try:
                     with zipfile.ZipFile(target_path, "r") as zip_ref:
                         zip_ref.extractall(path=extract_dir)
+                        extracted_members = [name for name in zip_ref.namelist() if not name.endswith("/")]
                     logger.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
                     logger.error(f"Failed to extract {target_path}: {e}")
@@ -593,12 +648,18 @@ def process_vntyper_references(
                 try:
                     with tarfile.open(target_path, "r:gz") as tar:
                         tar.extractall(path=extract_dir)
+                        extracted_members = [member.name for member in tar.getmembers() if member.isfile()]
                     logger.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
                     logger.error(f"Failed to extract {target_path}: {e}")
                     sys.exit(1)
             else:
                 logger.warning(f"Unsupported archive format for {target_path}. Skipping extraction.")
+
+            for member in extracted_members:
+                member_path = extract_dir / member
+                if member_path.is_file():
+                    _record_source_provenance(output_dir, member_path, expected, url)
 
         if index_command and not skip_indexing:
             execute_index_command(index_command, target_path)
@@ -649,7 +710,8 @@ def process_own_repository_references(
         # present: `download_file` skips an existing destination, so a stale or
         # corrupted seed from an earlier partial run must not be indexed and activated
         # unchecked.
-        verify_seed(target_path_str, target_path, file_info, release_spec)
+        expected = verify_seed(target_path_str, target_path, file_info, release_spec)
+        _record_source_provenance(output_dir, target_path, expected, url)
 
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
@@ -995,6 +1057,7 @@ def run_derivations(
             message = f"{mismatch}; discarded {output} rather than leave a wrong reference in the tree"
             logger.error(message)
             raise ValueError(message) from mismatch
+        _record_source_provenance(output_dir, destination, expected)
         index_fasta_with_samtools(destination, samtools)
         logger.info(f"Derived {output} from {provenance}")
 
@@ -1107,7 +1170,7 @@ def resolve_seed_digest(name: str, entry: dict[str, Any], release_spec: dict[str
     return digest
 
 
-def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> None:
+def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> str:
     """Verify a seed against its committed digest, whether just downloaded or reused.
 
     ``download_file`` skips a destination that already exists, so without this a stale
@@ -1122,6 +1185,11 @@ def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spe
         entry: This seed's section of the install config.
         release_spec: Parsed ``--release-spec`` contents, or None.
 
+    Returns:
+        str: The digest `target_path` was verified against - both callers record it as
+        this file's install provenance (see :mod:`reference_provenance`) rather than
+        re-deriving it.
+
     Raises:
         ValueError: If no digest is configured, or if the file's bytes do not match it.
             On a mismatch the file is removed so a retry re-downloads it, matching
@@ -1135,6 +1203,33 @@ def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spe
         message = f"{mismatch}; removed {target_path.name} so a retry downloads it again"
         logger.error(message)
         raise ValueError(message) from mismatch
+    return expected
+
+
+def _record_source_provenance(output_dir: Path, path: Path, sha256: str, source_url: str | None = None) -> None:
+    """Record one ``--from-source`` install provenance entry.
+
+    A thin wrapper around :mod:`reference_provenance`, imported function-locally like
+    every other sibling `install_references.py` uses only inside a function body (see
+    that module's docstring for why). Called once per verified file rather than
+    threaded through a shared mutable accumulator: each call is an independent,
+    idempotent read-modify-write of the small ledger, which is cheap next to the
+    network and hashing cost already paid to produce `sha256`.
+
+    Args:
+        output_dir: Reference-tree root the file was installed under (the
+            `staged_install` staging directory, mid-install).
+        path: The installed file.
+        sha256: The digest already verified for this file (or, for a decompressed
+            genome FASTA, for the compressed source archive it was expanded from).
+        source_url: The upstream URL the digest was verified against, when there is
+            one. None for a locally derived output (a SHARK region cut, or the merged
+            motif FASTA), which has no single upstream URL of its own.
+    """
+    from vntyper.scripts.reference_provenance import build_record, merge, relative_posix
+
+    relative = relative_posix(path, output_dir)
+    merge(output_dir, {relative: build_record(sha256=sha256, source="from-source", source_url=source_url)})
 
 
 def decompress_source(archive: Path) -> Path:
@@ -1257,7 +1352,22 @@ def install_from_source(
             fasta = decompress_source(archive)
             index_fasta_with_samtools(fasta, samtools)
             if aligners:
-                results = index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=False)
+                # Parked finding (was #245): `force_reindex=True`, not the module
+                # default. `decompress_source` above unconditionally rewrites `fasta`
+                # from the just-verified archive every time this loop reaches it (see
+                # its own docstring), but `staged_install` seeds a fresh staging
+                # directory from whatever aligner sidecars (`.amb`/`.ann`/`.bwt`/`.pac`/
+                # `.sa`) an earlier install left beside the *old* FASTA at this same
+                # path. Without this, `check_index_exists` sees all five present and
+                # skips indexing entirely - so after a maintainer repins this genome's
+                # `source_sha256`, the tree ends up with a new FASTA and a `bwa mem`
+                # index still built from the old one, both named identically by
+                # `config.json` and by this run's own install provenance record. This
+                # call site is exactly "--from-source actually replaced the FASTA in
+                # this run" (unconditionally, right above), so forcing a reindex here
+                # is defensible even though it costs a redundant index on the common
+                # case where the bytes did not change.
+                results = index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=True)
                 # The legacy path logs a failure and carries on, which is right for an
                 # operator installing locally. It is wrong here. `execute_aligner_index`
                 # returns False on a CalledProcessError, and `bundle_release.verify_tree`
@@ -1275,6 +1385,11 @@ def install_from_source(
                     logger.error(message)
                     raise RuntimeError(message)
 
+            # `expected` verified the compressed *archive*; `decompress_source` is a
+            # deterministic gunzip, but the provenance record should describe the actual
+            # installed artifact, not assume the expansion produced it byte-for-byte -
+            # hence one fresh digest of `fasta` itself rather than reusing `expected`.
+            _record_source_provenance(output_dir, fasta, sha256_of(fasta), url)
             installed[ref_id] = fasta
 
     _install_source_seeds(install_config, output_dir, skip_indexing, release_spec)
@@ -1557,6 +1672,41 @@ def _reindex_if_bwa_version_differs(
     logger.info(f"  ✓ re-indexed {fasta.name} with the local bwa {local_version}")
 
 
+def _record_bundle_provenance(staging: Path, manifest: dict[str, Any], asset: _BundleAsset, release_tag: str) -> None:
+    """Record install provenance for the file(s) `canonical_reference_keys` looks up.
+
+    Only the FASTA itself for a `kind == "bwa"` genome asset - never a BWA index
+    sidecar. `_reindex_if_bwa_version_differs` may rewrite the sidecars with a
+    locally-built index moments after this runs, which would make a sidecar's recorded
+    manifest digest describe bytes the tree no longer has; `canonical_reference_keys`
+    never looks a sidecar up by its own key anyway, only the FASTA's `installed_path`
+    is one. The common asset carries no BWA index and is never reindexed, so every file
+    its manifest lists is recorded.
+
+    Args:
+        staging: Directory the asset was extracted into.
+        manifest: Parsed `release-manifest.json`, already verified file-by-file by
+            `_verify_manifest_files`.
+        asset: The asset just installed.
+        release_tag: The release tag the asset was fetched from.
+    """
+    from vntyper.scripts.reference_provenance import build_record, merge
+
+    files_by_path = {entry["path"]: entry["sha256"] for entry in manifest.get("files", [])}
+    records: dict[str, dict[str, Any]] = {}
+
+    if asset.entry is not None and asset.entry.get("kind") == "bwa":
+        relative = asset.entry["installed_path"]
+        digest = files_by_path.get(relative)
+        if digest is not None:
+            records[relative] = build_record(sha256=digest, source="bundle", asset=asset.name, release_tag=release_tag)
+    else:
+        for relative, digest in files_by_path.items():
+            records[relative] = build_record(sha256=digest, source="bundle", asset=asset.name, release_tag=release_tag)
+
+    merge(staging, records)
+
+
 def _install_bundle_asset(
     repository: str, release_tag: str, asset: _BundleAsset, download_dir: Path, staging: Path
 ) -> None:
@@ -1595,6 +1745,13 @@ def _install_bundle_asset(
     build_info = _read_bundle_json(staging / "BUILD_INFO.json", asset.name)
     try:
         _verify_manifest_files(staging, manifest, asset.name)
+        # Provenance is recorded from the now-verified manifest before any reindex, not
+        # after: a bwa version mismatch below rewrites the sidecar index files with a
+        # locally-built index, and this only ever records the FASTA itself for a `kind
+        # == "bwa"` asset (see `_record_bundle_provenance`) - never a sidecar - so the
+        # order does not matter for correctness, but recording first keeps "verified"
+        # and "recorded" atomic in the log even if reindexing raises.
+        _record_bundle_provenance(staging, manifest, asset, release_tag)
         if asset.entry is not None and asset.entry.get("kind") == "bwa":
             _reindex_if_bwa_version_differs(staging, asset.entry, build_info, asset.ref_id)
     finally:
