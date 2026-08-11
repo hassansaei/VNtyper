@@ -168,9 +168,14 @@ cython_debug/
 /tmp/
 /download/
 
-# ignore large reference files and subdirectories
-/reference/chr1*
-/reference/*/
+# Reference data now comes from berntpopp/vntyper-data as a published, checksummed
+# release bundle (`vntyper install-references`), not from tracked files - see AGENTS.md
+# trap 10. Ignore everything install-references populates into reference/, keeping only
+# the provenance scripts and docs that stay tracked.
+/reference/*
+!/reference/README.md
+!/reference/pseudonymize.py
+!/reference/pseudonymize_config.json
 /references/*/
 /references/*
 /references/

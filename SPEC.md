@@ -28,6 +28,12 @@ $ awk '/^>/{if(n)print n,l; n=substr($0,2); l=0; next}{l+=length($0)}END{print n
 3-4 120
 ```
 
+(This was run at milestone 2, when `reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`
+was tracked. Milestone 5 moved reference data to `berntpopp/vntyper-data`, published as a
+checksummed release bundle; the same file, and the same command output, are reproduced by
+`vntyper install-references -d reference` before re-running the `awk` above. The values
+recorded here are the historical proof and do not change.)
+
 Every record in the Kestrel reference is a **pair** of 60 bp motifs, 120 bp long, named
 `<left>-<right>`. The chain is:
 

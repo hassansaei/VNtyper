@@ -10,17 +10,23 @@
 #   docker/Dockerfile.base                      (this file)
 #   vntyper/__init__.py                         (package init, imported by python -m)
 #   vntyper/scripts/__init__.py                 (package init, imported by python -m)
-#   vntyper/scripts/install_references*.{py,json}  (reference genomes + BWA indexes)
+#   vntyper/scripts/install_references*.{py,json}  (fetches + verifies the reference bundle)
 #   vntyper/scripts/reference_bundle.py         (digest verification + safe extraction)
+#   vntyper/scripts/reference_provenance.py     (per-file install ledger; see below)
 #   vntyper/dependencies/advntr/**              (adVNTR build)
-#   reference/**                                (the tracked reference files COPYed below)
-#   .dockerignore                               (decides which of them reach the context)
+#   .dockerignore                               (decides which context files reach the build)
 #
 # Keep this list identical to the hashFiles() expressions in docker-base.yml and
 # docker-build.yml, docker-base.yml's push paths: filter, and the Makefile's
-# BASE_INPUTS. A stale copy of it here is exactly how `reference/**` came to be
+# BASE_INPUTS. A stale copy of it here is exactly how `reference/**` once came to be
 # missing from the hash: three config-declared files were dropped from the image
-# without changing the tag, so nothing rebuilt.
+# without changing the tag, so nothing rebuilt. `reference/**` itself is no longer in
+# this list: milestone 5 moved reference data to a published, checksummed bundle in
+# berntpopp/vntyper-data, so nothing under the tracked `reference/` directory (which now
+# holds only README.md, pseudonymize.py and pseudonymize_config.json) can change what
+# the `refs` stage below installs. The bundle pin - `asset`/`asset_sha256` inside
+# vntyper/scripts/install_references_config.json, already in this list - is what
+# triggers a rebuild when a reference byte changes now.
 #
 # Everything here is independent of application source, so editing vntyper/ or
 # docker/app/ never triggers a rebuild. The per-commit image (docker/Dockerfile)
@@ -83,40 +89,49 @@ RUN bash -c "source /opt/conda/etc/profile.d/conda.sh && \
 # =============================================================================
 # Stage: refs - reference genomes and BWA indexes
 # =============================================================================
-# Gated on only the two reference files, so a conda env change does not force a
-# 6-15 minute genome re-download and re-index.
+# Fetches the published, checksummed reference bundle from berntpopp/vntyper-data
+# instead of downloading six genomes from UCSC/NCBI/Ensembl and BWA-indexing them here -
+# the single most expensive step in the old build, and the main reason this image is
+# separated from the per-commit one. Gated on only the installer inputs below, so a
+# conda env or adVNTR change does not force a bundle re-fetch.
 FROM envs AS refs
 
-# The tracked reference files that ship in the repo. These are NOT downloadable by
-# install_references.py and the pipeline needs them: muc1_region_hg19.fa for the SHARK
-# module (vntyper/modules/shark/shark_config.json) and vntr_db_advntr.zip for the adVNTR
-# databases named in config.json. The previous Dockerfile got them for free by cloning
-# the repo into the image; they now come from the build context.
-COPY reference/ /opt/refs/
-
+# Three Python files are needed, not two. install_references.py imports nothing from
+# vntyper at module scope except reference_bundle, by design (see the file header
+# comment above); tests/unit/test_docker_installer_imports.py fails the build guard if
+# either module ever grows a module-scope import this stage does not COPY for. The two
+# package __init__.py files are required because `python -m` walks the package chain to
+# reach the module. reference_registry is deliberately NOT copied here:
+# canonical_reference_keys imports it function-locally, and this stage passes no
+# --config-path, so that code path never runs in the image. reference_provenance IS
+# copied, unlike reference_registry: _install_bundle_asset calls it unconditionally, for
+# every asset, regardless of --config-path - it is a real runtime dependency of this
+# stage's actual invocation below, not one gated behind a flag this stage never passes.
 COPY vntyper/__init__.py                            /opt/ir/vntyper/__init__.py
 COPY vntyper/scripts/__init__.py                    /opt/ir/vntyper/scripts/__init__.py
 COPY vntyper/scripts/install_references.py          /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/install_references_config.json /opt/ir/vntyper/scripts/
 COPY vntyper/scripts/reference_bundle.py            /opt/ir/vntyper/scripts/
+COPY vntyper/scripts/reference_provenance.py        /opt/ir/vntyper/scripts/
 ENV PYTHONPATH=/opt/ir
 
 # No --config-path: the shipped config.json already carries correct RELATIVE reference
 # paths for this image's layout, and the ucsc_*/ncbi_* absolute keys it would add are
 # read by nothing in vntyper/. See the note in docker/Dockerfile.
 #
-# Files copied above are detected as already present and skipped. The two chr1 genomes
-# are downloaded and BWA-indexed here - the single most expensive step in the build,
-# and the main reason this image is separated from the per-commit one.
+# All six physical references, explicitly: config.json already ships all six
+# bwa_reference_* keys as real (non-null) paths, so a partial image would make
+# reference_registry's family fallback the normal case for four of the eight accepted
+# --reference-assembly labels instead of the never-taken safety net it is meant to be.
+# The common asset (MUC1 FASTAs and both adVNTR databases, pre-extracted - no zip ships
+# in the bundle) is fetched unconditionally by install_from_bundle regardless of
+# --references.
 RUN conda run -n vntyper python -m vntyper.scripts.install_references \
         --output-dir /opt/refs \
-        --threads 4 && \
-    if [ -f /opt/refs/vntr_db_advntr.zip ] && [ ! -d /opt/refs/vntr_db_advntr ]; then \
-        conda run -n vntyper python -c "import zipfile; zipfile.ZipFile('/opt/refs/vntr_db_advntr.zip').extractall('/opt/refs')"; \
-    fi && \
-    test -d /opt/refs/vntr_db_advntr || { echo "adVNTR database missing after extraction"; exit 1; } && \
-    test -f /opt/refs/muc1_region_hg19.fa || { echo "SHARK muc1_region_hg19.fa missing"; exit 1; } && \
-    rm -f /opt/refs/alignment/*.fa.gz && \
+        --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl && \
+    test -d /opt/refs/vntr_db_advntr || { echo "adVNTR database missing"; exit 1; } && \
+    test -f /opt/refs/muc1_region_hg19.fa || { echo "SHARK hg19 region missing"; exit 1; } && \
+    test -f /opt/refs/muc1_region_hg38.fa || { echo "SHARK hg38 region missing"; exit 1; } && \
     rm -rf /opt/ir
 
 # =============================================================================

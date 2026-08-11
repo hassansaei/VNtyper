@@ -494,6 +494,140 @@ def resolve_chromosome_name(
 
 
 # =============================================================================
+# Reference Key Resolution
+# =============================================================================
+
+# How each kind of reference file is keyed in `config["reference_data"]`.
+#
+# `physical`  - the file differs by reference source, because contig naming does
+#               (`chr1` vs `1` vs `NC_000001.11`). Eight labels, six files.
+# `coordinate_system` - only two files exist, one per coordinate system: the adVNTR
+#               databases `hg19_muc1.db`/`hg38_muc1.db` and the two MUC1 region
+#               FASTAs. Source naming is irrelevant to both.
+REFERENCE_KINDS: dict[str, dict[str, str]] = {
+    "bwa": {"prefix": "bwa_reference", "keyed_by": "physical"},
+    "cram": {"prefix": "cram_reference", "keyed_by": "physical"},
+    "advntr": {"prefix": "advntr_reference_vntr", "keyed_by": "coordinate_system"},
+    "shark": {"prefix": "muc1_region_fasta", "keyed_by": "coordinate_system"},
+}
+
+# The physical file an (coordinate system, source) pair names. These ids are also the
+# entry names in install_references_config.json, which is what lets the writer and the
+# readers agree without either of them owning the name.
+_PHYSICAL_IDS: dict[tuple[str, str], str] = {
+    ("GRCh37", "ucsc"): "hg19",
+    ("GRCh38", "ucsc"): "hg38",
+    ("GRCh37", "ncbi"): "GRCh37",
+    ("GRCh38", "ncbi"): "GRCh38",
+    ("GRCh37", "ensembl"): "hg19_ensembl",
+    ("GRCh38", "ensembl"): "hg38_ensembl",
+}
+
+_UCSC_BY_COORDINATE_SYSTEM = {"GRCh37": "hg19", "GRCh38": "hg38"}
+
+
+def physical_reference_id(assembly_name: str) -> str:
+    """Collapse an assembly label onto the physical file it names.
+
+    `GRCh38` and `hg38_ncbi` are two labels for one NCBI file, as are `GRCh37` and
+    `hg19_ncbi`. Keying on the label instead of the file means the writer emits
+    `bwa_reference_GRCh38` while a `hg38_ncbi` run looks for
+    `bwa_reference_hg38_ncbi`, misses, and silently uses UCSC sequence.
+
+    Args:
+        assembly_name (str): Assembly label (canonical or alias).
+
+    Returns:
+        str: One of `hg19`, `hg38`, `GRCh37`, `GRCh38`, `hg19_ensembl`, `hg38_ensembl`.
+
+    Raises:
+        ValueError: If the assembly is unknown.
+
+    Examples:
+        >>> physical_reference_id("hg38_ncbi")
+        'GRCh38'
+        >>> physical_reference_id("hg38_ensembl")
+        'hg38_ensembl'
+    """
+    identity = (get_coordinate_system(assembly_name), get_reference_source(assembly_name))
+    physical = _PHYSICAL_IDS.get(identity)
+    if physical is None:  # pragma: no cover - unreachable while validate_registry passes
+        raise ValueError(f"No physical reference id for {identity}")
+    return physical
+
+
+def ucsc_family(assembly_name: str) -> str:
+    """Return the UCSC-named assembly sharing this label's coordinate system.
+
+    Args:
+        assembly_name (str): Assembly label (canonical or alias).
+
+    Returns:
+        str: `hg19` or `hg38`.
+
+    Raises:
+        ValueError: If the assembly is unknown.
+
+    Examples:
+        >>> ucsc_family("hg38_ensembl")
+        'hg38'
+    """
+    return _UCSC_BY_COORDINATE_SYSTEM[get_coordinate_system(assembly_name)]
+
+
+def reference_keys(kind: str, assembly_name: str) -> tuple[str, ...]:
+    """Config keys naming this reference, most specific first.
+
+    Physical-keyed kinds return up to three keys - the label key, the physical key, then
+    the UCSC-family key - de-duplicated with order preserved, so a UCSC label collapses to
+    one. The label tier preserves an existing tested capability: a replacement config may
+    specialise or disable one accepted label. Coordinate-keyed kinds return a single key,
+    whose name is unchanged from before this milestone.
+
+    Callers must resolve by **membership**, not truthiness: a key that is present with
+    value `None` is an authoritative "disabled" and must not fall through. See
+    `reference_resolution.resolve_from_mapping`.
+
+    Args:
+        kind (str): One of `REFERENCE_KINDS`.
+        assembly_name (str): Assembly label (canonical or alias).
+
+    Returns:
+        tuple[str, ...]: One to three `config["reference_data"]` keys: coordinate-keyed
+        kinds always return one, physical-keyed kinds return one to three depending on
+        how many of the label, physical and UCSC-family tiers are distinct.
+
+    Raises:
+        ValueError: If the kind or the assembly is unknown.
+
+    Examples:
+        >>> reference_keys("bwa", "hg38_ensembl")
+        ('bwa_reference_hg38_ensembl', 'bwa_reference_hg38')
+        >>> reference_keys("bwa", "hg38_ncbi")
+        ('bwa_reference_hg38_ncbi', 'bwa_reference_GRCh38', 'bwa_reference_hg38')
+        >>> reference_keys("advntr", "hg38_ncbi")
+        ('advntr_reference_vntr_hg38',)
+    """
+    spec = REFERENCE_KINDS.get(kind)
+    if spec is None:
+        supported = ", ".join(sorted(REFERENCE_KINDS))
+        raise ValueError(f"Unknown reference kind '{kind}'. Supported kinds: {supported}")
+
+    prefix = spec["prefix"]
+    family_key = f"{prefix}_{ucsc_family(assembly_name)}"
+    if spec["keyed_by"] == "coordinate_system":
+        return (family_key,)
+
+    label = normalize_assembly_name(assembly_name, warn_deprecated=False)
+    ordered = (
+        f"{prefix}_{label}",
+        f"{prefix}_{physical_reference_id(assembly_name)}",
+        family_key,
+    )
+    return tuple(dict.fromkeys(ordered))
+
+
+# =============================================================================
 # Validation Functions
 # =============================================================================
 

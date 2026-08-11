@@ -48,6 +48,19 @@ SOURCE_SHA256 = {
     "hg38_ensembl": "05d4d42ed292962055afb9774a1a29a691d7b285fd85dbf9069c050a273e0d3c",
 }
 
+#: The four non-derivable seeds (MAJOR 3, milestone-5 PR-2 review) - the only reference
+#: bytes a bundle build cannot reproduce from an upstream source, and so the only ones
+#: whose provenance rests on a commit rather than on a download. Fetched from the pinned
+#: commit `install_references_config.json` still names, and cross-checked byte-for-byte
+#: against the already-installed local `reference/` tree (itself downloaded from the
+#: published, checksummed bundle) before being committed here.
+SEED_SHA256 = {
+    "MUC1_motifs_Rev_com.fa": "7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47",
+    "code-adVNTR_RUs.fa": "c21d631cf894e388c8cb76d7bbd2a51ebf4a27cd1a9158f50971cd831d8aa26e",
+    "filter_config.json": "d2190ed78695efe9b1b8105c97479391b81129cf641410dfb88feb1c1ffea085",
+    "vntr_db_advntr.zip": "90a619f6aa2ee7d038b6d8703a5736d92fd483e8b4bfad4a5ad07480bf8f7ff1",
+}
+
 
 @pytest.fixture(autouse=True)
 def _restore_root_logging():
@@ -431,6 +444,128 @@ class TestResolveSourceLocation:
 
 
 # =============================================================================
+# resolve_seed_digest / verify_seed (MAJOR 3, milestone-5 PR-2 review)
+# =============================================================================
+#
+# `--from-source` used to compute MD5 for logging only, never comparing a seed
+# (`MUC1_motifs_Rev_com.fa`, `code-adVNTR_RUs.fa`, `vntr_db_advntr.zip`,
+# `filter_config.json`) against a committed digest or a `--release-spec`'s `seeds`
+# block - and `download_file` skips a destination that already exists, so a stale or
+# corrupted seed sitting in the output tree was extracted, indexed and activated
+# without complaint. These pin the fix: `resolve_seed_digest` mirrors
+# `resolve_source_location`'s "committed config is the trust anchor, a spec may only
+# corroborate it" rule, and `verify_seed` is the gate every seed download now passes
+# through, whether freshly fetched or already present.
+
+
+class TestResolveSeedDigest:
+    def test_without_a_spec_the_committed_digest_is_used(self):
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, None)
+        assert digest == "a" * 64
+
+    def test_a_release_spec_that_agrees_with_the_config_is_accepted(self):
+        spec = {"seeds": {"code-adVNTR_RUs.fa": {"sha256": "a" * 64}}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, spec)
+        assert digest == "a" * 64
+
+    def test_a_release_spec_may_use_the_flat_string_form(self):
+        """`bundle_release.spec_seed_digests` accepts both spellings; so must this."""
+        spec = {"seeds": {"code-adVNTR_RUs.fa": "a" * 64}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, spec)
+        assert digest == "a" * 64
+
+    def test_a_release_spec_may_fill_in_a_digest_the_config_leaves_blank(self):
+        """Filling a gap is not contradicting a pin, so it stays allowed."""
+        spec = {"seeds": {"code-adVNTR_RUs.fa": {"sha256": "b" * 64}}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {}, spec)
+        assert digest == "b" * 64
+
+    def test_a_release_spec_contradicting_the_committed_digest_is_refused(self):
+        """The spec lives beside the assets; install_references_config.json lives here.
+
+        Preferring the spec would let a release publish a seed VNtyper's own committed
+        provenance does not describe - the exact failure `resolve_source_location`
+        already refuses for the six genomes.
+        """
+        entry = {"source_sha256": "a" * 64}
+        spec = {"seeds": {"code-adVNTR_RUs.fa": {"sha256": "b" * 64}}}
+
+        with pytest.raises(ValueError) as excinfo:
+            install_references.resolve_seed_digest("code-adVNTR_RUs.fa", entry, spec)
+
+        message = str(excinfo.value)
+        assert "code-adVNTR_RUs.fa" in message
+        assert "a" * 64 in message
+        assert "b" * 64 in message
+        assert "install_references_config.json" in message
+
+    def test_a_seed_the_spec_does_not_name_falls_back_to_the_config(self):
+        spec = {"seeds": {"other.fa": {"sha256": "b" * 64}}}
+        digest = install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, spec)
+        assert digest == "a" * 64
+
+    def test_a_missing_digest_everywhere_is_refused_rather_than_installed_unverified(self):
+        with pytest.raises(ValueError) as excinfo:
+            install_references.resolve_seed_digest("code-adVNTR_RUs.fa", {}, None)
+
+        assert "code-adVNTR_RUs.fa" in str(excinfo.value)
+        assert "source_sha256" in str(excinfo.value)
+
+    def test_a_seeds_block_that_is_not_a_mapping_is_ignored_not_crashed_on(self):
+        """A malformed `--release-spec` must not stop the committed digest from working."""
+        digest = install_references.resolve_seed_digest(
+            "code-adVNTR_RUs.fa", {"source_sha256": "a" * 64}, {"seeds": "not a mapping"}
+        )
+        assert digest == "a" * 64
+
+
+class TestVerifySeed:
+    def test_a_matching_seed_passes_silently(self, tmp_path):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"the real seed bytes")
+        digest = hashlib.sha256(b"the real seed bytes").hexdigest()
+
+        install_references.verify_seed("code-adVNTR_RUs.fa", target, {"source_sha256": digest}, None)
+
+        assert target.exists(), "a matching seed must not be touched"
+
+    def test_a_mismatching_seed_is_removed_and_the_message_names_both_digests(self, tmp_path):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"tampered bytes")
+
+        with pytest.raises(ValueError) as excinfo:
+            install_references.verify_seed("code-adVNTR_RUs.fa", target, {"source_sha256": "a" * 64}, None)
+
+        message = str(excinfo.value)
+        assert "code-adVNTR_RUs.fa" in message
+        assert "a" * 64 in message
+        assert "removed" in message, "the message must say how to recover: delete it and re-run"
+        assert not target.exists(), "a tampered seed must not be left for a retry to silently reuse"
+
+    def test_a_preexisting_stale_file_is_verified_too_not_only_a_fresh_download(self, tmp_path):
+        """MAJOR 3's specific failure: `download_file` skips an existing destination, so
+        a stale or corrupted seed left over from an earlier partial run reaches this
+        function exactly as a freshly-downloaded one does - and must be rejected the
+        same way, not treated as already trusted because it predates this run."""
+        target = tmp_path / "vntr_db_advntr.zip"
+        target.write_bytes(b"stale-from-a-previous-partial-run")
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.verify_seed("vntr_db_advntr.zip", target, {"source_sha256": "a" * 64}, None)
+
+        assert not target.exists()
+
+    def test_an_unconfigured_seed_is_refused_before_any_digest_comparison(self, tmp_path):
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"anything")
+
+        with pytest.raises(ValueError, match="source_sha256"):
+            install_references.verify_seed("code-adVNTR_RUs.fa", target, {}, None)
+
+        assert target.exists(), "an unconfigured digest is a config error, not a reason to delete the file"
+
+
+# =============================================================================
 # run_derivations
 # =============================================================================
 
@@ -699,6 +834,33 @@ class TestInstallFromSource:
         assert urls == ["https://hgdownload.example/hg19/chr1.fa.gz"]
         assert (tmp_path / "alignment" / "chr1.hg19.fa.fai").exists()
 
+    def test_the_installed_fasta_is_recorded_and_satisfies_the_provenance_gate(self, tmp_path, monkeypatch):
+        """Parked finding (was issue #244): `canonical_reference_keys` now requires a
+        `reference_provenance` record, so the `--from-source` path must actually write
+        one for the genome FASTA it installs, not only the bundle path."""
+        from vntyper.scripts.reference_provenance import load_provenance
+
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, []))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        monkeypatch.setattr(
+            install_references,
+            "index_reference_with_aligners",
+            lambda ref_path, aligners, threads=4, force_reindex=False: {},
+        )
+        config = self._config(digest)
+        config["ucsc_references"]["hg19"]["installed_path"] = "alignment/chr1.hg19.fa"
+
+        install_references.install_from_source(config, tmp_path, ["hg19"], {"bwa": {}}, index_threads=1)
+
+        records = load_provenance(tmp_path)
+        assert "alignment/chr1.hg19.fa" in records
+        assert records["alignment/chr1.hg19.fa"]["source"] == "from-source"
+        assert records["alignment/chr1.hg19.fa"]["source_url"] == "https://hgdownload.example/hg19/chr1.fa.gz"
+
+        keys = install_references.canonical_reference_keys(config, tmp_path)
+        assert "bwa_reference_hg19" in keys
+
     def test_a_release_spec_supplies_a_url_the_config_leaves_blank(self, tmp_path, monkeypatch):
         urls: list[str] = []
         digest = self._gz_digest(tmp_path, self.GENOME)
@@ -791,6 +953,39 @@ class TestInstallFromSource:
         assert "bwa" in message
         assert "bowtie2" not in message, "only the aligner that failed should be named"
 
+    def test_the_genome_loop_always_forces_a_reindex(self, tmp_path, monkeypatch):
+        """Parked finding (was issue #245): `staged_install` seeds a fresh staging
+        directory with whatever BWA sidecars (`.amb`/`.ann`/`.bwt`/`.pac`/`.sa`) an
+        earlier install left beside this exact FASTA path, and
+        `index_reference_with_aligners` treats their mere presence as proof the index
+        already matches the FASTA - it never actually compares them. Just above this
+        call, `decompress_source` unconditionally rewrites the FASTA from the just
+        -verified archive on every pass through this loop (see its own docstring), so
+        after a maintainer repins this genome's `source_sha256`, a `force_reindex=False`
+        call here would leave the *old* index sitting beside the *new* sequence. This
+        pins the fix: the genome loop must always force a reindex, since it always just
+        replaced the FASTA.
+        """
+        urls: list[str] = []
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        monkeypatch.setattr(install_references, "download_file", self._download(self.GENOME, urls))
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            install_references,
+            "index_reference_with_aligners",
+            lambda ref_path, aligners, threads=4, force_reindex=False: (
+                calls.append({"ref_path": ref_path, "force_reindex": force_reindex}) or {}
+            ),
+        )
+
+        install_references.install_from_source(self._config(digest), tmp_path, ["hg19"], {"bwa": {}}, index_threads=2)
+
+        assert len(calls) == 1
+        assert calls[0]["force_reindex"] is True, (
+            "a stale BWA index left beside a freshly-replaced FASTA must always be rebuilt"
+        )
+
     def test_a_successful_aligner_index_does_not_stop_the_build(self, tmp_path, monkeypatch):
         """The complement of the test above: a green index result must not raise."""
         digest = self._gz_digest(tmp_path, self.GENOME)
@@ -836,6 +1031,107 @@ class TestInstallFromSource:
         assert "filter_config.json" in str(excinfo.value)
         assert "MUC1_motifs_Rev_com.fa" not in str(excinfo.value), "only the absent seed should be named"
         assert urls == [], "the preflight must run before the first download"
+
+    def test_a_downloadable_seed_absent_at_preflight_time_does_not_trip_it(self, tmp_path, monkeypatch):
+        """Carry-forward #4 (parked PR-1 minor): `MUC1_motifs_Rev_com.fa` is a
+        downloadable `own_repository_references.raw_files` entry that
+        `_install_source_seeds` fetches later in the same `install_from_source` run, so
+        the preflight must not require it to already exist - only `filter_config.json`,
+        which has no download source, still has to be staged in advance. This was latent
+        rather than live: every shipped path stages all four seeds before calling
+        `--from-source`, so nothing previously reached a fresh `output_dir` missing only
+        the downloadable one. Testing `_preflight_literal_seeds` directly, rather than
+        through `install_from_source`, isolates the fix from the rest of the pipeline the
+        full run below also exercises.
+        """
+        config = {
+            "own_repository_references": {
+                "raw_files": [{"url": "https://x/seed.fa", "target_path": "MUC1_motifs_Rev_com.fa"}]
+            },
+            "derivations": [
+                {
+                    "kind": "literal",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                }
+            ],
+        }
+        # Neither seed is on disk. Without the fix both would be named as missing.
+        with pytest.raises(RuntimeError) as excinfo:
+            install_references._preflight_literal_seeds(config, tmp_path)
+
+        assert "filter_config.json" in str(excinfo.value)
+        assert "MUC1_motifs_Rev_com.fa" not in str(excinfo.value), (
+            "a seed own_repository_references can fetch must not be required up front"
+        )
+
+    def test_a_seed_with_no_download_source_anywhere_is_still_required(self, tmp_path):
+        """The complement of the test above: when nothing in the config can fetch a
+        named seed, it is required exactly as before the fix."""
+        config = {
+            "derivations": [
+                {
+                    "kind": "literal",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                }
+            ]
+        }
+
+        with pytest.raises(RuntimeError) as excinfo:
+            install_references._preflight_literal_seeds(config, tmp_path)
+
+        assert "filter_config.json" in str(excinfo.value)
+        assert "MUC1_motifs_Rev_com.fa" in str(excinfo.value)
+
+    def test_a_fresh_from_source_run_succeeds_with_only_the_non_downloadable_seed_staged(self, tmp_path, monkeypatch):
+        """The full defect the parked minor named: a fresh `output_dir` that stages only
+        `filter_config.json` (no download source) and leaves `MUC1_motifs_Rev_com.fa` to
+        be fetched must not fail preflight - and must actually complete, proving
+        `_install_source_seeds` really does fetch it before `run_derivations` needs it.
+        """
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        seed_payload = b">A\nAAA\n"
+        merged_digest = hashlib.sha256(b">A-A\nAAAAAA\n").hexdigest()
+
+        def _download(url, dest_path):
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            if dest_path.suffix == ".gz":
+                _gz(dest_path, self.GENOME)
+            else:
+                dest_path.write_bytes(seed_payload)
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        (tmp_path / "filter_config.json").write_text("{}", encoding="utf-8")
+
+        config = self._config(
+            digest,
+            derivations=[
+                {
+                    "kind": "literal",
+                    "config_key": "muc1_reference_vntr",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                    "expected_sha256": merged_digest,
+                }
+            ],
+        )
+        config["own_repository_references"] = {
+            "raw_files": [
+                {
+                    "url": "https://x/seed.fa",
+                    "target_path": "MUC1_motifs_Rev_com.fa",
+                    "source_sha256": hashlib.sha256(seed_payload).hexdigest(),
+                }
+            ]
+        }
+
+        installed = install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
+
+        assert installed == {"hg19": tmp_path / "alignment" / "chr1.hg19.fa"}
+        assert (tmp_path / "MUC1_motifs_Rev_com.fa").read_bytes() == seed_payload
+        assert (tmp_path / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa").exists()
 
     def test_a_shark_derivation_does_not_trip_the_seed_preflight(self, tmp_path, monkeypatch):
         """Only `literal` derivations read seeds; a region cut reads an installed genome."""
@@ -974,7 +1270,9 @@ class TestInstallFromSource:
         monkeypatch.setattr(
             install_references,
             "process_own_repository_references",
-            lambda refs, out, skip, md5: requested.extend(f["target_path"] for f in refs["raw_files"]),
+            lambda refs, out, skip, md5, release_spec=None: requested.extend(
+                f["target_path"] for f in refs["raw_files"]
+            ),
         )
         monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
         config = {
@@ -1030,7 +1328,7 @@ class TestInstallFromSource:
         monkeypatch.setattr(
             install_references,
             "process_vntyper_references",
-            lambda refs, out, bwa, skip, md5: seen.extend(refs),
+            lambda refs, out, bwa, skip, md5, release_spec=None: seen.extend(refs),
         )
         config = {
             "vntyper_references": {
@@ -1041,6 +1339,185 @@ class TestInstallFromSource:
         install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
 
         assert seen == ["vntr_db_advntr"]
+
+
+# =============================================================================
+# Seed digest verification wired into the real download paths
+# (MAJOR 3, milestone-5 PR-2 review)
+# =============================================================================
+
+
+class TestProcessOwnRepositoryReferencesVerifiesSeeds:
+    def test_a_freshly_downloaded_seed_matching_its_digest_is_indexed(self, tmp_path, monkeypatch):
+        payload = b"the real seed bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+        calls: list[str] = []
+
+        def _download(url, dest_path):
+            dest_path.write_bytes(payload)
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
+        config = {
+            "raw_files": [
+                {
+                    "url": "https://x/code-adVNTR_RUs.fa",
+                    "target_path": "code-adVNTR_RUs.fa",
+                    "source_sha256": digest,
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert (tmp_path / "code-adVNTR_RUs.fa").read_bytes() == payload
+        assert len(calls) == 1, "indexing must still run for a verified seed"
+
+    def test_a_freshly_downloaded_seed_failing_its_digest_is_rejected_before_indexing(self, tmp_path, monkeypatch):
+        def _download(url, dest_path):
+            dest_path.write_bytes(b"wrong bytes entirely")
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        calls: list[str] = []
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
+        config = {
+            "raw_files": [
+                {
+                    "url": "https://x/code-adVNTR_RUs.fa",
+                    "target_path": "code-adVNTR_RUs.fa",
+                    "source_sha256": "a" * 64,
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert calls == [], "a rejected seed must never be indexed"
+        assert not (tmp_path / "code-adVNTR_RUs.fa").exists()
+
+    def test_a_stale_preexisting_seed_is_rejected_not_silently_extracted_and_indexed(self, tmp_path, monkeypatch):
+        """The literal MAJOR 3 scenario: `download_file` skips a destination that
+        already exists, so a stale or corrupted `code-adVNTR_RUs.fa` sitting in the
+        output tree from an earlier partial run must not be indexed and activated
+        without complaint. `download_file` is deliberately left un-mocked here: since
+        the target already exists, its real `if dest_path.exists(): return` guard is
+        what makes this scenario possible in production, and the fix must hold even
+        when nothing else intercepts the call.
+        """
+        target = tmp_path / "code-adVNTR_RUs.fa"
+        target.write_bytes(b"stale, corrupted from an earlier partial run")
+        calls: list[str] = []
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, calls))
+        config = {
+            "raw_files": [
+                {
+                    # A URL that would fail loudly if ever actually requested - proving
+                    # the rejection comes from the digest check, not from the network.
+                    "url": "https://seed.invalid/code-adVNTR_RUs.fa",
+                    "target_path": "code-adVNTR_RUs.fa",
+                    "source_sha256": hashlib.sha256(b"the real seed bytes").hexdigest(),
+                    "index_command": "samtools faidx {path}",
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.process_own_repository_references(config, tmp_path, False, {})
+
+        assert calls == [], "a stale seed must never reach indexing"
+        assert not target.exists(), "the stale seed must be removed, not left for a retry to reuse silently"
+
+    def test_a_release_spec_seed_digest_is_honoured_when_it_agrees(self, tmp_path, monkeypatch):
+        payload = b"the real seed bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        config = {
+            "raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa", "source_sha256": digest}]
+        }
+
+        install_references.process_own_repository_references(
+            config, tmp_path, True, {}, release_spec={"seeds": {"code-adVNTR_RUs.fa": {"sha256": digest}}}
+        )
+
+        assert (tmp_path / "code-adVNTR_RUs.fa").read_bytes() == payload
+
+    def test_a_release_spec_seed_digest_that_disagrees_is_refused(self, tmp_path, monkeypatch):
+        payload = b"the real seed bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        config = {
+            "raw_files": [{"url": "https://x/f.fa", "target_path": "code-adVNTR_RUs.fa", "source_sha256": digest}]
+        }
+
+        with pytest.raises(ValueError, match="trust anchor"):
+            install_references.process_own_repository_references(
+                config, tmp_path, True, {}, release_spec={"seeds": {"code-adVNTR_RUs.fa": {"sha256": "f" * 64}}}
+            )
+
+
+class TestProcessVntyperReferencesVerifiesSeeds:
+    @staticmethod
+    def _zip_bytes() -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("vntr_db_advntr/hg19_muc1.db", "hg19 db")
+        return buffer.getvalue()
+
+    def test_a_freshly_downloaded_database_matching_its_digest_is_extracted(self, tmp_path, monkeypatch):
+        payload = self._zip_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        monkeypatch.setattr(install_references, "download_file", lambda url, dest: dest.write_bytes(payload))
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://x/db.zip",
+                "target_path": "db.zip",
+                "source_sha256": digest,
+                "extract_to": ".",
+            }
+        }
+
+        install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
+
+        assert (tmp_path / "vntr_db_advntr" / "hg19_muc1.db").exists()
+
+    def test_a_stale_preexisting_database_is_rejected_not_silently_extracted(self, tmp_path, monkeypatch):
+        """MAJOR 3 names `vntr_db_advntr.zip` explicitly: a stale or corrupted copy
+        already in the output tree must not be extracted and activated unchecked."""
+        target = tmp_path / "vntr_db_advntr.zip"
+        target.write_bytes(b"stale, corrupted from an earlier partial run")
+        config = {
+            "vntr_db_advntr": {
+                "url": "https://seed.invalid/db.zip",
+                "target_path": "vntr_db_advntr.zip",
+                "source_sha256": hashlib.sha256(self._zip_bytes()).hexdigest(),
+                "extract_to": ".",
+            }
+        }
+
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            install_references.process_vntyper_references(config, tmp_path, "bwa", True, {})
+
+        assert not target.exists()
+        assert not (tmp_path / "vntr_db_advntr").exists(), "a rejected archive must never be extracted"
+
+
+class TestInstallSourceSeedsThreadsTheReleaseSpec:
+    def test_the_release_spec_reaches_process_own_repository_references(self, tmp_path, monkeypatch):
+        seen: dict = {}
+        monkeypatch.setattr(
+            install_references,
+            "process_own_repository_references",
+            lambda refs, out, skip, md5, release_spec=None: seen.update(release_spec=release_spec),
+        )
+        config = {"own_repository_references": {"raw_files": [{"url": "https://x/seed.fa", "target_path": "seed.fa"}]}}
+        spec = {"seeds": {"seed.fa": {"sha256": "a" * 64}}}
+
+        install_references._install_source_seeds(config, tmp_path, release_spec=spec)
+
+        assert seen["release_spec"] == spec
 
 
 # =============================================================================
@@ -1132,6 +1609,24 @@ class TestPartialSelectionAgainstTheShippedConfig:
             "run",
             _fake_samtools({"chr1:155158000-155163000": self.HG19_REGION_PAYLOAD}, []),
         )
+
+        # MAJOR 3 (milestone-5 PR-2 review): `--from-source` now verifies every seed
+        # against a committed digest, including one it finds already present - see
+        # `_download` above. The fake bytes this fixture stages or fabricates for each
+        # seed must therefore match the digest this test hands back to the caller, or
+        # every test built on this fixture would fail the new check instead of
+        # exercising what it is actually about.
+        seed_digests = {
+            "MUC1_motifs_Rev_com.fa": hashlib.sha256((tmp_path / "MUC1_motifs_Rev_com.fa").read_bytes()).hexdigest(),
+            "filter_config.json": hashlib.sha256((tmp_path / "filter_config.json").read_bytes()).hexdigest(),
+            "code-adVNTR_RUs.fa": hashlib.sha256(b">seed\nACGT\n").hexdigest(),
+            "vntr_db_advntr.zip": hashlib.sha256(advntr_zip).hexdigest(),
+        }
+        for entry in config["own_repository_references"]["raw_files"]:
+            digest = seed_digests.get(entry["target_path"])
+            if digest is not None:
+                entry["source_sha256"] = digest
+        config["vntyper_references"]["vntr_db_advntr"]["source_sha256"] = seed_digests["vntr_db_advntr.zip"]
 
         probe = tmp_path / "probe.gz"
         _gz(probe, genome)
@@ -1226,11 +1721,20 @@ class TestMainRouting:
         monkeypatch.setattr(install_references, "install_from_source", _record_into(seen))
         for legacy in ("process_ucsc_references", "process_vntyper_references", "process_own_repository_references"):
             monkeypatch.setattr(install_references, legacy, _forbidden(legacy))
+        monkeypatch.setattr(install_references, "install_from_bundle", _forbidden("install_from_bundle"))
 
         install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"], from_source=True)
 
         assert seen["references"] == ["hg19"]
-        assert seen["output_dir"] == tmp_path
+        # Task 11 / carry-forward #2 (PR-1 Codex finding M5): `main()` now stages the
+        # `--from-source` build too, so `install_from_source` is handed a staging
+        # directory - a sibling of `tmp_path` - rather than `tmp_path` itself. Activation
+        # happens only after it returns without raising; see
+        # `test_a_successful_from_source_run_via_main_lands_at_the_real_output_dir` below
+        # for proof the *final* result still ends up at the real `output_dir`.
+        assert seen["output_dir"] != tmp_path
+        assert seen["output_dir"].parent == tmp_path.parent
+        assert seen["output_dir"].name.startswith(f".{tmp_path.name}.staging.")
         assert seen["release_spec"] is None
         # `skip_indexing` empties the aligner set, and it is threaded on separately so the
         # seeds and the adVNTR database are not indexed either.
@@ -1254,22 +1758,69 @@ class TestMainRouting:
         assert seen["index_threads"] == 9
         assert seen["skip_indexing"] is False
 
-    def test_without_the_flag_the_legacy_path_is_unchanged(self, tmp_path, monkeypatch):
-        seen: list[str] = []
+    def test_a_successful_from_source_run_via_main_lands_at_the_real_output_dir(self, tmp_path, monkeypatch):
+        """The staging wrapper introduced for carry-forward #2 must be invisible on success:
+        whatever `install_from_source` writes into the staging directory it is handed
+        ends up at the real, literal `output_dir` once `main()` returns, and no staging
+        or quarantine directory is left behind."""
+
+        def _fake_build(cfg, out, refs, aligners, index_threads, release_spec=None, skip_indexing=False):
+            (out / "alignment").mkdir(parents=True, exist_ok=True)
+            (out / "alignment" / "chr1.hg19.fa").write_text("built", encoding="utf-8")
+            return {"hg19": out / "alignment" / "chr1.hg19.fa"}
+
+        monkeypatch.setattr(install_references, "install_from_source", _fake_build)
+
+        install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"], from_source=True)
+
+        assert (tmp_path / "alignment" / "chr1.hg19.fa").read_text(encoding="utf-8") == "built"
+        assert not list(tmp_path.parent.glob(f".{tmp_path.name}.staging.*"))
+        assert not list(tmp_path.parent.glob(f".{tmp_path.name}.previous.*"))
+
+    def test_a_from_source_failure_via_main_leaves_a_pre_existing_tree_untouched(self, tmp_path, monkeypatch):
+        """The other half of carry-forward #2: a late `--from-source` failure must not
+        corrupt or partially replace whatever was already installed, the same guarantee
+        `install_from_bundle` gets from `staged_install` directly."""
+        (tmp_path / "alignment").mkdir()
+        (tmp_path / "alignment" / "chr1.hg19.fa").write_text("previous install", encoding="utf-8")
+
+        def _boom(cfg, out, refs, aligners, index_threads, release_spec=None, skip_indexing=False):
+            (out / "alignment").mkdir(parents=True, exist_ok=True)
+            (out / "alignment" / "chr1.hg38.fa").write_text("half-built", encoding="utf-8")
+            raise RuntimeError("network died mid-build")
+
+        monkeypatch.setattr(install_references, "install_from_source", _boom)
+
+        with pytest.raises(RuntimeError, match="network died mid-build"):
+            install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"], from_source=True)
+
+        assert (tmp_path / "alignment" / "chr1.hg19.fa").read_text(encoding="utf-8") == "previous install"
+        assert not (tmp_path / "alignment" / "chr1.hg38.fa").exists()
+        assert not list(tmp_path.parent.glob(f".{tmp_path.name}.staging.*"))
+
+    def test_without_the_flag_the_bundle_path_is_used(self, tmp_path, monkeypatch):
+        """Task 11: the default path now fetches the published, checksummed release
+        bundle rather than the legacy per-section download from six third-party hosts."""
+        seen: dict = {}
+
+        def _record_bundle(cfg, out, refs):
+            seen.update(output_dir=out, references=refs)
+
+        monkeypatch.setattr(install_references, "install_from_bundle", _record_bundle)
         monkeypatch.setattr(
             install_references, "install_from_source", _forbidden("install_from_source", exception=AssertionError)
         )
-        monkeypatch.setattr(
-            install_references,
-            "process_ucsc_references",
-            lambda refs, out, bwa, skip, md5, aligners=None, index_threads=4: seen.extend(refs),
-        )
-        monkeypatch.setattr(install_references, "process_vntyper_references", lambda refs, out, bwa, skip, md5: None)
-        monkeypatch.setattr(install_references, "process_own_repository_references", lambda refs, out, skip, md5: None)
+        for legacy in ("process_ucsc_references", "process_vntyper_references", "process_own_repository_references"):
+            monkeypatch.setattr(install_references, legacy, _forbidden(legacy))
 
         install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"])
 
-        assert seen == ["hg19"]
+        assert seen["references"] == ["hg19"]
+        # Unlike the `--from-source` branch, `install_from_bundle` stages its own
+        # install (its own direct unit tests in test_reference_bundle_install.py require
+        # that), so `main()` hands it `output_dir` directly rather than a staging
+        # substitute computed here.
+        assert seen["output_dir"] == tmp_path
 
     def test_a_release_spec_path_is_loaded_and_handed_over(self, tmp_path, monkeypatch):
         spec_path = tmp_path / "spec.json"
@@ -1365,7 +1916,9 @@ class TestCliSurface:
             cli_handlers.handle_install_references(args, {}, build_parser(), 20, None)
 
     def test_the_from_source_help_does_not_promise_more_than_it_delivers(self):
-        """`filter_config.json` has no download source, so the flag needs staged seeds."""
+        """The seeds are fetched automatically now, but `--from-source` still needs
+        network access for them (and for the genomes), so the help must not claim
+        otherwise."""
         help_text = _install_option_help("--from-source")
 
         assert "needs no access to the reference release" not in help_text
@@ -1419,6 +1972,20 @@ class TestShippedConfig:
 
         assert digests == SOURCE_SHA256
 
+    def test_every_committed_seed_carries_a_source_digest(self):
+        """MAJOR 3: `--from-source` refuses to install a seed with no committed digest,
+        so the four the review named must actually carry one in the shipped config."""
+        config = _shipped_config()
+        raw_files = {
+            entry["target_path"]: entry.get("source_sha256")
+            for entry in config["own_repository_references"]["raw_files"]
+        }
+        digests = {name: raw_files[name] for name in ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")}
+        digests["filter_config.json"] = raw_files["filter_config.json"]
+        digests["vntr_db_advntr.zip"] = config["vntyper_references"]["vntr_db_advntr"]["source_sha256"]
+
+        assert digests == SEED_SHA256
+
     def test_ensembl_is_pinned_to_an_explicit_release_not_current(self):
         """A digest beside a mutable `current` URL rots at the next Ensembl release."""
         ensembl = _shipped_config()["ensembl_references"]
@@ -1434,3 +2001,33 @@ class TestShippedConfig:
         for entry in _shipped_config()["common_references"]:
             assert entry["config_key"]
             assert entry["installed_path"]
+
+    def test_every_genome_entry_declares_a_kind_installed_path_and_bundle_asset(self):
+        """`canonical_reference_keys` only reads `installed_path`, but `kind`, `asset`
+        and `asset_sha256` are the bundle metadata Task 11's downloader will need - and a
+        missing one would ship silently, since nothing in this file's own dispatch reads
+        them yet."""
+        for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
+            for ref_id, entry in _shipped_config()[section].items():
+                assert entry["kind"], f"{ref_id} declares no kind"
+                assert entry["installed_path"], f"{ref_id} declares no installed_path"
+                assert entry["asset"], f"{ref_id} declares no bundle asset"
+                assert entry["asset_sha256"], f"{ref_id} declares no bundle asset_sha256"
+
+    def test_the_installed_path_is_the_target_path_without_its_gz_suffix(self):
+        """The writer names the file `--from-source` actually leaves on disk:
+        `decompress_source` strips exactly the `.gz` extension from the downloaded
+        archive, so a hand-typed `installed_path` that disagreed would name a file
+        `canonical_reference_keys` could never find."""
+        for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
+            for ref_id, entry in _shipped_config()[section].items():
+                assert entry["installed_path"] == entry["target_path"].removesuffix(".gz"), (
+                    f"{ref_id}: installed_path does not match target_path with .gz stripped"
+                )
+
+    def test_the_bundle_pointer_names_the_common_asset_and_its_digest(self):
+        bundle = _shipped_config()["bundle"]
+        assert bundle["repository"] == "berntpopp/vntyper-data"
+        assert bundle["release_tag"] == "refs-v1"
+        assert bundle["common_asset"] == "vntyper-references-refs-v1-muc1.tar.gz"
+        assert bundle["common_asset_sha256"]

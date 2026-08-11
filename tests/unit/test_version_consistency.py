@@ -333,21 +333,9 @@ def test_image_required_binaries_are_in_the_conda_environment() -> None:
 #     Both are pinned, both bound the version of their own dependency in their
 #     metadata, and neither can install without pulling these in. Naming them here
 #     would pin a transitive version independently of the package that owns it.
-#
-#   bcrypt - NOT of the same kind, and the reason this guard was written.
-#     `docker/app/utils.py` imports it directly, but `requirements-web.txt` declares
-#     only `passlib[bcrypt]==1.7.4`, and nothing under `docker/app/` imports passlib
-#     any more. The import therefore survives on an *extra* of a distribution that is
-#     otherwise unused - one dependency edit away from an ImportError at container
-#     start. The fix is to declare `bcrypt` directly and drop `passlib`, but
-#     `requirements-web.txt` is an input to the base image's content hash (AGENTS.md
-#     trap 10), so editing it fails every application image build until a new base is
-#     published on `main`. FOLLOW-UP: make that edit as part of the next base-image
-#     rebuild, then delete this entry - the test above will insist on it.
 UNDECLARED_IMPORT_ALLOWANCES: dict[str, str] = {
     "starlette": "fastapi",
     "kombu": "celery",
-    "bcrypt": "passlib",
 }
 
 
@@ -547,3 +535,19 @@ def test_undeclared_import_allowances_are_all_still_needed() -> None:
             stale.append(f"{module}: allowed on the strength of '{provider}', which the image no longer installs")
 
     assert not stale, "UNDECLARED_IMPORT_ALLOWANCES is out of date:\n  " + "\n  ".join(stale)
+
+
+def test_bcrypt_is_declared_directly_and_passlib_is_gone() -> None:
+    """`docker/app/utils.py` imports `bcrypt` directly; the image must declare it directly too.
+
+    Before this pin, `bcrypt` survived only as an extra of `passlib[bcrypt]==1.7.4`, which nothing
+    under `docker/app` imports any more - see the deleted `UNDECLARED_IMPORT_ALLOWANCES` entry this
+    test replaces. `passlib` 1.7.4's backend probe against `bcrypt` >= 4.1 previously meant no cohort
+    passphrase ever worked (#179), so the pin is on the version the published base image actually
+    resolves, not a locally-installed one.
+    """
+    from packaging.requirements import Requirement
+
+    declared = {_normalise(Requirement(line).name) for line in web_requirements()}
+    assert "bcrypt" in declared, "requirements-web.txt must declare bcrypt directly"
+    assert "passlib" not in declared, "passlib should no longer be installed at all"

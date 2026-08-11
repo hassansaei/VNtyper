@@ -10,8 +10,7 @@ from typing import Any
 
 from vntyper.scripts.alignment_contract import index_candidate_names
 from vntyper.scripts.alignment_target_io import bwa_index_paths, reference_index_paths
-from vntyper.scripts.reference_registry import get_coordinate_system
-from vntyper.scripts.reference_resolution import configured_reference_candidates
+from vntyper.scripts.reference_resolution import configured_reference_candidates, resolve_from_mapping
 
 
 def _absolute(path: str | Path) -> Path:
@@ -41,14 +40,30 @@ def _alignment_input_trees(args: argparse.Namespace) -> tuple[Path, ...]:
 
 
 def _selected_bwa_reference(args: argparse.Namespace, config: dict[str, Any]) -> Path | None:
+    """The configured BWA reference path this guard must protect.
+
+    Deliberately **not** the same call as `cli_handlers.select_bwa_reference(...,
+    required=False)`: that helper's contract is to degrade a configured-but-missing
+    file to None (`cli_handlers.py`, `TestThePresentButMissingFileFailsClosed`), which
+    is correct for its own callers but was wrong here - it dropped a not-yet-installed
+    reference out of the protected-path set entirely, so `--log-file` naming that exact
+    path sailed through the guard and `setup_logging` created a regular file there. A
+    configured-but-missing reference is exactly the case this guard exists to protect,
+    so this resolves the same key (via the same `resolve_from_mapping` walk
+    `select_bwa_reference` itself uses) **without** requiring the path to exist.
+
+    Returns None only when nothing is configured for the assembly at all, or when the
+    configured value is present-but-null (an explicit "disabled", not a path to guard)
+    or not a string (malformed config, left to later validation - see
+    `test_malformed_fastq_bwa_reference_is_left_to_pipeline_validation`).
+    """
     assembly = args.reference_assembly or config.get("default_values", {}).get("reference_assembly", "hg19")
-    try:
-        coordinate_system = get_coordinate_system(assembly)
-    except ValueError:
-        coordinate_system = "GRCh37"
-    ucsc_assembly = {"GRCh37": "hg19", "GRCh38": "hg38"}.get(coordinate_system, "hg19")
-    reference = config.get("reference_data", {}).get(f"bwa_reference_{ucsc_assembly}")
-    return Path(reference) if isinstance(reference, str) and reference else None
+    # An unknown assembly still raises and MUST propagate: swallowing it fails the guard
+    # open, and the guard runs before setup_logging opens the log file in append mode.
+    resolved = resolve_from_mapping("bwa", assembly, config.get("reference_data", {}))
+    if resolved is None or not isinstance(resolved.value, str) or not resolved.value:
+        return None
+    return Path(resolved.value)
 
 
 def _pipeline_operator_paths(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Path, ...]:

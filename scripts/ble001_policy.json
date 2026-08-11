@@ -1,11 +1,11 @@
 {
   "reviewed_ruff_version": "ruff 0.14.3",
   "expected_counts": {
-    "normal": 103,
-    "ignore_noqa": 108,
-    "identities": 79,
+    "normal": 102,
+    "ignore_noqa": 107,
+    "identities": 78,
     "categories": {
-      "A": 30,
+      "A": 29,
       "B": 16,
       "C": 33
     }
@@ -490,14 +490,6 @@
       "all_count": 2,
       "category": "A",
       "rationale": "vntyper/scripts/install_references.py::update_config: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
-    },
-    {
-      "path": "vntyper/scripts/install_references.py",
-      "symbol": "write_md5_checksums",
-      "normal_count": 1,
-      "all_count": 1,
-      "category": "A",
-      "rationale": "vntyper/scripts/install_references.py::write_md5_checksums: terminal, re-raise, cleanup, or explicit error-state boundary; no ordinary success value continues"
     },
     {
       "path": "vntyper/scripts/pipeline_guards.py",

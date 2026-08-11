@@ -23,21 +23,68 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
-def start_summary(version=None, input_files=None):
+def start_summary(
+    version=None,
+    input_files=None,
+    reference_assembly_requested=None,
+    reference_key_used=None,
+    reference_path=None,
+    reference_source_effective=None,
+):
     """
     Initializes a new pipeline summary.
+
+    The four ``reference_*`` fields record how the run's reference was actually
+    resolved: a UCSC-family fallback is otherwise invisible to the operator once the
+    run has finished, since nothing downstream re-derives it from the reference path
+    alone. They are optional and default to `None` so a caller that has not resolved a
+    reference (or whose run reads none at all) still gets a normal summary.
+
+    Only a FASTQ run's values are the BWA reference it aligned with (#163). A BAM run
+    reads no reference at all, and a CRAM run decodes against whatever the alignment
+    plan actually resolved - an explicit ``--reference-fasta``, a different configured
+    CRAM candidate, an ambient htslib resolution, or a private M5 cache - which can
+    differ entirely from the configured BWA path; naming the BWA selection for either
+    would be a false provenance claim (MAJOR 5, milestone-5 PR-2 review). Callers pass
+    :func:`vntyper.scripts.pipeline_alignment.resolve_summary_reference_provenance`'s
+    result rather than the raw BWA resolution, so ``reference_key_used`` and
+    ``reference_path`` are `None` for BAM, and ``reference_source_effective`` for BAM
+    and CRAM instead carries the alignment plan's own source label (e.g.
+    ``"not-required"``, ``"cli"``, ``"htslib_resolved"``) rather than a coordinate
+    system name.
 
     Args:
         version (str, optional): vntyper version. Defaults to "unknown" if not provided.
         input_files (dict, optional): Dictionary of input files. Defaults to empty dict.
+        reference_assembly_requested (str, optional): The ``--reference-assembly`` label
+            the run was asked for. Recorded regardless of input type: even a BAM/CRAM
+            run that reads no reference file still uses this to select the correct
+            coordinate-system region, so it is never a false claim the way a BWA path
+            would be.
+        reference_key_used (str, optional): For FASTQ, the ``reference_data`` config key
+            that supplied the BWA reference actually used. `None` for BAM and CRAM,
+            which have no comparable configured key to report.
+        reference_path (str, optional): The reference path actually used - the BWA
+            reference for FASTQ, the alignment plan's proven reference for CRAM, or
+            `None` when the run read no reference file at all (BAM) or the winning CRAM
+            candidate was an ambient htslib resolution with no run-local path.
+        reference_source_effective (str, optional): For FASTQ, the reference source
+            ("ucsc", "ncbi" or "ensembl") the run actually used, which can differ from
+            the requested assembly's own source when a UCSC-family fallback was taken.
+            For BAM and CRAM, the alignment plan's own source label instead.
 
     Returns:
-        dict: A summary dictionary with pipeline start timestamp, version, input files, and an empty steps list.
+        dict: A summary dictionary with pipeline start timestamp, version, input files,
+        the effective reference selection, and an empty steps list.
     """
     return {
         "pipeline_start": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "version": version if version is not None else "unknown",
         "input_files": input_files if input_files is not None else {},
+        "reference_assembly_requested": reference_assembly_requested,
+        "reference_key_used": reference_key_used,
+        "reference_path": reference_path,
+        "reference_source_effective": reference_source_effective,
         "steps": [],
     }
 

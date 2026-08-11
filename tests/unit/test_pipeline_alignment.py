@@ -16,6 +16,7 @@ from vntyper.scripts.pipeline_alignment import (
     format_regions_as_bed,
     prepare_alignment_target,
     prepare_input_alignment_preflight,
+    resolve_summary_reference_provenance,
 )
 from vntyper.scripts.preflight_error_io import PreflightErrorContext
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
@@ -38,6 +39,131 @@ def test_format_regions_as_bed_preserves_the_slice_shape() -> None:
 def test_format_regions_as_bed_rejects_a_malformed_region() -> None:
     with pytest.raises(ValueError, match="Invalid region format: chr1-10-20"):
         format_regions_as_bed("chr1-10-20")
+
+
+# =============================================================================
+# resolve_summary_reference_provenance (MAJOR 5, milestone-5 PR-2 review)
+# =============================================================================
+#
+# `pipeline_summary.json` used to name the resolved BWA reference for every input
+# type, including BAM (which never reads a reference at all) and CRAM (which decodes
+# against whatever `alignment_plan` actually resolved, which can differ entirely from
+# the configured BWA path). These pin the fix.
+
+
+def _plan(*, reference_path: str | None, reference_source: str) -> AlignmentPlan:
+    return AlignmentPlan(
+        input_path="/input/sample.cram",
+        view_path="/out/input.cram",
+        file_format="cram",
+        index_path="/out/input.cram.crai",
+        reference_path=reference_path,
+        reference_source=reference_source,
+        uncovered_contigs=(),
+        unmapped_scan="indexed",
+    )
+
+
+class TestResolveSummaryReferenceProvenance:
+    def test_a_fastq_run_passes_the_bwa_resolution_through_unchanged(self) -> None:
+        """The one case where the recorded fields were already correct - and are the
+        reason they exist at all - must not be touched."""
+        result = resolve_summary_reference_provenance(
+            input_type="FASTQ",
+            bwa_reference_key="bwa_reference_hg19",
+            bwa_reference_path="/refs/hg19.fa",
+            bwa_reference_source="ucsc",
+            alignment_plan=None,
+        )
+
+        assert result.key_used == "bwa_reference_hg19"
+        assert result.path == "/refs/hg19.fa"
+        assert result.source_effective == "ucsc"
+
+    def test_a_fastq_run_ignores_an_alignment_plan_if_one_is_somehow_supplied(self) -> None:
+        """FASTQ never has a plan in practice, but if it did, it must still win on the
+        BWA resolution: that reference is what FASTQ actually aligns against."""
+        result = resolve_summary_reference_provenance(
+            input_type="FASTQ",
+            bwa_reference_key="bwa_reference_hg19",
+            bwa_reference_path="/refs/hg19.fa",
+            bwa_reference_source="ucsc",
+            alignment_plan=_plan(reference_path="/refs/other.fa", reference_source="cli"),
+        )
+
+        assert result.path == "/refs/hg19.fa"
+
+    def test_a_bam_run_claims_no_reference_it_never_read(self) -> None:
+        """A BAM run's alignment plan already carries `reference_path=None`,
+        `reference_source="not-required"` (see `alignment_preflight.run_preflight`'s BAM
+        branch) - read through directly rather than naming the configured BWA path."""
+        result = resolve_summary_reference_provenance(
+            input_type="BAM",
+            bwa_reference_key="bwa_reference_hg19",
+            bwa_reference_path="/refs/hg19.fa",
+            bwa_reference_source="ucsc",
+            alignment_plan=AlignmentPlan(
+                input_path="/input/sample.bam",
+                view_path="/out/input.bam",
+                file_format="bam",
+                index_path="/out/input.bam.bai",
+                reference_path=None,
+                reference_source="not-required",
+                uncovered_contigs=(),
+                unmapped_scan="indexed",
+            ),
+        )
+
+        assert result.key_used is None
+        assert result.path is None
+        assert result.source_effective == "not-required"
+
+    def test_a_cram_run_records_the_reference_it_actually_decoded_with(self) -> None:
+        """The literal MAJOR 5 scenario: a CRAM decoded against a reference distinct
+        from the configured BWA path must record *that* reference, not the BWA one."""
+        result = resolve_summary_reference_provenance(
+            input_type="CRAM",
+            bwa_reference_key="bwa_reference_hg19",
+            bwa_reference_path="/refs/bwa/hg19.fa",
+            bwa_reference_source="ucsc",
+            alignment_plan=_plan(reference_path="/refs/cram/explicit.fa", reference_source="cli"),
+        )
+
+        assert result.key_used is None
+        assert result.path == "/refs/cram/explicit.fa"
+        assert result.path != "/refs/bwa/hg19.fa"
+        assert result.source_effective == "cli"
+
+    def test_a_cram_run_resolved_ambiently_by_htslib_records_no_path_but_names_the_source(self) -> None:
+        """`alignment_preflight.resolve_reference` documents that an ambient
+        htslib-resolved winner has `reference_path=None` - itself an honest "the answer
+        is not a file path", not a reason to fall back to naming the BWA selection."""
+        result = resolve_summary_reference_provenance(
+            input_type="CRAM",
+            bwa_reference_key="bwa_reference_hg19",
+            bwa_reference_path="/refs/bwa/hg19.fa",
+            bwa_reference_source="ucsc",
+            alignment_plan=_plan(reference_path=None, reference_source="htslib_resolved"),
+        )
+
+        assert result.path is None
+        assert result.source_effective == "htslib_resolved"
+
+    def test_a_bam_or_cram_run_with_no_plan_yet_claims_nothing(self) -> None:
+        """Defensive: `run_pipeline` always has a plan for BAM/CRAM by the time it
+        builds the summary, but a missing plan must degrade to "nothing to claim"
+        rather than fall back to the BWA resolution or raise."""
+        result = resolve_summary_reference_provenance(
+            input_type="CRAM",
+            bwa_reference_key="bwa_reference_hg19",
+            bwa_reference_path="/refs/hg19.fa",
+            bwa_reference_source="ucsc",
+            alignment_plan=None,
+        )
+
+        assert result.key_used is None
+        assert result.path is None
+        assert result.source_effective is None
 
 
 def test_prepare_alignment_target_keeps_a_provided_bed_byte_identical(tmp_path: Path) -> None:

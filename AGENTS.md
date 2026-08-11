@@ -122,7 +122,7 @@ collection time, so any other CWD breaks collection, including `-m unit`.
   CI from green to 740 errors with no code change). Add rules to `select` explicitly;
   never rely on defaults. `BLE001` and `G004` are omitted on purpose — see the
   rationale comment in `pyproject.toml`.
-  The reviewed BLE001 policy is 103 normal/108 including suppressions; its executable
+  The reviewed BLE001 policy is 102 normal/107 including suppressions; its executable
   inventory is `scripts/ble001_policy.json` and the policy tests. Not every broad
   handler is a process boundary, so do not globally select or mechanically narrow it.
 - mypy is configured in `[tool.mypy]` in `pyproject.toml`, not via Makefile flags.
@@ -486,11 +486,11 @@ summary | release-summary | none | always records success, failure, skipped jobs
 10. **The image is split in two, and the halves are bound by a content hash.**
     `docker/Dockerfile.base` holds the conda envs, adVNTR and the reference genomes and
     is rebuilt only by `docker-base.yml` when `conda/**`, `requirements-web.txt`,
-    `install_references*` or `dependencies/advntr/**` change. `docker/Dockerfile` holds
-    only the application and builds on top in ~3 min. Both workflows compute the same
-    `hashFiles()` tag, so a base input can never be changed and then silently built
-    against a stale base. What happens when the tag is missing depends on **who is
-    running the workflow**, and the two paths are very different:
+    `install_references*`, `reference_bundle.py` or `dependencies/advntr/**` change.
+    `docker/Dockerfile` holds only the application and builds on top in ~3 min. Both
+    workflows compute the same `hashFiles()` tag, so a base input can never be changed
+    and then silently built against a stale base. What happens when the tag is missing
+    depends on **who is running the workflow**, and the two paths are very different:
     - **Same-repository run** (push, or a PR from a branch in this repo): the
       `base-status` job records `missing=true`, the `build-base` job calls the reusable
       `./.github/workflows/docker-base.yml` and publishes the base, and `build-and-test`
@@ -507,6 +507,29 @@ summary | release-summary | none | always records success, failure, skipped jobs
 
     (The split replaced a `RUN git clone` of GitHub `main`, which meant PR builds never
     tested PR code and a cached layer could serve an arbitrarily stale checkout.)
+
+    `reference/**` is **not** a base input, and has not been since milestone 5: reference
+    data comes from a published, checksummed bundle in `berntpopp/vntyper-data` rather
+    than from tracked files, and `reference/` holds only `README.md`, `pseudonymize.py`
+    and `pseudonymize_config.json`. Changing a reference byte now means publishing a new
+    bundle release and updating the `asset`/`asset_sha256` pins in
+    `install_references_config.json` — which *is* still a base input, so that pin change
+    is what triggers the rebuild instead.
+
+    The `refs` stage installs **all six** physical BWA references (`hg19`, `hg38`,
+    `GRCh37`, `GRCh38`, `hg19_ensembl`, `hg38_ensembl`), not just the two UCSC ones a bare
+    `install-references` run defaults to, and its `config.json` is the repo's file
+    unmodified — no `--config-path` is passed at build time. That matters together: every
+    one of the six `bwa_reference_*` keys `config.json` ships as a real relative path
+    therefore resolves to a file that actually exists in the image, so
+    `reference_registry`'s UCSC-family fallback (`bwa_reference_hg38_ensembl` missing,
+    falling back to `bwa_reference_hg38`) should never fire inside the container for any
+    accepted `--reference-assembly` label — every label gets its own physical file, not a
+    UCSC stand-in. `tests/docker/test_image_structure.py::test_every_declared_reference_exists`
+    is what enforces this: it reads `config.json`'s declared paths from *inside* the image
+    and fails if any of them is missing, so it cannot drift from what the image actually
+    ships. It is also the reason `MAX_IMAGE_BYTES` was raised from 6 GiB to 9 GiB — the
+    four newly-shipped genomes add roughly 2.57 GiB uncompressed.
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
     table; `report_formatting.py` owns the icons, the column projections and the IGV
@@ -567,8 +590,17 @@ summary | release-summary | none | always records success, failure, skipped jobs
     2026-08-11 verification measured 39 Python files at 7,249 of 7,781 measured
     units, or 93.16% aggregate scripts-only branch-inclusive coverage, and 17,310 of
     19,392 measured units, or 89.26% combined branch-inclusive coverage. All 5,432 unit
-    tests passed with no skips and 163 warnings in the maintained Python 3.12.13
-    environment. Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
+    tests passed with no skips, in the maintained Python 3.12.13 environment. **Do not
+    quote a fixed warning count here** - it is not pinned by any gate and drifts with
+    dependency versions, so a number recorded on one date reads as a false regression on
+    another. Measure your own baseline (`pytest -m unit`) before a change and treat a
+    *wider* count than that freshly measured baseline as the signal, never a count quoted
+    in this file. (For calibration only, not as a target: on 2026-08-11, `main` measured
+    5,669 passed / 464 warnings on this machine, and this branch measured the same 464
+    warnings over more tests - both already superseding whatever fixed count was quoted
+    here before, which is exactly the drift this note now warns against instead of
+    restating a new one.)
+    Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
     builder) took the directory to all 40 Python files and `make test-scripts-cov` to
     7,806 of 8,340 measured units, or 93.60%, over 5,665 passing unit tests.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13

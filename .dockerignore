@@ -88,16 +88,13 @@ tests/benchmark/
 
 # Bioinformatics Data Files (CRITICAL - Saves 143GB+)
 # =============================================================================
-# Large reference genome files.
-# Exclude the GENERATED bulk only, not the whole directory. The small tracked files at
-# reference/ top level (~192 KB total) are real image inputs: muc1_region_hg19.fa is
-# required by the SHARK module via shark_config.json, and vntr_db_advntr.zip carries the
-# adVNTR databases that config.json points at. The old Dockerfile obtained them by
-# `git clone`ing the repo; now they come from the build context, so they must not be
-# ignored. Everything multi-GB lives in the two subdirectories below.
-reference/alignment/
-reference/vntr_db_advntr/
-reference/*.log
+# Reference data is no longer a build input. docker/Dockerfile.base's `refs` stage fetches
+# the published, checksummed bundle from berntpopp/vntyper-data at build time instead of
+# reading it out of the build context, so nothing under reference/ needs to reach the
+# daemon. Exclude the whole tree: a local checkout can have several GB installed there by
+# `vntyper install-references`, and sending it as build context would only slow every
+# build down for no benefit.
+reference/
 reference_old/
 
 # User output and downloads

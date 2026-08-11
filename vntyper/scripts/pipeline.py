@@ -30,12 +30,14 @@ from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
     prepare_input_alignment_preflight,
+    resolve_summary_reference_provenance,
 )
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
 from vntyper.scripts.pipeline_inputs import archive_base_name, protect_pipeline_input_ownership, resolve_pipeline_input
 from vntyper.scripts.pipeline_kestrel import run_kestrel_stage
 from vntyper.scripts.pipeline_read_routing import route_converted_fastqs
+from vntyper.scripts.reference_resolution import resolve_from_mapping
 from vntyper.scripts.reference_resolution_environment import pin_reference_resolution as pin_reference_resolution
 from vntyper.scripts.reference_resolution_environment import restore_reference_resolution
 from vntyper.scripts.region_utils import get_region_string_with_fallback
@@ -70,6 +72,20 @@ from vntyper.version import __version__ as VERSION
 logger = logging.getLogger(__name__)
 
 
+def select_advntr_reference(config: dict, reference_assembly: str) -> str | None:
+    """The adVNTR database for an assembly, by coordinate system.
+
+    Args:
+        config: Pipeline configuration.
+        reference_assembly: Supported assembly label.
+
+    Returns:
+        str | None: Database path, or None when no key is configured.
+    """
+    resolved = resolve_from_mapping("advntr", reference_assembly, config.get("reference_data", {}))
+    return resolved.value if resolved is not None else None
+
+
 def run_pipeline(
     bwa_reference,
     output_dir,
@@ -83,6 +99,8 @@ def run_pipeline(
     reference_fasta=None,
     threads=4,
     reference_assembly="hg19",
+    reference_key_used=None,
+    reference_source_effective=None,
     fast_mode=False,
     keep_intermediates=False,
     delete_intermediates=False,
@@ -111,6 +129,14 @@ def run_pipeline(
         reference_fasta (Path, optional): Explicit reference FASTA for CRAM decoding.
         threads (int, optional): Number of threads to use. Default is 4.
         reference_assembly (str, optional): Reference assembly ("hg19" or "hg38").
+        reference_key_used (str, optional): The `reference_data` config key that
+            supplied `bwa_reference`, as resolved by
+            :func:`vntyper.scripts.cli_handlers.select_bwa_reference`. Recorded in the
+            run summary so a UCSC-family fallback is visible in the report.
+        reference_source_effective (str, optional): The reference source
+            ("ucsc", "ncbi" or "ensembl") the run actually used, which can differ from
+            `reference_assembly`'s own source when a fallback was taken. Recorded in
+            the run summary alongside `reference_key_used`.
         fast_mode (bool, optional): Skip filtering steps if True.
         keep_intermediates (bool, optional): Keep intermediate files.
         delete_intermediates (bool, optional): Delete intermediate files after processing.
@@ -220,7 +246,26 @@ def run_pipeline(
         tool_versions = get_tool_versions(config)
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
-        summary = start_summary(version=VERSION, input_files=input_files)
+        # What the run actually used, not what BWA was configured with (MAJOR 5,
+        # milestone-5 PR-2 review): a BAM run never reads a reference, and a CRAM run
+        # decodes against whatever `alignment_plan` resolved above, which can differ
+        # entirely from the configured BWA path. Only FASTQ's own BWA resolution is
+        # correct as recorded, so it passes through unchanged.
+        reference_provenance = resolve_summary_reference_provenance(
+            input_type=input_type,
+            bwa_reference_key=reference_key_used,
+            bwa_reference_path=bwa_reference,
+            bwa_reference_source=reference_source_effective,
+            alignment_plan=alignment_plan,
+        )
+        summary = start_summary(
+            version=VERSION,
+            input_files=input_files,
+            reference_assembly_requested=reference_assembly,
+            reference_key_used=reference_provenance.key_used,
+            reference_path=reference_provenance.path,
+            reference_source_effective=reference_provenance.source_effective,
+        )
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         if input_type in ["BAM", "CRAM"]:
             logger.info(f"Starting {input_type} to FASTQ conversion with specified regions.")
@@ -467,15 +512,7 @@ def run_pipeline(
             advntr_reference = module_args.get("advntr", {}).get("advntr_reference")
 
             if not advntr_reference:
-                ref_map = {
-                    "hg19": "hg19",
-                    "GRCh37": "hg19",
-                    "hg38": "hg38",
-                    "GRCh38": "hg38",
-                }
-                ucsc_style_ref = ref_map.get(reference_assembly, "hg19")
-                advntr_key = f"advntr_reference_vntr_{ucsc_style_ref}"
-                advntr_reference = config.get("reference_data", {}).get(advntr_key)
+                advntr_reference = select_advntr_reference(config, reference_assembly)
             else:
                 if advntr_reference == "hg19":
                     advntr_reference = config.get("reference_data", {}).get("advntr_reference_vntr_hg19")

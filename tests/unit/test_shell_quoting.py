@@ -12,23 +12,26 @@ CRAM branch no longer uses process substitution - it is a plain pipe, see
 :func:`~vntyper.scripts.command_builders.build_cram_unmapped_filter_command` - but ``shell=True`` and
 ``executable="/bin/bash"`` are still required, and so is the quoting this module pins.)
 
-The quoted sites - samtools quickcheck in `utils.validate_bam_file`, and the SAM->BAM conversion, its
-index and the bcftools sort in `kestrel_genotyping` - each get a path with a space *and* a single quote
-in it, then assert on ``shlex.split()`` of the command handed to `run_command`: the operand list Bash
-will actually see. Asserting on the split rather than on the quoted string pins the property that
-matters (one path, one operand) without pinning which escaping style ``shlex.quote`` happens to choose.
-Quoting a path that did not need quoting is a no-op - ``shlex.quote`` leaves anything matching
-``[\\w@%+=:,./-]*`` alone - so the ordinary-path case pins that the everyday command is byte-identical
-to before.
+All five sites are quoted: samtools quickcheck in `utils.validate_bam_file`, the SAM->BAM conversion, its
+index and the bcftools sort in `kestrel_genotyping`, and the aligner indexing command in
+`install_references.execute_aligner_index`. Each test below gets a path with a space *and* a single
+quote in it, then asserts on ``shlex.split()`` of the command handed to `run_command` (or, for the last
+one, `subprocess.run`): the operand list Bash will actually see. Asserting on the split rather than on
+the quoted string pins the property that matters (one path, one operand) without pinning which escaping
+style ``shlex.quote`` happens to choose. Quoting a path that did not need quoting is a no-op -
+``shlex.quote`` leaves anything matching ``[\\w@%+=:,./-]*`` alone - so the ordinary-path case pins that
+the everyday command is byte-identical to before.
 
-The fifth site, `install_references.execute_aligner_index`, is **still unquoted**, and the tests below
-characterise it that way on purpose. `vntyper/scripts/install_references.py` is an input to the Docker
-base-image content hash, so editing it forces a base-image rebuild - which a pull request cannot
-publish, turning the `Build base image` job from skipped into failed. The quoting is deferred to the
-next base-image rebuild, where it lands alongside issue #193 (declaring `bcrypt` directly in
-`docker/requirements-web.txt`), which was held back for exactly the same reason. Characterising rather
-than deleting keeps the site covered and makes the deferral visible: when the rebuild happens, these
-tests fail loudly and are inverted back into the quoted form the others already use.
+The fifth site, `install_references.execute_aligner_index`, was quoted last, on purpose:
+`vntyper/scripts/install_references.py` is an input to the Docker base-image content hash, so editing it
+forces a base-image rebuild - which a pull request cannot publish, turning the `Build base image` job
+from skipped into failed. The quoting was deferred to the next base-image rebuild, where it landed
+alongside issue #193 (declaring `bcrypt` directly in `docker/requirements-web.txt`), which was held back
+for exactly the same reason. It quotes with `install_references._quote`, a three-line copy of
+:func:`~vntyper.scripts.command_builders.quote_path` rather than an import of it, because
+`install_references.py` may import nothing from `vntyper` at module scope (see the import comment at the
+top of that file); `TestQuote` in `tests/unit/test_install_references_derivations.py` pins that the two
+behave identically.
 
 Deliberately *not* quoted in any case: `config["tools"]` entries and the aligner ``index_command``
 templates. Those are command prefixes such as ``mamba run -n envadvntr advntr``, which must stay
@@ -109,19 +112,12 @@ def test_bcftools_sort_quotes_the_vcf_paths(tmp_path) -> None:
     assert shlex.split(run.call_args[0][0]) == ["bcftools", "sort", vcf, "-o", gz, "-W", "-O", "z"]
 
 
-def test_aligner_index_command_does_not_yet_quote_the_reference_path(tmp_path) -> None:
-    """
-    Characterise the *unquoted* reference path: quoting here is deferred to the next base-image rebuild.
+def test_aligner_index_command_quotes_the_reference_path(tmp_path) -> None:
+    """A reference path with a space and a stray quote must reach the aligner as one operand.
 
     The aligner templates are `.format()`ed and run with ``shell=True``, so this path is a
-    caller-controlled operand exactly like the four sites above - but
-    `vntyper/scripts/install_references.py` is an input to the Docker base-image content hash, and
-    editing it forces a rebuild that a pull request cannot publish. The fix therefore rides along with
-    the next base-image rebuild, together with issue #193.
-
-    Until then this is what Bash actually receives: the path goes in bare, so a directory with a space
-    becomes two operands and the stray single quote leaves the command unterminated - ``shlex.split``
-    refuses it, which is precisely the defect the deferred quoting closes.
+    caller-controlled operand exactly like the four sites above, quoted with
+    `install_references._quote` before the template is formatted.
     """
     ref = Path(_make(tmp_path, "ref.fa"))
     aligner_info = {"index_command": "bwa index {ref_path}", "supports_threading": False}
@@ -130,23 +126,12 @@ def test_aligner_index_command_does_not_yet_quote_the_reference_path(tmp_path) -
         install_references.execute_aligner_index(ref, "bwa", aligner_info)
 
     command = run.call_args[0][0]
-    assert command == f"bwa index {ref}", "the reference path is interpolated bare, without shlex.quote"
-    with pytest.raises(ValueError):
-        shlex.split(command)
+    assert shlex.split(command) == ["bwa", "index", str(ref)]
 
 
-def test_aligner_index_derived_index_locations_are_not_yet_quoted(tmp_path) -> None:
-    """
-    Characterise the *unquoted* derived locations; quoting is deferred with the rest of this site.
-
-    `index_dir` and `index_base` are derived from the reference path, so they inherit its spaces - and
-    today they too are interpolated bare. See the module docstring for why the fix waits for the next
-    base-image rebuild.
-
-    With two paths on the line the two stray single quotes balance each other, so unlike the single-path
-    case Bash raises nothing: it accepts the command and silently mangles it, swallowing
-    ``--output-directory`` inside a quoted run. Neither path survives as an operand.
-    """
+def test_aligner_index_derived_index_locations_are_quoted(tmp_path) -> None:
+    """`index_dir` and `index_base` are derived from the reference path, so they inherit its spaces
+    and are quoted the same way it is - each survives as its own operand."""
     ref = Path(_make(tmp_path, "ref.fa"))
     aligner_info = {
         "index_command": "dragen-os --build-hash-table true --ht-reference {ref_path} --output-directory {index_dir}",
@@ -158,23 +143,25 @@ def test_aligner_index_derived_index_locations_are_not_yet_quoted(tmp_path) -> N
 
     index_dir = ref.parent / f"{ref.stem}_dragmap_index"
     command = run.call_args[0][0]
-    assert command == f"dragen-os --build-hash-table true --ht-reference {ref} --output-directory {index_dir}"
-
-    operands = shlex.split(command)
-    assert str(ref) not in operands, "the reference path does not survive as a single operand"
-    assert str(index_dir) not in operands, "the index directory does not survive as a single operand"
-    assert "--output-directory" not in operands, "the flag is swallowed into a quoted run"
+    assert shlex.split(command) == [
+        "dragen-os",
+        "--build-hash-table",
+        "true",
+        "--ht-reference",
+        str(ref),
+        "--output-directory",
+        str(index_dir),
+    ]
 
 
 def test_the_thread_count_is_not_quoted(tmp_path) -> None:
     """
     Only paths are ever candidates for quoting; a numeric operand must stay a bare number.
 
-    This one uses a shell-safe reference path, so it holds both today and after the deferred quoting
-    lands - ``shlex.quote`` is a no-op on such a path, and it must never touch the thread count.
+    Uses a reference path with a space and a stray quote so the same command line proves both things
+    at once: the path reaches bwa-mem2 as one operand, and the thread count next to it stays bare.
     """
-    ref = tmp_path / "ref.fa"
-    ref.write_text("x", encoding="utf-8")
+    ref = Path(_make(tmp_path, "ref.fa"))
     aligner_info = {"index_command": "bwa-mem2 index -t {threads} {ref_path}", "supports_threading": True}
 
     with patch.object(install_references.subprocess, "run") as run:

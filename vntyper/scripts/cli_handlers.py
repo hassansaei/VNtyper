@@ -32,6 +32,8 @@ from vntyper.scripts.install_references import main as install_references_main
 # Import the online mode function
 from vntyper.scripts.online_mode import run_online_mode
 from vntyper.scripts.pipeline import run_pipeline
+from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
+from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +173,125 @@ def handle_install_references(
     sys.exit(0)
 
 
+def _resolve_bwa_reference(
+    config: dict[str, Any], reference_assembly: str, *, required: bool = True
+) -> ResolvedReference | None:
+    """Resolve the BWA reference config entry for an assembly, failing closed.
+
+    Shared by :func:`select_bwa_reference`, which reduces this to a path, and by
+    :func:`handle_pipeline`, which also needs the matched key and fallback status to
+    record in the run summary (``reference_key_used``, ``reference_source_effective``) -
+    re-deriving them independently at the call site would risk disagreeing with what was
+    actually resolved.
+
+    Args:
+        config: Pipeline configuration.
+        reference_assembly: Supported assembly label.
+        required: Whether an unresolved reference raises (True, the run path) or returns
+            None (False, the logging-safety guard).
+
+    Returns:
+        ResolvedReference | None: The matched key, its value and whether it was a
+        UCSC-family fallback, or None when nothing resolves and `required` is False.
+
+    Raises:
+        ValueError: If no configured key resolves, if the key that resolved is present
+            with an explicit ``null`` (deliberately disabled), or if a resolved path
+            names no file on disk, and `required` is True in each case.
+        ValueError: If `reference_assembly` is not a supported label. This must NOT be
+            swallowed by callers - an unknown assembly is a configuration error, not a
+            missing file.
+    """
+    resolved = resolve_from_mapping("bwa", reference_assembly, config.get("reference_data", {}))
+    keys = ", ".join(reference_keys("bwa", reference_assembly))
+
+    # A present-but-non-string value (an int, a dict, ...) is malformed config, not a
+    # usable path. Treating it as unresolved - rather than handing it to `Path()` further
+    # down the call chain - is what lets `required=False` return None instead of the
+    # caller crashing on a type it never asked to handle; `required=True` still fails
+    # closed, just with a clear message instead of a `Path`/`TypeError` two frames later.
+    if resolved is not None and isinstance(resolved.value, str) and resolved.value:
+        if not Path(resolved.value).exists():
+            # Presence beat truthiness to get here, but a configured path that names no
+            # file on disk is not a usable reference either. A default `install-references`
+            # run only installs hg19/hg38, so a shipped config.json that also declares
+            # bwa_reference_GRCh38 as a real (but not-yet-installed) relative path used to
+            # resolve here, is_fallback=False, no warning - and the run died several stages
+            # later with a message naming neither the assembly nor the remedy. Falling
+            # through to the next tier (the UCSC-family key, when one exists) instead of
+            # raising here would silently align a GRCh38-labelled run against UCSC sequence
+            # - precisely the defect this milestone exists to kill - so this fails closed at
+            # whichever tier `resolve_from_mapping` already matched, rather than re-walking
+            # `reference_keys` to find one whose file happens to exist.
+            if not required:
+                return None
+            message = (
+                f"BWA reference for --reference-assembly {reference_assembly!r} is configured at "
+                f"reference_data[{resolved.key!r}] = {resolved.value!r}, but that file does not exist. "
+                f"Run `vntyper install-references --references {physical_reference_id(reference_assembly)}` "
+                "to install it."
+            )
+            logger.error(message)
+            raise ValueError(message)
+        if resolved.is_fallback:
+            # Name the effective source plainly. Deriving it from the key suffix would be
+            # fragile; the fallback key is always the UCSC family key, so the source is ucsc.
+            logger.warning(
+                f"--reference-assembly {reference_assembly!r} has no {keys.split(', ')[0]!r} entry; "
+                f"falling back to {resolved.key!r}. This run therefore uses 'ucsc' sequence, "
+                f"not {get_reference_source(reference_assembly)!r}. "
+                f"Run `vntyper install-references` to install the requested reference."
+            )
+        return resolved
+
+    if not required:
+        return None
+
+    if resolved is not None and resolved.value is None:
+        # Present with an explicit null is a deliberate "disabled", not an absence - say
+        # so, distinctly from the "nothing configured at all" message below, the way
+        # `shark_filtering.select_muc1_region_fasta` already distinguishes the two.
+        message = (
+            f"reference_data[{resolved.key!r}] is null; BWA reference for --reference-assembly "
+            f"{reference_assembly!r} is disabled. Tried: {keys}. "
+            "Run `vntyper install-references` or set one of those keys."
+        )
+    else:
+        message = (
+            f"No BWA reference configured for --reference-assembly {reference_assembly!r}. "
+            f"Tried: {keys}. Run `vntyper install-references` or set one of those keys."
+        )
+    logger.error(message)
+    raise ValueError(message)
+
+
+def select_bwa_reference(config: dict[str, Any], reference_assembly: str, *, required: bool = True) -> str | None:
+    """Resolve the BWA reference for an assembly, failing closed.
+
+    Both this and `cli_logging_safety` must agree, or the guard that refuses to let
+    `--log-file` name an operator input inspects a different file from the one the run
+    opens for writing.
+
+    Args:
+        config: Pipeline configuration.
+        reference_assembly: Supported assembly label.
+        required: Whether an unresolved reference raises (True) or returns None
+            (False).
+
+    Returns:
+        str | None: Path to the reference FASTA, or None when `required` is False and
+        nothing resolves.
+
+    Raises:
+        ValueError: If no configured key resolves and `required` is True.
+        ValueError: If `reference_assembly` is not a supported label. This must NOT be
+            swallowed by callers - an unknown assembly is a configuration error, not a
+            missing file.
+    """
+    resolved = _resolve_bwa_reference(config, reference_assembly, required=required)
+    return resolved.value if resolved is not None else None
+
+
 def handle_pipeline(
     args: argparse.Namespace,
     config: dict[str, Any],
@@ -266,21 +387,26 @@ def handle_pipeline(
         logger.debug("Shark module detected with BAM/CRAM input; exiting.")
         sys.exit(1)
 
-    # Determine which BWA reference to use from config using registry
-    from vntyper.scripts.reference_registry import get_coordinate_system
-
-    try:
-        coord_system = get_coordinate_system(args.reference_assembly)
-    except ValueError:
-        logger.warning(f"Unknown assembly '{args.reference_assembly}', defaulting to GRCh37")
-        coord_system = "GRCh37"
-
-    # Map coordinate system to UCSC-style name for BWA reference lookup
-    ucsc_map = {"GRCh37": "hg19", "GRCh38": "hg38"}
-    ucsc_style_ref = ucsc_map.get(coord_system, "hg19")
-    bwa_key = f"bwa_reference_{ucsc_style_ref}"
-    bwa_reference = config.get("reference_data", {}).get(bwa_key)
-    logger.debug(f"Using BWA reference {bwa_key}: {bwa_reference}")
+    # Determine which BWA reference to use, resolving membership-first through the
+    # shared registry (#163): `cli_logging_safety`'s pre-open guard must resolve to the
+    # same file this does, or `--log-file` can end up appending into whichever reference
+    # the guard did not check. Only a FASTQ run actually aligns with it -
+    # `pipeline_inputs.py` raises for a missing BWA reference only when
+    # `input_type == "FASTQ"`, and the BAM/CRAM branches never read it - so `required` is
+    # tied to that, not to a blanket True. A BAM/CRAM run resolves best-effort (its result
+    # still feeds input-ownership protection and archiving) so a config with no BWA keys
+    # at all does not abort a run that never needed one; a FASTQ run still fails closed,
+    # with `pipeline_inputs`'s own message one layer down if this resolves to None anyway.
+    is_fastq_input = not args.bam and not args.cram
+    resolved_bwa_reference = _resolve_bwa_reference(config, args.reference_assembly, required=is_fastq_input)
+    bwa_reference = resolved_bwa_reference.value if resolved_bwa_reference is not None else None
+    reference_key_used = resolved_bwa_reference.key if resolved_bwa_reference is not None else None
+    reference_source_effective = None
+    if resolved_bwa_reference is not None:
+        reference_source_effective = (
+            "ucsc" if resolved_bwa_reference.is_fallback else get_reference_source(args.reference_assembly)
+        )
+    logger.debug(f"Using BWA reference {reference_key_used}: {bwa_reference}")
 
     sample_name_val = args.sample_name
     if sample_name_val is None:
@@ -321,6 +447,8 @@ def handle_pipeline(
         reference_fasta=args.reference_fasta,
         threads=args.threads,
         reference_assembly=args.reference_assembly,
+        reference_key_used=reference_key_used,
+        reference_source_effective=reference_source_effective,
         fast_mode=args.fast_mode,
         keep_intermediates=args.keep_intermediates,
         delete_intermediates=args.delete_intermediates,

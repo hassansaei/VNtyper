@@ -38,10 +38,23 @@ def test_cli_reference_and_single_fastq_values_survive_one_handler_contract(tmp_
         ]
     )
 
+    # `_resolve_bwa_reference` (Important 1) now fails closed on a configured-but-missing
+    # BWA reference, and this is a FASTQ run so resolution is required. MINIMAL_CONFIG's
+    # shared "/refs/hg19.fa" is a placeholder `run_pipeline_under_harness` never resolves
+    # as a real path (it hands `bwa_reference` to `run_pipeline` directly), but this test
+    # goes through `handle_pipeline`, which does resolve it - so it needs a file that
+    # actually exists.
+    bwa_reference = tmp_path / "bwa-hg19.fa"
+    bwa_reference.touch()
+    config = {
+        **MINIMAL_CONFIG,
+        "reference_data": {**MINIMAL_CONFIG["reference_data"], "bwa_reference_hg19": str(bwa_reference)},
+    }
+
     with mock.patch.object(cli_handlers, "run_pipeline", autospec=True) as runner:
         cli_handlers.handle_pipeline(
             args,
-            config=MINIMAL_CONFIG,
+            config=config,
             parser=parser,
             log_level_value=logging.INFO,
             log_file_str=None,

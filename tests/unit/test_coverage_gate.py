@@ -245,7 +245,15 @@ def test_contributor_docs_match_the_scripts_quality_scope() -> None:
     assert "7,249 of 7,781 measured units" in normalized_agents
     assert "93.16% aggregate scripts-only branch-inclusive coverage" in normalized_agents
     assert "17,310 of 19,392 measured units, or 89.26% combined branch-inclusive coverage" in normalized_agents
-    assert "All 5,432 unit tests passed with no skips and 163 warnings" in normalized_agents
+    assert "All 5,432 unit tests passed with no skips, in the maintained Python 3.12.13" in normalized_agents
+    # A warning count is not gated anywhere, so pinning one here just goes stale the next
+    # time a dependency changes what it warns about - which is exactly what happened to
+    # the "163 warnings" figure this replaced (milestone 5 measured 464 on both `main` and
+    # this branch, on the same machine). Guard the *policy* instead of a new number: the
+    # doc must tell a contributor to measure their own baseline, and must not silently
+    # regain a stale fixed count.
+    assert "Do not quote a fixed warning count here" in normalized_agents
+    assert "163 warnings" not in agents
     assert "every script was measured above" not in agents
     assert "24 Python files" not in agents
     assert "92.5166935298181%" not in agents

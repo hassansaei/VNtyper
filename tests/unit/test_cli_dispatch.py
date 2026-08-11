@@ -200,6 +200,33 @@ def test_logging_is_configured_before_the_handler_runs(tmp_path, monkeypatch) ->
     assert order == ["setup_logging", "handler"]
 
 
+def test_a_handler_value_error_exits_one_instead_of_escaping_as_a_traceback(tmp_path, monkeypatch, caplog) -> None:
+    """Item 10: a handler-level `ValueError` (AGENTS.md's `logger.error(msg)` then
+    `raise ValueError(msg)` convention, no custom exception classes) must get the same
+    clean `sys.exit(1)` every other CLI-level validation error already gets here, rather
+    than escape `main()` uncaught. `_resolve_bwa_reference`'s new fail-closed error on a
+    present-but-uninstalled BWA reference is what surfaced this, but the fix and this
+    test exercise the real end-to-end path: a genuine FASTQ run through the real
+    `handle_pipeline`, with nothing configured for a required BWA reference.
+    """
+    monkeypatch.setattr(cli, "setup_logging", lambda log_level=logging.INFO, log_file=None: None)
+    monkeypatch.setattr(cli, "load_config", lambda config_path=None: {"reference_data": {}})
+
+    fastq1 = tmp_path / "r1.fastq.gz"
+    fastq1.write_bytes(b"fastq")
+
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(SystemExit) as excinfo,
+    ):
+        cli.main(["pipeline", "--fastq1", str(fastq1), "-o", str(tmp_path / "out")])
+
+    assert excinfo.value.code == 1
+    assert any(
+        record.levelno >= logging.ERROR and "No BWA reference configured" in record.message for record in caplog.records
+    ), "the handler's own diagnostic must not be swallowed by the clean exit"
+
+
 def _called_function_names(module) -> set[str]:
     """Return every function name called anywhere in ``module``'s source.
 

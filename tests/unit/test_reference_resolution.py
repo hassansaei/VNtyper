@@ -137,3 +137,51 @@ def test_reference_coverage_distinguishes_unknown_complete_and_uncovered(
 ) -> None:
     """Missing FAI evidence remains distinct from a known complete reference."""
     assert uncovered_reference_contigs(header_contigs, reference_contigs) == expected
+
+
+class TestResolveFromMapping:
+    """Membership, not truthiness - the rule `configured_reference_candidates` already uses.
+
+    A key present with value None is a deliberate "disabled". Falling through it would
+    silently re-enable a reference an operator switched off.
+    """
+
+    def test_the_physical_key_wins_when_present(self):
+        from vntyper.scripts.reference_resolution import resolve_from_mapping
+
+        mapping = {"bwa_reference_hg38_ensembl": "/refs/ensembl.fa", "bwa_reference_hg38": "/refs/ucsc.fa"}
+        resolved = resolve_from_mapping("bwa", "hg38_ensembl", mapping)
+        assert resolved.key == "bwa_reference_hg38_ensembl"
+        assert resolved.value == "/refs/ensembl.fa"
+        assert resolved.is_fallback is False
+
+    def test_the_family_key_is_used_and_flagged_when_the_physical_key_is_absent(self):
+        from vntyper.scripts.reference_resolution import resolve_from_mapping
+
+        resolved = resolve_from_mapping("bwa", "hg38_ensembl", {"bwa_reference_hg38": "/refs/ucsc.fa"})
+        assert resolved.key == "bwa_reference_hg38"
+        assert resolved.value == "/refs/ucsc.fa"
+        assert resolved.is_fallback is True
+
+    def test_a_present_null_is_authoritative_and_does_not_fall_through(self):
+        from vntyper.scripts.reference_resolution import resolve_from_mapping
+
+        mapping = {"bwa_reference_hg38_ensembl": None, "bwa_reference_hg38": "/refs/ucsc.fa"}
+        resolved = resolve_from_mapping("bwa", "hg38_ensembl", mapping)
+        assert resolved.key == "bwa_reference_hg38_ensembl"
+        assert resolved.value is None
+        assert resolved.is_fallback is False
+
+    def test_no_key_present_at_all_returns_none(self):
+        from vntyper.scripts.reference_resolution import resolve_from_mapping
+
+        assert resolve_from_mapping("bwa", "hg38_ensembl", {}) is None
+
+    def test_both_ncbi_labels_resolve_the_same_entry(self):
+        from vntyper.scripts.reference_resolution import resolve_from_mapping
+
+        mapping = {"bwa_reference_GRCh38": "/refs/ncbi.fna"}
+        for label in ("GRCh38", "hg38_ncbi"):
+            resolved = resolve_from_mapping("bwa", label, mapping)
+            assert resolved.value == "/refs/ncbi.fna", label
+            assert resolved.is_fallback is False, label

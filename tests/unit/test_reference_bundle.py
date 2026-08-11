@@ -157,6 +157,49 @@ class TestSafeExtract:
         assert not (destination.parent / "owned").exists(), "a member was written outside the destination"
         assert not (destination / "pivot").exists()
 
+    def test_a_preexisting_destination_symlink_cannot_redirect_a_member(self, tmp_path, monkeypatch):
+        """Regression (MAJOR 4, milestone-5 PR-2 review): the symlink does not have to be
+        in the archive at all - one already sitting in the destination is enough.
+
+        On Python 3.10.0-3.10.11 and 3.11.0-3.11.3, `tarfile`'s `filter="data"` is
+        unavailable and this member loop is the *only* defence. It validates member
+        names and types, but - before this fix - never resolved the destination path
+        through a symlink that already existed there. `staged_install` seeds staging
+        from the existing tree with `symlinks=True` (see its own docstring), so an
+        `alignment` symlink pointing outside the reference root survives into a fresh
+        install's staging directory, and an ordinary, fully-verified member such as
+        `alignment/chr1.hg19.fa` would be written straight through it - landing outside
+        `destination` even though every per-member check (no `..`, not absolute, not a
+        link itself, a regular file) passes.
+
+        `_EXTRACT_KWARGS` is emptied for the same reason as
+        `test_an_earlier_member_cannot_redirect_a_later_one`: the real value is `{}` on
+        an interpreter `requires-python` still allows, and the member loop has to hold
+        the guarantee entirely on its own.
+        """
+        import vntyper.scripts.reference_bundle as reference_bundle
+
+        monkeypatch.setattr(reference_bundle, "_EXTRACT_KWARGS", {})
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        destination = tmp_path / "out"
+        destination.mkdir()
+        (destination / "alignment").symlink_to(outside, target_is_directory=True)
+
+        archive = tmp_path / "preexisting_symlink.tar.gz"
+        payload = b">chr1\nACGT\n"
+        with tarfile.open(archive, "w:gz") as tar:
+            member = tarfile.TarInfo("alignment/chr1.hg19.fa")
+            member.size = len(payload)
+            tar.addfile(member, io.BytesIO(payload))
+
+        with pytest.raises(ValueError, match="alignment/chr1.hg19.fa"):
+            safe_extract(archive, destination)
+
+        assert not (outside / "chr1.hg19.fa").exists(), "a member was written outside the destination"
+        assert (destination / "alignment").is_symlink(), "the pre-existing symlink itself must be left alone"
+
     def test_a_device_member_is_rejected(self, tmp_path):
         """Neither a regular file nor a directory, so it belongs in no reference bundle."""
         archive = tmp_path / "device.tar.gz"

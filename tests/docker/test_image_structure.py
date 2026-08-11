@@ -35,10 +35,20 @@ import pytest
 IMAGE = os.environ.get("VNTYPER_TEST_IMAGE", "vntyper:local")
 PROBE = Path(__file__).parent / "image_probe.py"
 
-# Generous on purpose. The image is ~4.8 GiB; this catches a regression of the class
-# documented in docker/Dockerfile (a 680 MB duplicated reference layer, a 1.66 GB
-# recursive chown), not ordinary drift. A tight budget is a flaky budget.
-MAX_IMAGE_BYTES = 6 * 1024**3
+# Generous on purpose. This catches a regression of the class documented in
+# docker/Dockerfile (a 680 MB duplicated reference layer, a 1.66 GB recursive chown),
+# not ordinary drift. A tight budget is a flaky budget.
+#
+# The image was ~4.8 GiB when the `refs` stage installed only hg19+hg38. Milestone 5's
+# bundle path made shipping all six physical BWA references (hg19, hg38, GRCh37,
+# GRCh38, hg19_ensembl, hg38_ensembl - see MIN_REFERENCE_BYTES) cheap enough to do, and
+# config.json already declares all six bwa_reference_* keys as real paths (R10 in the
+# milestone design: the image must never take the reference_registry family fallback).
+# The four newly-shipped genomes are ~2.57 GiB uncompressed per
+# release-manifest.json's per-asset `size` fields (refs-v1, verified 2026-08-11), so
+# ~7.4 GiB is the expected new floor. Not verified against a real build - see the
+# task-1314 report for what could not be confirmed without one.
+MAX_IMAGE_BYTES = 9 * 1024**3
 
 # org.opencontainers.image.version and .ref.name are inherited from the Ubuntu base
 # ("20.04", "ubuntu") on local builds and only corrected by docker/metadata-action in
@@ -51,10 +61,23 @@ REQUIRED_LABELS = (
 REQUIRED_BINARIES = ("bwa", "samtools", "fastp", "bcftools", "java")
 
 # Floors, never equality: BWA index sizes shift with the indexer version. These only
-# need to catch a truncated download or a half-written layer.
+# need to catch a truncated download or a half-written layer. All six physical BWA
+# references now ship in the image (docker/Dockerfile.base's `refs` stage installs
+# --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl), matching the six
+# bwa_reference_* keys config.json already declares as real paths.
 MIN_REFERENCE_BYTES = {
     "bwa_reference_hg19": 200 * 1024**2,
     "bwa_reference_hg38": 200 * 1024**2,
+    "bwa_reference_GRCh37": 200 * 1024**2,
+    "bwa_reference_GRCh38": 200 * 1024**2,
+    "bwa_reference_hg19_ensembl": 200 * 1024**2,
+    "bwa_reference_hg38_ensembl": 200 * 1024**2,
+    # The SHARK hg38 region: present regardless of which genomes were selected above.
+    # `install_from_bundle` runs no derivations at all - unlike `--from-source`, which
+    # cuts each region FASTA out of an installed chromosome with `run_derivations` - the
+    # region FASTAs arrive pre-built inside the common asset every install fetches
+    # unconditionally, the same way the MUC1 motif and adVNTR assets do.
+    "shark.muc1_region_fasta_hg38": 5 * 1024,
 }
 
 
@@ -365,3 +388,18 @@ def test_reference_not_truncated(probe: dict[str, Any], key: str, minimum: int) 
         minimum: Minimum plausible size in bytes.
     """
     assert probe["references"][key]["size"] >= minimum
+
+
+@pytest.mark.parametrize("key", sorted(MIN_REFERENCE_BYTES))
+def test_declared_reference_paths_stay_relative(probe: dict[str, Any], key: str) -> None:
+    """They resolve against WORKDIR; an absolute path would bind the image to a host.
+
+    `test_workdir_is_prefix` pins the WORKDIR itself but not that config.json's paths
+    are actually relative to it - this is the other half of the "layout did not move"
+    argument that migrating reference data off tracked files depends on.
+
+    Args:
+        probe: Probe report.
+        key: config.json reference key.
+    """
+    assert not Path(probe["references"][key]["declared"]).is_absolute()

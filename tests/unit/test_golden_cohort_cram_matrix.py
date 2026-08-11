@@ -295,7 +295,7 @@ def test_check_matrix_counts_the_cram_group(tmp_path: Path) -> None:
     built = _build(_documented_data_dir(tmp_path))
     recount = matrix.check_matrix(built["cases"], built["probes"])
     assert recount["counts"]["cram"] == 6
-    assert recount["counts"]["total"] == 64
+    assert recount["counts"]["total"] == 78
     assert recount["documented"]["cram"] == matrix.DOCUMENTED_TOTALS["cram"]
     assert recount["mismatches"] == []
 

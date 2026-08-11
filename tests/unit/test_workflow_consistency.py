@@ -95,12 +95,19 @@ def test_base_image_hash_inputs_are_identical() -> None:
 def test_base_hash_covers_everything_that_changes_the_base() -> None:
     """The hash must cover every input that can change the base image's contents.
 
-    `.dockerignore` and `reference/**` are easy to forget and were genuinely missed:
-    excluding all of reference/ dropped three config-declared files from the image
-    without changing the tag, so no rebuild was triggered. The two `__init__.py` files
-    were the sixth defect found at this seam: the `refs` stage COPYs them and
+    `.dockerignore` was easy to forget and was genuinely missed once: excluding all of
+    reference/ dropped three config-declared files from the image without changing the
+    tag, so no rebuild was triggered. The two `__init__.py` files were the sixth defect
+    found at this seam: the `refs` stage COPYs them and
     `python -m vntyper.scripts.install_references` imports both, so they are image
     content, and they were in none of the five mirrors of this list.
+
+    `reference/**` itself is deliberately absent from `required`: milestone 5 moved
+    reference data to a published, checksummed bundle in berntpopp/vntyper-data, so
+    `reference/` (now holding only `README.md`, `pseudonymize.py` and
+    `pseudonymize_config.json`) no longer changes what the `refs` stage installs. The
+    bundle pin (`install_references_config.json`'s asset/asset_sha256 fields) is already
+    required below, and is what triggers a rebuild when a reference byte changes now.
 
     Raises:
         AssertionError: If a required path is absent from the hash inputs.
@@ -114,8 +121,8 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
         "vntyper/scripts/install_references.py",
         "vntyper/scripts/install_references_config.json",
         "vntyper/scripts/reference_bundle.py",
+        "vntyper/scripts/reference_provenance.py",
         "vntyper/dependencies/advntr/**",
-        "reference/**",
         ".dockerignore",
     )
     expressions = _base_hash_expressions()

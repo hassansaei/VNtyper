@@ -1,12 +1,25 @@
-"""Pure CRAM reference-candidate policy and coverage decisions."""
+"""Pure reference resolution, generalised beyond CRAM.
+
+Of this module's five public names, only `ordered_reference_candidates` and
+`uncovered_reference_contigs` remain CRAM-specific policy and coverage decisions.
+`resolve_from_mapping` is the membership-over-truthiness walk that
+`cli_handlers.select_bwa_reference`, `pipeline.select_advntr_reference` and
+`shark_filtering.select_muc1_region_fasta` all call directly for BWA, adVNTR and SHARK -
+not CRAM at all. `ResolvedReference` is the generic result type that walk returns.
+`configured_reference_candidates` sits in between: it is CRAM/BWA-candidate machinery
+by origin and every current caller uses it for a CRAM run, but it does so by calling the
+same generic `resolve_from_mapping` twice, once per kind, rather than encoding any
+CRAM-only policy of its own.
+"""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Set
+from dataclasses import dataclass
 from typing import Any
 
-from vntyper.scripts.reference_registry import get_coordinate_system, get_reference_source, list_assemblies
+from vntyper.scripts.reference_registry import reference_keys
 
 logger = logging.getLogger(__name__)
 
@@ -15,14 +28,61 @@ _EXPLICIT_REFERENCE_SOURCES = {"cli", "config_cram_reference", "config_bwa_refer
 _TERMINAL_REFERENCE_SOURCE = "htslib_resolved"
 
 
+@dataclass(frozen=True)
+class ResolvedReference:
+    """Which config key supplied a reference, and whether it was a fallback.
+
+    Attributes:
+        key: The `reference_data` key that was present.
+        value: Its value. `None` means present-and-disabled, not missing.
+        is_fallback: True when the UCSC-family key stood in for an absent physical
+            key, which means the run uses UCSC sequence for a non-UCSC request.
+    """
+
+    key: str
+    value: str | None
+    is_fallback: bool
+
+
+def resolve_from_mapping(kind: str, reference_assembly: str, mapping: dict) -> ResolvedReference | None:
+    """Resolve a reference from a config mapping by key membership.
+
+    Args:
+        kind: One of `reference_registry.REFERENCE_KINDS`.
+        reference_assembly: Supported assembly label.
+        mapping: A dict of config keys to values, e.g. `config["reference_data"]`.
+
+    Returns:
+        The first key that is *present* in the mapping, or None when none are.
+        Presence wins over truthiness so an explicit null stays authoritative.
+        `is_fallback` is True only when the *last* (UCSC-family) key resolved and
+        it was not the only key available - not merely when the resolved key is
+        not the first one. The middle, physical-id tier that `hg19_ncbi`/`hg38_ncbi`
+        share with `GRCh37`/`GRCh38` is that label's own physical file, not a UCSC
+        stand-in, so matching it there must not be flagged as a fallback.
+
+    Raises:
+        ValueError: If the kind or the assembly is unknown.
+    """
+    keys = reference_keys(kind, reference_assembly)
+    for index, key in enumerate(keys):
+        if key in mapping:
+            is_fallback = index == len(keys) - 1 and len(keys) > 1
+            return ResolvedReference(key=key, value=mapping[key], is_fallback=is_fallback)
+    return None
+
+
 def configured_reference_candidates(
     config: dict,
     reference_assembly: str,
 ) -> tuple[tuple[str, Any], ...]:
     """Map configured CRAM reference sources without validating probe policy.
 
-    Exact assembly-label keys take precedence even when their value is null;
-    otherwise the matching UCSC-family key supplies the fallback.
+    Exact assembly-label keys take precedence even when their value is null; failing
+    that, the middle physical/NCBI-id tier a label such as `hg19_ncbi` shares with
+    `GRCh37` is tried next; only then does the matching UCSC-family key supply the
+    fallback. See `reference_registry.reference_keys` for the three-tier order this
+    walks via `resolve_from_mapping`.
 
     Args:
         config: Pipeline configuration containing reference paths.
@@ -34,21 +94,10 @@ def configured_reference_candidates(
         Callers that interpret them as paths must require strings.
     """
     reference_data = config.get("reference_data", {})
-    coordinate_system = get_coordinate_system(reference_assembly)
-    family_assembly = next(
-        assembly
-        for assembly in list_assemblies()
-        if get_coordinate_system(assembly) == coordinate_system and get_reference_source(assembly) == "ucsc"
-    )
     values: list[tuple[str, Any]] = []
-    for source, prefix in (
-        ("config_cram_reference", "cram_reference"),
-        ("config_bwa_reference", "bwa_reference"),
-    ):
-        exact_key = f"{prefix}_{reference_assembly}"
-        family_key = f"{prefix}_{family_assembly}"
-        value = reference_data[exact_key] if exact_key in reference_data else reference_data.get(family_key)
-        values.append((source, value))
+    for source, kind in (("config_cram_reference", "cram"), ("config_bwa_reference", "bwa")):
+        resolved = resolve_from_mapping(kind, reference_assembly, reference_data)
+        values.append((source, resolved.value if resolved is not None else None))
     return tuple(values)
 
 

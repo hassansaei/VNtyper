@@ -7,12 +7,16 @@ import hashlib
 import itertools
 import json
 import logging
+import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.request import urlretrieve
@@ -22,12 +26,12 @@ from urllib.request import urlretrieve
 # here joins the base-image content hash. `reference_bundle` is therefore the only
 # `vntyper` import allowed at module scope; anything else is inlined below or imported
 # inside the function that needs it.
-from vntyper.scripts.reference_bundle import verify_sha256
+from vntyper.scripts.reference_bundle import safe_extract, sha256_of, staged_install, verify_sha256
 
 logger = logging.getLogger(__name__)
 
 #: Config sections holding one physical chromosome FASTA per entry, in the order
-#: `--from-source` walks them.
+#: `--from-source` and `install_from_bundle`'s `--references` selection both walk them.
 GENOME_SECTIONS = ("ucsc_references", "ncbi_references", "ensembl_references")
 
 
@@ -116,6 +120,13 @@ def execute_index_command(index_command: str, fasta_path: Path):
     """
     Execute the indexing command for a FASTA file.
 
+    No shell is involved - the command is parsed into an argv list, not run through
+    `/bin/bash` - so this is a correctness bug, not an injection one. The path is
+    substituted quoted (:func:`_quote`) and the result parsed with `shlex.split`
+    rather than `str.split`, so a path containing whitespace (e.g.
+    ``--output-dir "/data/my refs"``) still reaches the aligner as one argv element
+    instead of being shredded across two.
+
     Args:
         index_command (str): The indexing command with a placeholder for the file path.
         fasta_path (Path): Path to the FASTA file to index.
@@ -123,10 +134,10 @@ def execute_index_command(index_command: str, fasta_path: Path):
     Raises:
         SystemExit: If the indexing fails.
     """
-    command = index_command.format(path=str(fasta_path))
+    command = index_command.format(path=_quote(fasta_path))
     logger.info(f"Executing indexing command: {command}")
     try:
-        args = command.split()
+        args = shlex.split(command)
         subprocess.run(args, check=True, capture_output=True)
         logger.info(f"Successfully executed: {command}")
     except subprocess.CalledProcessError as e:
@@ -267,9 +278,11 @@ def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[
         logger.error(f"No index_command specified for {aligner_name}")
         return False
 
-    # Prepare command parameters
+    # Prepare command parameters. Paths are quoted with `_quote` before they are
+    # interpolated into the shell=True command below; `threads` is numeric and is never
+    # a candidate for quoting.
     params = {
-        "ref_path": str(ref_path),
+        "ref_path": _quote(ref_path),
         "threads": threads if aligner_info.get("supports_threading", False) else aligner_info.get("threads_default", 4),
     }
 
@@ -278,12 +291,12 @@ def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[
         # DRAGMAP: needs separate index directory
         index_dir = ref_path.parent / f"{ref_path.stem}_{aligner_name}_index"
         index_dir.mkdir(parents=True, exist_ok=True)
-        params["index_dir"] = str(index_dir)
+        params["index_dir"] = _quote(index_dir)
 
     if aligner_info.get("requires_index_base", False):
         # Bowtie2: needs separate index base name
         index_base = ref_path.parent / f"{ref_path.stem}_{aligner_name}"
-        params["index_base"] = str(index_base)
+        params["index_base"] = _quote(index_base)
 
     # Format command
     try:
@@ -338,9 +351,109 @@ def index_reference_with_aligners(
     return results
 
 
+def canonical_reference_keys(install_config: dict[str, Any], output_dir: Path) -> dict[str, Path]:
+    """Map every installed, *verified* reference onto the config key the pipeline reads.
+
+    Reads exactly the schema fixed for the installer and nothing else. Genome keys are
+    derived from the registry rather than written by hand, so the writer and the readers
+    cannot drift: neither of them owns the name. `reference_registry` is imported here,
+    function-locally, rather than at module scope: `docker/Dockerfile.base` copies this
+    module alone into a build stage and runs it by path without installing the package,
+    and `tests/unit/test_docker_installer_imports.py` fails the build guard if a sibling
+    the Dockerfile does not COPY is imported at module scope.
+
+    Parked finding (was #244): a path being *present* under `output_dir` used to be
+    enough. `staged_install` seeds a new run's staging directory from whatever tree is
+    already there (`reference_bundle.staged_install`, `seed_from_existing=True`) so that
+    a partial install (`--references hg19`) does not erase a different assembly a
+    previous run installed - that is deliberate accumulation, not a bug. But the same
+    seeding step carried forward a file this or any earlier `install-references` run
+    never verified at all: an old, hand-copied or tampered FASTA sitting in the output
+    directory before the very first real install. This now requires a
+    :mod:`reference_provenance` record for the path instead - written at install time by
+    `_install_bundle_asset`/`_record_bundle_provenance` (bundle path) and
+    `_record_source_provenance` (`--from-source` path) once that specific file's bytes
+    have actually been checked against a committed or upstream digest. Presence with no
+    record is reported by name, together with the `--references <label>` (or plain
+    `install-references`, for a common asset installed on every run) that installs and
+    verifies it, and left out of the mapping - neither silently dropped nor silently
+    trusted.
+
+    This never re-hashes a file to decide: it only checks whether a ledger key exists,
+    so a 700 MB genome FASTA costs nothing extra on every `config.json` write, no matter
+    how many times this runs.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Directory the references were installed into.
+
+    Returns:
+        dict[str, Path]: Absolute paths, keyed by `reference_data` key.
+
+    Raises:
+        KeyError: If an entry is missing a required schema field. Failing here is
+            correct - a silently skipped entry is a silently missing reference.
+    """
+    from vntyper.scripts.reference_provenance import has_record, load_provenance, relative_posix
+    from vntyper.scripts.reference_registry import REFERENCE_KINDS, reference_keys
+
+    prefix = REFERENCE_KINDS["bwa"]["prefix"]
+    written: dict[str, Path] = {}
+    remedies: dict[str, str] = {}
+    common_remedy = "vntyper install-references (installs common assets on every run)"
+
+    for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
+        for physical_id, entry in install_config.get(section, {}).items():
+            key = f"{prefix}_{physical_id}"
+            written[key] = (output_dir / entry["installed_path"]).resolve()
+            remedies[key] = f"vntyper install-references --references {physical_id}"
+
+    for entry in install_config.get("common_references", []):
+        key = entry["config_key"]
+        written[key] = (output_dir / entry["installed_path"]).resolve()
+        remedies[key] = common_remedy
+
+    for spec in install_config.get("derivations", []):
+        if spec["kind"] == "shark":
+            (key,) = reference_keys("shark", spec["assembly"])
+            remedies[key] = f"vntyper install-references --references {spec['from']}"
+        else:
+            key = spec["config_key"]
+            remedies[key] = common_remedy
+        written[key] = (output_dir / spec["output"]).resolve()
+
+    # Only consider files that are actually there. A partial install (`--references
+    # hg38`) must not write a key pointing at an hg19 FASTA nobody downloaded - that is
+    # the same class of defect as #163 itself, just from the other direction.
+    provenance = load_provenance(output_dir)
+    result: dict[str, Path] = {}
+    for key, path in written.items():
+        if not path.exists():
+            continue
+        try:
+            relative = relative_posix(path, output_dir)
+        except ValueError:
+            relative = None
+        if relative is not None and has_record(provenance, relative):
+            result[key] = path
+        else:
+            logger.warning(
+                f"{path} exists but has no install provenance record; not writing "
+                f"config.json[{key!r}] to point at an unverified file. Run "
+                f"`{remedies.get(key, 'vntyper install-references')}` to install and verify it."
+            )
+    return result
+
+
 def update_config(config_path: Path, references: dict[str, Path]):
     """
     Update the main config.json with paths to the downloaded references.
+
+    Writes atomically: the new document is written to a sibling `.json.tmp` file and
+    then renamed over `config_path` with `os.replace`, which POSIX and Windows both
+    guarantee is atomic. A write failure (disk full, a `json.dump` error on a bad value)
+    therefore never leaves `config_path` truncated or half-written - the previous config
+    survives untouched, and only the `.tmp` file is corrupted.
 
     Args:
         config_path (Path): Path to the main config.json file.
@@ -369,12 +482,15 @@ def update_config(config_path: Path, references: dict[str, Path]):
     for ref_key, ref_path in references.items():
         config["reference_data"][ref_key] = str(ref_path)
 
+    tmp_path = config_path.with_suffix(".json.tmp")
     try:
-        with config_path.open("w") as f:
+        with tmp_path.open("w") as f:
             json.dump(config, f, indent=2)
+        os.replace(tmp_path, config_path)
         logger.info(f"Successfully updated {config_path} with new reference paths.")
     except Exception as e:
         logger.error(f"Failed to write updated config.json: {e}")
+        tmp_path.unlink(missing_ok=True)
         sys.exit(1)
 
 
@@ -465,6 +581,7 @@ def process_vntyper_references(
     bwa_path: str,
     skip_indexing: bool,
     md5_dict: dict[str, str],
+    release_spec: dict[str, Any] | None = None,
 ):
     """
     Process VNtyper references by downloading and extracting.
@@ -475,6 +592,15 @@ def process_vntyper_references(
         bwa_path (str): Path to the bwa executable.
         skip_indexing (bool): Whether to skip the indexing step.
         md5_dict (dict): Dictionary to store MD5 checksums.
+        release_spec (dict, optional): Parsed ``--release-spec`` contents, or None. A
+            digest it names must agree with the one committed in
+            install_references_config.json (see :func:`resolve_seed_digest`); it is
+            never allowed to override it.
+
+    Raises:
+        ValueError: If a seed - ``vntr_db_advntr.zip`` is the one this function
+            downloads - has no committed or spec-pinned digest, or if the downloaded or
+            already-present bytes do not match it (MAJOR 3, milestone-5 PR-2 review).
     """
     for ref_name, ref_info in vntyper_refs.items():
         url = ref_info.get("url")
@@ -489,6 +615,12 @@ def process_vntyper_references(
         target_path = output_dir / target_path_str
 
         download_file(url, target_path)
+        # Verified whether this call just downloaded the file or found it already
+        # present: `download_file` skips an existing destination, so a stale or
+        # corrupted `vntr_db_advntr.zip` from an earlier partial run must not be
+        # extracted and activated unchecked.
+        expected = verify_seed(target_path_str, target_path, ref_info, release_spec)
+        _record_source_provenance(output_dir, target_path, expected, url)
 
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
@@ -497,10 +629,17 @@ def process_vntyper_references(
         if extract_to:
             extract_dir = output_dir / extract_to
             extract_dir.mkdir(parents=True, exist_ok=True)
+            # `canonical_reference_keys` looks common assets like the adVNTR VNTR
+            # databases up by their *extracted* path, not the archive's - the archive's
+            # own digest is what was actually verified above, so every member this
+            # archive is known (from its own listing) to have produced inherits it as
+            # its provenance record rather than going unrecorded.
+            extracted_members: list[str] = []
             if target_path.suffix == ".zip":
                 try:
                     with zipfile.ZipFile(target_path, "r") as zip_ref:
                         zip_ref.extractall(path=extract_dir)
+                        extracted_members = [name for name in zip_ref.namelist() if not name.endswith("/")]
                     logger.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
                     logger.error(f"Failed to extract {target_path}: {e}")
@@ -509,12 +648,18 @@ def process_vntyper_references(
                 try:
                     with tarfile.open(target_path, "r:gz") as tar:
                         tar.extractall(path=extract_dir)
+                        extracted_members = [member.name for member in tar.getmembers() if member.isfile()]
                     logger.info(f"Successfully extracted {target_path.name}")
                 except Exception as e:
                     logger.error(f"Failed to extract {target_path}: {e}")
                     sys.exit(1)
             else:
                 logger.warning(f"Unsupported archive format for {target_path}. Skipping extraction.")
+
+            for member in extracted_members:
+                member_path = extract_dir / member
+                if member_path.is_file():
+                    _record_source_provenance(output_dir, member_path, expected, url)
 
         if index_command and not skip_indexing:
             execute_index_command(index_command, target_path)
@@ -527,6 +672,7 @@ def process_own_repository_references(
     output_dir: Path,
     skip_indexing: bool,
     md5_dict: dict[str, str],
+    release_spec: dict[str, Any] | None = None,
 ):
     """
     Process own repository references by downloading specific FASTA files.
@@ -536,6 +682,16 @@ def process_own_repository_references(
         output_dir (Path): Base output directory.
         skip_indexing (bool): Whether to skip the indexing step.
         md5_dict (dict): Dictionary to store MD5 checksums.
+        release_spec (dict, optional): Parsed ``--release-spec`` contents, or None. A
+            digest it names must agree with the one committed in
+            install_references_config.json (see :func:`resolve_seed_digest`); it is
+            never allowed to override it.
+
+    Raises:
+        ValueError: If a seed this function downloads (``MUC1_motifs_Rev_com.fa``,
+            ``code-adVNTR_RUs.fa`` or ``filter_config.json``) has no committed or
+            spec-pinned digest, or if the downloaded or already-present bytes do not
+            match it (MAJOR 3, milestone-5 PR-2 review).
     """
     raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
     for file_info in raw_files:
@@ -550,6 +706,12 @@ def process_own_repository_references(
         target_path = output_dir / target_path_str
 
         download_file(url, target_path)
+        # Verified whether this call just downloaded the file or found it already
+        # present: `download_file` skips an existing destination, so a stale or
+        # corrupted seed from an earlier partial run must not be indexed and activated
+        # unchecked.
+        expected = verify_seed(target_path_str, target_path, file_info, release_spec)
+        _record_source_provenance(output_dir, target_path, expected, url)
 
         md5_checksum = calculate_md5(target_path)
         md5_dict[str(target_path)] = md5_checksum
@@ -747,8 +909,26 @@ def _missing_seed_message(output: str, missing: list[str], output_dir: Path) -> 
     )
 
 
+def _downloadable_seed_names(install_config: dict[str, Any]) -> set[str]:
+    """Return every seed name `_install_source_seeds` can fetch on its own.
+
+    `own_repository_references.raw_files` is downloaded later in the same
+    :func:`install_from_source` run, after the genome loop and before
+    :func:`run_derivations`. A seed named there does not need to exist yet when the
+    preflight below runs - only a seed with no download source at all does.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+
+    Returns:
+        set[str]: `target_path` of every `own_repository_references.raw_files` entry.
+    """
+    own_repo_refs = install_config.get("own_repository_references", {})
+    return {entry.get("target_path") for entry in own_repo_refs.get("raw_files", []) if entry.get("target_path")}
+
+
 def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path) -> None:
-    """Fail on a missing literal-derivation seed before a single genome is downloaded.
+    """Fail on a missing, non-downloadable literal-derivation seed before any genome runs.
 
     :func:`run_derivations` already names a missing ``filter_config.json`` well, but only
     after every genome has been downloaded, decompressed and BWA-indexed - three hours
@@ -756,17 +936,30 @@ def _preflight_literal_seeds(install_config: dict[str, Any], output_dir: Path) -
     This file's philosophy is preflight first; this is the same check, moved to where it
     costs a second, and it uses the same message so the two cannot drift apart.
 
+    A seed such as ``MUC1_motifs_Rev_com.fa`` is a downloadable ``raw_files`` entry that
+    :func:`_install_source_seeds` fetches later in the *same* run, after the genome loop.
+    Requiring it here too would reject a fresh, unstaged ``output_dir`` that is about to
+    succeed. In the shipped config every literal-derivation seed, including
+    ``filter_config.json``, now has a download source (a pinned commit under
+    ``berntpopp/vntyper-data``'s ``seeds/``), so this preflight passes for a fresh,
+    unstaged ``output_dir`` too - it only still raises for a seed that names no download
+    source at all in whatever ``install_config`` a caller supplies.
+
     Args:
         install_config: The parsed install_references_config.json.
         output_dir: Reference tree being populated.
 
     Raises:
-        RuntimeError: If a ``literal`` derivation names a seed that is not present.
+        RuntimeError: If a ``literal`` derivation names a non-downloadable seed that is
+            not present.
     """
+    downloadable = _downloadable_seed_names(install_config)
     for spec in install_config.get("derivations", []):
         if spec.get("kind") != "literal":
             continue
-        missing = [name for name in spec.get("from_seeds", []) if not (output_dir / name).exists()]
+        missing = [
+            name for name in spec.get("from_seeds", []) if name not in downloadable and not (output_dir / name).exists()
+        ]
         if missing:
             message = _missing_seed_message(spec.get("output", "<unnamed derivation>"), missing, output_dir)
             logger.error(message)
@@ -864,6 +1057,7 @@ def run_derivations(
             message = f"{mismatch}; discarded {output} rather than leave a wrong reference in the tree"
             logger.error(message)
             raise ValueError(message) from mismatch
+        _record_source_provenance(output_dir, destination, expected)
         index_fasta_with_samtools(destination, samtools)
         logger.info(f"Derived {output} from {provenance}")
 
@@ -924,6 +1118,118 @@ def resolve_source_location(ref_id: str, entry: dict[str, Any], release_spec: di
         logger.error(message)
         raise ValueError(message)
     return url, digest
+
+
+def resolve_seed_digest(name: str, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> str:
+    """Decide the SHA-256 a seed file must match, refusing a spec that disagrees.
+
+    Mirrors :func:`resolve_source_location`'s trust model for the four seeds
+    ``--from-source`` cannot derive (``MUC1_motifs_Rev_com.fa``, ``code-adVNTR_RUs.fa``,
+    ``vntr_db_advntr.zip``, ``filter_config.json``, i.e. ``bundle_release.REQUIRED_SEEDS``):
+    the digest committed in install_references_config.json is the trust anchor, and a
+    ``--release-spec``'s ``seeds`` block - read directly here rather than via
+    ``bundle_release.spec_seed_digests``, since this module may import nothing from the
+    package but ``reference_bundle`` - may only corroborate it, never override it.
+
+    Args:
+        name: Seed file name, keyed the same way in the install config's
+            ``target_path`` and in a release spec's ``seeds`` block (e.g.
+            ``"code-adVNTR_RUs.fa"``).
+        entry: This seed's section of the install config.
+        release_spec: Parsed ``--release-spec`` contents, or None.
+
+    Returns:
+        str: Lowercase hex SHA-256 the seed must match, whether freshly downloaded or
+        already present in the output tree.
+
+    Raises:
+        ValueError: If the spec and the config both declare a digest and disagree, or if
+            neither declares one at all - ``--from-source`` never installs a seed it
+            cannot verify.
+    """
+    seeds_block = (release_spec or {}).get("seeds", {})
+    spec_entry = seeds_block.get(name) if isinstance(seeds_block, dict) else None
+    declared = spec_entry.get("sha256") if isinstance(spec_entry, dict) else spec_entry
+    committed = entry.get("source_sha256")
+
+    if declared and committed and declared != committed:
+        message = (
+            f"seed '{name}': the release spec pins sha256 {declared!r} but "
+            f"install_references_config.json pins {committed!r}. The committed config is the "
+            "trust anchor; change it in a reviewed commit and match the spec to it rather than "
+            "publishing a release whose provenance does not describe its bytes."
+        )
+        logger.error(message)
+        raise ValueError(message)
+
+    digest = committed or declared
+    if not digest:
+        message = f"no source_sha256 configured for seed '{name}'; --from-source refuses to install unverified bytes"
+        logger.error(message)
+        raise ValueError(message)
+    return digest
+
+
+def verify_seed(name: str, target_path: Path, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> str:
+    """Verify a seed against its committed digest, whether just downloaded or reused.
+
+    ``download_file`` skips a destination that already exists, so without this a stale
+    or corrupted seed left over from an earlier partial run - or planted there - would be
+    extracted, indexed and activated without complaint (MAJOR 3, milestone-5 PR-2
+    review). Calling this unconditionally after every ``download_file`` closes that gap
+    for both the freshly-downloaded and the already-present case alike.
+
+    Args:
+        name: Seed file name, as used by :func:`resolve_seed_digest`.
+        target_path: Where the seed landed in the output tree.
+        entry: This seed's section of the install config.
+        release_spec: Parsed ``--release-spec`` contents, or None.
+
+    Returns:
+        str: The digest `target_path` was verified against - both callers record it as
+        this file's install provenance (see :mod:`reference_provenance`) rather than
+        re-deriving it.
+
+    Raises:
+        ValueError: If no digest is configured, or if the file's bytes do not match it.
+            On a mismatch the file is removed so a retry re-downloads it, matching
+            :func:`install_from_source`'s genome verification.
+    """
+    expected = resolve_seed_digest(name, entry, release_spec)
+    try:
+        verify_sha256(target_path, expected)
+    except ValueError as mismatch:
+        target_path.unlink(missing_ok=True)
+        message = f"{mismatch}; removed {target_path.name} so a retry downloads it again"
+        logger.error(message)
+        raise ValueError(message) from mismatch
+    return expected
+
+
+def _record_source_provenance(output_dir: Path, path: Path, sha256: str, source_url: str | None = None) -> None:
+    """Record one ``--from-source`` install provenance entry.
+
+    A thin wrapper around :mod:`reference_provenance`, imported function-locally like
+    every other sibling `install_references.py` uses only inside a function body (see
+    that module's docstring for why). Called once per verified file rather than
+    threaded through a shared mutable accumulator: each call is an independent,
+    idempotent read-modify-write of the small ledger, which is cheap next to the
+    network and hashing cost already paid to produce `sha256`.
+
+    Args:
+        output_dir: Reference-tree root the file was installed under (the
+            `staged_install` staging directory, mid-install).
+        path: The installed file.
+        sha256: The digest already verified for this file (or, for a decompressed
+            genome FASTA, for the compressed source archive it was expanded from).
+        source_url: The upstream URL the digest was verified against, when there is
+            one. None for a locally derived output (a SHARK region cut, or the merged
+            motif FASTA), which has no single upstream URL of its own.
+    """
+    from vntyper.scripts.reference_provenance import build_record, merge, relative_posix
+
+    relative = relative_posix(path, output_dir)
+    merge(output_dir, {relative: build_record(sha256=sha256, source="from-source", source_url=source_url)})
 
 
 def decompress_source(archive: Path) -> Path:
@@ -1046,7 +1352,22 @@ def install_from_source(
             fasta = decompress_source(archive)
             index_fasta_with_samtools(fasta, samtools)
             if aligners:
-                results = index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=False)
+                # Parked finding (was #245): `force_reindex=True`, not the module
+                # default. `decompress_source` above unconditionally rewrites `fasta`
+                # from the just-verified archive every time this loop reaches it (see
+                # its own docstring), but `staged_install` seeds a fresh staging
+                # directory from whatever aligner sidecars (`.amb`/`.ann`/`.bwt`/`.pac`/
+                # `.sa`) an earlier install left beside the *old* FASTA at this same
+                # path. Without this, `check_index_exists` sees all five present and
+                # skips indexing entirely - so after a maintainer repins this genome's
+                # `source_sha256`, the tree ends up with a new FASTA and a `bwa mem`
+                # index still built from the old one, both named identically by
+                # `config.json` and by this run's own install provenance record. This
+                # call site is exactly "--from-source actually replaced the FASTA in
+                # this run" (unconditionally, right above), so forcing a reindex here
+                # is defensible even though it costs a redundant index on the common
+                # case where the bytes did not change.
+                results = index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=True)
                 # The legacy path logs a failure and carries on, which is right for an
                 # operator installing locally. It is wrong here. `execute_aligner_index`
                 # returns False on a CalledProcessError, and `bundle_release.verify_tree`
@@ -1064,9 +1385,14 @@ def install_from_source(
                     logger.error(message)
                     raise RuntimeError(message)
 
+            # `expected` verified the compressed *archive*; `decompress_source` is a
+            # deterministic gunzip, but the provenance record should describe the actual
+            # installed artifact, not assume the expansion produced it byte-for-byte -
+            # hence one fresh digest of `fasta` itself rather than reusing `expected`.
+            _record_source_provenance(output_dir, fasta, sha256_of(fasta), url)
             installed[ref_id] = fasta
 
-    _install_source_seeds(install_config, output_dir, skip_indexing)
+    _install_source_seeds(install_config, output_dir, skip_indexing, release_spec)
 
     # Unconditional, unlike the legacy path, which filters this by `--references` and so
     # installs no adVNTR database at all unless someone asks for `vntr_db_advntr` by name -
@@ -1078,13 +1404,25 @@ def install_from_source(
     vntyper_refs = install_config.get("vntyper_references", {})
     if vntyper_refs:
         logger.info("Installing common VNtyper references (not selectable: every install needs them)...")
-        process_vntyper_references(vntyper_refs, output_dir, install_config.get("bwa_path", "bwa"), skip_indexing, {})
+        process_vntyper_references(
+            vntyper_refs,
+            output_dir,
+            install_config.get("bwa_path", "bwa"),
+            skip_indexing,
+            {},
+            release_spec=release_spec,
+        )
 
     run_derivations(install_config, output_dir, installed, selected)
     return installed
 
 
-def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip_indexing: bool = False) -> None:
+def _install_source_seeds(
+    install_config: dict[str, Any],
+    output_dir: Path,
+    skip_indexing: bool = False,
+    release_spec: dict[str, Any] | None = None,
+) -> None:
     """Fetch the common seed files, skipping anything a derivation produces.
 
     ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is still listed as a
@@ -1095,6 +1433,9 @@ def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip
         install_config: The parsed install_references_config.json.
         output_dir: Reference tree to populate.
         skip_indexing: Skip the seeds' ``samtools faidx`` step.
+        release_spec: Parsed ``--release-spec`` contents, or None. Forwarded to
+            :func:`process_own_repository_references` so a seed's digest can be
+            corroborated, never overridden, by the spec.
     """
     own_repo_refs = install_config.get("own_repository_references", {})
     raw_files = own_repo_refs.get("raw_files", [])
@@ -1107,37 +1448,395 @@ def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip
         return
 
     logger.info("Installing common seed files...")
-    process_own_repository_references({"raw_files": seeds}, output_dir, skip_indexing, {})
+    process_own_repository_references({"raw_files": seeds}, output_dir, skip_indexing, {}, release_spec=release_spec)
 
 
-def write_md5_checksums(md5_dict: dict[str, str], output_dir: Path):
+###############################################################################
+# Installing the published, checksummed reference bundle
+###############################################################################
+
+#: Matches bwa's own banner line, e.g. "Version: 0.7.18-r1243-dirty". The identical
+#: pattern lives in `scripts/bundle_release.py::_BWA_VERSION`, which is not importable
+#: here (see the module-scope import comment at the top of this file) - a three-line
+#: literal is cheaper to keep in sync than a cross-file dependency neither side needs.
+_BWA_VERSION_RE = re.compile(r"^Version:\s*(\S+)", re.MULTILINE)
+
+#: The two files `scripts/bundle_release.py` writes inside every asset (never fetched
+#: separately - see `install_from_bundle`'s docstring). They describe exactly one asset
+#: each, so they are deleted from the shared staging tree right after being read: left
+#: in place, the *last* asset's copy would silently overwrite every earlier one's, and
+#: both would otherwise land inside the installed reference tree they were never part of.
+_BUNDLE_METADATA_MEMBERS = ("release-manifest.json", "BUILD_INFO.json")
+
+
+@dataclass(frozen=True)
+class _BundleAsset:
+    """One published `.tar.gz` this run needs, and what it becomes once extracted.
+
+    Attributes:
+        name: Asset file name, e.g. ``vntyper-references-refs-v1-ucsc-hg19.tar.gz``.
+        sha256: The trust anchor committed in install_references_config.json.
+        ref_id: Physical reference id (``hg19``, ...) for a genome asset, or None for
+            the common asset, which covers several `common_references` entries at once
+            and carries no single `kind`/`index_command` of its own.
+        entry: That reference's section of the install config, or None for the common
+            asset. Carries `kind`, `installed_path` and `index_command` - the fields the
+            bwa-version check below needs.
     """
-    Write the MD5 checksums to a file in the output directory.
 
-    Args:
-        md5_dict (dict): Dictionary mapping file paths to their MD5 checksums.
-        output_dir (Path): Base output directory.
+    name: str
+    sha256: str
+    ref_id: str | None
+    entry: dict[str, Any] | None
+
+
+def _local_bwa_version() -> str | None:
+    """Read the locally installed bwa's version banner.
+
+    Returns:
+        str | None: The version string (e.g. ``0.7.18-r1243-dirty``), or None if `bwa`
+        is not on PATH or its banner does not match the expected format. Either way, the
+        caller treats "unknown" the same as "matches" - it re-indexes only on a positive,
+        confirmed mismatch, never on the absence of information.
     """
-    checksum_file = output_dir / "md5_checksums.txt"
     try:
-        with checksum_file.open("w") as f:
-            for file_path, md5 in md5_dict.items():
-                relative_path = file_path.replace(str(output_dir) + "/", "")
-                f.write(f"{md5}  {relative_path}\n")
-        logger.info(f"MD5 checksums written to {checksum_file}")
-    except Exception as e:
-        logger.error(f"Failed to write MD5 checksums to {checksum_file}: {e}")
-        sys.exit(1)
+        completed = subprocess.run(["bwa"], capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    match = _BWA_VERSION_RE.search(f"{completed.stdout}\n{completed.stderr}")
+    return match.group(1) if match else None
 
 
-def setup_logging(output_dir: Path):
-    """
-    Setup logging to output to both stdout and a log file in the output directory.
+def _plan_bundle_assets(install_config: dict[str, Any], references: list[str]) -> list[_BundleAsset]:
+    """Decide which assets one `install_from_bundle` run needs.
+
+    Every selected genome's asset, plus the common asset unconditionally: the MUC1
+    seeds and the adVNTR databases it carries are not selectable by `--references`, the
+    same rule `install_from_source` already applies to `vntyper_references`.
 
     Args:
-        output_dir (Path): Directory where logs will be stored.
+        install_config: The parsed install_references_config.json.
+        references: Physical reference ids this run was asked for.
+
+    Returns:
+        list[_BundleAsset]: Genome assets first (in `GENOME_SECTIONS` order), then the
+        common asset last.
+
+    Raises:
+        ValueError: If the config's `bundle` section, or a selected genome entry, is
+            missing the asset name or digest this function needs to plan a fetch.
     """
-    log_file = output_dir / "install_references.log"
+    bundle = install_config.get("bundle", {})
+    for field in ("repository", "release_tag", "common_asset", "common_asset_sha256"):
+        if not bundle.get(field):
+            message = (
+                f"install_references_config.json's 'bundle' section declares no {field}; "
+                "cannot fetch the published reference release"
+            )
+            logger.error(message)
+            raise ValueError(message)
+
+    selected = set(references)
+    assets: list[_BundleAsset] = []
+    for section in GENOME_SECTIONS:
+        for ref_id, entry in install_config.get(section, {}).items():
+            if ref_id not in selected:
+                continue
+            asset = entry.get("asset")
+            digest = entry.get("asset_sha256")
+            if not asset or not digest:
+                message = (
+                    f"reference '{ref_id}' declares no bundle asset/asset_sha256; "
+                    "cannot install it from the published release"
+                )
+                logger.error(message)
+                raise ValueError(message)
+            assets.append(_BundleAsset(asset, digest, ref_id, entry))
+
+    assets.append(_BundleAsset(bundle["common_asset"], bundle["common_asset_sha256"], None, None))
+    return assets
+
+
+def _read_bundle_json(path: Path, asset_name: str) -> dict[str, Any]:
+    """Parse one of an extracted asset's two metadata members.
+
+    Args:
+        path: Path the member was extracted to.
+        asset_name: The asset it came from, for the error message.
+
+    Returns:
+        dict[str, Any]: The parsed document.
+
+    Raises:
+        ValueError: If the file is absent (extraction did not produce it) or is not
+            valid JSON.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        message = f"{asset_name}: {path.name} was not found after extraction: {error}"
+        logger.error(message)
+        raise ValueError(message) from error
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        message = f"{asset_name}: {path.name} is not valid JSON: {error}"
+        logger.error(message)
+        raise ValueError(message) from error
+
+
+def _verify_manifest_files(staging: Path, manifest: dict[str, Any], asset_name: str) -> None:
+    """Re-check every file the asset's own manifest says it extracted.
+
+    The asset's whole-archive digest (`verify_sha256` before `safe_extract`) is the
+    security-critical check - a tampered archive never reaches extraction at all. This
+    is defence in depth on top of it: independent per-file digests, taken from metadata
+    that is itself inside the already-verified archive, catch an extraction that silently
+    produced the wrong bytes for one member without the archive as a whole disagreeing.
+
+    Args:
+        staging: Directory the asset was just extracted into.
+        manifest: Parsed `release-manifest.json` from that asset.
+        asset_name: The asset's file name, for the error message.
+
+    Raises:
+        ValueError: If a file the manifest names was not extracted, or does not match
+            the digest the manifest records for it.
+    """
+    for file_entry in manifest.get("files", []):
+        relative = file_entry["path"]
+        extracted = staging / relative
+        if not extracted.is_file():
+            message = f"{asset_name}: release-manifest.json names '{relative}', but extraction did not produce it"
+            logger.error(message)
+            raise ValueError(message)
+        verify_sha256(extracted, file_entry["sha256"])
+
+
+def _reindex_if_bwa_version_differs(
+    staging: Path, entry: dict[str, Any], build_info: dict[str, Any], ref_id: str | None
+) -> None:
+    """Re-run bwa locally when the bundled index was built with a different bwa.
+
+    A BWA index is not guaranteed compatible across bwa versions. Comparing
+    `BUILD_INFO.json`'s `bwa_version` against what is actually on this machine's PATH
+    catches the mismatch before it becomes a silent alignment problem; re-indexing
+    locally is cheap next to a 250 MB chromosome download, and `bwa` is already a
+    required dependency of every VNtyper install.
+
+    Only called for an entry whose `kind` is `"bwa"` - the common asset carries no BWA
+    index and has no `entry` at all. This is the one place today that reads `kind`: it
+    tells this function "this asset's manifest describes a bwa-indexed genome, so a
+    version mismatch here is actionable", as opposed to a hypothetical future asset kind
+    this check would not know how to re-index.
+
+    Args:
+        staging: Directory the genome asset was extracted into.
+        entry: That reference's section of the install config - `installed_path` and
+            `index_command`.
+        build_info: Parsed `BUILD_INFO.json` from the same asset.
+        ref_id: Physical reference id, for the log message.
+
+    Raises:
+        ValueError: If a mismatch is detected but the entry names no `index_command` to
+            recover with.
+        RuntimeError: If the re-index command itself fails.
+    """
+    bundled_version = build_info.get("bwa_version")
+    local_version = _local_bwa_version()
+    if not bundled_version or not local_version or bundled_version == local_version:
+        return
+
+    fasta = staging / entry["installed_path"]
+    logger.warning(
+        f"{ref_id}: the bundled BWA index was built with bwa {bundled_version}, but the local bwa is "
+        f"{local_version}; re-indexing {fasta.name} locally"
+    )
+
+    index_command_template = entry.get("index_command")
+    if not index_command_template:
+        message = f"{ref_id}: no index_command configured; cannot re-index {fasta.name} after a bwa version mismatch"
+        logger.error(message)
+        raise ValueError(message)
+
+    # `_quote` + `shlex.split` rather than `str()` + `str.split`: an unquoted path
+    # containing whitespace (e.g. `--output-dir "/data/my refs"`) would otherwise be
+    # shredded across two argv elements and abort an otherwise valid install. No shell
+    # is involved here, so this is a correctness fix, not an injection one.
+    command = index_command_template.format(path=_quote(fasta))
+    completed = subprocess.run(shlex.split(command), capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        message = f"{ref_id}: re-indexing {fasta.name} failed: {completed.stderr.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+    logger.info(f"  ✓ re-indexed {fasta.name} with the local bwa {local_version}")
+
+
+def _record_bundle_provenance(staging: Path, manifest: dict[str, Any], asset: _BundleAsset, release_tag: str) -> None:
+    """Record install provenance for the file(s) `canonical_reference_keys` looks up.
+
+    Only the FASTA itself for a `kind == "bwa"` genome asset - never a BWA index
+    sidecar. `_reindex_if_bwa_version_differs` may rewrite the sidecars with a
+    locally-built index moments after this runs, which would make a sidecar's recorded
+    manifest digest describe bytes the tree no longer has; `canonical_reference_keys`
+    never looks a sidecar up by its own key anyway, only the FASTA's `installed_path`
+    is one. The common asset carries no BWA index and is never reindexed, so every file
+    its manifest lists is recorded.
+
+    Args:
+        staging: Directory the asset was extracted into.
+        manifest: Parsed `release-manifest.json`, already verified file-by-file by
+            `_verify_manifest_files`.
+        asset: The asset just installed.
+        release_tag: The release tag the asset was fetched from.
+    """
+    from vntyper.scripts.reference_provenance import build_record, merge
+
+    files_by_path = {entry["path"]: entry["sha256"] for entry in manifest.get("files", [])}
+    records: dict[str, dict[str, Any]] = {}
+
+    if asset.entry is not None and asset.entry.get("kind") == "bwa":
+        relative = asset.entry["installed_path"]
+        digest = files_by_path.get(relative)
+        if digest is not None:
+            records[relative] = build_record(sha256=digest, source="bundle", asset=asset.name, release_tag=release_tag)
+    else:
+        for relative, digest in files_by_path.items():
+            records[relative] = build_record(sha256=digest, source="bundle", asset=asset.name, release_tag=release_tag)
+
+    merge(staging, records)
+
+
+def _install_bundle_asset(
+    repository: str, release_tag: str, asset: _BundleAsset, download_dir: Path, staging: Path
+) -> None:
+    """Fetch, verify and extract one asset, then react to its metadata.
+
+    Args:
+        repository: `owner/repo` the release lives in.
+        release_tag: The immutable release tag, e.g. ``refs-v1``.
+        asset: The asset to install.
+        download_dir: Scratch directory for the downloaded archive; not part of the
+            installed tree.
+        staging: The `staged_install` staging directory to extract into.
+
+    Raises:
+        RuntimeError: If the download fails.
+        ValueError: If the digest does not match, if `safe_extract` refuses the archive,
+            or if the asset's own manifest disagrees with what was extracted.
+    """
+    url = f"https://github.com/{repository}/releases/download/{release_tag}/{asset.name}"
+    archive = download_dir / asset.name
+    logger.info(f"Fetching {asset.name} from {repository}@{release_tag}")
+    try:
+        download_file(url, archive)
+    except SystemExit as exit_signal:
+        message = f"failed to download {asset.name} from repository {repository}, release {release_tag} ({url})"
+        logger.error(message)
+        raise RuntimeError(message) from exit_signal
+
+    # Carry-forward from the Task 3 review: the digest is checked before a single byte
+    # of the archive is written into the tree.
+    verify_sha256(archive, asset.sha256)
+    safe_extract(archive, staging)
+    archive.unlink(missing_ok=True)
+
+    manifest = _read_bundle_json(staging / "release-manifest.json", asset.name)
+    build_info = _read_bundle_json(staging / "BUILD_INFO.json", asset.name)
+    try:
+        _verify_manifest_files(staging, manifest, asset.name)
+        # Provenance is recorded from the now-verified manifest before any reindex, not
+        # after: a bwa version mismatch below rewrites the sidecar index files with a
+        # locally-built index, and this only ever records the FASTA itself for a `kind
+        # == "bwa"` asset (see `_record_bundle_provenance`) - never a sidecar - so the
+        # order does not matter for correctness, but recording first keeps "verified"
+        # and "recorded" atomic in the log even if reindexing raises.
+        _record_bundle_provenance(staging, manifest, asset, release_tag)
+        if asset.entry is not None and asset.entry.get("kind") == "bwa":
+            _reindex_if_bwa_version_differs(staging, asset.entry, build_info, asset.ref_id)
+    finally:
+        # Removed unconditionally, success or failure: metadata for a *different* asset
+        # must never be mistaken for this one's, and neither file is part of the
+        # reference tree the pipeline reads. See `_BUNDLE_METADATA_MEMBERS`.
+        for name in _BUNDLE_METADATA_MEMBERS:
+            (staging / name).unlink(missing_ok=True)
+
+
+def install_from_bundle(install_config: dict[str, Any], output_dir: Path, references: list[str]) -> None:
+    """Install references by fetching the published, checksummed release bundle.
+
+    This is the default `install-references` path (see `main`); `--from-source` is the
+    exception, not this. Each selected genome's asset, plus the common asset that
+    carries the MUC1 seeds and the adVNTR databases, is downloaded from
+    ``https://github.com/{repository}/releases/download/{release_tag}/{asset}``,
+    verified against the SHA-256 committed in install_references_config.json, and
+    extracted - all into one `staged_install` staging directory, so a failure partway
+    through (a bad download, a digest mismatch, a manifest disagreement) leaves any
+    previously installed tree untouched rather than half-replaced.
+
+    That guarantee covers every failure `staged_install` can catch, which is every
+    ordinary Python exception - it does not cover an uncatchable one. `staged_install`
+    activates with two renames (the live tree aside to `.output_dir.previous.*`, then
+    the finished staging tree into `output_dir`) that cannot be made atomic together
+    without an OS-level directory-swap primitive this codebase does not use. A SIGKILL
+    landing in the narrow window between those two renames skips its `except
+    BaseException` handler entirely - there is no Python code left running to catch
+    anything - and leaves **`output_dir` absent** while **both** `.output_dir.previous.*`
+    (the old tree, moved aside but never restored) **and** `.output_dir.staging.*` (the
+    new tree, fully built but never activated) survive on disk as orphans, with nothing
+    logged. This is deliberately left as an operator-diagnosable state rather than
+    auto-recovered on the next run's startup: the next full `install-references` call
+    self-heals by rebuilding `output_dir` from scratch (`main`'s `output_dir.mkdir(...,
+    exist_ok=True)` tolerates its absence), but the two siblings are not swept or
+    reported by this codebase, and nothing else on the machine can tell which of them
+    (if either) is safe to delete without an operator looking at both.
+
+    ``release-manifest.json`` and ``BUILD_INFO.json`` are read from *inside* each
+    already-verified archive, never fetched separately: a loose metadata file sitting
+    beside the asset has no committed digest to check it against, so trusting it would
+    reopen exactly the trust hole `asset_sha256` closes. Only after an asset's own
+    digest has passed does this function read its manifest, to re-check every file it
+    says it extracted, and its `BUILD_INFO.json`, to detect a bwa version mismatch and
+    re-index locally rather than install a BWA index this machine's bwa may not agree
+    with byte-for-byte.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Directory to install references into.
+        references: Physical reference ids to install (e.g. ``["hg19", "hg38"]``).
+
+    Raises:
+        RuntimeError: If a download fails, or a bwa re-index fails.
+        ValueError: If the config's `bundle` section or a selected genome entry has no
+            asset/digest configured, if an asset's digest does not match, if
+            `safe_extract` refuses an archive, or if an asset's own manifest disagrees
+            with what was extracted from it.
+    """
+    assets = _plan_bundle_assets(install_config, references)
+    bundle = install_config["bundle"]
+
+    with (
+        staged_install(output_dir) as staging,
+        tempfile.TemporaryDirectory(prefix="vntyper-bundle-download-") as download_dir,
+    ):
+        for asset in assets:
+            _install_bundle_asset(bundle["repository"], bundle["release_tag"], asset, Path(download_dir), staging)
+
+
+def setup_logging(output_dir: Path, log_file: Path | None = None):
+    """
+    Setup logging to output to both stdout and a log file.
+
+    Args:
+        output_dir (Path): Directory where logs will be stored, when `log_file` is not
+            given explicitly.
+        log_file (Path, optional): Exact path to write the log to. Defaults to
+            ``output_dir / "install_references.log"``. `main` passes a path *outside*
+            `output_dir` (see `_staging_safe_log_path`) and moves the finished file into
+            place itself once `output_dir` is no longer subject to being replaced by a
+            `staged_install` activation.
+    """
+    log_file = log_file or (output_dir / "install_references.log")
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -1161,6 +1860,77 @@ def setup_logging(output_dir: Path):
     logger.info(f"Logging initialized. Logs will be saved to {log_file}")
 
 
+def _staging_safe_log_path(output_dir: Path) -> Path:
+    """Choose a log location that a `staged_install` activation cannot lose.
+
+    Both install paths `main` can take stage their work in a temporary directory beside
+    `output_dir` and activate by renaming it into place. A log file written directly
+    into `output_dir` would be caught by that rename dance in a way that loses most of
+    a run's own log, regardless of which side of the swap it ends up on:
+
+    - If `staged_install`'s `seed_from_existing` copies `output_dir` into staging (the
+      default, so an install of one assembly does not erase another), the log file gets
+      seeded too - but only as of whatever it contained at that exact moment, typically
+      just "Logging initialized..." and "Processing references: ...". Every line logged
+      afterwards keeps going to the *original* file descriptor, which is what gets
+      renamed to `.previous.*` and then deleted once activation succeeds - taking the
+      complete log with it. The tree left at `output_dir` ends up with only the seeded,
+      truncated copy.
+    - If the log were excluded from seeding instead, `output_dir` would end up with no
+      log file at all after activation, for the same reason: nothing ever writes into
+      the *new* directory at that path, and the complete one is still the file that gets
+      deleted.
+
+    Writing beside `output_dir` instead sidesteps both failure modes: nothing this
+    function's log depends on ever needs to survive a `staged_install` rename. `main`
+    moves the finished file into `output_dir / "install_references.log"` itself, in
+    `_finalize_install_log`, once `output_dir` has settled.
+
+    Args:
+        output_dir: The install's final destination.
+
+    Returns:
+        Path: A sibling of `output_dir`, named after it so an operator can tell which
+        run a stray file belongs to if `_finalize_install_log` is ever unable to move it
+        into place.
+    """
+    return output_dir.parent / f".{output_dir.name}.install-references.log"
+
+
+def _finalize_install_log(log_file: Path, output_dir: Path) -> None:
+    """Move a run's log into its final home now that `output_dir` has settled.
+
+    Called from a `finally` block in `main`, so this runs whether the install
+    succeeded, raised, or hit an early `sys.exit` - the log is worth keeping either way,
+    and a failed run is exactly when an operator most wants to read it.
+
+    A rename rather than a copy-then-delete: the log's `FileHandler` keeps writing
+    through the same open file descriptor no matter what path is used to reach it (POSIX
+    rename does not invalidate open file descriptors), so this is both cheaper than a
+    copy and leaves no window where the handler points at nothing.
+
+    Args:
+        log_file: Where `setup_logging` was pointed - `_staging_safe_log_path`'s return
+            value.
+        output_dir: The install's final destination.
+    """
+    if not log_file.exists():
+        return
+    if not output_dir.exists():
+        # The run failed before anything was ever activated, or activation itself
+        # failed and `staged_install` could not even restore `output_dir`. Either way
+        # there is nowhere to move the log into; leave it at its sibling path and say
+        # so, rather than silently dropping a log that is still complete up to the
+        # point of failure.
+        logger.error(f"install run did not produce {output_dir}; its log remains at {log_file}")
+        return
+    destination = output_dir / "install_references.log"
+    try:
+        log_file.rename(destination)
+    except OSError as error:
+        logger.error(f"could not move install log {log_file} into {destination}: {error}")
+
+
 def main(
     output_dir: Path,
     config_path: Path | None = None,
@@ -1177,16 +1947,26 @@ def main(
     Args:
         output_dir (Path): Directory where references will be installed.
         config_path (Optional[Path]): Path to the main config.json file to update.
-        skip_indexing (bool): Whether to skip the indexing step.
-        index_threads (int): Number of threads to use for indexing.
-        aligners_to_use (list, optional): List of specific aligners to use (overrides config).
+        skip_indexing (bool): Whether to skip the indexing step. Only affects
+            ``--from-source``; the default bundle path re-indexes only in reaction to a
+            detected bwa version mismatch (see `install_from_bundle`), and that safety
+            check is not something a speed flag should be able to turn off.
+        index_threads (int): Number of threads to use for indexing. Only affects
+            ``--from-source``.
+        aligners_to_use (list, optional): List of specific aligners to use (overrides
+            config). Only affects ``--from-source``; the bundle path always installs the
+            BWA index the release already carries.
         references_to_process (list, optional): List of specific references to process (e.g., ['hg19', 'hg38']).
         from_source (bool): Build every reference from its upstream source and run the
-            configured derivations, instead of the legacy per-section download. This is
-            the path the bundle build workflow runs. Defaults to False, which leaves the
-            existing behaviour untouched.
+            configured derivations, instead of fetching the published, checksummed
+            release bundle. This is the path the bundle build workflow itself runs.
+            Defaults to False, which now takes `install_from_bundle`'s path rather than
+            the legacy per-section download this replaced: references come from a
+            versioned release in ``berntpopp/vntyper-data``, not from six third-party
+            hosts at install time.
         release_spec_path (Optional[Path]): Release builds only - take every source URL
             and digest from this file rather than from the shipped install config.
+            Requires ``from_source``.
     """
     script_dir = Path(__file__).parent
     install_config_path = script_dir / "install_references_config.json"
@@ -1197,10 +1977,7 @@ def main(
     ncbi_refs = install_config.get("ncbi_references", {})
     ensembl_refs = install_config.get("ensembl_references", {})
     vntyper_refs = install_config.get("vntyper_references", {})
-    own_repo_refs = install_config.get("own_repository_references", {})
-    bwa_path = install_config.get("bwa_path", "bwa")  # Default to 'bwa'
 
-    # Load aligner configurations
     aligner_config = install_config.get("aligners", {})
 
     try:
@@ -1209,203 +1986,188 @@ def main(
         logger.error(f"Failed to create output directory {output_dir}: {e}")
         sys.exit(1)
 
-    setup_logging(output_dir)
+    # Written outside `output_dir` for the whole run and moved into place at the very
+    # end, in `finally` below - see `_staging_safe_log_path`'s docstring for why a log
+    # written directly into `output_dir` would lose most of its own content to the
+    # `staged_install` rename dance both branches below go through.
+    log_file = _staging_safe_log_path(output_dir)
+    setup_logging(output_dir, log_file=log_file)
 
-    # Filter references (after logging is set up)
-    # Default to hg19 and hg38 (UCSC) for backward compatibility
-    if references_to_process is None:
-        references_to_process = ["hg19", "hg38"]
-        logger.info("No references specified, using default: hg19, hg38")
+    try:
+        # Filter references (after logging is set up)
+        # Default to hg19 and hg38 (UCSC) for backward compatibility
+        if references_to_process is None:
+            references_to_process = ["hg19", "hg38"]
+            logger.info("No references specified, using default: hg19, hg38")
 
-    all_available_refs = (
-        set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
-    )
-    requested_refs = set(references_to_process)
-    found_refs = requested_refs & all_available_refs
-    missing_refs = requested_refs - all_available_refs
+        all_available_refs = (
+            set(ucsc_refs.keys()) | set(ncbi_refs.keys()) | set(ensembl_refs.keys()) | set(vntyper_refs.keys())
+        )
+        requested_refs = set(references_to_process)
+        found_refs = requested_refs & all_available_refs
+        missing_refs = requested_refs - all_available_refs
 
-    if missing_refs:
-        logger.warning(f"Requested references not found in config: {', '.join(sorted(missing_refs))}")
-        logger.warning(f"Available references: {', '.join(sorted(all_available_refs))}")
+        if missing_refs:
+            logger.warning(f"Requested references not found in config: {', '.join(sorted(missing_refs))}")
+            logger.warning(f"Available references: {', '.join(sorted(all_available_refs))}")
 
-    if not found_refs:
-        logger.error("None of the requested references were found in the configuration.")
-        sys.exit(1)
+        if not found_refs:
+            logger.error("None of the requested references were found in the configuration.")
+            sys.exit(1)
 
-    logger.info(f"Processing references: {', '.join(sorted(found_refs))}")
+        logger.info(f"Processing references: {', '.join(sorted(found_refs))}")
 
-    ucsc_refs = {k: v for k, v in ucsc_refs.items() if k in references_to_process}
-    ncbi_refs = {k: v for k, v in ncbi_refs.items() if k in references_to_process}
-    ensembl_refs = {k: v for k, v in ensembl_refs.items() if k in references_to_process}
-    vntyper_refs = {k: v for k, v in vntyper_refs.items() if k in references_to_process}
+        _install_references(
+            install_config,
+            output_dir,
+            config_path,
+            skip_indexing,
+            index_threads,
+            aligners_to_use,
+            found_refs,
+            from_source,
+            release_spec_path,
+            aligner_config,
+        )
+    finally:
+        _finalize_install_log(log_file, output_dir)
 
-    # Initialize aligners
-    enabled_aligners = {}
-    if not skip_indexing and aligner_config:
-        logger.info("=" * 80)
-        logger.info("ALIGNER CONFIGURATION")
-        logger.info("=" * 80)
-        logger.info("Checking available aligners:")
 
-        # Get enabled aligners
-        all_enabled = get_enabled_aligners(aligner_config)
+def _install_references(
+    install_config: dict[str, Any],
+    output_dir: Path,
+    config_path: Path | None,
+    skip_indexing: bool,
+    index_threads: int,
+    aligners_to_use: list[str] | None,
+    found_refs: set[str],
+    from_source: bool,
+    release_spec_path: Path | None,
+    aligner_config: dict[str, Any],
+) -> None:
+    """Run the selected install path and update config.json - the part of `main` that
+    needs no `finally`, split out so the log-finalisation wrapper in `main` stays small.
 
-        # Filter by user-specified aligners if provided, otherwise default to BWA only
-        if aligners_to_use:
-            for aligner_name in aligners_to_use:
-                if aligner_name in all_enabled:
-                    enabled_aligners[aligner_name] = all_enabled[aligner_name]
-                elif aligner_name in aligner_config:
-                    logger.warning(f"  ✗ {aligner_name} was specified but is not available or not enabled")
-                else:
-                    logger.error(f"  ✗ Unknown aligner: {aligner_name}")
-        else:
-            # Default to BWA only
-            if "bwa" in all_enabled:
-                enabled_aligners["bwa"] = all_enabled["bwa"]
-                logger.info("  Using default aligner: bwa")
-            else:
-                logger.warning("  Default aligner 'bwa' not available")
-
-        if not enabled_aligners:
-            logger.warning("No aligners available. Indexing will be skipped.")
-            logger.warning(
-                "To enable aligners, install them and ensure they are in your PATH, "
-                "or set enabled:true in install_references_config.json"
-            )
-        else:
-            logger.info(f"\nWill use {len(enabled_aligners)} aligner(s) for indexing:")
-            for name in enabled_aligners:
-                logger.info(f"  • {name}")
-
-            # Detect index file conflicts
-            conflicts = detect_index_conflicts(enabled_aligners)
-            if conflicts:
-                logger.warning("\n⚠ Index file conflicts detected:")
-                for warning in conflicts:
-                    logger.warning(f"  • {warning}")
-                logger.warning("  These conflicts may cause issues if aligners overwrite each other's index files.")
-            else:
-                logger.info("  ✓ No index file conflicts detected")
-
-        logger.info("=" * 80)
-        logger.info("")
-
-    md5_dict: dict[str, str] = {}
-
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Directory where references are installed.
+        config_path: Path to the main config.json to update, or None to skip.
+        skip_indexing: Whether to skip indexing. Only affects ``--from-source``.
+        index_threads: Threads for indexing. Only affects ``--from-source``.
+        aligners_to_use: Specific aligners to use. Only affects ``--from-source``.
+        found_refs: Physical reference ids this run will install.
+        from_source: Build from upstream sources instead of fetching the release bundle.
+        release_spec_path: Release builds only - source URLs/digests to use instead of
+            the shipped config. Requires `from_source`.
+        aligner_config: The install config's ``aligners`` section.
+    """
     if from_source:
+        # Initialize aligners. Only `--from-source` reads this: the bundle path in the
+        # `else` branch below always installs the BWA index the release already carries,
+        # and re-indexes on its own only when `install_from_bundle` detects a bwa version
+        # mismatch - computing an "enabled aligners" set for it would be dead work, and
+        # logging a whole "ALIGNER CONFIGURATION" section for a run it cannot affect
+        # would tell the operator a flag mattered when it did not.
+        enabled_aligners: dict[str, dict[str, Any]] = {}
+        if not skip_indexing and aligner_config:
+            logger.info("=" * 80)
+            logger.info("ALIGNER CONFIGURATION")
+            logger.info("=" * 80)
+            logger.info("Checking available aligners:")
+
+            # Get enabled aligners
+            all_enabled = get_enabled_aligners(aligner_config)
+
+            # Filter by user-specified aligners if provided, otherwise default to BWA only
+            if aligners_to_use:
+                for aligner_name in aligners_to_use:
+                    if aligner_name in all_enabled:
+                        enabled_aligners[aligner_name] = all_enabled[aligner_name]
+                    elif aligner_name in aligner_config:
+                        logger.warning(f"  ✗ {aligner_name} was specified but is not available or not enabled")
+                    else:
+                        logger.error(f"  ✗ Unknown aligner: {aligner_name}")
+            else:
+                # Default to BWA only
+                if "bwa" in all_enabled:
+                    enabled_aligners["bwa"] = all_enabled["bwa"]
+                    logger.info("  Using default aligner: bwa")
+                else:
+                    logger.warning("  Default aligner 'bwa' not available")
+
+            if not enabled_aligners:
+                logger.warning("No aligners available. Indexing will be skipped.")
+                logger.warning(
+                    "To enable aligners, install them and ensure they are in your PATH, "
+                    "or set enabled:true in install_references_config.json"
+                )
+            else:
+                logger.info(f"\nWill use {len(enabled_aligners)} aligner(s) for indexing:")
+                for name in enabled_aligners:
+                    logger.info(f"  • {name}")
+
+                # Detect index file conflicts
+                conflicts = detect_index_conflicts(enabled_aligners)
+                if conflicts:
+                    logger.warning("\n⚠ Index file conflicts detected:")
+                    for warning in conflicts:
+                        logger.warning(f"  • {warning}")
+                    logger.warning("  These conflicts may cause issues if aligners overwrite each other's index files.")
+                else:
+                    logger.info("  ✓ No index file conflicts detected")
+
+            logger.info("=" * 80)
+            logger.info("")
+
         # The source path owns every section at once: it must verify each download
         # before expanding it, and it must know which chromosome FASTAs landed where so
         # the derivations can cut from them. It writes no md5_checksums.txt - the
         # digests it enforces are SHA-256 values committed in the install config.
+        #
+        # Wrapped in `staged_install` here rather than inside `install_from_source`
+        # itself (carry-forward from PR-1 Codex finding M5): `install_from_source`'s own
+        # direct-unit-test suite in test_install_references_derivations.py asserts its
+        # returned paths equal `output_dir`-relative paths for the literal directory it
+        # was called with, so redirecting its writes has to happen at this call site, by
+        # substituting `staging` for `output_dir`, rather than by changing what the
+        # function does with the `output_dir` it is given. A late failure - a bad
+        # download, a failed derivation, a `bwa index` that runs out of disk mid-genome -
+        # now leaves any previously installed tree untouched instead of a partially
+        # rebuilt one, the same guarantee the bundle path gets from `install_from_bundle`
+        # below - including the same inherent exception to it: a SIGKILL landing between
+        # `staged_install`'s two activation renames leaves `output_dir` absent and both
+        # `.previous.*`/`.staging.*` siblings orphaned with nothing logged, deliberately
+        # left for manual inspection rather than auto-recovered. See
+        # `install_from_bundle`'s docstring for the full explanation.
         release_spec = load_install_config(release_spec_path) if release_spec_path else None
         if release_spec is not None:
             logger.info(f"Taking source URLs and digests from {release_spec_path}")
-        install_from_source(
-            install_config,
-            output_dir,
-            sorted(found_refs),
-            enabled_aligners,
-            index_threads,
-            release_spec,
-            skip_indexing,
-        )
+        with staged_install(output_dir) as staging:
+            install_from_source(
+                install_config,
+                staging,
+                sorted(found_refs),
+                enabled_aligners,
+                index_threads,
+                release_spec,
+                skip_indexing,
+            )
     else:
-        # Process UCSC references
-        if ucsc_refs:
-            logger.info("Processing UCSC references...")
-            process_ucsc_references(
-                ucsc_refs,
-                output_dir,
-                bwa_path,
-                skip_indexing,
-                md5_dict,
-                aligners=enabled_aligners,
-                index_threads=index_threads,
-            )
+        # The default path: fetch the published, checksummed release bundle rather than
+        # rebuilding from six third-party hosts. `install_from_bundle` stages its own
+        # install (see its docstring), so it is handed `output_dir` directly rather than
+        # a staging directory computed here - unlike the `--from-source` branch above,
+        # its own unit tests call it exactly this way.
+        install_from_bundle(install_config, output_dir, sorted(found_refs))
 
-        # Process NCBI references
-        if ncbi_refs:
-            logger.info("Processing NCBI references...")
-            process_ucsc_references(
-                ncbi_refs,
-                output_dir,
-                bwa_path,
-                skip_indexing,
-                md5_dict,
-                aligners=enabled_aligners,
-                index_threads=index_threads,
-            )
-
-        # Process ENSEMBL references
-        if ensembl_refs:
-            logger.info("Processing ENSEMBL references...")
-            process_ucsc_references(
-                ensembl_refs,
-                output_dir,
-                bwa_path,
-                skip_indexing,
-                md5_dict,
-                aligners=enabled_aligners,
-                index_threads=index_threads,
-            )
-
-        # Process VNtyper references
-        if vntyper_refs:
-            logger.info("Processing VNtyper references...")
-            process_vntyper_references(vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict)
-
-        # Process own repository references
-        if own_repo_refs:
-            logger.info("Processing own repository references...")
-            process_own_repository_references(own_repo_refs, output_dir, skip_indexing, md5_dict)
-
-    # Write MD5 checksums to file
-    if md5_dict:
-        write_md5_checksums(md5_dict, output_dir)
-
-    # Update the main config.json with new reference paths if config_path is provided
+    # Update the main config.json with new reference paths if config_path is provided.
+    # `canonical_reference_keys` re-derives every key from `install_config` (the full,
+    # unfiltered config loaded above) and `output_dir` directly, rather than from the
+    # per-section dicts this run happened to process - so the keys it writes are exactly
+    # the ones `vntyper/` reads, and a partial run never writes a key pointing at a file
+    # that was never installed.
     if config_path and config_path.exists():
-        updated_references = {}
-
-        # Collect all references from UCSC
-        for ref_key, ref_info in ucsc_refs.items():
-            ucsc_target = ref_info.get("target_path")
-            if ucsc_target:
-                ref_path = output_dir / ucsc_target
-                updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
-
-        # Collect all references from NCBI
-        for ref_key, ref_info in ncbi_refs.items():
-            ncbi_target = ref_info.get("target_path")
-            if ncbi_target:
-                ref_path = output_dir / ncbi_target
-                updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
-
-        # Collect all references from ENSEMBL
-        for ref_key, ref_info in ensembl_refs.items():
-            ensembl_target = ref_info.get("target_path")
-            if ensembl_target:
-                ref_path = output_dir / ensembl_target
-                updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
-
-        # Collect all references from VNtyper
-        for ref_key, ref_info in vntyper_refs.items():
-            vntyper_target = ref_info.get("target_path")
-            if vntyper_target:
-                ref_path = output_dir / vntyper_target
-                updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
-
-        # Collect references from own repository
-        raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
-        for file_info in raw_files:
-            own_target = file_info.get("target_path")
-            if own_target:
-                ref_name = Path(own_target).stem
-                ref_path = output_dir / own_target
-                updated_references[f"own_repo_{ref_name}"] = ref_path.resolve()
-
-        update_config(config_path, updated_references)
+        update_config(config_path, canonical_reference_keys(install_config, output_dir))
     else:
         if config_path:
             logger.warning(f"Config file {config_path} does not exist. Skipping config update.")

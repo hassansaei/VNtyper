@@ -15,6 +15,62 @@ VNtyper 2 supports multiple reference genome assemblies with automatic chromosom
 | `hg19_ensembl` | GRCh37 | Ensembl | `1` |
 | `hg38_ensembl` | GRCh38 | Ensembl | `1` |
 
+## Physical identity: eight labels, six files
+
+The eight assembly labels above do not each name a separate genome file. Contig naming
+differs by *reference source* (UCSC `chr1` vs. NCBI `NC_000001.10` vs. Ensembl `1`), so the
+BWA and CRAM reference files are keyed by `(coordinate system, source)` — but `GRCh37` and
+`hg19_ncbi` are two labels for the **same** NCBI file, as are `GRCh38` and `hg38_ncbi`: both
+name the NCBI RefSeq FASTA for their coordinate system, just spelled differently. That
+leaves six physical files behind the eight labels:
+
+| Label(s) | Physical file id | Config key VNtyper writes and reads |
+|----------|-------------------|--------------------------------------|
+| `hg19` | `hg19` | `bwa_reference_hg19` |
+| `GRCh37`, `hg19_ncbi` | `GRCh37` | `bwa_reference_GRCh37` |
+| `hg19_ensembl` | `hg19_ensembl` | `bwa_reference_hg19_ensembl` |
+| `hg38` | `hg38` | `bwa_reference_hg38` |
+| `GRCh38`, `hg38_ncbi` | `GRCh38` | `bwa_reference_GRCh38` |
+| `hg38_ensembl` | `hg38_ensembl` | `bwa_reference_hg38_ensembl` |
+
+`vntyper install-references` writes the `bwa_reference_*` key for each physical file it
+actually installed, out of these six possible keys (see
+[install-references](../cli/install-references.md)) -- the default run installs only
+`bwa_reference_hg19` and `bwa_reference_hg38`; `--references GRCh38` additionally installs
+the physical file that both `GRCh38` and `hg38_ncbi` runs read.
+
+adVNTR and SHARK need no such distinction: only two files of each exist in total — one
+adVNTR database and one MUC1 region FASTA per **coordinate system** — because contig naming
+is irrelevant once VNtyper has already sliced out the MUC1 region. Those are keyed by
+coordinate system alone (`advntr_reference_vntr_hg19`/`_hg38`,
+`muc1_region_fasta_hg19`/`_hg38`), so all four labels sharing a coordinate system — `hg19`,
+`GRCh37`, `hg19_ncbi`, `hg19_ensembl` — resolve to the same adVNTR database and the same
+SHARK region FASTA.
+
+Before this was fixed, `pipeline.py` held its own four-entry map from assembly to adVNTR
+database and defaulted every label it did not recognise to hg19 — so `--reference-assembly
+hg38_ncbi` or `hg38_ensembl` silently validated against the **GRCh37** adVNTR database
+instead of GRCh38's. Keying by coordinate system instead of by the raw label closes that:
+every label maps to its coordinate system first, so there is no "unrecognised label" case
+left to default anywhere.
+
+### The fallback, and why a complete installation never uses it
+
+Reading a reference walks a fixed key order, most specific first: the exact label (when the
+config specialises one, e.g. `bwa_reference_hg19_ncbi`), then the physical-file key from the
+table above, then the UCSC-family key for the coordinate system (`bwa_reference_hg19` /
+`bwa_reference_hg38`). A key that is *present* wins even when its value is `null` — that is
+a deliberate "disabled", not a miss to fall through past.
+
+If none of those keys is present, VNtyper falls back to the UCSC-family key and logs a
+warning naming the assembly and the key it used instead, because that run is now using
+`hg19`/`hg38` **UCSC** sequence for a request that named a different source. This is not a
+normal outcome: `vntyper install-references` writes the physical-file key for every
+reference it installs, so a complete installation never triggers this fallback — it only
+fires against a `config.json` that was hand-edited or only partially installed. Seeing the
+warning is the signal to run `vntyper install-references` for the missing assembly rather
+than to trust the fallback file.
+
 ## MUC1 VNTR Region Coordinates
 
 All assemblies within the same coordinate system use identical coordinates:
@@ -79,16 +135,22 @@ Three things the check deliberately does **not** do:
 
 ## Installing References
 
-Before running the pipeline, install reference files:
+Before running the pipeline, install reference files. By default this fetches the
+published, checksummed reference release from
+[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) rather than building
+anything locally — see [Reference Setup](../getting-started/reference-setup.md) for the
+trust model and [install-references](../cli/install-references.md) for every flag.
 
 ```bash
-vntyper install-references -d /path/to/references --threads 4
+vntyper install-references -d /path/to/references
 ```
 
-To install specific assemblies or aligners:
+To install specific physical files (the six ids from the table above, not the eight
+labels — `GRCh37` also covers `hg19_ncbi`, `GRCh38` also covers `hg38_ncbi`):
 
 ```bash
-vntyper install-references -d /path/to/references \
-    --references hg19 hg38 \
-    --aligners bwa bwa-mem2
+vntyper install-references -d /path/to/references --references hg19 hg38 GRCh37 GRCh38
 ```
+
+`--references hg19` alone still installs the common MUC1 motif FASTAs and both adVNTR
+databases — those are not selectable per assembly, because only one of each exists.
