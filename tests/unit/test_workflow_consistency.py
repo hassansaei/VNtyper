@@ -85,6 +85,7 @@ def test_base_hash_covers_everything_that_changes_the_base() -> None:
         "docker/requirements-web.txt",
         "vntyper/scripts/install_references.py",
         "vntyper/scripts/install_references_config.json",
+        "vntyper/scripts/reference_bundle.py",
         "vntyper/dependencies/advntr/**",
         "reference/**",
         ".dockerignore",

@@ -63,7 +63,7 @@ jobs:
       - name: Compute base image tag
         id: hash
         env:
-          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
+          HASH: ${{ hashFiles('conda/**', 'docker/Dockerfile.base', 'docker/requirements-web.txt', 'vntyper/scripts/install_references.py', 'vntyper/scripts/install_references_config.json', 'vntyper/scripts/reference_bundle.py', 'vntyper/dependencies/advntr/**', 'reference/**', '.dockerignore') }}
         run: |
           set -euo pipefail
           # hashFiles() returns "" when nothing matched, which would silently produce the
