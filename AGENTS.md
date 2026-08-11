@@ -318,11 +318,12 @@ limit.
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
   `--strict-markers` additionally turns a *misspelled* marker into an error.
 - Unit tests must stay pure: `tmp_path` + `unittest.mock`, no network, no reference data.
-- Integration and docker tests require both the ~1.1 GB Zenodo archive and the pinned
+- Integration tests require both the ~1.1 GB Zenodo archive and the pinned host
   `reference/alignment/chr1.hg19.fa`. Install that reference with
   `vntyper install-references -d reference --references hg19`; the test-data download
-  does not install it. The test bootstrap MD5s all 114 `file_resources` entries, and one
-  missing file triggers a full re-download.
+  does not install it. Docker tests use the pinned reference bundled in the image and
+  require only the archive on the host. The test bootstrap MD5s all 114 `file_resources`
+  entries, and one missing file triggers a full re-download.
   **The test-data bootstrap has no skip fallback**: `tests/conftest.py` and
   `tests/support/data_utils.py` call `pytest.exit(..., returncode=1)` on missing config,
   a missing Kestrel JAR or a failed download, which ends the whole session — unit tests
@@ -562,8 +563,8 @@ summary | release-summary | none | always records success, failure, skipped jobs
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
     final 2026-08-11 verification measured all 38 Python files at 7,166 of 7,698 measured
     units, or 93.09% aggregate scripts-only branch-inclusive coverage, and 17,227 of
-    19,309 measured units, or 89.22% combined branch-inclusive coverage. All 5,384 unit
-    tests passed with no skips and 154 warnings in the maintained Python 3.12.13
+    19,309 measured units, or 89.22% combined branch-inclusive coverage. All 5,385 unit
+    tests passed with no skips and 163 warnings in the maintained Python 3.12.13
     environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:

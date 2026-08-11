@@ -75,13 +75,26 @@ def test_changelog_preserves_released_history_and_records_the_fix_unreleased() -
     assert "## 2.0.11 (Current)" in page
 
 
-def test_golden_page_defers_issue_233_results_until_evidence_exists() -> None:
+def test_golden_page_records_the_issue_233_run_and_retained_evidence() -> None:
     page = _read("docs/development/golden-cohort-gate.md")
+    normalized = " ".join(page.split())
     assert "Current routing policy (2026-08-11, #233)" in page
-    assert "will record all 32 formerly refused" in page
+    assert "32 base cases plus 10 repeat/derived cases, 42 total" in normalized
     assert "comparison.json" in page
-    assert "No issue #233 run result is recorded here" in page
-    assert "| 7 |" not in page
+    assert "| 7 | `19c8acd` | `4678851` |" in page
+    assert "5b8dc9199cd19fc1142e0a6ba7bd2740d4c0a97b0cdd9e5f8f4b08e51330e88e" in page
+    assert "6808936b98be8b8d79decd17c76f89f5f4519a6e1fa9acc3f96c0c9eb6d14cbd" in page
+    assert "67/67 pipeline/probe outcomes" in normalized
+    assert "4/4 cohort outcomes" in normalized
+
+
+def test_agents_scopes_the_host_reference_prerequisite_to_integration() -> None:
+    page = _read("AGENTS.md")
+    testing = page[page.index("## Testing") : page.index("## Git and PRs")]
+    normalized = " ".join(testing.split())
+    assert "Integration tests require" in normalized
+    assert "pinned host `reference/alignment/chr1.hg19.fa`" in normalized
+    assert "Docker tests use the pinned reference bundled in the image" in normalized
 
 
 def test_agents_records_the_fail_closed_append_only_success_contract() -> None:
