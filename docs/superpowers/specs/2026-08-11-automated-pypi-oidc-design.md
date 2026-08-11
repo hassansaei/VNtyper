@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-11  
 **Issue:** #236  
-**Status:** Approved direction; written design awaiting final review
+**Status:** Approved for implementation
 
 ## Problem
 
