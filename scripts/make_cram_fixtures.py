@@ -601,6 +601,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.data_config.is_file():
         logger.error("test-data config not found: %s", args.data_config)
         return 1
+    if not args.reference_fasta.is_file():
+        reference_root = args.reference_fasta.parent.parent
+        logger.error(
+            "required pinned hg19 reference FASTA not found: %s; "
+            "run `vntyper install-references -d %s --references hg19` before deriving CRAM fixtures",
+            args.reference_fasta,
+            reference_root,
+        )
+        return 1
 
     with snapshot_reference_fasta(args.reference_fasta) as validated_reference:
         summary = build_fixtures(

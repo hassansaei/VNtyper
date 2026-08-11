@@ -103,22 +103,23 @@ def _prepare_main_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 @pytest.mark.parametrize(
-    ("reference_args", "expected_reference"),
-    [
-        ([], Path("reference/alignment/chr1.hg19.fa")),
-        (
-            ["--reference-fasta", "/opt/vntyper/reference/alignment/chr1.hg19.fa"],
-            Path("/opt/vntyper/reference/alignment/chr1.hg19.fa"),
-        ),
-    ],
+    "explicit_reference",
+    [False, True],
 )
 def test_main_forwards_selected_reference_fasta_unchanged(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    reference_args: list[str],
-    expected_reference: Path,
+    explicit_reference: bool,
 ) -> None:
     data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    expected_reference = (
+        tmp_path / "mounted/reference/alignment/chr1.hg19.fa"
+        if explicit_reference
+        else generator.DEFAULT_REFERENCE_COMPRESSED_FASTA
+    )
+    _touch(expected_reference)
+    reference_args = ["--reference-fasta", str(expected_reference)] if explicit_reference else []
     authority = mock.sentinel.validated_reference
     snapshot = mock.Mock(return_value=nullcontext(authority))
     derive = mock.Mock(return_value=mock.Mock(as_manifest_entry=dict))
@@ -154,24 +155,13 @@ def test_main_forwards_selected_reference_fasta_unchanged(
     assert derive.call_args.kwargs == {"validated_reference": authority}
 
 
-@pytest.mark.parametrize(
-    ("reference_value", "error", "message"),
-    [
-        (None, FileNotFoundError, "does not exist"),
-        (">chr1\nA\n", ValueError, "SHA-256 mismatch"),
-    ],
-)
-def test_main_rejects_explicit_missing_or_invalid_reference_before_publication(
+def test_main_rejects_explicit_invalid_reference_before_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    reference_value: str | None,
-    error: type[Exception],
-    message: str,
 ) -> None:
     data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
     reference = tmp_path / "explicit-reference.fa"
-    if reference_value is not None:
-        reference.write_text(reference_value, encoding="utf-8")
+    reference.write_text(">chr1\nA\n", encoding="utf-8")
     final_cram = _touch(fixture_root / "reference-compressed/example_b178_hg19_subset.cram", "existing cram")
     final_crai = _touch(Path(f"{final_cram}.crai"), "existing crai")
     expected_bytes = (final_cram.read_bytes(), final_crai.read_bytes())
@@ -198,7 +188,7 @@ def test_main_rejects_explicit_missing_or_invalid_reference_before_publication(
     monkeypatch.setattr(generator, "build_indexed_safe_fixture", indexed_safe)
     monkeypatch.setattr(generator, "write_manifest", manifest)
 
-    with pytest.raises(error, match=message):
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
         generator.main(
             [
                 "--data-root",

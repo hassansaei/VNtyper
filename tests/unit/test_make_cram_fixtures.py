@@ -574,6 +574,7 @@ def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_
             }
         )
     )
+    _touch(repository_root / cram_fixtures.DEFAULT_REFERENCE_COMPRESSED_FASTA)
 
     def fake_derive_cram(_samtools: str, bam: Path, _data_root: Path, fixture_root: Path) -> Fixture:
         return Fixture(bam, fixture_root / "source.cram", 1, 0, "digest", 1, 1)
@@ -715,6 +716,7 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
     """``make cram-fixtures`` must make the #209, A-SCAN-1 and A-178-2 fixtures available."""
     data_root = tmp_path / "data"
     data_root.mkdir()
+    reference = _touch(tmp_path / "reference/alignment/chr1.hg19.fa")
     calls: list[Path] = []
     selections: list[bool] = []
 
@@ -738,9 +740,26 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
     monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda root: calls.append(root))
     monkeypatch.setattr("scripts.make_cram_fixtures.build_indexed_safe_fixture", lambda root: calls.append(root))
 
-    exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
+    exit_code = cram_fixtures.main(
+        [
+            "--data-root",
+            str(data_root),
+            "--fixture-root",
+            str(tmp_path / "cram"),
+            "--reference-fasta",
+            str(reference),
+        ]
+    )
     all_exit_code = cram_fixtures.main(
-        ["--data-root", str(data_root), "--fixture-root", str(tmp_path / "all-cram"), "--all"]
+        [
+            "--data-root",
+            str(data_root),
+            "--fixture-root",
+            str(tmp_path / "all-cram"),
+            "--reference-fasta",
+            str(reference),
+            "--all",
+        ]
     )
 
     assert exit_code == 1
@@ -762,6 +781,7 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     """A partial fixture tree must not make the ordinary Make target report success."""
     data_root = tmp_path / "data"
     data_root.mkdir()
+    reference = _touch(tmp_path / "reference/alignment/chr1.hg19.fa")
     source = data_root / "good.bam"
     source.write_bytes(b"BAM")
     fixture = cram_fixtures.Fixture(
@@ -785,7 +805,16 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda _root: None)
     monkeypatch.setattr("scripts.make_cram_fixtures.build_indexed_safe_fixture", lambda _root: None)
 
-    exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
+    exit_code = cram_fixtures.main(
+        [
+            "--data-root",
+            str(data_root),
+            "--fixture-root",
+            str(tmp_path / "cram"),
+            "--reference-fasta",
+            str(reference),
+        ]
+    )
 
     assert exit_code == 1
 
@@ -797,6 +826,7 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
     data_root.mkdir()
     config = tmp_path / "test_data_config.json"
     config.write_text("{}", encoding="utf-8")
+    reference = _touch(tmp_path / "reference/alignment/chr1.hg19.fa")
     manifest = tmp_path / "manifest.json"
 
     def fail_build(*args: object, **kwargs: object) -> Summary:
@@ -814,6 +844,8 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
                 str(config),
                 "--manifest",
                 str(manifest),
+                "--reference-fasta",
+                str(reference),
             ]
         )
     assert not manifest.exists()
@@ -829,6 +861,48 @@ def test_main_returns_one_when_required_input_is_missing(tmp_path: Path, missing
         config.write_text("{}", encoding="utf-8")
 
     assert cram_fixtures.main(["--data-root", str(data_root), "--data-config", str(config)]) == 1
+
+
+def test_main_missing_reference_fails_before_building_and_preserves_existing_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    config = tmp_path / "test_data_config.json"
+    config.write_text("{}", encoding="utf-8")
+    missing_reference = tmp_path / "reference" / "alignment" / "chr1.hg19.fa"
+    fixture_root = tmp_path / "cram"
+    fixture_root.mkdir()
+    existing_cram = fixture_root / "existing.cram"
+    existing_manifest = fixture_root / "manifest.json"
+    existing_cram.write_bytes(b"existing cram")
+    existing_manifest.write_text('{"existing": true}\n', encoding="utf-8")
+
+    def must_not_build(*args: object, **kwargs: object) -> Summary:
+        del args, kwargs
+        raise AssertionError("fixture builders must not run without the pinned reference")
+
+    monkeypatch.setattr(cram_fixtures, "build_fixtures", must_not_build)
+
+    with caplog.at_level("ERROR"):
+        exit_code = cram_fixtures.main(
+            [
+                "--data-root",
+                str(data_root),
+                "--data-config",
+                str(config),
+                "--fixture-root",
+                str(fixture_root),
+                "--reference-fasta",
+                str(missing_reference),
+            ]
+        )
+
+    assert exit_code == 1
+    assert f"required pinned hg19 reference FASTA not found: {missing_reference}" in caplog.text
+    assert "vntyper install-references" in caplog.text
+    assert existing_cram.read_bytes() == b"existing cram"
+    assert existing_manifest.read_text(encoding="utf-8") == '{"existing": true}\n'
 
 
 def test_the_reference_contract_purpose_fixtures_are_registered_with_portable_paths() -> None:
