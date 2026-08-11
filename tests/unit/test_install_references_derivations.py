@@ -837,6 +837,101 @@ class TestInstallFromSource:
         assert "MUC1_motifs_Rev_com.fa" not in str(excinfo.value), "only the absent seed should be named"
         assert urls == [], "the preflight must run before the first download"
 
+    def test_a_downloadable_seed_absent_at_preflight_time_does_not_trip_it(self, tmp_path, monkeypatch):
+        """Carry-forward #4 (parked PR-1 minor): `MUC1_motifs_Rev_com.fa` is a
+        downloadable `own_repository_references.raw_files` entry that
+        `_install_source_seeds` fetches later in the same `install_from_source` run, so
+        the preflight must not require it to already exist - only `filter_config.json`,
+        which has no download source, still has to be staged in advance. This was latent
+        rather than live: every shipped path stages all four seeds before calling
+        `--from-source`, so nothing previously reached a fresh `output_dir` missing only
+        the downloadable one. Testing `_preflight_literal_seeds` directly, rather than
+        through `install_from_source`, isolates the fix from the rest of the pipeline the
+        full run below also exercises.
+        """
+        config = {
+            "own_repository_references": {
+                "raw_files": [{"url": "https://x/seed.fa", "target_path": "MUC1_motifs_Rev_com.fa"}]
+            },
+            "derivations": [
+                {
+                    "kind": "literal",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                }
+            ],
+        }
+        # Neither seed is on disk. Without the fix both would be named as missing.
+        with pytest.raises(RuntimeError) as excinfo:
+            install_references._preflight_literal_seeds(config, tmp_path)
+
+        assert "filter_config.json" in str(excinfo.value)
+        assert "MUC1_motifs_Rev_com.fa" not in str(excinfo.value), (
+            "a seed own_repository_references can fetch must not be required up front"
+        )
+
+    def test_a_seed_with_no_download_source_anywhere_is_still_required(self, tmp_path):
+        """The complement of the test above: when nothing in the config can fetch a
+        named seed, it is required exactly as before the fix."""
+        config = {
+            "derivations": [
+                {
+                    "kind": "literal",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                }
+            ]
+        }
+
+        with pytest.raises(RuntimeError) as excinfo:
+            install_references._preflight_literal_seeds(config, tmp_path)
+
+        assert "filter_config.json" in str(excinfo.value)
+        assert "MUC1_motifs_Rev_com.fa" in str(excinfo.value)
+
+    def test_a_fresh_from_source_run_succeeds_with_only_the_non_downloadable_seed_staged(self, tmp_path, monkeypatch):
+        """The full defect the parked minor named: a fresh `output_dir` that stages only
+        `filter_config.json` (no download source) and leaves `MUC1_motifs_Rev_com.fa` to
+        be fetched must not fail preflight - and must actually complete, proving
+        `_install_source_seeds` really does fetch it before `run_derivations` needs it.
+        """
+        digest = self._gz_digest(tmp_path, self.GENOME)
+        seed_payload = b">A\nAAA\n"
+        merged_digest = hashlib.sha256(b">A-A\nAAAAAA\n").hexdigest()
+
+        def _download(url, dest_path):
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            if dest_path.suffix == ".gz":
+                _gz(dest_path, self.GENOME)
+            else:
+                dest_path.write_bytes(seed_payload)
+
+        monkeypatch.setattr(install_references, "download_file", _download)
+        monkeypatch.setattr(install_references.subprocess, "run", _fake_samtools({}, []))
+        (tmp_path / "filter_config.json").write_text("{}", encoding="utf-8")
+
+        config = self._config(
+            digest,
+            derivations=[
+                {
+                    "kind": "literal",
+                    "config_key": "muc1_reference_vntr",
+                    "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+                    "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+                    "expected_sha256": merged_digest,
+                }
+            ],
+        )
+        config["own_repository_references"] = {
+            "raw_files": [{"url": "https://x/seed.fa", "target_path": "MUC1_motifs_Rev_com.fa"}]
+        }
+
+        installed = install_references.install_from_source(config, tmp_path, ["hg19"], {}, index_threads=1)
+
+        assert installed == {"hg19": tmp_path / "alignment" / "chr1.hg19.fa"}
+        assert (tmp_path / "MUC1_motifs_Rev_com.fa").read_bytes() == seed_payload
+        assert (tmp_path / "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa").exists()
+
     def test_a_shark_derivation_does_not_trip_the_seed_preflight(self, tmp_path, monkeypatch):
         """Only `literal` derivations read seeds; a region cut reads an installed genome."""
         digest = self._gz_digest(tmp_path, self.GENOME)
@@ -1226,11 +1321,20 @@ class TestMainRouting:
         monkeypatch.setattr(install_references, "install_from_source", _record_into(seen))
         for legacy in ("process_ucsc_references", "process_vntyper_references", "process_own_repository_references"):
             monkeypatch.setattr(install_references, legacy, _forbidden(legacy))
+        monkeypatch.setattr(install_references, "install_from_bundle", _forbidden("install_from_bundle"))
 
         install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"], from_source=True)
 
         assert seen["references"] == ["hg19"]
-        assert seen["output_dir"] == tmp_path
+        # Task 11 / carry-forward #2 (PR-1 Codex finding M5): `main()` now stages the
+        # `--from-source` build too, so `install_from_source` is handed a staging
+        # directory - a sibling of `tmp_path` - rather than `tmp_path` itself. Activation
+        # happens only after it returns without raising; see
+        # `test_a_successful_from_source_run_via_main_lands_at_the_real_output_dir` below
+        # for proof the *final* result still ends up at the real `output_dir`.
+        assert seen["output_dir"] != tmp_path
+        assert seen["output_dir"].parent == tmp_path.parent
+        assert seen["output_dir"].name.startswith(f".{tmp_path.name}.staging.")
         assert seen["release_spec"] is None
         # `skip_indexing` empties the aligner set, and it is threaded on separately so the
         # seeds and the adVNTR database are not indexed either.
@@ -1254,22 +1358,69 @@ class TestMainRouting:
         assert seen["index_threads"] == 9
         assert seen["skip_indexing"] is False
 
-    def test_without_the_flag_the_legacy_path_is_unchanged(self, tmp_path, monkeypatch):
-        seen: list[str] = []
+    def test_a_successful_from_source_run_via_main_lands_at_the_real_output_dir(self, tmp_path, monkeypatch):
+        """The staging wrapper introduced for carry-forward #2 must be invisible on success:
+        whatever `install_from_source` writes into the staging directory it is handed
+        ends up at the real, literal `output_dir` once `main()` returns, and no staging
+        or quarantine directory is left behind."""
+
+        def _fake_build(cfg, out, refs, aligners, index_threads, release_spec=None, skip_indexing=False):
+            (out / "alignment").mkdir(parents=True, exist_ok=True)
+            (out / "alignment" / "chr1.hg19.fa").write_text("built", encoding="utf-8")
+            return {"hg19": out / "alignment" / "chr1.hg19.fa"}
+
+        monkeypatch.setattr(install_references, "install_from_source", _fake_build)
+
+        install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"], from_source=True)
+
+        assert (tmp_path / "alignment" / "chr1.hg19.fa").read_text(encoding="utf-8") == "built"
+        assert not list(tmp_path.parent.glob(f".{tmp_path.name}.staging.*"))
+        assert not list(tmp_path.parent.glob(f".{tmp_path.name}.previous.*"))
+
+    def test_a_from_source_failure_via_main_leaves_a_pre_existing_tree_untouched(self, tmp_path, monkeypatch):
+        """The other half of carry-forward #2: a late `--from-source` failure must not
+        corrupt or partially replace whatever was already installed, the same guarantee
+        `install_from_bundle` gets from `staged_install` directly."""
+        (tmp_path / "alignment").mkdir()
+        (tmp_path / "alignment" / "chr1.hg19.fa").write_text("previous install", encoding="utf-8")
+
+        def _boom(cfg, out, refs, aligners, index_threads, release_spec=None, skip_indexing=False):
+            (out / "alignment").mkdir(parents=True, exist_ok=True)
+            (out / "alignment" / "chr1.hg38.fa").write_text("half-built", encoding="utf-8")
+            raise RuntimeError("network died mid-build")
+
+        monkeypatch.setattr(install_references, "install_from_source", _boom)
+
+        with pytest.raises(RuntimeError, match="network died mid-build"):
+            install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"], from_source=True)
+
+        assert (tmp_path / "alignment" / "chr1.hg19.fa").read_text(encoding="utf-8") == "previous install"
+        assert not (tmp_path / "alignment" / "chr1.hg38.fa").exists()
+        assert not list(tmp_path.parent.glob(f".{tmp_path.name}.staging.*"))
+
+    def test_without_the_flag_the_bundle_path_is_used(self, tmp_path, monkeypatch):
+        """Task 11: the default path now fetches the published, checksummed release
+        bundle rather than the legacy per-section download from six third-party hosts."""
+        seen: dict = {}
+
+        def _record_bundle(cfg, out, refs):
+            seen.update(output_dir=out, references=refs)
+
+        monkeypatch.setattr(install_references, "install_from_bundle", _record_bundle)
         monkeypatch.setattr(
             install_references, "install_from_source", _forbidden("install_from_source", exception=AssertionError)
         )
-        monkeypatch.setattr(
-            install_references,
-            "process_ucsc_references",
-            lambda refs, out, bwa, skip, md5, aligners=None, index_threads=4: seen.extend(refs),
-        )
-        monkeypatch.setattr(install_references, "process_vntyper_references", lambda refs, out, bwa, skip, md5: None)
-        monkeypatch.setattr(install_references, "process_own_repository_references", lambda refs, out, skip, md5: None)
+        for legacy in ("process_ucsc_references", "process_vntyper_references", "process_own_repository_references"):
+            monkeypatch.setattr(install_references, legacy, _forbidden(legacy))
 
         install_references.main(tmp_path, skip_indexing=True, references_to_process=["hg19"])
 
-        assert seen == ["hg19"]
+        assert seen["references"] == ["hg19"]
+        # Unlike the `--from-source` branch, `install_from_bundle` stages its own
+        # install (its own direct unit tests in test_reference_bundle_install.py require
+        # that), so `main()` hands it `output_dir` directly rather than a staging
+        # substitute computed here.
+        assert seen["output_dir"] == tmp_path
 
     def test_a_release_spec_path_is_loaded_and_handed_over(self, tmp_path, monkeypatch):
         spec_path = tmp_path / "spec.json"
