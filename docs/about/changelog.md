@@ -4,6 +4,10 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.12 (Current)
+
 **Valid mixed alignment conversions are now routed losslessly (#233).** When R1 and R2
 contain equal non-zero record counts, every non-empty R1, R2, `other`, and singleton
 FASTQ is passed exactly once, in that order, to one Kestrel 1.0.1 sample. The files are
@@ -12,7 +16,7 @@ Kestrel as invalid. This restores BAM, CRAM, and adVNTR runs rejected by 2.0.10 
 2.0.11 while retaining genuine singleton and unpaired reads instead of silently
 discarding them.
 
-## 2.0.11 (Current)
+## 2.0.11
 
 When both `--keep-intermediates` and `--delete-intermediates` are supplied,
 `--delete-intermediates` now wins as the CLI help has always documented. Earlier

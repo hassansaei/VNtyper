@@ -42,7 +42,7 @@ def test_current_policy_names_lossless_selection_and_invalid_parity() -> None:
     current_sections = (
         milestone_6[milestone_6.index("Superseded routing policy") : milestone_6.index("## Purpose")],
         milestone_4[milestone_4.index("Superseded routing policy") : milestone_4.index("---")],
-        changelog[changelog.index("## Unreleased") : changelog.index("## 2.0.11 (Current)")],
+        changelog[changelog.index("## 2.0.12 (Current)") : changelog.index("## 2.0.11")],
     )
     normalized_sections = tuple(" ".join(section.split()) for section in current_sections)
     for section in normalized_sections:
@@ -66,13 +66,15 @@ def test_docker_quick_is_named_as_a_real_b178_success_sentinel() -> None:
     assert "required success sentinel" in page
 
 
-def test_changelog_preserves_released_history_and_records_the_fix_unreleased() -> None:
+def test_changelog_preserves_released_history_and_records_the_fix_in_2_0_12() -> None:
     page = _read("docs/about/changelog.md")
-    assert page.index("## Unreleased") < page.index("## 2.0.11 (Current)")
-    unreleased = page[page.index("## Unreleased") : page.index("## 2.0.11 (Current)")]
-    assert "Valid mixed alignment conversions are now routed losslessly" in unreleased
+    assert page.index("## Unreleased") < page.index("## 2.0.12 (Current)") < page.index("## 2.0.11")
+    unreleased = page[page.index("## Unreleased") : page.index("## 2.0.12 (Current)")]
+    release = page[page.index("## 2.0.12 (Current)") : page.index("## 2.0.11")]
+    assert "No unreleased changes." in unreleased
+    assert "Valid mixed alignment conversions are now routed losslessly" in release
     assert "Superseded on 2026-08-11 by #233" in page
-    assert "## 2.0.11 (Current)" in page
+    assert "## 2.0.11 (Current)" not in page
 
 
 def test_golden_page_records_the_issue_233_run_and_retained_evidence() -> None:
