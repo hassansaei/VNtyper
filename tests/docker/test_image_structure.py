@@ -72,8 +72,11 @@ MIN_REFERENCE_BYTES = {
     "bwa_reference_GRCh38": 200 * 1024**2,
     "bwa_reference_hg19_ensembl": 200 * 1024**2,
     "bwa_reference_hg38_ensembl": 200 * 1024**2,
-    # The SHARK hg38 region: both derivations run because the default reference
-    # selection above includes hg19 and hg38 (see install_from_bundle/run_derivations).
+    # The SHARK hg38 region: present regardless of which genomes were selected above.
+    # `install_from_bundle` runs no derivations at all - unlike `--from-source`, which
+    # cuts each region FASTA out of an installed chromosome with `run_derivations` - the
+    # region FASTAs arrive pre-built inside the common asset every install fetches
+    # unconditionally, the same way the MUC1 motif and adVNTR assets do.
     "shark.muc1_region_fasta_hg38": 5 * 1024,
 }
 

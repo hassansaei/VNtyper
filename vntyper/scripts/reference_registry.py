@@ -593,7 +593,9 @@ def reference_keys(kind: str, assembly_name: str) -> tuple[str, ...]:
         assembly_name (str): Assembly label (canonical or alias).
 
     Returns:
-        tuple[str, ...]: One or two `config["reference_data"]` keys.
+        tuple[str, ...]: One to three `config["reference_data"]` keys: coordinate-keyed
+        kinds always return one, physical-keyed kinds return one to three depending on
+        how many of the label, physical and UCSC-family tiers are distinct.
 
     Raises:
         ValueError: If the kind or the assembly is unknown.

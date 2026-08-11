@@ -515,6 +515,21 @@ summary | release-summary | none | always records success, failure, skipped jobs
     bundle release and updating the `asset`/`asset_sha256` pins in
     `install_references_config.json` — which *is* still a base input, so that pin change
     is what triggers the rebuild instead.
+
+    The `refs` stage installs **all six** physical BWA references (`hg19`, `hg38`,
+    `GRCh37`, `GRCh38`, `hg19_ensembl`, `hg38_ensembl`), not just the two UCSC ones a bare
+    `install-references` run defaults to, and its `config.json` is the repo's file
+    unmodified — no `--config-path` is passed at build time. That matters together: every
+    one of the six `bwa_reference_*` keys `config.json` ships as a real relative path
+    therefore resolves to a file that actually exists in the image, so
+    `reference_registry`'s UCSC-family fallback (`bwa_reference_hg38_ensembl` missing,
+    falling back to `bwa_reference_hg38`) should never fire inside the container for any
+    accepted `--reference-assembly` label — every label gets its own physical file, not a
+    UCSC stand-in. `tests/docker/test_image_structure.py::test_every_declared_reference_exists`
+    is what enforces this: it reads `config.json`'s declared paths from *inside* the image
+    and fails if any of them is missing, so it cannot drift from what the image actually
+    ships. It is also the reason `MAX_IMAGE_BYTES` was raised from 6 GiB to 9 GiB — the
+    four newly-shipped genomes add roughly 2.57 GiB uncompressed.
 11. **The report's presentation logic lives outside `generate_report.py`.**
     `screening_summary.py` owns the screening state and the `report_config.json` rule
     table; `report_formatting.py` owns the icons, the column projections and the IGV

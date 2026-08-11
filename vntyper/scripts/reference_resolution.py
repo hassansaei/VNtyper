@@ -1,4 +1,16 @@
-"""Pure CRAM reference-candidate policy and coverage decisions."""
+"""Pure reference resolution, generalised beyond CRAM.
+
+Of this module's five public names, only `ordered_reference_candidates` and
+`uncovered_reference_contigs` remain CRAM-specific policy and coverage decisions.
+`resolve_from_mapping` is the membership-over-truthiness walk that
+`cli_handlers.select_bwa_reference`, `pipeline.select_advntr_reference` and
+`shark_filtering.select_muc1_region_fasta` all call directly for BWA, adVNTR and SHARK -
+not CRAM at all. `ResolvedReference` is the generic result type that walk returns.
+`configured_reference_candidates` sits in between: it is CRAM/BWA-candidate machinery
+by origin and every current caller uses it for a CRAM run, but it does so by calling the
+same generic `resolve_from_mapping` twice, once per kind, rather than encoding any
+CRAM-only policy of its own.
+"""
 
 from __future__ import annotations
 
@@ -66,8 +78,11 @@ def configured_reference_candidates(
 ) -> tuple[tuple[str, Any], ...]:
     """Map configured CRAM reference sources without validating probe policy.
 
-    Exact assembly-label keys take precedence even when their value is null;
-    otherwise the matching UCSC-family key supplies the fallback.
+    Exact assembly-label keys take precedence even when their value is null; failing
+    that, the middle physical/NCBI-id tier a label such as `hg19_ncbi` shares with
+    `GRCh37` is tried next; only then does the matching UCSC-family key supply the
+    fallback. See `reference_registry.reference_keys` for the three-tier order this
+    walks via `resolve_from_mapping`.
 
     Args:
         config: Pipeline configuration containing reference paths.
