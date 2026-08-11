@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -239,3 +240,107 @@ def test_integration_compatibility_workflow_rejects_unreachable_bases(
     status, argv = _run_compatibility_step(tmp_path, event_name=event_name, base_ref=base_ref, before=before)
     assert status != 0
     assert argv == f"check-integration-compatibility INTEGRATION_COMPAT_BASE={expected_base}"
+
+
+def _docker_workflow() -> dict[str, Any]:
+    return yaml.safe_load((WORKFLOWS / "docker-build.yml").read_text(encoding="utf-8"))
+
+
+def _docker_test_step() -> dict[str, object]:
+    workflow = _docker_workflow()
+    steps = workflow["jobs"]["build-and-test"]["steps"]
+    matches = [step for step in steps if step.get("name") == "Run Docker tests"]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _run_docker_test_step(
+    tmp_path: Path,
+    *,
+    event_name: str,
+    make_status: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    capture = tmp_path / "make-argv.txt"
+    fake_make = fake_bin / "make"
+    fake_make.write_text(
+        """#!/bin/sh
+printf '%s\n' "$*" > "$WORKFLOW_CAPTURE"
+exit "$WORKFLOW_MAKE_STATUS"
+""",
+        encoding="utf-8",
+    )
+    fake_make.chmod(0o755)
+    step = _docker_test_step()
+    result = subprocess.run(
+        ["bash", "-c", str(step["run"])],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "EVENT_NAME": event_name,
+            "WORKFLOW_CAPTURE": str(capture),
+            "WORKFLOW_MAKE_STATUS": str(make_status),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, capture.read_text(encoding="utf-8").strip() if capture.exists() else ""
+
+
+@pytest.mark.parametrize(
+    ("event_name", "expected_make_argv"),
+    [
+        ("pull_request", "test-docker-quick"),
+        ("push", "docker-cram-fixtures test-docker-fast"),
+        ("schedule", "docker-cram-fixtures test-docker"),
+        ("workflow_dispatch", "docker-cram-fixtures test-docker"),
+    ],
+)
+def test_docker_workflow_selects_exact_event_tier_and_fixture_order(
+    tmp_path: Path,
+    event_name: str,
+    expected_make_argv: str,
+) -> None:
+    """Swapping a tier or collecting CRAM before candidate fixture generation must fail."""
+    result, argv = _run_docker_test_step(tmp_path, event_name=event_name)
+
+    assert result.returncode == 0
+    assert argv == expected_make_argv
+
+
+def test_docker_workflow_rejects_unknown_events_and_propagates_make_failure(tmp_path: Path) -> None:
+    """An unknown event or failed fixture/test target must never reach a green Docker check."""
+    unknown, unknown_argv = _run_docker_test_step(tmp_path / "unknown", event_name="repository_dispatch")
+    failed, failed_argv = _run_docker_test_step(
+        tmp_path / "failure",
+        event_name="push",
+        make_status=17,
+    )
+
+    assert unknown.returncode != 0
+    assert unknown_argv == ""
+    assert failed.returncode == 17
+    assert failed_argv == "docker-cram-fixtures test-docker-fast"
+
+
+def test_docker_workflow_step_is_strict_ordered_and_has_full_matrix_budget() -> None:
+    """Soft failure, early collection, or the old one-adVNTR job budget must fail."""
+    workflow = _docker_workflow()
+    job = workflow["jobs"]["build-and-test"]
+    step = _docker_test_step()
+    steps = job["steps"]
+    names = [item.get("name") for item in steps]
+
+    assert job["timeout-minutes"] == 120
+    assert step["env"] == {
+        "EVENT_NAME": "${{ github.event_name }}",
+        "VNTYPER_TEST_IMAGE": "vntyper:test",
+        "VNTYPER_TEST_DATA_SKIP_DOWNLOAD": "1",
+    }
+    assert "set -euo pipefail" in str(step["run"])
+    assert "continue-on-error" not in step
+    assert "|| true" not in str(step["run"])
+    assert names.index("Build application image") < names.index("Final test data verification")
+    assert names.index("Final test data verification") < names.index("Run Docker tests")

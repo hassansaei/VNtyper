@@ -22,6 +22,8 @@ from tests.parametrization import (
     get_advntr_test_ids,
     get_bam_test_cases,
     get_bam_test_ids,
+    get_cram_test_cases,
+    get_cram_test_ids,
     get_fastq_test_cases,
     get_fastq_test_ids,
 )
@@ -31,6 +33,7 @@ from tests.support.orchestration import (
     PipelineRunResult,
     run_advntr_test_case,
     run_bam_test_case,
+    run_cram_test_case,
     run_fastq_test_case,
 )
 
@@ -93,6 +96,28 @@ def test_docker_bam_pipeline(test_case: dict, vntyper_container, tmp_path, ensur
     # This is the SAME function used by local tests!
     # Use test-specific subdirectory for isolation
     run_bam_test_case(test_case, docker_runner, test_output_dir)
+
+
+# ============================================================================
+# CRAM Pipeline Tests
+# ============================================================================
+
+
+@pytest.mark.docker
+@pytest.mark.parametrize("test_case", get_cram_test_cases(), ids=get_cram_test_ids())
+def test_docker_cram_pipeline(test_case: dict, vntyper_container, ensure_test_data) -> None:
+    """Run each shared CRAM request and validation through Docker's path mapper."""
+    import subprocess
+
+    container, output_dir = vntyper_container
+    test_output_dir = output_dir / test_case["test_name"]
+    test_output_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chmod", "777", str(test_output_dir)], check=True)
+
+    def docker_runner(request: PipelineRequest) -> PipelineRunResult:
+        return _docker_runner(container, output_dir, request)
+
+    run_cram_test_case(test_case, docker_runner, test_output_dir)
 
 
 # ============================================================================

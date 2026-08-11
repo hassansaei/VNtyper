@@ -147,7 +147,7 @@ jobs:
       needs.build-base.result != 'failure' &&
       needs.build-base.result != 'cancelled'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: write
@@ -367,16 +367,17 @@ jobs:
       # of them - ~13 min of critical path for zero extra information.
       - name: Run Docker tests
         env:
+          EVENT_NAME: ${{ github.event_name }}
           VNTYPER_TEST_IMAGE: vntyper:test
           VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            make test-docker-quick
-          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            make test-docker
-          else
-            make test-docker-fast
-          fi
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) make test-docker-quick ;;
+            push) make docker-cram-fixtures test-docker-fast ;;
+            schedule|workflow_dispatch) make docker-cram-fixtures test-docker ;;
+            *) echo "Unsupported Docker workflow event: $EVENT_NAME" >&2; exit 1 ;;
+          esac
 
       # Publish only from an exact main push, once the image has actually passed its
       # tests. Scheduled and manual runs still exercise the full validation tier, but

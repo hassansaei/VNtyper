@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -551,6 +551,7 @@ ci-local-docker: lint-docker
 DOCKER_IMAGE_NAME := vntyper
 DOCKER_IMAGE_TAG := latest
 DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
+DOCKER_FIXTURE_IMAGE = $(or $(strip $(VNTYPER_TEST_IMAGE)),$(DOCKER_IMAGE))
 
 # The image is split in two. docker/Dockerfile.base carries the conda environments,
 # adVNTR and the reference genomes (expensive, changes a few times a year);
@@ -575,6 +576,25 @@ docker-build:
 		-t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
 
+# Generate CRAM fixtures with the exact candidate image that the integration tests
+# exercise. The repository stays read-only except for the fixture subtree, the
+# container has no network, and it runs with the invoking user's identity.
+docker-cram-fixtures: $(if $(strip $(VNTYPER_TEST_IMAGE)),,docker-build)
+	docker run --rm --network none \
+		--user "$$(id -u):$$(id -g)" \
+		--entrypoint /opt/conda/envs/vntyper/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--volume "$(CURDIR)/tests/data:/workspace/tests/data:rw" \
+		--workdir /workspace \
+		$(DOCKER_FIXTURE_IMAGE) \
+		/workspace/scripts/make_cram_fixtures.py \
+		--data-root /workspace/tests/data \
+		--fixture-root /workspace/tests/data/cram \
+		--manifest /workspace/tests/data/cram/manifest.json \
+		--data-config /workspace/tests/test_data_config.json \
+		--samtools /opt/conda/envs/vntyper/bin/samtools \
+		--reference-fasta /opt/vntyper/reference/alignment/chr1.hg19.fa
+
 # Fast structural checks against an already-built image. No Zenodo test data, no
 # network inside the container, ~2s. Set VNTYPER_TEST_IMAGE to point at a tag other
 # than vntyper:local.
@@ -588,13 +608,13 @@ test-docker-smoke:
 # genotyping is 15-25 min on a 2-core runner and dominates the suite, so it is
 # exercised on a schedule instead of blocking every merge.
 # Note the marker composition: repeated -m flags OVERRIDE rather than combine.
-test-docker-fast:
+test-docker-fast: docker-cram-fixtures
 	@echo "$(BLUE)Running Docker tests excluding the slow tier...$(RESET)"
 	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
 		pytest -m "docker and not slow" -v
 	@echo "$(GREEN)✓ Docker tests (fast tier) complete$(RESET)"
 
-test-docker:
+test-docker: docker-cram-fixtures
 	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"
 	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
 	@if ! python -c "import testcontainers" 2>/dev/null; then \

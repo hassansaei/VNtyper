@@ -292,3 +292,44 @@ def test_generic_docker_runner_maps_fastq_output_to_its_case_suffix(tmp_path: Pa
     assert "--fastq2 /opt/vntyper/input/nested/R2.fastq.gz" in command
     assert "--output-dir /opt/vntyper/output/fastq-case" in command
     assert "--output-dir /opt/vntyper/output " not in command
+
+
+def test_generic_docker_runner_maps_reference_compressed_cram_without_transport_defaults(tmp_path: Path) -> None:
+    """Changing the CRAM/reference roles or adding runner-owned defaults must break the exact argv."""
+    data_root = tmp_path / "data"
+    cram = data_root / "cram" / "reference-compressed" / "sample.cram"
+    cram.parent.mkdir(parents=True)
+    cram.write_bytes(b"cram")
+    output_root = tmp_path / "docker_output0"
+    output_dir = output_root / "cram-case"
+    output_dir.mkdir(parents=True)
+    request = _request(
+        data_root,
+        output_dir,
+        input_kind="cram",
+        input_paths=(cram,),
+        threads=2,
+        log_level="DEBUG",
+        cli_options=("--fast-mode", "--archive-results"),
+        reference_fasta=Path("reference/alignment/chr1.hg19.fa"),
+    )
+    container = _Container()
+
+    docker_support.run_vntyper_pipeline(
+        container,
+        request,
+        test_data_root=data_root,
+        output_mount_root=output_root,
+    )
+
+    command = container.commands[0][2]
+    expected = (
+        "source /opt/conda/etc/profile.d/conda.sh && conda run --no-capture-output -n vntyper "
+        "vntyper -l DEBUG pipeline --cram /opt/vntyper/input/cram/reference-compressed/sample.cram "
+        "--threads 2 --reference-assembly hg19 --output-dir /opt/vntyper/output/cram-case "
+        "--reference-fasta /opt/vntyper/reference/alignment/chr1.hg19.fa --fast-mode --archive-results"
+    )
+    assert command == expected
+    assert command.count("--threads") == 1
+    assert command.count("--reference-fasta") == 1
+    assert "/opt/vntyper/input/reference/alignment" not in command
