@@ -135,6 +135,16 @@ MUC1_MEMBERS: tuple[str, ...] = (
 #: Committed in the data repository rather than derived or downloaded.
 SEED_FASTAS = ("MUC1_motifs_Rev_com.fa", "code-adVNTR_RUs.fa")
 
+#: Every non-derivable artefact the data repository commits, and therefore everything the
+#: release spec has to pin by digest: a build can reproduce anything else from an upstream
+#: source, but these exist only because someone committed them.
+REQUIRED_SEEDS = (*SEED_FASTAS, "vntr_db_advntr.zip", "filter_config.json")
+
+#: The MUC1 FASTAs that are not seeds are, by construction, derivation outputs - so the
+#: spec must declare a derivation for each. Derived from the frozen member set rather than
+#: written out again, so the two cannot disagree.
+DERIVED_FASTAS: tuple[str, ...] = tuple(name for name in MUC1_FASTAS if name not in SEED_FASTAS)
+
 #: Written into every archive alongside the reference files, at the archive root.
 METADATA_MEMBERS = ("release-manifest.json", "BUILD_INFO.json")
 
@@ -511,10 +521,12 @@ def spec_source(spec: dict[str, Any], reference_id: str) -> dict[str, Any]:
         reference_id: Physical reference id.
 
     Returns:
-        dict[str, Any]: That reference's source block.
+        dict[str, Any]: That reference's source block, guaranteed to carry a non-empty
+        `url` and `source_sha256`.
 
     Raises:
-        ValueError: If the block is absent or declares no URL.
+        ValueError: If the block is absent, is keyed by anything other than the physical
+            id, declares no URL, or spells the digest field `sha256`.
     """
     sources = spec.get("sources")
     if not isinstance(sources, dict):
@@ -533,6 +545,22 @@ def spec_source(spec: dict[str, Any], reference_id: str) -> dict[str, Any]:
         message = f"release spec source for '{reference_id}' declares no url"
         logger.error(message)
         raise ValueError(message)
+    if not entry.get("source_sha256"):
+        # The failure this rejects is silent, which is why it is worth a dedicated
+        # message. `resolve_source_location` falls back field by field to
+        # install_references_config.json, so a spec spelling the digest `sha256` still
+        # builds - against the config's pin, not the spec's, while this manifest would
+        # record the spec as the authority. Wrong bytes cannot ship (verify_tree is fatal
+        # on a digest disagreement), but "the spec governs the build" would not hold.
+        found = "'sha256'" if entry.get("sha256") else "no digest field"
+        message = (
+            f"release spec source for '{reference_id}' declares {found}; "
+            "install_references.resolve_source_location reads 'source_sha256'. Rename the field: "
+            "as written the spec's digest is ignored and the build silently falls back to the pin "
+            "in install_references_config.json."
+        )
+        logger.error(message)
+        raise ValueError(message)
     return entry
 
 
@@ -549,11 +577,19 @@ def validate_spec(spec: dict[str, Any], tag: str, references: Sequence[str]) -> 
         references: Physical reference ids this build packages.
 
     Raises:
-        ValueError: If the spec declares a different tag, names no source for a
-            requested reference, has no seeds block, or has a malformed derivation.
+        ValueError: If the spec omits or contradicts the tag, names no usable source for
+            a requested reference, does not pin all four seeds, or does not fully declare
+            every derivation. The spec is hand-written once and then frozen into an
+            immutable release, so this is strict to the point of pedantry: a permissive
+            preflight only moves the discovery of a typo from minute one to hour three,
+            or past publication.
     """
     declared = spec.get("release_tag")
-    if declared and declared != tag:
+    if not declared:
+        message = f"release spec declares no release_tag; this build publishes '{tag}'"
+        logger.error(message)
+        raise ValueError(message)
+    if declared != tag:
         message = f"release spec declares tag '{declared}' but this build publishes '{tag}'"
         logger.error(message)
         raise ValueError(message)
@@ -561,18 +597,45 @@ def validate_spec(spec: dict[str, Any], tag: str, references: Sequence[str]) -> 
     for reference_id in references:
         spec_source(spec, reference_id)
 
-    spec_seed_digests(spec)
+    missing_seeds = [seed for seed in REQUIRED_SEEDS if seed not in spec_seed_digests(spec)]
+    if missing_seeds:
+        message = (
+            f"release spec pins no digest for seed(s) {', '.join(missing_seeds)}. All "
+            f"{len(REQUIRED_SEEDS)} committed seeds must be pinned - they are the only reference "
+            "bytes a build cannot reproduce from an upstream source."
+        )
+        logger.error(message)
+        raise ValueError(message)
 
-    derivations = spec.get("derivations", [])
-    if not isinstance(derivations, list):
-        message = "release spec 'derivations' must be a list"
+    derivations = spec.get("derivations")
+    if not isinstance(derivations, list) or not derivations:
+        message = "release spec declares no non-empty 'derivations' list"
         logger.error(message)
         raise ValueError(message)
     for item in derivations:
-        if not isinstance(item, dict) or not item.get("output") or not item.get("expected_sha256"):
-            message = f"release spec derivation {item!r} needs both 'output' and 'expected_sha256'"
+        missing = (
+            ["not a JSON object"]
+            if not isinstance(item, dict)
+            else [field for field in ("output", "command", "expected_sha256") if not item.get(field)]
+        )
+        if missing:
+            # `command` is required, not optional: it is the only place the manifest's
+            # `produced_by` can come from. Note the trap it guards - the derivations in
+            # install_references_config.json carry `tool`, not `command`, so a spec copied
+            # from the config's shape would leave every derived file's provenance blank.
+            message = f"release spec derivation {item!r} is missing {', '.join(missing)}"
             logger.error(message)
             raise ValueError(message)
+
+    undeclared = sorted(set(DERIVED_FASTAS) - {item["output"] for item in derivations})
+    if undeclared:
+        message = (
+            f"release spec declares no derivation for {', '.join(undeclared)}. Every MUC1 FASTA "
+            "that is not a committed seed is derived, and an undeclared one ships with neither a "
+            "digest check nor a provenance record."
+        )
+        logger.error(message)
+        raise ValueError(message)
 
 
 def _capture(argv: list[str]) -> str:
@@ -706,23 +769,12 @@ def verify_tree(
     for asset in assets:
         if asset.reference_id is None or asset.fasta is None:
             continue
-        source = spec_source(spec, asset.reference_id)
-        pinned: str | None = source.get("source_sha256") or source.get("sha256")
+        # `spec_source` guarantees a non-empty `source_sha256`; reading any other spelling
+        # here is what let a spec using the wrong field name through the preflight.
+        pinned: str = spec_source(spec, asset.reference_id)["source_sha256"]
         archive = f"{asset.fasta}.gz"
         entry = entries.get(archive)
-        if not pinned:
-            checks.append(
-                _check(
-                    archive,
-                    "source-archive",
-                    None,
-                    entry.sha256 if entry else None,
-                    ok=True,
-                    fatal=False,
-                    verdict=f"release spec pins no source digest for '{asset.reference_id}'",
-                )
-            )
-        elif entry is None:
+        if entry is None:
             checks.append(
                 _check(
                     archive,
@@ -795,13 +847,19 @@ def file_provenance(relative: str, asset: Asset, spec: dict[str, Any]) -> dict[s
 
     Returns:
         dict[str, Any]: Provenance fields to merge into the file's manifest entry.
+
+    Raises:
+        ValueError: If the file matches no provenance rule. `validate_spec` requires a
+            declared derivation for every non-seed MUC1 FASTA, so with the frozen member
+            set this cannot happen - reaching it means the member set and these rules
+            have drifted apart, and a manifest entry with no provenance would ship.
     """
     if asset.reference_id is not None and asset.fasta is not None:
         if relative == asset.fasta:
-            source = spec.get("sources", {}).get(asset.reference_id, {})
+            source = spec_source(spec, asset.reference_id)
             return {
-                "source_url": source.get("url"),
-                "source_sha256": source.get("source_sha256") or source.get("sha256"),
+                "source_url": source["url"],
+                "source_sha256": source["source_sha256"],
                 "produced_by": f"gunzip of {Path(asset.fasta).name}.gz",
             }
         if relative.endswith(".fai"):
@@ -810,17 +868,20 @@ def file_provenance(relative: str, asset: Asset, spec: dict[str, Any]) -> dict[s
 
     for item in spec.get("derivations", []):
         if item.get("output") == relative:
-            return {
-                "produced_by": item.get("command") or "derived by install-references --from-source",
-                "expected_sha256": item.get("expected_sha256"),
-            }
+            return {"produced_by": item["command"], "expected_sha256": item["expected_sha256"]}
     if relative in SEED_FASTAS:
         return {"produced_by": "seed committed in the data repository"}
     if relative in ADVNTR_DATABASES:
         return {"produced_by": "extracted from vntr_db_advntr.zip"}
     if relative.endswith(".fai"):
         return {"produced_by": f"samtools faidx {relative[: -len('.fai')]}"}
-    return {"produced_by": "install-references --from-source"}
+
+    message = (
+        f"no provenance rule covers '{relative}' in {asset.name}; refusing to record a manifest "
+        "entry that does not say where the file came from"
+    )
+    logger.error(message)
+    raise ValueError(message)
 
 
 def build_info(tag: str, data_sha: str, builder_sha: str, observed: dict[str, str | None], now: str) -> dict[str, Any]:
@@ -984,7 +1045,11 @@ def build(args: argparse.Namespace) -> int:
         return 1
 
     info_bytes = _json_bytes(info)
-    records: list[dict[str, Any]] = []
+    # Every manifest is built before the first archive is written, so a provenance rule
+    # that cannot classify a member aborts with nothing on disk - which matters under
+    # `--prune`, where a mid-loop failure would have already deleted an earlier asset's
+    # source files.
+    planned: list[tuple[Asset, list[dict[str, Any]], dict[str, Any]]] = []
     for asset in assets:
         files = [
             {
@@ -995,16 +1060,25 @@ def build(args: argparse.Namespace) -> int:
             }
             for member in asset.members
         ]
-        manifest = {
-            "release_tag": args.tag,
-            "generated_at": now,
-            "asset": asset.name,
-            "reference_id": asset.reference_id,
-            "builder_commit": args.builder_sha,
-            "data_commit": args.data_sha,
-            "metadata": list(METADATA_MEMBERS),
-            "files": files,
-        }
+        planned.append(
+            (
+                asset,
+                files,
+                {
+                    "release_tag": args.tag,
+                    "generated_at": now,
+                    "asset": asset.name,
+                    "reference_id": asset.reference_id,
+                    "builder_commit": args.builder_sha,
+                    "data_commit": args.data_sha,
+                    "metadata": list(METADATA_MEMBERS),
+                    "files": files,
+                },
+            )
+        )
+
+    records: list[dict[str, Any]] = []
+    for asset, files, manifest in planned:
         archive = out / asset.name
         write_archive(
             refs,

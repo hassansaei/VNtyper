@@ -536,7 +536,9 @@ class TestFailClosed:
         self, tmp_path: Path, refs: Path, spec: Path
     ) -> None:
         def mutate(document: dict[str, Any]) -> None:
-            document["derivations"].append({"output": "muc1_region_chm13.fa", "expected_sha256": "0" * 64})
+            document["derivations"].append(
+                {"output": "muc1_region_chm13.fa", "command": "samtools faidx", "expected_sha256": "0" * 64}
+            )
 
         self._rewrite_spec(spec, mutate)
         out = tmp_path / "dist"
@@ -545,26 +547,15 @@ class TestFailClosed:
         (record,) = [check for check in report["checks"] if check["name"] == "muc1_region_chm13.fa"]
         assert not record["ok"] and record["fatal"]
 
-    def test_a_source_with_no_digest_and_a_discarded_download_are_both_only_noted(
-        self, tmp_path: Path, refs: Path, spec: Path
-    ) -> None:
-        """The installer verified the download before decompressing it either way."""
-
-        def mutate(document: dict[str, Any]) -> None:
-            document["sources"]["hg19"].pop("source_sha256")
-
-        self._rewrite_spec(spec, mutate)
+    def test_a_download_the_build_discarded_is_only_noted(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+        """The installer verified it before decompressing it, so its absence is not a fault."""
         (refs / "alignment" / "chr1.hg38.fa.gz").unlink()
         out = tmp_path / "dist"
         assert bundle_release.main(_argv(refs, spec, out)) == 0
         report = json.loads((out / "verification-report.json").read_text(encoding="utf-8"))
-        noted = {
-            check["name"]: check
-            for check in report["checks"]
-            if check["check"] == "source-archive" and not check["fatal"]
-        }
-        assert set(noted) == {"alignment/chr1.hg19.fa.gz", "alignment/chr1.hg38.fa.gz"}
-        assert all(check["ok"] for check in noted.values())
+        (noted,) = [check for check in report["checks"] if check["check"] == "source-archive" and not check["fatal"]]
+        assert noted["name"] == "alignment/chr1.hg38.fa.gz"
+        assert noted["ok"]
 
     def test_a_spec_that_pins_no_toolchain_versions_records_no_toolchain_check(
         self, tmp_path: Path, refs: Path, spec: Path
@@ -578,23 +569,6 @@ class TestFailClosed:
         assert bundle_release.main(_argv(refs, spec, out)) == 0
         report = json.loads((out / "verification-report.json").read_text(encoding="utf-8"))
         assert not [check for check in report["checks"] if check["check"] == "toolchain"]
-
-    def test_a_spec_with_no_derivations_still_builds_and_says_so_in_the_manifest(
-        self, tmp_path: Path, refs: Path, spec: Path
-    ) -> None:
-        """The derivations were already asserted against the committed install config."""
-
-        def mutate(document: dict[str, Any]) -> None:
-            document["derivations"] = []
-
-        self._rewrite_spec(spec, mutate)
-        out = tmp_path / "dist"
-        assert bundle_release.main(_argv(refs, spec, out)) == 0
-        manifest = json.loads((out / "release-manifest.json").read_text(encoding="utf-8"))
-        entries = {entry["path"]: entry for asset in manifest["assets"] for entry in asset["files"]}
-        assert entries["muc1_region_hg19.fa"]["produced_by"] == "install-references --from-source"
-        report = json.loads((out / "verification-report.json").read_text(encoding="utf-8"))
-        assert not [check for check in report["checks"] if check["check"] == "derivation"]
 
     def test_a_spec_with_no_seeds_block_is_rejected_before_anything_is_built(
         self, tmp_path: Path, refs: Path, spec: Path
@@ -619,21 +593,78 @@ class TestSpecPreflight:
         assert bundle_release.main(_argv(empty, spec, out, "--check-spec-only")) == 0
         assert not out.exists()
 
-    def test_check_spec_only_rejects_a_spec_missing_a_source(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+    def _preflight(self, tmp_path: Path, spec: Path, mutate: Any) -> int:
         document = json.loads(spec.read_text(encoding="utf-8"))
-        del document["sources"]["GRCh37"]
+        mutate(document)
         spec.write_text(json.dumps(document), encoding="utf-8")
         empty = tmp_path / "not-built-yet"
-        empty.mkdir()
-        assert bundle_release.main(_argv(empty, spec, tmp_path / "dist", "--check-spec-only")) == 1
+        empty.mkdir(exist_ok=True)
+        return bundle_release.main(_argv(empty, spec, tmp_path / "dist", "--check-spec-only"))
+
+    def test_check_spec_only_rejects_a_spec_missing_a_source(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+        assert self._preflight(tmp_path, spec, lambda d: d["sources"].pop("GRCh37")) == 1
 
     def test_check_spec_only_rejects_a_source_with_no_url(self, tmp_path: Path, refs: Path, spec: Path) -> None:
-        document = json.loads(spec.read_text(encoding="utf-8"))
-        document["sources"]["GRCh37"].pop("url")
-        spec.write_text(json.dumps(document), encoding="utf-8")
-        empty = tmp_path / "not-built-yet"
-        empty.mkdir()
-        assert bundle_release.main(_argv(empty, spec, tmp_path / "dist", "--check-spec-only")) == 1
+        assert self._preflight(tmp_path, spec, lambda d: d["sources"]["GRCh37"].pop("url")) == 1
+
+    def test_the_design_sketch_digest_field_name_is_rejected_by_name(
+        self, tmp_path: Path, refs: Path, spec: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`sha256` is what §4.1's sketch writes, and it is the field the installer ignores.
+
+        `resolve_source_location` reads `source_sha256` and falls back field by field to
+        install_references_config.json, so a spec spelling it `sha256` still builds - just
+        not against the spec. The preflight is the only thing that can say so out loud.
+        """
+
+        def mutate(document: dict[str, Any]) -> None:
+            for entry in document["sources"].values():
+                entry["sha256"] = entry.pop("source_sha256")
+
+        assert self._preflight(tmp_path, spec, mutate) == 1
+        assert "sha256" in caplog.text
+        assert "source_sha256" in caplog.text
+
+    def test_check_spec_only_rejects_a_source_with_no_digest_at_all(
+        self, tmp_path: Path, refs: Path, spec: Path
+    ) -> None:
+        assert self._preflight(tmp_path, spec, lambda d: d["sources"]["hg19"].pop("source_sha256")) == 1
+
+    @pytest.mark.parametrize("seed", SEEDS)
+    def test_check_spec_only_rejects_a_spec_that_pins_only_some_seeds(
+        self, tmp_path: Path, refs: Path, spec: Path, seed: str
+    ) -> None:
+        """The seeds are the only bytes a build cannot reproduce from an upstream source."""
+        assert self._preflight(tmp_path, spec, lambda d: d["seeds"].pop(seed)) == 1
+
+    def test_check_spec_only_rejects_an_empty_derivations_list(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+        """It would leave every derived file with no digest check and no provenance."""
+
+        def mutate(document: dict[str, Any]) -> None:
+            document["derivations"] = []
+
+        assert self._preflight(tmp_path, spec, mutate) == 1
+
+    @pytest.mark.parametrize("output", DERIVED)
+    def test_check_spec_only_rejects_a_spec_that_underdeclares_its_derivations(
+        self, tmp_path: Path, refs: Path, spec: Path, output: str
+    ) -> None:
+        def mutate(document: dict[str, Any]) -> None:
+            document["derivations"] = [item for item in document["derivations"] if item["output"] != output]
+
+        assert self._preflight(tmp_path, spec, mutate) == 1
+
+    def test_check_spec_only_rejects_a_derivation_with_no_command(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+        """install_references_config.json spells this field `tool`; a spec copied from its
+        shape would leave every derived file's provenance blank."""
+
+        def mutate(document: dict[str, Any]) -> None:
+            document["derivations"][0]["tool"] = document["derivations"][0].pop("command")
+
+        assert self._preflight(tmp_path, spec, mutate) == 1
+
+    def test_check_spec_only_rejects_a_spec_that_omits_its_tag(self, tmp_path: Path, refs: Path, spec: Path) -> None:
+        assert self._preflight(tmp_path, spec, lambda d: d.pop("release_tag")) == 1
 
     def test_a_spec_that_is_not_json_fails_with_its_path(self, tmp_path: Path) -> None:
         broken = tmp_path / "broken.json"
@@ -661,13 +692,30 @@ class TestSpecPreflight:
 
     @pytest.mark.parametrize(
         "derivations",
-        ["not-a-list", [{"output": "muc1_region_hg19.fa"}], [{"expected_sha256": "0" * 64}]],
+        [
+            "not-a-list",
+            ["not-an-object"],
+            [{"output": "muc1_region_hg19.fa"}],
+            [{"expected_sha256": "0" * 64}],
+            [{"output": "muc1_region_hg19.fa", "expected_sha256": "0" * 64}],
+        ],
     )
     def test_a_malformed_derivations_block_is_rejected(self, refs: Path, derivations: Any) -> None:
         document = _spec_document(refs)
         document["derivations"] = derivations
         with pytest.raises(ValueError, match="derivation"):
             bundle_release.validate_spec(document, TAG, [])
+
+    def test_the_required_derivation_outputs_are_derived_from_the_frozen_member_set(self) -> None:
+        """Not written out a second time, so the two lists cannot disagree."""
+        assert set(bundle_release.DERIVED_FASTAS) == set(DERIVED)
+        assert set(bundle_release.REQUIRED_SEEDS) == set(SEEDS)
+
+    def test_a_file_no_provenance_rule_covers_stops_the_build(self, refs: Path) -> None:
+        """Unreachable for the frozen member set; reaching it means the rules have drifted."""
+        (muc1,) = [a for a in bundle_release.plan_assets(refs, TAG, []) if a.reference_id is None]
+        with pytest.raises(ValueError, match="unexpected_member.db"):
+            bundle_release.file_provenance("unexpected_member.db", muc1, _spec_document(refs))
 
 
 class TestPruning:

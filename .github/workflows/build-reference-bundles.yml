@@ -195,6 +195,22 @@ jobs:
             --title "VNtyper references ${RELEASE_TAG}" \
             --notes-file release-notes.md
 
+      # Two-plus hours of downloading and BWA-indexing must not be thrown away by a
+      # failure at the last step, and the likeliest failure there is a 403: a called
+      # workflow's `contents: write` is intersected with what the caller's job grants, and
+      # that is easy to get wrong on a first dispatch. Salvaging dist/ turns a permissions
+      # mistake into a re-publish instead of a rebuild. compression-level 0 because the
+      # assets are already gzip.
+      - name: Salvage the assets if publishing failed
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: reference-bundle-${{ inputs.release_tag }}
+          path: dist
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 7
+
       - name: Summary
         if: always()
         env:

@@ -568,7 +568,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     tests passed with no skips and 163 warnings in the maintained Python 3.12.13
     environment. Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
     builder) took the directory to all 39 Python files and `make test-scripts-cov` to
-    7,641 of 8,175 measured units, or 93.47%, over 5,567 passing unit tests.
+    7,671 of 8,205 measured units, or 93.49%, over 5,582 passing unit tests.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
     change the independent gate semantics:
