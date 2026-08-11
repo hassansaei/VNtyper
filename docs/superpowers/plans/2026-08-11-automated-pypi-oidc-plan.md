@@ -173,8 +173,9 @@ assert [name for name, job in jobs.items() if job.get("permissions", {}).get("id
 ]
 assert "PYPI_API_TOKEN" not in raw
 assert "TWINE_PASSWORD" not in raw
-assert "deployment_protection_rule" not in raw
 assert "/pending_deployments" not in raw
+assert "review_pending_deployments" not in raw
+assert "--method POST" not in preflight["run"]
 ```
 
 Also assert `publish-pypi.environment == {"name": "pypi"}` and its permission remains exactly `{"id-token": "write"}`.
@@ -207,9 +208,20 @@ Add `actions: read` to `validate-release`, then insert the step immediately afte
           ENVIRONMENT_PATH="$RUNNER_TEMP/pypi-environment.json"
           POLICIES_PATH="$RUNNER_TEMP/pypi-deployment-branch-policies.json"
           CUSTOM_RULES_PATH="$RUNNER_TEMP/pypi-deployment-protection-rules.json"
-          gh api "repos/${GITHUB_REPOSITORY}/environments/pypi" > "$ENVIRONMENT_PATH"
-          gh api "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment-branch-policies" > "$POLICIES_PATH"
-          gh api "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment_protection_rules" > "$CUSTOM_RULES_PATH"
+          fetch_contract() {
+            ENDPOINT=$1
+            DESTINATION=$2
+            TEMPORARY="${DESTINATION}.tmp"
+            if ! gh api "$ENDPOINT" > "$TEMPORARY"; then
+              rm -f -- "$TEMPORARY"
+              echo "::error::Failed to read GitHub API endpoint ${ENDPOINT}; see https://github.com/hassansaei/VNtyper/issues/236"
+              return 1
+            fi
+            mv -- "$TEMPORARY" "$DESTINATION"
+          }
+          fetch_contract "repos/${GITHUB_REPOSITORY}/environments/pypi" "$ENVIRONMENT_PATH"
+          fetch_contract "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment-branch-policies" "$POLICIES_PATH"
+          fetch_contract "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment_protection_rules" "$CUSTOM_RULES_PATH"
           python scripts/pypi_environment_contract.py "$ENVIRONMENT_PATH" "$POLICIES_PATH" "$CUSTOM_RULES_PATH"
 ```
 
