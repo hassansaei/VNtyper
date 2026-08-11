@@ -107,12 +107,18 @@ jobs:
         with:
           path: data
 
+      # `path:` must not be `vntyper`. `python -m` puts the working directory first on
+      # sys.path, so a checkout directory named `vntyper` shadows the installed package:
+      # `import vntyper` resolves to the repository root, `vntyper.scripts` resolves to the
+      # root `scripts/` directory, and `python -m vntyper.scripts.verify_seeds` fails with
+      # "No module named vntyper.scripts.verify_seeds" while the file sits right there.
+      # Measured on a real dispatch, 2026-08-11. `tests/unit/test_bundle_release.py` pins it.
       - name: Check out VNtyper at the pinned builder commit
         uses: actions/checkout@v7
         with:
           repository: hassansaei/VNtyper
           ref: ${{ inputs.source_commit }}
-          path: vntyper
+          path: builder
 
       - name: Record both resolved commits, and prove the builder is the one requested
         id: shas
@@ -120,7 +126,7 @@ jobs:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
-          builder="$(git -C vntyper rev-parse HEAD)"
+          builder="$(git -C builder rev-parse HEAD)"
 
           # The step above proved source_commit *looks* like an immutable pin; this proves
           # the checkout actually landed on it. Together they are what makes the recorded
@@ -154,13 +160,13 @@ jobs:
       - name: Create the vntyper conda environment
         uses: mamba-org/setup-micromamba@v2
         with:
-          environment-file: vntyper/conda/environment_vntyper.yml
+          environment-file: builder/conda/environment_vntyper.yml
 
       # --no-deps for the same reason docker/Dockerfile uses it (AGENTS.md trap 15):
       # every runtime dependency here is conda-managed, and letting pip re-resolve them
       # from PyPI lays a second numpy over the conda-managed one.
       - name: Install VNtyper
-        run: python -m pip install --no-deps -e vntyper
+        run: python -m pip install --no-deps -e builder
 
       # Everything cheap that can fail, before anything expensive runs. A seed whose
       # digest does not match the spec, or a spec that does not describe this build,
@@ -183,7 +189,7 @@ jobs:
           cp data/seeds/MUC1_motifs_Rev_com.fa data/seeds/code-adVNTR_RUs.fa refs/
           cp data/seeds/vntr_db_advntr.zip data/seeds/filter_config.json refs/
           python -m vntyper.scripts.verify_seeds --spec "$spec" --seeds data/seeds
-          python vntyper/scripts/bundle_release.py --check-spec-only \
+          python builder/scripts/bundle_release.py --check-spec-only \
             --refs refs --spec "$spec" --tag "$RELEASE_TAG" --out dist \
             --data-sha "$DATA_SHA" --builder-sha "$BUILDER_SHA"
 
@@ -213,7 +219,7 @@ jobs:
           BUILDER_SHA: ${{ steps.shas.outputs.builder }}
         run: |
           set -euo pipefail
-          python vntyper/scripts/bundle_release.py \
+          python builder/scripts/bundle_release.py \
             --refs refs --spec "data/${RELEASE_SPEC_PATH}" \
             --tag "$RELEASE_TAG" --out dist \
             --data-sha "$DATA_SHA" --builder-sha "$BUILDER_SHA" \
