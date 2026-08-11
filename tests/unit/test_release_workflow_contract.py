@@ -571,7 +571,7 @@ def test_release_trigger_uses_default_branch_repository_dispatch_for_production(
         "publish-pypi",
         "release-summary",
     }
-    assert publish["jobs"]["validate-release"]["permissions"] == {"contents": "read"}
+    assert publish["jobs"]["validate-release"]["permissions"] == {"actions": "read", "contents": "read"}
 
     commands = "\n".join(step.get("run", "") for job in publish["jobs"].values() for step in job.get("steps", []))
     assert "git tag" not in commands
@@ -633,6 +633,7 @@ def test_pypi_publish_is_protected_oidc_only_and_rerun_safe() -> None:
     job = publish["jobs"]["publish-pypi"]
     download = _step_using(publish, "publish-pypi", "actions/download-artifact@v5")
     publisher = _step_with_id(publish, "publish-pypi", "publish")
+    preflight = _step_with_id(publish, "validate-release", "pypi-environment")
 
     assert job["needs"] == ["validate-release", "wait-for-release-gates", "build-package", "promote-ghcr"]
     assert job["if"] == (
@@ -640,6 +641,9 @@ def test_pypi_publish_is_protected_oidc_only_and_rerun_safe() -> None:
     )
     assert job["environment"] == {"name": "pypi"}
     assert job["permissions"] == {"id-token": "write"}
+    assert [
+        name for name, candidate in publish["jobs"].items() if candidate.get("permissions", {}).get("id-token") == "write"
+    ] == ["publish-pypi"]
     assert job["outputs"] == {"publish_summary_json": "${{ steps.result.outputs.publish_summary_json }}"}
     assert download["with"] == {
         "name": "${{ needs.build-package.outputs.artifact_name }}",
@@ -658,6 +662,9 @@ def test_pypi_publish_is_protected_oidc_only_and_rerun_safe() -> None:
         "DOCKER_PASSWORD",
     ):
         assert forbidden not in raw
+    assert "/pending_deployments" not in raw
+    assert "review_pending_deployments" not in raw
+    assert "--method POST" not in preflight["run"]
     job_source = json.dumps(job)
     assert "actions/checkout" not in job_source
     assert "actions/setup-python" not in job_source
@@ -864,12 +871,12 @@ def test_dispatch_is_read_only_and_metadata_eligible_before_any_check_polling() 
         "publish-pypi",
         "release-summary",
     }
-    assert job["permissions"] == {"contents": "read"}
+    assert job["permissions"] == {"actions": "read", "contents": "read"}
     assert "id-token" not in job["permissions"]
     assert "packages" not in job["permissions"]
     assert "classify_check_runs" not in commands
     assert "/check-runs" not in commands
-    assert "gh api" not in commands
+    assert "--method POST" not in commands
 
 
 def test_validation_summary_preserves_structured_mismatch_observations(tmp_path: Path) -> None:
