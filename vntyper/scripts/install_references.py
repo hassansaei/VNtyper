@@ -7,6 +7,7 @@ import hashlib
 import itertools
 import json
 import logging
+import os
 import shlex
 import shutil
 import subprocess
@@ -340,9 +341,62 @@ def index_reference_with_aligners(
     return results
 
 
+def canonical_reference_keys(install_config: dict[str, Any], output_dir: Path) -> dict[str, Path]:
+    """Map every installed reference onto the config key the pipeline reads.
+
+    Reads exactly the schema fixed for the installer and nothing else. Genome keys are
+    derived from the registry rather than written by hand, so the writer and the readers
+    cannot drift: neither of them owns the name. `reference_registry` is imported here,
+    function-locally, rather than at module scope: `docker/Dockerfile.base` copies this
+    module alone into a build stage and runs it by path without installing the package,
+    and `tests/unit/test_docker_installer_imports.py` fails the build guard if a sibling
+    the Dockerfile does not COPY is imported at module scope.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Directory the references were installed into.
+
+    Returns:
+        dict[str, Path]: Absolute paths, keyed by `reference_data` key.
+
+    Raises:
+        KeyError: If an entry is missing a required schema field. Failing here is
+            correct - a silently skipped entry is a silently missing reference.
+    """
+    from vntyper.scripts.reference_registry import REFERENCE_KINDS, reference_keys
+
+    prefix = REFERENCE_KINDS["bwa"]["prefix"]
+    written: dict[str, Path] = {}
+
+    for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
+        for physical_id, entry in install_config.get(section, {}).items():
+            written[f"{prefix}_{physical_id}"] = (output_dir / entry["installed_path"]).resolve()
+
+    for entry in install_config.get("common_references", []):
+        written[entry["config_key"]] = (output_dir / entry["installed_path"]).resolve()
+
+    for spec in install_config.get("derivations", []):
+        if spec["kind"] == "shark":
+            (key,) = reference_keys("shark", spec["assembly"])
+        else:
+            key = spec["config_key"]
+        written[key] = (output_dir / spec["output"]).resolve()
+
+    # Only name files that are actually there. A partial install (`--references hg38`)
+    # must not write a key pointing at an hg19 FASTA nobody downloaded - that is the
+    # same class of defect as #163 itself, just from the other direction.
+    return {key: path for key, path in written.items() if path.exists()}
+
+
 def update_config(config_path: Path, references: dict[str, Path]):
     """
     Update the main config.json with paths to the downloaded references.
+
+    Writes atomically: the new document is written to a sibling `.json.tmp` file and
+    then renamed over `config_path` with `os.replace`, which POSIX and Windows both
+    guarantee is atomic. A write failure (disk full, a `json.dump` error on a bad value)
+    therefore never leaves `config_path` truncated or half-written - the previous config
+    survives untouched, and only the `.tmp` file is corrupted.
 
     Args:
         config_path (Path): Path to the main config.json file.
@@ -371,12 +425,15 @@ def update_config(config_path: Path, references: dict[str, Path]):
     for ref_key, ref_path in references.items():
         config["reference_data"][ref_key] = str(ref_path)
 
+    tmp_path = config_path.with_suffix(".json.tmp")
     try:
-        with config_path.open("w") as f:
+        with tmp_path.open("w") as f:
             json.dump(config, f, indent=2)
+        os.replace(tmp_path, config_path)
         logger.info(f"Successfully updated {config_path} with new reference paths.")
     except Exception as e:
         logger.error(f"Failed to write updated config.json: {e}")
+        tmp_path.unlink(missing_ok=True)
         sys.exit(1)
 
 
@@ -1366,48 +1423,14 @@ def main(
     if md5_dict:
         write_md5_checksums(md5_dict, output_dir)
 
-    # Update the main config.json with new reference paths if config_path is provided
+    # Update the main config.json with new reference paths if config_path is provided.
+    # `canonical_reference_keys` re-derives every key from `install_config` (the full,
+    # unfiltered config loaded above) and `output_dir` directly, rather than from the
+    # per-section dicts this run happened to process - so the keys it writes are exactly
+    # the ones `vntyper/` reads, and a partial run never writes a key pointing at a file
+    # that was never installed.
     if config_path and config_path.exists():
-        updated_references = {}
-
-        # Collect all references from UCSC
-        for ref_key, ref_info in ucsc_refs.items():
-            ucsc_target = ref_info.get("target_path")
-            if ucsc_target:
-                ref_path = output_dir / ucsc_target
-                updated_references[f"ucsc_{ref_key}"] = ref_path.resolve()
-
-        # Collect all references from NCBI
-        for ref_key, ref_info in ncbi_refs.items():
-            ncbi_target = ref_info.get("target_path")
-            if ncbi_target:
-                ref_path = output_dir / ncbi_target
-                updated_references[f"ncbi_{ref_key}"] = ref_path.resolve()
-
-        # Collect all references from ENSEMBL
-        for ref_key, ref_info in ensembl_refs.items():
-            ensembl_target = ref_info.get("target_path")
-            if ensembl_target:
-                ref_path = output_dir / ensembl_target
-                updated_references[f"ensembl_{ref_key}"] = ref_path.resolve()
-
-        # Collect all references from VNtyper
-        for ref_key, ref_info in vntyper_refs.items():
-            vntyper_target = ref_info.get("target_path")
-            if vntyper_target:
-                ref_path = output_dir / vntyper_target
-                updated_references[f"vntyper_{ref_key}"] = ref_path.resolve()
-
-        # Collect references from own repository
-        raw_files: list[dict[str, str]] = own_repo_refs.get("raw_files", [])
-        for file_info in raw_files:
-            own_target = file_info.get("target_path")
-            if own_target:
-                ref_name = Path(own_target).stem
-                ref_path = output_dir / own_target
-                updated_references[f"own_repo_{ref_name}"] = ref_path.resolve()
-
-        update_config(config_path, updated_references)
+        update_config(config_path, canonical_reference_keys(install_config, output_dir))
     else:
         if config_path:
             logger.warning(f"Config file {config_path} does not exist. Skipping config update.")

@@ -1434,3 +1434,33 @@ class TestShippedConfig:
         for entry in _shipped_config()["common_references"]:
             assert entry["config_key"]
             assert entry["installed_path"]
+
+    def test_every_genome_entry_declares_a_kind_installed_path_and_bundle_asset(self):
+        """`canonical_reference_keys` only reads `installed_path`, but `kind`, `asset`
+        and `asset_sha256` are the bundle metadata Task 11's downloader will need - and a
+        missing one would ship silently, since nothing in this file's own dispatch reads
+        them yet."""
+        for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
+            for ref_id, entry in _shipped_config()[section].items():
+                assert entry["kind"], f"{ref_id} declares no kind"
+                assert entry["installed_path"], f"{ref_id} declares no installed_path"
+                assert entry["asset"], f"{ref_id} declares no bundle asset"
+                assert entry["asset_sha256"], f"{ref_id} declares no bundle asset_sha256"
+
+    def test_the_installed_path_is_the_target_path_without_its_gz_suffix(self):
+        """The writer names the file `--from-source` actually leaves on disk:
+        `decompress_source` strips exactly the `.gz` extension from the downloaded
+        archive, so a hand-typed `installed_path` that disagreed would name a file
+        `canonical_reference_keys` could never find."""
+        for section in ("ucsc_references", "ncbi_references", "ensembl_references"):
+            for ref_id, entry in _shipped_config()[section].items():
+                assert entry["installed_path"] == entry["target_path"].removesuffix(".gz"), (
+                    f"{ref_id}: installed_path does not match target_path with .gz stripped"
+                )
+
+    def test_the_bundle_pointer_names_the_common_asset_and_its_digest(self):
+        bundle = _shipped_config()["bundle"]
+        assert bundle["repository"] == "berntpopp/vntyper-data"
+        assert bundle["release_tag"] == "refs-v1"
+        assert bundle["common_asset"] == "vntyper-references-refs-v1-muc1.tar.gz"
+        assert bundle["common_asset_sha256"]
