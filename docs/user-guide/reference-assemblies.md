@@ -33,9 +33,11 @@ leaves six physical files behind the eight labels:
 | `GRCh38`, `hg38_ncbi` | `GRCh38` | `bwa_reference_GRCh38` |
 | `hg38_ensembl` | `hg38_ensembl` | `bwa_reference_hg38_ensembl` |
 
-`vntyper install-references` writes exactly these six `bwa_reference_*` keys (see
-[install-references](../cli/install-references.md)); `--references GRCh38` installs the
-physical file that both `GRCh38` and `hg38_ncbi` runs read.
+`vntyper install-references` writes the `bwa_reference_*` key for each physical file it
+actually installed, out of these six possible keys (see
+[install-references](../cli/install-references.md)) -- the default run installs only
+`bwa_reference_hg19` and `bwa_reference_hg38`; `--references GRCh38` additionally installs
+the physical file that both `GRCh38` and `hg38_ncbi` runs read.
 
 adVNTR and SHARK need no such distinction: only two files of each exist in total — one
 adVNTR database and one MUC1 region FASTA per **coordinate system** — because contig naming
