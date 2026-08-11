@@ -550,25 +550,42 @@ summary | release-summary | none | always records success, failure, skipped jobs
     solvers, so `--no-deps` stays.
 16. **`scripts/` is in both runtime quality gates.** `RUFF_PATHS` covers
     `vntyper/ docker/app/ tests/ scripts/ docs/`, and `make type-check` runs
-    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 129 source files.
+    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 134 source files.
     `make type-check-all` then adds the deliberately separate `mypy vntyper/ tests/`
-    pass, which checked 282 test sources. Do not claim `scripts/` is part of that tests
+    pass, which checked 295 test sources. Do not claim `scripts/` is part of that tests
     invocation or collapse the two.
 
     Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-11 verification measured all 38 Python files at 6,909 of 7,457 measured
-    units, or 92.65% aggregate scripts-only branch-inclusive coverage, and 88.99% combined
-    branch-inclusive coverage across 5,279 unit tests in the maintained Python 3.12
-    environment. `ci-local`'s clean Python 3.13 rebuild and the Python 3.10–3.13 GitHub
-    matrix remain the authoritative cross-version gates. These figures do not change the
-    independent gate semantics:
+    final 2026-08-11 verification measured all 38 Python files at 7,124 of 7,655 measured
+    units, or 93.06% aggregate scripts-only branch-inclusive coverage, and 17,178 of
+    19,259 measured units, or 89.19% combined branch-inclusive coverage. All 5,370 unit
+    tests passed with no skips and 136 warnings in the maintained Python 3.12.13
+    environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
+    GitHub matrix remain the authoritative cross-version gates. These figures do not
+    change the independent gate semantics:
     `[tool.coverage.report].fail_under = 86` is the hard floor,
     `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
     lines, and `SCRIPTS_COVERAGE_TARGET ?= 88` is the isolated pre-source proof. The
     existing `exclude_also` entry ignores only mechanical direct-execution bootstrap
     guards; callable `main(...)` functions, exit policy and substantive CLI branches
     remain measured. Add no scripts omit entry to improve any of these numbers.
+17. **Real-data successes are append-only compatibility contracts.**
+    `tests/compatibility/real_success_baseline.json` is independent of the mutable
+    declarations in `tests/test_data_config.json`. Identity is `(suite, test_name)`, so
+    one input may legitimately occur in more than one suite. `make
+    check-integration-compatibility` validates baseline-to-live and qualifying
+    live-to-baseline coverage in the same process, then compares the complete current
+    row with the explicit Git event base. Never normalize a regression by changing exit
+    0 to exit 1, renaming or deleting a case or row, or weakening its input/reference
+    digest, threads, log level, CLI options, modules, routing counts or selection,
+    required artifacts, archive state, value fields, centers, or tolerances. A new
+    qualifying real success must add a complete row. Pull requests use
+    `origin/${{ github.base_ref }}` and pushes use `${{ github.event.before }}` with full
+    history; missing, empty, all-zero, shallow, or unreachable bases fail closed. The
+    only no-base bootstrap is the checker's pinned ten historical successes
+    reconstructed from the commit before `52c4146596fef2d1e2402991fbab062ba8021889`;
+    there is no exception or free-text waiver.
 
 ## Never
 

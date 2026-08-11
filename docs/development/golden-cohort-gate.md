@@ -3,6 +3,13 @@
 Before-versus-after comparison of genotyping output across the whole local test cohort,
 run to decide whether the deliberately behaviour-changing commits in #179 may ship.
 
+**Current routing policy (2026-08-11, #233).** The mixed-layout refusals recorded in
+milestone-4 runs are historical. Equal R1/R2 plus singleton/`other` reads now consume
+every non-empty FASTQ exactly once under one Kestrel sample; unequal or one-sided mates
+remain invalid. The final issue #233 `comparison.json` will record all 32 formerly refused
+cases without rewriting earlier run evidence. No issue #233 run result is recorded here
+until the final candidate SHA and retained comparison artifacts exist.
+
 Every run the gate has taken is registered in the table below. **A verdict is intended to
 attest one candidate commit and nothing after it**, so read the run whose candidate
 matches the tree you are judging.

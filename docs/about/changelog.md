@@ -4,7 +4,13 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
-No unreleased changes.
+**Valid mixed alignment conversions are now routed losslessly (#233).** When R1 and R2
+contain equal non-zero record counts, every non-empty R1, R2, `other`, and singleton
+FASTQ is passed exactly once, in that order, to one Kestrel 1.0.1 sample. The files are
+not concatenated or recompressed. Unequal or one-sided mate outputs still fail before
+Kestrel as invalid. This restores BAM, CRAM, and adVNTR runs rejected by 2.0.10 and
+2.0.11 while retaining genuine singleton and unpaired reads instead of silently
+discarding them.
 
 ## 2.0.11 (Current)
 
@@ -58,6 +64,11 @@ configuration option. Regenerate the alignment with consistent pairedness and ma
 or provide a homogeneous paired-end or single-end FASTQ input; do not suppress the error
 by discarding the named reads. Pure single-end BAMs and `--fastq1` without `--fastq2` are
 now supported through fastp, BWA and Kestrel.
+
+**Superseded on 2026-08-11 by #233.** The paragraph above accurately records the policy
+shipped in 2.0.10. Current behavior retains the same no-read-drop invariant but routes
+equal R1/R2 plus singleton/`other` reads losslessly; only unequal or one-sided mates fail
+as invalid.
 
 **BAM and CRAM inputs are preflighted through a run-local alignment view.** Missing
 indexes are built beside that view, where htslib can resolve them, without writing into a

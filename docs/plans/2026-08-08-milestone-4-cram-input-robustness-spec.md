@@ -7,6 +7,17 @@ the combined no-HIGH verdict remains the explicit close-out item.
 **Closes:** #213, #225, #209, #178, #165, #161
 **Date:** 2026-08-09
 
+**Superseded routing policy (2026-08-11, #233).** This specification records the
+milestone-4 behavior that shipped in 2.0.10 and is retained as historical evidence.
+Commit `2b4597d8b57f8986f008baad6c2505359cebea76` introduced unconditional mixed-layout
+refusal; `52c4146596fef2d1e2402991fbab062ba8021889` later inverted nine BAM and one adVNTR
+success oracle to expect it. Issue #233 preserves the no-drop invariant while replacing
+that policy: equal R1/R2 plus any singleton/`other` reads is losslessly routed to one
+Kestrel 1.0.1 sample, with every non-empty file passed exactly once in
+R1/R2/other/single order. The files are not concatenated or recompressed. Unequal or
+one-sided mates are now `invalid` and still fail closed. All milestone-4 refusal counts
+and review dispositions below describe the historical candidate, not current behavior.
+
 ---
 
 ## 1. The exit bar

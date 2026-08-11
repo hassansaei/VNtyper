@@ -7,6 +7,19 @@ reconciliation.
 
 **Baseline:** `main` at `ebb15b26631242a3295607e4eda4c68f688cd9a2` (`v2.0.10`).
 
+**Superseded routing policy (2026-08-11, #233).** This document remains a historical
+design record. Commit `2b4597d8b57f8986f008baad6c2505359cebea76` introduced the
+unconditional refusal of every mixed conversion layout;
+`52c4146596fef2d1e2402991fbab062ba8021889` later changed nine BAM and one adVNTR
+success oracle to expect that refusal. Issue #233 supersedes only that routing policy:
+equal non-empty R1/R2 outputs plus singleton and/or `other` reads are valid, and every
+non-empty file is passed exactly once to one Kestrel sample in R1/R2/other/single order.
+The files are not concatenated or recompressed. Unequal or one-sided mates remain invalid
+and fail before Kestrel. The
+`example_b178_hg19_subset_default` Docker quick node is now a required success sentinel.
+Historical evidence below is retained as measured; statements describing valid mixed
+layouts as intentionally failing are not current policy.
+
 ## Purpose
 
 Close the two remaining gaps in #71 without reimplementing the four criteria that the
