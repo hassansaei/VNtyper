@@ -12,9 +12,11 @@ Two things are pinned here:
 
 * the command string and the two artefact names, since ``pipeline.py`` consumes the
   returned paths and separately records a summary artefact path of its own;
-* the fact that ``reference_assembly`` is accepted and then never read -- see
-  :class:`TestReferenceAssemblyIsAccceptedAndIgnored`, which is characterisation of a live
-  defect, deliberately not a fix.
+* ``reference_assembly`` now *selects* the MUC1 region FASTA -- see
+  :class:`TestReferenceAssemblySelectsTheRegion` (#152) -- resolved through
+  :func:`vntyper.modules.shark.shark_filtering.select_muc1_region_fasta`, with
+  ``main_config["reference_data"]`` (what ``install-references`` writes) taking
+  precedence over the shipped ``shark_config.json`` (:class:`TestTheInstalledTreeWins`).
 """
 
 import logging
@@ -28,7 +30,12 @@ from vntyper.modules.shark import shark_filtering as shark
 pytestmark = pytest.mark.unit
 
 MAIN_CONFIG = {"tools": {"shark": "mamba run -n shark_env shark"}}
-SHARK_CONFIG = {"shark_settings": {"muc1_region_fasta": "reference/muc1_region_hg19.fa"}}
+SHARK_CONFIG = {
+    "shark_settings": {
+        "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+        "muc1_region_fasta_hg38": "reference/muc1_region_hg38.fa",
+    }
+}
 
 
 @pytest.fixture
@@ -148,7 +155,9 @@ class TestConfigResolution:
     def test_load_shark_config_reads_the_file_shipped_beside_the_module(self):
         loaded = shark.load_shark_config()
 
-        assert loaded["shark_settings"]["muc1_region_fasta"].endswith("muc1_region_hg19.fa")
+        settings = loaded["shark_settings"]
+        assert settings["muc1_region_fasta_hg19"].endswith("muc1_region_hg19.fa")
+        assert settings["muc1_region_fasta_hg38"].endswith("muc1_region_hg38.fa")
 
     def test_an_explicit_config_path_is_honoured(self, tmp_path):
         path = tmp_path / "custom.json"
@@ -176,108 +185,74 @@ class TestFailureHandling:
             filter_with(tmp_path)
 
 
-class TestReferenceAssemblyIsAccceptedAndIgnored:
-    """
-    **Specification (#187), not a live defect.**
-
-    @hassansaei on #187: "SHARK is sequence-based, not coordinate-based; keep one MUC1
-    region FASTA; document that assembly does not change SHARK; optionally warn or
-    ignore reference_assembly there instead of building a second FASTA unless
-    GRCh37/GRCh38 sequences at MUC1 VNTR differ enough to matter, like the number of
-    motif could impact the number of reads being retained by the SHARK model."
-
-    ``run_shark_filter`` takes a ``reference_assembly`` argument and ``pipeline.py`` passes
-    the run's actual assembly into it, but the function does not use it to select a
-    region: the region FASTA comes solely from ``shark_config.json``, which declares a
-    single MUC1 region file. That is intentional, not a bug -- SHARK matches k-mers
-    against sequence, not coordinates, so there is nothing for the assembly to select.
-    Per the decision above, no hg38 region FASTA is added. The parameter's docstring now
-    reads:
-
-        reference_assembly (str): Accepted for API compatibility and **ignored**.
-        SHARK matches k-mers against a single MUC1 region FASTA and does not select a
-        region by coordinate, so the assembly does not change what it retains. Passing
-        anything other than hg19/GRCh37 logs a warning. See issue #187.
-
-    See :class:`TestNonHg19AssemblyLogsAWarning` for that warning.
+class TestReferenceAssemblySelectsTheRegion:
+    """#152. SHARK filters on exact k-mers, and 40.6% of the hg38 MUC1 region's
+    canonical 17-mers are absent from the hg19 region - so an hg38 run against the
+    hg19 reference cannot see them. Measured across seven cohort samples: the hg38
+    reference retains 3.2-34.7% more reads. The parameter now selects.
     """
 
-    def test_hg38_produces_a_byte_identical_command_to_hg19(self, tmp_path, captured_command):
-        filter_with(tmp_path, reference_assembly="hg19")
-        filter_with(tmp_path, reference_assembly="hg38")
+    @pytest.mark.parametrize(
+        "assembly,expected",
+        [
+            ("hg19", "muc1_region_hg19.fa"),
+            ("GRCh37", "muc1_region_hg19.fa"),
+            ("hg19_ncbi", "muc1_region_hg19.fa"),
+            ("hg19_ensembl", "muc1_region_hg19.fa"),
+            ("hg38", "muc1_region_hg38.fa"),
+            ("GRCh38", "muc1_region_hg38.fa"),
+            ("hg38_ncbi", "muc1_region_hg38.fa"),
+            ("hg38_ensembl", "muc1_region_hg38.fa"),
+        ],
+    )
+    def test_each_assembly_gets_its_coordinate_systems_region(self, tmp_path, captured_command, assembly, expected):
+        filter_with(tmp_path, reference_assembly=assembly)
+        assert expected in captured_command[0]["command"]
 
-        assert captured_command[0]["command"] == captured_command[1]["command"]
+    def test_no_warning_is_logged_for_a_supported_assembly(self, tmp_path, captured_command, caplog):
+        with caplog.at_level(logging.WARNING):
+            filter_with(tmp_path, reference_assembly="hg38")
+        assert not [r for r in caplog.records if "reference_assembly" in r.getMessage()]
 
-    def test_an_hg38_run_still_filters_against_the_hg19_region(self, tmp_path, captured_command):
-        filter_with(tmp_path, reference_assembly="hg38")
 
-        assert "muc1_region_hg19.fa" in captured_command[0]["command"]
+class TestTheInstalledTreeWins:
+    """shark_config.json is a separate file from config.json, so install-references
+    cannot update it. Without reference_data as the first layer, `install-references
+    --output-dir X` would leave SHARK pointing at a CWD-relative path - #163's exact
+    bug, reintroduced for SHARK.
+    """
 
-    def test_even_a_nonsense_assembly_is_accepted_and_warned_about(self, tmp_path, captured_command, caplog):
-        """Specification (#187): a nonsense value is still accepted -- the run proceeds
-        regardless -- but no longer passes silently. Any value other than hg19/GRCh37
-        now logs a warning naming it.
+    def test_reference_data_overrides_the_shipped_shark_config(self, tmp_path, captured_command):
+        main = {**MAIN_CONFIG, "reference_data": {"muc1_region_fasta_hg38": "/custom/refs/muc1_region_hg38.fa"}}
+        filter_with(tmp_path, main_config=main, reference_assembly="hg38")
+        assert "/custom/refs/muc1_region_hg38.fa" in captured_command[0]["command"]
+
+    def test_a_present_null_in_reference_data_fails_closed(self, tmp_path):
+        main = {**MAIN_CONFIG, "reference_data": {"muc1_region_fasta_hg38": None}}
+        with pytest.raises(ValueError, match="hg38"):
+            filter_with(tmp_path, main_config=main, reference_assembly="hg38")
+
+    def test_a_structurally_legacy_config_still_works(self, tmp_path, captured_command):
+        legacy = {"shark_settings": {"muc1_region_fasta": "/legacy/region.fa"}}
+        filter_with(tmp_path, config=legacy, reference_assembly="hg19")
+        assert "/legacy/region.fa" in captured_command[0]["command"]
+
+    def test_a_present_null_legacy_key_fails_closed_with_the_specific_message(self, tmp_path):
+        """Membership, not truthiness, applies to the legacy tier too: an old-style
+        config that explicitly disables SHARK with ``"muc1_region_fasta": None`` must
+        be distinguishable from the key being absent altogether, and raise the same
+        "is null; disabled" message the other two tiers give -- not the generic
+        final "no FASTA found" message.
         """
-        with caplog.at_level(logging.WARNING, logger=shark.logger.name):
-            filter_with(tmp_path, reference_assembly="not-an-assembly")
+        legacy = {"shark_settings": {"muc1_region_fasta": None}}
+        with pytest.raises(ValueError, match=r"shark_settings\['muc1_region_fasta'\] is null"):
+            filter_with(tmp_path, config=legacy, reference_assembly="hg19")
 
-        assert captured_command, "the run proceeds regardless"
-        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("reference_assembly" in m and "not-an-assembly" in m for m in messages), "and now says so"
-
-    def test_the_shipped_config_offers_only_an_hg19_region(self):
-        """There is no hg38 alternative to select, so this cannot be fixed in-module."""
-        settings = shark.load_shark_config()["shark_settings"]
-
-        assert [key for key in settings if "fasta" in key] == ["muc1_region_fasta"]
-        assert "hg38" not in str(settings)
-
-
-class TestNonHg19AssemblyLogsAWarning:
-    """
-    Specification (#187). A non-hg19/GRCh37 ``reference_assembly`` does not change which
-    region SHARK filters against -- there is only ever the one MUC1 region FASTA -- but
-    it now logs a warning naming the value, so a caller who passes hg38 finds out the
-    parameter did nothing instead of silently getting hg19-filtered reads (see
-    :class:`TestReferenceAssemblyIsAccceptedAndIgnored`).
-    """
-
-    @pytest.mark.parametrize("assembly", ["hg38", "GRCh38", "hg38_ensembl"])
-    def test_a_non_hg19_assembly_is_warned_about(self, assembly, tmp_path, captured_command, caplog):
-        with caplog.at_level(logging.WARNING, logger=shark.logger.name):
-            filter_with(tmp_path, reference_assembly=assembly)
-
-        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("reference_assembly" in m and assembly in m for m in messages)
-
-    @pytest.mark.parametrize("assembly", ["hg19", "GRCh37", "grch37"])
-    def test_hg19_and_grch37_do_not_warn(self, assembly, tmp_path, captured_command, caplog):
-        """The warning marks a mismatch, not every call: hg19 and GRCh37 (any case) are silent."""
-        with caplog.at_level(logging.WARNING, logger=shark.logger.name):
-            filter_with(tmp_path, reference_assembly=assembly)
-
-        messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-        assert not [m for m in messages if "reference_assembly" in m]
-
-    def test_the_region_fasta_operand_is_byte_identical_at_hg19_and_hg38(self, tmp_path, captured_command):
-        """The substantive claim: assembly does not select a region.
-
-        A warning alone would not prove the parameter is inert; capturing the command
-        SHARK is actually given at hg19 and at hg38 and comparing the ``-r`` operand
-        does. (``TestReferenceAssemblyIsAccceptedAndIgnored`` already pins the whole
-        command as identical; this asserts the specific operand SHARK reads the region
-        from, so the claim holds even if unrelated parts of the command ever diverge.)
-        """
-        filter_with(tmp_path, reference_assembly="hg19")
-        filter_with(tmp_path, reference_assembly="hg38")
-
-        def region_operand(command):
-            words = shlex.split(command)
-            return words[words.index("-r") + 1]
-
-        hg19_operand = region_operand(captured_command[0]["command"])
-        hg38_operand = region_operand(captured_command[1]["command"])
-        assert hg19_operand == hg38_operand
+    def test_an_incomplete_keyed_config_does_not_masquerade_as_legacy(self, tmp_path):
+        """Only hg19 configured, plus a stray flat key: an hg38 run must not take it."""
+        partial = {"shark_settings": {"muc1_region_fasta_hg19": "/a.fa", "muc1_region_fasta": "/flat.fa"}}
+        with pytest.raises(ValueError, match="hg38"):
+            filter_with(tmp_path, config=partial, reference_assembly="hg38")
 
 
 class TestShellInterpolationIsQuoted:
