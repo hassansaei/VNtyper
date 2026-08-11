@@ -10,97 +10,22 @@
 > below stay tracked here. The rest of this section documents the generator's logic and
 > history and remains accurate as documentation - only the file locations changed.
 
-## 1. VNTR Reference Generator
+## 1. Reference genomes, MUC1 motifs and adVNTR databases
 
-This repository contains a Python script `generate_vntr_reference.py` which generates pairwise combinations of VNTR motifs from a given input FASTA file and writes them out to a new FASTA file. The script also uses a JSON configuration file to filter out certain disallowed motif combinations.
+The pairwise MUC1 motif generation (`generate_vntr_reference.py`, `filter_config.json`),
+the curation history of the adVNTR databases, and the source-of-truth build tooling for
+every published reference bundle now live in
+[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) rather than in this
+repository. `vntyper install-references` downloads the versioned, checksummed release that
+repository publishes by default; see
+[Reference Setup](https://hassansaei.github.io/VNtyper/getting-started/reference-setup/)
+(or `docs/getting-started/reference-setup.md` in this repository) for the trust model, and
+`vntyper/scripts/install_references_config.json` for the exact digests VNtyper pins.
 
-## Overview
-
-The script:
-1. Reads an input FASTA file that contains multiple contigs (motifs).
-2. Generates all pairwise combinations of these contigs, including self-combinations.
-3. Concatenates the sequences in a specified order to form the new reference entries.
-4. Uses a JSON configuration file to skip (filter out) certain disallowed combinations.
-
-## Files
-
-- **MUC1_motifs_Rev_com.fa**: The input FASTA file containing the original VNTR motifs.  
-  Each contig is represented as:
-  ```
-  >contigName
-  ACTGACTG...
-  ```
-
-- **filter_config.json**: The JSON configuration file that specifies disallowed combinations.  
-  Example format:
-  ```json
-  {
-    "1": ["1", "3", "4", ...],
-    "2": ["1", "2", "4", ...],
-    ...
-  }
-  ```
-  This means if the first contig is `"1"`, it should not be paired with `"1"`, `"3"`, `"4"`, etc.
-
-- **generate_vntr_reference.py**: The Python script that:
-  - Loads the configuration JSON file.
-  - Iterates over all contigs from the input FASTA file.
-  - Generates all pairwise combinations.
-  - Skips any combinations found in the JSON configuration file.
-  - Writes the allowed combinations to the output FASTA file.
-
-## Prerequisites
-
-- Python 3.x
-- A JSON configuration file with the appropriate format.
-- A FASTA file with your source motifs.
-
-## Usage
-
-1. **Prepare Your Input Files**:
-   - Ensure `MUC1_motifs_Rev_com.fa` (or your chosen input FASTA) is in the same directory as the script.
-   - Place `filter_config.json` in the same directory and confirm it has the correct format.
-
-2. **Run the Script**:
-   From the terminal or command prompt:
-   ```bash
-   python3 generate_vntr_reference.py
-   ```
-   
-   By default, the script is set to:
-   - Read from `MUC1_motifs_Rev_com.fa`.
-   - Write to `All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`.
-   - Use `filter_config.json` for filtering.
-
-   If you want to customize paths, open `generate_vntr_reference.py` and modify:
-   ```python
-   input_file_path = 'MUC1_motifs_Rev_com.fa'
-   output_file_path = 'All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa'
-   config_file_path = 'filter_config.json'
-   ```
-   Then run the script again.
-
-3. **Check the Output**:
-   After running the script, you will have a new FASTA file (`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`) containing only the allowed motif combinations.
-
-## Configuration Details
-
-- The `filter_config.json` file maps each "first contig" to a list of "second contigs" that cannot follow it.
-- If a combination `first-second` is disallowed, it will be skipped entirely.
-- Modify `filter_config.json` as needed to add or remove disallowed combinations. Any combination where the first contig is not listed or the second contig is not in the corresponding array/set will be allowed.
-
-## Example
-
-If you have:
-```json
-{
-  "1": ["1", "3"]
-}
-```
-
-This means:
-- When the first contig is `1`, do not allow `1-1` or `1-3`.
-- All other combinations starting with `1` (except `1-1` and `1-3`) are allowed.
+`--from-source` still rebuilds those same references locally from their original upstream
+hosts, and it is what the `berntpopp/vntyper-data` build workflow itself runs -- see that
+flag in [install-references](https://hassansaei.github.io/VNtyper/cli/install-references/)
+or `docs/cli/install-references.md` here.
 
 ## 2. BAM/FASTQ Pseudonymization and Anonymization
 
@@ -435,24 +360,30 @@ Edit `reference/pseudonymize_config.json` to enable/disable aligners or modify s
 
 #### Reference Index Installation with install_references.py
 
-Use `vntyper/scripts/install_references.py` to automatically download and index references for all supported aligners:
+`vntyper install-references -d reference/` (with no flags) fetches the published,
+BWA-indexed bundle from `berntpopp/vntyper-data` -- see
+[Reference Setup](https://hassansaei.github.io/VNtyper/getting-started/reference-setup/).
+That default path only ever produces a BWA index, so remapping with `bwa-mem2`, `minimap2`,
+`bowtie2` or DRAGMAP needs `--from-source`, which builds every reference locally instead:
 
 **Basic usage:**
 ```bash
-# Index all references with all enabled aligners
+# Fetch the published bundle (BWA index only)
 python vntyper/scripts/install_references.py -d reference/
 
-# Index specific aligners only
-python vntyper/scripts/install_references.py -d reference/ --aligners bwa bwa-mem2 minimap2
+# Build from source with specific aligners only
+python vntyper/scripts/install_references.py -d reference/ --from-source --aligners bwa bwa-mem2 minimap2
 
-# Use more threads (faster)
-python vntyper/scripts/install_references.py -d reference/ --threads 16
+# Build from source with more threads (faster)
+python vntyper/scripts/install_references.py -d reference/ --from-source --threads 16
 ```
 
 **Configuration:**
 Edit `vntyper/scripts/install_references_config.json` to:
-- Enable/disable specific aligners for indexing
-- Modify NCBI reference URLs and checksums
+- Enable/disable specific aligners for indexing (`--from-source` only)
+- Modify NCBI reference URLs and checksums (`--from-source` only; the default bundle path
+  verifies against the `asset_sha256` digests in the same file's `bundle`/genome sections
+  instead)
 - Adjust index parameters
 
 **Supported index types:**
@@ -519,4 +450,10 @@ The script automatically scans BAM headers and read groups to extract forbidden 
 
 ## 3. Adapted adVNTR references
 
-The referneces in vntr_db_advntr.zip have been created by removing all non-Muc1 entries from the hg9 database and adding the MUC1 reference with the same ID to the hgg38 database where it was missing and changing the start position to the corresponding start position after finding this with UCSC BLAT usng the left sequence.
+The curation history of the adVNTR databases (`hg19_muc1.db`, `hg38_muc1.db` -- built by
+removing all non-MUC1 entries from the hg19 database and adding the MUC1 entry to the hg38
+database where it was missing, at the start position found via UCSC BLAT) now lives in
+[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data), which builds and
+publishes both databases as part of the `muc1` release bundle. `vntyper install-references`
+installs both unconditionally, regardless of which genome assemblies are selected with
+`--references`.

@@ -47,7 +47,7 @@
   - `pipeline` --- run the full pipeline on a BAM, CRAM or FASTQ pair
   - `report` --- regenerate the summary report from an existing output directory
   - `cohort` --- aggregate several run directories into one cohort summary
-  - `install-references` --- download and index the reference files
+  - `install-references` --- fetch the published reference bundle (or build it from source)
   - `online` --- subset a BAM and submit it to a hosted VNtyper instance
 
   There is no `fastq`, `bam` or `kestrel` subcommand. FASTQ and BAM/CRAM are *input

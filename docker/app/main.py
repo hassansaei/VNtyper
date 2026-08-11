@@ -385,7 +385,7 @@ async def run_vntyper(
     **Parameters:**    - **bam_file**: The BAM file to be processed.
     - **bai_file**: Optional BAI index file corresponding to the BAM file.
     - **thread**: Number of threads to use for processing.
-    - **reference_assembly**: Reference genome assembly to use ('hg19', 'hg38', 'GRCh37', 'GRCh38').
+    - **reference_assembly**: Reference genome assembly to use ('hg19', 'hg38', 'GRCh37', 'GRCh38', 'hg19_ncbi', 'hg38_ncbi', 'hg19_ensembl', 'hg38_ensembl').
     - **fast_mode**: Boolean flag to enable fast mode processing.
     - **keep_intermediates**: Boolean flag to keep intermediate files.
     - **archive_results**: Boolean flag to archive results.

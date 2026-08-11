@@ -99,6 +99,24 @@ deltas are a different pair. The "Run 5" section below has them.
 
 ## Method
 
+### Prerequisite: install the reference bundle
+
+Every run in this gate reads a shared `reference/` tree from both worktrees it compares
+(trap 7: reference paths in `config.json` are relative to the process CWD). That tree is no
+longer tracked in git or built by hand -- install and verify it once from the published
+release before launching a run:
+
+```bash
+vntyper install-references -d reference --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl
+```
+
+See [Reference Setup](../getting-started/reference-setup.md) for what that command fetches
+and how it verifies what it downloads. Both the baseline and candidate worktrees then need
+this same populated tree; symlink one already-installed `reference/` into each side rather
+than installing it twice, which is consistent with `reference/**` being a base-image
+content-hash input that must be identical on both sides (see *The baseline shares the
+candidate's `reference/` tree* below).
+
 The cohort is every BAM under `tests/data/`, run at each assembly it is provided for:
 the 7 multi-reference samples at all six assemblies (`hg19`, `hg38`, `GRCh37`, `GRCh38`,
 `hg19_ensembl`, `hg38_ensembl`) plus their original hg19 subsets, and the hg38 regression
