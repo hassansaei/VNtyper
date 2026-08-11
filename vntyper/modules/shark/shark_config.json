@@ -1,5 +1,6 @@
 {
     "shark_settings": {
-      "muc1_region_fasta": "reference/muc1_region_hg19.fa"
+      "muc1_region_fasta_hg19": "reference/muc1_region_hg19.fa",
+      "muc1_region_fasta_hg38": "reference/muc1_region_hg38.fa"
     }
 }
