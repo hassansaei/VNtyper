@@ -848,17 +848,50 @@
           }
         },
         "cross_match": {
-          "Kestrel_POS": {"value": "67", "tolerance": null},
-          "Kestrel_REF": {"value": "G", "tolerance": null},
-          "Kestrel_ALT": {"value": "GG", "tolerance": null},
-          "Kestrel_Allele_Change": {"value": "G", "tolerance": null},
-          "Kestrel_Variant_Type": {"value": "Insertion", "tolerance": null},
-          "Advntr_POS": {"value": "22", "tolerance": null},
-          "Advntr_REF": {"value": "T", "tolerance": null},
-          "Advntr_ALT": {"value": "TG", "tolerance": null},
-          "Advntr_Allele_Change": {"value": "G", "tolerance": null},
-          "Advntr_Variant_Type": {"value": "Insertion", "tolerance": null},
-          "Match": {"value": "Yes", "tolerance": null}
+          "Kestrel_POS": {
+            "value": "67",
+            "tolerance": null
+          },
+          "Kestrel_REF": {
+            "value": "G",
+            "tolerance": null
+          },
+          "Kestrel_ALT": {
+            "value": "GG",
+            "tolerance": null
+          },
+          "Kestrel_Allele_Change": {
+            "value": "G",
+            "tolerance": null
+          },
+          "Kestrel_Variant_Type": {
+            "value": "Insertion",
+            "tolerance": null
+          },
+          "Advntr_POS": {
+            "value": "22",
+            "tolerance": null
+          },
+          "Advntr_REF": {
+            "value": "T",
+            "tolerance": null
+          },
+          "Advntr_ALT": {
+            "value": "TG",
+            "tolerance": null
+          },
+          "Advntr_Allele_Change": {
+            "value": "G",
+            "tolerance": null
+          },
+          "Advntr_Variant_Type": {
+            "value": "Insertion",
+            "tolerance": null
+          },
+          "Match": {
+            "value": "Yes",
+            "tolerance": null
+          }
         }
       },
       "compatibility_since": "2.0.9",
@@ -872,7 +905,8 @@
         "kind": "single_end_bam",
         "source_path": "tests/data/example_b178_hg19_subset.bam",
         "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
-        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff",
+        "record_digest": null
       },
       "inputs": [
         {
@@ -899,7 +933,7 @@
         "records": {
           "r1": 0,
           "r2": 0,
-          "other": 16930,
+          "other": 14683,
           "single": 0
         },
         "selected_basenames": [
@@ -919,7 +953,7 @@
       "outcomes": {
         "kestrel": {
           "Estimated_Depth_AlternateVariant": {
-            "value": 416,
+            "value": 414,
             "tolerance": {
               "kind": "percentage",
               "value": 5
@@ -958,7 +992,8 @@
         "kind": "single_end_bam",
         "source_path": "tests/data/example_b178_hg19_subset.bam",
         "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
-        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff",
+        "record_digest": null
       },
       "inputs": [
         {
@@ -984,7 +1019,7 @@
         "records": {
           "r1": 0,
           "r2": 0,
-          "other": 16930,
+          "other": 16922,
           "single": 0
         },
         "selected_basenames": [
@@ -1012,14 +1047,14 @@
             }
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance": {
               "kind": "percentage",
               "value": 5
             }
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance": {
               "kind": "percentage",
               "value": 5
@@ -1044,7 +1079,8 @@
         "kind": "single_end_bam",
         "source_path": "tests/data/example_b178_hg19_subset.bam",
         "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
-        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff",
+        "record_digest": null
       },
       "inputs": [
         {
@@ -1070,7 +1106,7 @@
         "records": {
           "r1": 0,
           "r2": 0,
-          "other": 16930,
+          "other": 16922,
           "single": 0
         },
         "selected_basenames": [
@@ -1099,14 +1135,14 @@
             }
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance": {
               "kind": "percentage",
               "value": 5
             }
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance": {
               "kind": "percentage",
               "value": 5
@@ -1131,7 +1167,8 @@
         "kind": "single_end_bam",
         "source_path": "tests/data/example_b178_hg19_subset.bam",
         "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
-        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff",
+        "record_digest": null
       },
       "inputs": [
         {
@@ -1158,7 +1195,7 @@
         "records": {
           "r1": 0,
           "r2": 0,
-          "other": 16930,
+          "other": 16922,
           "single": 0
         },
         "selected_basenames": [
@@ -1187,14 +1224,14 @@
             }
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance": {
               "kind": "percentage",
               "value": 5
             }
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance": {
               "kind": "percentage",
               "value": 5
@@ -1219,7 +1256,8 @@
         "kind": "single_end_bam",
         "source_path": "tests/data/example_b178_hg19_subset.bam",
         "output_path": "tests/data/derived/single_end/example_b178_hg19_single_end.bam",
-        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff"
+        "recipe_digest": "13484255d72b09b29eddd677667dcbef82bc5282c9d31595f9ea6d4b91c88cff",
+        "record_digest": null
       },
       "inputs": [
         {
@@ -1245,7 +1283,7 @@
         "records": {
           "r1": 0,
           "r2": 0,
-          "other": 16930,
+          "other": 16922,
           "single": 0
         },
         "selected_basenames": [
@@ -1272,14 +1310,14 @@
             }
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance": {
               "kind": "percentage",
               "value": 5
             }
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance": {
               "kind": "percentage",
               "value": 5
@@ -1403,17 +1441,50 @@
           }
         },
         "cross_match": {
-          "Kestrel_POS": {"value": "67", "tolerance": null},
-          "Kestrel_REF": {"value": "G", "tolerance": null},
-          "Kestrel_ALT": {"value": "GG", "tolerance": null},
-          "Kestrel_Allele_Change": {"value": "G", "tolerance": null},
-          "Kestrel_Variant_Type": {"value": "Insertion", "tolerance": null},
-          "Advntr_POS": {"value": "22", "tolerance": null},
-          "Advntr_REF": {"value": "T", "tolerance": null},
-          "Advntr_ALT": {"value": "TG", "tolerance": null},
-          "Advntr_Allele_Change": {"value": "G", "tolerance": null},
-          "Advntr_Variant_Type": {"value": "Insertion", "tolerance": null},
-          "Match": {"value": "Yes", "tolerance": null}
+          "Kestrel_POS": {
+            "value": "67",
+            "tolerance": null
+          },
+          "Kestrel_REF": {
+            "value": "G",
+            "tolerance": null
+          },
+          "Kestrel_ALT": {
+            "value": "GG",
+            "tolerance": null
+          },
+          "Kestrel_Allele_Change": {
+            "value": "G",
+            "tolerance": null
+          },
+          "Kestrel_Variant_Type": {
+            "value": "Insertion",
+            "tolerance": null
+          },
+          "Advntr_POS": {
+            "value": "22",
+            "tolerance": null
+          },
+          "Advntr_REF": {
+            "value": "T",
+            "tolerance": null
+          },
+          "Advntr_ALT": {
+            "value": "TG",
+            "tolerance": null
+          },
+          "Advntr_Allele_Change": {
+            "value": "G",
+            "tolerance": null
+          },
+          "Advntr_Variant_Type": {
+            "value": "Insertion",
+            "tolerance": null
+          },
+          "Match": {
+            "value": "Yes",
+            "tolerance": null
+          }
         }
       },
       "compatibility_since": "2.0.10",
@@ -1450,8 +1521,8 @@
       },
       "routing": {
         "records": {
-          "r1": 40953,
-          "r2": 40953,
+          "r1": 40954,
+          "r2": 40954,
           "other": 0,
           "single": 0
         },
@@ -1528,7 +1599,7 @@
         "records": {
           "r1": 0,
           "r2": 0,
-          "other": 40202,
+          "other": 40203,
           "single": 0
         },
         "selected_basenames": [
@@ -1657,6 +1728,398 @@
       },
       "compatibility_since": "2.0.10",
       "provenance_commit": "01ecafcf9dec47584285dd0bd38156a7799b37b2"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_b178_hg19_subset_default",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 16929,
+          "r2": 16929,
+          "other": 0,
+          "single": 1
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7088,
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": 0.05869074492099323,
+            "tolerance": null
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.11",
+      "provenance_commit": "00585119e0d441728e9e4978e0d08057258f1874"
+    },
+    {
+      "suite": "bam_tests",
+      "test_name": "example_40cf_hg38_subset_default",
+      "fixture": null,
+      "inputs": [
+        {
+          "path": "tests/data/example_40cf_hg38_subset.bam",
+          "md5": "ca4a47b964530ea65c1a72daa36bfaa4",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg38",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 19492,
+          "r2": 19492,
+          "other": 0,
+          "single": 93
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": "None",
+            "tolerance": null
+          },
+          "Confidence": {
+            "value": "Negative",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.11",
+      "provenance_commit": "00585119e0d441728e9e4978e0d08057258f1874"
+    },
+    {
+      "suite": "cram_tests",
+      "test_name": "b178_hg19_original_derived_mixed",
+      "fixture": {
+        "name": "b178_hg19_original_derived_mixed",
+        "kind": "no_ref_cram",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/cram/example_b178_hg19_subset.cram",
+        "record_digest": "5cb7b42b0aab871569f0619fbdd88502b1013c08eb360d91463d76df6d23eef0",
+        "recipe_digest": "d91ed63931f111e03225d5eb29bebed8f4c666a9261d3994057b067f3c59820d"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 14690,
+          "r2": 14690,
+          "other": 0,
+          "single": 1
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7088,
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": 0.05869074492099323,
+            "tolerance": null
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.11",
+      "provenance_commit": "00585119e0d441728e9e4978e0d08057258f1874"
+    },
+    {
+      "suite": "cram_tests",
+      "test_name": "b178_hg19_reference_compressed_mixed",
+      "fixture": {
+        "name": "b178_hg19_reference_compressed_mixed",
+        "kind": "reference_compressed_cram",
+        "source_path": "tests/data/example_b178_hg19_subset.bam",
+        "output_path": "tests/data/cram/reference-compressed/example_b178_hg19_subset.cram",
+        "record_digest": "37428a5a9c95b4791f063c663dc4973548796dcbe9342b870fd4e8425a2d8cc6",
+        "recipe_digest": "7eb349ddac806984042f5e4a9aac1c7029f62ffa6ebdd4c75cb6f653f0d57372"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/example_b178_hg19_subset.bam",
+          "md5": "df0bda7325519806fe6d6e1e531b7dbf",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": "reference/alignment/chr1.hg19.fa",
+        "sha256": "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338"
+      },
+      "execution": {
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 14690,
+          "r2": 14690,
+          "other": 0,
+          "single": 1
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7088,
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": 0.05869074492099323,
+            "tolerance": null
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.11",
+      "provenance_commit": "00585119e0d441728e9e4978e0d08057258f1874"
+    },
+    {
+      "suite": "cram_tests",
+      "test_name": "b178_hg19_remapped_pure_paired",
+      "fixture": {
+        "name": "b178_hg19_remapped_pure_paired",
+        "kind": "no_ref_cram",
+        "source_path": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+        "output_path": "tests/data/cram/remapped/bwa/hg19/example_b178_hg19_bwa.cram",
+        "record_digest": "5fc0ccddb513b32dc148679840f8113a7c30f19c175a09cc46d0c4386ce13c65",
+        "recipe_digest": "0138c4ea8c90e29d6106c9a10f3570a66307bad07c2b6ada54dffe9c72f671b9"
+      },
+      "inputs": [
+        {
+          "path": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+          "md5": "37679cfba7007ade57ed7df28a1ec77e",
+          "record_digest": null
+        }
+      ],
+      "reference": {
+        "assembly": "hg19",
+        "path": null,
+        "sha256": null
+      },
+      "execution": {
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "modules": []
+      },
+      "routing": {
+        "records": {
+          "r1": 14689,
+          "r2": 14689,
+          "other": 0,
+          "single": 0
+        },
+        "selected_basenames": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ]
+      },
+      "artifacts": {
+        "required_present": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "required_absent": [],
+        "archive": true
+      },
+      "outcomes": {
+        "kestrel": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance": null
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7087,
+            "tolerance": null
+          },
+          "Depth_Score": {
+            "value": 0.05869902638634119,
+            "tolerance": null
+          },
+          "Confidence": {
+            "value": "High_Precision*",
+            "tolerance": null
+          }
+        },
+        "advntr": {},
+        "cross_match": {}
+      },
+      "compatibility_since": "2.0.11",
+      "provenance_commit": "00585119e0d441728e9e4978e0d08057258f1874"
     }
   ]
 }

@@ -2,6 +2,7 @@
 
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -250,8 +251,10 @@ def test_local_and_docker_commands_have_identical_normalized_semantics(tmp_path:
     }
 
     assert request == _request(data_root, output_dir)
-    assert [identities.get(token, token) for token in local_commands[0]] == [
-        identities.get(token, token) for token in docker_argv
+    assert local_commands[0][:3] == [sys.executable, "-m", "vntyper.cli"]
+    assert docker_argv[:1] == ["vntyper"]
+    assert [identities.get(token, token) for token in local_commands[0][3:]] == [
+        identities.get(token, token) for token in docker_argv[1:]
     ]
     assert local_result == PipelineRunResult(1, "local stdout", "local stderr")
     assert docker_result == PipelineRunResult(1, "captured combined docker output", "")

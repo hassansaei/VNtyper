@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -209,6 +209,9 @@ test-fast:
 	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
 	pytest -m unit tests/unit -o log_cli=false -q --ff -x
 
+check-integration-compatibility:
+	python scripts/check_integration_compatibility.py $(if $(strip $(INTEGRATION_COMPAT_BASE)),--base-revision "$(INTEGRATION_COMPAT_BASE)",)
+
 # Coverage for the fast tier.
 #
 # Two repository thresholds:
@@ -406,7 +409,7 @@ all: format lint type-check test
 check: format-check type-check test-unit
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check-all: format-check lint type-check-all test-unit
+check-all: format-check lint type-check-all test-unit check-integration-compatibility
 	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
 
 # Opt-in gate that additionally runs the tiers needing test data / Docker.
@@ -604,7 +607,7 @@ test-docker-quick:
 		exit 1; \
 	fi
 	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
-	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_fast]" \
+	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_default]" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_container_health" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_volume_mounts" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_dependencies" -v

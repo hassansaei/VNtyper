@@ -705,6 +705,13 @@
       "reference_fasta": "tests/data/cram/reference-dependent/reference.fa",
       "no_ref_cram": "tests/data/cram/placed-flag12/placed-flag12.cram",
       "indexed_safe_cram": "tests/data/cram/indexed-safe/indexed-safe.cram"
+    },
+    "issue_233_real_cram_contract": {
+      "original_derived_b178": "tests/data/cram/example_b178_hg19_subset.cram",
+      "reference_compressed_b178": "tests/data/cram/reference-compressed/example_b178_hg19_subset.cram",
+      "remapped_pure_paired_b178": "tests/data/cram/remapped/bwa/hg19/example_b178_hg19_bwa.cram",
+      "reference_fasta": "reference/alignment/chr1.hg19.fa",
+      "reference_sha256": "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338"
     }
   },
   "unit_tests": {},
@@ -714,154 +721,776 @@
         "test_name": "example_b178_hg19_subset_fast",
         "bam": "tests/data/example_b178_hg19_subset.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 14690,
           "r2": 14690,
           "other": 0,
           "single": 1
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7110,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.05869074492099323,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_a5c1_hg19_subset_fast",
         "bam": "tests/data/example_a5c1_hg19_subset.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 20888,
           "r2": 20888,
           "other": 0,
           "single": 3
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 93,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 9883,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.009410098148335525,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "coverage_assertions": {
+          "mean": "1258.72",
+          "median": "945.00",
+          "stdev": "897.50",
+          "min": "102",
+          "max": "3616",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_66bf_hg19_subset_fast",
         "bam": "tests/data/example_66bf_hg19_subset.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 19841,
           "r2": 19841,
           "other": 0,
           "single": 3
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 491,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 22647,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.0217,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "2028.17",
+          "median": "1255.00",
+          "stdev": "1874.37",
+          "min": "179",
+          "max": "6886",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_7a61_hg19_subset_fast",
         "bam": "tests/data/example_7a61_hg19_subset.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 2359,
           "r2": 2359,
           "other": 0,
           "single": 8
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": "None",
+          "Estimated_Depth_Variant_ActiveRegion": "None",
+          "Depth_Score": {
+            "value": "None",
+            "tolerance_percentage": 5
+          },
+          "Confidence": "Negative"
+        },
+        "coverage_assertions": {
+          "mean": "185.92",
+          "median": "182.00",
+          "stdev": "55.30",
+          "min": "10",
+          "max": "286",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "No variant detected.<br>Note: adVNTR genotyping was not performed."
+        ]
       },
       {
         "test_name": "example_dfc3_hg19_subset_fast",
         "bam": "tests/data/example_dfc3_hg19_subset.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 31596,
           "r2": 31596,
           "other": 0,
           "single": 53
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "2889.03",
+          "median": "1512.00",
+          "stdev": "2906.58",
+          "min": "424",
+          "max": "10769",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_dfc3_GRCh37_fast",
         "bam": "tests/data/remapped/bwa/GRCh37/example_dfc3_GRCh37_bwa.bam",
         "reference_assembly": "GRCh37",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 31593,
           "r2": 31593,
           "other": 0,
           "single": 2
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19182,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.010855817875210793,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "2898.18",
+          "median": "1510.00",
+          "stdev": "2943.81",
+          "min": "371",
+          "max": "10975",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_dfc3_GRCh38_fast",
         "bam": "tests/data/remapped/bwa/GRCh38/example_dfc3_GRCh38_bwa.bam",
         "reference_assembly": "GRCh38",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 31603,
           "r2": 31603,
           "other": 0,
           "single": 2
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "1075.32",
+          "median": "810.00",
+          "stdev": "1158.83",
+          "min": "0",
+          "max": "6312",
+          "region_length": "4501",
+          "uncovered_bases": "244",
+          "percent_uncovered": "5.42",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_dfc3_hg38_ensembl_fast",
         "bam": "tests/data/remapped/bwa/hg38_ensembl/example_dfc3_hg38_ensembl_bwa.bam",
         "reference_assembly": "hg38_ensembl",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 31603,
           "r2": 31603,
           "other": 0,
           "single": 2
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 206,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 19183,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.010855245823892079,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "1075.32",
+          "median": "810.00",
+          "stdev": "1158.83",
+          "min": "0",
+          "max": "6312",
+          "region_length": "4501",
+          "uncovered_bases": "244",
+          "percent_uncovered": "5.42",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_40cf_hg38_subset_fast_gdp_guard",
         "bam": "tests/data/example_40cf_hg38_subset.bam",
         "reference_assembly": "hg38",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 3474,
           "r2": 3474,
           "other": 0,
           "single": 93
-        }
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": "None",
+          "Estimated_Depth_Variant_ActiveRegion": "None",
+          "Depth_Score": {
+            "value": "None",
+            "tolerance_percentage": 5
+          },
+          "Confidence": "Negative"
+        },
+        "coverage_assertions": {
+          "mean": "147.94",
+          "median": "107.00",
+          "stdev": "172.87",
+          "min": "0",
+          "max": "828",
+          "region_length": "4501",
+          "uncovered_bases": "454",
+          "percent_uncovered": "10.09",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "No variant detected.<br>Note: adVNTR genotyping was not performed."
+        ]
+      },
+      {
+        "test_name": "example_b178_hg19_subset_default",
+        "bam": "tests/data/example_b178_hg19_subset.bam",
+        "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
+          "r1": 16929,
+          "r2": 16929,
+          "other": 0,
+          "single": 1
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 416,
+          "Estimated_Depth_Variant_ActiveRegion": 7088,
+          "Depth_Score": 0.05869074492099323,
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
+      },
+      {
+        "test_name": "example_40cf_hg38_subset_default",
+        "bam": "tests/data/example_40cf_hg38_subset.bam",
+        "reference_assembly": "hg38",
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
+          "r1": 19492,
+          "r2": 19492,
+          "other": 0,
+          "single": 93
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": "None",
+          "Estimated_Depth_Variant_ActiveRegion": "None",
+          "Depth_Score": "None",
+          "Confidence": "Negative"
+        },
+        "coverage_assertions": {
+          "mean": "147.94",
+          "median": "107.00",
+          "stdev": "172.87",
+          "min": "0",
+          "max": "828",
+          "region_length": "4501",
+          "uncovered_bases": "454",
+          "percent_uncovered": "10.09",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "No variant detected.<br>Note: adVNTR genotyping was not performed."
+        ]
       }
     ],
     "single_end_bam_tests": [
@@ -869,13 +1498,33 @@
         "test_name": "example_b178_hg19_single_end",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates"
         ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 14683,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_other.fastq.gz"
+        ],
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
-            "value": 416,
+            "value": 414,
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
@@ -888,42 +1537,131 @@
           },
           "Confidence": "High_Precision*"
         },
-        "check_igv_report": false
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_b178_hg19_single_end_keep",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--keep-intermediates"
         ],
-        "expected_present": [
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
           "fastq_bam_processing/output_unmapped.bam"
         ],
+        "expected_absent": [],
         "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16922,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_other.fastq.gz"
+        ],
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
             "value": 416,
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
         },
-        "check_igv_report": false
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_b178_hg19_single_end_delete",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--delete-intermediates"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16922,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_other.fastq.gz"
         ],
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
@@ -931,28 +1669,71 @@
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
         },
-        "check_igv_report": false,
-        "expected_absent": [
-          "fastq_bam_processing/output_unmapped.bam"
-        ],
-        "expected_archive": false
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_b178_hg19_single_end_delete_overrides_keep",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--keep-intermediates",
           "--delete-intermediates"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [
+          "fastq_bam_processing/output_unmapped.bam"
+        ],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16922,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_other.fastq.gz"
         ],
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
@@ -960,27 +1741,68 @@
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
         },
-        "check_igv_report": false,
-        "expected_absent": [
-          "fastq_bam_processing/output_unmapped.bam"
-        ],
-        "expected_archive": false
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       },
       {
         "test_name": "example_b178_hg19_single_end_archive",
         "fixture_name": "example_b178_hg19_single_end",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--archive-results"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 16922,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_other.fastq.gz"
         ],
         "kestrel_assertions": {
           "Estimated_Depth_AlternateVariant": {
@@ -988,17 +1810,41 @@
             "tolerance_percentage": 5
           },
           "Estimated_Depth_Variant_ActiveRegion": {
-            "value": 6111,
+            "value": 6168,
             "tolerance_percentage": 5
           },
           "Depth_Score": {
-            "value": 0.0677466863033873,
+            "value": 0.06744487678339818,
             "tolerance_percentage": 5
           },
           "Confidence": "High_Precision*"
         },
-        "check_igv_report": false,
-        "expected_archive": true
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
       }
     ],
     "advntr_tests": [
@@ -1006,34 +1852,191 @@
         "test_name": "example_a5c1_hg19_subset_advntr",
         "bam": "tests/data/example_a5c1_hg19_subset.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
           "--archive-results",
-          "--extra-modules",
-          "advntr",
           "--advntr-max-coverage",
-          "300"
+          "300",
+          "--extra-modules",
+          "advntr"
         ],
-        "expected_exit_code": 1,
-        "expected_mixed_fastq_records": {
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "advntr/output_adVNTR_result.tsv"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
           "r1": 20888,
           "r2": 20888,
           "other": 0,
           "single": 3
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 93,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 9883,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.009410098148335525,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision"
+        },
+        "coverage_assertions": {
+          "mean": "1258.72",
+          "median": "945.00",
+          "stdev": "897.50",
+          "min": "102",
+          "max": "3616",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping",
+            "adVNTR Genotyping",
+            "Cross-Match Variant Comparison"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping",
+            "adVNTR Genotyping",
+            "Cross-Match Variant Comparison"
+          ]
+        },
+        "report_assertions": [
+          "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.<br>Quality metrics are acceptable.<br>Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended.",
+          "At least one match was found between Kestrel and adVNTR results."
+        ],
+        "advntr_assertions": {
+          "VID": "25561",
+          "State": "I22_2_G_LEN1",
+          "NumberOfSupportingReads": 11,
+          "MeanCoverage": {
+            "value": 153.986111111,
+            "tolerance_percentage": 10
+          },
+          "Pvalue": {
+            "value": 6.78296229901e-07,
+            "log10_tolerance": 2
+          }
+        },
+        "cross_match_assertions": {
+          "comments": [],
+          "data": [
+            {
+              "Kestrel_POS": "67",
+              "Kestrel_REF": "G",
+              "Kestrel_ALT": "GG",
+              "Kestrel_Allele_Change": "G",
+              "Kestrel_Variant_Type": "Insertion",
+              "Advntr_POS": "22",
+              "Advntr_REF": "T",
+              "Advntr_ALT": "TG",
+              "Advntr_Allele_Change": "G",
+              "Advntr_Variant_Type": "Insertion",
+              "Match": "Yes"
+            }
+          ]
         }
       },
       {
         "test_name": "example_b178_hg19_bwa_advntr",
         "bam": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--fast-mode",
           "--keep-intermediates",
-          "--extra-modules",
-          "advntr",
           "--advntr-max-coverage",
-          "300"
+          "300",
+          "--extra-modules",
+          "advntr"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "advntr/output_adVNTR_result.tsv"
+        ],
+        "expected_absent": [],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 14689,
+          "r2": 14689,
+          "other": 0,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 416,
+            "tolerance_percentage": 5
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 7087,
+            "tolerance_percentage": 5
+          },
+          "Depth_Score": {
+            "value": 0.05869902638634119,
+            "tolerance_percentage": 5
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "1012.99",
+          "median": "948.00",
+          "stdev": "468.58",
+          "min": "89",
+          "max": "2216",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "BAM Header Parsing",
+            "BAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping",
+            "adVNTR Genotyping",
+            "Cross-Match Variant Comparison"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping",
+            "adVNTR Genotyping",
+            "Cross-Match Variant Comparison"
+          ]
+        },
+        "report_assertions": [
+          "Pathogenic frameshift variant detected by Kestrel with high precision and confirmed by adVNTR.<br>Quality metrics are acceptable.<br>Additional validation using orthogonal methods (e.g., SNaPshot for dupC confirmation or long‐read sequencing for complex variants) is recommended.",
+          "At least one match was found between Kestrel and adVNTR results."
         ],
         "advntr_assertions": {
           "VID": "25561",
@@ -1047,6 +2050,24 @@
             "value": 5.774455097259999e-59,
             "log10_tolerance": 2
           }
+        },
+        "cross_match_assertions": {
+          "comments": [],
+          "data": [
+            {
+              "Kestrel_POS": "67",
+              "Kestrel_REF": "G",
+              "Kestrel_ALT": "GG",
+              "Kestrel_Allele_Change": "G",
+              "Kestrel_Variant_Type": "Insertion",
+              "Advntr_POS": "22",
+              "Advntr_REF": "T",
+              "Advntr_ALT": "TG",
+              "Advntr_Allele_Change": "G",
+              "Advntr_Variant_Type": "Insertion",
+              "Match": "Yes"
+            }
+          ]
         }
       }
     ],
@@ -1055,22 +2076,138 @@
         "test_name": "example_6449_hg19_subset_fastq_shark",
         "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
         "fastq2": "tests/data/example_6449_hg19_subset_R2.fastq.gz",
+        "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
         "cli_options": [
           "--extra-modules",
           "shark"
         ],
+        "expected_exit_code": 0,
         "expected_files": [
           "summary_report.html",
           "kestrel/kestrel_result.tsv"
+        ],
+        "expected_absent": [],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 40954,
+          "r2": 40954,
+          "other": 0,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 239,
+            "tolerance_percentage": 0
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 478,
+            "tolerance_percentage": 0
+          },
+          "Depth_Score": {
+            "value": 0.5,
+            "tolerance_percentage": 0
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "3709.29",
+          "median": "4138.00",
+          "stdev": "1704.10",
+          "min": "222",
+          "max": "6803",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "SHARK Filtering",
+            "FASTQ Quality Control",
+            "FASTQ Alignment",
+            "BAM to FASTQ Conversion (Post-alignment)",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
         ]
       },
       {
         "test_name": "example_6449_hg19_subset_single_fastq",
         "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [],
+        "expected_exit_code": 0,
         "expected_files": [
           "summary_report.html",
           "kestrel/kestrel_result.tsv"
+        ],
+        "expected_absent": [],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 0,
+          "r2": 0,
+          "other": 40203,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_other.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 262,
+            "tolerance_percentage": 0
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 1695,
+            "tolerance_percentage": 0
+          },
+          "Depth_Score": {
+            "value": 0.15457227138643068,
+            "tolerance_percentage": 0
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "2255.56",
+          "median": "1613.00",
+          "stdev": "1575.22",
+          "min": "216",
+          "max": "6110",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "FASTQ Quality Control",
+            "FASTQ Alignment",
+            "BAM to FASTQ Conversion (Post-alignment)",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
         ]
       },
       {
@@ -1078,9 +2215,272 @@
         "fastq1": "tests/data/example_b178_hg19_subset_R1.fastq.gz",
         "fastq2": "tests/data/example_b178_hg19_subset_R2.fastq.gz",
         "reference_assembly": "hg19",
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [],
+        "expected_exit_code": 0,
         "expected_files": [
           "summary_report.html",
           "kestrel/kestrel_result.tsv"
+        ],
+        "expected_absent": [],
+        "expected_archive": false,
+        "expected_fastq_records": {
+          "r1": 11452,
+          "r2": 11452,
+          "other": 0,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": {
+            "value": 125,
+            "tolerance_percentage": 0
+          },
+          "Estimated_Depth_Variant_ActiveRegion": {
+            "value": 1024,
+            "tolerance_percentage": 0
+          },
+          "Depth_Score": {
+            "value": 0.1220703125,
+            "tolerance_percentage": 0
+          },
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "566.90",
+          "median": "573.00",
+          "stdev": "299.18",
+          "min": "21",
+          "max": "1062",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "FASTQ Quality Control",
+            "FASTQ Alignment",
+            "BAM to FASTQ Conversion (Post-alignment)",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
+      }
+    ],
+    "cram_tests": [
+      {
+        "test_name": "b178_hg19_original_derived_mixed",
+        "cram": "tests/data/cram/example_b178_hg19_subset.cram",
+        "source_bam": "tests/data/example_b178_hg19_subset.bam",
+        "fixture_record_digest": "5cb7b42b0aab871569f0619fbdd88502b1013c08eb360d91463d76df6d23eef0",
+        "fixture_reference_sha256": null,
+        "reference_assembly": "hg19",
+        "reference_fasta": null,
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
+          "r1": 14690,
+          "r2": 14690,
+          "other": 0,
+          "single": 1
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 416,
+          "Estimated_Depth_Variant_ActiveRegion": 7088,
+          "Depth_Score": 0.05869074492099323,
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "CRAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
+      },
+      {
+        "test_name": "b178_hg19_reference_compressed_mixed",
+        "cram": "tests/data/cram/reference-compressed/example_b178_hg19_subset.cram",
+        "source_bam": "tests/data/example_b178_hg19_subset.bam",
+        "fixture_record_digest": "37428a5a9c95b4791f063c663dc4973548796dcbe9342b870fd4e8425a2d8cc6",
+        "fixture_reference_sha256": "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338",
+        "reference_assembly": "hg19",
+        "reference_fasta": "reference/alignment/chr1.hg19.fa",
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
+          "r1": 14690,
+          "r2": 14690,
+          "other": 0,
+          "single": 1
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz",
+          "output_single.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 416,
+          "Estimated_Depth_Variant_ActiveRegion": 7088,
+          "Depth_Score": 0.05869074492099323,
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "878.21",
+          "median": "812.00",
+          "stdev": "409.34",
+          "min": "95",
+          "max": "1942",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "CRAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
+        ]
+      },
+      {
+        "test_name": "b178_hg19_remapped_pure_paired",
+        "cram": "tests/data/cram/remapped/bwa/hg19/example_b178_hg19_bwa.cram",
+        "source_bam": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
+        "fixture_record_digest": "5fc0ccddb513b32dc148679840f8113a7c30f19c175a09cc46d0c4386ce13c65",
+        "fixture_reference_sha256": null,
+        "reference_assembly": "hg19",
+        "reference_fasta": null,
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": [
+          "--fast-mode",
+          "--keep-intermediates",
+          "--archive-results"
+        ],
+        "expected_exit_code": 0,
+        "expected_files": [
+          "summary_report.html",
+          "kestrel/kestrel_result.tsv",
+          "coverage/coverage_summary.tsv",
+          "pipeline_summary.json",
+          "igv_report.html"
+        ],
+        "expected_absent": [],
+        "expected_archive": true,
+        "expected_fastq_records": {
+          "r1": 14689,
+          "r2": 14689,
+          "other": 0,
+          "single": 0
+        },
+        "expected_selected_fastqs": [
+          "output_R1.fastq.gz",
+          "output_R2.fastq.gz"
+        ],
+        "kestrel_assertions": {
+          "Estimated_Depth_AlternateVariant": 416,
+          "Estimated_Depth_Variant_ActiveRegion": 7087,
+          "Depth_Score": 0.05869902638634119,
+          "Confidence": "High_Precision*"
+        },
+        "coverage_assertions": {
+          "mean": "1012.99",
+          "median": "948.00",
+          "stdev": "468.58",
+          "min": "89",
+          "max": "2216",
+          "region_length": "1501",
+          "uncovered_bases": "0",
+          "percent_uncovered": "0.00",
+          "coverage_qc": "PASS"
+        },
+        "pipeline_summary_assertions": {
+          "steps": [
+            "CRAM to FASTQ Conversion",
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ],
+          "parsed_results": [
+            "Coverage Calculation",
+            "Kestrel Genotyping"
+          ]
+        },
+        "report_assertions": [
+          "Kestrel detected a high-precision pathogenic variant.<br>Note: adVNTR genotyping was not performed.<br>It is recommended to perform adVNTR and validate the result using orthogonal methods (e.g., SNaPshot, long‐read sequencing)."
         ]
       }
     ]

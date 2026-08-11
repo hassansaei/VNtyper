@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -101,7 +102,8 @@ def _run_local_pipeline(request: PipelineRequest) -> PipelineRunResult:
     Returns:
         Complete captured local process result.
     """
-    completed = _run_cli(build_pipeline_argv(request, str))
+    pipeline_argv = build_pipeline_argv(request, str)
+    completed = _run_cli([sys.executable, "-m", "vntyper.cli", *pipeline_argv[1:]])
     return PipelineRunResult(completed.returncode, completed.stdout, completed.stderr)
 
 

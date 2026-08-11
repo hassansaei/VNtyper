@@ -12,6 +12,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 BOOTSTRAP_REVISION = "52c4146596fef2d1e2402991fbab062ba8021889^"
+TASK5_BASE_REVISION = "0058511"
 BOOTSTRAP_IDENTITIES = {
     ("bam_tests", "example_b178_hg19_subset_fast"),
     ("bam_tests", "example_a5c1_hg19_subset_fast"),
@@ -37,6 +38,11 @@ BOOTSTRAP_ROUTING_COUNTS = {
     ("advntr_tests", "example_a5c1_hg19_subset_advntr"): (20888, 20888, 0, 3),
 }
 CURRENT_IDENTITIES = BOOTSTRAP_IDENTITIES | {
+    ("bam_tests", "example_b178_hg19_subset_default"),
+    ("bam_tests", "example_40cf_hg38_subset_default"),
+    ("cram_tests", "b178_hg19_original_derived_mixed"),
+    ("cram_tests", "b178_hg19_reference_compressed_mixed"),
+    ("cram_tests", "b178_hg19_remapped_pure_paired"),
     ("single_end_bam_tests", "example_b178_hg19_single_end"),
     ("single_end_bam_tests", "example_b178_hg19_single_end_keep"),
     ("single_end_bam_tests", "example_b178_hg19_single_end_delete"),
@@ -146,10 +152,31 @@ def _live_case(contract: dict) -> dict:
         }
         if contract["outcomes"]["cross_match"]
         else {},
+        "coverage_assertions": {
+            "mean": "1.00",
+            "median": "1.00",
+            "stdev": "0.00",
+            "min": "1",
+            "max": "1",
+            "region_length": "1",
+            "uncovered_bases": "0",
+            "percent_uncovered": "0.00",
+            "coverage_qc": "PASS",
+        },
+        "pipeline_summary_assertions": {
+            "steps": ["Coverage Calculation", "Kestrel Genotyping"],
+            "parsed_results": ["Coverage Calculation", "Kestrel Genotyping"],
+        },
+        "report_assertions": ["High_Precision*"],
     }
     modules = contract["execution"]["modules"]
     if modules:
         case["cli_options"].extend(["--extra-modules", ",".join(modules)])
+    if "advntr" in modules:
+        case["pipeline_summary_assertions"]["steps"].extend(["adVNTR Genotyping", "Cross-Match Variant Comparison"])
+        case["pipeline_summary_assertions"]["parsed_results"].extend(
+            ["adVNTR Genotyping", "Cross-Match Variant Comparison"]
+        )
     return case
 
 
@@ -177,6 +204,45 @@ def _advntr_contract() -> dict:
         "Match": _assertion("Yes"),
     }
     return contract
+
+
+def _cram_contract() -> tuple[dict, dict, dict]:
+    """Build one generated-CRAM contract, live declaration, and resource registry."""
+    source = "tests/data/source.bam"
+    cram = "tests/data/cram/generated.cram"
+    reference = "reference/alignment/chr1.hg19.fa"
+    record_digest = "d" * 64
+    reference_digest = "e" * 64
+    contract = _contract(suite="cram_tests", name="case-cram", path=source)
+    contract["fixture"] = {
+        "name": "case-cram",
+        "kind": "reference_compressed_cram",
+        "source_path": source,
+        "output_path": cram,
+        "record_digest": record_digest,
+    }
+    contract["fixture"]["recipe_digest"] = _module()._fixture_recipe_digest(contract["fixture"])
+    contract["reference"] = {"assembly": "hg19", "path": reference, "sha256": reference_digest}
+    live = _live_case(contract)
+    live.pop("bam")
+    live.update(
+        {
+            "cram": cram,
+            "source_bam": source,
+            "fixture_record_digest": record_digest,
+            "reference_fasta": reference,
+            "fixture_reference_sha256": reference_digest,
+        }
+    )
+    resources = _resources(source)
+    resources["purpose_fixtures"] = {
+        "issue_233_real_cram_contract": {
+            "reference_compressed_b178": cram,
+            "reference_fasta": reference,
+            "reference_sha256": reference_digest,
+        }
+    }
+    return contract, live, resources
 
 
 def test_validate_manifest_accepts_complete_contract() -> None:
@@ -307,6 +373,7 @@ def test_validate_manifest_binds_generated_fixture_to_source_and_recipe() -> Non
         "kind": "single_end_bam",
         "source_path": "tests/data/source.bam",
         "output_path": "tests/data/derived/single.bam",
+        "record_digest": None,
         "recipe_digest": "2527b10c934fd45d51c184b82898687d67972b6dc089291d2e171a33ee12487f",
     }
     resources = _resources("tests/data/source.bam")
@@ -354,6 +421,65 @@ def test_validate_manifest_resolves_derived_record_and_reference_digests() -> No
         module.validate_manifest(_manifest(contract), resources)
 
 
+def test_check_compatibility_binds_cram_source_output_record_and_reference() -> None:
+    """Catch projecting a generated CRAM without its source, decoded digest, or exact reference."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract, live, resources = _cram_contract()
+
+    module.check_compatibility(
+        _manifest(contract),
+        _manifest(contract),
+        {"integration_tests": {"cram_tests": [live]}},
+        resources,
+    )
+
+    required_fields = {
+        "source_bam": "source_bam",
+        "fixture_record_digest": "fixture_record_digest",
+        "reference_fasta": "reference path and digest",
+        "fixture_reference_sha256": "reference path and digest",
+    }
+    for field, diagnostic in required_fields.items():
+        malformed = copy.deepcopy(live)
+        malformed.pop(field)
+        with pytest.raises(ValueError, match=diagnostic):
+            module.check_compatibility(
+                _manifest(contract),
+                _manifest(contract),
+                {"integration_tests": {"cram_tests": [malformed]}},
+                resources,
+            )
+
+
+def test_check_compatibility_binds_no_ref_cram_with_explicit_null_reference_pair() -> None:
+    """Catch rejecting the intentional no_ref=1 null reference or silently ignoring one-sided metadata."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract, live, resources = _cram_contract()
+    contract["reference"].update(path=None, sha256=None)
+    live.update(reference_fasta=None, fixture_reference_sha256=None)
+    contract["fixture"]["kind"] = "no_ref_cram"
+    recipe = {key: value for key, value in contract["fixture"].items() if key != "recipe_digest"}
+    contract["fixture"]["recipe_digest"] = module._fixture_recipe_digest(recipe)
+
+    module.check_compatibility(
+        _manifest(contract),
+        _manifest(contract),
+        {"integration_tests": {"cram_tests": [live]}},
+        resources,
+    )
+
+    live["fixture_reference_sha256"] = "e" * 64
+    with pytest.raises(ValueError, match="reference path and digest"):
+        module.check_compatibility(
+            _manifest(contract),
+            _manifest(contract),
+            {"integration_tests": {"cram_tests": [live]}},
+            resources,
+        )
+
+
 def test_check_compatibility_rejects_base_deletion_and_mutation() -> None:
     """Catch permitting removal or any in-place change to an established success."""
     module = _module()
@@ -370,13 +496,42 @@ def test_check_compatibility_rejects_base_deletion_and_mutation() -> None:
         module.check_compatibility(_manifest(contract), _manifest(changed), live, resources)
 
 
-@pytest.mark.parametrize("field", ["threads", "log_level"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "threads",
+        "log_level",
+        "coverage_assertions",
+        "pipeline_summary_assertions",
+        "report_assertions",
+    ],
+)
 def test_check_compatibility_requires_explicit_live_invocation_metadata(field: str) -> None:
     """Catch restoring an implicit invocation default that can hide Task 5 declaration drift."""
     module = _module()
     assert module is not None, "integration compatibility module is not implemented"
     contract = _contract()
     case = _live_case(contract)
+    case.update(
+        {
+            "coverage_assertions": {
+                "mean": "1.00",
+                "median": "1.00",
+                "stdev": "0.00",
+                "min": "1",
+                "max": "1",
+                "region_length": "1",
+                "uncovered_bases": "0",
+                "percent_uncovered": "0.00",
+                "coverage_qc": "PASS",
+            },
+            "pipeline_summary_assertions": {
+                "steps": ["Coverage Calculation", "Kestrel Genotyping"],
+                "parsed_results": ["Coverage Calculation", "Kestrel Genotyping"],
+            },
+            "report_assertions": ["High_Precision*"],
+        }
+    )
     case.pop(field)
     live = {"integration_tests": {"bam_tests": [case]}}
 
@@ -389,9 +544,51 @@ def test_check_compatibility_accepts_explicit_task5_invocation_metadata() -> Non
     module = _module()
     assert module is not None, "integration compatibility module is not implemented"
     contract = _contract()
-    live = {"integration_tests": {"bam_tests": [_live_case(contract)]}}
+    case = _live_case(contract)
+    case.update(
+        {
+            "coverage_assertions": {
+                "mean": "1.00",
+                "median": "1.00",
+                "stdev": "0.00",
+                "min": "1",
+                "max": "1",
+                "region_length": "1",
+                "uncovered_bases": "0",
+                "percent_uncovered": "0.00",
+                "coverage_qc": "PASS",
+            },
+            "pipeline_summary_assertions": {
+                "steps": ["Coverage Calculation", "Kestrel Genotyping"],
+                "parsed_results": ["Coverage Calculation", "Kestrel Genotyping"],
+            },
+            "report_assertions": ["High_Precision*"],
+        }
+    )
+    live = {"integration_tests": {"bam_tests": [case]}}
 
     module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
+
+
+@pytest.mark.parametrize(
+    "parsed_results",
+    [
+        ["Kestrel Genotyping"],
+        ["Kestrel Genotyping", "Coverage Calculation"],
+        ["Coverage Calculation", "Kestrel Genotyping", "BAM Header Parsing"],
+    ],
+)
+def test_check_compatibility_rejects_incomplete_or_ordered_wrong_summary_results(parsed_results: list[str]) -> None:
+    """Catch live summary declarations that do not bind result-bearing steps exactly."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    case = _live_case(contract)
+    case["pipeline_summary_assertions"]["parsed_results"] = parsed_results
+    live = {"integration_tests": {"bam_tests": [case]}}
+
+    with pytest.raises(ValueError, match=r"pipeline_summary_assertions\.parsed_results must declare exactly"):
+        module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
 
 
 def test_check_compatibility_accepts_task5_cross_match_result_shape() -> None:
@@ -439,11 +636,15 @@ def test_check_compatibility_rejects_malformed_live_declarations(mutation: Any, 
         ("suite",),
         ("test_name",),
         ("inputs", 0, "path"),
+        ("inputs", 0, "md5"),
         ("reference", "assembly"),
         ("execution", "cli_options"),
         ("execution", "modules"),
+        ("routing", "selected_basenames"),
         ("artifacts", "required_present"),
+        ("artifacts", "archive"),
         ("outcomes", "kestrel", "Confidence", "value"),
+        ("outcomes", "kestrel", "Estimated_Depth_AlternateVariant", "value"),
         ("outcomes", "kestrel", "Confidence", "tolerance"),
     ],
 )
@@ -460,15 +661,25 @@ def test_check_compatibility_rejects_live_contract_mutation(path: tuple[object, 
     current = target[leaf]
     if isinstance(current, list):
         target[leaf] = [*current, "changed"]
+    elif isinstance(current, bool):
+        target[leaf] = not current
     elif current is None:
         target[leaf] = {"kind": "percentage", "value": 5}
     else:
         target[leaf] = f"changed-{current}"
     live = {"integration_tests": {live_contract["suite"]: [_live_case(live_contract)]}}
+    resources = _resources("tests/data/input.bam")
+    if path == ("inputs", 0, "md5"):
+        resources["file_resources"][0]["md5sum"] = "c" * 32
 
-    message = "unsupported" if path == ("suite",) else r"does not (?:resolve|match live declaration)"
+    if path == ("suite",):
+        message = "unsupported"
+    elif path == ("inputs", 0, "md5"):
+        message = "resource digest mismatch"
+    else:
+        message = r"does not (?:resolve|match live declaration)"
     with pytest.raises(ValueError, match=message):
-        module.check_compatibility(_manifest(contract), _manifest(contract), live, _resources("tests/data/input.bam"))
+        module.check_compatibility(_manifest(contract), _manifest(contract), live, resources)
 
 
 def test_check_compatibility_rejects_success_without_contract_and_accepts_append() -> None:
@@ -560,3 +771,40 @@ def test_bootstrap_seed_is_reconstructed_from_authoritative_git_history() -> Non
         module.validate_bootstrap_manifest(
             mutated_routing, historical, json.loads(Path("tests/test_data_config.json").read_text())
         )
+
+
+def test_final_manifest_activates_from_absent_base_without_mutating_historical_ten() -> None:
+    """The corrected pre-activation FASTQ draft must not weaken the authoritative bootstrap."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    historical = json.loads(
+        subprocess.run(
+            ["git", "show", f"{BOOTSTRAP_REVISION}:tests/test_data_config.json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    task5_base = json.loads(
+        subprocess.run(
+            ["git", "show", f"{TASK5_BASE_REVISION}:tests/compatibility/real_success_baseline.json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    manifest = json.loads(Path("tests/compatibility/real_success_baseline.json").read_text())
+    live = json.loads(Path("tests/test_data_config.json").read_text())
+    current_rows = {(row["suite"], row["test_name"]): row for row in manifest["contracts"]}
+    base_rows = {(row["suite"], row["test_name"]): row for row in task5_base["contracts"]}
+
+    assert {identity: current_rows[identity] for identity in BOOTSTRAP_IDENTITIES} == {
+        identity: base_rows[identity] for identity in BOOTSTRAP_IDENTITIES
+    }
+    assert current_rows[("fastq_tests", "example_6449_hg19_subset_single_fastq")]["routing"]["records"] == {
+        "r1": 0,
+        "r2": 0,
+        "other": 40203,
+        "single": 0,
+    }
+    module.check_compatibility(None, manifest, live, live, historical_test_config=historical)

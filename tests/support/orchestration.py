@@ -12,7 +12,6 @@ from tests.helpers import (
     COVERAGE_COLUMNS,
     assert_required_files,
     validate_advntr_output,
-    validate_coverage_output,
     validate_kestrel_output,
 )
 
@@ -243,36 +242,11 @@ def mixed_layout_diagnostic(test_case: dict, output_dir: Path) -> str:
     return f"FASTQ layout 'mixed' cannot be consumed without dropping reads. Produced FASTQs: {details}"
 
 
-def current_declared_failure_diagnostic_adapter(test_case: dict[str, Any]) -> tuple[str, ...]:
-    """Adapt only the current valid-mixed failure declarations to stable fragments.
-
-    Task 3 cannot change the live manifest while the production routing fix is developed
-    independently. Task 5 removes this seam when those declarations become successes.
-
-    Args:
-        test_case: Current live integration declaration.
-
-    Returns:
-        Stable causal and per-output count fragments expected in captured process output.
-
-    Raises:
-        ValueError: If the declaration is not one of the temporary nonzero mixed cases.
-    """
-    if test_case.get("expected_exit_code", 0) == 0 or "expected_mixed_fastq_records" not in test_case:
-        raise ValueError("temporary current-failure adapter accepts only nonzero mixed-read declarations")
-    counts = test_case["expected_mixed_fastq_records"]
-    fragments = ["FASTQ layout 'mixed' cannot be consumed without dropping reads."]
-    fragments.extend(f"{filename}: {counts[key]} records" for key, filename in _FASTQ_OUTPUTS)
-    return tuple(fragments)
-
-
 def _failure_diagnostic_fragments(test_case: dict[str, Any]) -> tuple[str, ...]:
     diagnostic = test_case.get("expected_diagnostic")
-    if diagnostic is not None:
-        if not isinstance(diagnostic, str) or not diagnostic:
-            raise ValueError("expected_diagnostic must be a non-empty string")
-        return (diagnostic,)
-    return current_declared_failure_diagnostic_adapter(test_case)
+    if not isinstance(diagnostic, str) or not diagnostic:
+        raise ValueError("expected_diagnostic must be a non-empty string")
+    return (diagnostic,)
 
 
 def _assert_expected_exit(
@@ -395,6 +369,16 @@ _STRICT_FASTQ_FIELDS = frozenset(
     }
 )
 _STRICT_ADVNTR_FIELDS = _STRICT_FASTQ_FIELDS | {"advntr_assertions", "cross_match_assertions"}
+_STRICT_CASE_FIELDS = _STRICT_FASTQ_FIELDS | {
+    "expected_absent",
+    "expected_fastq_records",
+    "expected_selected_fastqs",
+}
+_STRICT_ADVNTR_CASE_FIELDS = _STRICT_ADVNTR_FIELDS | {
+    "expected_absent",
+    "expected_fastq_records",
+    "expected_selected_fastqs",
+}
 _STRICT_KESTREL_FIELDS = frozenset(
     {
         "Confidence",
@@ -447,20 +431,83 @@ def _summary_steps(output_dir: Path) -> dict[str, Any]:
     return steps
 
 
+def _summary_expected_result(test_case: dict[str, Any], output_dir: Path, step: str) -> dict[str, str]:
+    """Read one result-bearing summary oracle from its independently checked TSV."""
+    paths = {
+        "Coverage Calculation": output_dir / "coverage" / "coverage_summary.tsv",
+        "Kestrel Genotyping": output_dir / "kestrel" / "kestrel_result.tsv",
+        "adVNTR Genotyping": output_dir / "advntr" / "output_adVNTR_result.tsv",
+        "Cross-Match Variant Comparison": output_dir / "advntr" / "cross_match_results.tsv",
+    }
+    expected = _read_tsv_row(paths[step])
+    if "cross_match_assertions" in test_case:
+        declared = test_case["cross_match_assertions"]
+        assert set(declared) == {"comments", "data"}, "cross_match_assertions fields differ"
+        assert isinstance(declared["comments"], list), "cross_match_assertions comments must be a list"
+        assert isinstance(declared["data"], list) and len(declared["data"]) == 1
+        cross_match = declared["data"][0]
+        assert isinstance(cross_match, dict), "cross_match_assertions data must contain one result object"
+        enrichment_fields = {
+            "Kestrel Genotyping": {
+                "Allele_Change": "Kestrel_Allele_Change",
+                "Variant_Type": "Kestrel_Variant_Type",
+            },
+            "adVNTR Genotyping": {
+                "Allele_Change": "Advntr_Allele_Change",
+                "Variant_Type": "Advntr_Variant_Type",
+            },
+        }
+        if step in enrichment_fields:
+            for summary_field, cross_match_field in enrichment_fields[step].items():
+                assert cross_match_field in cross_match, (
+                    f"cross_match_assertions missing summary enrichment field: {cross_match_field}"
+                )
+                expected[summary_field] = cross_match[cross_match_field]
+        elif step == "Cross-Match Variant Comparison":
+            assert declared["data"] == [expected], "Cross-Match Variant Comparison TSV differs from its declared oracle"
+    return expected
+
+
 def _assert_summary_values(test_case: dict[str, Any], output_dir: Path, *, advntr: bool) -> None:
     expected = test_case["pipeline_summary_assertions"]
     required = {"Coverage Calculation", "Kestrel Genotyping"}
     if advntr:
-        required.add("adVNTR Genotyping")
-    assert set(expected) == required, f"pipeline_summary_assertions must declare exactly {sorted(required)}"
+        required.update({"adVNTR Genotyping", "Cross-Match Variant Comparison"})
     steps = _summary_steps(output_dir)
-    for name, expected_result in expected.items():
-        assert name in steps, f"Pipeline summary is missing step: {name}"
-        assert steps[name] == expected_result, f"Pipeline summary step {name} differs"
-    if advntr:
-        cross_match = "Cross-Match Variant Comparison"
-        assert cross_match in steps, f"Pipeline summary is missing step: {cross_match}"
-        assert steps[cross_match] == test_case["cross_match_assertions"], f"Pipeline summary step {cross_match} differs"
+    assert isinstance(expected, dict), "pipeline_summary_assertions must be an explicit result contract"
+    assert set(expected) == {"steps", "parsed_results"}, (
+        "pipeline_summary_assertions must declare exactly steps and parsed_results"
+    )
+    expected_steps = expected["steps"]
+    parsed_results = expected["parsed_results"]
+    if (
+        not isinstance(expected_steps, list)
+        or not expected_steps
+        or not all(isinstance(name, str) and name for name in expected_steps)
+    ):
+        raise ValueError("pipeline_summary_assertions.steps must be a non-empty list of step names")
+    if not isinstance(parsed_results, list) or not all(isinstance(name, str) and name for name in parsed_results):
+        raise ValueError("pipeline_summary_assertions.parsed_results must be a list of step names")
+    assert list(steps) == expected_steps, (
+        f"Pipeline summary step sequence differs: expected {expected_steps}, got {list(steps)}"
+    )
+    expected_result_order = [name for name in expected_steps if name in required]
+    assert parsed_results == expected_result_order and set(parsed_results) == required, (
+        f"pipeline_summary_assertions.parsed_results must declare exactly {sorted(required)}"
+    )
+    for name in parsed_results:
+        parsed = steps[name]
+        assert isinstance(parsed, dict) and set(parsed) == {"comments", "data"}, (
+            f"Pipeline summary step {name} parsed_result must contain only comments and data"
+        )
+        assert isinstance(parsed["comments"], list), f"Pipeline summary step {name} comments must be a list"
+        expected_result = _summary_expected_result(test_case, output_dir, name)
+        data = parsed["data"]
+        assert isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict), (
+            f"Pipeline summary step {name} data must contain exactly one result object"
+        )
+        actual_result = data[0]
+        assert actual_result == expected_result, f"Pipeline summary step {name} parsed_result differs"
 
 
 def _assert_report_values(test_case: dict[str, Any], output_dir: Path) -> None:
@@ -545,30 +592,45 @@ def run_bam_test_case(
     if not success:
         return
 
-    if "expected_fastq_records" in test_case:
-        assert_read_set_routing(
-            captured,
-            expected_counts=test_case["expected_fastq_records"],
-            expected_selected=tuple(test_case["expected_selected_fastqs"]),
-        )
-
-    required_files = [
-        "summary_report.html",
-        "kestrel/kestrel_result.tsv",
-        "coverage/coverage_summary.tsv",
-        "pipeline_summary.json",
-    ]
-
-    if test_case.get("check_igv_report"):
-        required_files.append("igv_report.html")
-
-    assert_required_files(output_dir, required_files)
-
-    validate_kestrel_output(output_dir, test_case["kestrel_assertions"])
-    coverage_metrics = validate_coverage_output(output_dir)
-    assert coverage_metrics["mean_cov"] >= 0, "Coverage mean should be non-negative"
+    _require_oracle_fields(test_case, _STRICT_CASE_FIELDS)
+    assert_read_set_routing(
+        captured,
+        expected_counts=test_case["expected_fastq_records"],
+        expected_selected=tuple(test_case["expected_selected_fastqs"]),
+    )
+    validate_strict_fastq_success(test_case, output_dir)
     assert_declared_artifacts(test_case, output_dir)
-    assert_declared_archive(test_case, output_dir)
+
+
+def run_cram_test_case(
+    test_case: dict,
+    runner: Callable[[PipelineRequest], PipelineRunResult],
+    output_dir: Path,
+) -> None:
+    """Run and validate one CRAM case identically across transports.
+
+    Args:
+        test_case: Test configuration from ``test_data_config.json``.
+        runner: Typed local or Docker runner.
+        output_dir: Per-case output directory.
+
+    Raises:
+        AssertionError: If any declared outcome differs.
+        ValueError: If the strict success declaration is incomplete.
+    """
+    request = _request_from_case(test_case, "cram", (Path(test_case["cram"]),), output_dir)
+    result = runner(request)
+    success, captured = _assert_expected_exit(test_case, result, label="CRAM")
+    if not success:
+        return
+    _require_oracle_fields(test_case, _STRICT_CASE_FIELDS)
+    assert_read_set_routing(
+        captured,
+        expected_counts=test_case["expected_fastq_records"],
+        expected_selected=tuple(test_case["expected_selected_fastqs"]),
+    )
+    validate_strict_fastq_success(test_case, output_dir)
+    assert_declared_artifacts(test_case, output_dir)
 
 
 def run_advntr_test_case(
@@ -606,22 +668,14 @@ def run_advntr_test_case(
     if not success:
         return
 
-    if "expected_fastq_records" in test_case:
-        assert_read_set_routing(
-            captured,
-            expected_counts=test_case["expected_fastq_records"],
-            expected_selected=tuple(test_case["expected_selected_fastqs"]),
-        )
-
-    required_files = [
-        "summary_report.html",
-        "kestrel/kestrel_result.tsv",
-        "advntr/output_adVNTR_result.tsv",  # adVNTR outputs go in advntr/ subdirectory
-    ]
-    assert_required_files(output_dir, required_files)
-
-    validate_advntr_output(output_dir, test_case["advntr_assertions"])
-    assert_declared_archive(test_case, output_dir)
+    _require_oracle_fields(test_case, _STRICT_ADVNTR_CASE_FIELDS)
+    assert_read_set_routing(
+        captured,
+        expected_counts=test_case["expected_fastq_records"],
+        expected_selected=tuple(test_case["expected_selected_fastqs"]),
+    )
+    validate_strict_advntr_success(test_case, output_dir)
+    assert_declared_artifacts(test_case, output_dir)
 
 
 def run_fastq_test_case(
@@ -650,9 +704,13 @@ def run_fastq_test_case(
     )
 
     result = runner(request)
-    success, _captured = _assert_expected_exit(test_case, result, label="FASTQ")
+    success, captured = _assert_expected_exit(test_case, result, label="FASTQ")
     assert success, "FASTQ declarations currently require a successful outcome"
-
-    expected_files = test_case.get("expected_files", [])
-    if expected_files:
-        assert_required_files(output_dir, expected_files)
+    _require_oracle_fields(test_case, _STRICT_CASE_FIELDS)
+    assert_read_set_routing(
+        captured,
+        expected_counts=test_case["expected_fastq_records"],
+        expected_selected=tuple(test_case["expected_selected_fastqs"]),
+    )
+    validate_strict_fastq_success(test_case, output_dir)
+    assert_declared_artifacts(test_case, output_dir)

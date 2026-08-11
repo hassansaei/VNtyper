@@ -63,7 +63,7 @@ _CONTRACT_KEYS = {
     "provenance_commit",
 }
 _INPUT_KEYS = {"path", "md5", "record_digest"}
-_FIXTURE_KEYS = {"name", "kind", "source_path", "output_path", "recipe_digest"}
+_FIXTURE_KEYS = {"name", "kind", "source_path", "output_path", "record_digest", "recipe_digest"}
 _REFERENCE_KEYS = {"assembly", "path", "sha256"}
 _EXECUTION_KEYS = {"threads", "log_level", "cli_options", "modules"}
 _ROUTING_KEYS = {"records", "selected_basenames"}
@@ -93,9 +93,22 @@ _CROSS_MATCH_FIELDS = {
     "Advntr_Variant_Type",
     "Match",
 }
+_COVERAGE_FIELDS = {
+    "mean",
+    "median",
+    "stdev",
+    "min",
+    "max",
+    "region_length",
+    "uncovered_bases",
+    "percent_uncovered",
+    "coverage_qc",
+}
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _MD5_RE = re.compile(r"[0-9a-f]{32}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_REAL_CRAM_PURPOSE_KEY = "issue_233_real_cram_contract"
+_REAL_CRAM_PATH_KEYS = frozenset({"original_derived_b178", "reference_compressed_b178", "remapped_pure_paired_b178"})
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:
@@ -198,6 +211,17 @@ def _reference_digests(resource_config: dict[str, Any]) -> dict[str, str]:
         if normalized_path in result and result[normalized_path] != digest:
             raise ValueError(f"resource config has inconsistent reference digests for {normalized_path}")
         result[normalized_path] = digest
+    cram_contract = resource_config.get("purpose_fixtures", {}).get(_REAL_CRAM_PURPOSE_KEY, {})
+    if isinstance(cram_contract, dict):
+        path = cram_contract.get("reference_fasta")
+        digest = cram_contract.get("reference_sha256")
+        if isinstance(path, str) and isinstance(digest, str):
+            normalized_path = _relative_path(path, "real CRAM contract reference_fasta")
+            if _SHA256_RE.fullmatch(digest) is None:
+                raise ValueError(
+                    f"real CRAM contract reference digest for {normalized_path} must be a lowercase SHA-256"
+                )
+            result[normalized_path] = digest
     return result
 
 
@@ -256,12 +280,30 @@ def _validate_fixture(value: object, label: str, resource_config: dict[str, Any]
     for key in ("name", "kind"):
         _string(fixture[key], f"{label}.{key}")
     source = _relative_path(fixture["source_path"], f"{label}.source_path")
-    _relative_path(fixture["output_path"], f"{label}.output_path")
+    output = _relative_path(fixture["output_path"], f"{label}.output_path")
     if source not in input_paths:
         raise ValueError(f"{label}.source_path must identify a contract input")
     digest = fixture["recipe_digest"]
     if not isinstance(digest, str) or _SHA256_RE.fullmatch(digest) is None:
         raise ValueError(f"{label}.recipe_digest must be a lowercase SHA-256")
+    record_digest = fixture["record_digest"]
+    if record_digest is not None:
+        if not isinstance(record_digest, str) or _SHA256_RE.fullmatch(record_digest) is None:
+            raise ValueError(f"{label}.record_digest must be a lowercase SHA-256 or null")
+        if fixture["kind"] not in {"no_ref_cram", "reference_compressed_cram"} or not output.endswith(".cram"):
+            raise ValueError(f"{label} has an unsupported generated CRAM identity")
+        declared = resource_config.get("purpose_fixtures", {}).get(_REAL_CRAM_PURPOSE_KEY, {})
+        registered_paths = (
+            {declared[key] for key in _REAL_CRAM_PATH_KEYS if isinstance(declared.get(key), str)}
+            if isinstance(declared, dict)
+            else set()
+        )
+        if output not in registered_paths:
+            raise ValueError(f"{label} does not match a registered CRAM purpose fixture")
+        recipe = {key: item for key, item in fixture.items() if key != "recipe_digest"}
+        if _fixture_recipe_digest(recipe) != digest:
+            raise ValueError(f"{label} fixture recipe digest mismatch")
+        return
     matches = [
         item
         for item in resource_config.get("derived_fixtures", [])
@@ -272,8 +314,8 @@ def _validate_fixture(value: object, label: str, resource_config: dict[str, Any]
     registered = matches[0]
     if registered.get("kind") != fixture["kind"] or registered.get("source_bam") != source:
         raise ValueError(f"{label} does not match registered fixture identity")
-    output = registered.get("output_bam") or registered.get("output_cram")
-    if output != fixture["output_path"]:
+    registered_output = registered.get("output_bam") or registered.get("output_cram")
+    if registered_output != fixture["output_path"]:
         raise ValueError(f"{label} does not match registered fixture output")
     if _fixture_recipe_digest(registered) != digest:
         raise ValueError(f"{label} fixture recipe digest mismatch")
@@ -481,15 +523,28 @@ def _split_options(case: dict[str, Any], suite: str) -> tuple[list[str], list[st
     return normalized, sorted(modules)
 
 
-def _live_fixture(case: dict[str, Any], resource_config: dict[str, Any]) -> dict[str, str] | None:
+def _live_fixture(case: dict[str, Any], resource_config: dict[str, Any]) -> dict[str, str | None] | None:
     fixture_name = case.get("fixture_name")
-    if fixture_name is None:
+    if fixture_name is not None:
+        matches = [
+            item
+            for item in resource_config.get("derived_fixtures", [])
+            if isinstance(item, dict) and item.get("name") == fixture_name
+        ]
+    elif isinstance(case.get("cram"), str) and isinstance(case.get("source_bam"), str):
+        declared = resource_config.get("purpose_fixtures", {}).get(_REAL_CRAM_PURPOSE_KEY, {})
+        if not isinstance(declared, dict) or case["cram"] not in declared.values():
+            return None
+        fixture = {
+            "name": str(case.get("test_name")),
+            "kind": "reference_compressed_cram" if case.get("reference_fasta") is not None else "no_ref_cram",
+            "source_path": case["source_bam"],
+            "output_path": case["cram"],
+            "record_digest": str(case.get("fixture_record_digest")),
+        }
+        return {**fixture, "recipe_digest": _fixture_recipe_digest(fixture)}
+    else:
         return None
-    matches = [
-        item
-        for item in resource_config.get("derived_fixtures", [])
-        if isinstance(item, dict) and item.get("name") == fixture_name
-    ]
     if len(matches) != 1:
         return None
     registered = matches[0]
@@ -502,6 +557,7 @@ def _live_fixture(case: dict[str, Any], resource_config: dict[str, Any]) -> dict
         "kind": str(registered.get("kind")),
         "source_path": source,
         "output_path": output,
+        "record_digest": None,
         "recipe_digest": _fixture_recipe_digest(registered),
     }
 
@@ -509,11 +565,14 @@ def _live_fixture(case: dict[str, Any], resource_config: dict[str, Any]) -> dict
 def _live_inputs(case: dict[str, Any], suite: str, resource_config: dict[str, Any]) -> list[str]:
     if suite == "fastq_tests":
         return [case[key] for key in ("fastq1", "fastq2") if isinstance(case.get(key), str) and case[key]]
+    if suite == "cram_tests":
+        return [case["source_bam"]] if isinstance(case.get("source_bam"), str) and case["source_bam"] else []
     for key in ("bam", "cram"):
         if isinstance(case.get(key), str):
             return [case[key]]
     fixture = _live_fixture(case, resource_config)
-    return [fixture["source_path"]] if fixture else []
+    source = fixture.get("source_path") if fixture else None
+    return [source] if isinstance(source, str) else []
 
 
 def _historical_artifacts(case: dict[str, Any], suite: str) -> list[str]:
@@ -536,6 +595,22 @@ def _historical_artifacts(case: dict[str, Any], suite: str) -> list[str]:
     return defaults
 
 
+def _validate_live_summary_contract(value: object, label: str, *, advntr: bool) -> None:
+    """Validate the ordered steps and exact result-bearing summary steps."""
+    summary = _mapping(value, label)
+    _exact_keys(summary, {"steps", "parsed_results"}, label)
+    steps = _string_list(summary["steps"], f"{label}.steps")
+    if not steps:
+        raise ValueError(f"{label}.steps must not be empty")
+    parsed_results = _string_list(summary["parsed_results"], f"{label}.parsed_results")
+    required = {"Coverage Calculation", "Kestrel Genotyping"}
+    if advntr:
+        required.update({"adVNTR Genotyping", "Cross-Match Variant Comparison"})
+    expected_order = [step for step in steps if step in required]
+    if parsed_results != expected_order or set(parsed_results) != required:
+        raise ValueError(f"{label}.parsed_results must declare exactly {sorted(required)} in step order")
+
+
 def _validate_live_success(case: dict[str, Any], suite: str) -> None:
     label = f"live case {case.get('test_name')}"
     _integer(case.get("threads"), f"{label} threads", positive=True)
@@ -545,6 +620,12 @@ def _validate_live_success(case: dict[str, Any], suite: str) -> None:
         _relative_path(case.get("fastq1"), f"{label} fastq1")
         if case.get("fastq2") not in (None, ""):
             _relative_path(case["fastq2"], f"{label} fastq2")
+    elif suite == "cram_tests":
+        _relative_path(case.get("cram"), f"{label} cram")
+        _relative_path(case.get("source_bam"), f"{label} source_bam")
+        record_digest = case.get("fixture_record_digest")
+        if not isinstance(record_digest, str) or _SHA256_RE.fullmatch(record_digest) is None:
+            raise ValueError(f"{label} fixture_record_digest must be a lowercase SHA-256")
     elif "fixture_name" in case:
         _string(case.get("fixture_name"), f"{label} fixture_name")
     else:
@@ -571,6 +652,17 @@ def _validate_live_success(case: dict[str, Any], suite: str) -> None:
     _string_list(case.get("expected_absent"), f"{label} expected_absent", paths=True)
     if not isinstance(case.get("expected_archive"), bool):
         raise ValueError(f"{label} expected_archive must be a Boolean")
+    coverage = _mapping(case.get("coverage_assertions"), f"{label} coverage_assertions")
+    if set(coverage) != _COVERAGE_FIELDS or not all(isinstance(value, str) for value in coverage.values()):
+        raise ValueError(f"{label} coverage_assertions must declare every serialized coverage field")
+    _validate_live_summary_contract(
+        case.get("pipeline_summary_assertions"),
+        f"{label} pipeline_summary_assertions",
+        advntr="advntr" in modules,
+    )
+    report = _string_list(case.get("report_assertions"), f"{label} report_assertions")
+    if not report:
+        raise ValueError(f"{label} report_assertions must not be empty")
     kestrel = _assertions_from_live(case.get("kestrel_assertions"))
     if set(kestrel) != _KESTREL_FIELDS:
         raise ValueError(f"{label} must declare complete Kestrel fields")

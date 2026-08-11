@@ -196,6 +196,25 @@ jobs:
       - name: Run unit tests with coverage floor
         run: make test-unit-cov
 
+      - name: Check real integration compatibility
+        if: matrix.python-version == '3.12'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) BASE_REVISION="origin/$PR_BASE_REF" ;;
+            push) BASE_REVISION="$PUSH_BEFORE" ;;
+            *) echo "Unsupported compatibility event: $EVENT_NAME" >&2; exit 1 ;;
+          esac
+          if [ -z "$BASE_REVISION" ]; then
+            echo "Compatibility base revision is empty" >&2
+            exit 1
+          fi
+          make check-integration-compatibility INTEGRATION_COMPAT_BASE="$BASE_REVISION"
+
       # Patch coverage: at least 80% of the lines THIS PR CHANGED must be covered.
       #
       # This is the step that makes AGENTS.md rule 1 ("touch a file, add tests for it")

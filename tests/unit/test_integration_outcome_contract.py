@@ -1,4 +1,4 @@
-"""Pure checks for integration cases that intentionally fail closed on mixed reads."""
+"""Pure checks for strict, value-bearing real-integration outcome declarations."""
 
 from pathlib import Path
 from typing import Any
@@ -6,13 +6,15 @@ from unittest import mock
 
 import pytest
 
+from tests import parametrization
+from tests.integration import test_pipeline_integration as local_integration
 from tests.parametrization import get_advntr_test_cases, get_bam_test_cases, get_fastq_test_cases, load_test_config
 from tests.support import orchestration
 
 pytestmark = pytest.mark.unit
 
 
-EXPECTED_MIXED_COUNTS = {
+EXPECTED_BAM_ROUTING = {
     "example_b178_hg19_subset_fast": (14_690, 14_690, 0, 1),
     "example_a5c1_hg19_subset_fast": (20_888, 20_888, 0, 3),
     "example_66bf_hg19_subset_fast": (19_841, 19_841, 0, 3),
@@ -22,7 +24,8 @@ EXPECTED_MIXED_COUNTS = {
     "example_dfc3_GRCh38_fast": (31_603, 31_603, 0, 2),
     "example_dfc3_hg38_ensembl_fast": (31_603, 31_603, 0, 2),
     "example_40cf_hg38_subset_fast_gdp_guard": (3_474, 3_474, 0, 93),
-    "example_a5c1_hg19_subset_advntr": (20_888, 20_888, 0, 3),
+    "example_b178_hg19_subset_default": (16_929, 16_929, 0, 1),
+    "example_40cf_hg38_subset_default": (19_492, 19_492, 0, 93),
 }
 
 
@@ -31,24 +34,31 @@ def _negative_case() -> dict[str, Any]:
         "bam": "fixture.bam",
         "reference_assembly": "hg19",
         "expected_exit_code": 1,
+        "expected_diagnostic": "mate outputs are inconsistent",
         "expected_mixed_fastq_records": {"r1": 7, "r2": 7, "other": 0, "single": 1},
     }
 
 
 def _negative_result() -> orchestration.PipelineRunResult:
-    diagnostic = "\n".join(orchestration.current_declared_failure_diagnostic_adapter(_negative_case()))
-    return orchestration.PipelineRunResult(1, "", diagnostic)
+    return orchestration.PipelineRunResult(1, "", "mate outputs are inconsistent")
 
 
-def test_every_known_mixed_fixture_declares_exit_one_and_its_exact_record_counts() -> None:
-    """The ten measured mixed fixtures must be explicit rather than silently treated as successes."""
+def test_every_bam_fixture_is_a_real_success_with_exact_measured_routing() -> None:
+    """Catch restoring the temporary mixed-layout refusal or losing default-mode controls."""
     configured = {}
-    for case in [*get_bam_test_cases(), *get_advntr_test_cases()]:
-        if case.get("expected_exit_code") == 1:
-            counts = case["expected_mixed_fastq_records"]
-            configured[case["test_name"]] = (counts["r1"], counts["r2"], counts["other"], counts["single"])
+    for case in get_bam_test_cases():
+        assert case["expected_exit_code"] == 0
+        assert case["threads"] == 2
+        assert case["log_level"] == "DEBUG"
+        counts = case["expected_fastq_records"]
+        configured[case["test_name"]] = (counts["r1"], counts["r2"], counts["other"], counts["single"])
+        assert case["expected_selected_fastqs"] == [
+            "output_R1.fastq.gz",
+            "output_R2.fastq.gz",
+            "output_single.fastq.gz",
+        ]
 
-    assert configured == EXPECTED_MIXED_COUNTS
+    assert configured == EXPECTED_BAM_ROUTING
 
 
 def test_declared_failures_do_not_retain_unreachable_success_expectations() -> None:
@@ -78,42 +88,71 @@ def test_clean_remapped_paired_bam_retains_a_real_advntr_success_contract() -> N
     """MED11: early-return negative tests cannot replace downstream paired/adVNTR proof."""
     successful = [case for case in get_advntr_test_cases() if case.get("expected_exit_code", 0) == 0]
 
-    assert successful == [
-        {
-            "test_name": "example_b178_hg19_bwa_advntr",
-            "bam": "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam",
-            "reference_assembly": "hg19",
-            "cli_options": [
-                "--fast-mode",
-                "--keep-intermediates",
-                "--extra-modules",
-                "advntr",
-                "--advntr-max-coverage",
-                "300",
-            ],
-            "advntr_assertions": {
-                "VID": "25561",
-                "State": "I22_4_G_LEN1",
-                "NumberOfSupportingReads": 39,
-                "MeanCoverage": {"value": 70.3333333333, "tolerance_percentage": 10},
-                "Pvalue": {"value": 5.774455097259999e-59, "log10_tolerance": 2},
-            },
-        }
+    assert [case["test_name"] for case in successful] == [
+        "example_a5c1_hg19_subset_advntr",
+        "example_b178_hg19_bwa_advntr",
     ]
+    case = successful[1]
+    assert case["bam"] == "tests/data/remapped/bwa/hg19/example_b178_hg19_bwa.bam"
+    assert case["expected_fastq_records"] == {"r1": 14689, "r2": 14689, "other": 0, "single": 0}
+    assert case["expected_selected_fastqs"] == ["output_R1.fastq.gz", "output_R2.fastq.gz"]
+    assert case["advntr_assertions"] == {
+        "VID": "25561",
+        "State": "I22_4_G_LEN1",
+        "NumberOfSupportingReads": 39,
+        "MeanCoverage": {"value": 70.3333333333, "tolerance_percentage": 10},
+        "Pvalue": {"value": 5.774455097259999e-59, "log10_tolerance": 2},
+    }
 
 
 def test_direct_single_fastq_has_an_end_to_end_integration_contract() -> None:
     """A-161-3 must exercise the single-input fastp/BWA/Kestrel path, not only argument parsing."""
     single_fastq_cases = [case for case in get_fastq_test_cases() if not case.get("fastq2")]
 
-    assert single_fastq_cases == [
-        {
-            "test_name": "example_6449_hg19_subset_single_fastq",
-            "fastq1": "tests/data/example_6449_hg19_subset_R1.fastq.gz",
-            "reference_assembly": "hg19",
-            "expected_files": ["summary_report.html", "kestrel/kestrel_result.tsv"],
-        }
-    ]
+    assert len(single_fastq_cases) == 1
+    case = single_fastq_cases[0]
+    assert case["test_name"] == "example_6449_hg19_subset_single_fastq"
+    assert case["fastq1"] == "tests/data/example_6449_hg19_subset_R1.fastq.gz"
+    assert case["expected_fastq_records"] == {"r1": 0, "r2": 0, "other": 40203, "single": 0}
+    assert case["expected_selected_fastqs"] == ["output_other.fastq.gz"]
+    assert case["kestrel_assertions"]["Depth_Score"] == {"value": 0.15457227138643068, "tolerance_percentage": 0}
+    assert case["coverage_assertions"] == {
+        "mean": "2255.56",
+        "median": "1613.00",
+        "stdev": "1575.22",
+        "min": "216",
+        "max": "6110",
+        "region_length": "1501",
+        "uncovered_bases": "0",
+        "percent_uncovered": "0.00",
+        "coverage_qc": "PASS",
+    }
+
+
+def test_paired_shark_fastq_has_the_deterministic_post_dedup_contract() -> None:
+    """Pin the exact SHARK output after deduplicating fastp was made deterministic."""
+    case = {case["test_name"]: case for case in get_fastq_test_cases()}["example_6449_hg19_subset_fastq_shark"]
+
+    assert case["expected_fastq_records"] == {"r1": 40954, "r2": 40954, "other": 0, "single": 0}
+    assert case["coverage_assertions"] == {
+        "mean": "3709.29",
+        "median": "4138.00",
+        "stdev": "1704.10",
+        "min": "222",
+        "max": "6803",
+        "region_length": "1501",
+        "uncovered_bases": "0",
+        "percent_uncovered": "0.00",
+        "coverage_qc": "PASS",
+    }
+
+
+def test_fastq_cases_name_the_exact_quality_control_summary_step() -> None:
+    """Catch the display-name shorthand that never appears in pipeline_summary.json."""
+    for case in get_fastq_test_cases():
+        steps = case["pipeline_summary_assertions"]["steps"]
+        assert "FASTQ Quality Control" in steps
+        assert "FASTQ QC" not in steps
 
 
 def test_alternate_paired_fastq_uses_b178_and_omits_shark() -> None:
@@ -124,19 +163,57 @@ def test_alternate_paired_fastq_uses_b178_and_omits_shark() -> None:
     assert case["fastq2"] == "tests/data/example_b178_hg19_subset_R2.fastq.gz"
     assert case["reference_assembly"] == "hg19"
     assert case["expected_files"] == ["summary_report.html", "kestrel/kestrel_result.tsv"]
-    runner = mock.Mock(return_value=orchestration.PipelineRunResult(0, "", ""))
-    with mock.patch.object(orchestration, "assert_required_files"):
+    assert case["coverage_assertions"] == {
+        "mean": "566.90",
+        "median": "573.00",
+        "stdev": "299.18",
+        "min": "21",
+        "max": "1062",
+        "region_length": "1501",
+        "uncovered_bases": "0",
+        "percent_uncovered": "0.00",
+        "coverage_qc": "PASS",
+    }
+    routing = 'READ_SET_ROUTING {"counts":{"other":0,"r1":11452,"r2":11452,"single":0},"layout":"paired","selected":["output_R1.fastq.gz","output_R2.fastq.gz"]}'
+    runner = mock.Mock(return_value=orchestration.PipelineRunResult(0, "", routing))
+    with (
+        mock.patch.object(orchestration, "validate_strict_fastq_success"),
+        mock.patch.object(orchestration, "assert_declared_artifacts"),
+    ):
         orchestration.run_fastq_test_case(case, runner, Path("output"))
     request = runner.call_args.args[0]
     assert isinstance(request, orchestration.PipelineRequest)
     assert request.cli_options == ()
 
 
+def test_local_runner_uses_the_current_worktree_module_not_an_ambient_console_script(tmp_path: Path) -> None:
+    """Catch an editable install from another worktree silently executing stale pipeline code."""
+    request = orchestration.PipelineRequest(
+        input_kind="bam",
+        input_paths=(Path("tests/data/input.bam"),),
+        reference_assembly="hg19",
+        output_dir=tmp_path,
+        threads=2,
+        log_level="DEBUG",
+        cli_options=(),
+        reference_fasta=None,
+    )
+    completed = __import__("subprocess").CompletedProcess([], 0, "stdout", "stderr")
+
+    with mock.patch.object(local_integration, "_run_cli", return_value=completed) as run_cli:
+        result = local_integration._run_local_pipeline(request)
+
+    argv = run_cli.call_args.args[0]
+    assert argv[:3] == [__import__("sys").executable, "-m", "vntyper.cli"]
+    assert argv[3:] == orchestration.build_pipeline_argv(request, str)[1:]
+    assert result == orchestration.PipelineRunResult(0, "stdout", "stderr")
+
+
 def test_single_end_keep_case_names_the_real_unmapped_artifact() -> None:
     cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
     keep = cases["example_b178_hg19_single_end_keep"]
     assert keep["cli_options"] == ["--keep-intermediates"]
-    assert keep["expected_present"] == ["fastq_bam_processing/output_unmapped.bam"]
+    assert "fastq_bam_processing/output_unmapped.bam" in keep["expected_files"]
     assert keep["expected_archive"] is False
 
 
@@ -152,6 +229,28 @@ def test_single_end_cases_declare_the_negative_matrix_after_keep() -> None:
     assert cases["example_b178_hg19_single_end_delete_overrides_keep"]["expected_absent"] == [artifact]
     assert cases["example_b178_hg19_single_end_archive"]["cli_options"] == ["--archive-results"]
     assert cases["example_b178_hg19_single_end_archive"]["expected_archive"] is True
+
+
+def test_single_end_fast_and_default_cases_pin_their_distinct_measured_read_sets() -> None:
+    """Catch copying the default-mode oracle onto the smaller fast-mode region slice."""
+    cases = {case["test_name"]: case for case in load_test_config()["integration_tests"]["single_end_bam_tests"]}
+    fast = cases["example_b178_hg19_single_end"]
+    default = cases["example_b178_hg19_single_end_keep"]
+
+    assert fast["expected_fastq_records"] == {"r1": 0, "r2": 0, "other": 14683, "single": 0}
+    assert fast["kestrel_assertions"] == {
+        "Estimated_Depth_AlternateVariant": {"value": 414, "tolerance_percentage": 5},
+        "Estimated_Depth_Variant_ActiveRegion": {"value": 6111, "tolerance_percentage": 5},
+        "Depth_Score": {"value": 0.0677466863033873, "tolerance_percentage": 5},
+        "Confidence": "High_Precision*",
+    }
+    assert default["expected_fastq_records"] == {"r1": 0, "r2": 0, "other": 16922, "single": 0}
+    assert default["kestrel_assertions"] == {
+        "Estimated_Depth_AlternateVariant": {"value": 416, "tolerance_percentage": 5},
+        "Estimated_Depth_Variant_ActiveRegion": {"value": 6168, "tolerance_percentage": 5},
+        "Depth_Score": {"value": 0.06744487678339818, "tolerance_percentage": 5},
+        "Confidence": "High_Precision*",
+    }
 
 
 def test_mixed_layout_diagnostic_renders_the_exact_dynamic_paths_and_counts(tmp_path: Path) -> None:
@@ -246,22 +345,22 @@ def test_declared_absence_rejects_a_dangling_symlink_entry(tmp_path: Path) -> No
 
 
 def test_successful_bam_enforces_declared_artifacts(tmp_path: Path) -> None:
-    case = {
-        "test_name": "bam-artifact",
-        "bam": "clean.bam",
-        "reference_assembly": "hg19",
-        "kestrel_assertions": {},
-        "expected_present": ["must-exist.txt"],
-    }
+    case = dict(get_bam_test_cases()[0])
+    case.update(test_name="bam-artifact", expected_present=["must-exist.txt"])
+    counts = case["expected_fastq_records"]
+    selected = case["expected_selected_fastqs"]
+    routing = "READ_SET_ROUTING " + __import__("json").dumps(
+        {"counts": counts, "layout": "mixed", "selected": selected},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     with (
-        mock.patch.object(orchestration, "assert_required_files"),
-        mock.patch.object(orchestration, "validate_kestrel_output"),
-        mock.patch.object(orchestration, "validate_coverage_output", return_value={"mean_cov": 0}),
+        mock.patch.object(orchestration, "validate_strict_fastq_success"),
         pytest.raises(AssertionError, match="case=bam-artifact field=expected_present"),
     ):
         orchestration.run_bam_test_case(
             case,
-            mock.Mock(return_value=orchestration.PipelineRunResult(0, "", "")),
+            mock.Mock(return_value=orchestration.PipelineRunResult(0, "", routing)),
             tmp_path,
         )
 
@@ -310,9 +409,8 @@ def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifac
     runner = mock.Mock(return_value=_negative_result())
 
     with (
-        mock.patch.object(orchestration, "assert_required_files") as required_files,
-        mock.patch.object(orchestration, "validate_kestrel_output") as kestrel,
-        mock.patch.object(orchestration, "validate_coverage_output") as coverage,
+        mock.patch.object(orchestration, "validate_strict_fastq_success") as strict_success,
+        mock.patch.object(orchestration, "assert_declared_artifacts") as declared_artifacts,
     ):
         orchestration.run_bam_test_case(case, runner, tmp_path)
 
@@ -320,9 +418,8 @@ def test_bam_orchestration_accepts_the_declared_exit_one_without_success_artifac
     assert isinstance(request, orchestration.PipelineRequest)
     assert request.input_paths == (Path("fixture.bam"),)
     assert request.output_dir == tmp_path
-    required_files.assert_not_called()
-    kestrel.assert_not_called()
-    coverage.assert_not_called()
+    strict_success.assert_not_called()
+    declared_artifacts.assert_not_called()
 
 
 def test_advntr_orchestration_accepts_the_declared_exit_one_without_success_artifact_checks(tmp_path: Path) -> None:
@@ -354,3 +451,171 @@ def test_clean_bam_cases_still_require_exit_zero(tmp_path: Path) -> None:
             mock.Mock(return_value=orchestration.PipelineRunResult(1, "", "")),
             tmp_path,
         )
+
+
+@pytest.mark.parametrize(
+    ("runner_name", "case"),
+    [
+        (
+            "run_bam_test_case",
+            {"test_name": "bam", "bam": "sample.bam", "reference_assembly": "hg19"},
+        ),
+        (
+            "run_fastq_test_case",
+            {"test_name": "fastq", "fastq1": "reads.fastq.gz", "reference_assembly": "hg19"},
+        ),
+        (
+            "run_advntr_test_case",
+            {"test_name": "advntr", "bam": "sample.bam", "reference_assembly": "hg19"},
+        ),
+    ],
+)
+def test_every_success_runner_rejects_a_missing_strict_oracle(
+    tmp_path: Path, runner_name: str, case: dict[str, Any]
+) -> None:
+    """Catch a transport-specific success path bypassing the shared strict schema."""
+    runner = getattr(orchestration, runner_name)
+
+    with pytest.raises(ValueError, match="missing strict oracle field"):
+        runner(case, lambda _request: orchestration.PipelineRunResult(0, "", ""), tmp_path)
+
+
+def test_cram_parametrization_and_runner_preserve_the_exact_request(tmp_path: Path) -> None:
+    """Catch CRAM declarations being absent or translated outside PipelineRequest."""
+    cases = parametrization.get_cram_test_cases()
+    assert parametrization.get_cram_test_ids() == [case["test_name"] for case in cases]
+    case = {
+        "test_name": "cram-case",
+        "cram": "tests/data/cram/sample.cram",
+        "reference_assembly": "hg19",
+        "reference_fasta": "reference/alignment/chr1.hg19.fa",
+        "threads": 2,
+        "log_level": "DEBUG",
+        "cli_options": ["--fast-mode"],
+    }
+    received: list[orchestration.PipelineRequest] = []
+
+    def runner(request: orchestration.PipelineRequest) -> orchestration.PipelineRunResult:
+        received.append(request)
+        return orchestration.PipelineRunResult(0, "", "")
+
+    with pytest.raises(ValueError, match="missing strict oracle field"):
+        orchestration.run_cram_test_case(case, runner, tmp_path)
+
+    assert received == [
+        orchestration.PipelineRequest(
+            input_kind="cram",
+            input_paths=(Path("tests/data/cram/sample.cram"),),
+            reference_assembly="hg19",
+            output_dir=tmp_path,
+            threads=2,
+            log_level="DEBUG",
+            cli_options=("--fast-mode",),
+            reference_fasta=Path("reference/alignment/chr1.hg19.fa"),
+        )
+    ]
+
+
+def test_nonzero_case_requires_an_explicit_causal_diagnostic(tmp_path: Path) -> None:
+    """Catch retaining the temporary adapter after valid mixed cases become successes."""
+    case = _negative_case()
+    case.pop("expected_diagnostic")
+    diagnostic = "\n".join(
+        [
+            "FASTQ layout 'mixed' cannot be consumed without dropping reads.",
+            "output_R1.fastq.gz: 7 records",
+            "output_R2.fastq.gz: 7 records",
+            "output_other.fastq.gz: 0 records",
+            "output_single.fastq.gz: 1 records",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="expected_diagnostic"):
+        orchestration.run_bam_test_case(
+            case,
+            lambda _request: orchestration.PipelineRunResult(1, "", diagnostic),
+            tmp_path,
+        )
+
+
+def test_summary_step_list_is_an_exact_stable_oracle(tmp_path: Path) -> None:
+    """Catch dropping, reordering, or requiring volatile timestamps in summary validation."""
+    summary = {
+        "steps": [
+            {"step": "BAM Header Parsing", "parsed_result": {"date": "volatile"}},
+            {
+                "step": "Coverage Calculation",
+                "parsed_result": {"comments": [], "data": [{"mean": "878.21"}]},
+            },
+            {
+                "step": "Kestrel Genotyping",
+                "parsed_result": {"comments": ["volatile"], "data": [{"mean": "878.21"}]},
+            },
+        ]
+    }
+    (tmp_path / "pipeline_summary.json").write_text(__import__("json").dumps(summary), encoding="utf-8")
+    case: dict[str, Any] = {
+        "pipeline_summary_assertions": {
+            "steps": ["BAM Header Parsing", "Coverage Calculation", "Kestrel Genotyping"],
+            "parsed_results": ["Coverage Calculation", "Kestrel Genotyping"],
+        },
+        "coverage_assertions": {"mean": "878.21"},
+    }
+
+    with mock.patch.object(
+        orchestration,
+        "_summary_expected_result",
+        return_value={"mean": "878.21"},
+        create=True,
+    ):
+        orchestration._assert_summary_values(case, tmp_path, advntr=False)
+    case["pipeline_summary_assertions"]["steps"] = ["Coverage Calculation", "Kestrel Genotyping"]
+    with pytest.raises(AssertionError, match="step sequence"):
+        orchestration._assert_summary_values(case, tmp_path, advntr=False)
+
+
+@pytest.mark.parametrize(
+    ("step", "expected_error"),
+    [
+        ("Coverage Calculation", "Coverage Calculation parsed_result differs"),
+        ("Kestrel Genotyping", "Kestrel Genotyping parsed_result differs"),
+        ("adVNTR Genotyping", "adVNTR Genotyping parsed_result differs"),
+        ("Cross-Match Variant Comparison", "Cross-Match Variant Comparison parsed_result differs"),
+    ],
+)
+def test_summary_required_parsed_result_mutations_fail(
+    tmp_path: Path,
+    step: str,
+    expected_error: str,
+) -> None:
+    """Every result-bearing summary step must agree with its independently checked artifact."""
+    required = ["Coverage Calculation", "Kestrel Genotyping"]
+    if step in {"adVNTR Genotyping", "Cross-Match Variant Comparison"}:
+        required.extend(["adVNTR Genotyping", "Cross-Match Variant Comparison"])
+    summary_steps = [
+        {
+            "step": name,
+            "parsed_result": {"comments": [], "data": [{"value": "mutated" if name == step else name}]},
+        }
+        for name in required
+    ]
+    (tmp_path / "pipeline_summary.json").write_text(
+        __import__("json").dumps({"steps": summary_steps}),
+        encoding="utf-8",
+    )
+    case = {
+        "pipeline_summary_assertions": {"steps": required, "parsed_results": required},
+        "cross_match_assertions": {
+            "comments": [],
+            "data": [{"value": "Cross-Match Variant Comparison"}],
+        },
+    }
+
+    def expected_result(_case: dict, _output: Path, name: str) -> dict[str, str]:
+        return {"value": name}
+
+    with (
+        mock.patch.object(orchestration, "_summary_expected_result", side_effect=expected_result, create=True),
+        pytest.raises(AssertionError, match=expected_error),
+    ):
+        orchestration._assert_summary_values(case, tmp_path, advntr=len(required) == 4)

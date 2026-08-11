@@ -274,25 +274,6 @@ def test_advntr_orchestration_rejects_ambiguous_module_declarations(tmp_path: Pa
         )
 
 
-def test_current_failure_adapter_is_limited_to_live_nonzero_mixed_declarations() -> None:
-    """Task 5 can delete this named seam when the current valid-mixed failures become successes."""
-    from tests.parametrization import get_advntr_test_cases, get_bam_test_cases
-
-    current_failures = [
-        case for case in [*get_bam_test_cases(), *get_advntr_test_cases()] if case.get("expected_exit_code", 0) != 0
-    ]
-    assert len(current_failures) == 10
-    for case in current_failures:
-        fragments = orchestration.current_declared_failure_diagnostic_adapter(case)
-        assert fragments[0] == "FASTQ layout 'mixed' cannot be consumed without dropping reads."
-        assert fragments[-1].endswith("records")
-
-    with pytest.raises(ValueError, match="temporary current-failure adapter"):
-        orchestration.current_declared_failure_diagnostic_adapter(
-            {"expected_exit_code": 0, "expected_mixed_fastq_records": {}}
-        )
-
-
 def _routing_line(record: dict[str, Any]) -> str:
     import json
 
@@ -394,21 +375,74 @@ def _write_strict_success_tree(output_dir: Path, *, advntr: bool = False) -> Non
         "566.92\t593.00\t300.71\t23\t1062\t1501\t0\t0.00\tPASS\n",
         encoding="utf-8",
     )
-    steps = [
-        {"step": "Coverage Calculation", "parsed_result": {"status": "PASS"}},
-        {"step": "Kestrel Genotyping", "parsed_result": {"Confidence": "High_Precision*"}},
+    coverage_result = {
+        "mean": "566.92",
+        "median": "593.00",
+        "stdev": "300.71",
+        "min": "23",
+        "max": "1062",
+        "region_length": "1501",
+        "uncovered_bases": "0",
+        "percent_uncovered": "0.00",
+        "coverage_qc": "PASS",
+    }
+    kestrel_result = {
+        "Confidence": "High_Precision*",
+        "Estimated_Depth_AlternateVariant": "125",
+        "Estimated_Depth_Variant_ActiveRegion": "1024",
+        "Depth_Score": "0.1220703125",
+    }
+    steps: list[dict[str, Any]] = [
+        {"step": "Coverage Calculation", "parsed_result": {"comments": [], "data": [coverage_result]}},
+        {"step": "Kestrel Genotyping", "parsed_result": {"comments": [], "data": [kestrel_result]}},
     ]
     if advntr:
+        steps[1]["parsed_result"]["data"][0].update({"Variant_Type": "Insertion", "Allele_Change": "G"})
         (output_dir / "advntr").mkdir()
         (output_dir / "advntr" / "output_adVNTR_result.tsv").write_text(
             "VID\tVariant\tNumberOfSupportingReads\tMeanCoverage\tPvalue\n"
             "25561\tI22_4_G_LEN1\t39\t70.3333333333\t5.774455097259999e-59\n",
             encoding="utf-8",
         )
+        (output_dir / "advntr" / "cross_match_results.tsv").write_text(
+            "Kestrel_Allele_Change\tKestrel_Variant_Type\tAdvntr_Allele_Change\tAdvntr_Variant_Type\tMatch\n"
+            "G\tInsertion\tG\tInsertion\tYes\n",
+            encoding="utf-8",
+        )
         steps.extend(
             [
-                {"step": "adVNTR Genotyping", "parsed_result": {"VID": "25561"}},
-                {"step": "Cross-Match Variant Comparison", "parsed_result": {"match": "Yes"}},
+                {
+                    "step": "adVNTR Genotyping",
+                    "parsed_result": {
+                        "comments": [],
+                        "data": [
+                            {
+                                "VID": "25561",
+                                "Variant": "I22_4_G_LEN1",
+                                "NumberOfSupportingReads": "39",
+                                "MeanCoverage": "70.3333333333",
+                                "Pvalue": "5.774455097259999e-59",
+                                "Variant_Type": "Insertion",
+                                "Allele_Change": "G",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "step": "Cross-Match Variant Comparison",
+                    "parsed_result": {
+                        "comments": [],
+                        "data": [
+                            {
+                                "Kestrel_Allele_Change": "G",
+                                "Kestrel_Variant_Type": "Insertion",
+                                "Advntr_Allele_Change": "G",
+                                "Advntr_Variant_Type": "Insertion",
+                                "Match": "Yes",
+                            }
+                        ],
+                    },
+                },
             ]
         )
     (output_dir / "pipeline_summary.json").write_text(json.dumps({"steps": steps}), encoding="utf-8")
@@ -444,8 +478,8 @@ def _strict_fastq_case() -> dict[str, Any]:
             "coverage_qc": "PASS",
         },
         "pipeline_summary_assertions": {
-            "Coverage Calculation": {"status": "PASS"},
-            "Kestrel Genotyping": {"Confidence": "High_Precision*"},
+            "steps": ["Coverage Calculation", "Kestrel Genotyping"],
+            "parsed_results": ["Coverage Calculation", "Kestrel Genotyping"],
         },
         "report_assertions": ["Kestrel detected a high-precision pathogenic variant."],
         "expected_archive": False,
@@ -517,8 +551,16 @@ def test_strict_advntr_success_adds_exact_module_and_cross_match_oracles(tmp_pat
                 "advntr/output_adVNTR_result.tsv",
             ],
             "pipeline_summary_assertions": {
-                **case["pipeline_summary_assertions"],
-                "adVNTR Genotyping": {"VID": "25561"},
+                "steps": [
+                    *case["pipeline_summary_assertions"]["steps"],
+                    "adVNTR Genotyping",
+                    "Cross-Match Variant Comparison",
+                ],
+                "parsed_results": [
+                    *case["pipeline_summary_assertions"]["parsed_results"],
+                    "adVNTR Genotyping",
+                    "Cross-Match Variant Comparison",
+                ],
             },
             "advntr_assertions": {
                 "VID": "25561",
@@ -527,12 +569,87 @@ def test_strict_advntr_success_adds_exact_module_and_cross_match_oracles(tmp_pat
                 "MeanCoverage": 70.3333333333,
                 "Pvalue": 5.774455097259999e-59,
             },
-            "cross_match_assertions": {"match": "Yes"},
+            "cross_match_assertions": {
+                "comments": [],
+                "data": [
+                    {
+                        "Kestrel_Allele_Change": "G",
+                        "Kestrel_Variant_Type": "Insertion",
+                        "Advntr_Allele_Change": "G",
+                        "Advntr_Variant_Type": "Insertion",
+                        "Match": "Yes",
+                    }
+                ],
+            },
         }
     )
 
     orchestration.validate_strict_advntr_success(case, output_dir)
 
-    case["cross_match_assertions"] = {"match": "No"}
+    case["cross_match_assertions"]["data"][0]["Match"] = "No"
     with pytest.raises(AssertionError, match="Cross-Match Variant Comparison"):
+        orchestration.validate_strict_advntr_success(case, output_dir)
+
+
+@pytest.mark.parametrize(
+    ("step", "field"),
+    [
+        ("Kestrel Genotyping", "Variant_Type"),
+        ("Kestrel Genotyping", "Allele_Change"),
+        ("Kestrel Genotyping", "Unexpected_Stable_Field"),
+        ("adVNTR Genotyping", "Variant_Type"),
+        ("adVNTR Genotyping", "Allele_Change"),
+        ("adVNTR Genotyping", "Unexpected_Stable_Field"),
+    ],
+)
+def test_strict_advntr_summary_rejects_mutated_enriched_cross_match_values(
+    tmp_path: Path, step: str, field: str
+) -> None:
+    """Cross-match enrichment must remain bound to its independent declared result."""
+    output_dir = tmp_path / "advntr"
+    _write_strict_success_tree(output_dir, advntr=True)
+    case = _strict_fastq_case()
+    case.update(
+        {
+            "expected_files": [*case["expected_files"], "advntr/output_adVNTR_result.tsv"],
+            "pipeline_summary_assertions": {
+                "steps": [
+                    *case["pipeline_summary_assertions"]["steps"],
+                    "adVNTR Genotyping",
+                    "Cross-Match Variant Comparison",
+                ],
+                "parsed_results": [
+                    *case["pipeline_summary_assertions"]["parsed_results"],
+                    "adVNTR Genotyping",
+                    "Cross-Match Variant Comparison",
+                ],
+            },
+            "advntr_assertions": {
+                "VID": "25561",
+                "State": "I22_4_G_LEN1",
+                "NumberOfSupportingReads": 39,
+                "MeanCoverage": 70.3333333333,
+                "Pvalue": 5.774455097259999e-59,
+            },
+            "cross_match_assertions": {
+                "comments": [],
+                "data": [
+                    {
+                        "Kestrel_Allele_Change": "G",
+                        "Kestrel_Variant_Type": "Insertion",
+                        "Advntr_Allele_Change": "G",
+                        "Advntr_Variant_Type": "Insertion",
+                        "Match": "Yes",
+                    }
+                ],
+            },
+        }
+    )
+    summary_path = output_dir / "pipeline_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    result = next(entry["parsed_result"]["data"][0] for entry in summary["steps"] if entry["step"] == step)
+    result[field] = "mutated"
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    with pytest.raises(AssertionError, match=step):
         orchestration.validate_strict_advntr_success(case, output_dir)

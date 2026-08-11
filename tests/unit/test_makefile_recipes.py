@@ -211,7 +211,7 @@ def _run_scripts_coverage_with_fake_pytest(
     pytest_status: int,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(parents=True)
     capture = tmp_path / "coverage-file.txt"
     _write_executable(
         fake_bin / "pytest",
@@ -279,3 +279,74 @@ printf '%s\n' "$COVERAGE_FILE" > "$COVERAGE_CAPTURE"
     assert result.returncode == 2
     assert "Error 23" in result.stderr
     assert not capture.exists(), "pytest received a COVERAGE_FILE path after mktemp failed"
+
+
+def _run_integration_compatibility_with_fake_python(
+    tmp_path: Path, status: int
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    capture = tmp_path / "python-argv.txt"
+    _write_executable(
+        fake_bin / "python",
+        """#!/bin/sh
+printf '%s\n' "$*" > "$COMPAT_CAPTURE"
+exit "$COMPAT_STATUS"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["COMPAT_CAPTURE"] = str(capture)
+    env["COMPAT_STATUS"] = str(status)
+    result = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "check-integration-compatibility",
+            "INTEGRATION_COMPAT_BASE=event-base",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, capture.read_text(encoding="utf-8").strip() if capture.exists() else ""
+
+
+def test_integration_compatibility_recipe_passes_the_explicit_base_and_propagates_failure(tmp_path: Path) -> None:
+    """Catch omitting the event base or masking a failed append-only comparison."""
+    success, argv = _run_integration_compatibility_with_fake_python(tmp_path / "success", 0)
+    assert success.returncode == 0
+    assert argv == "scripts/check_integration_compatibility.py --base-revision event-base"
+
+    failure, _ = _run_integration_compatibility_with_fake_python(tmp_path / "failure", 17)
+    assert failure.returncode != 0
+
+
+def test_check_all_depends_on_integration_compatibility() -> None:
+    """Catch a locally green pre-PR gate that never runs the compatibility checker."""
+    expanded = subprocess.run(
+        ["make", "--dry-run", "check-all"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert expanded.returncode == 0
+    assert "scripts/check_integration_compatibility.py" in expanded.stdout
+
+
+def test_docker_quick_uses_default_mode_b178_reporter_sentinel() -> None:
+    """Catch losing the PR-tier proof of the normal reporter path."""
+    expanded = subprocess.run(
+        ["make", "--dry-run", "test-docker-quick"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert expanded.returncode == 0
+    assert "test_docker_bam_pipeline[example_b178_hg19_subset_default]" in expanded.stdout
+    assert "test_docker_bam_pipeline[example_b178_hg19_subset_fast]" not in expanded.stdout
