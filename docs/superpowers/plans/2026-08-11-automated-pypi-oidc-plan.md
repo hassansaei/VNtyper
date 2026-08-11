@@ -14,6 +14,11 @@
 - Permit the live environment only from the exact branch policy `{name: "main", type: "branch"}`.
 - Require the built-in `branch_policy` protection rule and reject every required reviewer, wait timer, custom deployment protection rule, unrestricted policy, missing/extra branch policy, and tag policy.
 - Do not add `PYPI_API_TOKEN`, Twine credentials, GitHub App approval, token fallback, environment deletion, tag creation, or tag movement.
+- Keep the environment reviewer-free with no timer or environment secrets, custom policies for
+  the exact branch `main`, and no custom deployment-protection rules. Its preflight fails
+  before package or registry writes and cites #236 on a mismatch; OIDC remains the only
+  publisher, so never reintroduce `PYPI_API_TOKEN`. After the first successful OIDC release,
+  the owner separately deletes that obsolete repository secret.
 - Keep `publish-pypi` as the only job with `id-token: write`; keep GHCR permissions, ten release checks, tag/ancestry validation, immutable evidence, concurrency, and retries unchanged.
 - Preserve Python 3.10 compatibility and the repository's 120-character Ruff line length.
 - Every behavioral edit follows RED, causal failure, minimal GREEN, refactor, verification, commit, and independent review.

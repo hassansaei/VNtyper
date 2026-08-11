@@ -642,7 +642,9 @@ def test_pypi_publish_is_protected_oidc_only_and_rerun_safe() -> None:
     assert job["environment"] == {"name": "pypi"}
     assert job["permissions"] == {"id-token": "write"}
     assert [
-        name for name, candidate in publish["jobs"].items() if candidate.get("permissions", {}).get("id-token") == "write"
+        name
+        for name, candidate in publish["jobs"].items()
+        if candidate.get("permissions", {}).get("id-token") == "write"
     ] == ["publish-pypi"]
     assert job["outputs"] == {"publish_summary_json": "${{ steps.result.outputs.publish_summary_json }}"}
     assert download["with"] == {

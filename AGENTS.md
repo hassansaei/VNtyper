@@ -408,11 +408,15 @@ the version was newly published or already existed.
 
 PyPI publication uses Trusted Publishing in the protected `pypi` environment with only
 `id-token: write`; there is no package token in the current controller.
-Do not delete `PYPI_API_TOKEN` until the first successful OIDC release has proved the
-publisher configuration. The owner must then delete it separately. Until that deletion, do not
-create a release tag pointing at a pre-milestone commit: historical tagged commits
-still contain a legacy token workflow, and those workflows become inert only after the
-owner removes the obsolete token.
+The environment must be reviewer-free, have no wait timer or environment secrets, use custom
+branch policies for the exact branch `main`, and have no custom deployment-protection rules.
+The controller preflights that live state and fails before package or registry writes when it
+drifts; follow #236 to repair the environment rather than bypassing it. OIDC is the only
+publisher: never reintroduce `PYPI_API_TOKEN`. Do not delete `PYPI_API_TOKEN` until the first
+successful OIDC release has proved the publisher configuration; the owner must then delete it
+separately. Until that deletion, do not create a release tag pointing at a pre-milestone commit:
+historical tagged commits still contain a legacy token workflow, and those workflows become inert
+only after the owner removes the obsolete token.
 
 ```text
 phase | job | permissions | retry/recovery
@@ -559,9 +563,9 @@ summary | release-summary | none | always records success, failure, skipped jobs
     pass, which checked 295 test sources. Do not claim `scripts/` is part of that tests
     invocation or collapse the two.
 
-    Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
+    Coverage uses ``source = [`vntyper`, `docker/app`, `scripts`]``, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-11 verification measured all 38 Python files at 7,166 of 7,698 measured
+    final 2026-08-11 verification measured all 39 Python files at 7,166 of 7,698 measured
     units, or 93.09% aggregate scripts-only branch-inclusive coverage, and 17,227 of
     19,309 measured units, or 89.22% combined branch-inclusive coverage. All 5,385 unit
     tests passed with no skips and 163 warnings in the maintained Python 3.12.13

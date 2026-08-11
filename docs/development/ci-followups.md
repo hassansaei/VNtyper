@@ -130,6 +130,12 @@ its production publisher runs in the protected `pypi` environment with only
 PyPA publisher with `skip-existing`. It does not read `PYPI_API_TOKEN` or another
 long-lived package credential.
 
+The `pypi` environment is reviewer-free, has no wait timer or environment secrets, and uses
+custom branch policies for the exact branch `main` with no custom deployment-protection rules.
+The controller preflights this live policy and fails before package or registry writes on a
+mismatch; use #236 to repair the environment. OIDC remains the only publisher: never
+reintroduce `PYPI_API_TOKEN`.
+
 One owner-only rollout action remains intentionally pending. Do not delete
 `PYPI_API_TOKEN` until the first successful OIDC release proves that the configured
 publisher (owner `hassansaei`, repository `VNtyper`, workflow `publish-pypi.yml`,

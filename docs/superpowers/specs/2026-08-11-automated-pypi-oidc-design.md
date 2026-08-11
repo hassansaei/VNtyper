@@ -109,6 +109,12 @@ The workflow adds only the read permission required for this inspection. The
 `publish-pypi` job remains the sole job with `id-token: write`; it retains no `contents`,
 `packages`, or repository write permission.
 
+Maintainer guidance records the same contract: the environment is reviewer-free, has no wait
+timer or environment secrets, uses custom branch policies for the exact branch `main`, and has
+no custom deployment-protection rules. A mismatch cites #236 and fails before package or
+registry writes. OIDC remains the only publisher; never reintroduce `PYPI_API_TOKEN`. After
+the first successful OIDC release, the owner separately deletes that obsolete repository secret.
+
 ### 3. Current v2.0.11 recovery
 
 After the administrator saves the environment policy, inspect the existing waiting run.

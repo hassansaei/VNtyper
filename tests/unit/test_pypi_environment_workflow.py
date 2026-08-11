@@ -19,6 +19,11 @@ ISSUE_URL = "https://github.com/hassansaei/VNtyper/issues/236"
 ENVIRONMENT_ENDPOINT = "repos/hassansaei/VNtyper/environments/pypi"
 POLICIES_ENDPOINT = f"{ENVIRONMENT_ENDPOINT}/deployment-branch-policies"
 CUSTOM_RULES_ENDPOINT = f"{ENVIRONMENT_ENDPOINT}/deployment_protection_rules"
+MAINTAINER_GUIDANCE_PATHS = (
+    ROOT / "AGENTS.md",
+    ROOT / "docs" / "superpowers" / "specs" / "2026-08-11-automated-pypi-oidc-design.md",
+    ROOT / "docs" / "superpowers" / "plans" / "2026-08-11-automated-pypi-oidc-plan.md",
+)
 
 VALID_ENVIRONMENT: dict[str, object] = {
     "name": "pypi",
@@ -117,6 +122,22 @@ def _valid_payloads() -> dict[str, object]:
         POLICIES_ENDPOINT: VALID_POLICIES,
         CUSTOM_RULES_ENDPOINT: VALID_CUSTOM_RULES,
     }
+
+
+def test_maintainer_guidance_records_the_pypi_environment_contract() -> None:
+    """Release guidance must preserve the reviewer-free, main-only OIDC policy."""
+    required = (
+        "reviewer-free",
+        "exact branch `main`",
+        "fails before package or registry writes",
+        "#236",
+        "never reintroduce `PYPI_API_TOKEN`",
+    )
+
+    for path in MAINTAINER_GUIDANCE_PATHS:
+        normalized_guidance = " ".join(path.read_text(encoding="utf-8").split())
+        for phrase in required:
+            assert phrase in normalized_guidance, f"{path} is missing: {phrase}"
 
 
 def test_preflight_is_unprivileged_and_ordered_before_candidate_resolution() -> None:
