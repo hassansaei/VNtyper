@@ -91,6 +91,19 @@ def safe_extract(archive: Path, destination: Path) -> None:
     a link, and `safe_extract` is only ever pointed at those bundles, after their digest
     has been verified against a value committed in this repository.
 
+    A link **already present in `destination`, rather than in the archive**, is a
+    separate hazard the checks above do not cover: they judge what the archive
+    contains, not what the destination already has. `staged_install` seeds its staging
+    directory from the existing tree with `symlinks=True`, so an `alignment` symlink
+    pointing outside the reference root survives into a fresh install unchanged, and an
+    ordinary, fully-verified member such as `alignment/chr1.hg19.fa` would be written
+    straight through it. Every member's destination path is therefore resolved and
+    confirmed to stay inside `destination` before extraction runs, which holds
+    regardless of what was already on disk - and, unlike the link-target judgement
+    above, is safe to do ahead of extraction: nothing in the loop above lets an archive
+    member create a symlink, so no member extracted during *this* call can change what
+    a later one in the same archive resolves to.
+
     Absolute paths and `..` components are rejected by the same loop. `filter="data"` is
     applied as defence in depth **where the interpreter has it** - `requires-python` is
     `>=3.10` and `filter=` only exists from 3.10.12, 3.11.4 and 3.12, so passing it
@@ -105,11 +118,13 @@ def safe_extract(archive: Path, destination: Path) -> None:
 
     Raises:
         ValueError: On an absolute path, a `..` component, a symbolic or hard link, a
-            device or FIFO member, or anything `tarfile`'s own `data` filter refuses.
-            Per AGENTS.md the convention is `logger.error(message)` then `raise`, with no
-            custom exception class.
+            device or FIFO member, a member whose destination resolves outside
+            `destination` through a symlink already present there, or anything
+            `tarfile`'s own `data` filter refuses. Per AGENTS.md the convention is
+            `logger.error(message)` then `raise`, with no custom exception class.
     """
     destination.mkdir(parents=True, exist_ok=True)
+    destination_root = destination.resolve()
     with tarfile.open(archive, "r:gz") as tar:
         for member in tar.getmembers():
             name = Path(member.name)
@@ -131,6 +146,15 @@ def safe_extract(archive: Path, destination: Path) -> None:
                 raise ValueError(message)
             if not (member.isfile() or member.isdir()):
                 message = f"{archive.name}: member '{member.name}' is not a regular file or directory"
+                logger.error(message)
+                raise ValueError(message)
+            resolved_target = (destination / name).resolve()
+            if not resolved_target.is_relative_to(destination_root):
+                message = (
+                    f"{archive.name}: member '{member.name}' resolves to {resolved_target}, outside "
+                    f"destination root {destination_root} - a symlink already present in the destination "
+                    "redirected it there"
+                )
                 logger.error(message)
                 raise ValueError(message)
         try:
