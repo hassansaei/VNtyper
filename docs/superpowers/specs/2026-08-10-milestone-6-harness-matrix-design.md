@@ -228,7 +228,7 @@ No implementation file changes for #226 are part of this track. Closure evidence
 - introduction in `80f42fbba63c5c045ee605e49949cdd970884320` and hardening in
   `edabd3eaf594b785906d8ba03c9cce60f1c6babd`;
 - `tests/unit/test_make_cram_fixtures.py::test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed`;
-- `tests/integration/test_cram_reference_contract.py::test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages`;
+- `tests/integration/test_cram_reference_pipeline_contract.py::test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages`;
 - `test_a209_2_explicit_reference_completes_the_reference_dependent_cram`; and
 - `test_a209_3_no_ref_cram_completes_without_an_explicit_reference`.
 
