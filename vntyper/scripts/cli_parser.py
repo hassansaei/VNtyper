@@ -315,6 +315,23 @@ def build_parser() -> argparse.ArgumentParser:
             "Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38). Default: hg19 hg38 (UCSC references only)."
         ),
     )
+    parser_install.add_argument(
+        "--from-source",
+        action="store_true",
+        help=(
+            "Build references from their upstream sources instead of downloading the "
+            "published bundle. Slower (downloads and BWA-indexes six chromosome FASTAs) "
+            "but needs no access to the reference release. This is the path the bundle "
+            "build workflow itself runs."
+        ),
+    )
+    parser_install.add_argument(
+        "--release-spec",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Release builds only: take every source URL and digest from this file.",
+    )
 
     # Subcommand: online
     parser_online = subparsers.add_parser(

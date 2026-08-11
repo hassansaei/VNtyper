@@ -159,6 +159,8 @@ def handle_install_references(
         index_threads=args.threads,
         aligners_to_use=args.aligners,
         references_to_process=args.references,
+        from_source=args.from_source,
+        release_spec_path=args.release_spec,
     )
     sys.exit(0)
 

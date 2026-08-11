@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import itertools
 import json
 import logging
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,7 +17,18 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlretrieve
 
+# `docker/Dockerfile.base` copies this module and `reference_bundle.py` alone into a
+# build stage and runs them without installing the package, and every module imported
+# here joins the base-image content hash. `reference_bundle` is therefore the only
+# `vntyper` import allowed at module scope; anything else is inlined below or imported
+# inside the function that needs it.
+from vntyper.scripts.reference_bundle import verify_sha256
+
 logger = logging.getLogger(__name__)
+
+#: Config sections holding one physical chromosome FASTA per entry, in the order
+#: `--from-source` walks them.
+GENOME_SECTIONS = ("ucsc_references", "ncbi_references", "ensembl_references")
 
 
 def load_install_config(config_path: Path) -> dict[str, Any]:
@@ -548,6 +561,402 @@ def process_own_repository_references(
             logger.info(f"Skipping indexing for {target_path}")
 
 
+###############################################################################
+# Building references from their upstream sources
+###############################################################################
+
+
+def _quote(value: object) -> str:
+    """Quote one operand for a shell command.
+
+    A three-line copy of :func:`vntyper.scripts.samtools_command_fragments.quote_path`
+    (which `command_builders` only re-exports), deliberately duplicated rather than
+    imported: either module would join the Docker base-image content-hash set, where
+    every future edit costs a 25-120 minute rebuild. See the import comment at the top
+    of this file. ``TestQuote`` in `tests/unit/test_install_references_derivations.py`
+    pins that the two helpers behave identically.
+
+    Args:
+        value: The operand to quote. Anything with a ``str()``.
+
+    Returns:
+        str: The operand as exactly one shell word.
+    """
+    return shlex.quote(str(value))
+
+
+def _run_shell(command: str) -> subprocess.CompletedProcess[str]:
+    """Run one shell command the way `utils.run_command` would, without importing it.
+
+    ``shell=True`` with an explicit ``/bin/bash`` is the repository-wide convention:
+    the commands built here contain a redirect, and every interpolated *path* is
+    quoted with :func:`_quote` while command *prefixes* from the config are not, so
+    that ``mamba run -n vntyper samtools`` stays several words.
+
+    Args:
+        command: The complete shell command.
+
+    Returns:
+        subprocess.CompletedProcess[str]: The finished process, stdout/stderr captured.
+    """
+    return subprocess.run(command, shell=True, executable="/bin/bash", capture_output=True, text=True, check=False)
+
+
+def derive_region_fasta(source_fasta: Path, region: str, destination: Path, samtools: str) -> Path:
+    """Cut a MUC1 region out of a chromosome FASTA.
+
+    This is how both SHARK references are produced. The hg19 one reproduces the FASTA
+    this repository used to track byte-for-byte, which is what makes deriving rather
+    than shipping them safe.
+
+    Args:
+        source_fasta: Indexed chromosome FASTA to cut from.
+        region: ``chr1:start-end``, in the source's own contig naming.
+        destination: File to write.
+        samtools: samtools command prefix from the install config.
+
+    Returns:
+        Path: ``destination``.
+
+    Raises:
+        RuntimeError: If samtools fails.
+    """
+    command = f"{samtools} faidx {_quote(source_fasta)} {_quote(region)} > {_quote(destination)}"
+    completed = _run_shell(command)
+    if completed.returncode != 0:
+        message = (
+            f"faidx derivation failed for {destination.name} "
+            f"({region} of {source_fasta.name}): {completed.stderr.strip()}"
+        )
+        logger.error(message)
+        raise RuntimeError(message)
+    return destination
+
+
+def index_fasta_with_samtools(fasta: Path, samtools: str) -> None:
+    """Write the ``.fai`` beside a FASTA.
+
+    Both the chromosome FASTAs (so :func:`derive_region_fasta` can cut from them) and
+    the derived outputs (so the pipeline can read them) need one.
+
+    Args:
+        fasta: FASTA to index in place.
+        samtools: samtools command prefix from the install config.
+
+    Raises:
+        RuntimeError: If samtools fails.
+    """
+    completed = _run_shell(f"{samtools} faidx {_quote(fasta)}")
+    if completed.returncode != 0:
+        message = f"samtools faidx failed for {fasta.name}: {completed.stderr.strip()}"
+        logger.error(message)
+        raise RuntimeError(message)
+
+
+def merge_pairwise_motifs(seed_fasta: Path, filter_config: Path, destination: Path) -> Path:
+    """Build the pairwise-and-self merged MUC1 motif reference from its two seeds.
+
+    Ported from `reference/generate_vntr_reference.py`, which hardcodes three
+    CWD-relative filenames and moves out of this repository with the rest of the seed
+    data. The bundle build stages the seeds and then runs ``--from-source``, so this
+    has to produce the file with no script beside it to call.
+
+    The logic is reproduced exactly because the output digest is asserted: every
+    ordered pair from ``itertools.product`` over an insertion-ordered dict, self-pairs
+    included, written as ``>h1-h2`` carrying ``seq(h2) + seq(h1)``. That inversion is
+    deliberate in the original and load-bearing for the digest, as is the absence of
+    line wrapping.
+
+    Args:
+        seed_fasta: Motif seed with one line of sequence per record.
+        filter_config: JSON mapping a contig name to the partners disallowed after it.
+        destination: File to write.
+
+    Returns:
+        Path: ``destination``.
+
+    Raises:
+        ValueError: If the seed holds no records, or its headers and sequence lines do
+            not pair up one-to-one - which would silently emit a shorter reference
+            under the expected name.
+    """
+    lines = seed_fasta.read_text(encoding="utf-8").splitlines()
+    headers = [line.strip() for line in lines if line.startswith(">")]
+    sequences = [line.strip() for line in lines if line.strip() and not line.startswith(">")]
+
+    if not headers:
+        message = f"{seed_fasta.name} contains no records; cannot build {destination.name}"
+        logger.error(message)
+        raise ValueError(message)
+    if len(headers) != len(sequences):
+        message = (
+            f"{seed_fasta.name} is not one sequence line per record: "
+            f"{len(headers)} headers against {len(sequences)} sequence lines"
+        )
+        logger.error(message)
+        raise ValueError(message)
+
+    contigs = {header[1:]: sequence for header, sequence in zip(headers, sequences, strict=True)}
+    filters = json.loads(filter_config.read_text(encoding="utf-8"))
+    disallowed = {name: set(partners) for name, partners in filters.items()}
+
+    with destination.open("w", encoding="utf-8") as handle:
+        for first, second in itertools.product(contigs, repeat=2):
+            if second in disallowed.get(first, ()):
+                continue
+            handle.write(f">{first}-{second}\n{contigs[second]}{contigs[first]}\n")
+
+    logger.info(f"Merged {len(contigs)} motifs from {seed_fasta.name} into {destination.name}")
+    return destination
+
+
+def run_derivations(install_config: dict[str, Any], output_dir: Path, references: dict[str, Path]) -> None:
+    """Run every configured derivation and verify it against its committed digest.
+
+    Two kinds are configured. ``shark`` cuts a region out of an installed chromosome
+    FASTA; ``literal`` merges the two MUC1 motif seeds. Every output is checked against
+    ``expected_sha256`` before it is indexed, so a silent change upstream turns the
+    bundle build red instead of publishing different sequence under an unchanged name.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Reference tree being populated.
+        references: Physical id to installed chromosome FASTA, for ``from`` lookups.
+
+    Raises:
+        RuntimeError: If a source reference or a literal seed is missing.
+        ValueError: If a derivation declares no digest or an unknown kind, if a literal
+            derivation does not name exactly two seeds, or if a derived file does not
+            match ``expected_sha256``.
+    """
+    samtools = install_config.get("samtools_path", "samtools")
+
+    for spec in install_config.get("derivations", []):
+        kind = spec.get("kind")
+        output = spec["output"]
+        destination = output_dir / output
+        expected = spec.get("expected_sha256")
+        if not expected:
+            message = f"derivation {output} declares no expected_sha256; refusing to produce it unverified"
+            logger.error(message)
+            raise ValueError(message)
+
+        if kind == "shark":
+            source_id = spec["from"]
+            source = references.get(source_id)
+            if source is None or not source.exists():
+                message = f"cannot derive {output}: source reference '{source_id}' is not installed"
+                logger.error(message)
+                raise RuntimeError(message)
+            derive_region_fasta(source, spec["region"], destination, samtools)
+            provenance = f"{source.name} at {spec['region']}"
+        elif kind == "literal":
+            seed_names = spec.get("from_seeds", [])
+            if len(seed_names) != 2:
+                message = (
+                    f"derivation {output} must name exactly two seeds (motif FASTA, filter config); "
+                    f"got {len(seed_names)}"
+                )
+                logger.error(message)
+                raise ValueError(message)
+            seeds = [output_dir / name for name in seed_names]
+            missing = [seed.name for seed in seeds if not seed.exists()]
+            if missing:
+                message = (
+                    f"cannot derive {output}: seed(s) {', '.join(missing)} are not present in {output_dir}. "
+                    "The bundle build stages the seeds into the reference tree before running --from-source."
+                )
+                logger.error(message)
+                raise RuntimeError(message)
+            merge_pairwise_motifs(seeds[0], seeds[1], destination)
+            provenance = " and ".join(seed.name for seed in seeds)
+        else:
+            message = f"derivation {output} declares unknown kind '{kind}'; expected 'shark' or 'literal'"
+            logger.error(message)
+            raise ValueError(message)
+
+        verify_sha256(destination, expected)
+        index_fasta_with_samtools(destination, samtools)
+        logger.info(f"Derived {output} from {provenance}")
+
+
+def resolve_source_location(ref_id: str, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> tuple[str, str]:
+    """Decide where one genome is fetched from and what it must hash to.
+
+    A release spec's ``sources`` block overrides the shipped config field by field; a
+    reference the spec does not name keeps the URL and digest committed in
+    install_references_config.json, both of which are pinned there.
+
+    Args:
+        ref_id: Physical reference id, e.g. ``hg19``.
+        entry: That reference's section of the install config.
+        release_spec: Parsed ``--release-spec`` contents, or None.
+
+    Returns:
+        tuple[str, str]: The URL to download and the expected SHA-256.
+
+    Raises:
+        ValueError: If either the URL or the digest is missing. ``--from-source``
+            never installs bytes it cannot verify.
+    """
+    pinned: dict[str, Any] = (release_spec or {}).get("sources", {}).get(ref_id, {})
+    url = pinned.get("url") or entry.get("url")
+    digest = pinned.get("source_sha256") or entry.get("source_sha256")
+
+    if not url:
+        message = f"no source URL configured for reference '{ref_id}'; --from-source cannot build it"
+        logger.error(message)
+        raise ValueError(message)
+    if not digest:
+        message = (
+            f"no source_sha256 configured for reference '{ref_id}' ({url}); "
+            "--from-source refuses to install unverified bytes"
+        )
+        logger.error(message)
+        raise ValueError(message)
+    return url, digest
+
+
+def decompress_source(archive: Path) -> Path:
+    """Expand a downloaded genome, or hand back a file that needs no expanding.
+
+    Decompression is unconditional rather than skipped when the target exists: the
+    archive has just been digest-verified, so rewriting from it is the only way to be
+    sure the FASTA beside it is the file that digest describes.
+
+    Args:
+        archive: The verified download.
+
+    Returns:
+        Path: The FASTA to index and derive from.
+    """
+    if archive.suffix != ".gz":
+        logger.info(f"{archive.name} is not gzip-compressed; using it where it landed")
+        return archive
+
+    destination = archive.with_suffix("")
+    with gzip.open(archive, "rb") as compressed, destination.open("wb") as expanded:
+        shutil.copyfileobj(compressed, expanded)
+    logger.info(f"Expanded {archive.name} to {destination.name}")
+    return destination
+
+
+def install_from_source(
+    install_config: dict[str, Any],
+    output_dir: Path,
+    references: list[str],
+    aligners: dict[str, dict[str, Any]],
+    index_threads: int,
+    release_spec: dict[str, Any] | None = None,
+) -> dict[str, Path]:
+    """Build every requested reference from its upstream source.
+
+    This is what the bundle build workflow runs, so it is the definition of what a
+    bundle contains - there is no second derivation implementation to drift from it.
+
+    When ``release_spec`` is given (release builds), the URLs and digests it names take
+    precedence and the downloaded bytes are verified **before** decompression or
+    indexing. Without it, the URLs and ``source_sha256`` values in
+    install_references_config.json are used; those pin Ensembl to an explicit release
+    rather than the mutable ``current`` path.
+
+    The two downloadable MUC1 seeds are installed too, minus anything a derivation
+    produces. ``filter_config.json`` is not downloadable and must already be in the
+    tree - the bundle build stages the seeds before calling this, and a checkout has
+    them tracked. :func:`run_derivations` says so by name if one is absent.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Reference tree to populate.
+        references: Physical reference ids to build.
+        aligners: Enabled aligner configurations; empty to skip aligner indexing.
+        index_threads: Threads handed to the aligners.
+        release_spec: Parsed ``--release-spec`` contents, or None.
+
+    Returns:
+        dict[str, Path]: physical id -> installed chromosome FASTA, for
+        :func:`run_derivations`.
+
+    Raises:
+        RuntimeError: If a download fails, or if a derivation's source is missing.
+        ValueError: If an entry has no ``target_path``, no URL or no digest, or if a
+            download or derivation does not match its expected digest.
+    """
+    samtools = install_config.get("samtools_path", "samtools")
+    selected = set(references)
+    installed: dict[str, Path] = {}
+
+    for section in GENOME_SECTIONS:
+        for ref_id, entry in install_config.get(section, {}).items():
+            if ref_id not in selected:
+                continue
+
+            target_path_str = entry.get("target_path")
+            if not target_path_str:
+                message = f"reference '{ref_id}' declares no target_path; cannot install it from source"
+                logger.error(message)
+                raise ValueError(message)
+
+            url, expected = resolve_source_location(ref_id, entry, release_spec)
+            archive = output_dir / target_path_str
+
+            logger.info(f"Building {ref_id} from source")
+            try:
+                download_file(url, archive)
+            except SystemExit as exit_signal:
+                # `download_file` ends the process, which is right for the legacy CLI path
+                # but wrong here: this function is called by the bundle build and by
+                # `staged_install`, both of which have cleanup to do first.
+                message = f"failed to download {ref_id} from {url}"
+                logger.error(message)
+                raise RuntimeError(message) from exit_signal
+            # Before decompression and before any indexing: unverified bytes are never
+            # expanded, never indexed and never derived from.
+            verify_sha256(archive, expected)
+
+            fasta = decompress_source(archive)
+            index_fasta_with_samtools(fasta, samtools)
+            if aligners:
+                index_reference_with_aligners(fasta, aligners, threads=index_threads, force_reindex=False)
+
+            installed[ref_id] = fasta
+
+    _install_source_seeds(install_config, output_dir)
+
+    vntyper_refs = {k: v for k, v in install_config.get("vntyper_references", {}).items() if k in selected}
+    if vntyper_refs:
+        logger.info("Processing VNtyper references...")
+        process_vntyper_references(vntyper_refs, output_dir, install_config.get("bwa_path", "bwa"), False, {})
+
+    run_derivations(install_config, output_dir, installed)
+    return installed
+
+
+def _install_source_seeds(install_config: dict[str, Any], output_dir: Path) -> None:
+    """Fetch the common seed files, skipping anything a derivation produces.
+
+    ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is still listed as a
+    downloadable raw file, but it is derived now, so fetching it first would be a
+    wasted round trip over a file that is about to be overwritten.
+
+    Args:
+        install_config: The parsed install_references_config.json.
+        output_dir: Reference tree to populate.
+    """
+    own_repo_refs = install_config.get("own_repository_references", {})
+    raw_files = own_repo_refs.get("raw_files", [])
+    if not raw_files:
+        return
+
+    derived = {spec.get("output") for spec in install_config.get("derivations", [])}
+    seeds = [entry for entry in raw_files if entry.get("target_path") not in derived]
+    if not seeds:
+        return
+
+    logger.info("Installing common seed files...")
+    process_own_repository_references({"raw_files": seeds}, output_dir, False, {})
+
+
 def write_md5_checksums(md5_dict: dict[str, str], output_dir: Path):
     """
     Write the MD5 checksums to a file in the output directory.
@@ -606,6 +1015,8 @@ def main(
     index_threads: int = 4,
     aligners_to_use: list[str] | None = None,
     references_to_process: list[str] | None = None,
+    from_source: bool = False,
+    release_spec_path: Path | None = None,
 ):
     """
     Main function to execute the install_references process.
@@ -617,6 +1028,12 @@ def main(
         index_threads (int): Number of threads to use for indexing.
         aligners_to_use (list, optional): List of specific aligners to use (overrides config).
         references_to_process (list, optional): List of specific references to process (e.g., ['hg19', 'hg38']).
+        from_source (bool): Build every reference from its upstream source and run the
+            configured derivations, instead of the legacy per-section download. This is
+            the path the bundle build workflow runs. Defaults to False, which leaves the
+            existing behaviour untouched.
+        release_spec_path (Optional[Path]): Release builds only - take every source URL
+            and digest from this file rather than from the shipped install config.
     """
     script_dir = Path(__file__).parent
     install_config_path = script_dir / "install_references_config.json"
@@ -723,54 +1140,71 @@ def main(
 
     md5_dict: dict[str, str] = {}
 
-    # Process UCSC references
-    if ucsc_refs:
-        logger.info("Processing UCSC references...")
-        process_ucsc_references(
-            ucsc_refs,
+    if from_source:
+        # The source path owns every section at once: it must verify each download
+        # before expanding it, and it must know which chromosome FASTAs landed where so
+        # the derivations can cut from them. It writes no md5_checksums.txt - the
+        # digests it enforces are SHA-256 values committed in the install config.
+        release_spec = load_install_config(release_spec_path) if release_spec_path else None
+        if release_spec is not None:
+            logger.info(f"Taking source URLs and digests from {release_spec_path}")
+        install_from_source(
+            install_config,
             output_dir,
-            bwa_path,
-            skip_indexing,
-            md5_dict,
-            aligners=enabled_aligners,
-            index_threads=index_threads,
+            sorted(found_refs),
+            enabled_aligners,
+            index_threads,
+            release_spec,
         )
+    else:
+        # Process UCSC references
+        if ucsc_refs:
+            logger.info("Processing UCSC references...")
+            process_ucsc_references(
+                ucsc_refs,
+                output_dir,
+                bwa_path,
+                skip_indexing,
+                md5_dict,
+                aligners=enabled_aligners,
+                index_threads=index_threads,
+            )
 
-    # Process NCBI references
-    if ncbi_refs:
-        logger.info("Processing NCBI references...")
-        process_ucsc_references(
-            ncbi_refs,
-            output_dir,
-            bwa_path,
-            skip_indexing,
-            md5_dict,
-            aligners=enabled_aligners,
-            index_threads=index_threads,
-        )
+        # Process NCBI references
+        if ncbi_refs:
+            logger.info("Processing NCBI references...")
+            process_ucsc_references(
+                ncbi_refs,
+                output_dir,
+                bwa_path,
+                skip_indexing,
+                md5_dict,
+                aligners=enabled_aligners,
+                index_threads=index_threads,
+            )
 
-    # Process ENSEMBL references
-    if ensembl_refs:
-        logger.info("Processing ENSEMBL references...")
-        process_ucsc_references(
-            ensembl_refs,
-            output_dir,
-            bwa_path,
-            skip_indexing,
-            md5_dict,
-            aligners=enabled_aligners,
-            index_threads=index_threads,
-        )
+        # Process ENSEMBL references
+        if ensembl_refs:
+            logger.info("Processing ENSEMBL references...")
+            process_ucsc_references(
+                ensembl_refs,
+                output_dir,
+                bwa_path,
+                skip_indexing,
+                md5_dict,
+                aligners=enabled_aligners,
+                index_threads=index_threads,
+            )
 
-    # Process VNtyper references
-    if vntyper_refs:
-        logger.info("Processing VNtyper references...")
-        process_vntyper_references(vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict)
+        # Process VNtyper references
+        if vntyper_refs:
+            logger.info("Processing VNtyper references...")
+            process_vntyper_references(vntyper_refs, output_dir, bwa_path, skip_indexing, md5_dict)
 
-    # Process own repository references
-    if own_repo_refs:
-        logger.info("Processing own repository references...")
-        process_own_repository_references(own_repo_refs, output_dir, skip_indexing, md5_dict)
+        # Process own repository references
+        if own_repo_refs:
+            logger.info("Processing own repository references...")
+            process_own_repository_references(own_repo_refs, output_dir, skip_indexing, md5_dict)
 
     # Write MD5 checksums to file
     if md5_dict:
@@ -896,6 +1330,26 @@ Examples:
         help="Specific references to process (e.g., hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl). "
         "Default: hg19 hg38 (UCSC references only).",
     )
+    parser.add_argument(
+        "--from-source",
+        action="store_true",
+        help="Build references from their upstream sources and run the configured derivations.",
+    )
+    parser.add_argument(
+        "--release-spec",
+        type=Path,
+        default=None,
+        help="Release builds only: take every source URL and digest from this file.",
+    )
 
     args = parser.parse_args()
-    main(args.output_dir, args.config_path, args.skip_indexing, args.threads, args.aligners, args.references)
+    main(
+        args.output_dir,
+        args.config_path,
+        args.skip_indexing,
+        args.threads,
+        args.aligners,
+        args.references,
+        args.from_source,
+        args.release_spec,
+    )

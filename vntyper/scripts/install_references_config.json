@@ -38,15 +38,18 @@
   },
 
   "bwa_path": "bwa",
+  "samtools_path": "samtools",
 
   "ucsc_references": {
     "hg19": {
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz",
+      "source_sha256": "8d99e436ac1b8ee27999917cc4384a0bfec5a75467b59bbbea8ad314adb553d7",
       "target_path": "alignment/chr1.hg19.fa.gz",
       "index_command": "bwa index {path}"
     },
     "hg38": {
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr1.fa.gz",
+      "source_sha256": "baf03990d81ed87d66a976779c2eb4d8a0e5243829ca913556d3819fe0fba696",
       "target_path": "alignment/chr1.hg38.fa.gz",
       "index_command": "bwa index {path}"
     }
@@ -55,12 +58,14 @@
   "ncbi_references": {
     "GRCh37": {
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
+      "source_sha256": "cb58b0a7eb8d478d6f3b803182d6de7654e621a42223ba90c33d02c592dbdfb9",
       "target_path": "alignment/chr1.GRCh37.fna.gz",
       "index_command": "bwa index {path}",
       "description": "NCBI GRCh37.p13 chromosome 1 (uses NC_000001.10 accession in FASTA header)"
     },
     "GRCh38": {
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
+      "source_sha256": "191c0c9f25748e67eb251a5cbeb2289e10dadc98746b4ddf0170c559db219a2e",
       "target_path": "alignment/chr1.GRCh38.fna.gz",
       "index_command": "bwa index {path}",
       "description": "NCBI GRCh38.p14 chromosome 1 (uses NC_000001.11 accession in FASTA header)"
@@ -69,16 +74,18 @@
 
   "ensembl_references": {
     "hg19_ensembl": {
-      "url": "https://ftp.ensembl.org/pub/grch37/current/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz",
+      "url": "https://ftp.ensembl.org/pub/grch37/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz",
+      "source_sha256": "2f13339ef278b05fd7d80d60052ba12dbd661b6396024b2043a2c5ada07aab96",
       "target_path": "alignment/chr1.hg19_ensembl.fa.gz",
       "index_command": "bwa index {path}",
-      "description": "ENSEMBL GRCh37 chromosome 1 (uses '1' in FASTA header, no chr prefix)"
+      "description": "ENSEMBL GRCh37 chromosome 1 (uses '1' in FASTA header, no chr prefix). Pinned to release-116: a digest beside the mutable 'current' path would rot at the next Ensembl release."
     },
     "hg38_ensembl": {
-      "url": "https://ftp.ensembl.org/pub/current_fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.1.fa.gz",
+      "url": "https://ftp.ensembl.org/pub/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.1.fa.gz",
+      "source_sha256": "05d4d42ed292962055afb9774a1a29a691d7b285fd85dbf9069c050a273e0d3c",
       "target_path": "alignment/chr1.hg38_ensembl.fa.gz",
       "index_command": "bwa index {path}",
-      "description": "ENSEMBL GRCh38 chromosome 1 (uses '1' in FASTA header, no chr prefix)"
+      "description": "ENSEMBL GRCh38 chromosome 1 (uses '1' in FASTA header, no chr prefix). Pinned to release-116: a digest beside the mutable 'current' path would rot at the next Ensembl release."
     }
   },
 
@@ -108,5 +115,36 @@
         "index_command": "samtools faidx {path}"
       }
     ]
-  }
+  },
+
+  "derivations": [
+    {
+      "kind": "shark", "assembly": "hg19",
+      "output": "muc1_region_hg19.fa",
+      "from": "hg19", "region": "chr1:155158000-155163000",
+      "tool": "samtools faidx",
+      "expected_sha256": "d6007957193f9686e2a8b02becb8a7d02a8aa5dae4f087d233e24e4145b88a1d"
+    },
+    {
+      "kind": "shark", "assembly": "hg38",
+      "output": "muc1_region_hg38.fa",
+      "from": "hg38", "region": "chr1:155184000-155194000",
+      "tool": "samtools faidx",
+      "expected_sha256": "60026035da804b4a7234ae051e4f8440c4a7f05f517affc47684ca85b5c25a6a"
+    },
+    {
+      "kind": "literal", "config_key": "muc1_reference_vntr",
+      "output": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
+      "from_seeds": ["MUC1_motifs_Rev_com.fa", "filter_config.json"],
+      "tool": "generate_vntr_reference",
+      "expected_sha256": "bd6a895ed9fee6aafdd2742f7d295f0b5b26d1a7bb613b9de7793eeba02df441"
+    }
+  ],
+
+  "common_references": [
+    {"config_key": "muc1_motifs_rev_com",        "installed_path": "MUC1_motifs_Rev_com.fa"},
+    {"config_key": "code_adVNTR_RUs",            "installed_path": "code-adVNTR_RUs.fa"},
+    {"config_key": "advntr_reference_vntr_hg19", "installed_path": "vntr_db_advntr/hg19_muc1.db"},
+    {"config_key": "advntr_reference_vntr_hg38", "installed_path": "vntr_db_advntr/hg38_muc1.db"}
+  ]
 }
