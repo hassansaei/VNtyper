@@ -4,7 +4,7 @@
 
 **Goal:** Make VNtyper releases fail early when the live `pypi` environment is not reviewer-free and main-only, while retaining tokenless PyPI Trusted Publishing.
 
-**Architecture:** A new pure Python adapter validates the two GitHub REST payloads that define the live environment and its deployment branch policies. The default-branch release controller downloads those payloads in `validate-release` and invokes the adapter before candidate checkout, package building, GHCR promotion, or PyPI publication. Unit tests own the schema and hostile mutations; workflow tests own permissions, ordering, propagation, and the continued absence of credentials or approval bypasses.
+**Architecture:** A new pure Python adapter validates the three GitHub REST payloads that define the live environment, its deployment branch policies, and its custom deployment protection rules. The default-branch release controller downloads those payloads in `validate-release` and invokes the adapter before candidate checkout, package building, GHCR promotion, or PyPI publication. Unit tests own the schema and hostile mutations; workflow tests own permissions, ordering, propagation, and the continued absence of credentials or approval bypasses.
 
 **Tech Stack:** Python 3.10, `argparse`, `json`, GitHub Actions YAML, GitHub REST API, pytest, PyYAML, Ruff, mypy, actionlint.
 
@@ -12,7 +12,7 @@
 
 - Keep the GitHub environment named exactly `pypi` and keep the PyPI OIDC publisher tuple `hassansaei/VNtyper`, `publish-pypi.yml`, environment `pypi`.
 - Permit the live environment only from the exact branch policy `{name: "main", type: "branch"}`.
-- Reject every required reviewer, wait timer, custom protection rule, unrestricted policy, missing/extra branch policy, and tag policy.
+- Require the built-in `branch_policy` protection rule and reject every required reviewer, wait timer, custom deployment protection rule, unrestricted policy, missing/extra branch policy, and tag policy.
 - Do not add `PYPI_API_TOKEN`, Twine credentials, GitHub App approval, token fallback, environment deletion, tag creation, or tag movement.
 - Keep `publish-pypi` as the only job with `id-token: write`; keep GHCR permissions, ten release checks, tag/ancestry validation, immutable evidence, concurrency, and retries unchanged.
 - Preserve Python 3.10 compatibility and the repository's 120-character Ruff line length.
@@ -27,8 +27,8 @@
 - Create: `tests/unit/test_pypi_environment_contract.py`
 
 **Interfaces:**
-- Consumes: decoded GitHub environment and deployment-branch-policy JSON objects as `Mapping[str, object]`.
-- Produces: `validate_pypi_environment(environment: Mapping[str, object], policies: Mapping[str, object]) -> None` and `main(argv: Sequence[str] | None = None) -> int`.
+- Consumes: decoded GitHub environment, deployment-branch-policy, and custom deployment-protection-rule JSON objects as `Mapping[str, object]`.
+- Produces: `validate_pypi_environment(environment: Mapping[str, object], policies: Mapping[str, object], custom_rules: Mapping[str, object]) -> None` and `main(argv: Sequence[str] | None = None) -> int`.
 
 - [ ] **Step 1: Write the successful-policy and hostile-schema tests**
 
@@ -37,7 +37,7 @@ Create a literal valid fixture rather than importing production constants:
 ```python
 VALID_ENVIRONMENT = {
     "name": "pypi",
-    "protection_rules": [],
+    "protection_rules": [{"id": 23, "node_id": "BR_x", "type": "branch_policy"}],
     "deployment_branch_policy": {
         "protected_branches": False,
         "custom_branch_policies": True,
@@ -47,23 +47,24 @@ VALID_POLICIES = {
     "total_count": 1,
     "branch_policies": [{"id": 17, "node_id": "BP_x", "name": "main", "type": "branch"}],
 }
+VALID_CUSTOM_RULES = {"total_count": 0, "custom_deployment_protection_rules": []}
 
 def test_exact_reviewer_free_main_only_policy_is_valid() -> None:
-    assert validate_pypi_environment(VALID_ENVIRONMENT, VALID_POLICIES) is None
+    assert validate_pypi_environment(VALID_ENVIRONMENT, VALID_POLICIES, VALID_CUSTOM_RULES) is None
 ```
 
-Parametrize independent mutations for `required_reviewers`, `wait_timer`, unknown protection rules, a missing or malformed `protection_rules`, `deployment_branch_policy=None`, protected-branch mode, unrestricted mode, zero/two policies, `master`, glob patterns, and `{name: "main", type: "tag"}`. Assert `ValueError` includes the rejected field and issue URL `https://github.com/hassansaei/VNtyper/issues/236`.
+Parametrize independent mutations for `required_reviewers`, `wait_timer`, missing/duplicate/unknown built-in protection rules, malformed `protection_rules`, `deployment_branch_policy=None`, protected-branch mode, unrestricted mode, zero/two policies, `master`, glob patterns, `{name: "main", type: "tag"}`, nonzero custom-rule count, and any custom-rule row. Assert `ValueError` includes the rejected field and issue URL `https://github.com/hassansaei/VNtyper/issues/236`.
 
 - [ ] **Step 2: Write CLI tests for file, JSON, and policy failures**
 
 Use `tmp_path` JSON files and assert:
 
 ```python
-assert main([str(environment_path), str(policies_path)]) == 0
+assert main([str(environment_path), str(policies_path), str(custom_rules_path)]) == 0
 assert "reviewer-free and restricted to branch main" in capsys.readouterr().out
 ```
 
-Then corrupt each file and assert exit `1`, the exact failed path, an actionable `#236` diagnostic, and no traceback. Test a valid JSON payload with a forbidden reviewer separately from invalid JSON so parsing and policy failures cannot collapse into one branch.
+Then corrupt each of the three files and assert exit `1`, the exact failed path, an actionable `#236` diagnostic, and no traceback. Test a valid JSON payload with a forbidden reviewer separately from invalid JSON so parsing and policy failures cannot collapse into one branch.
 
 - [ ] **Step 3: Run the new tests to verify RED**
 
@@ -79,12 +80,18 @@ Implement strict type helpers that reject booleans where integers are required. 
 ISSUE_URL = "https://github.com/hassansaei/VNtyper/issues/236"
 
 def validate_pypi_environment(
-    environment: Mapping[str, object], policies: Mapping[str, object]
+    environment: Mapping[str, object],
+    policies: Mapping[str, object],
+    custom_rules: Mapping[str, object],
 ) -> None:
     if environment.get("name") != "pypi":
         _reject("environment name must be 'pypi'", environment)
-    if environment.get("protection_rules") != []:
-        _reject("protection_rules must contain no reviewers, timers, or custom rules", environment)
+    protection_rules = environment.get("protection_rules")
+    if not isinstance(protection_rules, list) or len(protection_rules) != 1:
+        _reject("protection_rules must contain exactly the built-in branch_policy rule", environment)
+    rule = protection_rules[0]
+    if not isinstance(rule, Mapping) or rule.get("type") != "branch_policy":
+        _reject("protection_rules must contain exactly the built-in branch_policy rule", environment)
     if environment.get("deployment_branch_policy") != {
         "protected_branches": False,
         "custom_branch_policies": True,
@@ -98,9 +105,11 @@ def validate_pypi_environment(
     row = rows[0]
     if not isinstance(row, Mapping) or row.get("name") != "main" or row.get("type") != "branch":
         _reject("the sole policy must be branch main", policies)
+    if custom_rules.get("total_count") != 0 or custom_rules.get("custom_deployment_protection_rules") != []:
+        _reject("custom deployment protection rules must be empty", custom_rules)
 ```
 
-Load each input with `Path.read_text(encoding="utf-8")` and `json.loads`; require top-level objects; print one success line on `stdout`, and on `OSError`, `json.JSONDecodeError`, or `ValueError` print one `stderr` diagnostic and return `1`.
+Load each of the three inputs with `Path.read_text(encoding="utf-8")` and `json.loads`; require top-level objects; print one success line on `stdout`, and on `OSError`, `json.JSONDecodeError`, or `ValueError` print one `stderr` diagnostic and return `1`.
 
 - [ ] **Step 5: Run focused GREEN and static checks**
 
@@ -148,11 +157,11 @@ assert step["env"] == {
 assert step["continue-on-error"] is absent
 ```
 
-Pin ordering: controller checkout, `pypi-environment`, `resolve`, candidate checkout. Assert the run script fetches exactly `/repos/${GITHUB_REPOSITORY}/environments/pypi` and `/deployment-branch-policies`, passes both files to `controller/scripts/pypi_environment_contract.py`, uses `set -euo pipefail`, and contains neither `|| true` nor a reviewer-approval API.
+Pin ordering: controller checkout, `pypi-environment`, `resolve`, candidate checkout. Assert the run script fetches exactly `/repos/${GITHUB_REPOSITORY}/environments/pypi`, `/deployment-branch-policies`, and `/deployment_protection_rules`, passes all three files to `controller/scripts/pypi_environment_contract.py`, uses `set -euo pipefail`, and contains neither `|| true` nor a reviewer-approval API.
 
 - [ ] **Step 2: Write executable workflow RED tests**
 
-Extract the checked-in step and run it with a fake `gh` executable. The fake records argv and returns literal payloads. Assert a valid pair exits `0` and records exactly two GETs. Parametrize API failure, reviewer payload, wrong branch, tag type, and extra policy; each must exit nonzero before a fake `resolve` sentinel can run and must mention #236.
+Extract the checked-in step and run it with a fake `gh` executable. The fake records argv and returns literal payloads. Assert a valid triple exits `0` and records exactly three GETs. Parametrize API failure, reviewer payload, wrong branch, tag type, extra policy, and custom protection rule; each must exit nonzero before a fake `resolve` sentinel can run and must mention #236.
 
 - [ ] **Step 3: Strengthen privilege and credential regression tests**
 
@@ -197,9 +206,11 @@ Add `actions: read` to `validate-release`, then insert the step immediately afte
           set -euo pipefail
           ENVIRONMENT_PATH="$RUNNER_TEMP/pypi-environment.json"
           POLICIES_PATH="$RUNNER_TEMP/pypi-deployment-branch-policies.json"
+          CUSTOM_RULES_PATH="$RUNNER_TEMP/pypi-deployment-protection-rules.json"
           gh api "repos/${GITHUB_REPOSITORY}/environments/pypi" > "$ENVIRONMENT_PATH"
           gh api "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment-branch-policies" > "$POLICIES_PATH"
-          python scripts/pypi_environment_contract.py "$ENVIRONMENT_PATH" "$POLICIES_PATH"
+          gh api "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment_protection_rules" > "$CUSTOM_RULES_PATH"
+          python scripts/pypi_environment_contract.py "$ENVIRONMENT_PATH" "$POLICIES_PATH" "$CUSTOM_RULES_PATH"
 ```
 
 Do not add an `if`, soft-failure path, approval API, environment reference, or write permission to this job.
@@ -328,7 +339,7 @@ Run fresh `make check-all`, `make ci-local`, `git diff --check`, and clean-statu
 
 - [ ] **Step 1: Verify the administrator migration before dispatch**
 
-Read the environment and branch-policy endpoints. Require no `protection_rules`, custom policies enabled, and exactly `{name: "main", type: "branch"}`. Require issue #236 to record who changed it and when. Do not dispatch while the policy is wrong.
+Read the environment, branch-policy, and custom-protection-rule endpoints. Require exactly the built-in `branch_policy` protection rule, custom policies enabled, exactly `{name: "main", type: "branch"}`, and zero custom deployment protection rules. Require issue #236 to record who changed it and when. Do not dispatch while the policy is wrong.
 
 - [ ] **Step 2: Complete v2.0.11 first**
 

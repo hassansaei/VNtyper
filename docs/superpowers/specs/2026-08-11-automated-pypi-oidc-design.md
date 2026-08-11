@@ -90,13 +90,16 @@ to identify owner `hassansaei`, repository `VNtyper`, workflow
 
 ### 2. Version-controlled fail-fast contract
 
-Add a small pure Python contract module under `scripts/` that accepts the two GitHub REST
-responses: the environment object and its deployment branch-policy collection. It returns
+Add a small pure Python contract module under `scripts/` that accepts three GitHub REST
+responses: the environment object, its deployment branch-policy collection, and its
+custom deployment-protection-rule collection. It returns
 success only when the live shape is exactly the selected policy. It rejects reviewers,
 wait timers, custom protection rules, an unrestricted environment, missing/extra policy
-patterns, or a tag policy masquerading as `main`.
+patterns, or a tag policy masquerading as `main`. The built-in `branch_policy` protection
+rule is required; it is the API representation of the selected main-only branch boundary,
+not a manual approval rule.
 
-The default-branch release controller reads those two public API resources during
+The default-branch release controller reads those three public API resources during
 `validate-release`, before package building or registry mutation, and invokes the pure
 validator. API failures and policy mismatches fail with #236 and the owner command/UI
 path. This turns future drift into an immediate diagnostic rather than a late waiting
@@ -153,7 +156,8 @@ After the first successful OIDC publication, the repository owner deletes the ob
 ## Tests and verification
 
 TDD covers the pure live-policy validator with literal fixtures and mutations for every
-forbidden rule and every missing/extra/wrong-type `main` policy. Workflow contract tests
+forbidden rule, the required built-in branch-policy rule, every enabled custom deployment
+protection rule, and every missing/extra/wrong-type `main` policy. Workflow contract tests
 prove the validation runs before build/promotion, API failures propagate, permissions
 remain read-only except for the isolated OIDC job, and neither token credentials nor
 approval bypasses appear.
