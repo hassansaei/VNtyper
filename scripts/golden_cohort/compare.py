@@ -648,11 +648,16 @@ def render_text(result: dict[str, Any]) -> str:
         counts = check.get("counts", {})
         # Build the policy breakdown from the counts mapping rather than naming the groups
         # in a literal: the sentence used to read "base, non-fast and adVNTR" and stopped
-        # adding up the moment a `cram` group was declared. Anything derived stays named
-        # as derived; every other group is policy.
+        # adding up the moment a `cram` group was declared, and again when the `alias`
+        # group was. Anything derived stays named as derived; every other group is policy.
         policy = ", ".join(
             f"{counts[name]} {label}"
-            for name, label in (("nonfast", "non-fast"), ("advntr", "adVNTR"), ("cram", "CRAM"))
+            for name, label in (
+                ("nonfast", "non-fast"),
+                ("advntr", "adVNTR"),
+                ("alias", "alias"),
+                ("cram", "CRAM"),
+            )
             if counts.get(name)
         )
         lines.append(

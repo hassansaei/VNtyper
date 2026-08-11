@@ -5,11 +5,13 @@ assemblies plus their original hg19 subsets, and the hg38 regression guard
 ``example_40cf``", then five repeats without ``--fast-mode`` and three ``--extra-modules
 advntr`` runs. A hardcoded list of ids reproduces that only until ``tests/data``
 changes, and then reproduces it wrongly and silently. So the 50 BAM-by-assembly cases are
-**derived** by walking the data directory, and the four selections that are policy rather
+**derived** by walking the data directory, and the five selections that are policy rather
 than data - which cases repeat without fast mode, which run adVNTR, which repeat from a
-derived CRAM, which are the deliberate-mismatch probes - are declared here by case id and
-**resolved** against the derived set. A policy naming a case the data does not contain is
-an error, not a silent drop.
+derived CRAM, which are the deliberate-mismatch probes, and which alias a ``GRCh37``/
+``GRCh38`` BAM under its ``hg19_ncbi``/``hg38_ncbi`` physical-identity label - are declared
+here by case id (or, for the alias group, by assembly) and **resolved** against the
+derived set. A policy naming a case the data does not contain is an error, not a silent
+drop.
 
 What the page pins and what it does not
 ---------------------------------------
@@ -52,11 +54,26 @@ Two properties of these cases are load-bearing rather than incidental:
   passed. There is deliberately no "0 or 6 CRAM cases are both fine" rule: a run without
   them is a reduced run and must not earn an attestation-grade verdict.
 
+The alias group
+----------------
+Milestone 5's physical-identity change gives ``hg19_ncbi``/``hg38_ncbi`` their own resolver
+path, and ``hg19_ncbi``/``GRCh37`` (like ``hg38_ncbi``/``GRCh38``) resolve to the identical
+physical genome file. Adding the two labels to :data:`ASSEMBLIES` proves nothing -
+``rg -n '\bASSEMBLIES\b' scripts/golden_cohort/`` shows it is read only by its own
+definition and a docstring - so instead :func:`build_alias_cases` reruns every derived
+``GRCh37``/``GRCh38`` base case a second time, declared under its alias label via
+:data:`ALIAS_ASSEMBLIES`, same BAM and otherwise identical. What that proves is routing:
+that the new label reaches the same physical file the original assembly already does and
+reproduces the same genotype. Like the CRAM group, only the *base* cases being aliased are
+derived; which assembly labels alias which is policy, declared in
+:data:`ALIAS_ASSEMBLIES`.
+
 What "derived" does and does not mean
 -------------------------------------
 Only the **base cases** are derived. The five non-fast ids, the three adVNTR ids, the two
-cohort CRAM ids, the indexed-safe purpose CRAM and the three probes are hardcoded policy,
-with the base-case selections resolved against the derived set. The
+cohort CRAM ids, the indexed-safe purpose CRAM, the fourteen ``hg19_ncbi``/``hg38_ncbi``
+aliases and the three probes are hardcoded policy, with the base-case selections resolved
+against the derived set. The
 CRAM *fixture paths* are derived from the base case's BAM path, so they cannot drift from
 what ``make_cram_fixtures.py`` wrote, but which cases are chosen is policy like the rest.
 Anything that describes this matrix as "derived" without that qualification is overstating
@@ -65,9 +82,10 @@ it, and the gate page has done exactly that.
 Drift is fatal by default
 -------------------------
 :func:`check_matrix` compares the derivation against the per-group contract the gate page
-records - 50 base, 5 non-fast, 3 adVNTR, 6 CRAM and 3 probes. (It was 50/5/3 plus 3 probes
-for runs 1-5, which is the matrix every result table on that page was measured over; run 6
-took an earlier, smaller CRAM group.) That check used to be advisory in every
+records - 50 base, 5 non-fast, 3 adVNTR, 14 alias, 6 CRAM and 3 probes. (It was 50/5/3
+plus 3 probes for runs 1-5, which is the matrix every result table on that page was
+measured over; run 6 took an earlier, smaller CRAM group and predates the alias group
+entirely.) That check used to be advisory in every
 direction: ``build_matrix`` logged the
 deviations as warnings, ``cmd_matrix`` returned 0 regardless, and the comparison's verdict
 ignored them - so a silently reduced run earned the same ``IDENTICAL`` as a full one, and a
@@ -83,6 +101,7 @@ Attributes:
     ADVNTR_CASE_IDS: Which derived cases repeat with ``--extra-modules advntr``.
     CRAM_CASE_IDS: Which derived cases repeat from their derived CRAM fixture.
     CRAM_FIXTURE_DIRNAME: The fixture root, relative to the data directory.
+    ALIAS_ASSEMBLIES: Which alias assembly labels reuse which derived assembly's BAMs.
     PROBE_SPECS: The three deliberate-mismatch probes.
     DOCUMENTED_ASSEMBLY_COUNTS: The per-assembly case counts, used as a self-check.
 """
@@ -159,6 +178,17 @@ CRAM_CASE_IDS: tuple[str, ...] = (
 #: rather than declared.
 CRAM_FIXTURE_DIRNAME = "cram"
 
+#: The physical-identity aliases: an alias assembly label mapped to the derived assembly
+#: whose BAMs it reuses unmodified. ``hg19_ncbi`` and ``GRCh37`` resolve to the identical
+#: physical genome file (``chr1.GRCh37.fna``), and ``hg38_ncbi``/``GRCh38`` likewise (see
+#: docs/development/golden-cohort-gate.md). :func:`build_alias_cases` runs every derived
+#: base case of the mapped assembly a second time, declared under the alias label, so the
+#: gate proves the new resolver routes the alias to the same file and the same genotype.
+ALIAS_ASSEMBLIES: dict[str, str] = {
+    "hg19_ncbi": "GRCh37",
+    "hg38_ncbi": "GRCh38",
+}
+
 #: ``(probe_id, base_case_id, declared_assembly, expectation)``. Two deliberate
 #: mismatches, which the page records as exit 1 on both sides with only the failure point
 #: moving, and one naming probe (an NCBI-named BAM declared ``hg38``) which exits 0.
@@ -174,7 +204,11 @@ PROBE_SPECS: tuple[tuple[str, str, str, str], ...] = (
 #: 7 hg38_ensembl, and run 2's after-side assembly-guard verdict counts are that same
 #: distribution. Each selected CRAM fixture now runs through both lossless scan strategies,
 #: moving hg19 to 24 and hg38_ensembl to 9. The page's ``x / 58`` result tables therefore
-#: describe the pre-CRAM matrix and are not restated here.
+#: describe the pre-CRAM matrix and are not restated here. ``hg19_ncbi``/``hg38_ncbi`` are
+#: new assembly labels the alias group introduces (see :data:`ALIAS_ASSEMBLIES`): one alias
+#: case per ``GRCh37`` base case (7) and per ``GRCh38`` base case (7) - the ``GRCh37``/
+#: ``GRCh38`` counts themselves are unchanged, since the alias is declared under the new
+#: label rather than added to the aliased assembly's own count.
 DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
     "hg19": 24,
     "hg38": 9,
@@ -182,11 +216,22 @@ DOCUMENTED_ASSEMBLY_COUNTS: dict[str, int] = {
     "GRCh37": 7,
     "hg19_ensembl": 7,
     "hg38_ensembl": 9,
+    "hg19_ncbi": 7,
+    "hg38_ncbi": 7,
 }
 
 #: The page's own totals, checked the same way. ``total`` was 58 for runs 1-5; six CRAM
-#: cases cover indexed and stream extraction and take it to 64.
-DOCUMENTED_TOTALS: dict[str, int] = {"base": 50, "nonfast": 5, "advntr": 3, "cram": 6, "total": 64, "probes": 3}
+#: cases cover indexed and stream extraction and take it to 64; fourteen ``hg19_ncbi``/
+#: ``hg38_ncbi`` alias cases (see :data:`ALIAS_ASSEMBLIES`) take it to 78.
+DOCUMENTED_TOTALS: dict[str, int] = {
+    "base": 50,
+    "nonfast": 5,
+    "advntr": 3,
+    "alias": 14,
+    "cram": 6,
+    "total": 78,
+    "probes": 3,
+}
 
 
 def _short(sample: str) -> str:
@@ -363,6 +408,52 @@ def apply_policies(
     return cases, log
 
 
+def build_alias_cases(
+    base_cases: list[dict[str, Any]], *, alias_assemblies: dict[str, str] = ALIAS_ASSEMBLIES
+) -> list[dict[str, Any]]:
+    """Rerun every derived ``GRCh37``/``GRCh38`` base case under its physical-identity alias.
+
+    Adding ``hg19_ncbi``/``hg38_ncbi`` to :data:`ASSEMBLIES` would achieve nothing - nothing
+    reads that constant except its own definition and a docstring - so instead each base
+    case whose assembly is a value of ``alias_assemblies`` is copied verbatim (same BAM,
+    same sample, same expectations) under the alias label. What this proves is routing: that
+    the new label reaches the same physical file the original assembly already does and
+    produces the same genotype.
+
+    The alias id is reconstructed the same way :func:`derive_base_cases` built the original
+    - ``<sample>_<alias>_<aligner>`` for a remapped BAM, ``<sample>_<alias>_subset`` for a
+    top-level one - rather than by substituting the assembly substring into the original id,
+    which would break on a sample name that happens to contain the assembly text.
+
+    Args:
+        base_cases: The derived BAM-by-assembly cases.
+        alias_assemblies: Override for :data:`ALIAS_ASSEMBLIES`.
+
+    Returns:
+        list[dict]: One alias case per (alias label, matching base case) pair, sorted by id.
+    """
+    aliases: list[dict[str, Any]] = []
+    for alias_label, source_assembly in alias_assemblies.items():
+        for base in base_cases:
+            if base["assembly"] != source_assembly:
+                continue
+            aligner = base["source"].removeprefix("remapped/") if base["source"].startswith("remapped/") else None
+            suffix = aligner if aligner is not None else "subset"
+            case = without_side_expectations(base)
+            case.update(
+                {
+                    "case_id": f"{_short(base['sample'])}_{alias_label}_{suffix}",
+                    "group": "alias",
+                    "assembly": alias_label,
+                    "alias_of_assembly": source_assembly,
+                    "repeat_of": base["case_id"],
+                }
+            )
+            aliases.append(case)
+    aliases.sort(key=lambda case: case["case_id"])
+    return aliases
+
+
 def build_probes(base_cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build the three deliberate-mismatch probes from :data:`PROBE_SPECS`.
 
@@ -426,6 +517,7 @@ def check_matrix(cases: list[dict[str, Any]], probes: list[dict[str, Any]]) -> d
         "base": by_group.get("base", 0),
         "nonfast": by_group.get("nonfast", 0),
         "advntr": by_group.get("advntr", 0),
+        "alias": by_group.get("alias", 0),
         # Counted like the rest rather than exempted: a run that derived no CRAM fixtures
         # is a reduced run, and reporting 0 here is what makes it say so.
         "cram": by_group.get("cram", 0),
@@ -465,6 +557,7 @@ def build_matrix(
     advntr_ids: tuple[str, ...] = ADVNTR_CASE_IDS,
     cram_ids: tuple[str, ...] = CRAM_CASE_IDS,
     cram_root: Path | None = None,
+    alias_assemblies: dict[str, str] = ALIAS_ASSEMBLIES,
     advntr_max_coverage: int = 300,
     case_filter: list[str] | None = None,
     include_probes: bool = True,
@@ -480,6 +573,7 @@ def build_matrix(
         cram_ids: Override for :data:`CRAM_CASE_IDS`.
         cram_root: Where ``make cram-fixtures`` wrote. Defaults to
             ``data_dir / CRAM_FIXTURE_DIRNAME``.
+        alias_assemblies: Override for :data:`ALIAS_ASSEMBLIES`.
         advntr_max_coverage: The ``--advntr-max-coverage`` value.
         case_filter: If given, keep only cases whose id contains one of these substrings.
             For smoke tests; the check against the page's counts becomes advisory when it
@@ -510,6 +604,13 @@ def build_matrix(
         advntr_max_coverage=advntr_max_coverage,
     )
     log.extend(policy_log)
+
+    alias_cases = build_alias_cases(base_cases, alias_assemblies=alias_assemblies)
+    cases.extend(alias_cases)
+    log.append(
+        f"physical-identity alias cases: {len(alias_cases)} -> {', '.join(alias_assemblies)} "
+        f"reusing {', '.join(sorted(set(alias_assemblies.values())))} BAMs"
+    )
 
     resolved_cram_root = cram_root if cram_root is not None else data_dir / CRAM_FIXTURE_DIRNAME
     cram_cases, cram_log = build_cram_cases(
@@ -584,6 +685,7 @@ def build_matrix(
             "advntr_case_ids": list(advntr_ids),
             "cram_case_ids": list(cram_ids),
             "cram_root": str(resolved_cram_root),
+            "alias_assemblies": dict(alias_assemblies),
             "advntr_max_coverage": advntr_max_coverage,
             "probe_specs": [list(spec) for spec in PROBE_SPECS] if include_probes else [],
         },
