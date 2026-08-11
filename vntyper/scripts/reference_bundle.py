@@ -23,10 +23,15 @@ logger = logging.getLogger(__name__)
 
 _CHUNK = 1024 * 1024
 
-# `extractall(filter=...)` landed in 3.12 and was backported to 3.10.12 and 3.11.4.
-# `requires-python` is ">=3.10", so it cannot be passed unconditionally.
-_EXTRACT_KWARGS: dict[str, Any] = (
-    {"filter": "data"} if "filter" in inspect.signature(tarfile.TarFile.extractall).parameters else {}
+# `extractall(filter=...)` and `tarfile.FilterError` landed together in 3.12 and were
+# backported to 3.10.12 and 3.11.4. `requires-python` is ">=3.10", so neither can be
+# referenced unconditionally: an early 3.10 has no `filter=` keyword to pass and no
+# `FilterError` class to catch. An empty tuple in an `except` clause never matches, which
+# is exactly right on an interpreter where the filter cannot run in the first place.
+_HAS_EXTRACTION_FILTER = "filter" in inspect.signature(tarfile.TarFile.extractall).parameters
+_EXTRACT_KWARGS: dict[str, Any] = {"filter": "data"} if _HAS_EXTRACTION_FILTER else {}
+_FILTER_ERRORS: tuple[type[BaseException], ...] = (
+    (tarfile.FilterError,) if _HAS_EXTRACTION_FILTER else ()  # type: ignore[attr-defined,unused-ignore]
 )
 
 
@@ -69,31 +74,40 @@ def verify_sha256(path: Path, expected: str) -> None:
     logger.info(f"  ✓ verified {path.name}")
 
 
-def _is_within(root: Path, candidate: Path) -> bool:
-    """True when `candidate` resolves inside `root`."""
-    try:
-        candidate.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
-
-
 def safe_extract(archive: Path, destination: Path) -> None:
     """Extract a tar archive, rejecting any member that could write outside the root.
 
-    The explicit member loop below is the guarantee, not `tarfile`'s `filter=`
-    argument: `requires-python` is `>=3.10` and `filter=` only exists from 3.10.12,
-    3.11.4 and 3.12, so passing it unconditionally would raise `TypeError` on an
-    early 3.10. It is applied as defence in depth where available.
+    **Links are rejected outright rather than resolved**, and that is the whole defence
+    against a class of attack that per-member target resolution does not stop. A link's
+    target is judged *before* extraction, but extracting an earlier member can change
+    what a later one means. Three members in order - `pivot` symlinked to `.`, `escape`
+    symlinked to `pivot/..`, then a regular file `escape/owned` - each pass a lexical
+    pre-check (`destination/pivot/..` normalises to `destination`, and `escape/owned`
+    has neither a `..` component nor an absolute path), and the regular member is then
+    written *through* `escape` into the destination's parent.
+
+    Rejection is safe here rather than merely conservative: VNtyper's bundles are built
+    by `scripts/bundle_release.py` from a fixed list of regular files and never contain
+    a link, and `safe_extract` is only ever pointed at those bundles, after their digest
+    has been verified against a value committed in this repository.
+
+    Absolute paths and `..` components are rejected by the same loop. `filter="data"` is
+    applied as defence in depth **where the interpreter has it** - `requires-python` is
+    `>=3.10` and `filter=` only exists from 3.10.12, 3.11.4 and 3.12, so passing it
+    unconditionally would raise `TypeError` on an early 3.10. That filter signals refusal
+    with `tarfile.FilterError`, which is not a `ValueError`, so it is translated below:
+    the contract this function documents has to hold on every interpreter, not only the
+    ones without the filter.
 
     Args:
         archive: `.tar.gz` to unpack.
         destination: Directory to unpack into; created if absent.
 
     Raises:
-        ValueError: On an absolute path, a `..` component, a device or FIFO member,
-            or a link resolving outside the destination. Per AGENTS.md the convention is
-            `logger.error(message)` then `raise`, with no custom exception class.
+        ValueError: On an absolute path, a `..` component, a symbolic or hard link, a
+            device or FIFO member, or anything `tarfile`'s own `data` filter refuses.
+            Per AGENTS.md the convention is `logger.error(message)` then `raise`, with no
+            custom exception class.
     """
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:gz") as tar:
@@ -107,25 +121,24 @@ def safe_extract(archive: Path, destination: Path) -> None:
                 message = f"{archive.name}: member '{member.name}' escapes the archive root"
                 logger.error(message)
                 raise ValueError(message)
-            if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
-                message = f"{archive.name}: member '{member.name}' is not a regular file or link"
+            if member.issym() or member.islnk():
+                message = (
+                    f"{archive.name}: member '{member.name}' is a link, and a reference bundle ships "
+                    "regular files only. A link's meaning depends on what has already been extracted, "
+                    "so it cannot be validated ahead of extraction."
+                )
                 logger.error(message)
                 raise ValueError(message)
-            # Symlink targets are relative to the member's own directory; hard-link
-            # targets are relative to the archive root. Resolving both the same way
-            # misjudges one of them, and on a Python without `filter=` this loop is the
-            # only protection there is.
-            if member.issym():
-                linked = destination / name.parent / member.linkname
-            elif member.islnk():
-                linked = destination / member.linkname
-            else:
-                linked = None
-            if linked is not None and not _is_within(destination, linked):
-                message = f"{archive.name}: link '{member.name}' escapes the archive root"
+            if not (member.isfile() or member.isdir()):
+                message = f"{archive.name}: member '{member.name}' is not a regular file or directory"
                 logger.error(message)
                 raise ValueError(message)
-        tar.extractall(path=destination, **_EXTRACT_KWARGS)
+        try:
+            tar.extractall(path=destination, **_EXTRACT_KWARGS)
+        except _FILTER_ERRORS as refused:
+            message = f"{archive.name}: tarfile's 'data' extraction filter refused the archive: {refused}"
+            logger.error(message)
+            raise ValueError(message) from refused
 
 
 @contextmanager
@@ -155,6 +168,9 @@ def staged_install(target: Path, *, seed_from_existing: bool = True) -> Iterator
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.staging.", dir=target.parent))
     previous: Path | None = None
+    # A plain flag rather than blanking `staging`: once the rename has happened that path
+    # *is* the live installation, and the cleanup below must not be able to delete it.
+    activated = False
     try:
         # Seeding only reads `target`, but a mid-copy failure (disk full, permission
         # error, an interrupted copy of a large reference tree) must still hit the
@@ -167,9 +183,10 @@ def staged_install(target: Path, *, seed_from_existing: bool = True) -> Iterator
             previous.rmdir()
             target.rename(previous)
         staging.rename(target)
-        staging = None  # type: ignore[assignment]
+        activated = True
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        if not activated:
+            shutil.rmtree(staging, ignore_errors=True)
         if previous is not None:
             # Restore only into a vacant slot, and NEVER delete `previous` on this path:
             # if something else recreated `target`, or the rename back fails, the previous

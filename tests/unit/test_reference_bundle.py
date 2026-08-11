@@ -82,12 +82,15 @@ class TestSafeExtract:
         with pytest.raises(ValueError):
             safe_extract(archive, tmp_path / "out")
 
-    def test_a_link_resolving_inside_the_root_is_extracted(self, tmp_path):
-        """A legitimate in-root link must survive extraction, not just be rejected.
+    def test_a_link_resolving_inside_the_root_is_rejected_anyway(self, tmp_path):
+        """Even a link whose target is unambiguously inside the root is refused.
 
-        The four tests above only prove the guard rejects bad members; none of them
-        prove it lets a good one through, and a guard that rejects everything passes
-        every one of them.
+        An earlier round asked for the opposite of this test, on the reasoning that a
+        guard rejecting everything would pass every rejection test above. That reasoning
+        is obsolete: resolving a link target before extraction is not safe at all (see
+        `test_an_earlier_member_cannot_redirect_a_later_one`), so the guard now rejects
+        links outright and this pins that. `test_an_ordinary_archive_extracts` is what
+        proves the guard is not simply rejecting everything.
         """
         archive = tmp_path / "links.tar.gz"
         payload = b">chr1\nACGT\n"
@@ -101,17 +104,92 @@ class TestSafeExtract:
             symlink.linkname = "chr1.hg38.fa"  # relative to the symlink's own directory
             tar.addfile(symlink)
 
-            hardlink = tarfile.TarInfo("alignment/chr1.hard.fa")
-            hardlink.type = tarfile.LNKTYPE
-            hardlink.linkname = "alignment/chr1.hg38.fa"  # relative to the archive root
-            tar.addfile(hardlink)
-
         destination = tmp_path / "out"
-        safe_extract(archive, destination)
+        with pytest.raises(ValueError, match="is a link"):
+            safe_extract(archive, destination)
+        assert not (destination / "alignment/chr1.sym.fa").exists()
 
-        assert (destination / "alignment/chr1.hg38.fa").read_bytes() == payload
-        assert (destination / "alignment/chr1.sym.fa").read_bytes() == payload
-        assert (destination / "alignment/chr1.hard.fa").read_bytes() == payload
+    def test_an_earlier_member_cannot_redirect_a_later_one(self, tmp_path, monkeypatch):
+        """Regression: validating every member up front, then extracting, is not enough.
+
+        Members in archive order:
+
+        1. `pivot` - a symlink to `.`
+        2. `escape` - a symlink to `pivot/..`
+        3. `escape/owned` - a regular file
+
+        A pre-extraction check on link targets clears all three: `destination/pivot/..`
+        normalises lexically to `destination`, and the regular member has neither a `..`
+        component nor an absolute path. Once extraction has created `pivot`, `escape`
+        resolves to `destination.parent` and the regular member is written *through* it.
+
+        `_EXTRACT_KWARGS` is emptied so this exercises the member loop rather than
+        `tarfile`'s `filter="data"`. Without that, the test would pass on this
+        interpreter for the wrong reason and would not have caught the bug - the real
+        `_EXTRACT_KWARGS` is `{}` on a 3.10 older than 3.10.12, which `requires-python`
+        allows.
+        """
+        import vntyper.scripts.reference_bundle as reference_bundle
+
+        monkeypatch.setattr(reference_bundle, "_EXTRACT_KWARGS", {})
+
+        archive = tmp_path / "ordering.tar.gz"
+        payload = b"OWNED"
+        with tarfile.open(archive, "w:gz") as tar:
+            pivot = tarfile.TarInfo("pivot")
+            pivot.type = tarfile.SYMTYPE
+            pivot.linkname = "."
+            tar.addfile(pivot)
+
+            escape = tarfile.TarInfo("escape")
+            escape.type = tarfile.SYMTYPE
+            escape.linkname = "pivot/.."
+            tar.addfile(escape)
+
+            owned = tarfile.TarInfo("escape/owned")
+            owned.size = len(payload)
+            tar.addfile(owned, io.BytesIO(payload))
+
+        destination = tmp_path / "root" / "out"
+        with pytest.raises(ValueError, match="is a link"):
+            safe_extract(archive, destination)
+
+        assert not (destination.parent / "owned").exists(), "a member was written outside the destination"
+        assert not (destination / "pivot").exists()
+
+    def test_a_device_member_is_rejected(self, tmp_path):
+        """Neither a regular file nor a directory, so it belongs in no reference bundle."""
+        archive = tmp_path / "device.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            info = tarfile.TarInfo("dev/null")
+            info.type = tarfile.CHRTYPE
+            info.devmajor = 1
+            info.devminor = 3
+            tar.addfile(info)
+        with pytest.raises(ValueError, match="not a regular file or directory"):
+            safe_extract(archive, tmp_path / "out")
+
+    def test_the_data_filter_refusing_the_archive_surfaces_as_a_value_error(self, tmp_path, monkeypatch):
+        """`filter="data"` raises `tarfile.FilterError`, which is not a `ValueError`.
+
+        Every caller is documented to see `ValueError`, and the member loop cannot be
+        the only thing that honours that: on an interpreter carrying the filter, a
+        refusal from `tarfile` itself must be translated or the contract holds on some
+        Python versions and not others.
+        """
+        import vntyper.scripts.reference_bundle as reference_bundle
+
+        if not reference_bundle._FILTER_ERRORS:
+            pytest.skip("this interpreter predates tarfile's extraction filter")
+
+        archive = _tar_with(tmp_path, [("alignment/chr1.hg38.fa", b">chr1\nACGT\n")])
+
+        def refuse(self, *_args, **_kwargs):
+            raise reference_bundle._FILTER_ERRORS[0](tarfile.TarInfo("alignment/chr1.hg38.fa"), "/elsewhere")
+
+        monkeypatch.setattr(tarfile.TarFile, "extractall", refuse)
+        with pytest.raises(ValueError, match="extraction filter refused"):
+            safe_extract(archive, tmp_path / "out")
 
 
 class TestStagedInstall:
