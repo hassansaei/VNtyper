@@ -353,16 +353,23 @@ def handle_pipeline(
     # Determine which BWA reference to use, resolving membership-first through the
     # shared registry (#163): `cli_logging_safety`'s pre-open guard must resolve to the
     # same file this does, or `--log-file` can end up appending into whichever reference
-    # the guard did not check. `required=True` is the run path's fail-closed default.
-    resolved_bwa_reference = _resolve_bwa_reference(config, args.reference_assembly)
-    # `required` defaults to True above, so `_resolve_bwa_reference` has already raised
-    # rather than returning None; this only narrows the type for mypy.
-    assert resolved_bwa_reference is not None
-    bwa_reference = resolved_bwa_reference.value
-    reference_source_effective = (
-        "ucsc" if resolved_bwa_reference.is_fallback else get_reference_source(args.reference_assembly)
-    )
-    logger.debug(f"Using BWA reference {resolved_bwa_reference.key}: {bwa_reference}")
+    # the guard did not check. Only a FASTQ run actually aligns with it -
+    # `pipeline_inputs.py` raises for a missing BWA reference only when
+    # `input_type == "FASTQ"`, and the BAM/CRAM branches never read it - so `required` is
+    # tied to that, not to a blanket True. A BAM/CRAM run resolves best-effort (its result
+    # still feeds input-ownership protection and archiving) so a config with no BWA keys
+    # at all does not abort a run that never needed one; a FASTQ run still fails closed,
+    # with `pipeline_inputs`'s own message one layer down if this resolves to None anyway.
+    is_fastq_input = not args.bam and not args.cram
+    resolved_bwa_reference = _resolve_bwa_reference(config, args.reference_assembly, required=is_fastq_input)
+    bwa_reference = resolved_bwa_reference.value if resolved_bwa_reference is not None else None
+    reference_key_used = resolved_bwa_reference.key if resolved_bwa_reference is not None else None
+    reference_source_effective = None
+    if resolved_bwa_reference is not None:
+        reference_source_effective = (
+            "ucsc" if resolved_bwa_reference.is_fallback else get_reference_source(args.reference_assembly)
+        )
+    logger.debug(f"Using BWA reference {reference_key_used}: {bwa_reference}")
 
     sample_name_val = args.sample_name
     if sample_name_val is None:
@@ -403,7 +410,7 @@ def handle_pipeline(
         reference_fasta=args.reference_fasta,
         threads=args.threads,
         reference_assembly=args.reference_assembly,
-        reference_key_used=resolved_bwa_reference.key,
+        reference_key_used=reference_key_used,
         reference_source_effective=reference_source_effective,
         fast_mode=args.fast_mode,
         keep_intermediates=args.keep_intermediates,
