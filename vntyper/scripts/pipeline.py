@@ -30,6 +30,7 @@ from vntyper.scripts.pipeline_alignment import (
     build_alignment_preflight_kwargs,
     prepare_alignment_target,
     prepare_input_alignment_preflight,
+    resolve_summary_reference_provenance,
 )
 from vntyper.scripts.pipeline_cleanup import close_alignment_plan
 from vntyper.scripts.pipeline_coverage import calculate_alignment_coverage
@@ -245,13 +246,25 @@ def run_pipeline(
         tool_versions = get_tool_versions(config)
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
+        # What the run actually used, not what BWA was configured with (MAJOR 5,
+        # milestone-5 PR-2 review): a BAM run never reads a reference, and a CRAM run
+        # decodes against whatever `alignment_plan` resolved above, which can differ
+        # entirely from the configured BWA path. Only FASTQ's own BWA resolution is
+        # correct as recorded, so it passes through unchanged.
+        reference_provenance = resolve_summary_reference_provenance(
+            input_type=input_type,
+            bwa_reference_key=reference_key_used,
+            bwa_reference_path=bwa_reference,
+            bwa_reference_source=reference_source_effective,
+            alignment_plan=alignment_plan,
+        )
         summary = start_summary(
             version=VERSION,
             input_files=input_files,
             reference_assembly_requested=reference_assembly,
-            reference_key_used=reference_key_used,
-            reference_path=bwa_reference,
-            reference_source_effective=reference_source_effective,
+            reference_key_used=reference_provenance.key_used,
+            reference_path=reference_provenance.path,
+            reference_source_effective=reference_provenance.source_effective,
         )
         summary_file_path = os.path.join(output_dir, "pipeline_summary.json")
         if input_type in ["BAM", "CRAM"]:

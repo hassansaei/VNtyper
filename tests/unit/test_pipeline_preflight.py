@@ -109,11 +109,20 @@ def test_coverage_region_is_resolved_once_before_preflight_and_reused_by_the_con
         events.append(event)
         return mock.DEFAULT
 
+    def finish_preflight(*args: object, **kwargs: object) -> AlignmentPlan:
+        # A real plan, not `mock.DEFAULT`'s bare `MagicMock`: `run_pipeline` now reads
+        # `alignment_plan.reference_path`/`.reference_source` to build the summary
+        # (MAJOR 5, milestone-5 PR-2 review) even on this event-ordering test's path,
+        # and a MagicMock attribute is not JSON-serializable.
+        del args
+        events.append("preflight")
+        return _plan(out, "bam")
+
     harness = run_pipeline_under_harness(
         out,
         stage_side_effects={
             "get_region_string_with_fallback": resolve_region,
-            "run_preflight": lambda *args, **kwargs: record("preflight"),
+            "run_preflight": finish_preflight,
             "get_tool_versions": lambda *args, **kwargs: record("tools"),
         },
     )

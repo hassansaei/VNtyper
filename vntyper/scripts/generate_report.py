@@ -429,10 +429,13 @@ def generate_summary_report(
     input_files = pipeline_summary.get("input_files", {})
     pipeline_version = pipeline_summary.get("version", "unknown")
 
-    # How the BWA reference was actually resolved (#163). A summary written before this
-    # was recorded (or one built for adVNTR/BAM-only paths) simply omits these, and the
-    # template renders nothing for them - see AGENTS.md trap 5 on step names for the same
-    # "absent key, no section" pattern.
+    # How the run's reference was actually resolved (#163) - the BWA reference for
+    # FASTQ, or whatever the alignment plan proved for BAM/CRAM, never a BWA path a
+    # BAM/CRAM run never opened (MAJOR 5, milestone-5 PR-2 review; see
+    # `pipeline_alignment.resolve_summary_reference_provenance`). A summary written
+    # before this was recorded simply omits these, and the template renders nothing for
+    # them - see AGENTS.md trap 5 on step names for the same "absent key, no section"
+    # pattern.
     reference_assembly_requested = pipeline_summary.get("reference_assembly_requested")
     reference_key_used = pipeline_summary.get("reference_key_used")
     reference_path = pipeline_summary.get("reference_path")

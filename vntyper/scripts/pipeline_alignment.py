@@ -65,6 +65,86 @@ class PreparedAlignmentPreflight:
     previous_ref_path: str | None
 
 
+@dataclass(frozen=True)
+class SummaryReferenceProvenance:
+    """The reference identity a run's summary and report may honestly claim.
+
+    Attributes:
+        key_used: The `reference_data` config key that supplied the reference, or
+            None when the run has no comparable "configured key" to report - which is
+            every case but FASTQ (see `resolve_summary_reference_provenance`).
+        path: The reference path the run actually used, or None when it read no
+            reference file at all (a BAM run) or when the winning candidate was an
+            ambient htslib resolution with no run-local path (a CRAM run).
+        source_effective: For FASTQ, the reference source ("ucsc", "ncbi" or
+            "ensembl") the resolved BWA reference belongs to. For BAM and CRAM, the
+            alignment plan's own source label (e.g. "not-required", "cli",
+            "config_bwa_reference", "htslib_resolved", "header_ur", "private M5
+            cache") - a different vocabulary, but the same field, because it already
+            carries exactly the meaning "where this run's reference identity came
+            from".
+    """
+
+    key_used: str | None
+    path: str | None
+    source_effective: str | None
+
+
+def resolve_summary_reference_provenance(
+    *,
+    input_type: str,
+    bwa_reference_key: str | None,
+    bwa_reference_path: str | None,
+    bwa_reference_source: str | None,
+    alignment_plan: AlignmentPlan | None,
+) -> SummaryReferenceProvenance:
+    """Describe the reference a run actually used, not the one BWA would have.
+
+    `pipeline.py` used to record the resolved BWA reference in `pipeline_summary.json`
+    for every input type, including BAM and CRAM runs that never open it at all (MAJOR
+    5, milestone-5 PR-2 review): a BAM run reads no reference whatsoever, and a CRAM run
+    decodes against whatever `alignment_plan` resolved - an explicit `--reference-fasta`,
+    a different configured CRAM candidate, an ambient htslib resolution, or a private M5
+    cache - which can differ entirely from the configured BWA path. Naming the BWA
+    selection in either case is a false provenance claim in a machine-readable artefact,
+    in a milestone whose thesis is that the recorded reference is the one actually used.
+
+    A FASTQ run is the one case where the BWA reference *is* what was used to align, so
+    its three values pass through unchanged - `key_used`'s only remaining reason to be a
+    field distinct from `path` at all, since neither BAM nor CRAM has a comparable
+    "configured key" to report.
+
+    For BAM and CRAM, `alignment_plan.reference_path` and `.reference_source` already
+    describe exactly what was proven at preflight - `None`/`"not-required"` for BAM,
+    and whichever candidate `alignment_preflight.resolve_reference` actually proved for
+    CRAM - so they are read through directly rather than re-derived. `key_used` is
+    always None for both: there is no `reference_data` key equivalent to report, and
+    inventing one would misrepresent an alignment-plan source label as a config key.
+
+    Args:
+        input_type: Pipeline input kind (``"FASTQ"``, ``"BAM"`` or ``"CRAM"``).
+        bwa_reference_key: The `reference_data` key that resolved the BWA reference, as
+            returned by `cli_handlers._resolve_bwa_reference`.
+        bwa_reference_path: The resolved BWA reference path.
+        bwa_reference_source: The effective reference source for the resolved BWA
+            reference.
+        alignment_plan: The proven `AlignmentPlan` for a BAM/CRAM run. Only FASTQ is
+            expected to call this with None - `run_pipeline` always has a plan for
+            BAM/CRAM by the time it builds the summary - and that case degrades to
+            "nothing to claim" rather than raising, since a missing plan is itself
+            already a sign nothing was proven yet.
+
+    Returns:
+        SummaryReferenceProvenance: What this run actually used, not what BWA was
+        configured with.
+    """
+    if input_type == "FASTQ":
+        return SummaryReferenceProvenance(bwa_reference_key, bwa_reference_path, bwa_reference_source)
+    if alignment_plan is None:
+        return SummaryReferenceProvenance(None, None, None)
+    return SummaryReferenceProvenance(None, alignment_plan.reference_path, alignment_plan.reference_source)
+
+
 def format_regions_as_bed(regions: str) -> str:
     """Convert comma-separated ``chrom:start-end`` regions to BED rows.
 
