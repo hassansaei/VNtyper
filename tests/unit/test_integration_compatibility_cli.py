@@ -194,7 +194,56 @@ def test_resolve_base_uses_merge_base_when_supplied_base_tip_advanced(tmp_path: 
     advanced_base = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "feature")
 
-    assert module.resolve_base_revision(repo, advanced_base, ci=True) == base
+    assert module.resolve_base_revision(repo, advanced_base, ci=True, allow_merge_base=True) == base
+
+
+def test_main_rejects_non_fast_forward_push_that_removes_before_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catch hiding a removed push-before contract by falling back to an older common ancestor."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo, base, before = _repository(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "rewritten", base)
+    _git(repo, "commit", "--allow-empty", "-qm", "rewrite without appended contract")
+
+    exit_code = module.main(
+        ["--base-revision", before, "--repo-root", str(repo)],
+        environ={"CI": "true", "EVENT_NAME": "push"},
+    )
+
+    assert exit_code == 1
+    assert "base revision is not an ancestor of HEAD" in capsys.readouterr().err
+
+
+def test_main_rejects_ambiguous_criss_cross_pull_request_merge_bases(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Catch silently choosing one of multiple best pull-request merge bases."""
+    module = _module()
+    assert module is not None, "integration compatibility CLI is not implemented"
+    repo, base, _ = _repository(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "left", base)
+    _git(repo, "commit", "--allow-empty", "-qm", "left base")
+    left = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "right", base)
+    _git(repo, "commit", "--allow-empty", "-qm", "right base")
+    right = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "pr-head", left)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge right into PR", right)
+    _git(repo, "checkout", "-q", "-b", "advanced-base", right)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge left into base", left)
+    advanced_base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "pr-head")
+    assert set(_git(repo, "merge-base", "--all", advanced_base, "HEAD").splitlines()) == {left, right}
+
+    exit_code = module.main(
+        ["--base-revision", advanced_base, "--repo-root", str(repo)],
+        environ={"CI": "true", "EVENT_NAME": "pull_request"},
+    )
+
+    assert exit_code == 1
+    assert "no unique exact merge base" in capsys.readouterr().err
 
 
 def test_resolve_base_rejects_unrelated_history(tmp_path: Path) -> None:
@@ -207,8 +256,8 @@ def test_resolve_base_rejects_unrelated_history(tmp_path: Path) -> None:
     unrelated = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", feature_head)
 
-    with pytest.raises(ValueError, match="no exact merge base"):
-        module.resolve_base_revision(repo, unrelated, ci=True)
+    with pytest.raises(ValueError, match="no unique exact merge base"):
+        module.resolve_base_revision(repo, unrelated, ci=True, allow_merge_base=True)
 
 
 @pytest.mark.parametrize(
@@ -216,7 +265,7 @@ def test_resolve_base_rejects_unrelated_history(tmp_path: Path) -> None:
     [
         ("initial-ancestry", "Git ancestry check failed"),
         ("reverse-ancestry", "Git ancestry check failed for HEAD"),
-        ("merge-output", "no exact merge base"),
+        ("merge-output", "no unique exact merge base"),
         ("merge-ancestry", "Git merge-base ancestry check failed"),
     ],
 )
@@ -242,7 +291,7 @@ def test_resolve_base_fails_closed_for_inconsistent_git_results(
             result.returncode = 2 if failure == "initial-ancestry" else 1
         elif arguments == ["merge-base", "--is-ancestor", "HEAD", supplied]:
             result.returncode = 2 if failure == "reverse-ancestry" else 1
-        elif arguments == ["merge-base", supplied, "HEAD"]:
+        elif arguments == ["merge-base", "--all", supplied, "HEAD"]:
             result.stdout = "invalid\n" if failure == "merge-output" else f"{common}\n"
         elif arguments == ["merge-base", "--is-ancestor", common, "HEAD"]:
             result.returncode = 1 if failure == "merge-ancestry" else 0
@@ -253,7 +302,7 @@ def test_resolve_base_fails_closed_for_inconsistent_git_results(
     monkeypatch.setattr(module, "_git", fake_git)
 
     with pytest.raises(ValueError, match=message):
-        module.resolve_base_revision(tmp_path, supplied, ci=True)
+        module.resolve_base_revision(tmp_path, supplied, ci=True, allow_merge_base=True)
 
 
 def test_git_boundaries_fail_for_missing_worktree_and_inconsistent_tree_output(tmp_path: Path) -> None:

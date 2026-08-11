@@ -35,13 +35,20 @@ def _git(repo_root: Path, arguments: Sequence[str]) -> subprocess.CompletedProce
         raise ValueError(f"Git subprocess failed: {error}") from error
 
 
-def resolve_base_revision(repo_root: Path, revision: str | None, *, ci: bool) -> str:
+def resolve_base_revision(
+    repo_root: Path,
+    revision: str | None,
+    *,
+    ci: bool,
+    allow_merge_base: bool = False,
+) -> str:
     """Resolve an explicit event base or a clearly labelled local fallback.
 
     Args:
         repo_root: Git worktree root.
         revision: Explicit PR base or direct-push ``before`` revision.
         ci: Whether the caller is running in CI.
+        allow_merge_base: Whether PR event semantics permit resolving a diverged base tip.
 
     Returns:
         Full base commit SHA.
@@ -73,15 +80,17 @@ def resolve_base_revision(repo_root: Path, revision: str | None, *, ci: bool) ->
         raise ValueError(f"invalid base revision {revision!r}: {resolved.stderr.strip()}")
     ancestry = _git(repo_root, ["merge-base", "--is-ancestor", sha, "HEAD"])
     if ancestry.returncode == 1:
+        if not allow_merge_base:
+            raise ValueError(f"base revision is not an ancestor of HEAD: {sha}")
         behind = _git(repo_root, ["merge-base", "--is-ancestor", "HEAD", sha])
         if behind.returncode == 0:
             raise ValueError(f"base revision is not an ancestor of HEAD: {sha}")
         if behind.returncode != 1:
             raise ValueError(f"Git ancestry check failed for HEAD and {sha}: {behind.stderr.strip()}")
-        merged = _git(repo_root, ["merge-base", sha, "HEAD"])
+        merged = _git(repo_root, ["merge-base", "--all", sha, "HEAD"])
         merge_bases = [line for line in merged.stdout.splitlines() if line]
         if merged.returncode != 0 or len(merge_bases) != 1 or len(merge_bases[0]) != 40:
-            raise ValueError(f"base revision has no exact merge base with HEAD: {sha}: {merged.stderr.strip()}")
+            raise ValueError(f"base revision has no unique exact merge base with HEAD: {sha}: {merged.stderr.strip()}")
         sha = merge_bases[0]
         merge_ancestry = _git(repo_root, ["merge-base", "--is-ancestor", sha, "HEAD"])
         if merge_ancestry.returncode != 0:
@@ -169,7 +178,12 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
     environment = os.environ if environ is None else environ
     repo_root = args.repo_root.resolve()
     try:
-        base_revision = resolve_base_revision(repo_root, args.base_revision, ci=bool(environment.get("CI")))
+        base_revision = resolve_base_revision(
+            repo_root,
+            args.base_revision,
+            ci=bool(environment.get("CI")),
+            allow_merge_base=environment.get("EVENT_NAME") == "pull_request",
+        )
         current_manifest = _read_current_json(repo_root, args.manifest)
         live_config = _read_current_json(repo_root, args.test_config)
         resource_config = _read_current_json(repo_root, args.resource_config)
