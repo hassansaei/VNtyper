@@ -810,6 +810,79 @@ def test_the_version_and_input_files_come_from_the_summary(positive_summary) -> 
     assert "sample.bam" in html
 
 
+# ---------------------------------------------------------------------------
+# The effective BWA reference selection reaches the report (#163)
+# ---------------------------------------------------------------------------
+
+
+def _labeled_value(html: str, label: str) -> str:
+    """The text rendered after ``<strong>{label}:</strong>`` in the report."""
+    match = re.search(rf"<strong>{re.escape(label)}:</strong>\s*([^<]*)", html)
+    assert match, f"label {label!r} not found in report"
+    return match.group(1).strip()
+
+
+def test_the_effective_bwa_reference_reaches_the_report_when_a_fallback_was_taken(tmp_path) -> None:
+    """`select_bwa_reference` (Task 7, #163) can substitute a UCSC-family reference for
+    a requested NCBI/ENSEMBL one; the report is the operator's only later evidence that
+    happened, so all four fields `pipeline.py` records must actually be rendered."""
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        reference_assembly_requested="hg38_ensembl",
+        reference_key_used="bwa_reference_hg38",
+        reference_path="/refs/hg38.fa",
+        reference_source_effective="ucsc",
+    )
+
+    html = render(tmp_path)
+
+    assert _labeled_value(html, "Reference assembly requested") == "hg38_ensembl"
+    assert _labeled_value(html, "Reference key used") == "bwa_reference_hg38"
+    assert _labeled_value(html, "Reference path") == "/refs/hg38.fa"
+    assert _labeled_value(html, "Effective reference source") == "ucsc"
+
+
+def test_the_requested_and_effective_reference_sources_are_shown_as_different(tmp_path) -> None:
+    """A fallback must read as a substitution, not as a match.
+
+    `reference_assembly_requested` names the label actually asked for (`hg38_ensembl`,
+    whose own source is `ensembl`); when the run fell back, `reference_source_effective`
+    is `ucsc` instead. Both must be visible and distinct so an operator cannot read the
+    requested label as proof of what was actually used.
+    """
+    write_summary(
+        tmp_path,
+        tabular_step(summary_steps.STEP_COVERAGE, [COVERAGE_ROW]),
+        tabular_step(summary_steps.STEP_KESTREL, [KESTREL_ROW]),
+        reference_assembly_requested="hg38_ensembl",
+        reference_key_used="bwa_reference_hg38",
+        reference_path="/refs/hg38.fa",
+        reference_source_effective="ucsc",
+    )
+
+    html = render(tmp_path)
+
+    requested = _labeled_value(html, "Reference assembly requested")
+    effective = _labeled_value(html, "Effective reference source")
+    assert requested != effective
+    assert requested == "hg38_ensembl"
+    assert effective == "ucsc"
+
+
+def test_an_older_summary_without_reference_selection_fields_still_renders(positive_summary) -> None:
+    """A summary written before this change (or one with no BWA reference at all, e.g.
+    a BAM-only run) simply omits the four fields; the section must not appear rather
+    than rendering empty labels."""
+    html = render(positive_summary)
+
+    assert "Reference assembly requested" not in html
+    assert "Reference key used" not in html
+    assert "Reference path" not in html
+    assert "Effective reference source" not in html
+
+
 def test_an_unrecognised_pipeline_version_leaves_the_coverage_figures_alone() -> None:
     """The legacy correction requires positive identification, and defaults to inaction.
 

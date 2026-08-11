@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 from pathlib import Path
@@ -576,3 +577,57 @@ def test_log_creation_inside_an_input_tree_is_rejected_before_parent_setup(
     handler.assert_not_called()
     assert not (patient / "pipeline.log").exists()
     assert not (patient / "new.log").exists()
+
+
+class TestTheGuardUsesTheSameReferenceTheRunWill:
+    """A guard that inspects a different file than the run uses is not a guard."""
+
+    @pytest.mark.parametrize(
+        "label,key",
+        [
+            ("hg38_ensembl", "bwa_reference_hg38_ensembl"),
+            ("hg38_ncbi", "bwa_reference_GRCh38"),
+            ("GRCh37", "bwa_reference_GRCh37"),
+            ("hg19_ensembl", "bwa_reference_hg19_ensembl"),
+        ],
+    )
+    def test_the_exact_reference_cannot_be_used_as_a_log_file(self, tmp_path, label, key):
+        from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
+
+        reference = tmp_path / "exact.fa"
+        reference.write_text(">chr1\nACGT\n")
+        config = {"reference_data": {key: str(reference), "bwa_reference_hg38": str(tmp_path / "ucsc.fa")}}
+        args = argparse.Namespace(
+            fastq1="r1.fq",
+            fastq2="r2.fq",
+            bam=None,
+            cram=None,
+            bed_file=None,
+            reference_fasta=None,
+            reference_assembly=label,
+            log_file=str(reference),
+        )
+        with pytest.raises(ValueError, match="exact.fa"):
+            validate_pipeline_log_destination(str(reference), args, config)
+
+    @pytest.mark.parametrize("suffix", [".amb", ".ann", ".bwt", ".pac", ".sa"])
+    def test_a_bwa_sidecar_of_the_exact_reference_cannot_be_used_either(self, tmp_path, suffix):
+        from vntyper.scripts.cli_logging_safety import validate_pipeline_log_destination
+
+        reference = tmp_path / "exact.fa"
+        reference.write_text(">chr1\nACGT\n")
+        sidecar = tmp_path / f"exact.fa{suffix}"
+        sidecar.write_bytes(b"\x00")
+        config = {"reference_data": {"bwa_reference_hg38_ensembl": str(reference)}}
+        args = argparse.Namespace(
+            fastq1="r1.fq",
+            fastq2="r2.fq",
+            bam=None,
+            cram=None,
+            bed_file=None,
+            reference_fasta=None,
+            reference_assembly="hg38_ensembl",
+            log_file=str(sidecar),
+        )
+        with pytest.raises(ValueError):
+            validate_pipeline_log_destination(str(sidecar), args, config)
