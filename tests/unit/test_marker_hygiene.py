@@ -80,6 +80,28 @@ def test_no_test_modules_outside_the_known_tiers() -> None:
     )
 
 
+def test_collected_test_module_basenames_are_unique() -> None:
+    """Every collected test module must have a repository-unique basename.
+
+    Pytest's default import mode imports non-package test modules by basename. Two
+    tier directories containing the same ``test_*.py`` basename therefore collide
+    during collection before marker selection can deselect either module.
+
+    Raises:
+        AssertionError: If two collected test modules share a basename.
+    """
+    tests_root = UNIT_DIR.parent
+    paths_by_basename: dict[str, list[str]] = {}
+    for path in sorted(tests_root.rglob("test_*.py")):
+        paths_by_basename.setdefault(path.name, []).append(str(path.relative_to(tests_root)))
+
+    duplicates = {name: paths for name, paths in paths_by_basename.items() if len(paths) > 1}
+    assert not duplicates, (
+        f"Collected test modules share basenames under pytest's default import mode: {duplicates}. "
+        "Rename each test module so its basename is unique across all tiers."
+    )
+
+
 def test_root_pytest_ini_is_the_single_live_marker_authority() -> None:
     pytest_ini = (REPO_ROOT / "pytest.ini").read_text(encoding="utf-8")
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

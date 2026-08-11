@@ -34,6 +34,7 @@ import ast
 import inspect
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -75,6 +76,8 @@ PARAMETERISED_ON_THE_FASTQ_PATH: dict[str, str] = {
 RECONSTRUCTED: set[str] = {
     "fastq_bam_processing/output_R1.fastq.gz",
     "fastq_bam_processing/output_R2.fastq.gz",
+    "fastq_bam_processing/output_other.fastq.gz",
+    "fastq_bam_processing/output_single.fastq.gz",
     "fastq_bam_processing/output.json",
     "fastq_bam_processing/output_sliced.bam",
     "alignment_processing/output_sorted.bam",
@@ -132,20 +135,22 @@ def _relative_named_paths(harness) -> set[str]:
             continue
         for call in stub.call_args_list:
             for value in (*call.args, *call.kwargs.values()):
-                candidates = (
-                    (Path(value.view_path), Path(value.index_path))
-                    if isinstance(value, AlignmentPlan)
-                    else (Path(value),)
-                    if isinstance(value, str | Path)
-                    else ()
-                )
-                for candidate in candidates:
-                    if not candidate.is_absolute():
-                        continue
-                    try:
-                        found.add(candidate.resolve().relative_to(root).as_posix())
-                    except ValueError:
-                        continue
+                values = value if isinstance(value, tuple) else (value,)
+                for item in values:
+                    candidates = (
+                        (Path(item.view_path), Path(item.index_path))
+                        if isinstance(item, AlignmentPlan)
+                        else (Path(item),)
+                        if isinstance(item, str | Path)
+                        else ()
+                    )
+                    for candidate in candidates:
+                        if not candidate.is_absolute():
+                            continue
+                        try:
+                            found.add(candidate.resolve().relative_to(root).as_posix())
+                        except ValueError:
+                            continue
     return found
 
 
@@ -301,6 +306,8 @@ BAM_RUN_ARTEFACTS: set[str] = {
     "fastq_bam_processing/input.bam.bai",
     "fastq_bam_processing/output_R1.fastq.gz",
     "fastq_bam_processing/output_R2.fastq.gz",
+    "fastq_bam_processing/output_other.fastq.gz",
+    "fastq_bam_processing/output_single.fastq.gz",
     "fastq_bam_processing/output_sliced.bam",
     "fastq_bam_processing/pipeline_info.json",
     "coverage",
@@ -326,6 +333,8 @@ FASTQ_RUN_ARTEFACTS: set[str] = {
     "fastq_bam_processing/output.json",
     "fastq_bam_processing/output_R1.fastq.gz",
     "fastq_bam_processing/output_R2.fastq.gz",
+    "fastq_bam_processing/output_other.fastq.gz",
+    "fastq_bam_processing/output_single.fastq.gz",
     "alignment_processing",
     "alignment_processing/output_sorted.bam",
     "coverage",
@@ -488,6 +497,52 @@ def test_the_compressed_vcf_wins_when_both_exist(tmp_path: Path) -> None:
     (kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz").touch()
 
     assert select_best_vcf_file(str(kestrel_dir)) == str(kestrel_dir / f"{PIPELINE_BASENAME}_indel.vcf.gz")
+
+
+@pytest.mark.parametrize("input_kind", ["bam", "cram", "fastq"])
+def test_archive_protects_original_cli_inputs_not_the_routed_tuple(input_kind: str, tmp_path: Path) -> None:
+    """Post-conversion reassignment must not replace operator-owned archive protections."""
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    original = {name: inputs / name for name in ("sample.bam", "sample.cram", "R1.fastq.gz", "R2.fastq.gz")}
+    reference = inputs / "reference.fa"
+    bed = inputs / "regions.bed"
+    bwa = inputs / "bwa.fa"
+    for path in (*original.values(), reference, bed, bwa):
+        path.touch()
+    bam: str | None = None
+    cram: str | None = None
+    fastq1: str | None = None
+    fastq2: str | None = None
+    if input_kind == "bam":
+        bam = str(original["sample.bam"])
+    elif input_kind == "cram":
+        cram = str(original["sample.cram"])
+    else:
+        fastq1 = str(original["R1.fastq.gz"])
+        fastq2 = str(original["R2.fastq.gz"])
+
+    with mock.patch.object(pipeline, "create_safe_archive", return_value=str(tmp_path / "out.zip")) as archive:
+        run_pipeline_under_harness(
+            tmp_path / "out",
+            archive_results=True,
+            reference_fasta=reference,
+            bed_file=bed,
+            bwa_reference=str(bwa),
+            bam=bam,
+            cram=cram,
+            fastq1=fastq1,
+            fastq2=fastq2,
+        )
+
+    protected = archive.call_args.kwargs["protected_paths"]
+    expected_inputs = {
+        "bam": {str(original["sample.bam"])},
+        "cram": {str(original["sample.cram"])},
+        "fastq": {str(original["R1.fastq.gz"]), str(original["R2.fastq.gz"])},
+    }[input_kind]
+    assert set(protected) == expected_inputs | {reference, bed, str(bwa)}
+    assert all(not isinstance(path, tuple) for path in protected)
 
 
 # --------------------------------------------------------------------------------------

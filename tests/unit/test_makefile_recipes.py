@@ -32,6 +32,7 @@ Pure unit test: it reads the Makefile, asks make to expand recipes with
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -211,7 +212,7 @@ def _run_scripts_coverage_with_fake_pytest(
     pytest_status: int,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(parents=True)
     capture = tmp_path / "coverage-file.txt"
     _write_executable(
         fake_bin / "pytest",
@@ -279,3 +280,298 @@ printf '%s\n' "$COVERAGE_FILE" > "$COVERAGE_CAPTURE"
     assert result.returncode == 2
     assert "Error 23" in result.stderr
     assert not capture.exists(), "pytest received a COVERAGE_FILE path after mktemp failed"
+
+
+def _run_integration_compatibility_with_fake_python(
+    tmp_path: Path, status: int
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    capture = tmp_path / "python-argv.txt"
+    _write_executable(
+        fake_bin / "python",
+        """#!/bin/sh
+printf '%s\n' "$*" > "$COMPAT_CAPTURE"
+exit "$COMPAT_STATUS"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["COMPAT_CAPTURE"] = str(capture)
+    env["COMPAT_STATUS"] = str(status)
+    result = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "check-integration-compatibility",
+            "INTEGRATION_COMPAT_BASE=event-base",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, capture.read_text(encoding="utf-8").strip() if capture.exists() else ""
+
+
+def test_integration_compatibility_recipe_passes_the_explicit_base_and_propagates_failure(tmp_path: Path) -> None:
+    """Catch omitting the event base or masking a failed append-only comparison."""
+    success, argv = _run_integration_compatibility_with_fake_python(tmp_path / "success", 0)
+    assert success.returncode == 0
+    assert argv == "scripts/check_integration_compatibility.py --base-revision event-base"
+
+    failure, _ = _run_integration_compatibility_with_fake_python(tmp_path / "failure", 17)
+    assert failure.returncode != 0
+
+
+def test_check_all_depends_on_integration_compatibility() -> None:
+    """Catch a locally green pre-PR gate that never runs the compatibility checker."""
+    expanded = subprocess.run(
+        ["make", "--dry-run", "check-all"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert expanded.returncode == 0
+    assert "scripts/check_integration_compatibility.py" in expanded.stdout
+
+
+def _run_ci_local_compatibility_with_fake_tools(
+    tmp_path: Path, status: int
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    capture = tmp_path / "python-argv.txt"
+    _write_executable(
+        fake_bin / "git",
+        "#!/bin/sh\nprintf '%s\\n' authoritative-local-base\n",
+    )
+    _write_executable(
+        fake_bin / "python",
+        """#!/bin/sh
+printf '%s\n' "$*" > "$COMPAT_CAPTURE"
+exit "$COMPAT_STATUS"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["COMPAT_CAPTURE"] = str(capture)
+    env["COMPAT_STATUS"] = str(status)
+    result = subprocess.run(
+        ["make", "--no-print-directory", "ci-local-integration-compatibility"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, capture.read_text(encoding="utf-8").strip() if capture.exists() else ""
+
+
+def test_ci_local_compatibility_uses_authoritative_merge_base_and_propagates_failure(tmp_path: Path) -> None:
+    """The CI-parity gate must pass its resolved local base and fail closed."""
+    success, argv = _run_ci_local_compatibility_with_fake_tools(tmp_path / "success", 0)
+    assert success.returncode == 0
+    assert argv == "scripts/check_integration_compatibility.py --base-revision authoritative-local-base"
+
+    failure, _ = _run_ci_local_compatibility_with_fake_tools(tmp_path / "failure", 17)
+    assert failure.returncode != 0
+
+
+def test_ci_local_depends_on_integration_compatibility_parity_gate() -> None:
+    """Catch a local CI mirror that omits the event-base compatibility policy."""
+    declaration = next(
+        line for line in MAKEFILE.read_text(encoding="utf-8").splitlines() if line.startswith("ci-local:")
+    )
+    prerequisites = declaration.partition(":")[2].split()
+
+    assert prerequisites.count("ci-local-integration-compatibility") == 1
+
+
+def test_docker_quick_uses_default_mode_b178_reporter_sentinel() -> None:
+    """Catch losing the PR-tier proof of the normal reporter path."""
+    expanded = subprocess.run(
+        ["make", "--dry-run", "test-docker-quick"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert expanded.returncode == 0
+    assert "test_docker_bam_pipeline[example_b178_hg19_subset_default]" in expanded.stdout
+    assert "test_docker_bam_pipeline[example_b178_hg19_subset_fast]" not in expanded.stdout
+
+
+def test_docker_quick_sentinel_is_a_value_sensitive_mixed_success() -> None:
+    """Changing quick back to exit-only or dropping its singleton/value oracle must fail."""
+    payload = json.loads((REPO_ROOT / "tests/test_data_config.json").read_text(encoding="utf-8"))
+    cases = payload["integration_tests"]["bam_tests"]
+    sentinel = next(case for case in cases if case["test_name"] == "example_b178_hg19_subset_default")
+
+    assert sentinel["expected_exit_code"] == 0
+    assert sentinel["expected_fastq_records"] == {"r1": 16929, "r2": 16929, "other": 0, "single": 1}
+    assert sentinel["expected_selected_fastqs"] == [
+        "output_R1.fastq.gz",
+        "output_R2.fastq.gz",
+        "output_single.fastq.gz",
+    ]
+    assert sentinel["expected_archive"] is True
+    assert sentinel["kestrel_assertions"]["Confidence"] == "High_Precision*"
+    assert set(sentinel["coverage_assertions"]) == {
+        "mean",
+        "median",
+        "stdev",
+        "min",
+        "max",
+        "region_length",
+        "uncovered_bases",
+        "percent_uncovered",
+        "coverage_qc",
+    }
+    assert sentinel["pipeline_summary_assertions"]["parsed_results"] == [
+        "Coverage Calculation",
+        "Kestrel Genotyping",
+    ]
+    assert sentinel["report_assertions"]
+    assert {
+        "summary_report.html",
+        "kestrel/kestrel_result.tsv",
+        "coverage/coverage_summary.tsv",
+        "pipeline_summary.json",
+        "igv_report.html",
+    }.issubset(sentinel["expected_files"])
+
+
+def _run_docker_cram_fixtures_with_fake_docker(
+    tmp_path: Path,
+    status: int,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    capture = tmp_path / "docker-argv.txt"
+    _write_executable(
+        fake_bin / "docker",
+        """#!/bin/sh
+printf '%s\n' "$@" > "$DOCKER_ARGV_CAPTURE"
+exit "$DOCKER_STATUS"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["DOCKER_ARGV_CAPTURE"] = str(capture)
+    env["DOCKER_STATUS"] = str(status)
+    result = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "docker-cram-fixtures",
+            "VNTYPER_TEST_IMAGE=vntyper:issue-233",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, capture.read_text(encoding="utf-8").splitlines() if capture.exists() else []
+
+
+def test_docker_cram_fixture_recipe_uses_candidate_with_scoped_mounts(tmp_path: Path) -> None:
+    """Using another image, a broad writable mount, root, or a host reference must fail."""
+    result, argv = _run_docker_cram_fixtures_with_fake_docker(tmp_path, 0)
+
+    assert result.returncode == 0
+    assert argv == [
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--entrypoint",
+        "/opt/conda/envs/vntyper/bin/python",
+        "--volume",
+        f"{REPO_ROOT}:/workspace:ro",
+        "--volume",
+        f"{REPO_ROOT / 'tests/data'}:/workspace/tests/data:rw",
+        "--workdir",
+        "/workspace",
+        "vntyper:issue-233",
+        "/workspace/scripts/make_cram_fixtures.py",
+        "--data-root",
+        "/workspace/tests/data",
+        "--fixture-root",
+        "/workspace/tests/data/cram",
+        "--manifest",
+        "/workspace/tests/data/cram/manifest.json",
+        "--data-config",
+        "/workspace/tests/test_data_config.json",
+        "--samtools",
+        "/opt/conda/envs/vntyper/bin/samtools",
+        "--reference-fasta",
+        "/opt/vntyper/reference/alignment/chr1.hg19.fa",
+    ]
+
+
+def test_docker_cram_fixture_recipe_propagates_container_failure(tmp_path: Path) -> None:
+    """A failed fixture derivation must stop Make before Docker tests can collect stale data."""
+    result, argv = _run_docker_cram_fixtures_with_fake_docker(tmp_path, 17)
+
+    assert argv
+    assert result.returncode != 0
+    assert "Error 17" in result.stderr
+
+
+def test_fast_and_full_docker_tiers_generate_cram_fixtures_but_quick_does_not() -> None:
+    """Removing either prerequisite, or burdening PR quick with CRAM generation, must fail."""
+    declarations = {
+        line.partition(":")[0]: line.partition(":")[2].split()
+        for line in MAKEFILE.read_text(encoding="utf-8").splitlines()
+        if line.startswith(("test-docker-fast:", "test-docker:", "test-docker-quick:"))
+    }
+
+    assert declarations["test-docker-fast"].count("docker-cram-fixtures") == 1
+    assert declarations["test-docker"].count("docker-cram-fixtures") == 1
+    assert "docker-cram-fixtures" not in declarations["test-docker-quick"]
+
+
+def test_docker_cram_fixture_target_is_phony_and_builds_only_without_candidate_override() -> None:
+    """The local default must build first while CI's explicit candidate must remain immutable."""
+    makefile = MAKEFILE.read_text(encoding="utf-8")
+    phony_targets = {
+        target
+        for line in makefile.splitlines()
+        if line.startswith(".PHONY:")
+        for target in line.partition(":")[2].split()
+    }
+    local = subprocess.run(
+        ["make", "--no-print-directory", "--dry-run", "docker-cram-fixtures"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    candidate = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "--dry-run",
+            "docker-cram-fixtures",
+            "VNTYPER_TEST_IMAGE=vntyper:issue-233",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert "docker-cram-fixtures" in phony_targets
+    assert local.returncode == 0
+    assert "docker build" in local.stdout
+    assert local.stdout.index("docker build") < local.stdout.index("docker run")
+    assert candidate.returncode == 0
+    assert "docker build" not in candidate.stdout
+    assert "vntyper:issue-233" in candidate.stdout

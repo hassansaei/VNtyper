@@ -53,6 +53,25 @@ def get_bam_test_ids() -> list[str]:
     return [case["test_name"] for case in get_bam_test_cases()]
 
 
+def get_cram_test_cases() -> list[dict[str, Any]]:
+    """Get CRAM test cases for parametrization.
+
+    Returns:
+        List of test case dicts from integration_tests.cram_tests.
+    """
+    config = load_test_config()
+    return config.get("integration_tests", {}).get("cram_tests", [])
+
+
+def get_cram_test_ids() -> list[str]:
+    """Get CRAM test IDs for parametrization.
+
+    Returns:
+        List of test IDs (test_name values).
+    """
+    return [case["test_name"] for case in get_cram_test_cases()]
+
+
 def get_advntr_test_cases() -> list[dict[str, Any]]:
     """
     Get adVNTR test cases for parametrization.

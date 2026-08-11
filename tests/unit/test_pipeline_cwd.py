@@ -18,13 +18,15 @@ stage that chdirs mid-run cannot poison later stages; and an unreadable working
 directory falls back to the package root rather than raising.
 """
 
+import json
+import logging
 import os
 from pathlib import Path
 from unittest import mock
 
 import pytest
 
-from tests.support.pipeline_harness import run_pipeline_under_harness
+from tests.support.pipeline_harness import MINIMAL_CONFIG, run_pipeline_under_harness
 from vntyper.scripts import pipeline as pipeline_module
 
 pytestmark = pytest.mark.unit
@@ -141,6 +143,43 @@ def test_the_fastq_path_also_carries_the_working_directory(tmp_path: Path, monke
     )
 
     assert _cwd_of(harness, "run_kestrel") == expected
+
+
+def test_kestrel_stage_boundary_preserves_inputs_configuration_and_summary(tmp_path: Path, monkeypatch) -> None:
+    """Extracting the Kestrel stage must preserve every caller-visible argument and artifact."""
+    run_dir = tmp_path / "elsewhere"
+    run_dir.mkdir()
+    monkeypatch.chdir(run_dir)
+    out = tmp_path / "out"
+
+    harness = run_pipeline_under_harness(
+        out,
+        bam=None,
+        fastq1="/input/R1.fastq.gz",
+        fastq2="/input/R2.fastq.gz",
+        sample_name="patient-7",
+        log_level=logging.DEBUG,
+    )
+
+    assert harness.kwargs("run_kestrel") == {
+        "vcf_path": out / "kestrel" / "output.vcf",
+        "output_dir": out / "kestrel",
+        "fastq_files": (
+            str(out / "fastq_bam_processing" / "output_R1.fastq.gz"),
+            str(out / "fastq_bam_processing" / "output_R2.fastq.gz"),
+            str(out / "fastq_bam_processing" / "output_single.fastq.gz"),
+        ),
+        "reference_vntr": "/refs/muc1.fa",
+        "kestrel_path": "kestrel.jar",
+        "config": MINIMAL_CONFIG,
+        "sample_name": "patient-7",
+        "log_level": logging.DEBUG,
+        "cwd": str(run_dir),
+    }
+    summary = json.loads((out / "pipeline_summary.json").read_text(encoding="utf-8"))
+    kestrel_steps = [step for step in summary["steps"] if step["step"] == "Kestrel Genotyping"]
+    assert len(kestrel_steps) == 1
+    assert kestrel_steps[0]["result_file"] == str(out / "kestrel" / "kestrel_result.tsv")
 
 
 def test_a_cram_input_validates_with_the_working_directory(tmp_path: Path, monkeypatch) -> None:

@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures docker-cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -209,6 +209,14 @@ test-fast:
 	@echo "$(BLUE)Running unit tests (fail-fast, last-failed first)...$(RESET)"
 	pytest -m unit tests/unit -o log_cli=false -q --ff -x
 
+check-integration-compatibility:
+	python scripts/check_integration_compatibility.py $(if $(strip $(INTEGRATION_COMPAT_BASE)),--base-revision "$(INTEGRATION_COMPAT_BASE)",)
+
+ci-local-integration-compatibility:
+	@base_revision="$$(git merge-base origin/main HEAD)" && \
+		test -n "$$base_revision" && \
+		$(MAKE) --no-print-directory check-integration-compatibility INTEGRATION_COMPAT_BASE="$$base_revision"
+
 # Coverage for the fast tier.
 #
 # Two repository thresholds:
@@ -406,7 +414,7 @@ all: format lint type-check test
 check: format-check type-check test-unit
 	@echo "$(GREEN)✓ All checks passed$(RESET)"
 
-check-all: format-check lint type-check-all test-unit
+check-all: format-check lint type-check-all test-unit check-integration-compatibility
 	@echo "$(GREEN)✓ All checks passed (full suite)$(RESET)"
 
 # Opt-in gate that additionally runs the tiers needing test data / Docker.
@@ -496,7 +504,7 @@ ci-local-uv:
 
 # Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs, plus a
 # from-scratch install exactly as CI builds it.
-ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-coverage ci-local-docs ci-local-uv
+ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-coverage ci-local-docs ci-local-uv ci-local-integration-compatibility
 	@echo ""
 	@echo "$(GREEN)========================================$(RESET)"
 	@echo "$(GREEN)✓ Local CI parity checks all passed$(RESET)"
@@ -543,6 +551,7 @@ ci-local-docker: lint-docker
 DOCKER_IMAGE_NAME := vntyper
 DOCKER_IMAGE_TAG := latest
 DOCKER_IMAGE := $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)
+DOCKER_FIXTURE_IMAGE = $(or $(strip $(VNTYPER_TEST_IMAGE)),$(DOCKER_IMAGE))
 
 # The image is split in two. docker/Dockerfile.base carries the conda environments,
 # adVNTR and the reference genomes (expensive, changes a few times a year);
@@ -567,6 +576,25 @@ docker-build:
 		-t $(DOCKER_IMAGE) .
 	@echo "$(GREEN)✓ Docker image built: $(DOCKER_IMAGE)$(RESET)"
 
+# Generate CRAM fixtures with the exact candidate image that the integration tests
+# exercise. The repository stays read-only except for the fixture subtree, the
+# container has no network, and it runs with the invoking user's identity.
+docker-cram-fixtures: $(if $(strip $(VNTYPER_TEST_IMAGE)),,docker-build)
+	docker run --rm --network none \
+		--user "$$(id -u):$$(id -g)" \
+		--entrypoint /opt/conda/envs/vntyper/bin/python \
+		--volume "$(CURDIR):/workspace:ro" \
+		--volume "$(CURDIR)/tests/data:/workspace/tests/data:rw" \
+		--workdir /workspace \
+		$(DOCKER_FIXTURE_IMAGE) \
+		/workspace/scripts/make_cram_fixtures.py \
+		--data-root /workspace/tests/data \
+		--fixture-root /workspace/tests/data/cram \
+		--manifest /workspace/tests/data/cram/manifest.json \
+		--data-config /workspace/tests/test_data_config.json \
+		--samtools /opt/conda/envs/vntyper/bin/samtools \
+		--reference-fasta /opt/vntyper/reference/alignment/chr1.hg19.fa
+
 # Fast structural checks against an already-built image. No Zenodo test data, no
 # network inside the container, ~2s. Set VNTYPER_TEST_IMAGE to point at a tag other
 # than vntyper:local.
@@ -580,13 +608,13 @@ test-docker-smoke:
 # genotyping is 15-25 min on a 2-core runner and dominates the suite, so it is
 # exercised on a schedule instead of blocking every merge.
 # Note the marker composition: repeated -m flags OVERRIDE rather than combine.
-test-docker-fast:
+test-docker-fast: docker-cram-fixtures
 	@echo "$(BLUE)Running Docker tests excluding the slow tier...$(RESET)"
 	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
 		pytest -m "docker and not slow" -v
 	@echo "$(GREEN)✓ Docker tests (fast tier) complete$(RESET)"
 
-test-docker:
+test-docker: docker-cram-fixtures
 	@echo "$(BLUE)Running all Docker integration tests with testcontainers...$(RESET)"
 	@echo "$(BLUE)Note: Requires Docker daemon running$(RESET)"
 	@if ! python -c "import testcontainers" 2>/dev/null; then \
@@ -604,7 +632,7 @@ test-docker-quick:
 		exit 1; \
 	fi
 	$(if $(VNTYPER_TEST_IMAGE),VNTYPER_TEST_IMAGE=$(VNTYPER_TEST_IMAGE)) \
-	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_fast]" \
+	pytest "tests/docker/test_docker_pipeline.py::test_docker_bam_pipeline[example_b178_hg19_subset_default]" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_container_health" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_volume_mounts" \
 	       "tests/docker/test_docker_pipeline.py::test_docker_dependencies" -v

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import gzip
+import json
 import logging
+import zlib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
@@ -49,7 +51,7 @@ def count_fastq_records(path: str | Path, *, lines_per_record: int) -> int:
             return 0
         with _open_fastq(fastq_path) as handle:
             line_count = sum(1 for _ in handle)
-    except (OSError, EOFError, UnicodeError) as exc:
+    except (OSError, EOFError, UnicodeError, zlib.error) as exc:
         msg = f"Could not count FASTQ records in {fastq_path}: {exc}"
         logger.error(msg)
         raise ValueError(msg) from exc
@@ -81,7 +83,7 @@ def _configured_lines_per_record(config: Mapping[str, Any]) -> int:
 def route_converted_fastqs(
     produced: tuple[str, str, str, str],
     config: Mapping[str, Any],
-) -> tuple[str, str | None]:
+) -> tuple[str, ...]:
     """Count and route all four FASTQs emitted by alignment conversion.
 
     Args:
@@ -91,10 +93,10 @@ def route_converted_fastqs(
             four lines per record.
 
     Returns:
-        The first routed FASTQ and the optional paired FASTQ.
+        Every non-empty routed FASTQ in R1/R2/other/single order.
 
     Raises:
-        ValueError: If counting fails, the layout is mixed or empty, or any
+        ValueError: If counting fails, the layout is invalid or empty, or any
             produced FASTQ would be stranded.
     """
     paths = dict(zip(_FASTQ_KEYS, produced, strict=True))
@@ -104,10 +106,20 @@ def route_converted_fastqs(
     consumed, stranded = route_fastqs(layout, paths, counts)
     details = ", ".join(f"{paths[key]}: {counts[key]} records" for key in _FASTQ_KEYS)
 
-    if layout in {"mixed", "empty"} or stranded or len(consumed) not in {1, 2}:
+    if layout == "invalid":
+        msg = f"FASTQ layout 'invalid': mate outputs are inconsistent. Produced FASTQs: {details}"
+        logger.error(msg)
+        raise ValueError(msg)
+
+    if layout == "empty" or stranded or not 1 <= len(consumed) <= 4:
         msg = f"FASTQ layout '{layout}' cannot be consumed without dropping reads. Produced FASTQs: {details}"
         logger.error(msg)
         raise ValueError(msg)
 
-    logger.info(f"Detected {layout} FASTQ layout. Produced FASTQs: {details}")
-    return consumed[0], consumed[1] if len(consumed) == 2 else None
+    record = {
+        "counts": counts,
+        "layout": layout,
+        "selected": [Path(path).name for path in consumed],
+    }
+    logger.info(f"READ_SET_ROUTING {json.dumps(record, sort_keys=True, separators=(',', ':'))}")
+    return consumed

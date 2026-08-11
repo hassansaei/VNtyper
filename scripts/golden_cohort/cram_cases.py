@@ -159,17 +159,18 @@ def build_cram_cases(
                 }
             )
             if evidence_expectation is not None:
-                case["side_expectations"] = {
-                    "before": {
-                        "expect_exit": "zero",
-                        "required_artifacts": list(base["required_artifacts"]),
-                    },
-                    "after": {
-                        "expect_exit": "nonzero",
-                        "required_artifacts": [],
-                        "cram_evidence_expectation": evidence_expectation,
-                    },
-                }
+                case["cram_evidence_expectation"] = evidence_expectation
+                if scan == "indexed":
+                    guard_count = evidence_expectation["placed_unmapped_guard_count"]
+                    case.update(
+                        {
+                            "expect_exit": "nonzero",
+                            "required_artifacts": [],
+                            "expected_stderr_contains": (
+                                f"idxstats reports {guard_count} placed-unmapped reads; using stream scan"
+                            ),
+                        }
+                    )
             cases.append(case)
 
     if cram_ids:

@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,8 +40,9 @@ from tests.parametrization import (
 )
 from tests.support.orchestration import (
     ADVNTR_TIMEOUT_SECONDS,
-    assert_declared_archive,
-    mixed_layout_diagnostic,
+    PipelineRequest,
+    PipelineRunResult,
+    build_pipeline_argv,
     run_advntr_test_case,
     run_bam_test_case,
     run_fastq_test_case,
@@ -91,6 +93,20 @@ def _run_cli(command: list[str]) -> subprocess.CompletedProcess[str]:
     return result
 
 
+def _run_local_pipeline(request: PipelineRequest) -> PipelineRunResult:
+    """Execute a canonical request locally, mapping paths without changing identity.
+
+    Args:
+        request: Transport-independent pipeline request.
+
+    Returns:
+        Complete captured local process result.
+    """
+    pipeline_argv = build_pipeline_argv(request, str)
+    completed = _run_cli([sys.executable, "-m", "vntyper.cli", *pipeline_argv[1:]])
+    return PipelineRunResult(completed.returncode, completed.stdout, completed.stderr)
+
+
 #
 # 1) FASTQ Tests
 #
@@ -106,39 +122,7 @@ def test_fastq_input(tmp_path: Path, ensure_test_data: None, fastq_case: dict) -
     """
     output_dir = _fresh_output_dir(tmp_path, fastq_case["test_name"])
 
-    def local_runner(
-        fastq1: Path,
-        fastq2: Path | None,
-        reference: str,
-        out_dir: Path,
-        extra_modules: list[str],
-    ) -> int:
-        """Execute the vntyper CLI locally via subprocess."""
-        command = [
-            "vntyper",
-            "--config-path",
-            "vntyper/config.json",
-            "pipeline",
-            "--fastq1",
-            str(fastq1),
-        ]
-        if fastq2 is not None:
-            command.extend(["--fastq2", str(fastq2)])
-        command.extend(
-            [
-                "--threads",
-                "4",
-                "--reference-assembly",
-                reference,
-                "--output-dir",
-                str(out_dir),
-            ]
-        )
-        if extra_modules:
-            command.extend(["--extra-modules", ",".join(extra_modules)])
-        return _run_cli(command).returncode
-
-    run_fastq_test_case(fastq_case, local_runner, output_dir)
+    run_fastq_test_case(fastq_case, _run_local_pipeline, output_dir)
 
 
 #
@@ -161,35 +145,7 @@ def test_bam_input_with_kestrel_checks(tmp_path: Path, ensure_test_data: None, b
         bam_case: One entry of ``integration_tests.bam_tests``.
     """
     output_dir = _fresh_output_dir(tmp_path, bam_case["test_name"])
-    cli_options = list(bam_case.get("cli_options", []))
-
-    def local_runner(bam_file: Path, reference: str, out_dir: Path) -> int:
-        """Execute the vntyper CLI locally via subprocess."""
-        command = [
-            "vntyper",
-            "-l",
-            "DEBUG",
-            "pipeline",
-            "--bam",
-            str(bam_file),
-            "--threads",
-            "4",
-            "--reference-assembly",
-            reference,
-            "-o",
-            str(out_dir),
-            *cli_options,
-        ]
-        result = _run_cli(command)
-        if "expected_mixed_fastq_records" in bam_case:
-            expected = mixed_layout_diagnostic(bam_case, out_dir)
-            assert expected in result.stderr, (
-                f"Missing exact mixed-layout diagnostic:\n{expected}\nSTDERR:\n{result.stderr}"
-            )
-        return result.returncode
-
-    run_bam_test_case(bam_case, local_runner, output_dir)
-    assert_declared_archive(bam_case, output_dir)
+    run_bam_test_case(bam_case, _run_local_pipeline, output_dir)
 
 
 #
@@ -208,41 +164,4 @@ def test_advntr_input(tmp_path: Path, ensure_test_data: None, advntr_case: dict)
     """
     output_dir = _fresh_output_dir(tmp_path, advntr_case["test_name"])
 
-    def local_runner(
-        bam_file: Path,
-        reference: str,
-        out_dir: Path,
-        extra_modules: list[str],
-        extra_cli_options: list[str],
-    ) -> int:
-        """Execute the vntyper CLI locally via subprocess."""
-        command = [
-            "vntyper",
-            "-l",
-            "DEBUG",
-            "pipeline",
-            "--bam",
-            str(bam_file),
-            "--threads",
-            "4",
-            "--reference-assembly",
-            reference,
-            "-o",
-            str(out_dir),
-        ]
-
-        if extra_modules:
-            # The comma form relies on cli_handlers.normalise_extra_modules: before
-            # #179 "advntr,shark" matched neither module and ran Kestrel only.
-            command.extend(["--extra-modules", ",".join(extra_modules)])
-
-        command.extend(extra_cli_options)
-        result = _run_cli(command)
-        if "expected_mixed_fastq_records" in advntr_case:
-            expected = mixed_layout_diagnostic(advntr_case, out_dir)
-            assert expected in result.stderr, (
-                f"Missing exact mixed-layout diagnostic:\n{expected}\nSTDERR:\n{result.stderr}"
-            )
-        return result.returncode
-
-    run_advntr_test_case(advntr_case, local_runner, output_dir)
+    run_advntr_test_case(advntr_case, _run_local_pipeline, output_dir)

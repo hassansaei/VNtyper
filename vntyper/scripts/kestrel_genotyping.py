@@ -27,6 +27,7 @@ import logging
 import os
 import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -35,7 +36,8 @@ from vntyper.scripts.confidence_assignment import (
     calculate_depth_score_and_assign_confidence,
 )
 from vntyper.scripts.file_processing import filter_indel_vcf, filter_vcf
-from vntyper.scripts.kestrel_command import construct_kestrel_command
+from vntyper.scripts.kestrel_command import construct_kestrel_command as construct_kestrel_command  # noqa: F401
+from vntyper.scripts.kestrel_execution import KestrelCommandArguments, plan_kestrel_invocations
 from vntyper.scripts.motif_processing import (
     load_additional_motifs,
     load_muc1_reference,
@@ -148,8 +150,7 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
 def run_kestrel(
     vcf_path,
     output_dir,
-    fastq_1,
-    fastq_2,
+    fastq_files,
     reference_vntr,
     kestrel_path,
     config,
@@ -172,8 +173,7 @@ def run_kestrel(
     Args:
         vcf_path (Path): Where the VCF from Kestrel should be written.
         output_dir (str): Folder for intermediate & final results.
-        fastq_1 (str): Path to FASTQ R1.
-        fastq_2 (str | None): Optional path to FASTQ R2.
+        fastq_files (Sequence[str | Path]): Ordered FASTQs for one sample.
         reference_vntr (str): MUC1 reference FASTA for Kestrel.
         kestrel_path (str): Path to the Kestrel jar.
         config (dict): Overall pipeline config (tools, references, etc.).
@@ -198,7 +198,6 @@ def run_kestrel(
     max_hap_states = kestrel_settings.get("max_hap_states", 30)
     log_level_str = logging.getLevelName(log_level)
 
-    # Retrieve additional settings (defaults to empty)
     additional_settings = kestrel_settings.get("additional_settings", "")
 
     # #212: a pre-existing output.vcf used to skip the whole stage and `return`, which
@@ -215,42 +214,43 @@ def run_kestrel(
         logger.warning(f"Removing a VCF left by an earlier run before re-running Kestrel: {vcf_path}")
         vcf_path.unlink()
 
+    command_arguments = KestrelCommandArguments(
+        kestrel_path=kestrel_path,
+        reference_vntr=reference_vntr,
+        vcf_out=vcf_path,
+        java_path=java_path,
+        java_memory=java_memory,
+        max_align_states=max_align_states,
+        max_hap_states=max_hap_states,
+        log_level=log_level_str,
+        sample_name=sample_name,
+        additional_settings=additional_settings,
+    )
+    invocations = plan_kestrel_invocations(
+        fastq_files=fastq_files,
+        kmer_sizes=kmer_sizes,
+        output_dir=Path(output_dir),
+        command_arguments=command_arguments,
+    )
+
     # Whether some k-mer size both ran Kestrel and post-processed its VCF. `break` below
     # is reachable only inside `if vcf_path.is_file()`, so a Kestrel invocation that exits
     # 0 without writing a VCF used to fall out of the loop and return None.
     completed = False
 
-    # Try each k-mer size in sequence. Usually just [20], can be more.
-    for kmer_size in kmer_sizes:
-        kmer_command = construct_kestrel_command(
-            kmer_size=kmer_size,
-            kestrel_path=kestrel_path,
-            reference_vntr=reference_vntr,
-            output_dir=output_dir,
-            fastq_1=fastq_1,
-            fastq_2=fastq_2,
-            vcf_out=vcf_path,
-            java_path=java_path,
-            java_memory=java_memory,
-            max_align_states=max_align_states,
-            max_hap_states=max_hap_states,
-            log_level=log_level_str,
-            sample_name=sample_name,
-            additional_settings=additional_settings,
-        )
-
-        log_file = os.path.join(output_dir, f"kestrel_kmer_{kmer_size}.log")
+    for invocation in invocations:
+        kmer_size = invocation.kmer_size
+        kmer_command = invocation.command
+        log_file = str(invocation.log_file)
 
         logger.info(f"Launching Kestrel with k-mer size {kmer_size}...")
 
-        # Actually run the Kestrel command
         if not run_command(kmer_command, log_file, critical=True, cwd=cwd):
             logger.error(f"Kestrel failed for k-mer size {kmer_size}. Check {log_file} for details.")
             raise RuntimeError(f"Kestrel failed for kmer size {kmer_size}.")
 
         logger.info(f"Mapping-free genotyping of MUC1-VNTR with k-mer size {kmer_size} done!")
 
-        # Now that Kestrel completed, confirm the VCF is present
         if vcf_path.is_file():
             # Convert the intermediate SAM→BAM (for debugging or IGV)
             sam_file = os.path.join(output_dir, "output.sam")

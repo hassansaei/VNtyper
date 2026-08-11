@@ -94,7 +94,7 @@ def _tokens(command: str) -> list[str]:
 
 def test_the_fastp_command_is_pinned_with_both_flags_on():
     """
-    Both optional flags append after the base command.
+    Deduplication is serialized even when the caller requests more workers.
 
     The double space before ``--disable_adapter_trimming`` is not a typo: the base
     command ends with a trailing space and each flag is appended with a leading
@@ -116,7 +116,7 @@ def test_the_fastp_command_is_pinned_with_both_flags_on():
     )
 
     assert command == (
-        "fastp --thread 4 --in1 /data/in_R1.fq.gz --in2 /data/in_R2.fq.gz "
+        "fastp --thread 1 --in1 /data/in_R1.fq.gz --in2 /data/in_R2.fq.gz "
         "--out1 /out/output_R1.fastq.gz --out2 /out/output_R2.fastq.gz "
         "--compression 6 "
         "--qualified_quality_phred 20 "
@@ -129,7 +129,7 @@ def test_the_fastp_command_is_pinned_with_both_flags_on():
 
 
 def test_the_fastp_command_omits_both_optional_flags_when_disabled():
-    """With both switches off the command ends at the trailing space, as before."""
+    """Without deduplication, fastp retains the caller's requested concurrency."""
     command = build_fastp_command(
         fastp_path=FASTP,
         threads=4,
@@ -145,6 +145,7 @@ def test_the_fastp_command_omits_both_optional_flags_when_disabled():
         deduplication=False,
     )
 
+    assert command.startswith("fastp --thread 4 ")
     assert command.endswith("--json /out/output.json ")
     assert "--disable_adapter_trimming" not in command
     assert "--dedup" not in command
@@ -176,19 +177,21 @@ def test_the_fastp_command_uses_its_single_input_form_when_mate_two_is_absent():
 
 
 @pytest.mark.parametrize(
-    ("disable_adapter_trimming", "deduplication", "expected_suffix"),
+    ("disable_adapter_trimming", "deduplication", "expected_threads", "expected_suffix"),
     [
-        (True, True, " --disable_adapter_trimming --dedup"),
-        (True, False, " --disable_adapter_trimming"),
-        (False, True, " --dedup"),
-        (False, False, ""),
+        (True, True, 1, " --disable_adapter_trimming --dedup"),
+        (True, False, 4, " --disable_adapter_trimming"),
+        (False, True, 1, " --dedup"),
+        (False, False, 4, ""),
     ],
 )
-def test_every_fastp_flag_combination_is_pinned(disable_adapter_trimming, deduplication, expected_suffix):
-    """All four conditional-flag combinations, so neither switch can invert unnoticed."""
+def test_every_fastp_flag_combination_is_pinned(
+    disable_adapter_trimming, deduplication, expected_threads, expected_suffix
+):
+    """Only deduplication serializes fastp across all four flag combinations."""
     command = build_fastp_command(
         fastp_path=FASTP,
-        threads=1,
+        threads=4,
         fastq_1="/a_1.fq",
         fastq_2="/a_2.fq",
         output="/o",
@@ -201,6 +204,7 @@ def test_every_fastp_flag_combination_is_pinned(disable_adapter_trimming, dedupl
         deduplication=deduplication,
     )
 
+    assert command.startswith(f"fastp --thread {expected_threads} ")
     assert command.endswith("--json /o/s.json " + expected_suffix)
 
 

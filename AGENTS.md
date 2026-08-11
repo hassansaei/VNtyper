@@ -318,8 +318,12 @@ limit.
   `tests/unit/test_marker_hygiene.py`, which fails the build naming the offending file;
   `--strict-markers` additionally turns a *misspelled* marker into an error.
 - Unit tests must stay pure: `tmp_path` + `unittest.mock`, no network, no reference data.
-- Integration and docker tests pull a ~1.1 GB Zenodo archive and MD5 all 114
-  `file_resources` entries; one missing file triggers a full re-download.
+- Integration tests require both the ~1.1 GB Zenodo archive and the pinned host
+  `reference/alignment/chr1.hg19.fa`. Install that reference with
+  `vntyper install-references -d reference --references hg19`; the test-data download
+  does not install it. Docker tests use the pinned reference bundled in the image and
+  require only the archive on the host. The test bootstrap MD5s all 114 `file_resources`
+  entries, and one missing file triggers a full re-download.
   **The test-data bootstrap has no skip fallback**: `tests/conftest.py` and
   `tests/support/data_utils.py` call `pytest.exit(..., returncode=1)` on missing config,
   a missing Kestrel JAR or a failed download, which ends the whole session — unit tests
@@ -550,25 +554,42 @@ summary | release-summary | none | always records success, failure, skipped jobs
     solvers, so `--no-deps` stays.
 16. **`scripts/` is in both runtime quality gates.** `RUFF_PATHS` covers
     `vntyper/ docker/app/ tests/ scripts/ docs/`, and `make type-check` runs
-    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 129 source files.
+    `mypy vntyper/ docker/app/ scripts/`; the final no-cache run checked 134 source files.
     `make type-check-all` then adds the deliberately separate `mypy vntyper/ tests/`
-    pass, which checked 282 test sources. Do not claim `scripts/` is part of that tests
+    pass, which checked 295 test sources. Do not claim `scripts/` is part of that tests
     invocation or collapse the two.
 
     Coverage uses `source = [`vntyper`, `docker/app`, `scripts`]`, with root `scripts`
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
-    final 2026-08-10 verification measured all 35 Python files at 6,004 of 6,391 measured
-    units, or 93.94% aggregate scripts-only branch-inclusive coverage, and 89.17% combined
-    branch-inclusive coverage across 5,072 unit tests in both the maintained Python 3.12
-    environment and `ci-local`'s clean Python 3.13 rebuild. The Python 3.10–3.13 GitHub
-    matrix remains the authoritative cross-version gate. These figures do not change the
-    independent gate semantics:
+    final 2026-08-11 verification measured all 38 Python files at 7,166 of 7,698 measured
+    units, or 93.09% aggregate scripts-only branch-inclusive coverage, and 17,227 of
+    19,309 measured units, or 89.22% combined branch-inclusive coverage. All 5,385 unit
+    tests passed with no skips and 163 warnings in the maintained Python 3.12.13
+    environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
+    GitHub matrix remain the authoritative cross-version gates. These figures do not
+    change the independent gate semantics:
     `[tool.coverage.report].fail_under = 86` is the hard floor,
     `COVERAGE_TARGET ?= 86` is advisory, `PATCH_COVERAGE_TARGET ?= 80` scores changed
     lines, and `SCRIPTS_COVERAGE_TARGET ?= 88` is the isolated pre-source proof. The
     existing `exclude_also` entry ignores only mechanical direct-execution bootstrap
     guards; callable `main(...)` functions, exit policy and substantive CLI branches
     remain measured. Add no scripts omit entry to improve any of these numbers.
+17. **Real-data successes are append-only compatibility contracts.**
+    `tests/compatibility/real_success_baseline.json` is independent of the mutable
+    declarations in `tests/test_data_config.json`. Identity is `(suite, test_name)`, so
+    one input may legitimately occur in more than one suite. `make
+    check-integration-compatibility` validates baseline-to-live and qualifying
+    live-to-baseline coverage in the same process, then compares the complete current
+    row with the explicit Git event base. Never normalize a regression by changing exit
+    0 to exit 1, renaming or deleting a case or row, or weakening its input/reference
+    digest, threads, log level, CLI options, modules, routing counts or selection,
+    required artifacts, archive state, value fields, centers, or tolerances. A new
+    qualifying real success must add a complete row. Pull requests use
+    `origin/${{ github.base_ref }}` and pushes use `${{ github.event.before }}` with full
+    history; missing, empty, all-zero, shallow, or unreachable bases fail closed. The
+    only no-base bootstrap is the checker's pinned ten historical successes
+    reconstructed from the commit before `52c4146596fef2d1e2402991fbab062ba8021889`;
+    there is no exception or free-text waiver.
 
 ## Never
 

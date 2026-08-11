@@ -1,47 +1,11 @@
 #!/usr/bin/env python3
-"""Derive CRAM fixtures from the BAM test cohort, and prove the derivation is lossless.
+"""Derive lossless CRAM fixtures from the BAM test cohort.
 
-Why this exists
----------------
-VNtyper accepts CRAM but no CRAM has ever been exercised by a test (#188), so the CRAM
-branch of ``process_bam_to_fastq`` -- including its whole-file unmapped-read scan and the
-merge that follows it -- has never run against real data. Every claim about the CRAM path
-has therefore been an argument from source reading.
-
-Why the fixtures are derived rather than committed
---------------------------------------------------
-``/tests/data/`` is git-ignored; the cohort ships as a Zenodo archive. A committed CRAM
-would need a new archive, new checksums, and a second copy of every read. Deriving each
-CRAM from the BAM beside it costs about a second per sample and buys a much stronger
-assertion than a standalone fixture ever could:
-
-    the same sample, as BAM and as CRAM, must produce the same genotype.
-
-That is a real equivalence test. A shipped CRAM fixture could only be compared against a
-recorded expectation, which is exactly the kind of evidence this repository has learned
-not to trust.
-
-Why ``no_ref=1``
-----------------
-The cohort's BAM headers carry no ``M5`` tags, so htslib cannot resolve a reference by
-digest: no ``REF_PATH``/``REF_CACHE`` lookup and no refget request can succeed. A
-conventionally reference-compressed CRAM would therefore need an explicit ``-T`` at read
-time. The pipeline now probes explicit and configured reference candidates before using
-one, but these lossless cohort fixtures deliberately exercise the reference-free path.
-``no_ref=1`` stores sequences verbatim, needs no reference to write or read, and
-round-trips byte-for-byte.
-
-``embed_ref=2`` was measured and rejected: htslib cannot derive a consensus reference from
-a region subset, warns, falls back to non-ref mode part-way through a container, and the
-round trip is **not** lossless.
-
-What this script does NOT establish
------------------------------------
-A ``no_ref`` CRAM exercises the container format, the CRAM decoder, ``.crai`` indexing and
-the unmapped-read scan. It does **not** exercise reference resolution, because it needs
-none. The separate failure mode of a CRAM whose reference is unavailable -- the ordinary
-externally-referenced CRAM a diagnostic lab would send -- is a different fixture and a
-different test; see ``build_reference_dependent_fixture``.
+Most fixtures use ``no_ref=1`` because cohort BAM headers lack M5 tags. The registered
+b178 fixture exercises explicit reference compression and a pinned indexed-region oracle;
+purpose-built fixtures cover unavailable-reference and placed-unmapped failure modes.
+Outputs live under ignored ``tests/data`` because the cohort ships separately and
+BAM/CRAM equivalence is stronger evidence than a committed standalone CRAM.
 """
 
 from __future__ import annotations
@@ -53,30 +17,50 @@ import json
 import logging
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 import pysam
 
+if __package__:
+    from .cram_reference_contract import (
+        HG19_CHR1_REFERENCE_SHA256,
+        REFERENCE_VALIDATION_REGION,
+        LossyConversionError,
+        ReferenceCompressedFixture,
+        ValidatedReferenceSnapshot,
+        header_with_hg19_m5,
+        normalize_sam_record,
+        snapshot_reference_fasta,
+        validate_registered_b178_index_evidence,
+    )
+else:
+    from cram_reference_contract import (  # type: ignore[no-redef]
+        HG19_CHR1_REFERENCE_SHA256,
+        REFERENCE_VALIDATION_REGION,
+        LossyConversionError,
+        ReferenceCompressedFixture,
+        ValidatedReferenceSnapshot,
+        header_with_hg19_m5,
+        normalize_sam_record,
+        snapshot_reference_fasta,
+        validate_registered_b178_index_evidence,
+    )
+
 logger = logging.getLogger("cram_fixtures")
 
-#: Encoding options for the derived fixtures. See the module docstring for why this is
-#: ``no_ref`` rather than a reference-compressed or ``embed_ref`` CRAM.
+#: Default encoding is reference-independent; see the module docstring.
 CRAM_WRITE_OPTIONS = ("no_ref=1",)
 
-#: Where derived fixtures are written, mirroring the source layout underneath.
 DEFAULT_FIXTURE_ROOT = Path("tests/data/cram")
 DEFAULT_DATA_CONFIG = Path("tests/test_data_config.json")
+DEFAULT_REFERENCE_COMPRESSED_SOURCE = Path("tests/data/example_b178_hg19_subset.bam")
+DEFAULT_REFERENCE_COMPRESSED_FASTA = Path("reference/alignment/chr1.hg19.fa")
 
-# Pysam's typed interface exposes ``AlignmentFile`` but not its htslib-command wrappers.
-# Purpose-built fixtures use the latter deliberately so the unit tier never needs PATH's
-# external samtools binary.
 pysam_any: Any = pysam
-
-
-class LossyConversionError(RuntimeError):
-    """A derived CRAM did not round-trip to the records of its source BAM."""
 
 
 @dataclass
@@ -150,33 +134,71 @@ def _run(argv: list[str]) -> str:
     return completed.stdout
 
 
+def _run_to_file(argv: list[str], output: Path) -> None:
+    """Run a command whose binary stdout is the requested output file."""
+    with output.open("wb") as handle:
+        completed = subprocess.run(argv, stdout=handle, stderr=subprocess.PIPE, check=False)
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode() if isinstance(completed.stderr, bytes) else completed.stderr
+        raise RuntimeError(f"{' '.join(argv)} exited {completed.returncode}: {stderr.strip()}")
+
+
 def _record_digest(samtools: str, alignment: Path) -> tuple[str, int]:
     """Digest every decoded record of an alignment, with no reference supplied.
 
     Reading the CRAM with no ``-T`` is the point: it is what the pipeline does. If the
     fixture needed a reference this call would fail rather than quietly succeed.
     """
+    return _stream_record_digest([samtools, "view", str(alignment)], lambda line: line.encode())
+
+
+def _stream_record_digest(argv: list[str], normalize: Callable[[str], bytes]) -> tuple[str, int]:
+    """Digest command stdout while draining arbitrary stderr without a pipe deadlock."""
     digest = hashlib.sha256()
     count = 0
-    with subprocess.Popen(
-        [samtools, "view", str(alignment)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1024 * 1024,
-    ) as proc:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            digest.update(line.encode())
-            count += 1
-        stderr = proc.stderr.read() if proc.stderr else ""
-        # Wait before reading returncode: draining stdout does not reap the child, and an
-        # unreaped child reports returncode None, which would compare unequal to 0 and
-        # turn every success into a spurious failure.
-        proc.wait()
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        with subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+            bufsize=1024 * 1024,
+        ) as proc:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                digest.update(normalize(line))
+                count += 1
+            proc.wait()
+        stderr_file.seek(0)
+        stderr = stderr_file.read()
     if proc.returncode != 0:
-        raise RuntimeError(f"samtools view {alignment} exited {proc.returncode}: {stderr.strip()}")
+        raise RuntimeError(f"{' '.join(argv)} exited {proc.returncode}: {stderr.strip()}")
     return digest.hexdigest(), count
+
+
+def _normalized_record_digest(
+    samtools: str,
+    alignment: Path,
+    explicit_reference: Path | None = None,
+    *,
+    region: str | None = None,
+) -> tuple[str, int]:
+    """Digest decoded SAM records while ignoring optional-tag ordering.
+
+    Args:
+        samtools: The samtools executable.
+        alignment: BAM or CRAM whose decoded records are digested.
+        explicit_reference: FASTA passed with ``-T`` for CRAM decoding.
+        region: Optional indexed region appended to the samtools query.
+    """
+    argv = [samtools, "view"]
+    if explicit_reference is not None:
+        argv.extend(["-T", str(explicit_reference)])
+    argv.append(str(alignment))
+    if region is not None:
+        argv.append(region)
+
+    return _stream_record_digest(argv, normalize_sam_record)
 
 
 def discover_source_bams(data_root: Path, fixture_root: Path) -> list[Path]:
@@ -263,6 +285,122 @@ def derive_cram(samtools: str, bam: Path, data_root: Path, fixture_root: Path) -
         unmapped_reads=unmapped,
         record_digest=bam_digest,
         source_bytes=bam.stat().st_size,
+        cram_bytes=cram.stat().st_size,
+    )
+
+
+def derive_reference_compressed_cram(
+    samtools: str,
+    source_bam: Path,
+    reference: Path,
+    fixture_root: Path,
+    *,
+    expected_reference_sha256: str = HG19_CHR1_REFERENCE_SHA256,
+    validated_reference: ValidatedReferenceSnapshot | None = None,
+) -> ReferenceCompressedFixture:
+    """Derive and prove a real-read CRAM decoded with an explicit FASTA.
+
+    Args:
+        samtools: The samtools executable.
+        source_bam: Registered b178 BAM used as the record source.
+        reference: Exact chr1 hg19 FASTA used for encoding and decoding.
+        fixture_root: Root beneath which the fixture is regenerated.
+        expected_reference_sha256: Required identity of the reference bytes.
+        validated_reference: Optional immutable snapshot from an earlier validation.
+
+    Returns:
+        The derived fixture and stable digest evidence.
+
+    Raises:
+        FileNotFoundError: If the explicit reference does not exist.
+        ValueError: If the supplied reference is not the pinned chr1 hg19 FASTA.
+        LossyConversionError: If decoded records or record counts differ.
+        RuntimeError: If encoding, indexing, or decoding fails.
+    """
+    if validated_reference is None:
+        with snapshot_reference_fasta(reference, expected_reference_sha256) as snapshot:
+            return derive_reference_compressed_cram(
+                samtools,
+                source_bam,
+                reference,
+                fixture_root,
+                expected_reference_sha256=expected_reference_sha256,
+                validated_reference=snapshot,
+            )
+    reference_for_tools = validated_reference.tool_path_for(reference, expected_reference_sha256)
+
+    cram = fixture_root / "reference-compressed" / f"{source_bam.stem}.cram"
+    crai = Path(f"{cram}.crai")
+    cram.parent.mkdir(parents=True, exist_ok=True)
+    source_header = _run([samtools, "view", "-H", "--no-PG", str(source_bam)])
+    prepared_header = header_with_hg19_m5(source_header, validated_reference.source_uri)
+    with tempfile.TemporaryDirectory(prefix="reference-compressed-", dir=cram.parent) as temp_dir:
+        temp_root = Path(temp_dir)
+        header_path = temp_root / "header.sam"
+        prepared_bam = temp_root / source_bam.name
+        encoded_cram = temp_root / f"encoded-{cram.name}"
+        staged_cram = temp_root / cram.name
+        staged_crai = Path(f"{staged_cram}.crai")
+        header_path.write_text(prepared_header, encoding="utf-8")
+        _run_to_file([samtools, "reheader", "-P", str(header_path), str(source_bam)], prepared_bam)
+        _run(
+            [
+                samtools,
+                "view",
+                "-C",
+                "-T",
+                str(reference_for_tools),
+                "--no-PG",
+                "-o",
+                str(encoded_cram),
+                str(prepared_bam),
+            ]
+        )
+        _run_to_file([samtools, "reheader", "-P", str(header_path), str(encoded_cram)], staged_cram)
+        _run([samtools, "index", str(staged_cram)])
+        if not staged_crai.is_file():
+            raise RuntimeError(f"samtools index did not create expected CRAI: {staged_crai}")
+
+        source_digest, source_records = _normalized_record_digest(samtools, source_bam)
+        decoded_digest, decoded_records = _normalized_record_digest(samtools, staged_cram, reference_for_tools)
+        if source_digest != decoded_digest or source_records != decoded_records:
+            raise LossyConversionError(
+                f"{source_bam} -> {cram} reference-compressed CRAM is not lossless: "
+                f"{source_records} source records digest {source_digest[:16]}, "
+                f"{decoded_records} decoded records digest {decoded_digest[:16]}"
+            )
+
+        source_region_digest, source_region_records = _normalized_record_digest(
+            samtools, source_bam, region=REFERENCE_VALIDATION_REGION
+        )
+        decoded_region_digest, decoded_region_records = _normalized_record_digest(
+            samtools,
+            staged_cram,
+            reference_for_tools,
+            region=REFERENCE_VALIDATION_REGION,
+        )
+        validate_registered_b178_index_evidence(
+            source_region_digest,
+            source_region_records,
+            decoded_region_digest,
+            decoded_region_records,
+        )
+        staged_crai.replace(crai)
+        staged_cram.replace(cram)
+
+    return ReferenceCompressedFixture(
+        source_bam=source_bam,
+        cram=cram,
+        reference=reference,
+        records=source_records,
+        source_record_digest=source_digest,
+        decoded_record_digest=decoded_digest,
+        indexed_region=REFERENCE_VALIDATION_REGION,
+        indexed_region_records=source_region_records,
+        source_indexed_region_digest=source_region_digest,
+        decoded_indexed_region_digest=decoded_region_digest,
+        reference_sha256=validated_reference.sha256,
+        source_bytes=source_bam.stat().st_size,
         cram_bytes=cram.stat().st_size,
     )
 
@@ -423,15 +561,22 @@ def build_indexed_safe_fixture(fixture_root: Path) -> IndexedSafeFixture:
     return IndexedSafeFixture(cram=cram)
 
 
-def write_manifest(summary: Summary, manifest_path: Path) -> None:
+def write_manifest(
+    summary: Summary,
+    manifest_path: Path,
+    *,
+    reference_compressed: ReferenceCompressedFixture | None = None,
+) -> None:
     """Record what was derived, so a gate run can cite it rather than re-derive it."""
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    payload: dict[str, object] = {
         "encoding": list(CRAM_WRITE_OPTIONS),
         "verified": "every fixture's decoded record stream digests identically to its source BAM",
         "fixtures": [f.as_manifest_entry() for f in summary.fixtures],
         "skipped": [{"bam": str(p), "reason": r} for p, r in summary.skipped],
     }
+    if reference_compressed is not None:
+        payload["reference_compressed"] = reference_compressed.as_manifest_entry()
     manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     logger.info("wrote manifest with %d fixtures to %s", len(summary.fixtures), manifest_path)
 
@@ -444,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--samtools", default="samtools")
     parser.add_argument("--limit", type=int, default=None, help="derive only the first N, for a smoke run")
     parser.add_argument("--data-config", type=Path, default=DEFAULT_DATA_CONFIG)
+    parser.add_argument("--reference-fasta", type=Path, default=DEFAULT_REFERENCE_COMPRESSED_FASTA, help="hg19 FASTA")
     parser.add_argument("--all", action="store_true", help="derive every discovered BAM, for the golden cohort")
     args = parser.parse_args(argv)
 
@@ -455,36 +601,57 @@ def main(argv: list[str] | None = None) -> int:
     if not args.data_config.is_file():
         logger.error("test-data config not found: %s", args.data_config)
         return 1
-
-    summary = build_fixtures(
-        args.samtools,
-        args.data_root,
-        args.fixture_root,
-        args.limit,
-        data_config=args.data_config,
-        include_all=args.all,
-    )
-    build_reference_dependent_fixture(args.fixture_root)
-    build_placed_flag12_fixture(args.fixture_root)
-    build_indexed_safe_fixture(args.fixture_root)
-    write_manifest(summary, args.manifest or args.fixture_root / "manifest.json")
-
-    if not summary.fixtures or summary.skipped:
+    if not args.reference_fasta.is_file():
+        reference_root = args.reference_fasta.parent.parent
         logger.error(
-            "fixture derivation incomplete: %d verified, %d skipped",
-            len(summary.fixtures),
-            len(summary.skipped),
+            "required pinned hg19 reference FASTA not found: %s; "
+            "run `vntyper install-references -d %s --references hg19` before deriving CRAM fixtures",
+            args.reference_fasta,
+            reference_root,
         )
         return 1
-    logger.info(
-        "derived %d verified CRAM fixtures: %.1f MiB from %.1f MiB of BAM (%.0f%%), %d skipped",
-        len(summary.fixtures),
-        summary.total_cram_bytes / 1024 / 1024,
-        summary.total_source_bytes / 1024 / 1024,
-        100.0 * summary.total_cram_bytes / summary.total_source_bytes,
-        len(summary.skipped),
-    )
-    return 0
+
+    with snapshot_reference_fasta(args.reference_fasta) as validated_reference:
+        summary = build_fixtures(
+            args.samtools,
+            args.data_root,
+            args.fixture_root,
+            args.limit,
+            data_config=args.data_config,
+            include_all=args.all,
+        )
+        reference_compressed = derive_reference_compressed_cram(
+            args.samtools,
+            DEFAULT_REFERENCE_COMPRESSED_SOURCE,
+            args.reference_fasta,
+            args.fixture_root,
+            validated_reference=validated_reference,
+        )
+        build_reference_dependent_fixture(args.fixture_root)
+        build_placed_flag12_fixture(args.fixture_root)
+        build_indexed_safe_fixture(args.fixture_root)
+        write_manifest(
+            summary,
+            args.manifest or args.fixture_root / "manifest.json",
+            reference_compressed=reference_compressed,
+        )
+
+        if not summary.fixtures or summary.skipped:
+            logger.error(
+                "fixture derivation incomplete: %d verified, %d skipped",
+                len(summary.fixtures),
+                len(summary.skipped),
+            )
+            return 1
+        logger.info(
+            "derived %d verified CRAM fixtures: %.1f MiB from %.1f MiB of BAM (%.0f%%), %d skipped",
+            len(summary.fixtures),
+            summary.total_cram_bytes / 1024 / 1024,
+            summary.total_source_bytes / 1024 / 1024,
+            100.0 * summary.total_cram_bytes / summary.total_source_bytes,
+            len(summary.skipped),
+        )
+        return 0
 
 
 if __name__ == "__main__":

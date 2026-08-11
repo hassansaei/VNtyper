@@ -42,7 +42,8 @@ def process_fastq(fastq_1, fastq_2, threads, output, output_name, config):
     Args:
         fastq_1 (str or Path): Path to the first FASTQ file.
         fastq_2 (str or Path or None): Optional path to the second FASTQ file.
-        threads (int): Number of threads to use.
+        threads (int): Requested thread count. Dedup-enabled fastp is serialized
+            stage-locally; dedup-disabled fastp uses this value unchanged.
         output (str or Path): Output directory.
         output_name (str): Base name for the output files.
         config (dict): Configuration dictionary containing tool paths and parameters.

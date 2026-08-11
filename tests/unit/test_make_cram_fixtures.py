@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -41,6 +42,11 @@ def _touch(path: Path, content: str = "x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
     return path
+
+
+def _stub_reference_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = mock.Mock(side_effect=lambda *_args, **_kwargs: nullcontext(mock.sentinel.authority))
+    monkeypatch.setattr(cram_fixtures, "snapshot_reference_fasta", snapshot)
 
 
 def _paired_source_bam(path: Path) -> Path:
@@ -123,6 +129,14 @@ def test_run_returns_stdout_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cram_fixtures._run(["samtools"]) == "record-count\n"
 
 
+def test_run_to_file_reports_binary_command_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    completed = subprocess.CompletedProcess(["samtools"], 2, stdout=None, stderr=b"broken reheader")
+    monkeypatch.setattr(cram_fixtures.subprocess, "run", mock.Mock(return_value=completed))
+
+    with pytest.raises(RuntimeError, match="samtools exited 2: broken reheader"):
+        cram_fixtures._run_to_file(["samtools"], tmp_path / "prepared.bam")
+
+
 def test_the_direct_script_entry_point_loads_its_sibling_selection_module_without_pythonpath(tmp_path: Path) -> None:
     """A direct invocation cannot rely on importing the repository's ``scripts`` package."""
     result = subprocess.run(
@@ -138,8 +152,8 @@ def test_the_direct_script_entry_point_loads_its_sibling_selection_module_withou
     assert "--all" in result.stdout
 
 
-def test_the_direct_script_dispatches_its_sibling_single_end_builder_without_pythonpath(tmp_path: Path) -> None:
-    """The ordinary direct-script command must import and run both sibling modules."""
+def test_the_direct_module_dispatches_its_sibling_single_end_builder_without_pythonpath(tmp_path: Path) -> None:
+    """Direct-module mode must import and run the sibling builder without package imports."""
     repository_root = tmp_path / "repo"
     data_root = repository_root / "tests" / "data"
     source = _paired_source_bam(data_root / "source.bam")
@@ -161,24 +175,22 @@ def test_the_direct_script_dispatches_its_sibling_single_end_builder_without_pyt
         )
     )
 
+    dispatch = (
+        "import sys; from pathlib import Path; "
+        f"sys.path.insert(0, {str(REPO_ROOT / 'scripts')!r}); "
+        "import make_cram_fixtures as fixtures; "
+        "fixtures._derive_declared_single_end_fixtures(Path('tests/test_data_config.json'), Path('.'))"
+    )
     result = subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "scripts" / "make_cram_fixtures.py"),
-            "--data-root",
-            "tests/data",
-            "--fixture-root",
-            "tests/data/cram",
-            "--data-config",
-            "tests/test_data_config.json",
-        ],
+        [sys.executable, "-c", dispatch],
         cwd=repository_root,
+        env={"PATH": os.defpath},
         capture_output=True,
         text=True,
         check=False,
     )
 
-    assert result.returncode == 1, result.stderr
+    assert result.returncode == 0, result.stderr
     assert "ModuleNotFoundError" not in result.stderr
     assert output.is_file()
     assert output.with_suffix(".bam.bai").is_file()
@@ -276,6 +288,71 @@ def test_the_manifest_records_what_was_derived_and_what_was_skipped(tmp_path: Pa
     # A skipped BAM must stay visible: a silently shorter fixture set would weaken the
     # equivalence claim without anyone noticing.
     assert payload["skipped"] == [{"bam": "tests/data/broken.bam", "reason": "truncated"}]
+
+
+def test_reference_compressed_derivation_requires_an_existing_reference(tmp_path: Path) -> None:
+    """Removing the selected FASTA must fail before a misleading CRAM is emitted."""
+    source = _touch(tmp_path / "tests/data/example_b178_hg19_subset.bam")
+    missing_reference = tmp_path / "reference/alignment/chr1.hg19.fa"
+
+    with pytest.raises(FileNotFoundError, match="Reference FASTA does not exist"):
+        cram_fixtures.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            missing_reference,
+            tmp_path / "tests/data/cram",
+        )
+
+
+def test_wrong_reference_is_rejected_before_htslib_can_fall_back(tmp_path: Path) -> None:
+    """A wrong FASTA must not become a valid-looking embedded/non-reference CRAM."""
+    source = _touch(tmp_path / "tests/data/example_b178_hg19_subset.bam")
+    wrong_reference = _touch(tmp_path / "reference/wrong.fa", ">chr1\nA\n")
+
+    with pytest.raises(ValueError, match="Reference FASTA SHA-256 mismatch"):
+        cram_fixtures.derive_reference_compressed_cram(
+            "samtools", source, wrong_reference, tmp_path / "tests/data/cram"
+        )
+
+
+def test_reference_compressed_manifest_pins_encoding_source_and_reference_digests(tmp_path: Path) -> None:
+    """The manifest must identify both the decoded source stream and exact FASTA bytes."""
+    fixture = cram_fixtures.ReferenceCompressedFixture(
+        source_bam=Path("tests/data/example_b178_hg19_subset.bam"),
+        cram=Path("tests/data/cram/reference-compressed/example_b178_hg19_subset.cram"),
+        reference=Path("reference/alignment/chr1.hg19.fa"),
+        records=34_214,
+        source_record_digest="37428a5a9c95b4791f063c663dc4973548796dcbe9342b870fd4e8425a2d8cc6",
+        decoded_record_digest="37428a5a9c95b4791f063c663dc4973548796dcbe9342b870fd4e8425a2d8cc6",
+        indexed_region="chr1:155160500-155162000",
+        indexed_region_records=13_868,
+        source_indexed_region_digest="region-digest",
+        decoded_indexed_region_digest="region-digest",
+        reference_sha256="0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338",
+        source_bytes=3_893_446,
+        cram_bytes=2_613_506,
+    )
+    manifest = tmp_path / "manifest.json"
+
+    write_manifest(Summary(), manifest, reference_compressed=fixture)
+
+    entry = json.loads(manifest.read_text(encoding="utf-8"))["reference_compressed"]
+    assert entry == {
+        "encoding": "reference-compressed",
+        "source_bam": "tests/data/example_b178_hg19_subset.bam",
+        "cram": "tests/data/cram/reference-compressed/example_b178_hg19_subset.cram",
+        "reference_fasta": "reference/alignment/chr1.hg19.fa",
+        "records": 34_214,
+        "source_record_digest": "37428a5a9c95b4791f063c663dc4973548796dcbe9342b870fd4e8425a2d8cc6",
+        "decoded_record_digest": "37428a5a9c95b4791f063c663dc4973548796dcbe9342b870fd4e8425a2d8cc6",
+        "indexed_region": "chr1:155160500-155162000",
+        "indexed_region_records": 13_868,
+        "source_indexed_region_digest": "region-digest",
+        "decoded_indexed_region_digest": "region-digest",
+        "reference_sha256": "0c19925c13b1312f0cbdc2b804f62da260345589b8f9e8ad655abfb5d6e99338",
+        "source_bytes": 3_893_446,
+        "cram_bytes": 2_613_506,
+    }
 
 
 def test_manifest_creation_creates_its_parent_directory(tmp_path: Path) -> None:
@@ -497,12 +574,19 @@ def test_the_ordinary_command_materializes_declared_single_end_outputs_relative_
             }
         )
     )
+    _touch(repository_root / cram_fixtures.DEFAULT_REFERENCE_COMPRESSED_FASTA)
 
     def fake_derive_cram(_samtools: str, bam: Path, _data_root: Path, fixture_root: Path) -> Fixture:
         return Fixture(bam, fixture_root / "source.cram", 1, 0, "digest", 1, 1)
 
     monkeypatch.chdir(repository_root)
     monkeypatch.setattr(cram_fixtures, "derive_cram", fake_derive_cram)
+    _stub_reference_snapshot(monkeypatch)
+    monkeypatch.setattr(
+        cram_fixtures,
+        "derive_reference_compressed_cram",
+        lambda *_args, **_kwargs: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
+    )
     monkeypatch.setattr(cram_fixtures, "build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr(cram_fixtures, "build_placed_flag12_fixture", lambda _root: None)
     monkeypatch.setattr(cram_fixtures, "build_indexed_safe_fixture", lambda _root: None)
@@ -632,6 +716,7 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
     """``make cram-fixtures`` must make the #209, A-SCAN-1 and A-178-2 fixtures available."""
     data_root = tmp_path / "data"
     data_root.mkdir()
+    reference = _touch(tmp_path / "reference/alignment/chr1.hg19.fa")
     calls: list[Path] = []
     selections: list[bool] = []
 
@@ -639,14 +724,42 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
         selections.append(kwargs["include_all"])
         return Summary()
 
+    def record_reference_fixture(
+        _samtools: str, _source: Path, _reference: Path, root: Path, **_kwargs: object
+    ) -> mock.Mock:
+        calls.append(root)
+        return mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"})
+
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", fake_build)
+    _stub_reference_snapshot(monkeypatch)
+    monkeypatch.setattr(
+        "scripts.make_cram_fixtures.derive_reference_compressed_cram",
+        record_reference_fixture,
+    )
     monkeypatch.setattr("scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda root: calls.append(root))
     monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda root: calls.append(root))
     monkeypatch.setattr("scripts.make_cram_fixtures.build_indexed_safe_fixture", lambda root: calls.append(root))
 
-    exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
+    exit_code = cram_fixtures.main(
+        [
+            "--data-root",
+            str(data_root),
+            "--fixture-root",
+            str(tmp_path / "cram"),
+            "--reference-fasta",
+            str(reference),
+        ]
+    )
     all_exit_code = cram_fixtures.main(
-        ["--data-root", str(data_root), "--fixture-root", str(tmp_path / "all-cram"), "--all"]
+        [
+            "--data-root",
+            str(data_root),
+            "--fixture-root",
+            str(tmp_path / "all-cram"),
+            "--reference-fasta",
+            str(reference),
+            "--all",
+        ]
     )
 
     assert exit_code == 1
@@ -656,6 +769,8 @@ def test_the_deriver_command_also_builds_the_purpose_specific_cram_fixtures(tmp_
         tmp_path / "cram",
         tmp_path / "cram",
         tmp_path / "cram",
+        tmp_path / "cram",
+        tmp_path / "all-cram",
         tmp_path / "all-cram",
         tmp_path / "all-cram",
         tmp_path / "all-cram",
@@ -666,6 +781,7 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     """A partial fixture tree must not make the ordinary Make target report success."""
     data_root = tmp_path / "data"
     data_root.mkdir()
+    reference = _touch(tmp_path / "reference/alignment/chr1.hg19.fa")
     source = data_root / "good.bam"
     source.write_bytes(b"BAM")
     fixture = cram_fixtures.Fixture(
@@ -680,11 +796,25 @@ def test_the_deriver_command_fails_when_any_declared_cram_was_skipped(tmp_path: 
     summary = Summary(fixtures=[fixture], skipped=[(data_root / "broken.bam", "truncated")])
 
     monkeypatch.setattr("scripts.make_cram_fixtures.build_fixtures", lambda *_args, **_kwargs: summary)
+    _stub_reference_snapshot(monkeypatch)
+    monkeypatch.setattr(
+        "scripts.make_cram_fixtures.derive_reference_compressed_cram",
+        lambda *_args, **_kwargs: mock.Mock(as_manifest_entry=lambda: {"encoding": "reference-compressed"}),
+    )
     monkeypatch.setattr("scripts.make_cram_fixtures.build_reference_dependent_fixture", lambda _root: None)
     monkeypatch.setattr("scripts.make_cram_fixtures.build_placed_flag12_fixture", lambda _root: None)
     monkeypatch.setattr("scripts.make_cram_fixtures.build_indexed_safe_fixture", lambda _root: None)
 
-    exit_code = cram_fixtures.main(["--data-root", str(data_root), "--fixture-root", str(tmp_path / "cram")])
+    exit_code = cram_fixtures.main(
+        [
+            "--data-root",
+            str(data_root),
+            "--fixture-root",
+            str(tmp_path / "cram"),
+            "--reference-fasta",
+            str(reference),
+        ]
+    )
 
     assert exit_code == 1
 
@@ -696,6 +826,7 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
     data_root.mkdir()
     config = tmp_path / "test_data_config.json"
     config.write_text("{}", encoding="utf-8")
+    reference = _touch(tmp_path / "reference/alignment/chr1.hg19.fa")
     manifest = tmp_path / "manifest.json"
 
     def fail_build(*args: object, **kwargs: object) -> Summary:
@@ -703,6 +834,7 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
         raise LossyConversionError("not lossless")
 
     monkeypatch.setattr(cram_fixtures, "build_fixtures", fail_build)
+    _stub_reference_snapshot(monkeypatch)
     with pytest.raises(LossyConversionError, match="not lossless"):
         cram_fixtures.main(
             [
@@ -712,6 +844,8 @@ def test_lossy_build_aborts_before_a_manifest_can_record_the_failed_fixture(
                 str(config),
                 "--manifest",
                 str(manifest),
+                "--reference-fasta",
+                str(reference),
             ]
         )
     assert not manifest.exists()
@@ -727,6 +861,48 @@ def test_main_returns_one_when_required_input_is_missing(tmp_path: Path, missing
         config.write_text("{}", encoding="utf-8")
 
     assert cram_fixtures.main(["--data-root", str(data_root), "--data-config", str(config)]) == 1
+
+
+def test_main_missing_reference_fails_before_building_and_preserves_existing_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    config = tmp_path / "test_data_config.json"
+    config.write_text("{}", encoding="utf-8")
+    missing_reference = tmp_path / "reference" / "alignment" / "chr1.hg19.fa"
+    fixture_root = tmp_path / "cram"
+    fixture_root.mkdir()
+    existing_cram = fixture_root / "existing.cram"
+    existing_manifest = fixture_root / "manifest.json"
+    existing_cram.write_bytes(b"existing cram")
+    existing_manifest.write_text('{"existing": true}\n', encoding="utf-8")
+
+    def must_not_build(*args: object, **kwargs: object) -> Summary:
+        del args, kwargs
+        raise AssertionError("fixture builders must not run without the pinned reference")
+
+    monkeypatch.setattr(cram_fixtures, "build_fixtures", must_not_build)
+
+    with caplog.at_level("ERROR"):
+        exit_code = cram_fixtures.main(
+            [
+                "--data-root",
+                str(data_root),
+                "--data-config",
+                str(config),
+                "--fixture-root",
+                str(fixture_root),
+                "--reference-fasta",
+                str(missing_reference),
+            ]
+        )
+
+    assert exit_code == 1
+    assert f"required pinned hg19 reference FASTA not found: {missing_reference}" in caplog.text
+    assert "vntyper install-references" in caplog.text
+    assert existing_cram.read_bytes() == b"existing cram"
+    assert existing_manifest.read_text(encoding="utf-8") == '{"existing": true}\n'
 
 
 def test_the_reference_contract_purpose_fixtures_are_registered_with_portable_paths() -> None:

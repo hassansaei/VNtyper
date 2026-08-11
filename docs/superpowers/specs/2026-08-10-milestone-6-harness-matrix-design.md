@@ -7,6 +7,19 @@ reconciliation.
 
 **Baseline:** `main` at `ebb15b26631242a3295607e4eda4c68f688cd9a2` (`v2.0.10`).
 
+**Superseded routing policy (2026-08-11, #233).** This document remains a historical
+design record. Commit `2b4597d8b57f8986f008baad6c2505359cebea76` introduced the
+unconditional refusal of every mixed conversion layout;
+`52c4146596fef2d1e2402991fbab062ba8021889` later changed nine BAM and one adVNTR
+success oracle to expect that refusal. Issue #233 supersedes only that routing policy:
+equal non-empty R1/R2 outputs plus singleton and/or `other` reads are valid, and every
+non-empty file is passed exactly once to one Kestrel sample in R1/R2/other/single order.
+The files are not concatenated or recompressed. Unequal or one-sided mates remain invalid
+and fail before Kestrel. The
+`example_b178_hg19_subset_default` Docker quick node is now a required success sentinel.
+Historical evidence below is retained as measured; statements describing valid mixed
+layouts as intentionally failing are not current policy.
+
 ## Purpose
 
 Close the two remaining gaps in #71 without reimplementing the four criteria that the
@@ -215,7 +228,7 @@ No implementation file changes for #226 are part of this track. Closure evidence
 - introduction in `80f42fbba63c5c045ee605e49949cdd970884320` and hardening in
   `edabd3eaf594b785906d8ba03c9cce60f1c6babd`;
 - `tests/unit/test_make_cram_fixtures.py::test_reference_dependent_fixture_has_a_local_ur_target_that_can_be_removed`;
-- `tests/integration/test_cram_reference_contract.py::test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages`;
+- `tests/integration/test_cram_reference_pipeline_contract.py::test_a209_1_missing_reference_names_the_digest_and_candidates_before_stages`;
 - `test_a209_2_explicit_reference_completes_the_reference_dependent_cram`; and
 - `test_a209_3_no_ref_cram_completes_without_an_explicit_reference`.
 

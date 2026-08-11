@@ -3,7 +3,16 @@
 Before-versus-after comparison of genotyping output across the whole local test cohort,
 run to decide whether the deliberately behaviour-changing commits in #179 may ship.
 
-Every run the gate has taken is registered in the table below. **A verdict is intended to
+**Current routing policy (2026-08-11, #233).** The mixed-layout refusals recorded in
+milestone-4 runs are historical. Equal R1/R2 plus singleton/`other` reads now consume
+every non-empty FASTQ exactly once under one Kestrel sample; unequal or one-sided mates
+remain invalid. Run 7's issue #233 `comparison.json` records 32 base cases plus 10
+repeat/derived cases, 42 total, without rewriting earlier run evidence. This page also
+records the final gated candidate SHA and retained comparison artifact digests.
+
+Every run selected as an attestation of record is registered in the table below. Completed
+superseded executions are not separate attestations: the preliminary issue #233 run at
+`49b0cc6` was replaced by run 7 at the final executable candidate. **A verdict is intended to
 attest one candidate commit and nothing after it**, so read the run whose candidate
 matches the tree you are judging.
 
@@ -28,6 +37,7 @@ the harness change, so only the "after" side can prove its revision.
 | 4 | `ec67fff` | `4fd638a` | PASS with two attributed deltas, neither genotype-affecting | the `fix/issue-181-197-followups` branch at `ec67fff`, against the 2.0.6 release, and nothing after it |
 | 5 | `9816f86` | `4fd638a` | DELTAS, both classes fully attributed, every genotype artefact unchanged | the `fix/issue-181-197-followups` branch at `9816f86`, against the 2.0.6 release, and nothing after it |
 | 6 | `48f97fe` | `cb593b6` | DELTAS, every one attributed, **no genotype field changed anywhere** | the `fix/milestone-2-correctness-of-reported-numbers` branch at `48f97fe` (milestone 2, #171/#172/#174/#203/#212), against the 2.0.7 release, and nothing after it |
+| 7 | `19c8acd` | `4678851` | CANDIDATE PASS; comparison BLOCKED only by baseline-refused successes | issue #233 at `19c8acd`, against its required regression baseline `4678851`, and nothing after it |
 
 Runs 1–3 measure the `#179` branch against the baseline `2fcc6e3`. Runs 4 and 5 measure a
 *different* branch — `fix/issue-181-197-followups` — against a *different* baseline,
@@ -56,11 +66,13 @@ the day. The command does not go stale; its transcribed output does. `scripts/` 
 out deliberately: it holds the gate harness and the mutation tooling, neither of which the
 pipeline imports.)
 
-**The genotype verdict is PASS in every run.** Every genotype field, every `Confidence`
+**The genotype verdict is PASS in runs 1–6.** Every genotype field, every `Confidence`
 label and every `Flag` is byte-identical between baseline and candidate, on every sample
-and every assembly, in all **six** runs. Run 6 states this as a measurement rather than a
-reading: across its whole matrix, exactly two columns were added and the only column whose
-cells changed was one of them, with **no genotype field touched anywhere**.
+and every assembly, in all six of those runs. Run 6 states this as a measurement rather
+than a reading: across its whole matrix, exactly two columns were added and the only column
+whose cells changed was one of them, with **no genotype field touched anywhere**. Run 7 is
+the first deliberate genotype-reachability change: it proves the 42 formerly refused cases
+complete successfully and losslessly, so no successful baseline genotype exists to compare.
 
 Runs 4 and 5 are not *only* that, and the difference is named rather than smoothed over.
 In runs 1–3 the only differences were in how the HTML report *presents* an unchanged
@@ -1030,3 +1042,35 @@ Three things, stated because a clean row above invites the opposite reading.
 3. **It does not see `output.bed`.** No BED artefact is collected, and the report reader
    extracts summary boxes and literal tables rather than the IGV payload. #203's coordinate
    fix is attested by `tests/unit/test_generate_bed_file.py` alone.
+
+## Run 7 — `4678851` → `19c8acd`, issue #233
+
+Harness `1.4.0`. Both sides were clean detached worktrees and every launch resolved its
+recorded revision. The attestation-grade matrix comprised 64 pipeline cases, three probes
+and four cohorts. The candidate met **67/67 pipeline/probe outcomes** and **4/4 cohort
+outcomes**, with no timeout, aborted case, unverified launch or blocked candidate cohort.
+
+The comparison verdict is `BLOCKED`, deliberately: the required regression baseline
+refused 42 declarations that the new routing policy makes successful, so it could not
+produce the artifacts needed for a genotype comparison and three baseline cohorts could
+not consume their incomplete inputs. Every unmet expectation and blocked comparison is
+baseline-only. The candidate itself passed all declarations, including exact lossless
+routing for 40cf's 93 singleton reads, b178's singleton, all three adVNTR successes, CRAM
+stream successes and the two forced-indexed fail-closed guard cases.
+
+Exactly 25 cases ran successfully on both sides; every genotype-bearing artifact was
+identical or absent on both sides. The only delta class was executed-command text in 23
+cases, limited to `/proc/<pid>/fd/5` and temporary-file suffix noise.
+
+This is the first run whose intended result is not baseline/candidate genotype identity.
+It demonstrates that all 42 formerly refused mixed-read cases become reachable under the
+selected policy; it does not claim a genotype comparison where the baseline produced no
+successful artifact. The retained evidence is bound by these SHA-256 digests:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `comparison.json` | `5b8dc9199cd19fc1142e0a6ba7bd2740d4c0a97b0cdd9e5f8f4b08e51330e88e` |
+| `comparison.txt` | `6808936b98be8b8d79decd17c76f89f5f4519a6e1fa9acc3f96c0c9eb6d14cbd` |
+| baseline `side.json` | `d3b17029f55c4a610d708764bf4b9c5298f2caad3f0f3114ce532b79b43b41a3` |
+| candidate `side.json` | `8a0c1a0460934cecf9db19b659c7f219f964bf685bf5f818bf12b2b3b69bac10` |
+| both matrix snapshots | `6f09f9350d152ab1b69aa07cf2096aad895a01cca08f23c297608cf772029dd0` |

@@ -11,8 +11,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Nightly full sweep, including the `slow` adVNTR case. That test is 15-25 min on a
-  # 2-core runner and dominated the suite, so it runs here rather than blocking merges.
+  # Nightly full sweep, including the two `slow` adVNTR cases. Each test is 15-25 min on a
+  # 2-core runner and dominates the suite, so they run here rather than blocking merges.
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
@@ -147,7 +147,7 @@ jobs:
       needs.build-base.result != 'failure' &&
       needs.build-base.result != 'cancelled'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: write
@@ -355,11 +355,11 @@ jobs:
       # Three tiers, by how much signal each buys for its runtime:
       #   PR              -> quick    (4 tests, ~10s)
       #   push to main    -> fast     (everything except `slow`, ~3 min)
-      #   schedule/manual -> full     (adds adVNTR: 15-25 min on a 2-core runner)
+      #   schedule/manual -> full     (adds two adVNTR nodes: 15-25 min each on a 2-core runner)
       #
-      # adVNTR is excluded from the merge path deliberately. It is a single test that
-      # costs more than the entire rest of the pipeline, and it exercises an optional
-      # module (`--extra-modules advntr`); a nightly sweep catches regressions in it
+      # adVNTR is excluded from the merge path deliberately. These two tests each cost
+      # more than the entire rest of the pipeline, and they exercise an optional module
+      # (`--extra-modules advntr`); a nightly sweep catches regressions in them
       # without making every merge wait.
       #
       # The old workflow ran the quick tier and then the full tier serially on main,
@@ -367,16 +367,17 @@ jobs:
       # of them - ~13 min of critical path for zero extra information.
       - name: Run Docker tests
         env:
+          EVENT_NAME: ${{ github.event_name }}
           VNTYPER_TEST_IMAGE: vntyper:test
           VNTYPER_TEST_DATA_SKIP_DOWNLOAD: "1"
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            make test-docker-quick
-          elif [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            make test-docker
-          else
-            make test-docker-fast
-          fi
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request) make test-docker-quick ;;
+            push) make docker-cram-fixtures test-docker-fast ;;
+            schedule|workflow_dispatch) make docker-cram-fixtures test-docker ;;
+            *) echo "Unsupported Docker workflow event: $EVENT_NAME" >&2; exit 1 ;;
+          esac
 
       # Publish only from an exact main push, once the image has actually passed its
       # tests. Scheduled and manual runs still exercise the full validation tier, but

@@ -114,12 +114,20 @@ def test_only_exact_main_push_may_publish_release_authoritative_application_tags
     registry = _id_step(workflow, "build-and-test", "registry-digest")
     evidence = _id_step(workflow, "build-and-test", "release-evidence")
     upload = next(step for step in job["steps"] if step.get("uses") == "actions/upload-artifact@v5")
-    docker_tests = _named_step(workflow, "build-and-test", "Run Docker tests")["run"]
+    docker_step = _named_step(workflow, "build-and-test", "Run Docker tests")
+    docker_tests = docker_step["run"]
 
     assert "schedule" in workflow["on"]
     assert "workflow_dispatch" in workflow["on"]
-    assert 'github.event_name }}" = "schedule"' in docker_tests
-    assert 'github.event_name }}" = "workflow_dispatch"' in docker_tests
+    assert docker_step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
+    assert 'case "$EVENT_NAME" in' in docker_tests
+    assert "pull_request) make test-docker-quick ;;" in docker_tests
+    assert "push) make docker-cram-fixtures test-docker-fast ;;" in docker_tests
+    assert "schedule|workflow_dispatch) make docker-cram-fixtures test-docker ;;" in docker_tests
+    assert '*) echo "Unsupported Docker workflow event: $EVENT_NAME" >&2; exit 1 ;;' in docker_tests
+    assert "set -euo pipefail" in docker_tests
+    assert "continue-on-error" not in docker_step
+    assert "|| true" not in docker_tests
     assert "inputs.full" not in docker_tests
     assert {push["if"], registry["if"], evidence["if"], upload["if"]} == {MAIN_PUSH_GUARD}
     assert "docker push" in push["run"]

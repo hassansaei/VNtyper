@@ -511,8 +511,7 @@ class TestConstructKestrelCommand:
         "kestrel_path": "/opt/kestrel.jar",
         "reference_vntr": "/ref/muc1.fa",
         "output_dir": "/out",
-        "fastq_1": "/in/R1.fastq.gz",
-        "fastq_2": "/in/R2.fastq.gz",
+        "fastq_files": ("/in/R1.fastq.gz", "/in/R2.fastq.gz"),
         "vcf_out": "/out/output.vcf",
         "java_path": "/usr/bin/java",
         "java_memory": "12g",
@@ -584,22 +583,22 @@ class TestConstructKestrelCommand:
         """An extra-settings string lands at the end, after ``--temploc``."""
         assert self._command(additional_settings="--flank 5").endswith("--temploc /out --flank 5")
 
-    @pytest.mark.parametrize(
-        ("fastq_1", "fastq_2"),
-        [(None, "/in/R2.fastq.gz"), (None, None), ("", "/in/R2.fastq.gz")],
-    )
-    def test_a_missing_fastq_raises_value_error(self, fastq_1, fastq_2):
-        """A missing first FASTQ is a hard error, not a half-built command.
-
-        Args:
-            fastq_1: R1 path, or a falsy placeholder.
-            fastq_2: R2 path, or a falsy placeholder.
-        """
+    @pytest.mark.parametrize("fastq_files", [(), (None,), ("",), (23,)])
+    def test_invalid_fastq_elements_raise_value_error(self, fastq_files):
         with pytest.raises(ValueError, match="FASTQ input files are missing or invalid"):
-            self._command(fastq_1=fastq_1, fastq_2=fastq_2)
+            self._command(fastq_files=fastq_files)
+
+    def test_duplicate_fastq_operands_are_rejected(self):
+        with pytest.raises(ValueError, match="duplicate"):
+            self._command(fastq_files=("reads.fastq.gz", "reads.fastq.gz"))
+
+    @pytest.mark.parametrize("fastq_files", ["reads.fastq.gz", Path("reads.fastq.gz")])
+    def test_a_scalar_fastq_container_is_rejected_before_iteration(self, fastq_files):
+        with pytest.raises(ValueError, match="sequence"):
+            self._command(fastq_files=fastq_files)
 
     def test_a_single_fastq_is_emitted_without_a_none_operand(self):
-        command = self._command(fastq_2=None)
+        command = self._command(fastq_files=("/in/R1.fastq.gz",))
 
         assert "-sSAMPLE1 /in/R1.fastq.gz --hapfmt" in command
         assert "None" not in command
@@ -612,20 +611,55 @@ class TestConstructKestrelCommand:
     # execution. ``java_path`` stays unquoted: config.json holds a command *prefix*
     # there, which quoting would collapse into one token.
 
-    HOSTILE = ["/data/my samples/R1.fastq.gz", "/data/o'brien/R1.fastq.gz", "/data/x; id/R1.fastq.gz"]
+    HOSTILE = [
+        "/data/my samples/R1.fastq.gz",
+        "/data/o'brien/R1.fastq.gz",
+        "/data/x; id/R1.fastq.gz",
+        "/data/$(touch gotcha)/R1.fastq.gz",
+    ]
 
     @pytest.mark.parametrize("hostile", HOSTILE)
-    @pytest.mark.parametrize("argument,flag", [("fastq_1", None), ("reference_vntr", "-r"), ("vcf_out", "-o")])
+    @pytest.mark.parametrize("argument,flag", [("fastq_files", None), ("reference_vntr", "-r"), ("vcf_out", "-o")])
     def test_a_hostile_path_survives_as_one_shell_word(self, argument, flag, hostile):
         """Each operand, rendered and then re-split the way bash would split it."""
         import shlex
 
-        words = shlex.split(self._command(**{argument: hostile}))
+        value = (hostile,) if argument == "fastq_files" else hostile
+        words = shlex.split(self._command(**{argument: value}))
 
         if flag is None:
             assert hostile in words, f"{hostile!r} did not survive as one word"
         else:
             assert words[words.index(flag) + 1] == hostile
+
+    @pytest.mark.parametrize(
+        "fastq",
+        ["-reads.fastq.gz", Path("-reads.fastq.gz")],
+    )
+    def test_a_relative_fastq_that_looks_like_an_option_is_rejected(self, fastq):
+        with pytest.raises(ValueError, match="option"):
+            self._command(fastq_files=(fastq,))
+
+    @pytest.mark.parametrize("fastq", ["/dir/-reads.fastq.gz", "dir/-reads.fastq.gz"])
+    def test_a_dash_basename_with_a_directory_prefix_is_valid(self, fastq):
+        import shlex
+
+        assert fastq in shlex.split(self._command(fastq_files=(fastq,)))
+
+    @pytest.mark.parametrize(
+        "additional_settings",
+        [
+            "-s OVERRIDE",
+            "-sOVERRIDE",
+            "--sample OVERRIDE",
+            "--sample=OVERRIDE",
+            "--filespersample 2",
+            "--filespersample=2",
+        ],
+    )
+    def test_additional_settings_cannot_override_sample_or_input_grouping(self, additional_settings):
+        with pytest.raises(ValueError, match="sample or input grouping"):
+            self._command(additional_settings=additional_settings)
 
     def test_a_sample_name_with_a_space_stays_attached_to_the_s_flag(self):
         """``-s`` takes its value with no space, so quoting must not introduce one."""

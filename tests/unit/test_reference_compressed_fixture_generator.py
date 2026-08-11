@@ -1,0 +1,510 @@
+"""Unit tests for reference-compressed CRAM generation and artifact publication."""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import subprocess
+import sys
+from contextlib import nullcontext
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+import scripts.make_cram_fixtures as generator
+from scripts.cram_reference_contract import (
+    REGISTERED_B178_INDEXED_REGION_DIGEST,
+    REGISTERED_B178_INDEXED_REGION_RECORDS,
+    LossyConversionError,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def _touch(path: Path, content: str = "x") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+class _ReferenceSamtools:
+    """Materialize deterministic staged artifacts while recording every command."""
+
+    def __init__(self, *, failure: str | None = None, create_index: bool = True) -> None:
+        self.failure = failure
+        self.create_index = create_index
+        self.commands: list[list[str]] = []
+        self.reference_inputs: list[tuple[Path, bytes]] = []
+        self.prepared_headers: list[str] = []
+
+    def __call__(self, argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        self.commands.append(argv)
+        if argv[1:4] == ["view", "-H", "--no-PG"]:
+            operation = "header"
+        elif argv[1] == "reheader":
+            operation = "reheader"
+        elif "-C" in argv:
+            operation = "encode"
+        else:
+            operation = "index"
+        if operation == self.failure:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr=f"{operation} failed")
+        if operation == "header":
+            header = "@HD\tVN:1.6\tSO:coordinate\n@SQ\tSN:chr1\tLN:249250621\n@SQ\tSN:chr2\tLN:243199373\n"
+            return subprocess.CompletedProcess(argv, 0, stdout=header, stderr="")
+        if operation == "reheader":
+            self.prepared_headers.append(Path(argv[3]).read_text(encoding="utf-8"))
+            output = kwargs["stdout"]
+            assert hasattr(output, "name")
+            content = b"reference-compressed cram" if Path(argv[4]).suffix == ".cram" else b"reheadered bam"
+            Path(output.name).write_bytes(content)
+        elif operation == "encode":
+            reference = Path(argv[argv.index("-T") + 1])
+            self.reference_inputs.append((reference, reference.read_bytes()))
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"encoded cram with physical reference URI")
+        elif operation == "index" and self.create_index:
+            Path(f"{argv[-1]}.crai").write_bytes(b"reference-compressed crai")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+class _DigestProcess:
+    def __init__(self, stdout: str, *, returncode: int = 0) -> None:
+        self.stdout = io.StringIO(stdout)
+        self.returncode = returncode
+
+    def __enter__(self) -> _DigestProcess:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+
+    def wait(self) -> None:
+        return None
+
+
+def _registered_digest(
+    _samtools: str,
+    _alignment: Path,
+    _explicit_reference: Path | None = None,
+    *,
+    region: str | None = None,
+) -> tuple[str, int]:
+    if region is not None:
+        return REGISTERED_B178_INDEXED_REGION_DIGEST, REGISTERED_B178_INDEXED_REGION_RECORDS
+    return "normalized-record-digest", 34_214
+
+
+def _prepare_main_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    data_config = _touch(tmp_path / "test_data_config.json", "{}")
+    return data_root, data_config, tmp_path / "cram"
+
+
+@pytest.mark.parametrize(
+    "explicit_reference",
+    [False, True],
+)
+def test_main_forwards_selected_reference_fasta_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_reference: bool,
+) -> None:
+    data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    expected_reference = (
+        tmp_path / "mounted/reference/alignment/chr1.hg19.fa"
+        if explicit_reference
+        else generator.DEFAULT_REFERENCE_COMPRESSED_FASTA
+    )
+    _touch(expected_reference)
+    reference_args = ["--reference-fasta", str(expected_reference)] if explicit_reference else []
+    authority = mock.sentinel.validated_reference
+    snapshot = mock.Mock(return_value=nullcontext(authority))
+    derive = mock.Mock(return_value=mock.Mock(as_manifest_entry=dict))
+    summary = mock.Mock(fixtures=[mock.sentinel.fixture], skipped=[], total_cram_bytes=1, total_source_bytes=1)
+    monkeypatch.setattr(generator, "build_fixtures", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr(generator, "snapshot_reference_fasta", snapshot)
+    monkeypatch.setattr(generator, "derive_reference_compressed_cram", derive)
+    monkeypatch.setattr(generator, "build_reference_dependent_fixture", lambda _root: None)
+    monkeypatch.setattr(generator, "build_placed_flag12_fixture", lambda _root: None)
+    monkeypatch.setattr(generator, "build_indexed_safe_fixture", lambda _root: None)
+    monkeypatch.setattr(generator, "write_manifest", lambda *_args, **_kwargs: None)
+
+    exit_code = generator.main(
+        [
+            "--data-root",
+            str(data_root),
+            "--data-config",
+            str(data_config),
+            "--fixture-root",
+            str(fixture_root),
+            *reference_args,
+        ]
+    )
+
+    assert exit_code == 0
+    snapshot.assert_called_once_with(expected_reference)
+    assert derive.call_args.args == (
+        "samtools",
+        generator.DEFAULT_REFERENCE_COMPRESSED_SOURCE,
+        expected_reference,
+        fixture_root,
+    )
+    assert derive.call_args.kwargs == {"validated_reference": authority}
+
+
+def test_main_rejects_explicit_invalid_reference_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_root, data_config, fixture_root = _prepare_main_inputs(tmp_path)
+    reference = tmp_path / "explicit-reference.fa"
+    reference.write_text(">chr1\nA\n", encoding="utf-8")
+    final_cram = _touch(fixture_root / "reference-compressed/example_b178_hg19_subset.cram", "existing cram")
+    final_crai = _touch(Path(f"{final_cram}.crai"), "existing crai")
+    expected_bytes = (final_cram.read_bytes(), final_crai.read_bytes())
+
+    def publishing_builder(marker: Path, result: object = None) -> mock.Mock:
+        def publish(*_args: object, **_kwargs: object) -> object:
+            _touch(marker, "published")
+            return result
+
+        return mock.Mock(side_effect=publish)
+
+    markers = [tmp_path / f"builder-{number}.published" for number in range(4)]
+    build = publishing_builder(markers[0], generator.Summary())
+    derive = mock.Mock(wraps=generator.derive_reference_compressed_cram)
+    reference_dependent = publishing_builder(markers[1])
+    placed_flag12 = publishing_builder(markers[2])
+    indexed_safe = publishing_builder(markers[3])
+    manifest = publishing_builder(tmp_path / "manifest.published")
+    builders = [build, derive, reference_dependent, placed_flag12, indexed_safe, manifest]
+    monkeypatch.setattr(generator, "build_fixtures", build)
+    monkeypatch.setattr(generator, "derive_reference_compressed_cram", derive)
+    monkeypatch.setattr(generator, "build_reference_dependent_fixture", reference_dependent)
+    monkeypatch.setattr(generator, "build_placed_flag12_fixture", placed_flag12)
+    monkeypatch.setattr(generator, "build_indexed_safe_fixture", indexed_safe)
+    monkeypatch.setattr(generator, "write_manifest", manifest)
+
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        generator.main(
+            [
+                "--data-root",
+                str(data_root),
+                "--data-config",
+                str(data_config),
+                "--fixture-root",
+                str(fixture_root),
+                "--reference-fasta",
+                str(reference),
+            ]
+        )
+
+    for builder in builders:
+        builder.assert_not_called()
+    assert not any(marker.exists() for marker in markers)
+    assert not (tmp_path / "manifest.published").exists()
+    assert (final_cram.read_bytes(), final_crai.read_bytes()) == expected_bytes
+
+
+def test_normalized_digest_builds_the_explicit_indexed_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = "read-1\t0\tchr1\t155160500\t60\t4M\t*\t0\t0\tACGT\tIIII\tNM:i:0\tAS:i:4\n"
+    popen = mock.Mock(return_value=_DigestProcess(record))
+    monkeypatch.setattr(generator.subprocess, "Popen", popen)
+    reference = Path("reference/alignment/chr1.hg19.fa")
+
+    digest, count = generator._normalized_record_digest(
+        "samtools", Path("sample.cram"), reference, region=generator.REFERENCE_VALIDATION_REGION
+    )
+
+    normalized = b"read-1\t0\tchr1\t155160500\t60\t4M\t*\t0\t0\tACGT\tIIII\tAS:i:4\tNM:i:0\n"
+    assert (digest, count) == (hashlib.sha256(normalized).hexdigest(), 1)
+    assert popen.call_args.args[0] == [
+        "samtools",
+        "view",
+        "-T",
+        str(reference),
+        "sample.cram",
+        generator.REFERENCE_VALIDATION_REGION,
+    ]
+
+
+def test_normalized_digest_reports_decode_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    def popen(*_args: object, **kwargs: object) -> _DigestProcess:
+        stderr_file = kwargs["stderr"]
+        assert hasattr(stderr_file, "write")
+        stderr_file.write("reference unavailable")
+        return _DigestProcess("partial\n", returncode=3)
+
+    monkeypatch.setattr(generator.subprocess, "Popen", popen)
+
+    with pytest.raises(RuntimeError, match="exited 3: reference unavailable"):
+        generator._normalized_record_digest("samtools", Path("sample.cram"), Path("reference.fa"))
+
+
+@pytest.mark.timeout(5)
+def test_stream_digest_does_not_deadlock_when_stderr_exceeds_pipe_capacity() -> None:
+    script = (
+        "import signal,sys; signal.alarm(3); "
+        "sys.stderr.write('diagnostic-' * 200000); sys.stderr.flush(); "
+        "sys.stdout.write('record\\n')"
+    )
+
+    digest, count = generator._stream_record_digest([sys.executable, "-c", script], lambda line: line.encode())
+
+    assert (digest, count) == (hashlib.sha256(b"record\n").hexdigest(), 1)
+
+
+@pytest.mark.parametrize("missing", ["absent", "wrong"])
+def test_reference_identity_is_checked_before_encoding(tmp_path: Path, missing: str) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = tmp_path / "reference.fa"
+    if missing == "wrong":
+        _touch(reference, ">chr1\nA\n")
+        expected = "SHA-256 mismatch"
+    else:
+        expected = "does not exist"
+
+    with pytest.raises((FileNotFoundError, ValueError), match=expected):
+        generator.derive_reference_compressed_cram("samtools", source, reference, tmp_path / "cram")
+
+
+def test_derivation_rejects_authority_bound_to_another_reference(tmp_path: Path) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    other_reference = _touch(tmp_path / "other.fa", ">chr1\nACGT\n")
+    digest = hashlib.sha256(other_reference.read_bytes()).hexdigest()
+    with (
+        generator.snapshot_reference_fasta(other_reference, digest) as authority,
+        pytest.raises(ValueError, match="Validated reference path mismatch"),
+    ):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            expected_reference_sha256=digest,
+            validated_reference=authority,
+        )
+
+    assert not (tmp_path / "cram").exists()
+
+
+def test_derivation_rejects_authority_for_another_required_digest(tmp_path: Path) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    digest = hashlib.sha256(reference.read_bytes()).hexdigest()
+    with (
+        generator.snapshot_reference_fasta(reference, digest) as authority,
+        pytest.raises(ValueError, match="Validated reference SHA-256 mismatch"),
+    ):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            validated_reference=authority,
+        )
+
+    assert not (tmp_path / "cram").exists()
+
+
+def test_derivation_stages_then_publishes_explicit_reference_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _touch(tmp_path / "source.bam", "source bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    root = tmp_path / "cram"
+    fake = _ReferenceSamtools()
+    digest = mock.Mock(side_effect=_registered_digest)
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", digest)
+
+    fixture = generator.derive_reference_compressed_cram(
+        "samtools",
+        source,
+        reference,
+        root,
+        expected_reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),
+    )
+
+    final_cram = root / "reference-compressed/source.cram"
+    encoded_cram = Path(fake.commands[2][fake.commands[2].index("-o") + 1])
+    staged_cram = Path(fake.commands[4][-1])
+    snapshot_path, snapshot_bytes = fake.reference_inputs[0]
+    assert staged_cram != final_cram
+    assert fake.commands[2][0:6] == ["samtools", "view", "-C", "-T", str(snapshot_path), "--no-PG"]
+    assert snapshot_path != reference
+    assert snapshot_bytes == reference.read_bytes()
+    assert not snapshot_path.exists()
+    assert f"UR:{reference.absolute()}" in fake.prepared_headers[0]
+    assert str(snapshot_path) not in fake.prepared_headers[0]
+    assert fake.commands[3] == ["samtools", "reheader", "-P", fake.commands[1][3], str(encoded_cram)]
+    assert fake.commands[4] == ["samtools", "index", str(staged_cram)]
+    assert digest.call_args_list[1].args[2] == snapshot_path
+    assert digest.call_args_list[3].args[2] == snapshot_path
+    assert fixture.cram == final_cram
+    assert fixture.reference == reference
+    assert fixture.reference_sha256 == hashlib.sha256(reference.read_bytes()).hexdigest()
+    assert final_cram.read_bytes() == b"reference-compressed cram"
+    assert Path(f"{final_cram}.crai").read_bytes() == b"reference-compressed crai"
+    assert fixture.indexed_region_records == REGISTERED_B178_INDEXED_REGION_RECORDS
+    assert fixture.source_indexed_region_digest == REGISTERED_B178_INDEXED_REGION_DIGEST
+
+
+@pytest.mark.parametrize("source_mutation", ["delete", "replace", "retarget"])
+def test_derivation_uses_snapshot_after_logical_reference_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_mutation: str,
+) -> None:
+    source = _touch(tmp_path / "source.bam", "source bam")
+    original = _touch(tmp_path / "original.fa", ">chr1\nACGT\n")
+    reference = tmp_path / "reference.fa"
+    if source_mutation == "retarget":
+        reference.symlink_to(original)
+    else:
+        reference.write_bytes(original.read_bytes())
+    original_bytes = reference.read_bytes()
+    expected_sha256 = hashlib.sha256(original_bytes).hexdigest()
+    fake = _ReferenceSamtools()
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", _registered_digest)
+
+    with generator.snapshot_reference_fasta(reference, expected_sha256) as authority:
+        snapshot_path = authority.snapshot_path
+        if source_mutation == "delete":
+            reference.unlink()
+        elif source_mutation == "replace":
+            reference.write_text(">chr1\nTTTT\n", encoding="utf-8")
+        else:
+            replacement = _touch(tmp_path / "replacement.fa", ">chr1\nTTTT\n")
+            reference.unlink()
+            reference.symlink_to(replacement)
+
+        fixture = generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            expected_reference_sha256=expected_sha256,
+            validated_reference=authority,
+        )
+
+        assert fake.reference_inputs == [(snapshot_path, original_bytes)]
+        assert fixture.reference == reference
+        assert fixture.reference_sha256 == authority.sha256 == expected_sha256
+
+    assert not snapshot_path.exists()
+
+
+def test_index_failure_aborts_before_decode_or_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    fake = _ReferenceSamtools(failure="index")
+    digest = mock.Mock()
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", digest)
+
+    with pytest.raises(RuntimeError, match="index failed"):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            expected_reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),
+        )
+
+    digest.assert_not_called()
+    assert not fake.reference_inputs[0][0].exists()
+    assert not (tmp_path / "cram/reference-compressed/source.cram").exists()
+
+
+def test_missing_crai_aborts_before_decode_or_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A zero-exit index command cannot validate or preserve a stale final CRAI."""
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    root = tmp_path / "cram"
+    final_crai = _touch(root / "reference-compressed/source.cram.crai", "stale crai")
+    fake = _ReferenceSamtools(create_index=False)
+    digest = mock.Mock()
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", digest)
+
+    with pytest.raises(RuntimeError, match="did not create expected CRAI"):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            root,
+            expected_reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),
+        )
+
+    digest.assert_not_called()
+    assert final_crai.read_bytes() == b"stale crai"
+    assert not (root / "reference-compressed/source.cram").exists()
+
+
+@pytest.mark.parametrize("failure", ["full", "indexed"])
+def test_lossy_evidence_aborts_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    source = _touch(tmp_path / "source.bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    fake = _ReferenceSamtools()
+    calls = 0
+
+    def digest(*args: object, **kwargs: object) -> tuple[str, int]:
+        nonlocal calls
+        calls += 1
+        if failure == "full" and calls == 2:
+            return "decoded-full", 34_214
+        if kwargs.get("region") is not None:
+            if failure == "indexed" and calls == 4:
+                return "decoded-region", 4_975
+            return REGISTERED_B178_INDEXED_REGION_DIGEST, REGISTERED_B178_INDEXED_REGION_RECORDS
+        return "full", 34_214
+
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", digest)
+
+    with pytest.raises(LossyConversionError, match="not lossless"):
+        generator.derive_reference_compressed_cram(
+            "samtools",
+            source,
+            reference,
+            tmp_path / "cram",
+            expected_reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest(),
+        )
+
+    assert not (tmp_path / "cram/reference-compressed/source.cram").exists()
+
+
+def test_rerun_replaces_mutated_cram_and_crai_with_identical_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _touch(tmp_path / "source.bam", "source bam")
+    reference = _touch(tmp_path / "reference.fa", ">chr1\nACGT\n")
+    root = tmp_path / "cram"
+    final_cram = _touch(root / "reference-compressed/source.cram", "stale cram")
+    final_crai = _touch(Path(f"{final_cram}.crai"), "stale crai")
+    fake = _ReferenceSamtools()
+    monkeypatch.setattr(generator.subprocess, "run", fake)
+    monkeypatch.setattr(generator, "_normalized_record_digest", _registered_digest)
+    reference_sha256 = hashlib.sha256(reference.read_bytes()).hexdigest()
+
+    first = generator.derive_reference_compressed_cram(
+        "samtools", source, reference, root, expected_reference_sha256=reference_sha256
+    )
+    first_bytes = (final_cram.read_bytes(), final_crai.read_bytes())
+    final_cram.write_bytes(b"mutated stale cram")
+    final_crai.write_bytes(b"mutated stale crai")
+    second = generator.derive_reference_compressed_cram(
+        "samtools", source, reference, root, expected_reference_sha256=reference_sha256
+    )
+
+    assert second == first
+    assert (final_cram.read_bytes(), final_crai.read_bytes()) == first_bytes
+    assert first_bytes == (b"reference-compressed cram", b"reference-compressed crai")

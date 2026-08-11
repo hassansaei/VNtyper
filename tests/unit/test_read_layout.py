@@ -29,10 +29,6 @@ def test_everything_in_the_singleton_output_is_also_a_single_read_set() -> None:
     assert classify_layout(r1=0, r2=0, other=0, single=17) == "single"
 
 
-def test_unequal_r1_and_r2_is_mixed_because_that_is_a_truncated_conversion() -> None:
-    assert classify_layout(r1=900, r2=880, other=0, single=0) == "mixed"
-
-
 def test_paired_and_unpaired_outputs_together_are_mixed() -> None:
     assert classify_layout(r1=900, r2=900, other=4200, single=0) == "mixed"
 
@@ -41,8 +37,19 @@ def test_two_distinct_unpaired_outputs_are_mixed_not_implicitly_combined() -> No
     assert classify_layout(r1=0, r2=0, other=10, single=5) == "mixed"
 
 
-def test_only_one_mate_output_is_mixed_not_treated_as_single_end() -> None:
-    assert classify_layout(r1=10, r2=0, other=0, single=0) == "mixed"
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {"r1": 900, "r2": 880, "other": 0, "single": 0},
+        {"r1": 10, "r2": 0, "other": 0, "single": 0},
+        {"r1": 0, "r2": 10, "other": 0, "single": 0},
+    ],
+)
+def test_invalid_mate_parity_routes_nothing_and_strands_every_nonempty_path(counts: dict[str, int]) -> None:
+    assert classify_layout(**counts) == "invalid"
+    consumed, stranded = route_fastqs("invalid", PATHS, counts)
+    assert consumed == ()
+    assert stranded == tuple(PATHS[key] for key in ("r1", "r2") if counts[key] > 0)
 
 
 def test_nothing_at_all_is_empty_not_single() -> None:
@@ -83,11 +90,34 @@ def test_a_stranded_non_empty_file_is_reported_never_dropped() -> None:
     assert stranded == ("other.gz",)
 
 
-def test_mixed_layout_routes_nothing_and_reports_every_non_empty_file() -> None:
-    consumed, stranded = route_fastqs("mixed", PATHS, {"r1": 9, "r2": 9, "other": 4, "single": 2})
+@pytest.mark.parametrize(
+    ("counts", "verdict", "selected"),
+    [
+        ({"r1": 14_690, "r2": 14_690, "other": 0, "single": 1}, "mixed", ("r1.gz", "r2.gz", "single.gz")),
+        ({"r1": 3_474, "r2": 3_474, "other": 0, "single": 93}, "mixed", ("r1.gz", "r2.gz", "single.gz")),
+        (
+            {"r1": 9, "r2": 9, "other": 4, "single": 2},
+            "mixed",
+            ("r1.gz", "r2.gz", "other.gz", "single.gz"),
+        ),
+        ({"r1": 0, "r2": 0, "other": 4, "single": 2}, "mixed", ("other.gz", "single.gz")),
+    ],
+)
+def test_lossless_layout_routes_every_nonempty_file_once(
+    counts: dict[str, int], verdict: str, selected: tuple[str, ...]
+) -> None:
+    assert classify_layout(**counts) == verdict
+    consumed, stranded = route_fastqs(verdict, PATHS, counts)
+    assert consumed == selected
+    assert stranded == ()
 
-    assert consumed == ()
-    assert stranded == ("r1.gz", "r2.gz", "other.gz", "single.gz")
+
+def test_duplicate_selected_paths_are_rejected_instead_of_double_counted() -> None:
+    aliased_paths = {**PATHS, "other": "unpaired.gz", "single": "unpaired.gz"}
+    counts = {"r1": 0, "r2": 0, "other": 4, "single": 2}
+
+    with pytest.raises(ValueError, match="duplicate"):
+        route_fastqs("mixed", aliased_paths, counts)
 
 
 def test_empty_layout_has_no_consumed_or_stranded_files() -> None:

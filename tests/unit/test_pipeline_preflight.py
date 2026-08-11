@@ -350,6 +350,7 @@ def test_cram_plan_drives_conversion_and_reference_aware_coverage(tmp_path: Path
     coverage = harness.kwargs("calculate_vntr_coverage")
     assert coverage["bam_file"] == plan.view_path
     assert coverage["reference_path"] == reference
+    assert harness.kwargs("run_kestrel")["fastq_files"] == harness.stages["route_converted_fastqs"].return_value
 
 
 def test_pipeline_threads_the_explicit_cram_reference_to_preflight(tmp_path: Path) -> None:

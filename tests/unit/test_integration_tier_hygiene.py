@@ -35,6 +35,7 @@ pytestmark = pytest.mark.unit
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TESTS_ROOT.parent
 INTEGRATION_MODULE = TESTS_ROOT / "integration" / "test_pipeline_integration.py"
+KESTREL_MULTIFILE_MODULE = TESTS_ROOT / "integration" / "test_kestrel_multifile.py"
 ROOT_CONFTEST = TESTS_ROOT / "conftest.py"
 DATA_UTILS = TESTS_ROOT / "support" / "data_utils.py"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -331,6 +332,40 @@ def test_the_integration_tier_is_not_in_the_unit_tier() -> None:
         f"{INTEGRATION_MODULE.name} defines no integration marker, so `-m integration` "
         "selects nothing and the tier silently does not exist."
     )
+
+
+def test_real_kestrel_multifile_proof_is_integration_only() -> None:
+    """The real Java/samtools proof must never leak into the pure unit tier."""
+    tree = _parse(KESTREL_MULTIFILE_MODULE)
+    marker_attributes = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "pytest"
+        and node.value.attr == "mark"
+    }
+
+    assert "integration" in marker_attributes
+    assert "unit" not in marker_attributes
+
+
+def test_real_kestrel_multifile_proof_uses_registered_data() -> None:
+    """The real samples must come through the canonical manifest and data validator."""
+    tree = _parse(KESTREL_MULTIFILE_MODULE)
+    tests = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
+    assert tests, "The multifile module contains no executable test."
+    assert all({"test_config", "ensure_test_data"} <= {arg.arg for arg in node.args.args} for node in tests)
+
+    string_literals = {
+        node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert "file_resources" in string_literals
+    assert "example_b178_hg19_subset.bam" in string_literals
+    assert "example_40cf_hg38_subset.bam" in string_literals
+    assert "tests/data/example_b178_hg19_subset.bam" not in string_literals
+    assert "tests/data/example_40cf_hg38_subset.bam" not in string_literals
 
 
 # Shell tokens that may precede a command without changing which command runs.

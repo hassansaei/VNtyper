@@ -10,7 +10,7 @@ import pytest
 
 from scripts.single_end_fixture import parse_single_end_fixture
 from tests.parametrization import load_test_config
-from tests.support.orchestration import assert_declared_archive, run_bam_test_case
+from tests.support.orchestration import PipelineRequest, PipelineRunResult, build_pipeline_argv, run_bam_test_case
 
 logger = logging.getLogger(__name__)
 
@@ -39,26 +39,11 @@ def test_single_end_bam_produces_a_genotype(
     output_dir.mkdir()
     case = {**single_end_case, "bam": str(spec.output_bam)}
 
-    def local_runner(bam_file: Path, reference: str, out_dir: Path) -> int:
-        command = [
-            "vntyper",
-            "-l",
-            "DEBUG",
-            "pipeline",
-            "--bam",
-            str(bam_file),
-            "--threads",
-            "4",
-            "--reference-assembly",
-            reference,
-            "-o",
-            str(out_dir),
-            *case.get("cli_options", []),
-        ]
+    def local_runner(request: PipelineRequest) -> PipelineRunResult:
+        command = build_pipeline_argv(request, str)
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         logger.info("single-end pipeline stdout:\n%s", result.stdout)
         logger.info("single-end pipeline stderr:\n%s", result.stderr)
-        return result.returncode
+        return PipelineRunResult(result.returncode, result.stdout, result.stderr)
 
     run_bam_test_case(case, local_runner, output_dir)
-    assert_declared_archive(case, output_dir)

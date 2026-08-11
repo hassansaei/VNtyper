@@ -53,6 +53,6 @@ def test_default_bam_run_indexes_the_final_slice_exactly_once(
         for line in log_file.read_text(encoding="utf-8").splitlines()
         if "Re-indexing BAM file with command: samtools index" in line and "output_sliced.bam" in line
     ]
-    assert completed.returncode == 1
-    assert "FASTQ layout 'mixed' cannot be consumed without dropping reads" in completed.stderr
+    assert completed.returncode == 0, completed.stderr
+    assert "Pipeline finished successfully." in completed.stderr
     assert len(commands) == 1
