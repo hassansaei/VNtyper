@@ -113,9 +113,15 @@ vntyper install-references -d reference --references hg19 hg38 GRCh37 GRCh38 hg1
 See [Reference Setup](../getting-started/reference-setup.md) for what that command fetches
 and how it verifies what it downloads. Both the baseline and candidate worktrees then need
 this same populated tree; symlink one already-installed `reference/` into each side rather
-than installing it twice, which is consistent with `reference/**` being a base-image
-content-hash input that must be identical on both sides (see *The baseline shares the
-candidate's `reference/` tree* below).
+than installing it twice — a convenience, not a build-identity requirement. (An earlier
+version of this sentence said doing so was "consistent with `reference/**` being a
+base-image content-hash input that must be identical on both sides"; that stopped being
+true once milestone 5 moved reference data to a published, checksummed bundle in
+`berntpopp/vntyper-data` and dropped the tracked `reference/` tree from the image-rebuild
+trigger list — see `docker/Dockerfile.base`'s input list, which now covers only the bundle
+pin (`asset`/`asset_sha256` in `install_references_config.json`). *The baseline shares the
+candidate's `reference/` tree* below records the correction against run 5, where the claim
+was first made.)
 
 The cohort is every BAM under `tests/data/`, run at each assembly it is provided for:
 the 7 multi-reference samples at all six assemblies (`hg19`, `hg38`, `GRCh37`, `GRCh38`,
@@ -124,16 +130,24 @@ guard `example_40cf`. Five cases repeat without `--fast-mode` so the unmapped-re
 are exercised, three run `--extra-modules advntr`, two repeat from a derived cohort CRAM,
 and a purpose-built CRAM runs both scan strategies. See
 [The CRAM group](#the-cram-group-188) below. **Run 6 is the first to take the CRAM group**;
-runs 1–5 predate the fixtures.
+runs 1–5 predate the fixtures. Fourteen further cases alias the derived `GRCh37`/`GRCh38`
+BAMs under the `hg19_ncbi`/`hg38_ncbi` labels milestone 5's physical-identity change
+introduced — same file, different declared assembly, one alias per `GRCh37` base case and
+one per `GRCh38` base case — proving the new resolver routes each label to the file
+`GRCh37`/`GRCh38` already reach and reproduces the same genotype. See
+`golden_cohort.matrix.build_alias_cases`.
 
-**The matrix is 64 cases, was 60 for run 6 and was 58 for runs 1–5.** Every `x / 58`
-figure in the run sections below is that earlier matrix and is left as measured; run 6's
-tables are over 60 and are not comparable cell-for-cell with either matrix.
+**The matrix is 78 cases, was 64 for run 7, was 60 for run 6 and was 58 for runs 1–5.**
+Every `x / 58` figure in the run sections below is that earlier matrix and is left as
+measured; run 6's and run 7's tables are over their own totals and are not comparable
+cell-for-cell with any other matrix.
 
 The CRAM fixtures are **derived, not committed** (`scripts/make_cram_fixtures.py`), so a
-fresh clone has 58 cases until they are generated. Each of the two selected cohort CRAMs
-and the indexed-safe purpose fixture runs in both indexed and stream mode, adding six cases. The harness refuses to launch
-over the reduced matrix rather than running it silently — run 6 hit exactly that and
+fresh clone derives 72 cases — the 50 base cases, the 5 non-fast, 3 adVNTR and 14 alias
+repeats, none of which need a generated fixture — until the CRAM fixtures are also
+generated. Each of the two selected cohort CRAMs and the indexed-safe purpose fixture runs
+in both indexed and stream mode, adding six cases and reaching 78. The harness refuses to
+launch over the reduced matrix rather than running it silently — run 6 hit exactly that and
 generated the 50 fixtures instead of passing `--allow-matrix-drift`.
 
 Compared per case: the complete `kestrel_result.tsv` header and row set, keyed on
@@ -825,6 +839,10 @@ Still true of runs 1–5, and addressed in the matrix but **not yet by any run**
 * A CRAM whose reference is unavailable, which is the ordinary externally-referenced CRAM a
   diagnostic lab sends. The derived fixtures are `no_ref=1` and need no reference, so they
   cannot exercise that failure mode at all.
+* The `hg19_ncbi`/`hg38_ncbi` physical-identity aliases milestone 5 added (see
+  [Method](#method)): the matrix declares 14 cases reusing the `GRCh37`/`GRCh38` BAMs under
+  those labels, proving the new resolver routes each label to the file `GRCh37`/`GRCh38`
+  already reach, but no run on this page has yet exercised them.
 
 No longer true, and the change is run 4's:
 
@@ -931,8 +949,12 @@ process CWD, and each side runs with cwd set to its own tree). The first attempt
 because of this, and the new expectation check named all six affected cases rather than
 comparing them as `absent_both` — which is what the pre-1.1.0 harness would have done.
 Sharing one reference tree is sound rather than expedient: `git diff 4fd638a..HEAD --
-reference/` is empty, and `reference/**` is a base-image content-hash input that must be
-identical on both sides.
+reference/` is empty — a fact about run 5's two commits that is unaffected by anything
+below. (At the time this was also reinforced by `reference/**` being a base-image
+content-hash input that had to be identical on both sides; milestone 5 later moved
+reference data to a published, checksummed bundle and dropped the tracked `reference/`
+tree from the image-rebuild trigger list, so that second reason no longer holds — see the
+correction in [Method](#method).)
 
 **Run 5 ran no CRAM case.** That is a fact about run 5 and does not change: its 65 runs per
 side are the 58-case BAM matrix plus 3 probes plus 4 cohort cases, and `175011e` is

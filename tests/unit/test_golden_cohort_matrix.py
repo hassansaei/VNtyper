@@ -259,7 +259,7 @@ def test_cohorts_only_consume_cases_expected_to_write_candidate_summaries(tmp_pa
         "7a61_hg38_ensembl_indexed_cram",
         "b178_hg19_indexed_cram",
     }
-    assert len(candidate_successes) == 62
+    assert len(candidate_successes) == 76
     for cohort in built["cohort_cases"]:
         if cohort.get("empty_input_dir"):
             continue
@@ -310,14 +310,153 @@ def test_only_the_pseudonymized_cohort_case_requires_the_pseudonymization_table(
 
 
 # --------------------------------------------------------------------------------------
+# the alias group (hg19_ncbi / hg38_ncbi physical identity)
+# --------------------------------------------------------------------------------------
+
+
+def test_build_alias_cases_reruns_each_matching_base_case_under_its_alias_label() -> None:
+    """Every ``GRCh37``/``GRCh38`` base case gets one alias, id built the same way as the base.
+
+    ``derive_base_cases`` builds a remapped id as ``<sample>_<assembly>_<aligner>`` and a
+    top-level one as ``<sample>_<assembly>_subset``; the alias reconstructs the id the same
+    way rather than substituting the assembly text into the original, which would break on
+    a sample name containing the assembly string.
+    """
+    base_cases = [
+        {
+            "case_id": "b178_GRCh37_bwa",
+            "kind": "pipeline",
+            "group": "base",
+            "sample": "example_b178",
+            "assembly": "GRCh37",
+            "source": "remapped/bwa",
+            "bam": "/data/remapped/bwa/GRCh37/example_b178_GRCh37.bam",
+            "fast_mode": True,
+            "advntr": False,
+            "expect_exit": "zero",
+            "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+        },
+        {
+            "case_id": "dfc3_GRCh38_bwa",
+            "kind": "pipeline",
+            "group": "base",
+            "sample": "example_dfc3",
+            "assembly": "GRCh38",
+            "source": "remapped/bwa",
+            "bam": "/data/remapped/bwa/GRCh38/example_dfc3_GRCh38.bam",
+            "fast_mode": True,
+            "advntr": False,
+            "expect_exit": "zero",
+            "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+        },
+        # An hg19 base case must not alias to anything: it is not a value of ALIAS_ASSEMBLIES.
+        {
+            "case_id": "6449_hg19_subset",
+            "kind": "pipeline",
+            "group": "base",
+            "sample": "example_6449",
+            "assembly": "hg19",
+            "source": "subset",
+            "bam": "/data/example_6449_hg19_subset.bam",
+            "fast_mode": True,
+            "advntr": False,
+            "expect_exit": "zero",
+            "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+        },
+    ]
+
+    aliases = matrix.build_alias_cases(base_cases)
+
+    assert {alias["case_id"] for alias in aliases} == {"b178_hg19_ncbi_bwa", "dfc3_hg38_ncbi_bwa"}
+    by_id = {alias["case_id"]: alias for alias in aliases}
+
+    grch37_alias = by_id["b178_hg19_ncbi_bwa"]
+    assert grch37_alias["group"] == "alias"
+    assert grch37_alias["assembly"] == "hg19_ncbi"
+    assert grch37_alias["alias_of_assembly"] == "GRCh37"
+    assert grch37_alias["repeat_of"] == "b178_GRCh37_bwa"
+    # The whole point: the alias reuses the identical physical BAM, not a copy of it.
+    assert grch37_alias["bam"] == "/data/remapped/bwa/GRCh37/example_b178_GRCh37.bam"
+
+    grch38_alias = by_id["dfc3_hg38_ncbi_bwa"]
+    assert grch38_alias["assembly"] == "hg38_ncbi"
+    assert grch38_alias["alias_of_assembly"] == "GRCh38"
+    assert grch38_alias["repeat_of"] == "dfc3_GRCh38_bwa"
+    assert grch38_alias["bam"] == "/data/remapped/bwa/GRCh38/example_dfc3_GRCh38.bam"
+
+
+def test_build_alias_cases_handles_a_top_level_subset_bam_too() -> None:
+    """The id builder also has to work on the ``subset`` shape, not only ``remapped/*``."""
+    base_cases = [
+        {
+            "case_id": "dfc3_GRCh38_subset",
+            "kind": "pipeline",
+            "group": "base",
+            "sample": "example_dfc3",
+            "assembly": "GRCh38",
+            "source": "subset",
+            "bam": "/data/example_dfc3_GRCh38_subset.bam",
+            "fast_mode": True,
+            "advntr": False,
+            "expect_exit": "zero",
+            "required_artifacts": list(PIPELINE_REQUIRED_ARTIFACTS),
+        }
+    ]
+    aliases = matrix.build_alias_cases(base_cases)
+    assert [alias["case_id"] for alias in aliases] == ["dfc3_hg38_ncbi_subset"]
+    assert aliases[0]["bam"] == "/data/example_dfc3_GRCh38_subset.bam"
+
+
+def test_alias_cases_inherit_the_ordinary_pipeline_success_contract(tmp_path: Path) -> None:
+    """An alias case is a rerun, not a new kind of case: fast, no adVNTR, exit zero."""
+    built = _build(_documented_data_dir(tmp_path))
+    alias_cases = [case for case in built["cases"] if case["group"] == "alias"]
+
+    assert len(alias_cases) == 14
+    for case in alias_cases:
+        assert case["fast_mode"] is True
+        assert case["advntr"] is False
+        assert case["expect_exit"] == "zero"
+        assert case["required_artifacts"] == list(PIPELINE_REQUIRED_ARTIFACTS)
+        assert case.get("side_expectations") is None
+        assert case["assembly"] in matrix.ALIAS_ASSEMBLIES
+
+
+def test_alias_cases_reuse_the_same_physical_bam_as_their_aliased_assembly(tmp_path: Path) -> None:
+    """The whole point of the alias group: same file, different declared label."""
+    built = _build(_documented_data_dir(tmp_path))
+    by_id = {case["case_id"]: case for case in built["cases"]}
+
+    for alias_id, alias_label, source_id in (
+        ("b178_hg19_ncbi_bwa", "hg19_ncbi", "b178_GRCh37_bwa"),
+        ("dfc3_hg38_ncbi_bwa", "hg38_ncbi", "dfc3_GRCh38_bwa"),
+    ):
+        alias = by_id[alias_id]
+        source = by_id[source_id]
+        assert alias["assembly"] == alias_label
+        assert alias["bam"] == source["bam"]
+        assert alias["repeat_of"] == source_id
+
+
+def test_a_data_directory_without_grch37_or_grch38_derives_no_alias_cases(tmp_path: Path) -> None:
+    """No aliasable base case means no aliases - visible as ordinary drift, not a silent 0."""
+    root = _data_dir(tmp_path, ("a5c1",), ("hg19",))
+    built = _build(root, non_fast_ids=(), advntr_ids=(), cram_ids=(), include_probes=False, strict=False)
+    assert built["check"]["counts"]["alias"] == 0
+    assert "alias: derived 0, page records 14" in built["check"]["mismatches"]
+    assert built["check"]["attestation_grade"] is False
+
+
+# --------------------------------------------------------------------------------------
 # drift and emptiness
 # --------------------------------------------------------------------------------------
 
 
 def test_a_matrix_matching_the_documented_contract_builds_and_is_attestation_grade(tmp_path: Path) -> None:
-    """The fixture reproduces 50/5/3/6 and the per-assembly counts, so strict mode passes.
+    """The fixture reproduces 50/5/3/14/6 and the per-assembly counts, so strict mode passes.
 
-    The total is 64 rather than the 58 runs 1-5 measured: the CRAM group is six cases wider.
+    The total is 78 rather than the 58 runs 1-5 measured: the alias group is fourteen cases
+    wider and the CRAM group is six cases wider.
 
     Args:
         tmp_path: pytest's per-test directory.
@@ -325,7 +464,8 @@ def test_a_matrix_matching_the_documented_contract_builds_and_is_attestation_gra
     built = _build(_documented_data_dir(tmp_path))
     assert built["check"]["mismatches"] == []
     assert built["check"]["attestation_grade"] is True
-    assert built["check"]["counts"]["total"] == 64
+    assert built["check"]["counts"]["total"] == 78
+    assert built["check"]["counts"]["alias"] == 14
     assert built["check"]["counts"]["cram"] == 6
     assert built["check"]["counts"]["probes"] == 3
 
