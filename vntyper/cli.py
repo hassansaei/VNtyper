@@ -175,13 +175,27 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         sys.exit(1)
 
-    command_handler(
-        args,
-        config=config,
-        parser=parser,
-        log_level_value=log_level_value,
-        log_file_str=log_file_str,
-    )
+    try:
+        command_handler(
+            args,
+            config=config,
+            parser=parser,
+            log_level_value=log_level_value,
+            log_file_str=log_file_str,
+        )
+    except ValueError as exc:
+        # AGENTS.md's convention for a handler-level validation failure is
+        # `logger.error(msg)` followed by `raise ValueError(msg)` - no custom exception
+        # classes - so the diagnostic has already been logged before this runs. Without
+        # this catch, that clean convention is undone one frame up: the exception
+        # escapes `main()` as an uncaught traceback instead of the `sys.exit(1)` every
+        # other CLI-level validation error already gets here (see the `--output-name`
+        # and `--log-file` checks above). `_resolve_bwa_reference`'s new fail-closed
+        # ValueError (a present-but-uninstalled reference) is what surfaced this gap,
+        # but the fix is general: any handler that raises `ValueError` gets the same
+        # clean presentation, not just `pipeline`.
+        logger.critical(str(exc))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

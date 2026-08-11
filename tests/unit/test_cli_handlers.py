@@ -29,6 +29,13 @@ from vntyper.scripts.pipeline import run_pipeline
 
 pytestmark = pytest.mark.unit
 
+#: `_resolve_bwa_reference` now fails closed on a configured-but-missing file (Important
+#: 1), so a fake, never-written path like the old "/refs/hg19.fa" would make every
+#: FASTQ-input test below raise before `run_pipeline` was ever reached. Pointing at this
+#: test module's own file is a real, always-present path that carries no other meaning -
+#: nothing here asserts on the literal value, only on whether resolution succeeded.
+_EXISTING_FILE = str(Path(__file__).resolve())
+
 MINIMAL_CONFIG: dict[str, dict[str, object]] = {
     "default_values": {
         "output_dir": "out",
@@ -37,7 +44,7 @@ MINIMAL_CONFIG: dict[str, dict[str, object]] = {
         "output_name": PIPELINE_BASENAME,
         "archive_format": "zip",
     },
-    "reference_data": {"bwa_reference_hg19": "/refs/hg19.fa", "bwa_reference_hg38": "/refs/hg38.fa"},
+    "reference_data": {"bwa_reference_hg19": _EXISTING_FILE, "bwa_reference_hg38": _EXISTING_FILE},
 }
 
 

@@ -32,7 +32,7 @@ from vntyper.scripts.install_references import main as install_references_main
 # Import the online mode function
 from vntyper.scripts.online_mode import run_online_mode
 from vntyper.scripts.pipeline import run_pipeline
-from vntyper.scripts.reference_registry import get_reference_source, reference_keys
+from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
 
 logger = logging.getLogger(__name__)
@@ -195,37 +195,74 @@ def _resolve_bwa_reference(
         UCSC-family fallback, or None when nothing resolves and `required` is False.
 
     Raises:
-        ValueError: If no configured key resolves and `required` is True.
+        ValueError: If no configured key resolves, if the key that resolved is present
+            with an explicit ``null`` (deliberately disabled), or if a resolved path
+            names no file on disk, and `required` is True in each case.
         ValueError: If `reference_assembly` is not a supported label. This must NOT be
             swallowed by callers - an unknown assembly is a configuration error, not a
             missing file.
     """
     resolved = resolve_from_mapping("bwa", reference_assembly, config.get("reference_data", {}))
     keys = ", ".join(reference_keys("bwa", reference_assembly))
+
     # A present-but-non-string value (an int, a dict, ...) is malformed config, not a
     # usable path. Treating it as unresolved - rather than handing it to `Path()` further
     # down the call chain - is what lets `required=False` return None instead of the
     # caller crashing on a type it never asked to handle; `required=True` still fails
     # closed, just with a clear message instead of a `Path`/`TypeError` two frames later.
-    if resolved is None or not isinstance(resolved.value, str) or not resolved.value:
-        if not required:
-            return None
+    if resolved is not None and isinstance(resolved.value, str) and resolved.value:
+        if not Path(resolved.value).exists():
+            # Presence beat truthiness to get here, but a configured path that names no
+            # file on disk is not a usable reference either. A default `install-references`
+            # run only installs hg19/hg38, so a shipped config.json that also declares
+            # bwa_reference_GRCh38 as a real (but not-yet-installed) relative path used to
+            # resolve here, is_fallback=False, no warning - and the run died several stages
+            # later with a message naming neither the assembly nor the remedy. Falling
+            # through to the next tier (the UCSC-family key, when one exists) instead of
+            # raising here would silently align a GRCh38-labelled run against UCSC sequence
+            # - precisely the defect this milestone exists to kill - so this fails closed at
+            # whichever tier `resolve_from_mapping` already matched, rather than re-walking
+            # `reference_keys` to find one whose file happens to exist.
+            if not required:
+                return None
+            message = (
+                f"BWA reference for --reference-assembly {reference_assembly!r} is configured at "
+                f"reference_data[{resolved.key!r}] = {resolved.value!r}, but that file does not exist. "
+                f"Run `vntyper install-references --references {physical_reference_id(reference_assembly)}` "
+                "to install it."
+            )
+            logger.error(message)
+            raise ValueError(message)
+        if resolved.is_fallback:
+            # Name the effective source plainly. Deriving it from the key suffix would be
+            # fragile; the fallback key is always the UCSC family key, so the source is ucsc.
+            logger.warning(
+                f"--reference-assembly {reference_assembly!r} has no {keys.split(', ')[0]!r} entry; "
+                f"falling back to {resolved.key!r}. This run therefore uses 'ucsc' sequence, "
+                f"not {get_reference_source(reference_assembly)!r}. "
+                f"Run `vntyper install-references` to install the requested reference."
+            )
+        return resolved
+
+    if not required:
+        return None
+
+    if resolved is not None and resolved.value is None:
+        # Present with an explicit null is a deliberate "disabled", not an absence - say
+        # so, distinctly from the "nothing configured at all" message below, the way
+        # `shark_filtering.select_muc1_region_fasta` already distinguishes the two.
+        message = (
+            f"reference_data[{resolved.key!r}] is null; BWA reference for --reference-assembly "
+            f"{reference_assembly!r} is disabled. Tried: {keys}. "
+            "Run `vntyper install-references` or set one of those keys."
+        )
+    else:
         message = (
             f"No BWA reference configured for --reference-assembly {reference_assembly!r}. "
             f"Tried: {keys}. Run `vntyper install-references` or set one of those keys."
         )
-        logger.error(message)
-        raise ValueError(message)
-    if resolved.is_fallback:
-        # Name the effective source plainly. Deriving it from the key suffix would be
-        # fragile; the fallback key is always the UCSC family key, so the source is ucsc.
-        logger.warning(
-            f"--reference-assembly {reference_assembly!r} has no {keys.split(', ')[0]!r} entry; "
-            f"falling back to {resolved.key!r}. This run therefore uses 'ucsc' sequence, "
-            f"not {get_reference_source(reference_assembly)!r}. "
-            f"Run `vntyper install-references` to install the requested reference."
-        )
-    return resolved
+    logger.error(message)
+    raise ValueError(message)
 
 
 def select_bwa_reference(config: dict[str, Any], reference_assembly: str, *, required: bool = True) -> str | None:
