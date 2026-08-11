@@ -155,9 +155,12 @@ def staged_install(target: Path, *, seed_from_existing: bool = True) -> Iterator
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.staging.", dir=target.parent))
     previous: Path | None = None
-    if seed_from_existing and target.exists():
-        shutil.copytree(target, staging, dirs_exist_ok=True, symlinks=True)
     try:
+        # Seeding only reads `target`, but a mid-copy failure (disk full, permission
+        # error, an interrupted copy of a large reference tree) must still hit the
+        # `except` below - otherwise every failed retry leaks another staging directory.
+        if seed_from_existing and target.exists():
+            shutil.copytree(target, staging, dirs_exist_ok=True, symlinks=True)
         yield staging
         if target.exists():
             previous = Path(tempfile.mkdtemp(prefix=f".{target.name}.previous.", dir=target.parent))
@@ -178,7 +181,12 @@ def staged_install(target: Path, *, seed_from_existing: bool = True) -> Iterator
                     previous = None
                 except OSError as restore_error:
                     logger.error(f"could not restore {target} from {previous}: {restore_error}")
-            if previous is not None:
+            # Only report a preserved path that actually exists: if `target.rename(previous)`
+            # itself is what failed, `previous.rmdir()` already vacated the reserved name
+            # and nothing was ever moved there - `target` still holds it safely, and
+            # reporting the vacant `previous` path would send an operator hunting for
+            # data that was never displaced.
+            if previous is not None and previous.exists():
                 logger.error(f"previous reference tree preserved at {previous}; restore it by hand")
         raise
     else:

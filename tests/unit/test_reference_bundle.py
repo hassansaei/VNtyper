@@ -7,6 +7,7 @@ half-populated reference tree that the next run treated as complete.
 """
 
 import io
+import logging
 import tarfile
 
 import pytest
@@ -81,6 +82,37 @@ class TestSafeExtract:
         with pytest.raises(ValueError):
             safe_extract(archive, tmp_path / "out")
 
+    def test_a_link_resolving_inside_the_root_is_extracted(self, tmp_path):
+        """A legitimate in-root link must survive extraction, not just be rejected.
+
+        The four tests above only prove the guard rejects bad members; none of them
+        prove it lets a good one through, and a guard that rejects everything passes
+        every one of them.
+        """
+        archive = tmp_path / "links.tar.gz"
+        payload = b">chr1\nACGT\n"
+        with tarfile.open(archive, "w:gz") as tar:
+            regular = tarfile.TarInfo("alignment/chr1.hg38.fa")
+            regular.size = len(payload)
+            tar.addfile(regular, io.BytesIO(payload))
+
+            symlink = tarfile.TarInfo("alignment/chr1.sym.fa")
+            symlink.type = tarfile.SYMTYPE
+            symlink.linkname = "chr1.hg38.fa"  # relative to the symlink's own directory
+            tar.addfile(symlink)
+
+            hardlink = tarfile.TarInfo("alignment/chr1.hard.fa")
+            hardlink.type = tarfile.LNKTYPE
+            hardlink.linkname = "alignment/chr1.hg38.fa"  # relative to the archive root
+            tar.addfile(hardlink)
+
+        destination = tmp_path / "out"
+        safe_extract(archive, destination)
+
+        assert (destination / "alignment/chr1.hg38.fa").read_bytes() == payload
+        assert (destination / "alignment/chr1.sym.fa").read_bytes() == payload
+        assert (destination / "alignment/chr1.hard.fa").read_bytes() == payload
+
 
 class TestStagedInstall:
     def test_an_existing_installation_is_carried_into_staging(self, tmp_path):
@@ -94,6 +126,26 @@ class TestStagedInstall:
         assert (target / "alignment" / "chr1.hg19.fa").read_text() == "hg19"
         assert (target / "alignment" / "chr1.hg38.fa").read_text() == "hg38"
         assert (target / "README.md").read_text() == "kept"
+
+    def test_a_seeding_failure_leaves_no_staging_directory_behind(self, tmp_path, monkeypatch):
+        """Seeding only reads `target`, but a mid-copy failure - disk full, permission
+        error, an interrupted copy of a large reference tree - must still hit the
+        cleanup path, or every failed retry leaks another staging directory."""
+        import vntyper.scripts.reference_bundle as reference_bundle
+
+        target = tmp_path / "refs"
+        target.mkdir()
+        (target / "chr1.fa").write_text("original")
+
+        def failing_copytree(*_args, **_kwargs):
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr(reference_bundle.shutil, "copytree", failing_copytree)
+        with pytest.raises(OSError, match="no space left on device"), staged_install(target):
+            pass
+
+        assert list(tmp_path.glob(".refs.staging.*")) == []
+        assert (target / "chr1.fa").read_text() == "original"
 
     def test_a_successful_stage_is_activated_atomically(self, tmp_path):
         target = tmp_path / "refs"
@@ -137,6 +189,40 @@ class TestStagedInstall:
         assert preserved, "the previous tree must survive under a named path"
         assert (preserved[0] / "chr1.fa").read_text() == "original"
         assert not list(tmp_path.glob(".refs.staging.*")), "staging must still be cleaned up"
+
+    def test_a_failed_quarantine_does_not_report_a_preservation_that_never_happened(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """If `target.rename(previous)` itself is the rename that fails, the reserved
+        `previous` name was already vacated by `rmdir()` and nothing was ever moved
+        there - `target` still holds the tree safely. The operator report must not
+        send them hunting for data that was never displaced.
+        """
+        import pathlib
+
+        target = tmp_path / "refs"
+        target.mkdir()
+        (target / "chr1.fa").write_text("original")
+        real_rename = pathlib.Path.rename
+
+        def fail_quarantine(self, other):
+            if pathlib.Path(self) == target:
+                raise OSError("quarantine blocked")
+            return real_rename(self, other)
+
+        monkeypatch.setattr(pathlib.Path, "rename", fail_quarantine)
+        with (
+            caplog.at_level(logging.ERROR, logger="vntyper.scripts.reference_bundle"),
+            pytest.raises(OSError, match="quarantine blocked"),
+            staged_install(target) as staging,
+        ):
+            (staging / "chr1.fa").write_text("replacement")
+
+        assert (target / "chr1.fa").read_text() == "original"
+        assert list(tmp_path.glob(".refs.previous.*")) == []
+        assert "preserved at" not in caplog.text, (
+            "nothing was actually moved aside; the operator must not be told to go find it"
+        )
 
     def test_a_failure_leaves_a_previous_installation_untouched(self, tmp_path):
         target = tmp_path / "refs"
