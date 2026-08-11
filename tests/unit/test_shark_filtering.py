@@ -237,6 +237,17 @@ class TestTheInstalledTreeWins:
         filter_with(tmp_path, config=legacy, reference_assembly="hg19")
         assert "/legacy/region.fa" in captured_command[0]["command"]
 
+    def test_a_present_null_legacy_key_fails_closed_with_the_specific_message(self, tmp_path):
+        """Membership, not truthiness, applies to the legacy tier too: an old-style
+        config that explicitly disables SHARK with ``"muc1_region_fasta": None`` must
+        be distinguishable from the key being absent altogether, and raise the same
+        "is null; disabled" message the other two tiers give -- not the generic
+        final "no FASTA found" message.
+        """
+        legacy = {"shark_settings": {"muc1_region_fasta": None}}
+        with pytest.raises(ValueError, match=r"shark_settings\['muc1_region_fasta'\] is null"):
+            filter_with(tmp_path, config=legacy, reference_assembly="hg19")
+
     def test_an_incomplete_keyed_config_does_not_masquerade_as_legacy(self, tmp_path):
         """Only hg19 configured, plus a stray flat key: an hg38 run must not take it."""
         partial = {"shark_settings": {"muc1_region_fasta_hg19": "/a.fa", "muc1_region_fasta": "/flat.fa"}}

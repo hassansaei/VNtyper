@@ -70,8 +70,12 @@ def select_muc1_region_fasta(config: dict, main_config: dict, reference_assembly
         raise ValueError(f"shark_settings[{key!r}] is null; SHARK is disabled for {reference_assembly!r}")
 
     keyed = [name for name in settings if name.startswith("muc1_region_fasta_")]
-    if not keyed and settings.get("muc1_region_fasta"):
-        return settings["muc1_region_fasta"]
+    if not keyed:
+        legacy_key = "muc1_region_fasta"
+        if legacy_key in settings:
+            if settings[legacy_key]:
+                return settings[legacy_key]
+            raise ValueError(f"shark_settings[{legacy_key!r}] is null; SHARK is disabled for {reference_assembly!r}")
 
     raise ValueError(
         f"No SHARK MUC1 region FASTA for reference_assembly {reference_assembly!r}. "
