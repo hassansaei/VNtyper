@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 ISSUE_URL = "https://github.com/hassansaei/VNtyper/issues/236"
+DEPLOYMENT_BRANCH_POLICY_KEYS = {"protected_branches", "custom_branch_policies"}
 
 
 def _reject(message: str) -> NoReturn:
@@ -36,6 +37,25 @@ def _has_exact_count(payload: Mapping[str, object], expected: int) -> bool:
     return type(payload.get("total_count")) is int and payload["total_count"] == expected
 
 
+def _is_main_only_branch_policy(payload: object) -> bool:
+    """Return whether a deployment policy is exactly the custom main-only mode.
+
+    Args:
+        payload: Decoded ``deployment_branch_policy`` object from the environment API.
+
+    Returns:
+        ``True`` only for the two exact boolean fields required for branch ``main``.
+    """
+    return (
+        isinstance(payload, Mapping)
+        and set(payload) == DEPLOYMENT_BRANCH_POLICY_KEYS
+        and type(payload["protected_branches"]) is bool
+        and payload["protected_branches"] is False
+        and type(payload["custom_branch_policies"]) is bool
+        and payload["custom_branch_policies"] is True
+    )
+
+
 def validate_pypi_environment(
     environment: Mapping[str, object], policies: Mapping[str, object], custom_rules: Mapping[str, object]
 ) -> None:
@@ -59,10 +79,7 @@ def validate_pypi_environment(
     if not isinstance(rule, Mapping) or rule.get("type") != "branch_policy":
         _reject("protection_rules must contain exactly the built-in branch_policy rule")
 
-    if environment.get("deployment_branch_policy") != {
-        "protected_branches": False,
-        "custom_branch_policies": True,
-    }:
+    if not _is_main_only_branch_policy(environment.get("deployment_branch_policy")):
         _reject("deployment_branch_policy must be custom and main-only")
 
     if not _has_exact_count(policies, 1):

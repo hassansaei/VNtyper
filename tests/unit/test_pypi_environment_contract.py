@@ -42,6 +42,7 @@ def test_exact_reviewer_free_main_only_policy_is_valid() -> None:
 @pytest.mark.parametrize(
     ("environment", "policies", "custom_rules", "field"),
     (
+        ({**VALID_ENVIRONMENT, "name": "testpypi"}, VALID_POLICIES, VALID_CUSTOM_RULES, "environment name"),
         (
             {**VALID_ENVIRONMENT, "protection_rules": [{"type": "required_reviewers"}]},
             VALID_POLICIES,
@@ -103,19 +104,72 @@ def test_exact_reviewer_free_main_only_policy_is_valid() -> None:
             VALID_CUSTOM_RULES,
             "deployment_branch_policy",
         ),
-        (VALID_ENVIRONMENT, {"total_count": 0, "branch_policies": []}, VALID_CUSTOM_RULES, "total_count"),
+        (
+            {**VALID_ENVIRONMENT, "deployment_branch_policy": {"protected_branches": False}},
+            VALID_POLICIES,
+            VALID_CUSTOM_RULES,
+            "deployment_branch_policy",
+        ),
+        (
+            {
+                **VALID_ENVIRONMENT,
+                "deployment_branch_policy": {
+                    "protected_branches": False,
+                    "custom_branch_policies": True,
+                    "unexpected": False,
+                },
+            },
+            VALID_POLICIES,
+            VALID_CUSTOM_RULES,
+            "deployment_branch_policy",
+        ),
+        (
+            {
+                **VALID_ENVIRONMENT,
+                "deployment_branch_policy": {"protected_branches": 0, "custom_branch_policies": True},
+            },
+            VALID_POLICIES,
+            VALID_CUSTOM_RULES,
+            "deployment_branch_policy",
+        ),
+        (
+            {
+                **VALID_ENVIRONMENT,
+                "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": 1},
+            },
+            VALID_POLICIES,
+            VALID_CUSTOM_RULES,
+            "deployment_branch_policy",
+        ),
+        (
+            VALID_ENVIRONMENT,
+            {"total_count": 0, "branch_policies": [{"name": "main", "type": "branch"}]},
+            VALID_CUSTOM_RULES,
+            "total_count",
+        ),
         (
             VALID_ENVIRONMENT,
             {
                 "total_count": 2,
+                "branch_policies": [{"name": "main", "type": "branch"}],
+            },
+            VALID_CUSTOM_RULES,
+            "total_count",
+        ),
+        (VALID_ENVIRONMENT, {"total_count": 1, "branch_policies": []}, VALID_CUSTOM_RULES, "branch_policies"),
+        (
+            VALID_ENVIRONMENT,
+            {
+                "total_count": 1,
                 "branch_policies": [
                     {"id": 17, "node_id": "BP_x", "name": "main", "type": "branch"},
                     {"id": 18, "node_id": "BP_y", "name": "release", "type": "branch"},
                 ],
             },
             VALID_CUSTOM_RULES,
-            "total_count",
+            "branch_policies",
         ),
+        (VALID_ENVIRONMENT, {"total_count": 1, "branch_policies": None}, VALID_CUSTOM_RULES, "branch_policies"),
         (
             VALID_ENVIRONMENT,
             {"total_count": 1, "branch_policies": [{"id": 17, "node_id": "BP_x", "name": "master", "type": "branch"}]},
@@ -207,6 +261,42 @@ def test_main_reports_a_path_and_issue_for_invalid_json(
 
     diagnostic = capsys.readouterr().err
     assert str(failed_path) in diagnostic
+    assert "#236" in diagnostic
+    assert "Traceback" not in diagnostic
+
+
+@pytest.mark.parametrize("target", ("environment", "policies", "custom_rules"))
+def test_main_rejects_non_object_json_payload(tmp_path: Path, capsys: pytest.CaptureFixture[str], target: str) -> None:
+    """Top-level arrays cannot substitute for GitHub endpoint objects."""
+    environment_path = tmp_path / "environment.json"
+    policies_path = tmp_path / "policies.json"
+    custom_rules_path = tmp_path / "custom-rules.json"
+    environment_path.write_text(json.dumps(VALID_ENVIRONMENT), encoding="utf-8")
+    policies_path.write_text(json.dumps(VALID_POLICIES), encoding="utf-8")
+    custom_rules_path.write_text(json.dumps(VALID_CUSTOM_RULES), encoding="utf-8")
+    paths = {
+        "environment": environment_path,
+        "policies": policies_path,
+        "custom_rules": custom_rules_path,
+    }
+    failed_path = paths[target]
+    failed_path.write_text("[]", encoding="utf-8")
+
+    assert main([str(environment_path), str(policies_path), str(custom_rules_path)]) == 1
+
+    diagnostic = capsys.readouterr().err
+    assert str(failed_path) in diagnostic
+    assert "top-level JSON value must be an object" in diagnostic
+    assert "#236" in diagnostic
+    assert "Traceback" not in diagnostic
+
+
+def test_main_rejects_wrong_number_of_input_paths(capsys: pytest.CaptureFixture[str]) -> None:
+    """The CLI fails closed unless all three endpoint response files are supplied."""
+    assert main(["environment.json", "policies.json"]) == 1
+
+    diagnostic = capsys.readouterr().err
+    assert "expected three JSON file paths" in diagnostic
     assert "#236" in diagnostic
     assert "Traceback" not in diagnostic
 
