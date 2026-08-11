@@ -24,6 +24,12 @@ import sys
 PREFIX = "/opt/vntyper"
 CONDA_ENVS = ("vntyper", "envadvntr", "shark_env")
 REQUIRED_BINARIES = ("bwa", "samtools", "fastp", "bcftools", "java")
+# The six physical reference ids install_references_config.json declares BWA entries
+# for (ucsc_references + ncbi_references + ensembl_references). config.json ships all
+# six bwa_reference_* keys as real paths, so the sidecar check below must cover all six
+# too, not just the two UCSC ones - otherwise a missing GRCh37/GRCh38/*_ensembl index
+# would slip past this tier and only surface as a family-fallback warning at runtime.
+BWA_PHYSICAL_IDS = ("hg19", "hg38", "GRCh37", "GRCh38", "hg19_ensembl", "hg38_ensembl")
 # `git` is deliberately absent: condaforge/miniforge3 ships it in its own layer, so
 # asserting on it would be a permanently red test we cannot fix from this Dockerfile.
 BUILD_TOOLS = ("gcc", "g++", "cc", "make", "ld")
@@ -96,7 +102,7 @@ def _collect_references(pkg_dir, config):
     # bwa_index_extensions is itself config-declared, so the sidecar set stays in sync
     # with config.json rather than with a list maintained here.
     extensions = config.get("tool_params", {}).get("bwa_index_extensions", [])
-    for assembly in ("hg19", "hg38"):
+    for assembly in BWA_PHYSICAL_IDS:
         base = config.get("reference_data", {}).get("bwa_reference_" + assembly)
         if base:
             for ext in extensions:

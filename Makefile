@@ -521,7 +521,7 @@ BASE_INPUTS := conda docker/Dockerfile.base docker/requirements-web.txt \
 	vntyper/__init__.py vntyper/scripts/__init__.py \
 	vntyper/scripts/install_references.py vntyper/scripts/install_references_config.json \
 	vntyper/scripts/reference_bundle.py \
-	vntyper/dependencies/advntr reference .dockerignore
+	vntyper/dependencies/advntr .dockerignore
 
 # Mirrors docker-build.yml. Needs a Docker daemon.
 #

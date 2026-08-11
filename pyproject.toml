@@ -197,12 +197,15 @@ exclude = [
     "build",
     "dist",
     "*.egg-info",
-    # `reference/` is a base-image content-hash input: `docker-base.yml` rebuilds on any
-    # change under it, and `docker/Dockerfile` then fails on a missing tag until the new
-    # base publishes (AGENTS.md trap 10). Reformatting `generate_vntr_reference.py` would
-    # turn the image build red for a whitespace change, so the formatter does not own that
-    # tree. It is not in `RUFF_PATHS` either, so this only makes the two agree. Unparks
-    # with the next base rebuild, alongside #193.
+    # `reference/` is no longer a base-image content-hash input (AGENTS.md trap 10) - all
+    # reference data now comes from berntpopp/vntyper-data, and the directory holds only
+    # `README.md`, `pseudonymize.py` and `pseudonymize_config.json`. It stays excluded
+    # here for a narrower reason: it is not in `RUFF_PATHS` (`vntyper/ docker/app/ tests/
+    # scripts/ docs/`), and the Makefile's INVARIANT comment above `RUFF_PATHS` requires
+    # that variable to cover exactly what a bare `ruff .` discovers on its own. Removing
+    # this line would let `pseudonymize.py` back into that bare-command scan without
+    # adding it to `RUFF_PATHS`, reopening the green-CI/red-local trap `RUFF_PATHS` exists
+    # to close.
     "reference",
 ]
 
