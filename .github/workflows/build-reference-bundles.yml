@@ -63,13 +63,38 @@ jobs:
       # It is asserted rather than used as the checkout `ref`: an empty value there would
       # silently check out the default branch, whereas an equality check fails closed.
       # This runs first, before the checkouts and before anything expensive.
-      - name: Assert the builder commit is the workflow commit the caller pinned
+      # `source_commit` decides which VNtyper commit supplies bundle_release.py,
+      # install_references.py and every committed digest, so a release built from an
+      # unreviewed or moving ref is not reproducible. Two of the three checks below are
+      # enforceable unconditionally; the third depends on a context value GitHub does not
+      # always populate, so it is applied when present and reported when absent rather
+      # than silently skipped.
+      #
+      # `github.job_workflow_sha` is documented as the commit SHA of the reusable workflow
+      # file, which would tie `uses:` and `source_commit:` together directly. Measured
+      # 2026-08-11: it evaluates to the empty string inside a called workflow on
+      # ubuntu-24.04, runner 2.336.0. Asserting against it unconditionally fails every
+      # build, so the tie is verified only when the runner provides the value.
+      - name: Assert the builder commit is a reviewable, immutable pin
         env:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
           JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
         run: |
           set -euo pipefail
-          if [ "$SOURCE_COMMIT" != "$JOB_WORKFLOW_SHA" ]; then
+
+          # A branch or tag name would let the builder move under a published release.
+          if ! printf '%s' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::source_commit ('${SOURCE_COMMIT}') is not a full 40-character commit SHA."
+            echo "A branch or tag can move, so a release built from one is not reproducible."
+            exit 1
+          fi
+
+          if [ -z "$JOB_WORKFLOW_SHA" ]; then
+            echo "::warning::This runner did not populate github.job_workflow_sha, so the tie between"
+            echo "release-data.yml's 'uses:' pin and its 'source_commit:' input could not be verified here."
+            echo "Both must name the same full VNtyper SHA. The checkout below still proves that"
+            echo "source_commit resolves to exactly that commit."
+          elif [ "$SOURCE_COMMIT" != "$JOB_WORKFLOW_SHA" ]; then
             echo "::error::source_commit ('${SOURCE_COMMIT}') is not the commit this workflow file was resolved at ('${JOB_WORKFLOW_SHA}')."
             echo "release-data.yml must name the same full VNtyper SHA in its 'uses:' reference and in 'source_commit:'."
             echo "Otherwise the reviewed builder and the code that runs are two different commits."
@@ -89,13 +114,26 @@ jobs:
           ref: ${{ inputs.source_commit }}
           path: vntyper
 
-      - name: Record both resolved commits
+      - name: Record both resolved commits, and prove the builder is the one requested
         id: shas
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
+          builder="$(git -C vntyper rev-parse HEAD)"
+
+          # The step above proved source_commit *looks* like an immutable pin; this proves
+          # the checkout actually landed on it. Together they are what makes the recorded
+          # provenance true, and they hold whether or not the runner populated
+          # github.job_workflow_sha.
+          if [ "$builder" != "$SOURCE_COMMIT" ]; then
+            echo "::error::checked out ${builder} but source_commit named ${SOURCE_COMMIT}."
+            exit 1
+          fi
+
           {
             echo "data=$(git -C data rev-parse HEAD)"
-            echo "builder=$(git -C vntyper rev-parse HEAD)"
+            echo "builder=$builder"
           } >> "$GITHUB_OUTPUT"
 
       # Six indexed genomes are ~4.2 GB and their archives another ~2.7 GB, against the
