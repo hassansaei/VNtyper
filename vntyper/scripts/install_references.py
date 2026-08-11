@@ -267,9 +267,11 @@ def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[
         logger.error(f"No index_command specified for {aligner_name}")
         return False
 
-    # Prepare command parameters
+    # Prepare command parameters. Paths are quoted with `_quote` before they are
+    # interpolated into the shell=True command below; `threads` is numeric and is never
+    # a candidate for quoting.
     params = {
-        "ref_path": str(ref_path),
+        "ref_path": _quote(ref_path),
         "threads": threads if aligner_info.get("supports_threading", False) else aligner_info.get("threads_default", 4),
     }
 
@@ -278,12 +280,12 @@ def execute_aligner_index(ref_path: Path, aligner_name: str, aligner_info: dict[
         # DRAGMAP: needs separate index directory
         index_dir = ref_path.parent / f"{ref_path.stem}_{aligner_name}_index"
         index_dir.mkdir(parents=True, exist_ok=True)
-        params["index_dir"] = str(index_dir)
+        params["index_dir"] = _quote(index_dir)
 
     if aligner_info.get("requires_index_base", False):
         # Bowtie2: needs separate index base name
         index_base = ref_path.parent / f"{ref_path.stem}_{aligner_name}"
-        params["index_base"] = str(index_base)
+        params["index_base"] = _quote(index_base)
 
     # Format command
     try:
