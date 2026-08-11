@@ -35,6 +35,7 @@ jobs:
   validate-release:
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: read
     outputs:
       mode: ${{ steps.resolve.outputs.mode }}
@@ -51,6 +52,32 @@ jobs:
           fetch-depth: "0"
           persist-credentials: "false"
           path: controller
+
+      - id: pypi-environment
+        working-directory: controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ENVIRONMENT_PATH="$RUNNER_TEMP/pypi-environment.json"
+          POLICIES_PATH="$RUNNER_TEMP/pypi-deployment-branch-policies.json"
+          CUSTOM_RULES_PATH="$RUNNER_TEMP/pypi-deployment-protection-rules.json"
+          fetch_contract() {
+            ENDPOINT=$1
+            DESTINATION=$2
+            TEMPORARY="${DESTINATION}.tmp"
+            if ! gh api "$ENDPOINT" > "$TEMPORARY"; then
+              rm -f -- "$TEMPORARY"
+              echo "::error::Failed to read GitHub API endpoint ${ENDPOINT} (#236); see https://github.com/hassansaei/VNtyper/issues/236"
+              return 1
+            fi
+            mv -- "$TEMPORARY" "$DESTINATION"
+          }
+          fetch_contract "repos/${GITHUB_REPOSITORY}/environments/pypi" "$ENVIRONMENT_PATH"
+          fetch_contract "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment-branch-policies" "$POLICIES_PATH"
+          fetch_contract "repos/${GITHUB_REPOSITORY}/environments/pypi/deployment_protection_rules" "$CUSTOM_RULES_PATH"
+          python scripts/pypi_environment_contract.py "$ENVIRONMENT_PATH" "$POLICIES_PATH" "$CUSTOM_RULES_PATH"
 
       - id: resolve
         working-directory: controller
