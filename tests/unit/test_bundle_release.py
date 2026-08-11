@@ -1010,9 +1010,36 @@ class TestWorkflowAgreement:
         step = next(s for s in self._steps() if "prove the builder is the one requested" in str(s.get("name", "")))
         run = str(step["run"])
         assert step["env"] == {"SOURCE_COMMIT": "${{ inputs.source_commit }}"}
-        assert "git -C vntyper rev-parse HEAD" in run
+        assert "git -C builder rev-parse HEAD" in run
         assert '"$builder" != "$SOURCE_COMMIT"' in run
         assert "exit 1" in run
+
+    def test_the_vntyper_checkout_path_does_not_shadow_the_package(self) -> None:
+        """A checkout directory named `vntyper` breaks every `python -m vntyper.*` call.
+
+        `python -m` puts the working directory first on `sys.path`, so `import vntyper`
+        resolves to the checkout root rather than the installed package, and
+        `vntyper.scripts` resolves to the repository's root `scripts/` directory. The
+        real dispatch failed with "No module named vntyper.scripts.verify_seeds" while
+        the file was present, installed and importable by every other means.
+        """
+        checkout_paths = {
+            str((step.get("with") or {}).get("path", ""))
+            for step in self._steps()
+            if "checkout" in str(step.get("uses", ""))
+        }
+        assert checkout_paths, "no checkout steps found"
+        assert "vntyper" not in checkout_paths, (
+            "a checkout path of 'vntyper' shadows the installed package on sys.path; "
+            f"paths are {sorted(checkout_paths)}"
+        )
+
+    def test_module_invocations_use_a_non_shadowing_working_directory(self) -> None:
+        """Every `python -m vntyper.…` in the workflow depends on the guard above."""
+        module_runs = [line.strip() for line in self._run_text().splitlines() if "python -m vntyper." in line]
+        assert module_runs, "expected at least one python -m vntyper.* invocation"
+        for line in module_runs:
+            assert "vntyper/" not in line, f"module invocation mixes in a checkout path: {line}"
 
     def test_the_builder_assertion_precedes_both_checkouts(self) -> None:
         """It must fail closed before anything expensive, and before either checkout."""
