@@ -61,6 +61,10 @@ class ReferenceAssembly(str, Enum):
     HG38 = "hg38"
     GRCH37 = "GRCh37"
     GRCH38 = "GRCh38"
+    HG19_NCBI = "hg19_ncbi"
+    HG38_NCBI = "hg38_ncbi"
+    HG19_ENSEMBL = "hg19_ensembl"
+    HG38_ENSEMBL = "hg38_ensembl"
 
 
 # Environment variables for default directories
