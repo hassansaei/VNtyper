@@ -73,27 +73,46 @@ This is the typical scenario:
 ### Requirements
 
 - Conda environment `shark_env` with SHARK installed
-- MUC1 region FASTA reference (configured in `shark_config.json`)
+- MUC1 region FASTA references (configured in `shark_config.json`, one per coordinate system)
 
 ### Limitations
 
 - **FASTQ input only** -- SHARK cannot process BAM/CRAM files. For aligned input, the pipeline uses samtools region extraction instead.
-- **`--reference-assembly` does not affect SHARK** -- see [Reference assembly is not used](#reference-assembly-is-not-used) below.
+- **`--reference-assembly` selects between two region FASTAs, not eight** -- see [Reference assembly selects the region](#reference-assembly-selects-the-region) below. It distinguishes coordinate system (GRCh37 vs. GRCh38), not chromosome-naming source, so `hg19`, `GRCh37`, `hg19_ncbi` and `hg19_ensembl` all select the same GRCh37-coordinate FASTA.
 - SHARK filtering runs **before** fastp QC, so filtered reads still undergo quality control downstream.
 - After SHARK filtering, the pipeline still performs BWA alignment and full postprocessing on the filtered reads.
 
-### Reference assembly is not used
+### Reference assembly selects the region
 
-SHARK filters reads by matching k-mers against a single MUC1 region FASTA (the
-`muc1_region_fasta` set in `shark_config.json`); it does not select a genomic region by
-coordinate the way BAM-based extraction does. Because of that, the `--reference-assembly`
-value has nothing to select between and does not change which reads SHARK keeps.
+SHARK filters reads by matching k-mers against a MUC1 region FASTA, and which FASTA it uses
+now follows `--reference-assembly`'s coordinate system (issue #152). This replaces an
+earlier decision ([#187](https://github.com/hassansaei/VNtyper/issues/187)) to keep a single
+hg19-based region FASTA for both assemblies -- reopened once the cost of that shortcut was
+measured rather than assumed: **40.6% of the hg38 region's canonical 17-mers are absent from
+the hg19 region**, and filtering hg38-appropriate reads against the hg19 region measurably
+loses reads -- across the seven `tests/data/` cohort samples, the hg38 region retains
+**3.2--34.7% more reads** than the hg19 region on the same input.
 
-Per the decision on [#187](https://github.com/hassansaei/VNtyper/issues/187), VNtyper
-keeps a single hg19-based MUC1 region FASTA rather than building and maintaining a second
-one for hg38: `reference_assembly` is kept on `run_shark_filter` for API compatibility
-only and is otherwise inert. Passing anything other than `hg19`/`GRCh37` logs a warning
-noting that the value does not select a region for SHARK.
+`select_muc1_region_fasta()` in `vntyper/modules/shark/shark_filtering.py` resolves the
+region FASTA in three tiers, most authoritative first:
+
+1. **`config["reference_data"]`**, keyed `muc1_region_fasta_hg19` / `muc1_region_fasta_hg38`
+   -- what `vntyper install-references` writes. This is consulted first so that references
+   installed into a custom `--output-dir` are honoured: `--config-path` replaces the main
+   `config.json` but never touches `shark_config.json`, so without this layer an installed
+   tree would be invisible to SHARK.
+2. **`shark_config.json`'s `shark_settings`**, keyed the same way -- the shipped default,
+   pointing at `reference/muc1_region_hg19.fa` and `reference/muc1_region_hg38.fa`.
+3. **The legacy flat `muc1_region_fasta` key**, used only when `shark_settings` carries
+   **no** `muc1_region_fasta_*` entry at all. A config with one keyed entry but not the
+   other is treated as an incomplete keyed config, not as pre-#152 legacy, and is not
+   silently patched from the flat key.
+
+Resolution at every tier is by key **membership**: a key present with value `null` is a
+deliberate "disabled" for that assembly and raises rather than falling through to the next
+tier or the legacy key. See [Configuration](../user-guide/configuration.md) and
+[Reference Assemblies](../user-guide/reference-assemblies.md#the-fallback-and-why-a-complete-installation-never-uses-it)
+for the same membership rule as it applies to BWA and adVNTR reference selection.
 
 ### Execution
 

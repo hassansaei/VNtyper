@@ -56,7 +56,7 @@ Controls tool paths, reference data, processing parameters, and quality threshol
 | Section | Purpose |
 |---------|---------|
 | `default_values` | Fallback values when CLI arguments are not provided |
-| `reference_data` | Paths to BWA indexes, MUC1 motif references, adVNTR databases |
+| `reference_data` | Paths to BWA indexes, MUC1 motif references, adVNTR databases, and SHARK's MUC1 region FASTAs. The snippet above shows only three keys; `vntyper install-references` writes one `bwa_reference_*` per genome it installed plus the shared adVNTR and SHARK keys (e.g. `bwa_reference_GRCh38`, `advntr_reference_vntr_hg38`, `muc1_region_fasta_hg38`) -- see [Reference Assemblies](reference-assemblies.md) for the complete key list and how a missing key falls back |
 | `tools` | Executable paths for external tools |
 | `bam_processing` | fastp QC parameters and assembly-specific region coordinates |
 | `thresholds` | Quality thresholds for coverage and read quality metrics |

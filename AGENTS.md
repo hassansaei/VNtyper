@@ -567,8 +567,17 @@ summary | release-summary | none | always records success, failure, skipped jobs
     2026-08-11 verification measured 39 Python files at 7,249 of 7,781 measured
     units, or 93.16% aggregate scripts-only branch-inclusive coverage, and 17,310 of
     19,392 measured units, or 89.26% combined branch-inclusive coverage. All 5,432 unit
-    tests passed with no skips and 163 warnings in the maintained Python 3.12.13
-    environment. Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
+    tests passed with no skips, in the maintained Python 3.12.13 environment. **Do not
+    quote a fixed warning count here** - it is not pinned by any gate and drifts with
+    dependency versions, so a number recorded on one date reads as a false regression on
+    another. Measure your own baseline (`pytest -m unit`) before a change and treat a
+    *wider* count than that freshly measured baseline as the signal, never a count quoted
+    in this file. (For calibration only, not as a target: on 2026-08-11, `main` measured
+    5,669 passed / 464 warnings on this machine, and this branch measured the same 464
+    warnings over more tests - both already superseding whatever fixed count was quoted
+    here before, which is exactly the drift this note now warns against instead of
+    restating a new one.)
+    Adding `scripts/bundle_release.py` (milestone 5, the reference bundle
     builder) took the directory to all 40 Python files and `make test-scripts-cov` to
     7,806 of 8,340 measured units, or 93.60%, over 5,665 passing unit tests.
     `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
