@@ -42,51 +42,82 @@
 
   "ucsc_references": {
     "hg19": {
+      "kind": "bwa",
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/chromosomes/chr1.fa.gz",
       "source_sha256": "8d99e436ac1b8ee27999917cc4384a0bfec5a75467b59bbbea8ad314adb553d7",
       "target_path": "alignment/chr1.hg19.fa.gz",
-      "index_command": "bwa index {path}"
+      "installed_path": "alignment/chr1.hg19.fa",
+      "index_command": "bwa index {path}",
+      "asset": "vntyper-references-refs-v1-ucsc-hg19.tar.gz",
+      "asset_sha256": "f244fc0fde3d1ca7a3d3acb96e8b4f74bc7c571c54ec630a3419b181d91b4d16"
     },
     "hg38": {
+      "kind": "bwa",
       "url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr1.fa.gz",
       "source_sha256": "baf03990d81ed87d66a976779c2eb4d8a0e5243829ca913556d3819fe0fba696",
       "target_path": "alignment/chr1.hg38.fa.gz",
-      "index_command": "bwa index {path}"
+      "installed_path": "alignment/chr1.hg38.fa",
+      "index_command": "bwa index {path}",
+      "asset": "vntyper-references-refs-v1-ucsc-hg38.tar.gz",
+      "asset_sha256": "fcfda8aa84cdf6aaa80d62a78b5eb5de063ad29260cc00d34fc932d6bda5e4df"
     }
   },
 
   "ncbi_references": {
     "GRCh37": {
+      "kind": "bwa",
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.25_GRCh37.p13/GCF_000001405.25_GRCh37.p13_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
       "source_sha256": "cb58b0a7eb8d478d6f3b803182d6de7654e621a42223ba90c33d02c592dbdfb9",
       "target_path": "alignment/chr1.GRCh37.fna.gz",
+      "installed_path": "alignment/chr1.GRCh37.fna",
       "index_command": "bwa index {path}",
+      "asset": "vntyper-references-refs-v1-ncbi-GRCh37.tar.gz",
+      "asset_sha256": "0e842e0b1aac54706887239ec702ecce84e0bdb03f71d29a00b7ed0581acdc29",
       "description": "NCBI GRCh37.p13 chromosome 1 (uses NC_000001.10 accession in FASTA header)"
     },
     "GRCh38": {
+      "kind": "bwa",
       "url": "https://ftp.ncbi.nlm.nih.gov/genomes/refseq/vertebrate_mammalian/Homo_sapiens/all_assembly_versions/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_structure/Primary_Assembly/assembled_chromosomes/FASTA/chr1.fna.gz",
       "source_sha256": "191c0c9f25748e67eb251a5cbeb2289e10dadc98746b4ddf0170c559db219a2e",
       "target_path": "alignment/chr1.GRCh38.fna.gz",
+      "installed_path": "alignment/chr1.GRCh38.fna",
       "index_command": "bwa index {path}",
+      "asset": "vntyper-references-refs-v1-ncbi-GRCh38.tar.gz",
+      "asset_sha256": "c4e7c4c2180d80b3548a7870fe19c59ba7e69150025d8c7221ac366834b25373",
       "description": "NCBI GRCh38.p14 chromosome 1 (uses NC_000001.11 accession in FASTA header)"
     }
   },
 
   "ensembl_references": {
     "hg19_ensembl": {
+      "kind": "bwa",
       "url": "https://ftp.ensembl.org/pub/grch37/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh37.dna.chromosome.1.fa.gz",
       "source_sha256": "2f13339ef278b05fd7d80d60052ba12dbd661b6396024b2043a2c5ada07aab96",
       "target_path": "alignment/chr1.hg19_ensembl.fa.gz",
+      "installed_path": "alignment/chr1.hg19_ensembl.fa",
       "index_command": "bwa index {path}",
+      "asset": "vntyper-references-refs-v1-ensembl-hg19.tar.gz",
+      "asset_sha256": "d848e44de3eff33f8cabccc623d733574a2fc5adcb0ee2f3c7f3551fd6aa9fe2",
       "description": "ENSEMBL GRCh37 chromosome 1 (uses '1' in FASTA header, no chr prefix). Pinned to release-116: a digest beside the mutable 'current' path would rot at the next Ensembl release."
     },
     "hg38_ensembl": {
+      "kind": "bwa",
       "url": "https://ftp.ensembl.org/pub/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.1.fa.gz",
       "source_sha256": "05d4d42ed292962055afb9774a1a29a691d7b285fd85dbf9069c050a273e0d3c",
       "target_path": "alignment/chr1.hg38_ensembl.fa.gz",
+      "installed_path": "alignment/chr1.hg38_ensembl.fa",
       "index_command": "bwa index {path}",
+      "asset": "vntyper-references-refs-v1-ensembl-hg38.tar.gz",
+      "asset_sha256": "c86079ce1603787326c280cb78b0b7a27bd4753c79b1d5a28010562834aa148e",
       "description": "ENSEMBL GRCh38 chromosome 1 (uses '1' in FASTA header, no chr prefix). Pinned to release-116: a digest beside the mutable 'current' path would rot at the next Ensembl release."
     }
+  },
+
+  "bundle": {
+    "repository": "berntpopp/vntyper-data",
+    "release_tag": "refs-v1",
+    "common_asset": "vntyper-references-refs-v1-muc1.tar.gz",
+    "common_asset_sha256": "ea60b47b149310941c2eb54a50a2f9f5c2425c9b9f203e7b8593ee08f49ca88b"
   },
 
   "vntyper_references": {
