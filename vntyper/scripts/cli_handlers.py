@@ -148,10 +148,16 @@ def handle_install_references(
     Args:
         args: The parsed arguments.
         config: Unused; present for the uniform handler signature.
-        parser: Unused; present for the uniform handler signature.
+        parser: Used to reject ``--release-spec`` without ``--from-source``.
         log_level_value: Unused; present for the uniform handler signature.
         log_file_str: Unused; present for the uniform handler signature.
     """
+    if args.release_spec and not args.from_source:
+        # Silently ignoring a flag the user typed is worse than refusing it: only the
+        # source path reads a release spec, so without --from-source the pinned URLs and
+        # digests would have no effect at all. Usage errors exit 2, as argparse does.
+        parser.error("--release-spec requires --from-source; it only affects the from-source build")
+
     install_references_main(
         output_dir=args.output_dir,
         config_path=args.config_path,

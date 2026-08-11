@@ -602,6 +602,22 @@ def _run_shell(command: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, shell=True, executable="/bin/bash", capture_output=True, text=True, check=False)
 
 
+def _discard_failed_output(destination: Path) -> None:
+    """Remove a derivation output that must not survive its own failure.
+
+    Installation merges rather than replaces, so anything left on disk is copied into the
+    next run's staging directory and treated as real. A zero-byte FASTA from a failed
+    ``samtools faidx`` redirect, or a FASTA that just failed its digest, would be carried
+    forward as though it had been produced correctly. Its ``.fai`` goes too, so no index
+    is orphaned beside a file that no longer exists.
+
+    Args:
+        destination: The derivation output to discard.
+    """
+    destination.unlink(missing_ok=True)
+    Path(f"{destination}.fai").unlink(missing_ok=True)
+
+
 def derive_region_fasta(source_fasta: Path, region: str, destination: Path, samtools: str) -> Path:
     """Cut a MUC1 region out of a chromosome FASTA.
 
@@ -619,11 +635,15 @@ def derive_region_fasta(source_fasta: Path, region: str, destination: Path, samt
         Path: ``destination``.
 
     Raises:
-        RuntimeError: If samtools fails.
+        RuntimeError: If samtools fails. The truncated output is discarded first - see
+            :func:`_discard_failed_output`.
     """
     command = f"{samtools} faidx {_quote(source_fasta)} {_quote(region)} > {_quote(destination)}"
     completed = _run_shell(command)
     if completed.returncode != 0:
+        # Bash creates and truncates the redirect target before samtools runs, so a failed
+        # derivation has already left a zero-byte FASTA behind.
+        _discard_failed_output(destination)
         message = (
             f"faidx derivation failed for {destination.name} "
             f"({region} of {source_fasta.name}): {completed.stderr.strip()}"
@@ -710,21 +730,34 @@ def merge_pairwise_motifs(seed_fasta: Path, filter_config: Path, destination: Pa
     return destination
 
 
-def run_derivations(install_config: dict[str, Any], output_dir: Path, references: dict[str, Path]) -> None:
-    """Run every configured derivation and verify it against its committed digest.
+def run_derivations(
+    install_config: dict[str, Any],
+    output_dir: Path,
+    references: dict[str, Path],
+    selected: set[str] | None = None,
+) -> None:
+    """Run every in-scope derivation and verify it against its committed digest.
 
     Two kinds are configured. ``shark`` cuts a region out of an installed chromosome
     FASTA; ``literal`` merges the two MUC1 motif seeds. Every output is checked against
     ``expected_sha256`` before it is indexed, so a silent change upstream turns the
     bundle build red instead of publishing different sequence under an unchanged name.
 
+    A ``shark`` derivation whose ``from`` is outside ``selected`` is skipped, not failed:
+    ``--references hg19`` legitimately builds no hg38 reference, and because installation
+    merges rather than replaces, a later ``--references hg38`` run fills it in beside the
+    hg19 tree. A source that *is* selected but did not arrive remains a hard error. The
+    ``literal`` derivation depends on seeds rather than on a genome, so it always runs.
+
     Args:
         install_config: The parsed install_references_config.json.
         output_dir: Reference tree being populated.
         references: Physical id to installed chromosome FASTA, for ``from`` lookups.
+        selected: The reference ids this run was asked for. None means every configured
+            source is in scope, which is what a caller with no selection wants.
 
     Raises:
-        RuntimeError: If a source reference or a literal seed is missing.
+        RuntimeError: If a selected source reference, or a literal seed, is missing.
         ValueError: If a derivation declares no digest or an unknown kind, if a literal
             derivation does not name exactly two seeds, or if a derived file does not
             match ``expected_sha256``.
@@ -737,12 +770,21 @@ def run_derivations(install_config: dict[str, Any], output_dir: Path, references
         destination = output_dir / output
         expected = spec.get("expected_sha256")
         if not expected:
+            # Checked before the scope test on purpose: a derivation missing its digest is
+            # a malformed config, and that should surface on any run, not only the one that
+            # happens to select its source.
             message = f"derivation {output} declares no expected_sha256; refusing to produce it unverified"
             logger.error(message)
             raise ValueError(message)
 
         if kind == "shark":
             source_id = spec["from"]
+            if selected is not None and source_id not in selected:
+                logger.info(
+                    f"Skipping {output}: its source '{source_id}' is not in this run's reference "
+                    f"selection. Install it later with --references {source_id}."
+                )
+                continue
             source = references.get(source_id)
             if source is None or not source.exists():
                 message = f"cannot derive {output}: source reference '{source_id}' is not installed"
@@ -775,7 +817,13 @@ def run_derivations(install_config: dict[str, Any], output_dir: Path, references
             logger.error(message)
             raise ValueError(message)
 
-        verify_sha256(destination, expected)
+        try:
+            verify_sha256(destination, expected)
+        except ValueError as mismatch:
+            _discard_failed_output(destination)
+            message = f"{mismatch}; discarded {output} rather than leave a wrong reference in the tree"
+            logger.error(message)
+            raise ValueError(message) from mismatch
         index_fasta_with_samtools(destination, samtools)
         logger.info(f"Derived {output} from {provenance}")
 
@@ -848,6 +896,7 @@ def install_from_source(
     aligners: dict[str, dict[str, Any]],
     index_threads: int,
     release_spec: dict[str, Any] | None = None,
+    skip_indexing: bool = False,
 ) -> dict[str, Path]:
     """Build every requested reference from its upstream source.
 
@@ -861,9 +910,11 @@ def install_from_source(
     rather than the mutable ``current`` path.
 
     The two downloadable MUC1 seeds are installed too, minus anything a derivation
-    produces. ``filter_config.json`` is not downloadable and must already be in the
-    tree - the bundle build stages the seeds before calling this, and a checkout has
-    them tracked. :func:`run_derivations` says so by name if one is absent.
+    produces, as is the adVNTR database. Those are common assets rather than selectable
+    ones, so ``--references`` does not gate them - see the comment at the call site.
+    ``filter_config.json`` is not downloadable and must already be in the tree - the
+    bundle build stages the seeds before calling this, and a checkout has them tracked.
+    :func:`run_derivations` says so by name if one is absent.
 
     Args:
         install_config: The parsed install_references_config.json.
@@ -872,13 +923,17 @@ def install_from_source(
         aligners: Enabled aligner configurations; empty to skip aligner indexing.
         index_threads: Threads handed to the aligners.
         release_spec: Parsed ``--release-spec`` contents, or None.
+        skip_indexing: Skip the optional indexing of the seeds and the adVNTR database.
+            It does **not** skip ``samtools faidx`` on the chromosome FASTAs: the region
+            derivations cut from those indexes, so that one is a prerequisite rather than
+            an optional extra.
 
     Returns:
         dict[str, Path]: physical id -> installed chromosome FASTA, for
         :func:`run_derivations`.
 
     Raises:
-        RuntimeError: If a download fails, or if a derivation's source is missing.
+        RuntimeError: If a download fails, or if a selected derivation source is missing.
         ValueError: If an entry has no ``target_path``, no URL or no digest, or if a
             download or derivation does not match its expected digest.
     """
@@ -911,8 +966,17 @@ def install_from_source(
                 logger.error(message)
                 raise RuntimeError(message) from exit_signal
             # Before decompression and before any indexing: unverified bytes are never
-            # expanded, never indexed and never derived from.
-            verify_sha256(archive, expected)
+            # expanded, never indexed and never derived from. A mismatch also takes the
+            # archive with it - `download_file` skips a destination that already exists, so
+            # leaving truncated or tampered bytes on disk would make every later run skip
+            # the download, re-hash the same bad file and fail identically forever.
+            try:
+                verify_sha256(archive, expected)
+            except ValueError as mismatch:
+                archive.unlink(missing_ok=True)
+                message = f"{mismatch}; removed {archive.name} so a retry downloads it again"
+                logger.error(message)
+                raise ValueError(message) from mismatch
 
             fasta = decompress_source(archive)
             index_fasta_with_samtools(fasta, samtools)
@@ -921,18 +985,25 @@ def install_from_source(
 
             installed[ref_id] = fasta
 
-    _install_source_seeds(install_config, output_dir)
+    _install_source_seeds(install_config, output_dir, skip_indexing)
 
-    vntyper_refs = {k: v for k, v in install_config.get("vntyper_references", {}).items() if k in selected}
+    # Unconditional, unlike the legacy path, which filters this by `--references` and so
+    # installs no adVNTR database at all unless someone asks for `vntr_db_advntr` by name -
+    # and nobody does, because it is not an assembly. The bundle build runs this function
+    # with a list of six genomes, so keeping that filter here would publish an immutable
+    # refs release with no adVNTR databases in it. The adVNTR database is a common asset
+    # every install needs, exactly like the MUC1 seeds above; Task 10 makes that explicit
+    # for both paths.
+    vntyper_refs = install_config.get("vntyper_references", {})
     if vntyper_refs:
-        logger.info("Processing VNtyper references...")
-        process_vntyper_references(vntyper_refs, output_dir, install_config.get("bwa_path", "bwa"), False, {})
+        logger.info("Installing common VNtyper references (not selectable: every install needs them)...")
+        process_vntyper_references(vntyper_refs, output_dir, install_config.get("bwa_path", "bwa"), skip_indexing, {})
 
-    run_derivations(install_config, output_dir, installed)
+    run_derivations(install_config, output_dir, installed, selected)
     return installed
 
 
-def _install_source_seeds(install_config: dict[str, Any], output_dir: Path) -> None:
+def _install_source_seeds(install_config: dict[str, Any], output_dir: Path, skip_indexing: bool = False) -> None:
     """Fetch the common seed files, skipping anything a derivation produces.
 
     ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is still listed as a
@@ -942,6 +1013,7 @@ def _install_source_seeds(install_config: dict[str, Any], output_dir: Path) -> N
     Args:
         install_config: The parsed install_references_config.json.
         output_dir: Reference tree to populate.
+        skip_indexing: Skip the seeds' ``samtools faidx`` step.
     """
     own_repo_refs = install_config.get("own_repository_references", {})
     raw_files = own_repo_refs.get("raw_files", [])
@@ -954,7 +1026,7 @@ def _install_source_seeds(install_config: dict[str, Any], output_dir: Path) -> N
         return
 
     logger.info("Installing common seed files...")
-    process_own_repository_references({"raw_files": seeds}, output_dir, False, {})
+    process_own_repository_references({"raw_files": seeds}, output_dir, skip_indexing, {})
 
 
 def write_md5_checksums(md5_dict: dict[str, str], output_dir: Path):
@@ -1155,6 +1227,7 @@ def main(
             enabled_aligners,
             index_threads,
             release_spec,
+            skip_indexing,
         )
     else:
         # Process UCSC references
@@ -1333,16 +1406,19 @@ Examples:
     parser.add_argument(
         "--from-source",
         action="store_true",
-        help="Build references from their upstream sources and run the configured derivations.",
+        help="Build references from their upstream sources and run the configured derivations. "
+        "Needs the MUC1 seed files already present in the output directory.",
     )
     parser.add_argument(
         "--release-spec",
         type=Path,
         default=None,
-        help="Release builds only: take every source URL and digest from this file.",
+        help="Release builds only: take every source URL and digest from this file. Requires --from-source.",
     )
 
     args = parser.parse_args()
+    if args.release_spec and not args.from_source:
+        parser.error("--release-spec requires --from-source; it only affects the from-source build")
     main(
         args.output_dir,
         args.config_path,
