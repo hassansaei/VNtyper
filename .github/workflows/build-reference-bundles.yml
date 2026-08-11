@@ -51,6 +51,32 @@ jobs:
         # micromamba's shell hook needs a login shell to activate the environment.
         shell: bash -el {0}
     steps:
+      # The header above claims a bundle is always reproducible from a known builder,
+      # and nothing else makes that true: `uses:` pins the workflow file at one commit,
+      # while the code that actually runs is checked out from `source_commit`. A caller
+      # can pin a reviewed SHA and pass a different one - far more likely, someone bumps
+      # one and forgets the other when cutting a later release, and then
+      # bundle_release.py, install_references.py and every expected_sha256 come from a
+      # commit nobody reviewed as the builder.
+      #
+      # `github.job_workflow_sha` is exactly the commit of this reusable workflow file.
+      # It is asserted rather than used as the checkout `ref`: an empty value there would
+      # silently check out the default branch, whereas an equality check fails closed.
+      # This runs first, before the checkouts and before anything expensive.
+      - name: Assert the builder commit is the workflow commit the caller pinned
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE_COMMIT" != "$JOB_WORKFLOW_SHA" ]; then
+            echo "::error::source_commit ('${SOURCE_COMMIT}') is not the commit this workflow file was resolved at ('${JOB_WORKFLOW_SHA}')."
+            echo "release-data.yml must name the same full VNtyper SHA in its 'uses:' reference and in 'source_commit:'."
+            echo "Otherwise the reviewed builder and the code that runs are two different commits."
+            exit 1
+          fi
+          echo "Builder pinned at ${SOURCE_COMMIT}"
+
       - name: Check out the data repository (seeds and release spec)
         uses: actions/checkout@v7
         with:
@@ -189,8 +215,14 @@ jobs:
              merged-motif build input;
           3. run: sha256sum --check SHA256SUMS
           EOF
+          # --target is not optional here. Creating a missing tag without it points the
+          # tag at the DEFAULT BRANCH's latest commit, not at the commit this build was
+          # produced from - so after a two-hour build the tag can resolve somewhere else
+          # entirely, and publishing the draft freezes that mismatch. Every manifest
+          # already records DATA_SHA; the tag must agree with it.
           gh release create "$RELEASE_TAG" dist/* \
             --repo "$TARGET_REPOSITORY" \
+            --target "$DATA_SHA" \
             --draft \
             --title "VNtyper references ${RELEASE_TAG}" \
             --notes-file release-notes.md
