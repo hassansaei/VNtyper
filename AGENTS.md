@@ -559,7 +559,7 @@ summary | release-summary | none | always records success, failure, skipped jobs
     appended only after the scripts aggregate exceeded the separate 88% threshold. The
     final 2026-08-11 verification measured all 38 Python files at 7,124 of 7,655 measured
     units, or 93.06% aggregate scripts-only branch-inclusive coverage, and 17,178 of
-    19,259 measured units, or 89.19% combined branch-inclusive coverage. All 5,370 unit
+    19,259 measured units, or 89.19% combined branch-inclusive coverage. All 5,371 unit
     tests passed with no skips and 136 warnings in the maintained Python 3.12.13
     environment. `ci-local`'s clean Python 3.13.6 rebuild and the Python 3.10–3.13
     GitHub matrix remain the authoritative cross-version gates. These figures do not
