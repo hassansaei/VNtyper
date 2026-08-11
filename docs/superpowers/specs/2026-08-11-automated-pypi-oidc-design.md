@@ -1,8 +1,8 @@
 # Automated PyPI OIDC Publishing Design
 
-**Date:** 2026-08-11  
-**Issue:** #236  
-**Status:** Approved for implementation
+**Date:** 2026-08-11
+**Issue:** #236
+**Status:** Implemented; live acceptance complete
 
 ## Problem
 
@@ -12,7 +12,7 @@ and invokes the digest-pinned PyPA publish action without a username, password, 
 token. Release validation, exact-SHA checks, package construction, and GHCR promotion
 all complete automatically.
 
-The live `pypi` environment nevertheless has `required_reviewers = [hassansaei]` and no
+At planning time, the live `pypi` environment had `required_reviewers = [hassansaei]` and no
 deployment branch policy. Release v2.0.11 is therefore waiting after every automated
 gate has passed. PyPI remains at 2.0.10. The active collaborator can push but has neither
 `maintain` nor `admin` repository permission; GitHub requires repository Administration
@@ -99,52 +99,35 @@ patterns, or a tag policy masquerading as `main`. The built-in `branch_policy` p
 rule is required; it is the API representation of the selected main-only branch boundary,
 not a manual approval rule.
 
-The default-branch release controller reads those three public API resources during
-`validate-release`, before package building or registry mutation, and invokes the pure
-validator. API failures and policy mismatches fail with #236 and the owner command/UI
-path. This turns future drift into an immediate diagnostic rather than a late waiting
-deployment.
+The default-branch release controller preflights exactly the environment,
+deployment-branch-policy, and custom-deployment-protection-rule API responses during
+`validate-release`, before package building or registry mutation, and invokes the pure validator.
+API failures and policy mismatches fail with #236 and the owner command/UI path. This turns future
+drift into an immediate diagnostic rather than a late waiting deployment. Zero environment secrets
+is separately verified live administrator state, not controller-enforced.
 
 The workflow adds only the read permission required for this inspection. The
 `publish-pypi` job remains the sole job with `id-token: write`; it retains no `contents`,
 `packages`, or repository write permission.
 
 Maintainer guidance records the same contract: the environment is reviewer-free, has no wait
-timer or environment secrets, uses custom branch policies for the exact branch `main`, and has
-no custom deployment-protection rules. A mismatch cites #236 and fails before package or
-registry writes. OIDC remains the only publisher; never reintroduce `PYPI_API_TOKEN`. After
-the first successful OIDC release, the owner separately deletes that obsolete repository secret.
+timer, uses custom branch policies for the exact branch `main`, and has no custom
+deployment-protection rules. A mismatch cites #236 and fails before package or registry writes.
+OIDC remains the only publisher; never reintroduce `PYPI_API_TOKEN`. Zero environment secrets is
+separately verified live administrator state, not controller-enforced.
 
-### 3. Current v2.0.11 recovery
+### 3. Completed v2.0.11 recovery
 
-After the administrator saves the environment policy, inspect the existing waiting run.
-If GitHub re-evaluates it, monitor it normally. If it remains pending, the administrator
-uses **Start all waiting jobs** once, or the production `v2.0.11` dispatch is rerun. The
-workflow already makes both paths safe: package upload uses `skip-existing`, and GHCR
-promotion converges idempotently.
+The production OIDC run `31465885545` completed green and PyPI exposed 2.0.11. Its
+`skip-existing` package upload and idempotent GHCR promotion behaved as designed; no token
+fallback was used.
 
-Success requires the workflow summary to report publication success and PyPI's JSON API
-to expose version 2.0.11. If PyPI returns `invalid-publisher`, `@hassansaei` verifies the
-four Trusted Publisher fields above; no token fallback is permitted.
+### 4. Completed v2.0.12 release
 
-### 4. v2.0.12 release completion
-
-Once v2.0.11 is visible on PyPI and the policy PR is on `main`:
-
-1. Create an annotated SSH-signed `v2.0.12` tag at
-   `7f8583dd60565fec5d0297cbb26ccd2d7f439b22` and verify its signature and peeled commit.
-2. Push that new tag without force.
-3. Run the manual dry-run against the existing tag; require exact identity, all ten
-   checks, Docker evidence, package build, and no production writes.
-4. Send the authenticated `vntyper_release` repository dispatch.
-5. Require terminal success for validation, gates, package build, GHCR promotion, PyPI
-   publication, and release summary.
-6. Verify PyPI 2.0.12 files, GHCR immutable and floating aliases, image revision/version
-   labels, and the GitHub Release bound to the existing signed tag.
-7. Remove only completed temporary release branches/worktrees.
-
-After the first successful OIDC publication, the repository owner deletes the obsolete
-`PYPI_API_TOKEN` secret separately, as the existing release policy requires.
+The production OIDC run `31464328451` completed green. PyPI exposes 2.0.12, and the
+repository owner deleted `PYPI_API_TOKEN` after these green OIDC releases. The configured
+publisher remains owner `hassansaei`, repository `VNtyper`, workflow `publish-pypi.yml`, and
+environment `pypi`.
 
 ## Error handling
 
@@ -170,8 +153,9 @@ approval bypasses appear.
 
 Repository gates are `make check-all`, `make ci-local`, workflow semantic tests,
 actionlint, and the release workflow's existing mutation-sensitive safety suite. Live
-acceptance then verifies the environment API, v2.0.11 recovery, signed-tag identity,
-dry-run no-write evidence, production workflow, PyPI, GHCR, and GitHub Release.
+acceptance verified the environment API, green OIDC runs `31465885545` (2.0.11) and
+`31464328451` (2.0.12), PyPI 2.0.12, GHCR, GitHub Release, and deletion of
+`PYPI_API_TOKEN`.
 
 ## Rejected alternatives
 

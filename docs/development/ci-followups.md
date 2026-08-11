@@ -122,7 +122,7 @@ a bare `ruff format --check .` discovers, so the Makefile target and the obvious
 cannot report different things; the comment above `RUFF_PATHS` gives the command that
 checks that.
 
-### B4. PyPI Trusted Publishing — RESOLVED; owner cleanup remains
+### B4. PyPI Trusted Publishing — RESOLVED; cleanup complete
 
 The current default-branch `publish-pypi.yml` controller uses PyPI Trusted Publishing:
 its production publisher runs in the protected `pypi` environment with only
@@ -130,20 +130,16 @@ its production publisher runs in the protected `pypi` environment with only
 PyPA publisher with `skip-existing`. It does not read `PYPI_API_TOKEN` or another
 long-lived package credential.
 
-The `pypi` environment is reviewer-free, has no wait timer or environment secrets, and uses
-custom branch policies for the exact branch `main` with no custom deployment-protection rules.
-The controller preflights this live policy and fails before package or registry writes on a
-mismatch; use #236 to repair the environment. OIDC remains the only publisher: never
-reintroduce `PYPI_API_TOKEN`.
+The `pypi` environment is reviewer-free, has no wait timer, and uses custom branch policies for
+the exact branch `main` with no custom deployment-protection rules. The controller preflights
+exactly the environment, deployment-branch-policy, and custom-deployment-protection-rule API
+responses and fails before package or registry writes on a mismatch; use #236 to repair the
+environment. Zero environment secrets is separately verified live administrator state, not
+controller-enforced. OIDC remains the only publisher: never reintroduce `PYPI_API_TOKEN`.
 
-One owner-only rollout action remains intentionally pending. Do not delete
-`PYPI_API_TOKEN` until the first successful OIDC release proves that the configured
-publisher (owner `hassansaei`, repository `VNtyper`, workflow `publish-pypi.yml`,
-environment `pypi`) works live. After that proof, the owner must delete the obsolete
-secret separately and record the release run. Until deletion, do not create a release
-tag pointing at a pre-milestone commit: historical tagged commits still contain their
-legacy token workflow. Those old workflows become inert only after the token is
-removed, so the current workflow migration is resolved while secret retirement is not.
+Cleanup is complete: OIDC production runs `31465885545` (2.0.11) and `31464328451` (2.0.12)
+are green, PyPI 2.0.12 is published, and `PYPI_API_TOKEN has been deleted`. Historical tagged
+workflows cannot retrieve the obsolete credential.
 
 ### B5. `vntyper report` is broken — RESOLVED (#179)
 

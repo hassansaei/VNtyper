@@ -2337,11 +2337,8 @@ def test_release_guidance_records_current_controller_rollout_and_recovery_contra
         "dry run",
         "`pypi` environment",
         "`id-token: write`",
-        "Do not delete `PYPI_API_TOKEN` until the first successful OIDC release",
-        "historical tagged commits",
-        "legacy token workflow",
-        "inert only after",
-        "pre-milestone commit",
+        "`PYPI_API_TOKEN` has been deleted after the green OIDC releases",
+        "historical tagged commits cannot retrieve the obsolete credential",
         "proven short-prefix collision continues from the evidence digest",
         "ambiguous short-tag drift fails closed",
     ):
@@ -2350,7 +2347,7 @@ def test_release_guidance_records_current_controller_rollout_and_recovery_contra
     assert "`scripts/` is linted and formatted but is not type-checked" not in agents
     assert re.search(
         r"```text\nphase \| job \| permissions \| retry/recovery\n"
-        r"validation \| validate-release \| contents: read \|.*\n"
+        r"validation \| validate-release \| actions: read, contents: read \|.*\n"
         r"gates \| wait-for-release-gates \| actions: read, checks: read, contents: read, packages: read \|.*\n"
         r"build \| build-package \| contents: read \|.*\n"
         r"promotion \| promote-ghcr \| contents: read, packages: write \|.*\n"
@@ -2361,11 +2358,12 @@ def test_release_guidance_records_current_controller_rollout_and_recovery_contra
 
     b4 = followups.split("### B4.", maxsplit=1)[1].split("### B5.", maxsplit=1)[0]
     assert "RESOLVED" in b4
-    assert "owner" in b4
-    assert "first successful OIDC release" in b4
-    assert "PYPI_API_TOKEN" in b4
-    assert "historical tagged commits" in b4
-    assert "inert only after" in b4
+    assert "cleanup complete" in b4
+    assert "31465885545" in b4
+    assert "31464328451" in b4
+    assert "PyPI 2.0.12" in b4
+    assert "PYPI_API_TOKEN has been deleted" in b4
+    assert "remains intentionally pending" not in b4
 
     assert "client_payload.tag" in workflow_source
     assert "default branch" in workflow_source

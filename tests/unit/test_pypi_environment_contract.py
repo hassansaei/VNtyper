@@ -39,6 +39,17 @@ def test_exact_reviewer_free_main_only_policy_is_valid() -> None:
     assert validate_pypi_environment(VALID_ENVIRONMENT, VALID_POLICIES, VALID_CUSTOM_RULES) is None
 
 
+def test_custom_rule_rows_are_rejected_even_when_total_count_is_zero() -> None:
+    """A hostile endpoint cannot hide a custom rule behind an incorrect zero count."""
+    custom_rules = {
+        "total_count": 0,
+        "custom_deployment_protection_rules": [{"id": 19, "type": "required_reviewers"}],
+    }
+
+    with pytest.raises(ValueError, match="custom deployment protection rules"):
+        validate_pypi_environment(VALID_ENVIRONMENT, VALID_POLICIES, custom_rules)
+
+
 @pytest.mark.parametrize(
     ("environment", "policies", "custom_rules", "field"),
     (
