@@ -1,0 +1,219 @@
+name: Build reference bundles
+
+# Builds a versioned reference bundle and publishes it as a DRAFT release in the
+# CALLING repository (berntpopp/vntyper-data).
+#
+# It lives here rather than in the data repository for the reason phentrieve does the
+# same: the builder is software and belongs with the software. The data repository pins
+# this file at a full commit SHA, so a bundle is always reproducible from a known
+# builder, and this workflow reports that SHA back inside every asset.
+#
+# Two checkouts are required. `workflow_call` does NOT check out the caller, and the
+# seeds and the release spec live there while the builder lives here.
+#
+# Nothing here is a "latest" reference: every genome URL and digest comes from the
+# caller's committed release spec (Ensembl is pinned to release-116), every derivation is
+# asserted against a committed digest, and `scripts/bundle_release.py` refuses to publish
+# a tree containing a file that belongs to no asset and matches no exclusion.
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Release tag declared by a committed JSON spec in the caller.
+        required: true
+        type: string
+      release_spec_path:
+        description: Path to that spec, relative to the caller's repository root.
+        required: true
+        type: string
+      source_commit:
+        description: The VNtyper commit this builder was pinned at.
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and draft a reference release
+    runs-on: ubuntu-24.04
+    # Six single-threaded `bwa index` runs over chr1 dominate this (bwa ignores the
+    # thread count - `supports_threading: false` in install_references_config.json), at
+    # roughly 15 minutes each, plus the conda solve, the downloads and ~4 GB of gzip.
+    # Measured expectation is a little over two hours; 240 leaves room for a slow runner
+    # without letting a hung step burn the 6-hour job ceiling.
+    timeout-minutes: 240
+    permissions:
+      # The draft release is created in the CALLING repository.
+      contents: write
+    defaults:
+      run:
+        # micromamba's shell hook needs a login shell to activate the environment.
+        shell: bash -el {0}
+    steps:
+      - name: Check out the data repository (seeds and release spec)
+        uses: actions/checkout@v7
+        with:
+          path: data
+
+      - name: Check out VNtyper at the pinned builder commit
+        uses: actions/checkout@v7
+        with:
+          repository: hassansaei/VNtyper
+          ref: ${{ inputs.source_commit }}
+          path: vntyper
+
+      - name: Record both resolved commits
+        id: shas
+        run: |
+          set -euo pipefail
+          {
+            echo "data=$(git -C data rev-parse HEAD)"
+            echo "builder=$(git -C vntyper rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      # Six indexed genomes are ~4.2 GB and their archives another ~2.7 GB, against the
+      # ~14 GB an ubuntu-24.04 runner starts with. `--prune` below keeps peak usage at
+      # the tree's own size; reclaiming the preinstalled toolchains that this job will
+      # never use turns a tight fit into a comfortable one.
+      - name: Reclaim runner disk
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # The same recipe the Docker image is built from, so the bundle is produced by the
+      # toolchain the pipeline runs. Deliberately uncached: everything in the file is
+      # pinned, so a fresh solve costs ~5 minutes and removes a moving part from a build
+      # whose output is immutable.
+      - name: Create the vntyper conda environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: vntyper/conda/environment_vntyper.yml
+
+      # --no-deps for the same reason docker/Dockerfile uses it (AGENTS.md trap 15):
+      # every runtime dependency here is conda-managed, and letting pip re-resolve them
+      # from PyPI lays a second numpy over the conda-managed one.
+      - name: Install VNtyper
+        run: python -m pip install --no-deps -e vntyper
+
+      # Everything cheap that can fail, before anything expensive runs. A seed whose
+      # digest does not match the spec, or a spec that does not describe this build,
+      # costs a minute here instead of three hours after every genome has been
+      # downloaded and BWA-indexed.
+      #
+      # filter_config.json is staged because the merged-motif derivation reads it. Only
+      # these four files are staged: anything else copied in would land in the reference
+      # tree belonging to no asset, and the grouper would stop the build over it.
+      - name: Stage the seeds and validate the release spec
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SPEC_PATH: ${{ inputs.release_spec_path }}
+          DATA_SHA: ${{ steps.shas.outputs.data }}
+          BUILDER_SHA: ${{ steps.shas.outputs.builder }}
+        run: |
+          set -euo pipefail
+          spec="data/${RELEASE_SPEC_PATH}"
+          mkdir -p refs
+          cp data/seeds/MUC1_motifs_Rev_com.fa data/seeds/code-adVNTR_RUs.fa refs/
+          cp data/seeds/vntr_db_advntr.zip data/seeds/filter_config.json refs/
+          python -m vntyper.scripts.verify_seeds --spec "$spec" --seeds data/seeds
+          python vntyper/scripts/bundle_release.py --check-spec-only \
+            --refs refs --spec "$spec" --tag "$RELEASE_TAG" --out dist \
+            --data-sha "$DATA_SHA" --builder-sha "$BUILDER_SHA"
+
+      # All six genomes, always. A derivation whose source assembly is outside the
+      # selection is skipped rather than failed, so a short list would quietly produce a
+      # bundle with no muc1_region_hg38.fa in it.
+      - name: Build every reference from its upstream source
+        env:
+          RELEASE_SPEC_PATH: ${{ inputs.release_spec_path }}
+        run: |
+          set -euo pipefail
+          vntyper install-references \
+            --output-dir refs --from-source \
+            --release-spec "data/${RELEASE_SPEC_PATH}" \
+            --references hg19 hg38 GRCh37 GRCh38 hg19_ensembl hg38_ensembl \
+            --threads 4
+
+      # Groups the tree into the seven assets, writes release-manifest.json and
+      # BUILD_INFO.json INSIDE each archive (a loose metadata file has no committed
+      # digest to check it against), re-verifies every digest the spec pins, and refuses
+      # to write anything if a file in the tree belongs to no asset.
+      - name: Assemble the release assets
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SPEC_PATH: ${{ inputs.release_spec_path }}
+          DATA_SHA: ${{ steps.shas.outputs.data }}
+          BUILDER_SHA: ${{ steps.shas.outputs.builder }}
+        run: |
+          set -euo pipefail
+          python vntyper/scripts/bundle_release.py \
+            --refs refs --spec "data/${RELEASE_SPEC_PATH}" \
+            --tag "$RELEASE_TAG" --out dist \
+            --data-sha "$DATA_SHA" --builder-sha "$BUILDER_SHA" \
+            --prune
+          ls -l dist
+          ( cd dist && sha256sum --check --strict SHA256SUMS )
+          df -h /
+
+      - name: Publish a DRAFT release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SPEC_PATH: ${{ inputs.release_spec_path }}
+          DATA_SHA: ${{ steps.shas.outputs.data }}
+          BUILDER_SHA: ${{ steps.shas.outputs.builder }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Reference bundle **${RELEASE_TAG}**.
+
+          | | |
+          |---|---|
+          | Builder | hassansaei/VNtyper@${BUILDER_SHA} |
+          | Spec | ${RELEASE_SPEC_PATH} @ ${DATA_SHA} |
+
+          Every archive carries its own release-manifest.json and BUILD_INFO.json, and
+          each is covered by that archive's SHA-256. The top-level manifests are for
+          review only; the installer verifies each asset against a digest committed in
+          VNtyper's install_references_config.json.
+
+          Before publishing this draft:
+
+          1. read verification-report.json - every check must report ok: true;
+          2. read release-manifest.json - confirm the excluded list is only the
+             installer log, the downloaded .gz sources, the adVNTR zip and the
+             merged-motif build input;
+          3. run: sha256sum --check SHA256SUMS
+          EOF
+          gh release create "$RELEASE_TAG" dist/* \
+            --repo "$TARGET_REPOSITORY" \
+            --draft \
+            --title "VNtyper references ${RELEASE_TAG}" \
+            --notes-file release-notes.md
+
+      - name: Summary
+        if: always()
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          DATA_SHA: ${{ steps.shas.outputs.data }}
+          BUILDER_SHA: ${{ steps.shas.outputs.builder }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Reference bundle ${RELEASE_TAG}"
+            echo ""
+            echo "- Builder: hassansaei/VNtyper@${BUILDER_SHA}"
+            echo "- Data:    ${DATA_SHA}"
+            echo ""
+            if [ -f dist/SHA256SUMS ]; then
+              echo '```'
+              cat dist/SHA256SUMS
+              echo '```'
+            else
+              echo "No assets were produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
