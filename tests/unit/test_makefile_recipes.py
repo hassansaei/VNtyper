@@ -337,6 +337,58 @@ def test_check_all_depends_on_integration_compatibility() -> None:
     assert "scripts/check_integration_compatibility.py" in expanded.stdout
 
 
+def _run_ci_local_compatibility_with_fake_tools(
+    tmp_path: Path, status: int
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    capture = tmp_path / "python-argv.txt"
+    _write_executable(
+        fake_bin / "git",
+        "#!/bin/sh\nprintf '%s\\n' authoritative-local-base\n",
+    )
+    _write_executable(
+        fake_bin / "python",
+        """#!/bin/sh
+printf '%s\n' "$*" > "$COMPAT_CAPTURE"
+exit "$COMPAT_STATUS"
+""",
+    )
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["COMPAT_CAPTURE"] = str(capture)
+    env["COMPAT_STATUS"] = str(status)
+    result = subprocess.run(
+        ["make", "--no-print-directory", "ci-local-integration-compatibility"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, capture.read_text(encoding="utf-8").strip() if capture.exists() else ""
+
+
+def test_ci_local_compatibility_uses_authoritative_merge_base_and_propagates_failure(tmp_path: Path) -> None:
+    """The CI-parity gate must pass its resolved local base and fail closed."""
+    success, argv = _run_ci_local_compatibility_with_fake_tools(tmp_path / "success", 0)
+    assert success.returncode == 0
+    assert argv == "scripts/check_integration_compatibility.py --base-revision authoritative-local-base"
+
+    failure, _ = _run_ci_local_compatibility_with_fake_tools(tmp_path / "failure", 17)
+    assert failure.returncode != 0
+
+
+def test_ci_local_depends_on_integration_compatibility_parity_gate() -> None:
+    """Catch a local CI mirror that omits the event-base compatibility policy."""
+    declaration = next(
+        line for line in MAKEFILE.read_text(encoding="utf-8").splitlines() if line.startswith("ci-local:")
+    )
+    prerequisites = declaration.partition(":")[2].split()
+
+    assert prerequisites.count("ci-local-integration-compatibility") == 1
+
+
 def test_docker_quick_uses_default_mode_b178_reporter_sentinel() -> None:
     """Catch losing the PR-tier proof of the normal reporter path."""
     expanded = subprocess.run(

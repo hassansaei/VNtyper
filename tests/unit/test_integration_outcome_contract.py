@@ -35,7 +35,6 @@ def _negative_case() -> dict[str, Any]:
         "reference_assembly": "hg19",
         "expected_exit_code": 1,
         "expected_diagnostic": "mate outputs are inconsistent",
-        "expected_mixed_fastq_records": {"r1": 7, "r2": 7, "other": 0, "single": 1},
     }
 
 
@@ -251,29 +250,6 @@ def test_single_end_fast_and_default_cases_pin_their_distinct_measured_read_sets
         "Depth_Score": {"value": 0.06744487678339818, "tolerance_percentage": 5},
         "Confidence": "High_Precision*",
     }
-
-
-def test_mixed_layout_diagnostic_renders_the_exact_dynamic_paths_and_counts(tmp_path: Path) -> None:
-    """The contract must match the pipeline's full no-discard diagnostic, not a vague prefix."""
-    expected = orchestration.mixed_layout_diagnostic(_negative_case(), tmp_path / "case-output")
-
-    fastq_dir = tmp_path / "case-output" / "fastq_bam_processing"
-    assert expected == (
-        "FASTQ layout 'mixed' cannot be consumed without dropping reads. Produced FASTQs: "
-        f"{fastq_dir / 'output_R1.fastq.gz'}: 7 records, "
-        f"{fastq_dir / 'output_R2.fastq.gz'}: 7 records, "
-        f"{fastq_dir / 'output_other.fastq.gz'}: 0 records, "
-        f"{fastq_dir / 'output_single.fastq.gz'}: 1 records"
-    )
-
-
-def test_mixed_layout_diagnostic_rejects_an_incomplete_count_contract(tmp_path: Path) -> None:
-    """No produced FASTQ may disappear from a malformed negative-case declaration."""
-    case = _negative_case()
-    del case["expected_mixed_fastq_records"]["single"]
-
-    with pytest.raises(KeyError, match="single"):
-        orchestration.mixed_layout_diagnostic(case, tmp_path)
 
 
 def test_declared_artifacts_assert_both_presence_and_absence(tmp_path: Path) -> None:

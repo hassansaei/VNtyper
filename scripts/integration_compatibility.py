@@ -69,9 +69,11 @@ _EXECUTION_KEYS = {"threads", "log_level", "cli_options", "modules"}
 _ROUTING_KEYS = {"records", "selected_basenames"}
 _COUNT_KEYS = {"r1", "r2", "other", "single"}
 _ARTIFACT_KEYS = {"required_present", "required_absent", "archive"}
-_OUTCOME_KEYS = {"kestrel", "advntr", "cross_match"}
+_OUTCOME_KEYS = {"kestrel", "advntr", "cross_match", "coverage", "summary", "report"}
 _ASSERTION_KEYS = {"value", "tolerance"}
 _TOLERANCE_KEYS = {"kind", "value"}
+_SUMMARY_KEYS = {"steps", "parsed_results", "derivations"}
+_SUMMARY_DERIVATION_KEYS = {"row_source", "enrichments"}
 _SUPPORTED_SUITES = {"bam_tests", "cram_tests", "single_end_bam_tests", "fastq_tests", "advntr_tests"}
 _KESTREL_FIELDS = {
     "Confidence",
@@ -103,6 +105,12 @@ _COVERAGE_FIELDS = {
     "uncovered_bases",
     "percent_uncovered",
     "coverage_qc",
+}
+_SUMMARY_ROW_SOURCES = {
+    "Coverage Calculation": "coverage/coverage_summary.tsv",
+    "Kestrel Genotyping": "kestrel/kestrel_result.tsv",
+    "adVNTR Genotyping": "advntr/output_adVNTR_result.tsv",
+    "Cross-Match Variant Comparison": "advntr/cross_match_results.tsv",
 }
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _MD5_RE = re.compile(r"[0-9a-f]{32}")
@@ -380,6 +388,60 @@ def _validate_assertions(value: object, label: str) -> None:
             raise ValueError(f"{label}.{field}.tolerance is unbounded")
 
 
+def _summary_derivations(*, advntr: bool) -> dict[str, dict[str, object]]:
+    """Return the canonical evidence derivation for every result-bearing summary step."""
+    derivations: dict[str, dict[str, object]] = {
+        "Coverage Calculation": {
+            "row_source": _SUMMARY_ROW_SOURCES["Coverage Calculation"],
+            "enrichments": {},
+        },
+        "Kestrel Genotyping": {
+            "row_source": _SUMMARY_ROW_SOURCES["Kestrel Genotyping"],
+            "enrichments": {},
+        },
+    }
+    if advntr:
+        derivations["Kestrel Genotyping"]["enrichments"] = {
+            "Allele_Change": "cross_match.Kestrel_Allele_Change",
+            "Variant_Type": "cross_match.Kestrel_Variant_Type",
+        }
+        derivations["adVNTR Genotyping"] = {
+            "row_source": _SUMMARY_ROW_SOURCES["adVNTR Genotyping"],
+            "enrichments": {
+                "Allele_Change": "cross_match.Advntr_Allele_Change",
+                "Variant_Type": "cross_match.Advntr_Variant_Type",
+            },
+        }
+        derivations["Cross-Match Variant Comparison"] = {
+            "row_source": _SUMMARY_ROW_SOURCES["Cross-Match Variant Comparison"],
+            "enrichments": {},
+        }
+    return derivations
+
+
+def _validate_summary_outcome(value: object, label: str, *, advntr: bool) -> None:
+    """Validate full ordered summary shape and its independently checked evidence sources."""
+    summary = _mapping(value, label)
+    _exact_keys(summary, _SUMMARY_KEYS, label)
+    _validate_live_summary_contract(
+        {"steps": summary["steps"], "parsed_results": summary["parsed_results"]},
+        label,
+        advntr=advntr,
+    )
+    derivations = _mapping(summary["derivations"], f"{label}.derivations")
+    for step, derivation_value in derivations.items():
+        _string(step, f"{label}.derivations step")
+        derivation = _mapping(derivation_value, f"{label}.derivations.{step}")
+        _exact_keys(derivation, _SUMMARY_DERIVATION_KEYS, f"{label}.derivations.{step}")
+        _relative_path(derivation["row_source"], f"{label}.derivations.{step}.row_source")
+        enrichments = _mapping(derivation["enrichments"], f"{label}.derivations.{step}.enrichments")
+        for field, source in enrichments.items():
+            _string(field, f"{label}.derivations.{step}.enrichments field")
+            _string(source, f"{label}.derivations.{step}.enrichments.{field}")
+    if derivations != _summary_derivations(advntr=advntr):
+        raise ValueError(f"{label} summary derivations differ from the canonical result evidence")
+
+
 def _validate_contract(
     value: object,
     index: int,
@@ -409,7 +471,7 @@ def _validate_contract(
     _validate_artifacts(contract["artifacts"], f"{label}.artifacts")
     outcomes = _mapping(contract["outcomes"], f"{label}.outcomes")
     _exact_keys(outcomes, _OUTCOME_KEYS, f"{label}.outcomes")
-    for outcome in sorted(_OUTCOME_KEYS):
+    for outcome in sorted({"kestrel", "advntr", "cross_match", "coverage"}):
         _validate_assertions(outcomes[outcome], f"{label}.outcomes.{outcome}")
     if suite not in _SUPPORTED_SUITES:
         raise ValueError(f"{label}.suite is unsupported: {suite}")
@@ -420,6 +482,17 @@ def _validate_contract(
     if set(outcomes["kestrel"]) != _KESTREL_FIELDS:
         raise ValueError(f"{label} must declare complete Kestrel fields")
     has_advntr = "advntr" in contract["execution"]["modules"]
+    coverage = outcomes["coverage"]
+    if set(coverage) != _COVERAGE_FIELDS:
+        raise ValueError(f"{label} must declare complete coverage fields")
+    if any(
+        assertion["tolerance"] is not None or not isinstance(assertion["value"], str) for assertion in coverage.values()
+    ):
+        raise ValueError(f"{label} coverage fields must be exact serialized strings")
+    _validate_summary_outcome(outcomes["summary"], f"{label}.outcomes.summary", advntr=has_advntr)
+    report = _string_list(outcomes["report"], f"{label}.outcomes.report")
+    if not report:
+        raise ValueError(f"{label}.outcomes.report must not be empty")
     if suite == "advntr_tests" and not has_advntr:
         raise ValueError(f"{label} advntr suite must declare the advntr module")
     if has_advntr:
@@ -611,6 +684,17 @@ def _validate_live_summary_contract(value: object, label: str, *, advntr: bool) 
         raise ValueError(f"{label}.parsed_results must declare exactly {sorted(required)} in step order")
 
 
+def _summary_outcome_from_live(value: object, *, label: str, advntr: bool) -> dict[str, object]:
+    """Project a live ordered summary declaration with its canonical result derivations."""
+    _validate_live_summary_contract(value, label, advntr=advntr)
+    summary = _mapping(value, label)
+    return {
+        "steps": summary["steps"],
+        "parsed_results": summary["parsed_results"],
+        "derivations": _summary_derivations(advntr=advntr),
+    }
+
+
 def _validate_live_success(case: dict[str, Any], suite: str) -> None:
     label = f"live case {case.get('test_name')}"
     _integer(case.get("threads"), f"{label} threads", positive=True)
@@ -680,7 +764,7 @@ def _validate_live_success(case: dict[str, Any], suite: str) -> None:
 
 def _live_projection(case: dict[str, Any], suite: str, resource_config: dict[str, Any]) -> dict[str, Any]:
     options, modules = _split_options(case, suite)
-    records = case.get("expected_fastq_records") or case.get("expected_mixed_fastq_records")
+    records = case.get("expected_fastq_records")
     selected = case.get("expected_selected_fastqs")
     routing = None if records is None else {"records": records, "selected_basenames": selected or []}
     return {
@@ -709,6 +793,13 @@ def _live_projection(case: dict[str, Any], suite: str, resource_config: dict[str
             "kestrel": _assertions_from_live(case.get("kestrel_assertions", {})),
             "advntr": _assertions_from_live(case.get("advntr_assertions", {})),
             "cross_match": _cross_match_from_live(case.get("cross_match_assertions", {})),
+            "coverage": _assertions_from_live(case.get("coverage_assertions", {})),
+            "summary": _summary_outcome_from_live(
+                case.get("pipeline_summary_assertions"),
+                label=f"live case {case.get('test_name')} pipeline_summary_assertions",
+                advntr="advntr" in modules,
+            ),
+            "report": case.get("report_assertions"),
         },
     }
 

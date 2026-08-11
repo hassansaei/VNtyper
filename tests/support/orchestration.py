@@ -51,13 +51,6 @@ class PipelineRunResult:
     stderr: str
 
 
-_FASTQ_OUTPUTS = (
-    ("r1", "output_R1.fastq.gz"),
-    ("r2", "output_R2.fastq.gz"),
-    ("other", "output_other.fastq.gz"),
-    ("single", "output_single.fastq.gz"),
-)
-
 _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _REQUEST_OWNED_OPTIONS = frozenset(
     {
@@ -221,25 +214,6 @@ def assert_declared_archive(test_case: dict, output_dir: Path) -> None:
         assert not os.path.lexists(archive), (
             f"case={case_id} field=expected_archive unexpected entry is present: {archive}"
         )
-
-
-def mixed_layout_diagnostic(test_case: dict, output_dir: Path) -> str:
-    """Render the exact fail-closed diagnostic declared for one mixed fixture.
-
-    Args:
-        test_case: Integration case carrying ``expected_mixed_fastq_records``.
-        output_dir: Per-case pipeline output directory.
-
-    Returns:
-        The complete diagnostic emitted by ``route_converted_fastqs``.
-
-    Raises:
-        KeyError: If the case omits a required FASTQ record count.
-    """
-    counts = test_case["expected_mixed_fastq_records"]
-    fastq_dir = output_dir / "fastq_bam_processing"
-    details = ", ".join(f"{fastq_dir / filename}: {counts[key]} records" for key, filename in _FASTQ_OUTPUTS)
-    return f"FASTQ layout 'mixed' cannot be consumed without dropping reads. Produced FASTQs: {details}"
 
 
 def _failure_diagnostic_fragments(test_case: dict[str, Any]) -> tuple[str, ...]:

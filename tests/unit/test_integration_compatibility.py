@@ -53,6 +53,7 @@ CURRENT_IDENTITIES = BOOTSTRAP_IDENTITIES | {
     ("fastq_tests", "example_6449_hg19_subset_single_fastq"),
     ("fastq_tests", "example_b178_hg19_subset_paired_fastq_no_shark"),
 }
+_OUTCOME_FINGERPRINT_KEYS = {"kestrel", "advntr", "cross_match", "coverage", "summary", "report"}
 
 
 def _module() -> Any:
@@ -65,6 +66,43 @@ def _module() -> Any:
 
 def _assertion(value: object, tolerance: dict[str, object] | None = None) -> dict[str, object]:
     return {"value": value, "tolerance": tolerance}
+
+
+def _summary_outcome(*, advntr: bool = False) -> dict[str, object]:
+    steps = ["Coverage Calculation", "Kestrel Genotyping"]
+    parsed_results = ["Coverage Calculation", "Kestrel Genotyping"]
+    derivations: dict[str, object] = {
+        "Coverage Calculation": {
+            "row_source": "coverage/coverage_summary.tsv",
+            "enrichments": {},
+        },
+        "Kestrel Genotyping": {
+            "row_source": "kestrel/kestrel_result.tsv",
+            "enrichments": {},
+        },
+    }
+    if advntr:
+        steps.extend(["adVNTR Genotyping", "Cross-Match Variant Comparison"])
+        parsed_results.extend(["adVNTR Genotyping", "Cross-Match Variant Comparison"])
+        derivations["Kestrel Genotyping"] = {
+            "row_source": "kestrel/kestrel_result.tsv",
+            "enrichments": {
+                "Allele_Change": "cross_match.Kestrel_Allele_Change",
+                "Variant_Type": "cross_match.Kestrel_Variant_Type",
+            },
+        }
+        derivations["adVNTR Genotyping"] = {
+            "row_source": "advntr/output_adVNTR_result.tsv",
+            "enrichments": {
+                "Allele_Change": "cross_match.Advntr_Allele_Change",
+                "Variant_Type": "cross_match.Advntr_Variant_Type",
+            },
+        }
+        derivations["Cross-Match Variant Comparison"] = {
+            "row_source": "advntr/cross_match_results.tsv",
+            "enrichments": {},
+        }
+    return {"steps": steps, "parsed_results": parsed_results, "derivations": derivations}
 
 
 def _contract(*, suite: str = "bam_tests", name: str = "case-a", path: str = "tests/data/input.bam") -> dict:
@@ -103,6 +141,19 @@ def _contract(*, suite: str = "bam_tests", name: str = "case-a", path: str = "te
             },
             "advntr": {},
             "cross_match": {},
+            "coverage": {
+                "mean": _assertion("1.00"),
+                "median": _assertion("1.00"),
+                "stdev": _assertion("0.00"),
+                "min": _assertion("1"),
+                "max": _assertion("1"),
+                "region_length": _assertion("1"),
+                "uncovered_bases": _assertion("0"),
+                "percent_uncovered": _assertion("0.00"),
+                "coverage_qc": _assertion("PASS"),
+            },
+            "summary": _summary_outcome(),
+            "report": ["High_Precision*"],
         },
         "compatibility_since": "2.0.9",
         "provenance_commit": "b" * 40,
@@ -203,6 +254,7 @@ def _advntr_contract() -> dict:
         "Advntr_Variant_Type": _assertion("Insertion"),
         "Match": _assertion("Yes"),
     }
+    contract["outcomes"]["summary"] = _summary_outcome(advntr=True)
     return contract
 
 
@@ -267,6 +319,40 @@ def test_validate_manifest_accepts_complete_contract() -> None:
 )
 def test_validate_manifest_requires_complete_kestrel_success_content(mutation: Any, message: str) -> None:
     """Catch accepting a success row without routing, value, or artifact evidence."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    mutation(contract)
+
+    with pytest.raises(ValueError, match=message):
+        module.validate_manifest(_manifest(contract), _resources("tests/data/input.bam"))
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda value: value["outcomes"]["coverage"].pop("mean"), "complete coverage fields"),
+        (
+            lambda value: value["outcomes"]["coverage"]["mean"].update(tolerance={"kind": "percentage", "value": 1}),
+            "exact serialized strings",
+        ),
+        (lambda value: value["outcomes"]["coverage"]["mean"].update(value=1), "exact serialized strings"),
+        (lambda value: value["outcomes"]["summary"].pop("derivations"), "missing keys"),
+        (
+            lambda value: value["outcomes"]["summary"]["derivations"]["Coverage Calculation"].update(extra=True),
+            "extra keys",
+        ),
+        (
+            lambda value: value["outcomes"]["summary"]["derivations"]["Coverage Calculation"].update(
+                row_source="/absolute.tsv"
+            ),
+            "normalized relative path",
+        ),
+        (lambda value: value["outcomes"].update(report=[]), "report must not be empty"),
+    ],
+)
+def test_validate_manifest_rejects_malformed_additive_outcomes(mutation: Any, message: str) -> None:
+    """The additive coverage, summary, and report fingerprints are strict schema fields."""
     module = _module()
     assert module is not None, "integration compatibility module is not implemented"
     contract = _contract()
@@ -571,6 +657,44 @@ def test_check_compatibility_accepts_explicit_task5_invocation_metadata() -> Non
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda case: case["coverage_assertions"].update(mean="2.00"),
+        lambda case: case["pipeline_summary_assertions"]["steps"].reverse(),
+        lambda case: case["pipeline_summary_assertions"]["steps"].__setitem__(0, "Coverage Changed"),
+        lambda case: case["pipeline_summary_assertions"].update(parsed_results=["Kestrel Genotyping"]),
+        lambda case: case["report_assertions"].__setitem__(0, "Negative"),
+    ],
+)
+def test_check_compatibility_rejects_live_outcome_fingerprint_mutations(mutation: Any) -> None:
+    """Coverage, ordered summary shape, parsed results, and report text are immutable outcomes."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    case = _live_case(contract)
+    mutation(case)
+
+    with pytest.raises(ValueError, match=r"does not match live declaration|pipeline_summary_assertions"):
+        module.check_compatibility(
+            _manifest(contract),
+            _manifest(contract),
+            {"integration_tests": {"bam_tests": [case]}},
+            _resources("tests/data/input.bam"),
+        )
+
+
+def test_validate_manifest_rejects_changed_summary_derivation() -> None:
+    """A parsed result may not silently switch to a different evidence source."""
+    module = _module()
+    assert module is not None, "integration compatibility module is not implemented"
+    contract = _contract()
+    contract["outcomes"]["summary"]["derivations"]["Coverage Calculation"]["row_source"] = "kestrel/kestrel_result.tsv"
+
+    with pytest.raises(ValueError, match="summary derivations"):
+        module.validate_manifest(_manifest(contract), _resources("tests/data/input.bam"))
+
+
+@pytest.mark.parametrize(
     "parsed_results",
     [
         ["Kestrel Genotyping"],
@@ -798,9 +922,17 @@ def test_final_manifest_activates_from_absent_base_without_mutating_historical_t
     current_rows = {(row["suite"], row["test_name"]): row for row in manifest["contracts"]}
     base_rows = {(row["suite"], row["test_name"]): row for row in task5_base["contracts"]}
 
-    assert {identity: current_rows[identity] for identity in BOOTSTRAP_IDENTITIES} == {
+    def preexisting_fields(row: dict) -> dict:
+        preserved = copy.deepcopy(row)
+        for field in ("coverage", "summary", "report"):
+            preserved["outcomes"].pop(field, None)
+        return preserved
+
+    assert {identity: preexisting_fields(current_rows[identity]) for identity in BOOTSTRAP_IDENTITIES} == {
         identity: base_rows[identity] for identity in BOOTSTRAP_IDENTITIES
     }
+    for identity in BOOTSTRAP_IDENTITIES:
+        assert set(current_rows[identity]["outcomes"]) == _OUTCOME_FINGERPRINT_KEYS
     assert current_rows[("fastq_tests", "example_6449_hg19_subset_single_fastq")]["routing"]["records"] == {
         "r1": 0,
         "r2": 0,

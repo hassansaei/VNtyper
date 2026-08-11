@@ -1,7 +1,7 @@
 # VNtyper Makefile
 # Standardized development commands
 
-.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
+.PHONY: help install install-dev lint lint-stats format format-check type-check type-check-tests type-check-all download-test-data verify-test-data cram-fixtures test test-unit test-fast test-unit-cov test-scripts-cov test-integration test-integration-parallel test-advntr test-cov test-quiet test-verbose test-docker test-docker-quick test-docker-fast check check-all check-full check-ci check-integration-compatibility ci-local ci-local-docker ci-local-docs ci-local-integration-compatibility ci-local-uv lint-actions lint-docker coverage-report patch-coverage mutation mutation-render test-docker-smoke clean build docker-build docker-build-base docker-clean docs-install docs-serve docs-build docs-check docs-clean
 
 # Colors for output
 BLUE := \033[0;34m
@@ -211,6 +211,11 @@ test-fast:
 
 check-integration-compatibility:
 	python scripts/check_integration_compatibility.py $(if $(strip $(INTEGRATION_COMPAT_BASE)),--base-revision "$(INTEGRATION_COMPAT_BASE)",)
+
+ci-local-integration-compatibility:
+	@base_revision="$$(git merge-base origin/main HEAD)" && \
+		test -n "$$base_revision" && \
+		$(MAKE) --no-print-directory check-integration-compatibility INTEGRATION_COMPAT_BASE="$$base_revision"
 
 # Coverage for the fast tier.
 #
@@ -499,7 +504,7 @@ ci-local-uv:
 
 # Mirrors ci-tests.yml: lint -> typecheck -> unit tests + coverage -> docs, plus a
 # from-scratch install exactly as CI builds it.
-ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-coverage ci-local-docs ci-local-uv
+ci-local: lint-actions format-check lint type-check-all test-unit-cov patch-coverage ci-local-docs ci-local-uv ci-local-integration-compatibility
 	@echo ""
 	@echo "$(GREEN)========================================$(RESET)"
 	@echo "$(GREEN)✓ Local CI parity checks all passed$(RESET)"
