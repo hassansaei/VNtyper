@@ -142,6 +142,15 @@ def test_maintainer_guidance_records_the_pypi_environment_contract() -> None:
             assert phrase in normalized_guidance, f"{path} is missing: {phrase}"
 
 
+def test_live_complete_design_describes_the_initial_rollout_state_in_the_past_tense() -> None:
+    """A completed design must not present superseded release state as current."""
+    design = MAINTAINER_GUIDANCE_PATHS[1].read_text(encoding="utf-8")
+
+    assert "Release v2.0.11 is therefore waiting" not in design
+    assert "PyPI remains at 2.0.10" not in design
+    assert "environment currently permits every ref" not in design
+
+
 def test_preflight_is_unprivileged_and_ordered_before_candidate_resolution() -> None:
     """No release identity may be resolved before the live environment is proven safe."""
     workflow = _workflow()

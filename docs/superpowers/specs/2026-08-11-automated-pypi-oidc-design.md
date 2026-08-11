@@ -13,13 +13,13 @@ token. Release validation, exact-SHA checks, package construction, and GHCR prom
 all complete automatically.
 
 At planning time, the live `pypi` environment had `required_reviewers = [hassansaei]` and no
-deployment branch policy. Release v2.0.11 is therefore waiting after every automated
-gate has passed. PyPI remains at 2.0.10. The active collaborator can push but has neither
+deployment branch policy. Release v2.0.11 was therefore waiting after every automated
+gate had passed. PyPI remained at 2.0.10. The active collaborator could push but had neither
 `maintain` nor `admin` repository permission; GitHub requires repository Administration
 write permission to change an environment or its deployment branch policies.
 
 Removing only the reviewer would eliminate the delay but weaken the boundary: the
-environment currently permits every ref, so a collaborator could run a modified branch
+environment then permitted every ref, so a collaborator could run a modified branch
 copy of the trusted workflow. The replacement must automate approval and narrow the
 permitted ref at the same time.
 
