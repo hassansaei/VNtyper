@@ -84,8 +84,16 @@ def test_golden_page_records_the_issue_233_run_and_retained_evidence() -> None:
     assert "| 7 | `19c8acd` | `4678851` |" in page
     assert "5b8dc9199cd19fc1142e0a6ba7bd2740d4c0a97b0cdd9e5f8f4b08e51330e88e" in page
     assert "6808936b98be8b8d79decd17c76f89f5f4519a6e1fa9acc3f96c0c9eb6d14cbd" in page
+    assert "d3b17029f55c4a610d708764bf4b9c5298f2caad3f0f3114ce532b79b43b41a3" in page
+    assert "8a0c1a0460934cecf9db19b659c7f219f964bf685bf5f818bf12b2b3b69bac10" in page
+    assert "6f09f9350d152ab1b69aa07cf2096aad895a01cca08f23c297608cf772029dd0" in page
     assert "67/67 pipeline/probe outcomes" in normalized
     assert "4/4 cohort outcomes" in normalized
+    assert "This page also records the final gated candidate SHA" in normalized
+    assert "all three adVNTR successes" in normalized
+    assert "25 cases ran successfully on both sides" in normalized
+    assert "preliminary issue #233 run at `49b0cc6`" in normalized
+    assert "No issue #233 run result is recorded here" not in page
 
 
 def test_agents_scopes_the_host_reference_prerequisite_to_integration() -> None:

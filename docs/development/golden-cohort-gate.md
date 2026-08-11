@@ -7,10 +7,12 @@ run to decide whether the deliberately behaviour-changing commits in #179 may sh
 milestone-4 runs are historical. Equal R1/R2 plus singleton/`other` reads now consume
 every non-empty FASTQ exactly once under one Kestrel sample; unequal or one-sided mates
 remain invalid. Run 7's issue #233 `comparison.json` records 32 base cases plus 10
-repeat/derived cases, 42 total, without rewriting earlier run evidence. It also records the
-final gated candidate SHA and retained comparison artifact digests.
+repeat/derived cases, 42 total, without rewriting earlier run evidence. This page also
+records the final gated candidate SHA and retained comparison artifact digests.
 
-Every run the gate has taken is registered in the table below. **A verdict is intended to
+Every run selected as an attestation of record is registered in the table below. Completed
+superseded executions are not separate attestations: the preliminary issue #233 run at
+`49b0cc6` was replaced by run 7 at the final executable candidate. **A verdict is intended to
 attest one candidate commit and nothing after it**, so read the run whose candidate
 matches the tree you are judging.
 
@@ -1053,8 +1055,12 @@ refused 42 declarations that the new routing policy makes successful, so it coul
 produce the artifacts needed for a genotype comparison and three baseline cohorts could
 not consume their incomplete inputs. Every unmet expectation and blocked comparison is
 baseline-only. The candidate itself passed all declarations, including exact lossless
-routing for 40cf's 93 singleton reads, b178's singleton, both adVNTR successes, CRAM
+routing for 40cf's 93 singleton reads, b178's singleton, all three adVNTR successes, CRAM
 stream successes and the two forced-indexed fail-closed guard cases.
+
+Exactly 25 cases ran successfully on both sides; every genotype-bearing artifact was
+identical or absent on both sides. The only delta class was executed-command text in 23
+cases, limited to `/proc/<pid>/fd/5` and temporary-file suffix noise.
 
 This is the first run whose intended result is not baseline/candidate genotype identity.
 It demonstrates that all 42 formerly refused mixed-read cases become reachable under the
