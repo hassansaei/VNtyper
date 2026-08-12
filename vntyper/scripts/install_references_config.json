@@ -132,11 +132,6 @@
   "own_repository_references": {
     "raw_files": [
       {
-        "url": "https://raw.githubusercontent.com/hassansaei/VNtyper/main/reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
-        "target_path": "All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa",
-        "index_command": "samtools faidx {path}"
-      },
-      {
         "url": "https://raw.githubusercontent.com/berntpopp/vntyper-data/9f57431e289a9b742a98407c0a83f7a67da65ee7/seeds/MUC1_motifs_Rev_com.fa",
         "target_path": "MUC1_motifs_Rev_com.fa",
         "source_sha256": "7e6589f2388f3a08da6fb3bffa1fe22f10a5e03ec618b883fa6f07bcf1cb3e47",

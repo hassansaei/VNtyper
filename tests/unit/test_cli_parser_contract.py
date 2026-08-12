@@ -105,6 +105,7 @@ SUBCOMMAND_CONTRACT: dict[str, dict[str, ParserRow]] = {
     },
     "install-references": {
         "aligners": (("--aligners",), "_StoreAction", None, None, False, None, "+"),
+        "derive_only": (("--derive-only",), "_StoreTrueAction", None, False, False, None, 0),
         "from_source": (("--from-source",), "_StoreTrueAction", None, False, False, None, 0),
         # Note the odd one out: every other subcommand spells this -o.
         "output_dir": (("-d", "--output-dir"), "_StoreAction", "Path", None, True, None, None),
