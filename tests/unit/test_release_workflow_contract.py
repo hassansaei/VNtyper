@@ -745,8 +745,14 @@ def test_publish_result_distinguishes_new_existing_and_failed_reruns(
     }
 
 
-def test_current_container_commands_use_only_the_rolling_ghcr_main_image() -> None:
-    """Every runnable install example must be truthful before the first gated release."""
+def test_current_container_commands_use_a_published_release_alias() -> None:
+    """Every runnable install example must name a tag the release workflow publishes.
+
+    The release job promotes a verified digest to `v<version>`, `<version>`, the `X.Y`
+    and `X` series tags and `latest`, so those aliases exist and the surfaces must stop
+    saying they arrive only after a future release (#214). `main` stays documented as the
+    rolling branch tag, but no runnable example may send a user to it.
+    """
     surfaces = (
         ROOT / "README.md",
         ROOT / "docker" / "README.md",
@@ -755,21 +761,25 @@ def test_current_container_commands_use_only_the_rolling_ghcr_main_image() -> No
     )
     active_kinds: set[str] = set()
     unsupported = re.compile(r"(?<![A-Za-z0-9_.-])(?:docker://)?saei/vntyper")
+    published = re.compile(r"ghcr\.io/hassansaei/vntyper:(?:latest|v?\d+(?:\.\d+){0,2})(?![A-Za-z0-9._-])")
     for path in surfaces:
         text = path.read_text(encoding="utf-8")
         normalized = " ".join(text.lower().split())
         assert "rolling" in normalized
-        assert "unreleased" in normalized
-        assert "first gated release" in normalized
+        # The aliases exist now; claiming otherwise is the #214 defect, inverted.
+        assert "unreleased" not in normalized
+        assert "first gated release" not in normalized
         assert "`latest`" in text
         assert "`vX.Y.Z`" in text
         assert "`X.Y.Z`" in text
+        assert "`main`" in text
         for block in re.findall(r"```bash\n(.*?)```", text, flags=re.DOTALL):
             kinds = {kind for kind in ("docker pull", "docker run", "apptainer pull") if kind in block}
             if not kinds:
                 continue
             active_kinds.update(kinds)
-            assert "ghcr.io/hassansaei/vntyper:main" in block
+            assert published.search(block) is not None
+            assert "ghcr.io/hassansaei/vntyper:main" not in block
             assert unsupported.search(block) is None
     assert active_kinds == {"docker pull", "docker run", "apptainer pull"}
 
