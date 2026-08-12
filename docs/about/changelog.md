@@ -4,6 +4,12 @@ All notable changes to VNtyper 2 are documented on this page.
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.0.17 (Current)
+
+**Say which coverage number can be compared, and which cannot.**
+
 ### Added
 
 - **Coverage figures that can be compared between assemblies (#222).** Mean coverage over the
@@ -34,7 +40,7 @@ All notable changes to VNtyper 2 are documented on this page.
   previous behaviour exactly; the columns added above are isolated so neither can cost a reader
   the other.
 
-## 2.0.16 (Current)
+## 2.0.16
 
 **Pin what we build on, and let no attempt inherit another's leftovers.**
 
