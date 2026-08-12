@@ -26,16 +26,104 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from vntyper.scripts.artifact_names import validate_output_name
-from vntyper.scripts.cohort_summary import aggregate_cohort
-from vntyper.scripts.install_references import main as install_references_main
-
-# Import the online mode function
-from vntyper.scripts.online_mode import run_online_mode
 from vntyper.scripts.pipeline import run_pipeline
 from vntyper.scripts.reference_registry import get_reference_source, physical_reference_id, reference_keys
 from vntyper.scripts.reference_resolution import ResolvedReference, resolve_from_mapping
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand-only implementations, imported on first call
+# ---------------------------------------------------------------------------
+#
+# ``cohort_summary`` pulls matplotlib, plotly and seaborn; ``online_mode`` pulls
+# requests; ``install_references`` pulls its own downloader stack. ``vntyper pipeline``
+# imported all three at module scope and used none of them - measured startup 317-348 ms
+# against 205-239 ms without.
+#
+# These are *wrappers*, not function-local imports inside the handlers, and not a module
+# ``__getattr__``. The suite patches ``cli_handlers.run_online_mode`` and
+# ``cli_handlers.install_references_main`` as module attributes, so the name has to stay
+# a real attribute for ``monkeypatch.setattr`` to replace; and the handlers reach these
+# names through in-module ``LOAD_GLOBAL``, which never consults a module ``__getattr__``
+# and would raise ``NameError`` in production. A wrapper satisfies both.
+#
+# The loader is its own function per name so a test can replace it without reaching into
+# another module's namespace.
+
+
+def _load_aggregate_cohort():
+    """Import the cohort aggregator, which pulls matplotlib, plotly and seaborn.
+
+    Returns:
+        Callable: :func:`vntyper.scripts.cohort_summary.aggregate_cohort`.
+    """
+    from vntyper.scripts.cohort_summary import aggregate_cohort as implementation
+
+    return implementation
+
+
+def _load_run_online_mode():
+    """Import the online-mode client, which pulls requests.
+
+    Returns:
+        Callable: :func:`vntyper.scripts.online_mode.run_online_mode`.
+    """
+    from vntyper.scripts.online_mode import run_online_mode as implementation
+
+    return implementation
+
+
+def _load_install_references_main():
+    """Import the reference installer.
+
+    Returns:
+        Callable: :func:`vntyper.scripts.install_references.main`.
+    """
+    from vntyper.scripts.install_references import main as implementation
+
+    return implementation
+
+
+def aggregate_cohort(*args: Any, **kwargs: Any) -> Any:
+    """Run the cohort aggregation, importing its plotting stack on first call.
+
+    Args:
+        *args: Forwarded unchanged.
+        **kwargs: Forwarded unchanged.
+
+    Returns:
+        Any: Whatever the implementation returns.
+    """
+    return _load_aggregate_cohort()(*args, **kwargs)
+
+
+def run_online_mode(*args: Any, **kwargs: Any) -> Any:
+    """Run the online mode, importing requests on first call.
+
+    Args:
+        *args: Forwarded unchanged.
+        **kwargs: Forwarded unchanged.
+
+    Returns:
+        Any: Whatever the implementation returns.
+    """
+    return _load_run_online_mode()(*args, **kwargs)
+
+
+def install_references_main(*args: Any, **kwargs: Any) -> Any:
+    """Install reference data, importing the installer on first call.
+
+    Args:
+        *args: Forwarded unchanged.
+        **kwargs: Forwarded unchanged.
+
+    Returns:
+        Any: Whatever the implementation returns.
+    """
+    return _load_install_references_main()(*args, **kwargs)
+
 
 #: The optional stages ``--extra-modules`` can name. ``pipeline.py`` tests membership
 #: against exactly these two strings (``"advntr" in extra_modules``,
