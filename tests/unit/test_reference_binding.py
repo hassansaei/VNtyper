@@ -431,7 +431,7 @@ def test_a_reference_view_replaced_while_being_proven_is_never_removed(tmp_path:
             "vntyper.scripts.reference_binding.consumer_reachable_identity",
             side_effect=replace_then_report_unreachable,
         ),
-        pytest.raises(RuntimeError, match="Refusing to remove a replaced CRAM reference view"),
+        pytest.raises(RuntimeError, match="Refusing to remove replaced CRAM reference view"),
     ):
         ReferenceBinding(str(reference), str(output), "sample", 1)
 

@@ -95,46 +95,6 @@ class AlignmentBinding:
         self._view_identity = (installed_stat.st_dev, installed_stat.st_ino, stable_ctime)
         self._view_kind = kind
 
-    def _remove_own_symlink(self, destination: Path, installed_stat: os.stat_result) -> None:
-        """Withdraw the exact unreachable symlink installed here, never a replacement.
-
-        Removing it before the fallback runs keeps a failed hardlink install from
-        stranding an unrecorded entry, and stops the fallback's atomic replace from
-        overwriting an entry this binding does not own.
-
-        Args:
-            destination: Pathname whose just-installed proc symlink failed its proof.
-            installed_stat: ``lstat`` of that entry taken immediately after installation.
-
-        Raises:
-            RuntimeError: If the entry is no longer the exact symlink installed here.
-        """
-        try:
-            current_stat = os.lstat(destination)
-        except FileNotFoundError:
-            return
-        except OSError as error:
-            message = f"Unable to inspect an unreachable alignment view {destination}: {error}"
-            logger.error(message)
-            raise RuntimeError(message) from error
-        unchanged = (current_stat.st_dev, current_stat.st_ino, current_stat.st_ctime_ns) == (
-            installed_stat.st_dev,
-            installed_stat.st_ino,
-            installed_stat.st_ctime_ns,
-        )
-        if not unchanged or not stat.S_ISLNK(current_stat.st_mode) or os.readlink(destination) != self.view_target:
-            message = f"Refusing to replace an alignment view that changed while it was being proven: {destination}"
-            logger.error(message)
-            raise RuntimeError(message)
-        try:
-            os.unlink(destination)
-        except OSError as error:
-            # Suppressing this would let the fallback run against a pathname still holding
-            # an unrecorded symlink, which a failed hardlink install would then strand.
-            message = f"Unable to withdraw an unreachable alignment view {destination}: {error}"
-            logger.error(message)
-            raise RuntimeError(message) from error
-
     def _install_proc_view(self, destination: Path) -> bool:
         try:
             target_stat = os.stat(self.view_target)
@@ -160,11 +120,14 @@ class AlignmentBinding:
         reachable, reason = consumer_reachable_identity(destination)
         if reachable != self._descriptor_identity:
             # An installed view an external tool cannot open through its own pathname is
-            # not a view (#238). Withdraw it before the fallback runs: that proves the
-            # entry is still the one installed here rather than letting the hardlink
-            # install's atomic replace overwrite somebody else's, and it leaves nothing
-            # unrecorded behind if the fallback itself fails.
-            self._remove_own_symlink(destination, installed_stat)
+            # not a view (#238). Withdraw it before the fallback runs, so the hardlink
+            # install's atomic replace cannot overwrite an entry this binding does not
+            # own and a failed fallback strands nothing. Record ownership first: if the
+            # withdrawal cannot complete, it must survive so close() retries the same
+            # identity-checked removal rather than leaving a dangling entry behind the
+            # released descriptor.
+            self._record_view(destination, installed_stat, "symlink")
+            self._remove_owned_view()
             logger.warning(
                 f"Run-local alignment view {destination} does not reach the bound alignment "
                 f"through its own pathname ({reason or 'identity mismatch'}); using a hardlink view instead."

@@ -750,13 +750,18 @@ def test_an_alignment_view_replaced_while_being_proven_is_not_handed_to_the_fall
                 "vntyper.scripts.alignment_binding.consumer_reachable_identity",
                 side_effect=replace_then_report_unreachable,
             ),
-            pytest.raises(RuntimeError, match="changed while it was being proven"),
+            pytest.raises(RuntimeError, match="owned alignment view was replaced"),
         ):
             binding.install_view(view)
 
         assert view.read_bytes() == b"not ours"
     finally:
-        binding.close()
+        # Teardown refuses too: a replaced entry is never removed, at any point in the
+        # binding's life, and the descriptor is preserved rather than released blindly.
+        with pytest.raises(RuntimeError, match="owned alignment view was replaced"):
+            binding.close()
+
+    assert view.read_bytes() == b"not ours"
 
 
 def test_a_failed_fallback_after_an_unreachable_view_leaves_nothing_behind(tmp_path: Path) -> None:
@@ -802,8 +807,14 @@ def test_a_withdrawal_that_cannot_unlink_fails_closed_instead_of_falling_back(tm
                 "vntyper.scripts.alignment_binding.os.unlink",
                 side_effect=OSError(errno.EACCES, "permission denied"),
             ),
-            pytest.raises(RuntimeError, match="Unable to withdraw an unreachable alignment view"),
+            pytest.raises(RuntimeError, match="Unable to remove owned alignment view"),
         ):
             binding.install_view(view)
+
+        # Ownership must survive the failed withdrawal so teardown retries it; otherwise
+        # the descriptor is released behind a dangling entry nobody owns.
+        assert binding.view_path == str(view)
     finally:
         binding.close()
+
+    assert not os.path.lexists(view)

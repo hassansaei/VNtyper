@@ -145,7 +145,13 @@ class _InodeView:
             raise RuntimeError(message) from error
         except BaseException:
             # A refusal to touch a replaced entry is not an OSError, and it must not
-            # leave this descriptor retained by a half-built view.
+            # leave this descriptor retained by a half-built view. Construction never
+            # returns here, so the parent binding cannot inherit ownership of a recorded
+            # entry: retry its exact-entry removal once before releasing the descriptor.
+            try:
+                self._remove_destination()
+            except (OSError, RuntimeError) as cleanup_error:
+                logger.error(f"Unable to withdraw a half-built CRAM reference view: {cleanup_error}")
             self._close_descriptor()
             raise
 
@@ -169,47 +175,13 @@ class _InodeView:
             return False
         return (metadata.st_dev, metadata.st_ino) == self._identity
 
-    def _record_destination(self, kind: str) -> None:
-        metadata = os.lstat(self._destination)
+    def _record_destination(self, kind: str, metadata: os.stat_result | None = None) -> None:
+        # Callers that just created the entry pass their own stat: re-reading it here
+        # would record whatever replaced it, defeating the replacement check on removal.
+        if metadata is None:
+            metadata = os.lstat(self._destination)
         self._destination_identity = (metadata.st_dev, metadata.st_ino)
         self._destination_kind = kind
-
-    def _remove_own_symlink(self, installed_stat: os.stat_result) -> None:
-        """Remove only the exact symlink installed here, never a replacement.
-
-        Args:
-            installed_stat: ``lstat`` of the entry taken immediately after installation.
-
-        Raises:
-            RuntimeError: If the entry is no longer the exact symlink installed here.
-        """
-        try:
-            current_stat = os.lstat(self._destination)
-        except FileNotFoundError:
-            return
-        except OSError as error:
-            message = f"Unable to inspect an unreachable CRAM reference view {self._destination}: {error}"
-            logger.error(message)
-            raise RuntimeError(message) from error
-        unchanged = (current_stat.st_dev, current_stat.st_ino, current_stat.st_ctime_ns) == (
-            installed_stat.st_dev,
-            installed_stat.st_ino,
-            installed_stat.st_ctime_ns,
-        )
-        if (
-            not unchanged
-            or not stat.S_ISLNK(current_stat.st_mode)
-            or os.readlink(self._destination) != self._proc_target
-        ):
-            message = f"Refusing to remove a replaced CRAM reference view: {self._destination}"
-            logger.error(message)
-            raise RuntimeError(message)
-        try:
-            os.unlink(self._destination)
-        except OSError as error:
-            message = f"Unable to withdraw an unreachable CRAM reference view {self._destination}: {error}"
-            logger.error(message)
-            raise RuntimeError(message) from error
 
     def _install_proc_link(self) -> bool:
         if not self._proc_target_is_exact():
@@ -226,9 +198,12 @@ class _InodeView:
                 f"Run-local reference view {self._destination} does not reach the bound reference "
                 f"through its own pathname ({reason or 'identity mismatch'}); using a hardlink view instead."
             )
-            self._remove_own_symlink(installed_stat)
+            # Record ownership before withdrawing, so a withdrawal that cannot complete
+            # leaves an owned entry the teardown path retries rather than a dangling one.
+            self._record_destination("symlink", installed_stat)
+            self._remove_destination()
             return False
-        self._record_destination("symlink")
+        self._record_destination("symlink", installed_stat)
         return True
 
     def _install_source_view(self, source: str | Path) -> None:
