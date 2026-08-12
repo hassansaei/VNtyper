@@ -971,7 +971,7 @@ def run_derivations(
     output_dir: Path,
     references: dict[str, Path],
     selected: set[str] | None = None,
-) -> None:
+) -> list[str]:
     """Run every in-scope derivation and verify it against its committed digest.
 
     Two kinds are configured. ``shark`` cuts a region out of an installed chromosome
@@ -992,6 +992,12 @@ def run_derivations(
         selected: The reference ids this run was asked for. None means every configured
             source is in scope, which is what a caller with no selection wants.
 
+    Returns:
+        list[str]: The outputs actually derived and verified, in config order. A caller
+        that reports on the run needs this: the skipped ones are the difference between it
+        and the configured list, and claiming a file is verified when its derivation was
+        skipped is the failure this return value exists to make impossible.
+
     Raises:
         RuntimeError: If a selected source reference, or a literal seed, is missing.
         ValueError: If a derivation declares no digest or an unknown kind, if a literal
@@ -999,6 +1005,7 @@ def run_derivations(
             match ``expected_sha256``.
     """
     samtools = install_config.get("samtools_path", "samtools")
+    derived: list[str] = []
 
     for spec in install_config.get("derivations", []):
         kind = spec.get("kind")
@@ -1060,6 +1067,10 @@ def run_derivations(
         _record_source_provenance(output_dir, destination, expected)
         index_fasta_with_samtools(destination, samtools)
         logger.info(f"Derived {output} from {provenance}")
+        # Appended only past verify_sha256, so membership means "verified", not "attempted".
+        derived.append(output)
+
+    return derived
 
 
 def resolve_source_location(ref_id: str, entry: dict[str, Any], release_spec: dict[str, Any] | None) -> tuple[str, str]:
@@ -1464,7 +1475,9 @@ def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
 
     A derivation whose source genome is absent is skipped with a message naming what to
     install, not failed -- a tree holding only hg19 legitimately derives only the hg19
-    region.
+    region. The closing summary then names what was *not* rebuilt rather than reporting a
+    blanket success: a skipped derivation may still have a file at its path from an earlier
+    install, and that file was not read, so nothing here can say it matches its digest.
 
     Args:
         install_config: The parsed install_references_config.json.
@@ -1484,8 +1497,29 @@ def derive_only(install_config: dict[str, Any], output_dir: Path) -> None:
     _preflight_literal_seeds(install_config, output_dir)
     # `selected` is the set of genomes actually present: a derivation whose source is absent
     # is out of scope for this tree, which is the skip-not-fail case run_derivations handles.
-    run_derivations(install_config, output_dir, references, set(references))
-    logger.info("Derived reference files are present and match their committed digests.")
+    derived = run_derivations(install_config, output_dir, references, set(references))
+
+    configured = [spec["output"] for spec in install_config.get("derivations", [])]
+    skipped = [output for output in configured if output not in derived]
+    if skipped:
+        # A skip writes nothing, so nothing unverified is produced -- but the file may still
+        # be sitting in the tree from an earlier install, and reporting a blanket success
+        # here would state that it matches its digest when it was never read. That is the
+        # same defect as inferring success from a file's existence.
+        logger.warning(
+            "Derived and verified %d of %d reference file(s) in %s. Not rebuilt, and "
+            "therefore not verified: %s -- the source genome is not installed. Anything "
+            "already at those paths was left exactly as it was found.",
+            len(derived),
+            len(configured),
+            output_dir,
+            ", ".join(skipped),
+        )
+        return
+    logger.info(
+        "Derived and verified all %d reference file(s) against their committed digests.",
+        len(derived),
+    )
 
 
 def _install_source_seeds(
@@ -1497,7 +1531,9 @@ def _install_source_seeds(
     """Fetch the common seed files, skipping anything a derivation produces.
 
     ``All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`` is derived, not downloaded, so
-    fetching it would be a wasted round trip. Its `raw_files` entry was removed with the dead URL it carried (#253) over a file that is about to be overwritten.
+    fetching it would be a wasted round trip over a file that is about to be overwritten.
+    Its ``raw_files`` entry was removed along with the dead URL it carried (#253); the filter
+    below stays, because it enforces the rule rather than the one entry.
 
     Args:
         install_config: The parsed install_references_config.json.

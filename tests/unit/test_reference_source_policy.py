@@ -1,9 +1,17 @@
 """Where reference data may come from, as a config-shape invariant (#253).
 
-**Every reference file's source of truth is `berntpopp/vntyper-data`, never the code
+**VNtyper-owned seed bytes are hosted in `berntpopp/vntyper-data`, not in the code
 repository.** That is the milestone-5 design: reference data comes from a published,
 checksummed bundle rather than from tracked files, and `reference/` keeps only
 `README.md`, `pseudonymize.py` and `pseudonymize_config.json`.
+
+Hosting is the only thing that moved. The trust anchor stayed here: this config holds every
+source URL *and* every expected digest, `resolve_source_location` refuses a release spec that
+contradicts it, and `bundle_release.cross_check_sources` runs the same comparison as a
+preflight. That is why a tampered release asset cannot install undetectably -- the digest it
+must match is committed in the code repository, not published beside the bytes. So these
+tests constrain *where bytes are fetched from*; the digests constrain *which bytes are
+accepted*.
 
 One entry outlived that change. `own_repository_references.raw_files` carried
 `All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa` pointed at
@@ -71,7 +79,7 @@ def test_no_reference_file_is_sourced_from_the_code_repository():
     """
     offenders = [url for url in _every_url(_config()) if CODE_REPOSITORY in url]
 
-    assert offenders == [], f"reference data must come from berntpopp/vntyper-data, not the code repo: {offenders}"
+    assert offenders == [], f"reference data must not be hosted in the code repository: {offenders}"
 
 
 def test_every_source_url_names_an_allowed_host():

@@ -113,10 +113,12 @@ incomplete.
 | **`muc1_region_hg38.fa`** | **derived** | `samtools faidx chr1.hg38.fa chr1:155184000-155194000` |
 | **`All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`** | **derived** | merged from `MUC1_motifs_Rev_com.fa` + `filter_config.json` |
 
-Every reference file's source of truth is
-[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data) or an upstream genome
-provider — never this repository. The derivation rules, the exact regions and the expected
-checksum of every derived output live in `vntyper/scripts/install_references_config.json`.
+Reference **bytes** are hosted outside this repository — VNtyper's own seeds in
+[`berntpopp/vntyper-data`](https://github.com/berntpopp/vntyper-data), the genomes at UCSC,
+NCBI and Ensembl. Verification is not delegated with them: every source URL, every expected
+checksum, and the derivation rules and exact regions live in
+`vntyper/scripts/install_references_config.json`, here. Hosting is what moved; the digest that
+decides whether a fetched or derived file is accepted did not.
 
 **The two ordinary paths already handle this.** The published bundle ships the derived files
 pre-built, and `--from-source` builds them at the end of its run. You do not normally think
@@ -132,15 +134,16 @@ vntyper install-references -d /path/to/references --derive-only
 ```
 
 ```text
-Deriving reference files from 6 installed genome(s): GRCh37, GRCh38, hg19, hg19_ensembl, hg38, hg38_ensembl
-  ✓ verified muc1_region_hg19.fa
-  ✓ verified muc1_region_hg38.fa
-  ✓ verified All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa
-Derived reference files are present and match their committed digests.
+Deriving reference files from 6 installed genome(s) in /path/to/references: GRCh37, GRCh38, hg19, hg19_ensembl, hg38, hg38_ensembl
+Derived muc1_region_hg19.fa from chr1.hg19.fa at chr1:155158000-155163000
+Derived muc1_region_hg38.fa from chr1.hg38.fa at chr1:155184000-155194000
+Derived All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa from MUC1_motifs_Rev_com.fa and filter_config.json
+Derived and verified all 3 reference file(s) against their committed digests.
 ```
 
 Each output is checked against its committed checksum, exactly as on the other two paths — so
-this is the same verification on a cheaper path, not a way to produce unverified files.
+this is the same verification on a cheaper path, not a way to produce unverified files. A
+derived file that does not match is deleted rather than left in the tree, and the run fails.
 
 Use it when a tree has its genomes and seeds but is missing a derived file. Without it the
 only remedy was a full `--from-source` run, which re-downloads and BWA-indexes six chromosome
@@ -149,8 +152,20 @@ retyping the region from the config. **Do not do that.** A hand-cut region is un
 a wrong one produces a reference that is subtly incorrect rather than obviously broken.
 
 A derivation whose source genome is absent is **skipped**, not failed — a tree holding only
-hg19 legitimately derives only the hg19 region, and the message names what to install to get
-the rest.
+hg19 legitimately derives only the hg19 region. The closing line then says so, instead of
+reporting a blanket success:
+
+```text
+Deriving reference files from 1 installed genome(s) in /path/to/references: hg19
+Skipping muc1_region_hg38.fa: its source 'hg38' is not in this run's reference selection. Install it later with --references hg38.
+Derived muc1_region_hg19.fa from chr1.hg19.fa at chr1:155158000-155163000
+Derived All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa from MUC1_motifs_Rev_com.fa and filter_config.json
+Derived and verified 2 of 3 reference file(s) in /path/to/references. Not rebuilt, and therefore not verified: muc1_region_hg38.fa -- the source genome is not installed. Anything already at those paths was left exactly as it was found.
+```
+
+That last sentence is the point of the distinction: a skipped derivation writes nothing, but a
+file may still be at that path from an earlier install, and `--derive-only` did not read it.
+It is not a claim that the file is correct.
 
 `--derive-only` cannot be combined with `--from-source`; the latter already derives.
 
