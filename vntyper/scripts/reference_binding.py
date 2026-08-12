@@ -123,6 +123,8 @@ class _InodeView:
         self._destination_identity: tuple[int, int] | None = None
         self._destination_kind: str | None = None
         self._proc_target: str | None = None
+        self._source = source
+        self._generated = generated
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
         if generated:
             flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -134,26 +136,32 @@ class _InodeView:
                 raise OSError("bound reference entry is not a regular file")
             self._identity = (metadata.st_dev, metadata.st_ino)
             self._proc_target = f"/proc/{os.getpid()}/fd/{descriptor}"
-            if generated:
-                self._retain_generated_entry()
-            else:
-                self._install_source_view(source)
         except OSError as error:
             self._close_descriptor()
             message = f"Unable to retain CRAM reference input {source}: {error}"
             logger.error(message)
             raise RuntimeError(message) from error
-        except BaseException:
-            # A refusal to touch a replaced entry is not an OSError, and it must not
-            # leave this descriptor retained by a half-built view. Construction never
-            # returns here, so the parent binding cannot inherit ownership of a recorded
-            # entry: retry its exact-entry removal once before releasing the descriptor.
-            try:
-                self._remove_destination()
-            except (OSError, RuntimeError) as cleanup_error:
-                logger.error(f"Unable to withdraw a half-built CRAM reference view: {cleanup_error}")
-            self._close_descriptor()
-            raise
+
+    def install(self) -> None:
+        """Install this view's owned directory entry.
+
+        Construction only opens the inode, so an owner exists before any entry is
+        created. A failure here therefore leaves a view whose ``close()`` can still
+        retry the exact-entry removal and release the descriptor, instead of stranding
+        both in a constructor that never returned.
+
+        Raises:
+            RuntimeError: If the owned entry cannot be installed.
+        """
+        try:
+            if self._generated:
+                self._retain_generated_entry()
+            else:
+                self._install_source_view(self._source)
+        except OSError as error:
+            message = f"Unable to retain CRAM reference input {self._source}: {error}"
+            logger.error(message)
+            raise RuntimeError(message) from error
 
     @property
     def is_open(self) -> bool:
@@ -225,7 +233,9 @@ class _InodeView:
             with suppress(OSError):
                 os.unlink(temporary)
             raise
-        self._record_destination("regular")
+        # `metadata` is the verified hardlink's stat, and the destination shares its
+        # inode. Re-reading the pathname here would record whatever replaced it.
+        self._record_destination("regular", metadata)
 
     def _retain_generated_entry(self) -> None:
         # The entry already *is* the retained inode, so it is only recorded, never
@@ -236,7 +246,9 @@ class _InodeView:
         metadata = os.lstat(self._destination)
         if not stat.S_ISREG(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != self._identity:
             raise OSError("generated reference sidecar changed before it could be retained")
-        self._record_destination("regular")
+        # Record the inode just validated. A second read could see a replacement land
+        # between the two, and cleanup would then unlink an entry this view never owned.
+        self._record_destination("regular", metadata)
 
     def _remove_destination(self) -> None:
         if self._destination_identity is None or self._destination_kind is None:
@@ -312,12 +324,16 @@ class ReferenceBinding:
             directory_stat = os.stat(directory, follow_symlinks=False)
             self._directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
             self.consumer_path = str(directory / f"reference{suffixes}")
+            # Own each view before it installs anything, so a failed install still has a
+            # reachable owner that can retry its exact-entry removal.
             self._reference = _InodeView(input_path, self.consumer_path)
+            self._reference.install()
             for suffix in REFERENCE_SIDECAR_SUFFIXES:
                 source = Path(f"{input_path}{suffix}")
                 if regular_file_unavailable_reason(source, description=f"reference FASTA {suffix} index") is None:
                     destination = Path(f"{self.consumer_path}{suffix}")
                     self._sidecars[suffix] = _InodeView(source, destination)
+                    self._sidecars[suffix].install()
         except BaseException as primary_error:
             try:
                 self._close_after_failed_construction()
@@ -339,6 +355,7 @@ class ReferenceBinding:
             destination = Path(f"{self.consumer_path}{suffix}")
             if os.path.lexists(destination):
                 self._sidecars[suffix] = _InodeView(destination, destination, generated=True)
+                self._sidecars[suffix].install()
 
     def _remove_directory(self) -> None:
         if self._directory is None or self._directory_identity is None:

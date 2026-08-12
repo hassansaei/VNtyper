@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import shlex
@@ -436,3 +437,69 @@ def test_a_reference_view_replaced_while_being_proven_is_never_removed(tmp_path:
         ReferenceBinding(str(reference), str(output), "sample", 1)
 
     assert (output / ".sample_reference_1" / "reference.fa").read_bytes() == b"not ours"
+
+
+def test_a_retained_sidecar_records_the_inode_it_validated_not_a_later_read(tmp_path: Path) -> None:
+    """A replacement landing right after validation must never be adopted as owned.
+
+    Recording used to re-read the pathname, so an entry swapped in between the two reads
+    became the recorded owner and teardown would then unlink it.
+    """
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    intruder = tmp_path / "intruder"
+    intruder.write_bytes(b"not ours")
+    binding = ReferenceBinding(str(reference), str(output), "sample", 1)
+    generated = Path(f"{binding.consumer_path}.fai")
+    generated.write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
+    real_lstat = os.lstat
+    reads = {"count": 0}
+
+    def replace_right_after_validation(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        result = real_lstat(path, *args, **kwargs)
+        if str(path) == str(generated):
+            reads["count"] += 1
+            if reads["count"] == 2:
+                intruder.replace(generated)
+        return result
+
+    with patch("vntyper.scripts.reference_binding.os.lstat", side_effect=replace_right_after_validation):
+        binding.bind_generated_sidecars()
+
+    with pytest.raises(RuntimeError, match="Refusing to remove replaced CRAM reference view"):
+        binding.close()
+
+    assert generated.read_bytes() == b"not ours"
+
+
+def test_a_failed_install_still_has_an_owner_that_retries_its_removal(tmp_path: Path) -> None:
+    """Construction opens the inode before installing, so a failed install is still owned.
+
+    When the install itself raised from inside ``__init__`` there was no reachable owner
+    left, so the entry stayed and its private directory could not be removed.
+    """
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    real_unlink = os.unlink
+    failures = {"count": 0}
+
+    def unlink_failing_once(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(path) == str(output / ".sample_reference_1" / "reference.fa") and failures["count"] == 0:
+            failures["count"] += 1
+            raise OSError(errno.EIO, "transient I/O error")
+        return real_unlink(path, *args, **kwargs)
+
+    with (
+        patch(
+            "vntyper.scripts.reference_binding.consumer_reachable_identity",
+            return_value=(None, "Too many levels of symbolic links (errno 40)"),
+        ),
+        patch("vntyper.scripts.reference_binding.os.unlink", side_effect=unlink_failing_once),
+        pytest.raises(RuntimeError),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    assert failures["count"] == 1
+    assert not os.path.lexists(output / ".sample_reference_1")
