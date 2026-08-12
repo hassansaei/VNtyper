@@ -216,9 +216,9 @@ def test_the_bam_normal_path_extracts_merges_and_converts(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert commands == [
-        f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"samtools view -P -b -u -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
         f"-o {tmp_path}/output_sliced.bam",
-        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
@@ -233,9 +233,9 @@ def test_the_bam_normal_path_indexes_the_merge_for_advntr(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=True)
 
     assert commands == [
-        f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"samtools view -P -b -u -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
         f"-o {tmp_path}/output_sliced.bam",
-        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
         f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
         f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
         f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
@@ -272,7 +272,7 @@ def test_indexed_bam_recovery_uses_the_htslib_literal_star_command(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     assert [command for command in commands if "-f 4" in command] == [
-        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -u -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam"
     ]
 
 
@@ -377,7 +377,7 @@ def test_indexed_bam_recovery_uses_the_plan_view_and_exact_index_without_a_refer
 
     (unmapped_command,) = [command for command in recorder.commands if "-f 4" in command]
     assert unmapped_command == (
-        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
+        f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' -o {tmp_path}/output_unmapped.bam"
     )
     assert " -T " not in unmapped_command
 
@@ -480,7 +480,7 @@ def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
     """
     assert _cram_unmapped_command(tmp_path) == (
         f"set -o pipefail; /envs/vntyper/bin/samtools view -@ 4 -h /data/sample.cram | "
-        f"/envs/vntyper/bin/samtools view -b -f 4 -@ 4 - -o {tmp_path}/output_unmapped.bam"
+        f"/envs/vntyper/bin/samtools view -b -f 4 -u -@ 4 - -o {tmp_path}/output_unmapped.bam"
     )
 
 
@@ -1087,6 +1087,42 @@ def test_fast_mode_still_indexes_the_slice_for_advntr(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, fast_mode=True, needs_advntr=True)
 
     assert any(" && samtools index " in command for command in commands)
+
+
+def test_the_fast_mode_slice_is_compressed_because_it_survives_the_run(tmp_path):
+    """In fast mode the slice IS <name>_sliced.bam: archived, not merged away.
+
+    Compressing it is the same decision as leaving the merge output compressed, and
+    getting it wrong here would reintroduce that regression by a different route.
+    """
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=True)
+
+    slice_command = next(command for command in commands if " view " in command)
+    assert " -u " not in slice_command
+
+
+def test_the_non_fast_slice_is_uncompressed_because_the_merge_replaces_it(tmp_path):
+    """It is read by the merge milliseconds later and then overwritten by it."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    slice_command = next(command for command in commands if " -F 4 " in command)
+    assert " -u " in slice_command
+
+
+def test_the_unmapped_extraction_is_uncompressed(tmp_path):
+    """It is merged and then deleted; measured 0.869s -> 0.081s on a 963,549-read BAM."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    unmapped_command = next(command for command in commands if " -f 4 " in command)
+    assert " -u " in unmapped_command
+
+
+def test_the_merge_output_is_never_uncompressed(tmp_path):
+    """It survives as <name>_sliced.bam and is shipped to users in the archive."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    merge_command = next(command for command in commands if " merge " in command)
+    assert "-u" not in shlex.split(merge_command)
 
 
 def test_the_conversion_stage_takes_a_boolean_not_the_module_list(tmp_path):

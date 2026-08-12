@@ -54,11 +54,21 @@ def build_plan_slice_command(
         threads=threads,
         index_output=fast_mode and needs_advntr,
         exclude_unmapped=not fast_mode,
+        # Not unconditionally True. In fast mode there is no unmapped recovery and no
+        # merge, so this slice is never replaced: it *survives* as `<name>_sliced.bam`,
+        # is an enumerated artifact and is shipped to users inside the archive. Writing
+        # that at BGZF level 0 would roughly triple it.
+        uncompressed=not fast_mode,
     )
 
 
 def build_plan_unmapped_command(
-    *, samtools_path: str, plan: AlignmentPlan, output_bam: str | Path, threads: int
+    *,
+    samtools_path: str,
+    plan: AlignmentPlan,
+    output_bam: str | Path,
+    threads: int,
+    uncompressed: bool = False,
 ) -> str:
     """Build the plan-selected indexed or streaming unmapped-read command.
 
@@ -67,6 +77,8 @@ def build_plan_unmapped_command(
         plan: Proven alignment, reference, index, and scan decision.
         output_bam: Unmapped-read BAM destination.
         threads: Samtools thread count.
+        uncompressed: Write the unmapped BAM at BGZF level 0. Forwarded to whichever
+            scan the plan proved, so the decision cannot depend on that choice.
 
     Returns:
         The complete samtools view command.
@@ -79,6 +91,7 @@ def build_plan_unmapped_command(
             threads=threads,
             reference_path=plan.reference_path,
             index_path=plan.stable_index_path,
+            uncompressed=uncompressed,
         )
     return build_cram_unmapped_filter_command(
         samtools_path=samtools_path,
@@ -86,4 +99,5 @@ def build_plan_unmapped_command(
         unmapped_bam=output_bam,
         threads=threads,
         reference_path=plan.reference_path,
+        uncompressed=uncompressed,
     )

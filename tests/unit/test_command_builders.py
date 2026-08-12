@@ -41,6 +41,7 @@ from vntyper.scripts.command_builders import (
     build_bam_to_fastq_command,
     build_bwa_align_sort_command,
     build_cram_unmapped_filter_command,
+    build_cram_unmapped_indexed_command,
     build_fastp_command,
     build_samtools_depth_command,
     build_samtools_index_command,
@@ -1034,3 +1035,106 @@ def test_the_tool_invocation_is_not_quoted_because_it_may_be_a_command_prefix():
 
     assert command == "mamba run -n vntyper samtools index /out/output_sliced.bam"
     assert _tokens(command)[:5] == ["mamba", "run", "-n", "vntyper", "samtools"]
+
+
+# ---------------------------------------------------------------------------
+# Uncompressed intermediates (#262)
+# ---------------------------------------------------------------------------
+#
+# `-u` is BGZF level 0: still a valid, indexable BAM, just not deflated. It is worth
+# taking only where the file is re-read within milliseconds and then deleted or
+# replaced, which is true of the region slice in non-fast mode and of the unmapped
+# extraction, and false of everything else.
+
+
+def test_the_slice_command_can_request_uncompressed_output():
+    """The non-fast slice is consumed by the merge and then replaced by it."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/data/sample.bam",
+        output_bam="/out/output_sliced.bam",
+        region="chr1:1-2",
+        index_output=False,
+        uncompressed=True,
+    )
+
+    assert command == "samtools view -P -b -u /data/sample.bam chr1:1-2 -o /out/output_sliced.bam"
+
+
+def test_the_slice_command_is_compressed_by_default():
+    """A default that silently wrote level 0 would reach files that survive the run."""
+    command = build_samtools_slice_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/data/sample.bam",
+        output_bam="/out/output_sliced.bam",
+        region="chr1:1-2",
+        index_output=False,
+    )
+
+    assert "-u" not in _tokens(command)
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [build_cram_unmapped_filter_command, build_cram_unmapped_indexed_command],
+)
+def test_both_unmapped_builders_can_request_uncompressed_output(builder):
+    """The unmapped BAM is merged milliseconds later and then deleted.
+
+    Both scan modes write the same throwaway file, so a parameter on only one of them
+    would make the saving depend on which scan preflight happened to prove.
+    """
+    command = builder(
+        samtools_path=SAMTOOLS,
+        in_bam="/data/sample.bam",
+        unmapped_bam="/out/output_unmapped.bam",
+        threads=4,
+        uncompressed=True,
+    )
+
+    assert "-u" in _tokens(command)
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [build_cram_unmapped_filter_command, build_cram_unmapped_indexed_command],
+)
+def test_both_unmapped_builders_are_compressed_by_default(builder):
+    command = builder(
+        samtools_path=SAMTOOLS,
+        in_bam="/data/sample.bam",
+        unmapped_bam="/out/output_unmapped.bam",
+        threads=4,
+    )
+
+    assert "-u" not in _tokens(command)
+
+
+def test_the_merged_bam_can_never_be_written_uncompressed():
+    """It is renamed to <name>_sliced.bam, survives the run, and is shipped to users.
+
+    An earlier draft of this work applied `-u` to the merge, worth 0.821s -> 0.151s and
+    the largest single saving available. It is forfeited deliberately: the merge is
+    renamed to `<name>_sliced.bam`; the intermediate cleanup removes only
+    `<name>_unmapped.bam`, and only when `delete_intermediates` is true, whose CLI
+    default is False; `<name>_sliced.bam` is an enumerated artifact in
+    artifact_names.py; and both the CLI archive and the web service archive include the
+    whole output directory recursively. Writing it uncompressed would ship a roughly 3x
+    larger BAM -- gigabytes on a WGS input -- into user-downloadable archives.
+
+    The builder therefore grows no `uncompressed` parameter at all, so no caller can
+    reintroduce this by passing True.
+    """
+    import inspect
+
+    assert "uncompressed" not in inspect.signature(build_samtools_merge_command).parameters
+
+    command = build_samtools_merge_command(
+        samtools_path=SAMTOOLS,
+        merged_bam="/out/output_sliced_unmapped.bam",
+        sliced_bam="/out/output_sliced.bam",
+        unmapped_bam="/out/output_unmapped.bam",
+        threads=4,
+    )
+
+    assert "-u" not in _tokens(command)

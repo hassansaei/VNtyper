@@ -173,6 +173,7 @@ def build_samtools_slice_command(
     threads: int = 1,
     index_output: bool = True,
     exclude_unmapped: bool = False,
+    uncompressed: bool = False,
 ) -> str:
     """
     Build the region-slicing command, followed by indexing the slice.
@@ -192,6 +193,11 @@ def build_samtools_slice_command(
         index_output (bool): Whether to append indexing of the resulting slice.
         exclude_unmapped (bool): Exclude flag-4 reads recovered separately for a
             subsequent disjoint merge. Fast-mode slices leave this disabled.
+        uncompressed (bool): Emit ``-u``, BGZF level 0. Still a valid, indexable
+            BAM, just not deflated - worth taking only where the file is re-read
+            within milliseconds and then replaced or deleted. Defaults to False,
+            because a slice that **survives** the run is archived and shipped to
+            users, and shipping it at level 0 would roughly triple its size.
 
     Returns:
         str: ``samtools view ...``, optionally followed by ``&& samtools index``.
@@ -211,10 +217,11 @@ def build_samtools_slice_command(
         raise ValueError(message)
 
     exclude_flag = "-F 4 " if exclude_unmapped else ""
+    level_flag = "-u " if uncompressed else ""
     indexed_input = customized_index_input(in_bam, index_path)
     command = (
-        f"{samtools_path} view -P -b {exclude_flag}{_thread_flag(threads)}{_reference_flag(reference_path)}"
-        f"{indexed_input} {target} -o {quote_path(output_bam)}"
+        f"{samtools_path} view -P -b {level_flag}{exclude_flag}{_thread_flag(threads)}"
+        f"{_reference_flag(reference_path)}{indexed_input} {target} -o {quote_path(output_bam)}"
     )
     if not index_output:
         return command
@@ -253,6 +260,7 @@ def build_cram_unmapped_filter_command(
     unmapped_bam: str | Path,
     threads: int,
     reference_path: str | Path | None = None,
+    uncompressed: bool = False,
 ) -> str:
     """
     Build the whole-file unmapped-read extraction command.
@@ -270,6 +278,9 @@ def build_cram_unmapped_filter_command(
         unmapped_bam (str | Path): Where the unmapped reads are written.
         threads (int): Thread count for both samtools invocations.
         reference_path (str | Path | None): Reference FASTA for CRAM decoding.
+        uncompressed (bool): Emit ``-u``, BGZF level 0. The unmapped BAM is merged
+            milliseconds later and then deleted, so deflating it is pure cost -
+            measured 0.869 s to 0.081 s on a 963,549-read BAM.
 
     Returns:
         str: The complete command, prefixed with ``set -o pipefail``.
@@ -299,10 +310,11 @@ def build_cram_unmapped_filter_command(
         the writer's exit status is now part of the pipeline's. The bytes reaching
         the writer are unchanged - SAM text on stdin either way.
     """
+    level_flag = "-u " if uncompressed else ""
     return (
         f"{PIPEFAIL_PREFIX}"
         f"{samtools_path} view {_reference_flag(reference_path)}{_thread_flag(threads)}-h {quote_path(in_bam)} | "
-        f"{samtools_path} view -b -f 4 {_thread_flag(threads)}- -o {quote_path(unmapped_bam)}"
+        f"{samtools_path} view -b -f 4 {level_flag}{_thread_flag(threads)}- -o {quote_path(unmapped_bam)}"
     )
 
 
@@ -314,6 +326,7 @@ def build_cram_unmapped_indexed_command(
     threads: int,
     reference_path: str | Path | None = None,
     index_path: str | Path | None = None,
+    uncompressed: bool = False,
 ) -> str:
     """Build the indexed alignment command for unplaced unmapped reads.
 
@@ -324,14 +337,18 @@ def build_cram_unmapped_indexed_command(
         threads: Thread count for samtools.
         reference_path: Reference FASTA for CRAM decoding.
         index_path: Exact custom index passed with ``-X``.
+        uncompressed: Emit ``-u``, BGZF level 0. This writes the same throwaway file
+            as the stream builder, so it takes the same decision - otherwise the
+            saving would depend on which scan preflight happened to prove.
 
     Returns:
         A single ``samtools view`` command that requests literal ``'*'`` reads
         whose read-unmapped bit is set, including unpaired reads.
     """
+    level_flag = "-u " if uncompressed else ""
     indexed_input = customized_index_input(in_bam, index_path)
     return (
-        f"{samtools_path} view -b -f 4 {_thread_flag(threads)}{_reference_flag(reference_path)}"
+        f"{samtools_path} view -b -f 4 {level_flag}{_thread_flag(threads)}{_reference_flag(reference_path)}"
         f"{indexed_input} {quote_path('*')} -o {quote_path(unmapped_bam)}"
     )
 

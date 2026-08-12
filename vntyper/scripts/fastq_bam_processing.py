@@ -174,6 +174,9 @@ def process_bam_to_fastq(
             plan=plan,
             output_bam=unmapped_bam,
             threads=threads,
+            # Always: this file is consumed by the merge on the next line and then
+            # deleted, so it is the one intermediate that is unambiguously throwaway.
+            uncompressed=True,
         )
         log_file_filter = Path(output) / f"{output_name}_filter.log"
         logger.info(f"Executing filtering with command: {command_filter}")

@@ -135,7 +135,7 @@ def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path:
     assert plan.view_path in commands[0]
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
     assert unmapped_command == (
-        f"samtools view -b -f 4 -@ 4 -X {plan.view_path} {plan.index_path} '*' "
+        f"samtools view -b -f 4 -u -@ 4 -X {plan.view_path} {plan.index_path} '*' "
         f"-o {tmp_path / 'run' / 'output_unmapped.bam'}"
     )
 
