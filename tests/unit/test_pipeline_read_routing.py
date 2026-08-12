@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import gzip
 import logging
+import threading
 import zlib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -263,3 +265,155 @@ def test_a_stranded_path_from_the_router_is_never_ignored(tmp_path: Path, monkey
     assert "0 records" in message
     assert "cannot be consumed without dropping reads" in message
     assert "mate outputs are inconsistent" not in message
+
+
+# ---------------------------------------------------------------------------
+# Binary counting on a thread pool (#262)
+# ---------------------------------------------------------------------------
+
+
+def test_counting_never_decodes_the_file_into_text(tmp_path: Path, monkeypatch) -> None:
+    """The red test for #262: decoding 3.85M lines into str objects cost 1044ms.
+
+    Classifying the read layout and logging one line needs the number of newlines and
+    nothing else. This fails against the text iterator, which opens in "rt".
+    """
+    fastq = tmp_path / "reads.fastq.gz"
+    _write_fastq(fastq, 1)
+    real_open = gzip.open
+
+    def binary_only(path, mode="rb", *args, **kwargs):
+        assert "t" not in mode, f"count_fastq_records must open in binary mode, got {mode!r}"
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline_read_routing.gzip, "open", binary_only)
+
+    assert count_fastq_records(fastq, lines_per_record=4) == 1
+
+
+def test_a_plain_fastq_is_also_opened_in_binary(tmp_path: Path, monkeypatch) -> None:
+    """The uncompressed branch must not keep decoding text either."""
+    fastq = tmp_path / "reads.fastq"
+    _write_fastq(fastq, 2)
+    real_open = Path.open
+
+    def binary_only(self, mode="r", *args, **kwargs):
+        assert "b" in mode, f"count_fastq_records must open in binary mode, got {mode!r}"
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", binary_only)
+
+    assert count_fastq_records(fastq, lines_per_record=4) == 2
+
+
+@pytest.mark.parametrize("records", [1, 2, 17])
+def test_binary_counting_returns_the_same_integers_as_text_counting(tmp_path: Path, records: int) -> None:
+    """The contract is the integer, and it must not move for any input the text path took."""
+    plain = tmp_path / f"plain-{records}.fastq"
+    gzipped = tmp_path / f"gz-{records}.fastq.gz"
+    _write_fastq(plain, records)
+    _write_fastq(gzipped, records)
+
+    assert count_fastq_records(plain, lines_per_record=4) == records
+    assert count_fastq_records(gzipped, lines_per_record=4) == records
+
+
+def test_a_final_line_without_a_terminator_is_still_counted(tmp_path: Path) -> None:
+    """Counting b"\\n" would lose it, and the text iterator did not.
+
+    A FASTQ whose last quality line has no trailing newline is a complete record, and
+    dropping that line would make the line count indivisible and fail a valid file.
+    """
+    ragged = tmp_path / "ragged.fastq"
+    ragged.write_text("@r1\nACGT\n+\n!!!!", encoding="utf-8")
+
+    assert count_fastq_records(ragged, lines_per_record=4) == 1
+
+
+def test_a_non_utf8_fastq_is_still_rejected(tmp_path: Path) -> None:
+    """The text reader raised UnicodeError, which this function turned into ValueError.
+
+    Binary counting cannot get that for free, so validation is restored explicitly
+    rather than silently dropped -- this is a deliberate contract that is kept, not a
+    behaviour that survived by accident.
+    """
+    bad = tmp_path / "latin1.fastq"
+    bad.write_bytes(b"@r1\n\xff\xfe\n+\n!!\n")
+
+    with pytest.raises(ValueError, match=str(bad)):
+        count_fastq_records(bad, lines_per_record=4)
+
+
+def test_a_multibyte_character_spanning_a_chunk_boundary_is_accepted(tmp_path: Path, monkeypatch) -> None:
+    """Strict-decoding each chunk independently rejects valid files.
+
+    A two-byte character straddling the read boundary raises "unexpected end of data"
+    when each chunk is decoded on its own. An incremental decoder carries the partial
+    character across. Every FASTQ fixture in this repository is ASCII, so without this
+    test the regression is invisible.
+    """
+    fastq = tmp_path / "multibyte.fastq"
+    # "é" is 0xC3 0xA9; put the read boundary between its two bytes.
+    fastq.write_bytes("@ré\nACGT\n+\n!!!!\n".encode())
+    monkeypatch.setattr(pipeline_read_routing, "_COUNT_CHUNK_BYTES", 4)
+
+    assert count_fastq_records(fastq, lines_per_record=4) == 1
+
+
+def test_a_truncated_multibyte_character_at_end_of_file_is_rejected(tmp_path: Path) -> None:
+    """final=True is what catches a file whose last character is half-written."""
+    bad = tmp_path / "truncated-char.fastq"
+    bad.write_bytes(b"@r1\nACGT\n+\n!!!\xc3")
+
+    with pytest.raises(ValueError, match=str(bad)):
+        count_fastq_records(bad, lines_per_record=4)
+
+
+def test_the_four_counts_run_concurrently(tmp_path: Path) -> None:
+    """Serial counting spent 1044ms decoding; zlib releases the GIL, so they overlap.
+
+    Asserting on thread identity rather than on elapsed time: a timing assertion is
+    flaky on a loaded machine, while "these ran on more than one thread" is exactly the
+    property that makes the overlap possible.
+    """
+    produced = _paths(tmp_path, (2, 2, 0, 0))
+    threads: set[int] = set()
+    real_count = pipeline_read_routing.count_fastq_records
+
+    def record_thread(path, *, lines_per_record):
+        threads.add(threading.get_ident())
+        return real_count(path, lines_per_record=lines_per_record)
+
+    with mock.patch.object(pipeline_read_routing, "count_fastq_records", record_thread):
+        assert route_converted_fastqs(produced, config={}) == (produced[0], produced[1])
+
+    assert len(threads) > 1
+    assert threading.get_ident() not in threads
+
+
+def test_the_first_corrupt_file_reported_is_r1_not_whichever_thread_finished(tmp_path: Path) -> None:
+    """Parallel counting must not make the error message depend on scheduling.
+
+    R1 and R2 are both invalid. The text path resolved them in R1/R2/other/single order
+    through a dict comprehension, so R1 was always the reported one; resolving futures
+    as they complete would make the message a race.
+    """
+    produced = _paths(tmp_path, (1, 1, 0, 0))
+    for index in (0, 1):
+        Path(produced[index]).write_bytes(b"not gzip at all")
+
+    with pytest.raises(ValueError, match="r1.fastq.gz"):
+        route_converted_fastqs(produced, config={})
+
+
+def test_a_counting_failure_still_raises_through_the_thread_pool(tmp_path: Path, monkeypatch) -> None:
+    """future.result() re-raises, so the per-file ValueError contract is preserved."""
+    produced = _paths(tmp_path, (2, 2, 0, 0))
+
+    def explode(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(pipeline_read_routing, "count_fastq_records", explode)
+
+    with pytest.raises(ValueError, match="boom"):
+        route_converted_fastqs(produced, config={})
