@@ -243,7 +243,17 @@ def run_pipeline(
         dirs = create_output_directories(output_dir)
         logger.info(f"Created output directories in: {output_dir}")
 
-        tool_versions = get_tool_versions(config)
+        # Probing every configured tool shelled out to adVNTR (315 ms) and SHARK (36 ms)
+        # on every Kestrel-only run for a value that is only logged. The set is derived
+        # from the input type as well as the modules: fastp and BWA belong to the FASTQ
+        # path and are never invoked for BAM or CRAM, which `extra_modules` cannot say.
+        # A requested module is named only when the config declares a tool of that name,
+        # so this cannot assert the existence of an entry it has not read (trap 2).
+        tools_in_use = {"samtools", "kestrel", "java_path"}
+        if input_type == "FASTQ":
+            tools_in_use |= {"fastp", "bwa"}
+        tools_in_use |= {module for module in extra_modules if module in config.get("tools", {})}
+        tool_versions = get_tool_versions(config, tools_in_use=tools_in_use)
         logger.info(f"VNtyper pipeline {VERSION} started with tool versions: {tool_versions}")
 
         # What the run actually used, not what BWA was configured with (MAJOR 5,
