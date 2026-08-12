@@ -462,3 +462,45 @@ def test_a_bare_module_marker_is_still_answered_without_importing_the_module() -
 
     assert launcher.marker_is_present(module) is True
     assert module not in sys.modules, "a bare module marker must not be imported"
+
+
+def test_launch_aborts_when_the_marker_itself_cannot_be_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`resolve` recorded marker-resolution failures and nothing consumed the record.
+
+    A marker whose module raises on import reported `marker_state=absent`, which is
+    indistinguishable from a genuinely absent attribute. On the side that expects the
+    marker absent -- the baseline -- the run then proceeded with its witness void while the
+    launch line asserted it held. The attribute form makes this newly reachable: a bare
+    module's `find_spec` cannot fail this way for a module that exists.
+    """
+    resolution = _resolution(tmp_path, False)
+    resolution["error"] = "import_module(boom): RuntimeError: deps missing"
+    monkeypatch.setattr(launcher, "resolve", lambda *_args, **_kwargs: resolution)
+
+    code = launcher.launch(
+        tree=tmp_path, side="before", marker="boom:anything", expect_marker=False, commands_log=None, argv=[]
+    )
+
+    assert code == launcher.EXIT_ABORT
+    assert "marker-unresolvable" in capsys.readouterr().out
+
+
+def test_launch_still_runs_when_the_marker_resolved_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The abort above must key on the error, not on the marker being absent."""
+    monkeypatch.setattr(launcher, "resolve", lambda *_args, **_kwargs: _resolution(tmp_path, False))
+    monkeypatch.setattr(launcher, "_run_cli", lambda _argv: 0, raising=False)
+
+    code = launcher.launch(
+        tree=tmp_path, side="before", marker="mod:attr", expect_marker=False, commands_log=None, argv=["--help"]
+    )
+
+    assert code != launcher.EXIT_ABORT
+
+
+def test_parse_marker_refuses_more_than_one_colon() -> None:
+    """`partition` would give ('a.b', 'c:d'), and `hasattr(mod, 'c:d')` is always False --
+    so a mistyped marker reads as absent rather than as the error it is."""
+    with pytest.raises(ValueError, match="marker"):
+        launcher.parse_marker("a.b:c:d")

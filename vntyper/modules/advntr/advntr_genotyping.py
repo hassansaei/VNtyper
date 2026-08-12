@@ -192,44 +192,61 @@ MANAGED_ADVNTR_OPTION_OWNERS = {
     "--frameshift": "the fixed `genotype -fs` mode this module runs",
 }
 
-#: adVNTR options spelled with one dash and more than one character.
+#: Every other option adVNTR's ``genotype`` subparser declares -- the ones this module does
+#: not set, and which ``additional_commands`` therefore exists to carry.
 #:
-#: argparse matches a declared option string exactly before it considers a short option
-#: carrying an attached value, so ``-aln`` is ``--aln`` and not ``-a ln``. Without this set
-#: the attached-value rule below would reject ``-aln``, which is what the shipped
-#: configuration uses.
-ADVNTR_MULTI_CHARACTER_SHORT_OPTIONS = frozenset({"-aln", "-naive", "-fs", "-vid"})
+#: ``-h``/``--help`` are deliberately absent: adVNTR would print help and exit zero without
+#: genotyping anything.
+ADVNTR_EXTRA_OPTIONS = frozenset(
+    {
+        "-r",
+        "--reference_filename",
+        "-f",
+        "--fasta",
+        "-p",
+        "--pacbio",
+        "-n",
+        "--nanopore",
+        "--outfmt",
+        "--vid_file",
+        "--append",
+        "--noref_aln",
+        "--min_read_length",
+        "-e",
+        "--expansion",
+        "-c",
+        "--coverage",
+        "--haploid",
+        "-naive",
+        "--naive",
+        "-u",
+        "--update",
+        "--fullru",
+        "-aln",
+        "--aln",
+    }
+)
+
+#: What argparse treats as a negative number rather than an option string.
+_NEGATIVE_NUMBER = re.compile(r"^-\d+$|^-\d*\.\d+$")
 
 
-def managed_advntr_option(token):
-    """Return the managed option ``token`` would set, or ``None``.
+def advntr_option_token(token):
+    """Return the option spelling ``token`` is, or ``None`` if it is a value.
+
+    Only the exact spelling is returned -- ``--opt=value`` yields ``--opt``, and nothing
+    else is normalised. That is the point: see :func:`resolve_additional_commands` for why
+    this is an allow-list rather than a pattern match.
 
     Args:
         token (str): One ``shlex``-split word of ``additional_commands``.
 
     Returns:
-        str | None: The managed option spelling this token reaches, or ``None`` if the
-        token cannot reach one.
+        str | None: The option spelling, or ``None`` if the word is a value.
     """
-    if not token.startswith("-") or token == "-":
+    if not token.startswith("-") or _NEGATIVE_NUMBER.match(token):
         return None
-
-    head = token.split("=", 1)[0]
-    if head in MANAGED_ADVNTR_OPTIONS:
-        return head
-
-    if head.startswith("--") and len(head) > 2:
-        # argparse's `allow_abbrev` is on by default, so `--thr` reaches `--threads`.
-        reached = sorted(o for o in MANAGED_ADVNTR_OPTIONS if o.startswith("--") and o.startswith(head))
-        if reached:
-            return reached[0]
-
-    # A one-character short option can carry its value attached: `-t3` is `-t 3`.
-    attaches_a_value = not head.startswith("--") and len(head) > 2
-    if attaches_a_value and head not in ADVNTR_MULTI_CHARACTER_SHORT_OPTIONS and head[:2] in MANAGED_ADVNTR_OPTIONS:
-        return head[:2]
-
-    return None
+    return token.split("=", 1)[0] if token.startswith("--") else token
 
 
 def resolve_additional_commands(settings):
@@ -248,6 +265,25 @@ def resolve_additional_commands(settings):
     output path independently and reads the file back, so a redirected artefact is a
     missing result rather than a relocated one.
 
+    The rule is an **allow-list**, and that is not fastidiousness. The first version of this
+    guard pattern-matched against the managed options -- exact spellings, ``--opt=value``,
+    long abbreviations, and a one-character short option carrying an attached value. It
+    therefore had to reimplement argparse's option matching, and it missed two whole
+    classes, both measured against a parser built from adVNTR's own declarations:
+
+    * **single-dash flag groups.** ``consume_optional`` decomposes them, so a zero-argument
+      short option consumes its first character and re-forms ``'-' + tail``. Every one of
+      ``-p``, ``-n``, ``-e``, ``-u`` is a free prefix: ``-pt3`` set threads to 3, and
+      ``-po /elsewhere.vcf`` redirected the artefact.
+    * **single-dash abbreviation.** ``allow_abbrev`` applies to these too, and no ``-v`` is
+      declared, so ``-v 99999`` and ``-vi 99999`` both reach ``-vid``.
+
+    So a word starting with ``-`` must now be an option adVNTR declares *and* one this
+    module does not set. Abbreviations, attached values and flag groups are all refused
+    because none of them is an exact declared spelling -- fail-closed by construction
+    rather than by enumeration. It over-rejects only spellings argparse itself would
+    accept for a permitted option (``-c30``); those fail loudly and are re-spelled.
+
     Unlike ``threads`` and ``output_format``, a missing key is not an error here. Those two
     are authoritative because their old fallbacks *contradicted* the shipped file (#247);
     this default is ``-aln``, which is what advntr_config.json ships.
@@ -256,11 +292,14 @@ def resolve_additional_commands(settings):
         settings (dict): An ``advntr_settings`` mapping.
 
     Returns:
-        str: The fragment, unchanged, safe to interpolate.
+        str: The fragment, unchanged. Validated as ``shlex`` reads it -- ``run_command``
+        hands the assembled string to bash, which additionally expands ``$``, backticks and
+        ``$'...'``, so this is not a claim about shell metacharacters. The fragment is
+        operator-controlled configuration, not user input.
 
     Raises:
-        ValueError: If the fragment does not parse as shell words, or if any word reaches
-            an option :func:`run_advntr` sets itself.
+        ValueError: If the fragment does not parse as shell words, if any word is an option
+            :func:`run_advntr` sets itself, or if any word is not an option adVNTR declares.
     """
     additional = settings.get("additional_commands", "-aln")
 
@@ -274,14 +313,24 @@ def resolve_additional_commands(settings):
         ) from exc
 
     for token in tokens:
-        managed = managed_advntr_option(token)
-        if managed is not None:
-            owner = MANAGED_ADVNTR_OPTION_OWNERS[managed]
+        option = advntr_option_token(token)
+        if option is None:
+            continue
+        if option in MANAGED_ADVNTR_OPTIONS:
+            owner = MANAGED_ADVNTR_OPTION_OWNERS[option]
             raise ValueError(
-                f"advntr_settings['additional_commands'] contains {token!r}, which reaches adVNTR's "
-                f"{managed} -- an option run_advntr already sets. adVNTR parses with argparse, where "
+                f"advntr_settings['additional_commands'] contains {token!r}, which is adVNTR's "
+                f"{option} -- an option run_advntr already sets. adVNTR parses with argparse, where "
                 f"the last occurrence wins, so this would silently override {owner}. Set that instead, "
                 "and keep additional_commands for flags adVNTR alone owns (such as -aln)."
+            )
+        if option not in ADVNTR_EXTRA_OPTIONS:
+            raise ValueError(
+                f"advntr_settings['additional_commands'] contains {token!r}, which adVNTR's `genotype` "
+                "does not declare as an option. Abbreviations, attached values and single-dash flag "
+                "groups are refused even when argparse would accept them, because each is a way to "
+                "reach an option run_advntr sets -- `-pt3` sets the thread count and `-v` reaches "
+                "-vid. Spell the option out in full, one word per option."
             )
 
     return additional
@@ -302,6 +351,18 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
 
     Returns:
         int: Return code indicating success (0) or failure (non-zero).
+
+    Raises:
+        ValueError: From :func:`resolve_advntr_threads` or
+            :func:`resolve_additional_commands`, for a configured value this module refuses.
+            Deliberately not turned into a return code: ``pipeline.py`` ignores this
+            function's return value, so a ``1`` here would let the run proceed to
+            ``process_advntr_output`` on a file nothing wrote, while ``cli.py`` catches
+            ``ValueError`` and exits 1 with the message.
+        KeyError: From :func:`resolve_advntr_threads` or :func:`advntr_output_extension`,
+            for a *missing* configuration key. ``cli.py`` does not catch this, so a partial
+            mapping surfaces as a traceback rather than a clean exit -- the same shape
+            ``output_format`` already had.
     """
     advntr_path = config["tools"]["advntr"]
 

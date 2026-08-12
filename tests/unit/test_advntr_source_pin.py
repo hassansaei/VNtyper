@@ -407,8 +407,9 @@ class TestTheTwoDocumentsAgreeOnWhichReleaseMadeThreadingReal:
 
     2.0.0 is right. `f76d326` ("perf(hmm): bit-exact nogil Viterbi rewrite") and `82b1c2b`
     ("perf: parallelise read decoding, making -t genuinely work") both precede `d66b839`
-    ("release: 2.0.0"); 2.0.1 is `2e7a3d0`, which stops shipping the test harness in the egg
-    and touches no decoder or threading code.
+    ("release: 2.0.0"). Tag `v2.0.1` is `59479ae`, whose one substantive commit is `2e7a3d0`
+    ("build: stop shipping the test harness and dev scripts in the egg") -- packaging, not
+    decoding.
 
     Nothing else pins this. The pin tests above check the cfg's *shape*, and a wrong version
     in a comment survives every one of them -- which is exactly how it shipped.

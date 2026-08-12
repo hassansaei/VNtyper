@@ -107,6 +107,8 @@ def parse_marker(marker: str) -> tuple[str, str | None]:
     Raises:
         ValueError: If either half of a ``module:attribute`` marker is empty.
     """
+    if marker.count(":") > 1:
+        raise ValueError(f"marker {marker!r} has more than one ':'; write module:attribute or a bare module")
     module, separator, attribute = marker.partition(":")
     if not separator:
         if not module:
@@ -249,6 +251,14 @@ def launch(
                 f"{ABORT_PREFIX} reason=wrong-tree resolved={info['vntyper_file']} expected-under={tree}",
                 flush=True,
             )
+            return EXIT_ABORT
+        if info["error"] is not None:
+            # `resolve` records a marker that would not resolve, and until this check
+            # existed nothing consumed the record: an unimportable marker module printed
+            # `marker_state=absent`, indistinguishable from a genuinely absent attribute.
+            # On the side expecting absent that voided the witness while the launch line
+            # asserted it held.
+            print(f"{ABORT_PREFIX} reason=marker-unresolvable detail={info['error']}", flush=True)
             return EXIT_ABORT
         if info["marker_present"] is not expect_marker:
             print(
