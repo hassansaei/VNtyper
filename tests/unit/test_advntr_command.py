@@ -426,3 +426,53 @@ class TestThreadsInheritThePipelineValue:
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
 
         assert captured_command[0]["command"].endswith("-t 1 -aln")
+
+
+class TestThreadCountValidation:
+    """Bad thread values fail here, naming the key and the file.
+
+    adVNTR's own check (`advntr_commands.py:72-73`) says only "threads cannot be less
+    than 1", which names neither where the value came from nor how to fix it. Validating
+    before the command is built turns that into an actionable message.
+    """
+
+    def test_a_missing_key_names_the_key_and_the_file(self):
+        with pytest.raises(KeyError) as excinfo:
+            advntr.resolve_advntr_threads({}, 4)
+
+        message = str(excinfo.value)
+        assert "threads" in message
+        assert "advntr_config.json" in message
+        assert "null" in message
+
+    def test_zero_is_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            advntr.resolve_advntr_threads({"threads": 0}, 4)
+
+    def test_a_negative_count_is_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            advntr.resolve_advntr_threads({"threads": -8}, 4)
+
+    def test_an_inherited_value_is_validated_too(self):
+        """`null` delegates to --threads, so a bad pipeline value must not slip through."""
+        with pytest.raises(ValueError, match="--threads"):
+            advntr.resolve_advntr_threads({"threads": None}, 0)
+
+    def test_a_non_integer_is_rejected_with_its_type(self):
+        with pytest.raises(ValueError, match="str"):
+            advntr.resolve_advntr_threads({"threads": "4"}, 1)
+
+    def test_a_float_is_rejected(self):
+        with pytest.raises(ValueError, match="float"):
+            advntr.resolve_advntr_threads({"threads": 2.5}, 1)
+
+    def test_true_is_rejected_rather_than_becoming_one_thread(self):
+        """bool is an int subclass; True would otherwise silently mean one thread."""
+        with pytest.raises(ValueError, match="bool"):
+            advntr.resolve_advntr_threads({"threads": True}, 4)
+
+    def test_an_explicit_count_is_returned(self):
+        assert advntr.resolve_advntr_threads({"threads": 6}, 4) == 6
+
+    def test_null_inherits_the_pipeline_value(self):
+        assert advntr.resolve_advntr_threads({"threads": None}, 12) == 12

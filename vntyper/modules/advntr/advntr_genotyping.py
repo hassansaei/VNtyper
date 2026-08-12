@@ -108,6 +108,49 @@ def advntr_output_extension(settings: dict) -> str:
     return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
 
 
+def resolve_advntr_threads(settings, pipeline_threads):
+    """Return the ``-t`` value for a settings mapping and the pipeline's ``--threads``.
+
+    ``null`` means *inherit the pipeline value*; an integer overrides it. Both are
+    validated here rather than being interpolated into a command string and left for
+    adVNTR to reject, because adVNTR's own message (``threads cannot be less than 1``,
+    ``advntr_commands.py:72-73``) names neither the key nor the file the bad value came
+    from.
+
+    Args:
+        settings (dict): An ``advntr_settings`` mapping.
+        pipeline_threads (int): The pipeline's resolved ``--threads``.
+
+    Returns:
+        int: A positive thread count.
+
+    Raises:
+        KeyError: If ``threads`` is absent. A partial mapping is not supported input --
+            the same rule ``output_format`` follows -- and ``null`` is not the same as
+            missing: ``null`` is an explicit request to inherit.
+        ValueError: If either value is not a positive integer.
+    """
+    if "threads" not in settings:
+        raise KeyError(
+            "advntr_settings is missing 'threads'. A partial mapping is not supported "
+            "input: set an integer to pin the thread count, or null to inherit the "
+            "pipeline's --threads. See vntyper/modules/advntr/advntr_config.json."
+        )
+
+    configured = settings["threads"]
+    source = "advntr_settings['threads']"
+    if configured is None:
+        configured = pipeline_threads
+        source = "the pipeline's --threads (advntr_settings['threads'] is null)"
+
+    # bool is an int subclass, and True would silently become one thread.
+    if isinstance(configured, bool) or not isinstance(configured, int):
+        raise ValueError(f"{source} must be an integer, got {configured!r} ({type(configured).__name__})")
+    if configured < 1:
+        raise ValueError(f"{source} must be at least 1, got {configured}")
+    return configured
+
+
 def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipeline_threads=1):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
@@ -155,8 +198,7 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipel
     #
     # Note `--jobs J` x `-t T` oversubscribes. The golden-cohort runner already models
     # that with a separate `advntr_case_threads` knob, which remains the control.
-    configured_threads = advntr_settings["threads"]
-    threads = pipeline_threads if configured_threads is None else configured_threads
+    threads = resolve_advntr_threads(advntr_settings, pipeline_threads)
 
     # Retrieve additional command parts from advntr_settings, if available
     additional_commands = advntr_settings.get("additional_commands", "-aln")
