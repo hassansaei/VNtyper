@@ -82,7 +82,7 @@ def test_the_helper_columns_are_the_ones_production_writes() -> None:
     Nine since #172, which appended the ``coverage_qc`` verdict to the schema.
     """
     header = _production_coverage_header()
-    assert len(header) == 9, f"the header scan produced {header}; it has drifted"
+    assert len(header) == 16, f"the header scan produced {header}; it has drifted"
     assert list(COVERAGE_COLUMNS) == header
 
 
@@ -90,7 +90,11 @@ def test_coverage_output_returns_the_real_values(tmp_path) -> None:
     _write_tsv(
         tmp_path / "coverage" / "coverage_summary.tsv",
         list(COVERAGE_COLUMNS),
-        ["153.99", "150.00", "12.30", "7", "301", "5000", "12", "0.24", "PASS"],
+        # Eight measurements, then #222's seven build-comparable columns as NA - the
+        # state a run with no `vntr_array_coords` produces - then the QC verdict.
+        ["153.99", "150.00", "12.30", "7", "301", "5000", "12", "0.24"]
+        + ["NA"] * 7
+        + ["PASS"],
     )
 
     metrics = validate_coverage_output(tmp_path)

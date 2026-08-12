@@ -371,8 +371,11 @@ def _write_strict_success_tree(output_dir: Path, *, advntr: bool = False) -> Non
         encoding="utf-8",
     )
     (output_dir / "coverage" / "coverage_summary.tsv").write_text(
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
-        "566.92\t593.00\t300.71\t23\t1062\t1501\t0\t0.00\tPASS\n",
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\t"
+        # #222's build-comparable columns, as a run with no `vntr_array_coords` records them.
+        "vntr_array_length\tvntr_array_depth_sum\tvntr_array_depth_sum_per_unit_length\t"
+        "depth_sum_reference_length\tvntr_flank_bases\tvntr_flank_mean_depth\tdepth_counting_policy\tcoverage_qc\n"
+        "566.92\t593.00\t300.71\t23\t1062\t1501\t0\t0.00\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tPASS\n",
         encoding="utf-8",
     )
     coverage_result = {
@@ -384,6 +387,15 @@ def _write_strict_success_tree(output_dir: Path, *, advntr: bool = False) -> Non
         "region_length": "1501",
         "uncovered_bases": "0",
         "percent_uncovered": "0.00",
+        # #222's columns as a run with no `vntr_array_coords` records them: the literal
+        # not-measured token, never 0 - zero would read as "no coverage was seen".
+        "vntr_array_length": "NA",
+        "vntr_array_depth_sum": "NA",
+        "vntr_array_depth_sum_per_unit_length": "NA",
+        "depth_sum_reference_length": "NA",
+        "vntr_flank_bases": "NA",
+        "vntr_flank_mean_depth": "NA",
+        "depth_counting_policy": "NA",
         "coverage_qc": "PASS",
     }
     kestrel_result = {

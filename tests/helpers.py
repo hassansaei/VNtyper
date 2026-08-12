@@ -415,6 +415,13 @@ COVERAGE_COLUMNS = (
     "region_length",
     "uncovered_bases",
     "percent_uncovered",
+    "vntr_array_length",
+    "vntr_array_depth_sum",
+    "vntr_array_depth_sum_per_unit_length",
+    "depth_sum_reference_length",
+    "vntr_flank_bases",
+    "vntr_flank_mean_depth",
+    "depth_counting_policy",
     "coverage_qc",
 )
 

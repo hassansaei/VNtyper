@@ -56,7 +56,22 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-#: The eight measured statistics. Exactly what :func:`summarise_coverage` returns.
+#: The columns that make a coverage figure comparable between assemblies (#222).
+#:
+#: They are ``None`` - written as :data:`COVERAGE_NULL_TOKEN` - on any run with no
+#: ``vntr_array_coords``, which is what a ``--custom-regions`` run or a tree predating #222
+#: produces. ``None`` rather than ``0`` deliberately: zero reads as *no coverage was seen*.
+_BUILD_COMPARABLE_COLUMNS: tuple[str, ...] = (
+    "vntr_array_length",
+    "vntr_array_depth_sum",
+    "vntr_array_depth_sum_per_unit_length",
+    "depth_sum_reference_length",
+    "vntr_flank_bases",
+    "vntr_flank_mean_depth",
+    "depth_counting_policy",
+)
+
+#: The measured statistics. Exactly what :func:`summarise_coverage` returns.
 COVERAGE_METRIC_COLUMNS: tuple[str, ...] = (
     "mean",
     "median",
@@ -66,7 +81,7 @@ COVERAGE_METRIC_COLUMNS: tuple[str, ...] = (
     "region_length",
     "uncovered_bases",
     "percent_uncovered",
-)
+) + _BUILD_COMPARABLE_COLUMNS
 
 #: The coverage summary schema, in the order the TSV writes it: the measurements plus
 #: the QC verdict.
@@ -82,7 +97,9 @@ COVERAGE_METRIC_COLUMNS: tuple[str, ...] = (
 COVERAGE_COLUMNS: tuple[str, ...] = COVERAGE_METRIC_COLUMNS + ("coverage_qc",)
 
 #: Columns rendered with two decimal places; the rest are written as-is.
-_TWO_DECIMAL_COLUMNS = frozenset({"mean", "median", "stdev", "percent_uncovered"})
+_TWO_DECIMAL_COLUMNS = frozenset(
+    {"mean", "median", "stdev", "percent_uncovered", "vntr_array_depth_sum_per_unit_length", "vntr_flank_mean_depth"}
+)
 
 #: Width of the unique flank sampled either side of the VNTR array, per side.
 #:
@@ -91,7 +108,14 @@ _TWO_DECIMAL_COLUMNS = frozenset({"mean", "median", "stdev", "percent_uncovered"
 #: array bounds outward by 100 bp changes the cross-build comparison by 1.1%, while moving one
 #: build's bound alone by 140 bp changes it by 17.5%. A configured flank could drift out of
 #: symmetry; a derived one cannot.
-VNTR_FLANK_BASES = 500
+#:
+#: 190 rather than a rounder number because it is the largest width that fits inside *both*
+#: configured windows - GRCh37 leaves only 190 bp between its array and the window edge - and
+#: staying inside the window is what keeps every figure a slice of the depth table the pipeline
+#: already produces. Widening the `samtools depth` call instead would put it outside the region
+#: CRAM preflight proved a reference against. Measured cost of the smaller flank: none
+#: detectable, 0.976-1.001 against 0.977-1.000 at 500 bp.
+VNTR_FLANK_BASES = 190
 
 #: The fixed length ``vntr_array_depth_sum_per_unit_length`` is expressed over.
 #:
@@ -305,6 +329,18 @@ def vntr_geometry(assembly_config: dict, flank_bases: int = VNTR_FLANK_BASES) ->
     left = (array[0] - flank_bases, array[0] - 1)
     right = (array[1] + 1, array[1] + flank_bases)
 
+    # Inside the *window*, not merely inside the extracted region. Every figure here is a
+    # slice of the depth table the coverage stage already produces, so a flank outside the
+    # window would need a wider `samtools depth` call - and that call would then cover bases
+    # outside the region CRAM preflight proved a reference against.
+    if left[0] < window[0] or right[1] > window[1]:
+        msg = (
+            f"a {flank_bases} bp flank around vntr_array_coords {raw_array} spans "
+            f"{left[0]}-{right[1]}, which leaves vntr_region_coords "
+            f"{assembly_config['vntr_region_coords']}; the coverage depth table holds nothing outside it"
+        )
+        logger.error(msg)
+        raise ValueError(msg)
     if left[0] < bam_region[0] or right[1] > bam_region[1]:
         msg = (
             f"a {flank_bases} bp flank around vntr_array_coords {raw_array} spans "
@@ -314,6 +350,8 @@ def vntr_geometry(assembly_config: dict, flank_bases: int = VNTR_FLANK_BASES) ->
         logger.error(msg)
         raise ValueError(msg)
 
+    # Equal to the window by construction now that the flank is required to fit inside it.
+    # Kept explicit so a future widening has one place to change.
     span = (min(window[0], left[0]), max(window[1], right[1]))
     return VntrGeometry(window=window, array=array, flank=(left, right), span=span, flank_bases=flank_bases)
 
@@ -388,7 +426,14 @@ def read_depth_positions(depth_file: str | Path) -> list[tuple[int, int]]:
     return pairs
 
 
-def summarise_coverage(coverage_values: list[int], total_region_length: int) -> dict:
+def summarise_coverage(
+    coverage_values: list[int],
+    total_region_length: int,
+    *,
+    array_depths: list[int] | None = None,
+    flank_depths: list[int] | None = None,
+    flank_bases: int | None = None,
+) -> dict:
     """
     Summarise per-base depths into the frozen coverage schema.
 
@@ -458,7 +503,7 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
     uncovered_bases = sum(1 for depth in base if depth == 0)
     percent_uncovered = 0 if total_region_length <= 0 else uncovered_bases / total_region_length * 100
 
-    return {
+    summary: dict = {
         "mean": sum(base) / len(base),
         "median": statistics.median(base),
         "stdev": statistics.stdev(base) if len(base) > 1 else 0,
@@ -468,6 +513,26 @@ def summarise_coverage(coverage_values: list[int], total_region_length: int) -> 
         "uncovered_bases": uncovered_bases,
         "percent_uncovered": percent_uncovered,
     }
+
+    # Absent by default, so every caller that predates #222 - and every run with no
+    # `vntr_array_coords` - keeps producing exactly the eight statistics above with
+    # exactly the values it produced before. The columns still exist in the schema; they
+    # carry COVERAGE_NULL_TOKEN rather than a number.
+    summary.update(dict.fromkeys(_BUILD_COMPARABLE_COLUMNS))
+
+    if array_depths is not None and flank_depths:
+        array_sum = sum(array_depths)
+        summary["vntr_array_length"] = len(array_depths)
+        summary["vntr_array_depth_sum"] = array_sum
+        summary["vntr_array_depth_sum_per_unit_length"] = array_sum / DEPTH_SUM_REFERENCE_LENGTH
+        summary["depth_sum_reference_length"] = DEPTH_SUM_REFERENCE_LENGTH
+        # Per side, not the length of the concatenated vector: the flank is two intervals
+        # and reporting 2N here would misstate the geometry the figure was measured over.
+        summary["vntr_flank_bases"] = flank_bases if flank_bases is not None else len(flank_depths) // 2
+        summary["vntr_flank_mean_depth"] = sum(flank_depths) / len(flank_depths)
+        summary["depth_counting_policy"] = DEPTH_COUNTING_POLICY
+
+    return summary
 
 
 def format_coverage_summary(stats: dict) -> str:
@@ -487,7 +552,20 @@ def format_coverage_summary(stats: dict) -> str:
         KeyError: If ``stats`` is missing any of :data:`COVERAGE_COLUMNS`.
     """
     header = "\t".join(COVERAGE_COLUMNS)
-    values = "\t".join(
-        f"{stats[column]:.2f}" if column in _TWO_DECIMAL_COLUMNS else f"{stats[column]}" for column in COVERAGE_COLUMNS
-    )
+    values = "\t".join(_format_coverage_value(column, stats[column]) for column in COVERAGE_COLUMNS)
     return f"{header}\n{values}\n"
+
+
+def _format_coverage_value(column: str, value) -> str:
+    """Render one coverage cell, with ``None`` as :data:`COVERAGE_NULL_TOKEN`.
+
+    ``None`` cannot go through ``:.2f`` - it raises - and ``str(None)`` would write the
+    literal ``"None"``, which the reader would then have to know to special-case. A single
+    explicit token keeps *not recorded* distinguishable from ``0``, which is what a reader
+    would otherwise take *no coverage was seen* from.
+    """
+    if value is None:
+        return COVERAGE_NULL_TOKEN
+    if column in _TWO_DECIMAL_COLUMNS:
+        return f"{value:.2f}"
+    return f"{value}"

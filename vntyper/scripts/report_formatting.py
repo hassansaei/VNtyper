@@ -124,6 +124,15 @@ COVERAGE_FIELD_TYPES: dict[str, type] = {
     "region_length": int,
     "uncovered_bases": int,
     "percent_uncovered": float,
+    # #222's build-comparable columns. `depth_counting_policy` is a token, not a number:
+    # the array sum is only comparable across builds under the policy it names.
+    "vntr_array_length": int,
+    "vntr_array_depth_sum": int,
+    "vntr_array_depth_sum_per_unit_length": float,
+    "depth_sum_reference_length": int,
+    "vntr_flank_bases": int,
+    "vntr_flank_mean_depth": float,
+    "depth_counting_policy": str,
     # The QC verdict is a label, not a measurement: `str` keeps "PASS"/"FAIL" intact
     # and keeps it out of the two-decimal rendering the numeric fields get (#172).
     "coverage_qc": str,

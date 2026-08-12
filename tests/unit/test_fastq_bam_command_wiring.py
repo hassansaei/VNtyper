@@ -677,8 +677,10 @@ def test_calculate_vntr_coverage_writes_the_frozen_tsv_schema(tmp_path):
         )
 
     assert (tmp_path / "cov_summary.tsv").read_text() == (
-        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\tcoverage_qc\n"
-        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\tFAIL\n"
+        "mean\tmedian\tstdev\tmin\tmax\tregion_length\tuncovered_bases\tpercent_uncovered\t"
+        "vntr_array_length\tvntr_array_depth_sum\tvntr_array_depth_sum_per_unit_length\t"
+        "depth_sum_reference_length\tvntr_flank_bases\tvntr_flank_mean_depth\tdepth_counting_policy\tcoverage_qc\n"
+        "0.04\t0.00\t0.97\t0\t30\t1501\t1498\t99.80\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tFAIL\n"
     )
     assert stats["mean"] == pytest.approx(60 / 1501)
     assert stats["min"] == 0

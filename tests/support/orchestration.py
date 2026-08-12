@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS
+
 from tests.helpers import (
     COVERAGE_COLUMNS,
     assert_required_files,
@@ -383,13 +385,26 @@ def _read_tsv_row(path: Path) -> dict[str, str]:
     return {key: value for key, value in rows[0].items() if key is not None and value is not None}
 
 
+#: The coverage columns an integration case declares expected values for.
+#:
+#: Deliberately *not* every column in the TSV. #222 appended seven build-comparable columns,
+#: and `scripts/integration_compatibility.py` treats each case's declarations as an
+#: append-only contract that may not be mutated - so requiring the new columns to be declared
+#: would invalidate every historical case rather than extend it. The new columns are checked
+#: for presence here and asserted on properly in `tests/unit/test_coverage_stats.py`.
+_DECLARED_COVERAGE_COLUMNS = tuple(column for column in COVERAGE_COLUMNS if column not in _BUILD_COMPARABLE_COLUMNS)
+
+
 def _assert_coverage_values(test_case: dict[str, Any], output_dir: Path) -> None:
     expected = test_case["coverage_assertions"]
-    assert set(expected) == set(COVERAGE_COLUMNS), (
-        f"coverage_assertions must declare every coverage column: {list(COVERAGE_COLUMNS)}"
+    assert set(expected) == set(_DECLARED_COVERAGE_COLUMNS), (
+        f"coverage_assertions must declare every asserted coverage column: {list(_DECLARED_COVERAGE_COLUMNS)}"
     )
     actual = _read_tsv_row(output_dir / "coverage" / "coverage_summary.tsv")
-    assert actual == expected, f"Coverage values differ: expected {expected}, got {actual}"
+    declared = {key: value for key, value in actual.items() if key in expected}
+    assert declared == expected, f"Coverage values differ: expected {expected}, got {declared}"
+    missing = [column for column in _BUILD_COMPARABLE_COLUMNS if column not in actual]
+    assert not missing, f"coverage_summary.tsv is missing #222's columns: {missing}"
 
 
 def _summary_steps(output_dir: Path) -> dict[str, Any]:

@@ -52,6 +52,11 @@ def calculate_alignment_coverage(
             output_name="coverage",
             reference_path=plan.reference_path,
             index_path=plan.stable_index_path,
+            # `.get` chain rather than subscripts: `--config-path` replaces the whole config
+            # instead of merging it (AGENTS.md trap 2), so a caller-supplied config may carry
+            # no assemblies at all. Absent, the build-comparable columns record as not
+            # measured; they must never abort a run over a reporting figure (#222).
+            assembly_config=config.get("bam_processing", {}).get("assemblies", {}).get(reference_assembly),
         )
     except BaseException:
         primary_failure = True
