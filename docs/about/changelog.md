@@ -6,7 +6,59 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.15 (Current)
+## 2.0.16 (Current)
+
+**Pin what we build on, and let no attempt inherit another's leftovers.**
+
+### Added
+
+- **`vntyper install-references --derive-only`** rebuilds the derived reference files from
+  genomes and seeds already on disk, downloading nothing. Recovering a tree missing one of
+  them previously meant a full `--from-source` run — re-downloading and BWA-indexing six
+  chromosome FASTAs to rebuild three small ones — so in practice it was done by hand, with
+  `samtools faidx` retyped from the config, and by hand is where an unverified reference file
+  comes from. Every output is checked against its committed digest. A derivation this tree
+  cannot rebuild is skipped rather than failed, and whatever is already at its path is
+  verified instead, so all three are checked either way.
+
+### Fixed
+
+- **A discarded Kestrel attempt no longer leaves its SAM behind for a later one to convert
+  (#255).** Every k-mer size writes to the same `output.vcf` *and* the same `output.sam`. A
+  discarded attempt removed the VCF but left the SAM, and a later successful attempt converts
+  whatever occupies that path into `output.bam` — the alignment the report's IGV track shows.
+  The genotype comes from the VCF and is unaffected, which is why it was easy to miss.
+- **`convert_sam_to_bam_and_index` checks samtools' exit status instead of inferring it
+  (#255).** Success was inferred from `os.path.exists` on the outputs, which conflates
+  "samtools succeeded" with "a file is present". A failed `view` still leaves a truncated BAM,
+  so the SAM was deleted and the truncated BAM kept. Both results are checked now, and the SAM
+  survives a failure because it is the only copy of the data.
+- **A reference entry pointing at a 404 is gone (#253).** It was unreachable — the installer
+  drops any `raw_files` entry that is also a derivation output — so the issue's claim that
+  `--from-source` is broken by it is false and is corrected on the issue. A 404 was the
+  mildest way it could have failed: a URL resolving to a stale but live file would have
+  installed silently wrong reference data. Tests pin the rule rather than the entry.
+- **The unauthenticated download window is 3 days rather than 7 (#189 — a mitigation).**
+  `/download/{job_id}/` takes no credential, so the retention window *is* the exposure window:
+  the link is the capability. This reduces exposure duration, not exposure. The completion
+  email now names the window and says the link carries no password.
+- **`.env.example`'s retention knobs are now actually configurable.** `MAX_RESULT_AGE_DAYS`
+  and `COHORT_RETENTION_DAYS` were presented as operator settings, but compose passed a
+  literal for the first and never passed the second, so uncommenting either configured
+  nothing. Default behaviour is unchanged; the documentation becomes true.
+
+### Changed
+
+- **adVNTR is pinned to a commit, not a branch (#254).** `advntr_genotyping.py` cites exact
+  upstream line numbers as evidence for why adVNTR runs at `-t 1`, and a branch can move under
+  those citations. `GIT_COMMIT` now names `05fd98a4`, and the installer checks it out and
+  aborts if it is absent rather than silently building the branch tip.
+- **`install_advntr.sh` resolves its config beside the script**, not in the working directory,
+  and resolves symlinks to get there — the image runs it from elsewhere, so a bare relative
+  name was never sourced and the pin had no effect on the image it exists to pin.
+  `-c/--config` now replaces the shipped config rather than layering over it.
+
+## 2.0.15
 
 **Stop claiming more than we know.** Five defects in which VNtyper stated something it
 had not established.
