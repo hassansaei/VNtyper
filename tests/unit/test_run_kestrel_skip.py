@@ -21,12 +21,18 @@ substitutes them for the calls ``run_kestrel`` makes.
 """
 
 import logging
+from pathlib import Path
 
 import pytest
 
 from vntyper.scripts import kestrel_genotyping as kg
 
 pytestmark = pytest.mark.unit
+
+#: What a successful Kestrel run writes, minimally: a header the records can be read against.
+#: The five sites below used to write ``"fresh\n"``, which #223 now correctly classifies as
+#: unusable -- so they would exercise the failure path instead of the success path they mean.
+USABLE_VCF = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
 
 
 def _config():
@@ -68,7 +74,7 @@ def test_a_stale_vcf_does_not_skip_the_kestrel_run(tmp_path, monkeypatch):
 
     def fake_run_command(command, log_file=None, **kwargs):
         executed.append(command)
-        vcf.write_text("fresh\n", encoding="utf-8")
+        vcf.write_text(USABLE_VCF, encoding="utf-8")
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
@@ -88,7 +94,7 @@ def test_a_stale_vcf_is_removed_before_the_run(tmp_path, monkeypatch, caplog):
 
     def fake_run_command(command, log_file=None, **kwargs):
         seen.setdefault("existed_at_launch", vcf.is_file())
-        vcf.write_text("fresh\n", encoding="utf-8")
+        vcf.write_text(USABLE_VCF, encoding="utf-8")
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
@@ -113,11 +119,11 @@ def test_a_run_that_produces_no_vcf_raises_rather_than_returning_silently(tmp_pa
     """
     monkeypatch.setattr(kg, "run_command", lambda *a, **kw: True)
 
-    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="produced no VCF"):
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="produced no usable VCF"):
         _run(tmp_path / "output.vcf", tmp_path)
 
     errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
-    assert any("produced no VCF" in message for message in errors), errors
+    assert any("produced no usable VCF" in message for message in errors), errors
 
 
 def test_post_processing_runs_after_a_stale_vcf_is_replaced(tmp_path, monkeypatch):
@@ -127,7 +133,7 @@ def test_post_processing_runs_after_a_stale_vcf_is_replaced(tmp_path, monkeypatc
     calls = []
 
     def fake_run_command(command, log_file=None, **kwargs):
-        vcf.write_text("fresh\n", encoding="utf-8")
+        vcf.write_text(USABLE_VCF, encoding="utf-8")
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
@@ -156,7 +162,7 @@ def test_the_vcf_a_later_kmer_size_writes_is_not_removed(tmp_path, monkeypatch):
     def fake_run_command(command, log_file=None, **kwargs):
         launches.append(command)
         if len(launches) == 2:
-            vcf.write_text("fresh\n", encoding="utf-8")
+            vcf.write_text(USABLE_VCF, encoding="utf-8")
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
@@ -193,7 +199,7 @@ def test_runner_receives_the_planned_command_log_criticality_and_cwd(tmp_path, m
 
     def fake_run_command(command, log_file=None, **kwargs):
         calls.append((command, log_file, kwargs))
-        vcf.write_text("fresh\n", encoding="utf-8")
+        vcf.write_text(USABLE_VCF, encoding="utf-8")
         return True
 
     monkeypatch.setattr(kg, "run_command", fake_run_command)
@@ -218,3 +224,146 @@ def test_runner_receives_the_planned_command_log_criticality_and_cwd(tmp_path, m
     assert log_file == str(tmp_path / "kestrel_kmer_20.log")
     assert kwargs == {"critical": True, "cwd": "/project/root"}
     assert "-ssample r1.fq r2.fq single.fq --hapfmt" in command
+
+
+# --------------------------------------------------------------------------------------
+# #223 -- a VCF that cannot be parsed must never become a confident Negative
+# --------------------------------------------------------------------------------------
+
+
+def test_a_headerless_vcf_with_records_does_not_manufacture_a_negative(tmp_path, monkeypatch):
+    """The defect is a *manufactured Negative*, not an unraised exception.
+
+    Kestrel exits 0 and writes a VCF that has lost its ``#CHROM`` header but still carries two
+    real indel records. ``filter_vcf`` passes the records through, the derived files inherit
+    the missing header, ``read_vcf_without_comments`` returns two empty frames, and
+    ``output_empty_result`` writes the ``Negative`` placeholder -- with no ERROR logged at all.
+    A positive converted to a negative.
+
+    Assertion 1 is the defect and is what fails before the fix. The raise is asserted last, and
+    on its own would be satisfiable by an unrelated error, so it is never the primary
+    assertion -- this repository has already been bitten once by a RED test that passed for an
+    unrelated reason.
+    """
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+    records = "chr1\t155160000\t.\tC\tCG\t.\t.\tDP=100\n" * 2
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        vcf.write_text("##fileformat=VCFv4.2\n" + records, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _run(vcf, tmp_path)
+
+    # 1. THE DEFECT: no manufactured result of any kind was written.
+    written = sorted(path.name for path in tmp_path.rglob("*.tsv"))
+    assert written == [], f"a result file was written for an unparsable VCF: {written}"
+
+    # 2. The run failed loudly, and the message says the output was unusable rather than absent.
+    assert "no usable VCF" in str(excinfo.value)
+
+
+def test_every_configured_kmer_size_is_tried_before_giving_up(tmp_path, monkeypatch):
+    """An unusable VCF is the same kind of event as no VCF: warn, remove it, try the next size.
+
+    Aborting on the first one would contradict the deliberate fall-through for an exit-zero run
+    that wrote nothing, which ``test_the_vcf_a_later_kmer_size_writes_is_not_removed`` already
+    pins. Retrying is safe because the terminal raise still catches the case where every
+    configured size fails, so no path reaches a manufactured negative either way.
+    """
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+    launches = []
+    post_processing_saw = []
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        launches.append(command)
+        if len(launches) == 1:
+            vcf.write_text("##fileformat=VCFv4.2\nchr1\t1\t.\tC\tCG\t.\t.\tDP=1\n", encoding="utf-8")
+        else:
+            vcf.write_text(USABLE_VCF, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+    monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: post_processing_saw.append(True))
+
+    _run(vcf, tmp_path)
+
+    assert len(launches) == 2, "the unusable VCF from k=20 did not fall through to k=25"
+    assert post_processing_saw == [True], "the usable VCF from k=25 was not post-processed"
+
+
+def test_an_unusable_vcf_is_removed_before_the_next_kmer_size_runs(tmp_path, monkeypatch):
+    """``vcf_path`` is the same path for every k-mer size.
+
+    A stale unusable file left in place would be re-examined by the next iteration and reported
+    against the wrong k-mer size, and if that iteration wrote nothing it would look like a
+    result. The pre-loop unlink exists for the same reason.
+    """
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+    existed_at_launch = []
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        existed_at_launch.append(vcf.is_file())
+        vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError):
+        _run(vcf, tmp_path)
+
+    assert existed_at_launch == [False, False], "an unusable VCF survived into the next iteration"
+
+
+def test_the_warning_for_an_unusable_vcf_names_the_reason(tmp_path, monkeypatch, caplog):
+    """A silent negative had no ERROR at all. Whatever replaces it has to say what happened."""
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20]}})
+    vcf = tmp_path / "output.vcf"
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        vcf.write_text("##fileformat=VCFv4.2\nchr1\t1\t.\tC\tCG\t.\t.\tDP=1\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(RuntimeError):
+        _run(vcf, tmp_path)
+
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("no #CHROM header line" in message for message in warnings), warnings
+    assert any("1 data line(s)" in message for message in warnings), warnings
+
+
+def test_a_failed_removal_still_raises_the_terminal_error_type(tmp_path, monkeypatch):
+    """The removal must not become a new way to leave the loop.
+
+    ``run_kestrel``'s contract is that it either post-processes a usable VCF or raises
+    ``RuntimeError``. An unhandled ``OSError`` from the unlink would escape as a bare
+    filesystem error, skipping the terminal raise entirely and handing the caller an exception
+    type it has no reason to expect.
+    """
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
+        return True
+
+    def refuse_unlink(self, *args, **kwargs):
+        raise PermissionError("read-only filesystem")
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+    monkeypatch.setattr(Path, "unlink", refuse_unlink)
+
+    with pytest.raises(RuntimeError, match="could not be removed"):
+        _run(vcf, tmp_path)

@@ -3,6 +3,7 @@
 import importlib.resources as pkg_resources
 import json
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,93 @@ def _assert_kestrel_allele_contract(ref, alt, snv_length, source_path):
     )
     logger.error(msg)
     raise ValueError(msg)
+
+
+#: The eight mandatory VCF columns, in order, as VCFv4.2 fixes them.
+#:
+#: A ``#CHROM`` line carrying fewer than these is truncated, not a header. It matters because
+#: ``variant_parsing.read_vcf_without_comments`` accepts *any* line beginning ``#CHROM`` as its
+#: column definition, so a bare ``#CHROM`` sets a one-element column list, collects no records,
+#: and yields an empty frame - which two steps later is the ``Negative`` placeholder (#223).
+_MANDATORY_VCF_COLUMNS: tuple[str, ...] = (
+    "#CHROM",
+    "POS",
+    "ID",
+    "REF",
+    "ALT",
+    "QUAL",
+    "FILTER",
+    "INFO",
+)
+
+
+def describe_unusable_vcf(vcf_path: str | Path) -> str | None:
+    """
+    Say why a VCF cannot be parsed into variant records, or ``None`` if it can.
+
+    This is the second half of this module's job as the trust boundary for Kestrel's output.
+    :func:`_assert_kestrel_allele_contract` checks that a *record* has the shape the pinned
+    build emits; this checks that the *file* has a header those records can be read against.
+
+    Three things make a VCF unusable here, and each is a distinct silent-negative path:
+
+    1. **It cannot be read at all.** ``read_vcf_without_comments`` converts any read failure
+       into an empty frame, which is indistinguishable from "no variants found".
+    2. **It has no ``#CHROM`` line, or a truncated one.** The parser takes any line beginning
+       ``#CHROM`` as its column definition without checking the columns, so a bare ``#CHROM``
+       is accepted and yields an empty frame.
+    3. **A data line precedes the ``#CHROM`` line.** The contract is *ordered*, not merely
+       present: the parser collects a data line only once the header has been seen, so records
+       arriving before it are discarded in silence and a file whose header is late parses to
+       nothing while passing any presence check.
+
+    Why this matters: :func:`filter_vcf` copies data lines through whether or not a header is
+    present, so a headerless VCF yields headerless derived files, and
+    ``kestrel_genotyping.process_kestrel_output`` renders two empty frames as the ``Negative``
+    placeholder. A Kestrel run that exits 0 after losing its header would otherwise turn real
+    indel records into a confident negative genotype with no ERROR logged at all (#223).
+
+    A valid header with **no records** is usable. That is a genuine empty result, and reporting
+    it as a negative is correct - the distinction between "ran and found nothing" and "produced
+    nothing readable" is the entire point.
+
+    Args:
+        vcf_path (str | pathlib.Path): Path to the VCF to inspect.
+
+    Returns:
+        str | None: ``None`` when the file can be parsed into records. Otherwise a lowercase
+        clause naming the problem, phrased to read after "but " in a caller's message.
+    """
+    records_before_header = 0
+    try:
+        with open(vcf_path) as handle:
+            for line in handle:
+                if line.startswith("#CHROM"):
+                    columns = tuple(line.rstrip("\n").split("\t"))
+                    if columns[: len(_MANDATORY_VCF_COLUMNS)] != _MANDATORY_VCF_COLUMNS:
+                        return (
+                            f"its #CHROM line is truncated - it carries {len(columns)} column(s) rather "
+                            f"than the {len(_MANDATORY_VCF_COLUMNS)} mandatory ones, so no record can be "
+                            "read against it"
+                        )
+                    if records_before_header:
+                        return (
+                            f"{records_before_header} data line(s) appear before the #CHROM header, and "
+                            "every one of them is discarded when the file is parsed"
+                        )
+                    return None
+                if line.startswith("##") or not line.strip():
+                    continue
+                records_before_header += 1
+    except OSError as exc:
+        return f"it could not be read ({exc})"
+
+    if records_before_header:
+        return (
+            f"it has no #CHROM header line, so all {records_before_header} data line(s) it carries are "
+            "discarded when the file is parsed"
+        )
+    return "it has no #CHROM header line"
 
 
 def filter_vcf(input_path, output_path):
