@@ -393,7 +393,7 @@ def _claims_about(text: str, needle: str) -> list[str]:
         list[str]: The matching sentences, whitespace-normalised.
     """
     without_markers = _COMMENT_MARKER.sub("", text)
-    claims = []
+    claims: list[str] = []
     for block in re.split(r"\n\s*\n", without_markers):
         joined = " ".join(block.split())
         claims.extend(sentence for sentence in _SENTENCE_SPLIT.split(joined) if needle in sentence)
