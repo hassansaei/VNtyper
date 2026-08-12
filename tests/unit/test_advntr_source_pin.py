@@ -102,12 +102,20 @@ requires_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash is
 
 
 def _resolved_settings(tmp_path: Path, *args: str) -> str:
-    """Run the installer far enough to print its settings, and no further."""
+    """Run the installer far enough to print its settings, and no further.
+
+    ``-e ""`` clears CONDA_ENV. The shipped config sets it to ``envadvntr``, and the script
+    activates that environment -- exiting non-zero if conda is absent *or* the environment
+    does not exist -- before it reaches the existing-directory refusal this relies on to
+    stop. Without clearing it the test asserts something different depending on which conda
+    environments the machine happens to have, which is how it first went green locally and
+    red on every CI runner.
+    """
     stop_here = tmp_path / "already-installed"
     stop_here.mkdir()
 
     result = subprocess.run(
-        ["bash", str(INSTALLER), "-d", str(stop_here), *args],
+        ["bash", str(INSTALLER), "-e", "", "-d", str(stop_here), *args],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -196,7 +204,7 @@ def test_a_symlinked_invocation_still_finds_the_shipped_pin(tmp_path):
     stop_here.mkdir()
 
     result = subprocess.run(
-        ["bash", str(link), "-d", str(stop_here)],
+        ["bash", str(link), "-e", "", "-d", str(stop_here)],
         capture_output=True,
         text=True,
         cwd=tmp_path,
@@ -220,7 +228,7 @@ def test_an_unpinned_install_warns_rather_than_proceeding_quietly(tmp_path):
     stop_here.mkdir()
 
     result = subprocess.run(
-        ["bash", str(lone), "-d", str(stop_here)],
+        ["bash", str(lone), "-e", "", "-d", str(stop_here)],
         capture_output=True,
         text=True,
         cwd=tmp_path,
