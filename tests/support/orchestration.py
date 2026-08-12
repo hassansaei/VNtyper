@@ -8,14 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS
-
 from tests.helpers import (
     COVERAGE_COLUMNS,
     assert_required_files,
     validate_advntr_output,
     validate_kestrel_output,
 )
+from vntyper.scripts.coverage_stats import _BUILD_COMPARABLE_COLUMNS
 
 # Seconds allowed for a single adVNTR test, overriding pytest.ini's global 600 s.
 #

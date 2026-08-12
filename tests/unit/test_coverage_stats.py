@@ -29,13 +29,13 @@ import logging
 import pytest
 
 from vntyper.scripts.coverage_stats import (
+    _BUILD_COMPARABLE_COLUMNS,
     COVERAGE_COLUMNS,
     COVERAGE_METRIC_COLUMNS,
-    MAX_REGION_SPAN_BASES,
     DEPTH_COUNTING_POLICY,
     DEPTH_SUM_REFERENCE_LENGTH,
+    MAX_REGION_SPAN_BASES,
     VNTR_FLANK_BASES,
-    _BUILD_COMPARABLE_COLUMNS,
     format_coverage_summary,
     parse_region_length,
     read_depth_positions,

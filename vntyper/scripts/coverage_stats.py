@@ -420,7 +420,9 @@ def read_depth_positions(depth_file: str | Path) -> list[tuple[int, int]]:
             try:
                 pairs.append((int(fields[1]), int(fields[2])))
             except ValueError as exc:
-                msg = f"{depth_file}:{number}: position and depth must be integers, found {fields[1]!r} and {fields[2]!r}"
+                msg = (
+                    f"{depth_file}:{number}: position and depth must be integers, found {fields[1]!r} and {fields[2]!r}"
+                )
                 logger.error(msg)
                 raise ValueError(msg) from exc
     return pairs

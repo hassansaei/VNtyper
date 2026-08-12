@@ -96,9 +96,7 @@ def _figures(sample: str, build: str) -> tuple[float, float]:
 
     depths = _depths(bam, *geometry.window)
     window = [depths.get(position, 0) for position in range(geometry.window[0], geometry.window[1] + 1)]
-    flank = [
-        depths.get(position, 0) for start, end in geometry.flank for position in range(start, end + 1)
-    ]
+    flank = [depths.get(position, 0) for start, end in geometry.flank for position in range(start, end + 1)]
     return sum(window) / len(window), sum(flank) / len(flank)
 
 

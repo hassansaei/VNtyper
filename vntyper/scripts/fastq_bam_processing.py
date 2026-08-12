@@ -28,8 +28,8 @@ from vntyper.scripts.coverage_stats import (
     parse_region_length,
     read_depth_positions,
     read_depth_values,
-    vntr_geometry,
     summarise_coverage,
+    vntr_geometry,
 )
 from vntyper.scripts.region_utils import get_region_string_with_fallback
 from vntyper.scripts.utils import run_command
@@ -394,9 +394,7 @@ def calculate_vntr_coverage(
             # truncated at a contig end is short, and the missing positions are uncovered.
             array_depths = [depth_at.get(position, 0) for position in range(geometry.array[0], geometry.array[1] + 1)]
             flank_depths = [
-                depth_at.get(position, 0)
-                for start, end in geometry.flank
-                for position in range(start, end + 1)
+                depth_at.get(position, 0) for start, end in geometry.flank for position in range(start, end + 1)
             ]
             stats = summarise_coverage(
                 coverage_values,

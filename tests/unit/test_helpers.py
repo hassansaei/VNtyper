@@ -92,9 +92,7 @@ def test_coverage_output_returns_the_real_values(tmp_path) -> None:
         list(COVERAGE_COLUMNS),
         # Eight measurements, then #222's seven build-comparable columns as NA - the
         # state a run with no `vntr_array_coords` produces - then the QC verdict.
-        ["153.99", "150.00", "12.30", "7", "301", "5000", "12", "0.24"]
-        + ["NA"] * 7
-        + ["PASS"],
+        ["153.99", "150.00", "12.30", "7", "301", "5000", "12", "0.24"] + ["NA"] * 7 + ["PASS"],
     )
 
     metrics = validate_coverage_output(tmp_path)
