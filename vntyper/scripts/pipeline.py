@@ -499,6 +499,7 @@ def run_pipeline(
             logger.info("adVNTR module included. Starting adVNTR genotyping.")
             try:
                 from vntyper.modules.advntr.advntr_genotyping import (
+                    advntr_output_extension,
                     load_advntr_config,
                     process_advntr_output,
                     run_advntr,
@@ -551,8 +552,10 @@ def run_pipeline(
                     config=config,
                     cwd=project_root,
                 )
-                output_format = advntr_settings.get("output_format", "tsv")
-                output_ext = ".vcf" if output_format == "vcf" else ".tsv"
+                # Shared with run_advntr, which built the path adVNTR actually wrote. This
+                # used to repeat `.get("output_format", "tsv")` here, so the producer and the
+                # consumer of that path each carried their own fallback (#247).
+                output_ext = advntr_output_extension(advntr_settings)
                 output_path = os.path.join(dirs["advntr"], f"output_adVNTR{output_ext}")
                 process_advntr_output(output_path, dirs["advntr"], "output", config=config)
                 advntr_end = datetime.now(timezone.utc).replace(tzinfo=None)

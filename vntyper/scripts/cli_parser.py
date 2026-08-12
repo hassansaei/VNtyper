@@ -91,7 +91,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser_pipeline.add_argument("--bam", type=str, help="Path to the BAM file.")
     parser_pipeline.add_argument("--cram", type=str, help="Path to the CRAM file.")
     parser_pipeline.add_argument("--reference-fasta", type=Path, help="Path to the reference FASTA for CRAM decoding.")
-    parser_pipeline.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
+    parser_pipeline.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Number of threads to use. Applies to alignment, samtools and fastp; adVNTR ignores it, "
+        "because its -t flag has no effect on the short-read frameshift genotyping VNtyper runs.",
+    )
     parser_pipeline.add_argument(
         "--reference-assembly",
         type=str,
@@ -360,7 +366,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reference assembly used (hg19, hg38, GRCh37, GRCh38, hg19_ncbi, hg38_ncbi, hg19_ensembl, hg38_ensembl).",
     )
-    parser_online.add_argument("--threads", type=int, default=None, help="Number of threads to use.")
+    parser_online.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Number of threads to use. Applies to alignment, samtools and fastp; adVNTR ignores it, "
+        "because its -t flag has no effect on the short-read frameshift genotyping VNtyper runs.",
+    )
     parser_online.add_argument(
         "--email",
         type=str,

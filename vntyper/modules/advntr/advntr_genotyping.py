@@ -75,6 +75,32 @@ advntr_config = load_advntr_config()
 advntr_settings = advntr_config.get("advntr_settings", {})
 
 
+def advntr_output_extension(settings: dict) -> str:
+    """
+    Return the file extension adVNTR writes its results to, for a settings mapping.
+
+    Args:
+        settings (dict): An ``advntr_settings`` mapping.
+
+    Returns:
+        str: ``".vcf"`` when ``output_format`` is ``"vcf"``, otherwise ``".tsv"``.
+
+    Raises:
+        KeyError: If ``output_format`` is absent. The shipped ``advntr_config.json`` sets it;
+            a partial configuration is not supported input. See :func:`run_advntr`.
+
+    Note:
+        The mapping is a **parameter, not the module global**, deliberately.
+        :func:`run_advntr` reads the import-time :data:`advntr_settings`, while
+        ``pipeline.py`` calls :func:`load_advntr_config` a second time and derives its own
+        local mapping. Those are two independently loaded states, and this extension is
+        derived by both -- the producer of the output path and its consumer. A helper that
+        read the global would let the two disagree while appearing to share a single source
+        of truth, which is the drift this function exists to remove (#247).
+    """
+    return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
+
+
 def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
@@ -91,15 +117,30 @@ def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None):
     """
     advntr_path = config["tools"]["advntr"]
 
-    # Set the number of threads from advntr_settings or default to 8
-    threads = advntr_settings.get("threads", 8)
+    # Configuration is authoritative for `threads` and `output_format`. Both used to be read
+    # with `.get` fallbacks that contradicted the shipped file -- `threads` defaulted to 8
+    # while advntr_config.json sets 1, and `output_format` defaulted to "tsv" while it sets
+    # "vcf" -- so dropping either key changed the emitted command with no error at all. That
+    # is the pattern already rejected for the calibration constants in
+    # confidence_assignment.py:108-111. `--config-path` replaces the whole config rather than
+    # merging it, so a partial config is not supported input and failing loudly is right (#247).
+    #
+    # The thread count is 1 because adVNTR's `-t` is a genuine no-op for the invocation
+    # VNtyper makes, not because 1 is fast. `-t` sets only `settings.CORES`
+    # (advntr_commands.py:72-74), whose three readers are VNTR model construction
+    # (models.py:66,69,72,74) and two PacBio-only functions (vntr_finder.py:870,889). VNtyper
+    # runs `genotype -fs` on short reads, routing through advntr_commands.py:139-144 ->
+    # genome_analyzer.py:211, where there is no Process, Pool or CORES at all. Recorded in
+    # a0a2563 (2024-12-24) and re-verified against berntpopp/adVNTR 1.3.3 while closing #215.
+    # Do not "fix" this by wiring `--threads` into it: the command would change and the
+    # runtime would not, which is a false affordance.
+    threads = advntr_settings["threads"]
 
     # Retrieve additional command parts from advntr_settings, if available
     additional_commands = advntr_settings.get("additional_commands", "-aln")
 
-    # Determine the output format and extension
-    output_format = advntr_settings.get("output_format", "tsv")
-    output_ext = ".vcf" if output_format == "vcf" else ".tsv"
+    # Determine the output extension. Shared with pipeline.py, which reconstructs this path.
+    output_ext = advntr_output_extension(advntr_settings)
 
     # Set the VNTR ID from config file or default to 25561
     vid = advntr_settings.get("vid", 25561)
