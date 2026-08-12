@@ -225,9 +225,18 @@ class TestSettingsComeFromTheDerivedGlobal:
 
         assert captured_command == []
 
-    def test_the_shipped_configuration_emits_one_thread(self, inputs, captured_command):
-        """The pin is deliberate and is not a performance oversight: adVNTR's -t sets only
-        settings.CORES, which nothing on the `genotype -fs` short-read path reads (#215)."""
+    def test_a_caller_that_names_no_thread_count_gets_one(self, inputs, captured_command):
+        """The ``1`` here is ``run_advntr``'s ``pipeline_threads`` default, not a pin in the
+        shipped configuration: advntr_config.json sets ``threads: null``, which inherits.
+
+        This assertion used to be called "the shipped configuration emits one thread" and
+        was justified by adVNTR's ``-t`` setting only ``settings.CORES``, which nothing on
+        the ``genotype -fs`` short-read path reads (#215). That was true until adVNTR 2.0.0
+        moved the Viterbi DP into a ``nogil`` block and threaded the read loop. The
+        assertion outlived its reason because the default is 1 at both ends, so it kept
+        passing while saying something false about why. What matters now is in
+        :class:`TestThreadsInheritThePipelineValue`.
+        """
         db_file, sorted_bam, output = inputs
 
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
@@ -360,3 +369,308 @@ class TestConfigLoading:
         path.write_text('{"advntr_settings": {"vid": 1}}')
 
         assert advntr.load_advntr_config(str(path)) == {"advntr_settings": {"vid": 1}}
+
+
+class TestThreadsInheritThePipelineValue:
+    """``"threads": null`` means inherit ``--threads``; an integer overrides it.
+
+    Before adVNTR 2.0.0 this would have been a false affordance: ``-t`` set only
+    ``settings.CORES``, which nothing on the ``genotype -fs`` path read (#215, #254).
+    2.0.0 moved the Viterbi DP into a ``nogil`` block and threaded the read loop, so the
+    flag now has an effect and the pipeline's value is worth passing through.
+    """
+
+    def test_null_threads_inherit_the_pipeline_value(self, inputs, captured_command, monkeypatch):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": None, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        )
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=12)
+
+        assert captured_command[0]["command"].endswith("-t 12 -aln")
+
+    def test_an_explicit_thread_count_overrides_the_pipeline_value(self, inputs, captured_command, monkeypatch):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": 3, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        )
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=12)
+
+        assert captured_command[0]["command"].endswith("-t 3 -aln")
+
+    def test_a_missing_threads_key_still_raises(self, inputs, monkeypatch):
+        """``null`` is not the same as absent; a partial mapping is unsupported input."""
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        )
+
+        with pytest.raises(KeyError):
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=4)
+
+    def test_the_shipped_config_uses_null_so_the_cli_wins(self):
+        """If this becomes an integer again, ``--threads`` silently stops reaching adVNTR."""
+        config = advntr.load_advntr_config()
+
+        assert config["advntr_settings"]["threads"] is None
+
+    def test_the_default_is_one_so_callers_that_do_not_pass_it_are_unchanged(
+        self, inputs, captured_command, monkeypatch
+    ):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": None, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
+        )
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command[0]["command"].endswith("-t 1 -aln")
+
+
+class TestThreadCountValidation:
+    """Bad thread values fail here, naming the key and the file.
+
+    adVNTR's own check (`advntr_commands.py:72-73`) says only "threads cannot be less
+    than 1", which names neither where the value came from nor how to fix it. Validating
+    before the command is built turns that into an actionable message.
+    """
+
+    def test_a_missing_key_names_the_key_and_the_file(self):
+        with pytest.raises(KeyError) as excinfo:
+            advntr.resolve_advntr_threads({}, 4)
+
+        message = str(excinfo.value)
+        assert "threads" in message
+        assert "advntr_config.json" in message
+        assert "null" in message
+
+    def test_zero_is_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            advntr.resolve_advntr_threads({"threads": 0}, 4)
+
+    def test_a_negative_count_is_rejected(self):
+        with pytest.raises(ValueError, match="at least 1"):
+            advntr.resolve_advntr_threads({"threads": -8}, 4)
+
+    def test_an_inherited_value_is_validated_too(self):
+        """`null` delegates to --threads, so a bad pipeline value must not slip through."""
+        with pytest.raises(ValueError, match="--threads"):
+            advntr.resolve_advntr_threads({"threads": None}, 0)
+
+    def test_a_non_integer_is_rejected_with_its_type(self):
+        with pytest.raises(ValueError, match="str"):
+            advntr.resolve_advntr_threads({"threads": "4"}, 1)
+
+    def test_a_float_is_rejected(self):
+        with pytest.raises(ValueError, match="float"):
+            advntr.resolve_advntr_threads({"threads": 2.5}, 1)
+
+    def test_true_is_rejected_rather_than_becoming_one_thread(self):
+        """bool is an int subclass; True would otherwise silently mean one thread."""
+        with pytest.raises(ValueError, match="bool"):
+            advntr.resolve_advntr_threads({"threads": True}, 4)
+
+    def test_an_explicit_count_is_returned(self):
+        assert advntr.resolve_advntr_threads({"threads": 6}, 4) == 6
+
+    def test_null_inherits_the_pipeline_value(self):
+        assert advntr.resolve_advntr_threads({"threads": None}, 12) == 12
+
+
+class TestAdditionalCommandsCannotOverrideAManagedOption:
+    """``additional_commands`` is interpolated verbatim *after* every option ``run_advntr``
+    sets, so any managed option repeated there wins.
+
+    adVNTR declares ``-t``/``--threads`` as one argparse option
+    (``advntr/__main__.py:88``) and argparse lets the last occurrence win. Measured against
+    a parser built from adVNTR's own declarations, every one of these forms overrides an
+    earlier ``-t 12``: ``--threads 3``, ``-t3``, ``--threads=3`` and the abbreviations
+    ``--thr``/``--thread`` that ``allow_abbrev`` accepts by default.
+
+    That made ``resolve_advntr_threads`` decorative: it rejects 0, negatives, bools and
+    non-integers, and then a config that also says ``additional_commands: "--threads 0"``
+    hands adVNTR the very value it refused. The same hole redirects ``-o`` and ``-m``,
+    which would write the genotype somewhere ``pipeline.py`` does not read it back from.
+    """
+
+    @pytest.mark.parametrize(
+        "additional",
+        [
+            "--threads 3",
+            "-t 3",
+            "-t3",
+            "--threads=3",
+            "--thr 3",
+            "--thread 3",
+        ],
+        ids=["long", "short", "short-attached", "long-equals", "abbrev-short", "abbrev-long"],
+    )
+    def test_every_spelling_of_a_repeated_thread_count_is_refused(
+        self, additional, inputs, captured_command, monkeypatch
+    ):
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": 12, "output_format": "vcf", "additional_commands": additional},
+        )
+
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command == [], "no command may be emitted once a managed option is duplicated"
+
+    @pytest.mark.parametrize(
+        "additional",
+        ["-o /tmp/elsewhere.vcf", "--outfile /tmp/elsewhere.vcf", "-m /tmp/other.db", "--models /tmp/other.db"],
+    )
+    def test_redirecting_the_artefact_or_the_model_is_refused(self, additional, inputs, captured_command, monkeypatch):
+        """``pipeline.py`` reconstructs the output path independently and reads the file
+        back, so an ``-o`` nobody chose is a missing result, not a relocated one."""
+        db_file, sorted_bam, output = inputs
+        monkeypatch.setattr(
+            advntr,
+            "advntr_settings",
+            {"threads": 1, "output_format": "vcf", "additional_commands": additional},
+        )
+
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command == []
+
+    def test_the_message_names_the_option_and_the_key_that_owns_it(self):
+        with pytest.raises(ValueError) as excinfo:
+            advntr.resolve_additional_commands({"additional_commands": "--threads 3"})
+
+        message = str(excinfo.value)
+        assert "--threads" in message
+        assert "'threads'" in message, "the operator needs to be told which key to set instead"
+
+    @pytest.mark.parametrize("additional", ["-aln", "-aln --haploid", "--fullru", "-u", ""])
+    def test_flags_advntr_owns_alone_still_pass_through(self, additional):
+        """The guard must not turn ``additional_commands`` into an empty extension point:
+        ``-aln`` is what ships, and ``--haploid``/``--fullru``/``-u`` collide with nothing.
+        """
+        assert advntr.resolve_additional_commands({"additional_commands": additional}) == additional
+
+    def test_the_shipped_value_reaches_the_command_unchanged(self, inputs, captured_command):
+        db_file, sorted_bam, output = inputs
+
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)
+
+        assert captured_command[0]["command"].endswith("-aln")
+
+    def test_an_unparseable_value_is_refused_rather_than_interpolated(self):
+        """``run_command`` runs the result under ``shell=True``; an unbalanced quote would
+        otherwise reach bash as a syntax error several stages later."""
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.resolve_additional_commands({"additional_commands": "-aln 'unclosed"})
+
+
+class TestTheGuardIsAnAllowListAndNotAPatternMatch:
+    """A deny-list has to reimplement argparse's option matching, and the first one here
+    did not. Two whole classes of spelling walked past it, both measured against a parser
+    built from adVNTR's own declarations and appended to the exact command run_advntr
+    emits:
+
+    * **single-dash flag groups.** `consume_optional` decomposes them: a zero-argument
+      short option consumes its first character and re-forms `'-' + tail`, so every one of
+      `-p`, `-n`, `-e`, `-u` is a free prefix. `-pt3` set threads to 3. `-po /elsewhere.vcf`
+      redirected the artefact -- the case the module docstring calls out as the worst,
+      because pipeline.py rebuilds that path independently and reads it back.
+    * **single-dash abbreviation.** `allow_abbrev` applies to single-dash options too, and
+      no `-v` is declared, so `-v 99999` and `-vi 99999` both reach `-vid` and genotype a
+      different VNTR.
+
+    The fix inverts the rule: a word starting with `-` must be an option adVNTR declares
+    AND one this module does not set. Anything else is refused, including abbreviations,
+    attached values and flag groups, because none of them are exact declared spellings.
+    That is fail-closed by construction rather than by enumeration, and it costs the same
+    transcription the module was already paying.
+    """
+
+    @pytest.mark.parametrize(
+        "additional",
+        ["-pt3", "-nt3", "-et3", "-ut3", "-pt 3", "-po /elsewhere.vcf", "-pm /other.db", "-pa /other.bam"],
+    )
+    def test_a_flag_group_cannot_smuggle_in_a_managed_option(self, additional):
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.resolve_additional_commands({"additional_commands": additional})
+
+    @pytest.mark.parametrize("additional", ["-v 99999", "-vi 99999"])
+    def test_a_single_dash_abbreviation_of_vid_is_refused(self, additional):
+        """`-v 25561` is a spelling an operator could plausibly type."""
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.resolve_additional_commands({"additional_commands": additional})
+
+    @pytest.mark.parametrize(
+        "additional",
+        ["--thr 3", "--thread 3", "--work /tmp", "--model /db", "--out /x.vcf", "--vntr 1"],
+    )
+    def test_a_long_abbreviation_is_refused(self, additional):
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.resolve_additional_commands({"additional_commands": additional})
+
+    @pytest.mark.parametrize(
+        "additional",
+        [
+            "-aln",
+            "--aln",
+            "-naive",
+            "--naive",
+            "-e",
+            "-c 30",
+            "-u",
+            "-p",
+            "-n",
+            "--haploid",
+            "--fullru",
+            "--append",
+            "--noref_aln",
+            "--outfmt vcf",
+            "--outfmt=vcf",
+            "--min_read_length 100",
+            "--vid_file /ids.txt",
+            "-aln --haploid --fullru",
+            "",
+        ],
+    )
+    def test_every_flag_advntr_owns_alone_still_passes(self, additional):
+        """The guard must refuse overrides, not turn additional_commands into a dead
+        extension point. These are all declared `genotype` options run_advntr never sets."""
+        assert advntr.resolve_additional_commands({"additional_commands": additional}) == additional
+
+    def test_an_option_advntr_does_not_declare_is_refused_as_unknown(self):
+        """A typo reaching adVNTR is an opaque argparse error from a subprocess."""
+        with pytest.raises(ValueError, match="does not declare"):
+            advntr.resolve_additional_commands({"additional_commands": "--haploidd"})
+
+    def test_the_two_refusals_say_different_things(self):
+        """A managed option needs "set X instead"; an unknown one needs "no such option"."""
+        with pytest.raises(ValueError, match="advntr_settings\\['threads'\\]"):
+            advntr.resolve_additional_commands({"additional_commands": "--threads 3"})
+
+    def test_a_negative_number_is_a_value_and_not_an_option(self):
+        assert advntr.resolve_additional_commands({"additional_commands": "-c -1.5"}) == "-c -1.5"
+
+    @pytest.mark.parametrize("additional", ["--", "-"])
+    def test_the_bare_separators_are_refused(self, additional):
+        """Neither is a declared option, and `--` changes how everything after it parses."""
+        with pytest.raises(ValueError, match="additional_commands"):
+            advntr.resolve_additional_commands({"additional_commands": additional})
+
+    def test_every_managed_option_names_an_owner(self):
+        """The refusal path indexes the owners map; a managed option added without one
+        turns a clear refusal into a KeyError."""
+        assert set(advntr.MANAGED_ADVNTR_OPTIONS) == set(advntr.MANAGED_ADVNTR_OPTION_OWNERS)

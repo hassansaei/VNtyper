@@ -4,7 +4,7 @@
       "frameshift_multiplier": 3,
       "vid": 25561,
       "output_format": "vcf",
-      "threads": 1,
+      "threads": null,
       "additional_commands": "-aln"
     },
     "flagging_rules": {

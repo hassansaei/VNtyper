@@ -244,3 +244,36 @@ def test_main_dispatches_only_the_selected_handler(
 
     assert gate.main(argv) == statuses[selected]
     assert calls == [(selected, forwarded)]
+
+
+def test_cmd_probe_answers_an_attribute_marker_by_the_same_rule_as_a_launched_run(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The probe is what an operator runs *before* committing to a long gate, so a marker
+    state it reports must be the one the runs themselves will see.
+
+    This one runs the real subprocesses rather than a stub, because the thing under test is
+    the snippet the probe executes -- and that snippet is exactly what a stub replaces.
+    """
+    from golden_cohort import launcher  # noqa: PLC0415 - the gate module is loaded lazily above
+
+    marker = "vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads"
+
+    assert gate.cmd_probe(SimpleNamespace(tree=REPO_ROOT, marker=marker)) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"]["pythonpath_pinned"]["marker"] is True
+    assert payload["results"]["pythonpath_pinned"]["marker"] == launcher.resolve(REPO_ROOT, marker)["marker_present"]
+
+
+def test_cmd_probe_reports_an_absent_attribute_without_failing_the_probe(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The baseline side's answer. `absent` is a state, not a probe failure -- the probe's
+    exit code reports whether `vntyper` resolved into the tree, which it did."""
+    marker = "vntyper.modules.advntr.advntr_genotyping:no_such_function"
+
+    assert gate.cmd_probe(SimpleNamespace(tree=REPO_ROOT, marker=marker)) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"]["pythonpath_pinned"]["marker"] is False

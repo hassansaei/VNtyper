@@ -355,7 +355,7 @@ def test_two_sides_using_different_marker_modules_are_refused() -> None:
         _side("before", "/trees/base", "absent", marker="vntyper.scripts.pipeline_guards"),
         _side("after", "/trees/cand", "present", marker="vntyper.scripts.cohort_rules"),
     )
-    assert any("different marker modules" in problem for problem in problems)
+    assert any("different markers" in problem for problem in problems)
 
 
 def test_a_side_that_recorded_no_case_results_is_refused() -> None:

@@ -95,8 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--threads",
         type=int,
         default=None,
-        help="Number of threads to use. Applies to alignment, samtools and fastp; adVNTR ignores it, "
-        "because its -t flag has no effect on the short-read frameshift genotyping VNtyper runs.",
+        help="Number of threads to use. Applies to alignment, samtools, fastp and adVNTR. "
+        "adVNTR honours it from 2.0.0 onward, where -t parallelises read decoding; "
+        "before that its -t flag was a no-op on the short-read frameshift path.",
     )
     parser_pipeline.add_argument(
         "--reference-assembly",
@@ -383,8 +384,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--threads",
         type=int,
         default=None,
-        help="Number of threads to use. Applies to alignment, samtools and fastp; adVNTR ignores it, "
-        "because its -t flag has no effect on the short-read frameshift genotyping VNtyper runs.",
+        help="Number of threads to use. Applies to alignment, samtools, fastp and adVNTR. "
+        "adVNTR honours it from 2.0.0 onward, where -t parallelises read decoding; "
+        "before that its -t flag was a no-op on the short-read frameshift path.",
     )
     parser_online.add_argument(
         "--email",

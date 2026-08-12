@@ -363,3 +363,85 @@ def test_an_absent_pinned_revision_actually_aborts_the_install(tmp_path):
     assert result.returncode != 0, "an absent pinned revision must not build the branch tip"
     assert absent in result.stderr, "the abort must name the revision it could not find"
     assert "Refusing to build against the branch tip" in result.stderr
+
+
+#: The module whose comment the cfg's own comment cross-references.
+GENOTYPING = Path(__file__).resolve().parents[2] / "vntyper" / "modules" / "advntr" / "advntr_genotyping.py"
+
+#: A leading comment marker, with the single space that conventionally follows it.
+_COMMENT_MARKER = re.compile(r"(?m)^[ \t]*#[ \t]?")
+
+#: A sentence terminator followed by whitespace. ``203.3 s`` and ``subset.bam,`` do not
+#: match, because the character after the dot is not whitespace in either.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s")
+
+
+def _claims_about(text: str, needle: str) -> list[str]:
+    """Return the sentences of ``text`` that mention ``needle``.
+
+    Comment markers are stripped and wrapped lines rejoined, because the claim this checks
+    is written across several commented lines in both documents. A blank line ends a claim,
+    so a sentence can never absorb the paragraph after it -- without that, a ``.py`` file
+    would flatten into one string and a version number from unrelated code could satisfy
+    the assertion.
+
+    Args:
+        text: The whole file.
+        needle: The substring a sentence must contain to be returned.
+
+    Returns:
+        list[str]: The matching sentences, whitespace-normalised.
+    """
+    without_markers = _COMMENT_MARKER.sub("", text)
+    claims: list[str] = []
+    for block in re.split(r"\n\s*\n", without_markers):
+        joined = " ".join(block.split())
+        claims.extend(sentence for sentence in _SENTENCE_SPLIT.split(joined) if needle in sentence)
+    return claims
+
+
+class TestTheTwoDocumentsAgreeOnWhichReleaseMadeThreadingReal:
+    """`install_advntr.cfg` and `advntr_genotyping.py` both state which adVNTR release moved
+    the Viterbi DP into a ``nogil`` block, and the cfg explicitly tells a reader to keep the
+    two in step. They disagreed: the cfg credited 2.0.1, the module credited 2.0.0.
+
+    2.0.0 is right. `f76d326` ("perf(hmm): bit-exact nogil Viterbi rewrite") and `82b1c2b`
+    ("perf: parallelise read decoding, making -t genuinely work") both precede `d66b839`
+    ("release: 2.0.0"). Tag `v2.0.1` is `59479ae`, whose one substantive commit is `2e7a3d0`
+    ("build: stop shipping the test harness and dev scripts in the egg") -- packaging, not
+    decoding.
+
+    Nothing else pins this. The pin tests above check the cfg's *shape*, and a wrong version
+    in a comment survives every one of them -- which is exactly how it shipped.
+    """
+
+    @pytest.mark.parametrize("path", [CFG, GENOTYPING], ids=["cfg", "module"])
+    def test_the_nogil_claim_names_the_release_that_carries_it(self, path):
+        claims = _claims_about(path.read_text(encoding="utf-8"), "nogil")
+
+        assert claims, f"{path.name} no longer states which release moved the DP into a nogil block"
+        assert any("2.0.0" in claim for claim in claims), (
+            f"{path.name} must credit 2.0.0 with the nogil rewrite; found: {claims}"
+        )
+
+    @pytest.mark.parametrize("path", [CFG, GENOTYPING], ids=["cfg", "module"])
+    def test_no_document_credits_the_packaging_release_with_the_rewrite(self, path):
+        claims = _claims_about(path.read_text(encoding="utf-8"), "nogil")
+
+        offenders = [claim for claim in claims if "2.0.1" in claim]
+        assert not offenders, (
+            f"{path.name} credits 2.0.1 with the nogil rewrite, which is a packaging release: {offenders}"
+        )
+
+    def test_the_checker_reads_a_claim_split_across_commented_lines(self):
+        """Non-vacuity: the wording that actually shipped must be what this rejects."""
+        shipped = (
+            "# adVNTR 2.0.1 (tag v2.0.1) moved the Viterbi DP into a `nogil` block and threaded the\n"
+            "# read loop. Verified at this revision: 61.1 -> 3.12 ms per decode attempt serially.\n"
+        )
+
+        claims = _claims_about(shipped, "nogil")
+
+        assert claims == [
+            "adVNTR 2.0.1 (tag v2.0.1) moved the Viterbi DP into a `nogil` block and threaded the read loop."
+        ]

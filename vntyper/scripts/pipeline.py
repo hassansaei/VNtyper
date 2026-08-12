@@ -551,6 +551,7 @@ def run_pipeline(
                     "output",
                     config=config,
                     cwd=project_root,
+                    pipeline_threads=threads,
                 )
                 # Shared with run_advntr, which built the path adVNTR actually wrote. This
                 # used to repeat `.get("output_format", "tsv")` here, so the producer and the

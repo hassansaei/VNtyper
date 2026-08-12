@@ -15,7 +15,7 @@ What it does that the first three recorded runs did:
   the three adVNTR ids and the three probes are **not** derived: they are declared policy,
   resolved against the derived set. See :mod:`golden_cohort.matrix`;
 * launches **every** run through a wrapper that prints its resolved ``vntyper.__file__``
-  and marker-module state as its first line and refuses to start unless both agree with
+  and marker state as its first line and refuses to start unless both agree with
   its side, because the editable finder otherwise makes a baseline checkout run candidate
   code;
 * compares the Kestrel row set, the pre-filter frame, the adVNTR frame, the coverage
@@ -50,9 +50,16 @@ script - it takes the path):
     python scripts/golden_cohort_gate.py run --side after --tree "$PWD" \\
         --run-root /scratch/gate/after --marker vntyper.scripts.pipeline_guards \\
         --expect-marker present
+
     python scripts/golden_cohort_gate.py compare --before-root /scratch/gate/before \\
         --after-root /scratch/gate/after --json /scratch/gate/result.json \\
         --text /scratch/gate/result.md --expect-after-sha ec67fff
+
+``--marker`` also accepts ``module:attribute``, which is what a branch that only *modifies*
+files has to use: it has no new module to name, and a module both sides have distinguishes
+nothing. #259 is such a branch - even the test module it grows by 116 lines already exists
+on ``main`` - and ran against
+``vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads``.
 
 Exit codes:
     0: the command succeeded. For ``compare`` that means the verdict is ``IDENTICAL`` and
@@ -152,12 +159,20 @@ def build_parser() -> argparse.ArgumentParser:
         "probe", help="Demonstrate that a bare import resolves to the editable install, not the CWD."
     )
     parser_probe.add_argument("--tree", type=Path, required=True)
-    parser_probe.add_argument("--marker", required=True)
+    parser_probe.add_argument(
+        "--marker",
+        required=True,
+        help="A module, or module:attribute, present on exactly one side. See the module docstring.",
+    )
 
     parser_launch = subparsers.add_parser("launch", help="Internal: run one vntyper invocation under the wrapper.")
     parser_launch.add_argument("--tree", type=Path, required=True)
     parser_launch.add_argument("--side", required=True)
-    parser_launch.add_argument("--marker", required=True)
+    parser_launch.add_argument(
+        "--marker",
+        required=True,
+        help="A module, or module:attribute, present on exactly one side. See the module docstring.",
+    )
     parser_launch.add_argument("--expect-marker", required=True, choices=["present", "absent"])
     parser_launch.add_argument("--commands-log", type=Path, default=None)
 
@@ -166,7 +181,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser_run.add_argument("--side", required=True, choices=["before", "after"])
     parser_run.add_argument("--tree", type=Path, required=True)
     parser_run.add_argument("--run-root", type=Path, required=True)
-    parser_run.add_argument("--marker", required=True)
+    parser_run.add_argument(
+        "--marker",
+        required=True,
+        help="A module, or module:attribute, present on exactly one side. See the module docstring.",
+    )
     parser_run.add_argument("--expect-marker", required=True, choices=["present", "absent"])
     parser_run.add_argument("--threads", type=int, default=4)
     parser_run.add_argument("--advntr-case-threads", type=int, default=8)
@@ -280,10 +299,20 @@ def cmd_probe(args: argparse.Namespace) -> int:
         int: 0 if the pinned probe resolved into the tree, 1 otherwise.
     """
     tree = args.tree.resolve()
+    # The marker rule lives in `launcher`, not here. This used to inline `find_spec`, which
+    # answered *absent* for every `module:attribute` marker -- so the command an operator
+    # runs to check a gate before committing half an hour to it would have disagreed with
+    # the runs themselves, in the direction that reads as "the baseline is fine".
+    harness_root = str(Path(launcher.__file__).resolve().parents[1])
     snippet = (
-        "import importlib.util, json, sys, vntyper\n"
-        "print(json.dumps({'file': vntyper.__file__, 'sys_path_0': sys.path[0],"
-        f" 'marker': importlib.util.find_spec({args.marker!r}) is not None}}))\n"
+        "import json, sys, vntyper\n"
+        "resolved, path_head = vntyper.__file__, sys.path[0]\n"
+        # Appended, never prepended: which `vntyper` each mode resolves is the only thing
+        # this command measures, and it must not be perturbed to answer the marker.
+        f"sys.path.append({harness_root!r})\n"
+        "from golden_cohort.launcher import marker_is_present\n"
+        "print(json.dumps({'file': resolved, 'sys_path_0': path_head,"
+        f" 'marker': marker_is_present({args.marker!r})}}))\n"
     )
 
     results: dict[str, Any] = {}

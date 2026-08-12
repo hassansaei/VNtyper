@@ -2,7 +2,7 @@
   "reviewed_ruff_version": "ruff 0.14.3",
   "expected_counts": {
     "normal": 102,
-    "ignore_noqa": 107,
+    "ignore_noqa": 108,
     "identities": 78,
     "categories": {
       "A": 29,
@@ -103,9 +103,9 @@
       "path": "scripts/golden_cohort/launcher.py",
       "symbol": "resolve",
       "normal_count": 0,
-      "all_count": 1,
+      "all_count": 2,
       "category": "C",
-      "rationale": "scripts/golden_cohort/launcher.py::resolve: fallback/continuation boundary; the caller-visible outcome is pinned by tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure and failure remains observable via structured error result"
+      "rationale": "scripts/golden_cohort/launcher.py::resolve: fallback/continuation boundary; two handlers, one for the `vntyper` import and one for marker resolution, which imports a module when the marker names an attribute. Both are pinned by tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure and ::test_resolve_reports_an_attribute_whose_module_cannot_be_imported, and failure remains observable via structured error result"
     },
     {
       "path": "scripts/golden_cohort/runner.py",
@@ -668,8 +668,8 @@
       "path": "scripts/golden_cohort/launcher.py",
       "symbol": "resolve",
       "disposition": "preserved-contract",
-      "outcome": "Returns a structured resolution with the exception in error, in_tree false, and vntyper_file None.",
-      "rationale": "Golden-cohort discovery reports an unavailable candidate without executing a broken import.",
+      "outcome": "Returns a structured resolution with the exception in error and marker_present false; an unresolvable `vntyper` also gives in_tree false and vntyper_file None.",
+      "rationale": "Golden-cohort discovery reports an unavailable candidate, or a marker whose module will not import, without executing a broken import and without aborting before the launch line is printed.",
       "behavior_test": "tests/unit/test_golden_cohort_launcher.py::test_resolve_returns_structured_import_failure",
       "observable_via": "structured error result"
     },
