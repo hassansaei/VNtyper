@@ -12,7 +12,7 @@ Every run of every side is launched through :func:`launch`, which
 
 1. changes into its own tree and puts that tree first on ``sys.path`` (a path entry, so
    ``PathFinder`` - which precedes the appended editable finder - resolves it),
-2. prints its resolved ``vntyper.__file__`` and marker-module state **as its first line**,
+2. prints its resolved ``vntyper.__file__`` and marker state **as its first line**,
 3. ``sys.exit``s before doing any work unless both agree with its side.
 
 The tree also has to be the working directory, not merely importable: ``vntyper/config.json``
@@ -20,8 +20,14 @@ names ``reference/...``, ``vntyper/templates`` and ``vntyper/dependencies/kestre
 by **relative** path, so a run whose CWD is elsewhere reads another tree's references,
 templates and Kestrel jar even when the code is right.
 
-The marker module is a parameter, not a constant: it differs per comparison. Runs 1-3 used
-``vntyper.scripts.pipeline_guards``, which exists only after ``078a6c4``.
+The marker is a parameter, not a constant: it differs per comparison. Runs 1-3 used the
+module ``vntyper.scripts.pipeline_guards``, which exists only after ``078a6c4``.
+
+A branch that only *modifies* files has no such module to name, and naming one both sides
+have distinguishes nothing -- so ``--marker`` also accepts ``module:attribute``. That form
+is the stronger witness of the two, because it is reached through the same import machinery
+as the code under test rather than through a sibling module; the cost is that observing an
+attribute requires importing its module, where ``find_spec`` executes nothing.
 
 While the run is under way every ``subprocess.Popen`` construction is appended to a JSONL
 file, which is what run 3 added and what let it show that ``2ae28c5``'s ``shlex.quote``
@@ -83,13 +89,62 @@ def _record_commands(log_path: Path) -> Any:
     return original_init
 
 
+def parse_marker(marker: str) -> tuple[str, str | None]:
+    """Split a marker into a module name and, if the marker names one, an attribute.
+
+    ``module`` and ``module:attribute`` are both accepted, the second spelled as an entry
+    point is. A half-written marker is refused rather than degraded: ``mod:`` checked as a
+    bare ``mod`` would answer *present* on both sides of a comparison whose whole purpose
+    is that the two sides differ, and the gate would then compare two sides it believed it
+    had verified.
+
+    Args:
+        marker: The ``--marker`` value.
+
+    Returns:
+        tuple[str, str | None]: The module name, and the attribute or None.
+
+    Raises:
+        ValueError: If either half of a ``module:attribute`` marker is empty.
+    """
+    module, separator, attribute = marker.partition(":")
+    if not separator:
+        if not module:
+            raise ValueError("marker is empty")
+        return module, None
+    if not module or not attribute:
+        raise ValueError(f"marker {marker!r} has an empty half; write module:attribute or a bare module")
+    return module, attribute
+
+
+def marker_is_present(marker: str) -> bool:
+    """Report whether ``marker`` resolves in the current interpreter.
+
+    A bare module is answered with ``find_spec``, which locates without executing -- runs
+    1-3 relied on that, because the check happens before ``vntyper.cli.main`` configures
+    logging. An attribute cannot be observed without importing its module, which is the
+    price of a marker for a branch that adds no module of its own.
+
+    Args:
+        marker: A module name or ``module:attribute``.
+
+    Returns:
+        bool: Whether it resolves.
+    """
+    module, attribute = parse_marker(marker)
+    if attribute is None:
+        return importlib.util.find_spec(module) is not None
+    return hasattr(importlib.import_module(module), attribute)
+
+
 def resolve(tree: Path, marker: str) -> dict[str, Any]:
     """Import ``vntyper`` from ``tree`` and report what resolved.
 
     Args:
         tree: The source tree this side must run from.
-        marker: A module name whose presence distinguishes the two sides, e.g.
-            ``vntyper.scripts.pipeline_guards``.
+        marker: A module name, or ``module:attribute``, whose presence distinguishes the two
+            sides -- e.g. ``vntyper.scripts.pipeline_guards`` or
+            ``vntyper.modules.advntr.advntr_genotyping:resolve_advntr_threads``.
 
     Returns:
         dict[str, Any]: ``vntyper_file``, ``in_tree``, ``marker``, ``marker_present`` and
@@ -115,11 +170,20 @@ def resolve(tree: Path, marker: str) -> dict[str, Any]:
     info["in_tree"] = tree in resolved.parents
 
     try:
-        info["marker_present"] = importlib.util.find_spec(marker) is not None
-    except (ImportError, ValueError) as exc:
-        # A missing *parent* package raises rather than returning None.
+        module, attribute = parse_marker(marker)
+    except ValueError as exc:
         info["marker_present"] = False
-        info["error"] = f"find_spec({marker}): {type(exc).__name__}: {exc}"
+        info["error"] = f"marker({marker}): ValueError: {exc}"
+        return info
+
+    try:
+        info["marker_present"] = marker_is_present(marker)
+    except Exception as exc:  # noqa: BLE001 - any resolution failure is a refusal to start
+        # A missing *parent* package raises rather than returning None, and importing a
+        # module to reach an attribute can fail in any way that module's import can.
+        info["marker_present"] = False
+        label = f"find_spec({marker})" if attribute is None else f"import_module({module})"
+        info["error"] = f"{label}: {type(exc).__name__}: {exc}"
     return info
 
 
@@ -156,7 +220,7 @@ def launch(
     Args:
         tree: The source tree this side must run from.
         side: ``before`` or ``after``, for the printed line.
-        marker: The marker module name.
+        marker: The marker, as a module name or ``module:attribute``.
         expect_marker: Whether the marker must be present on this side.
         commands_log: Where to append the executed commands, or None to not record them.
         argv: The ``vntyper`` argument list, without the program name.
