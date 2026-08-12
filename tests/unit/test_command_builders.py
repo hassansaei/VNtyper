@@ -600,15 +600,16 @@ def test_depth_uses_the_exact_custom_index_operand() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_cram_filter_runs_the_configured_samtools_in_both_pipeline_stages():
+def test_the_cram_filter_runs_the_configured_samtools():
     """
-    The writing stage must use the **same** samtools as the reading stage.
+    The extraction must use the samtools from ``config["tools"]["samtools"]``.
 
-    It used to call a bare ``samtools``. Everywhere else in the pipeline the
-    binary comes from ``config["tools"]["samtools"]``, and under
+    It used to call a bare ``samtools`` in its writing stage. Under
     ``mamba run -n <env>`` a bare name resolves against a different PATH - so the
     unmapped reads were extracted by a different build of samtools, or by nothing
-    at all while the pipeline reported success.
+    at all while the pipeline reported success. With the pipe collapsed there is one
+    invocation rather than two (#262), so this now asserts that the single one is the
+    configured one and that no bare token survives anywhere.
     """
     configured = "/opt/conda/envs/vntyper/bin/samtools"
 
@@ -619,8 +620,7 @@ def test_the_cram_filter_runs_the_configured_samtools_in_both_pipeline_stages():
         threads=4,
     )
 
-    writer = command.split("|", 1)[1].strip()
-    assert writer.startswith(configured), f"the writing stage must call {configured}, got: {writer[:80]!r}"
+    assert command.startswith(configured), f"the extraction must call {configured}, got: {command[:80]!r}"
 
     bare_calls = [
         part for part in command.split() if part == "samtools"
@@ -629,7 +629,14 @@ def test_the_cram_filter_runs_the_configured_samtools_in_both_pipeline_stages():
 
 
 def test_the_cram_filter_command_is_pinned():
-    """The whole CRAM command, including the deliberate pipefail prefix."""
+    """The whole CRAM command, now one process rather than a pipe (#262).
+
+    The expectation changed because the command genuinely changed: decoding to SAM
+    text, piping and re-parsing is strictly more work than decoding once, and it does
+    not scale with threads because each stage is single-threaded. The read set is
+    identical -- the old first stage applied no filter and no region, so both forms
+    select flag 4 over every record in the file.
+    """
     command = build_cram_unmapped_filter_command(
         samtools_path=SAMTOOLS,
         in_bam="/data/sample.cram",
@@ -637,10 +644,7 @@ def test_the_cram_filter_command_is_pinned():
         threads=4,
     )
 
-    assert command == (
-        "set -o pipefail; samtools view -@ 4 -h /data/sample.cram | "
-        "samtools view -b -f 4 -@ 4 - -o /out/output_unmapped.bam"
-    )
+    assert command == "samtools view -b -f 4 -@ 4 /data/sample.cram -o /out/output_unmapped.bam"
 
 
 def test_the_cram_filter_uses_no_process_substitution():
@@ -669,15 +673,18 @@ def test_the_cram_filter_uses_no_process_substitution():
     assert " tee " not in command, "tee had a single consumer and is what forced the substitution"
 
 
-def test_the_cram_filter_still_requires_bash():
-    """
-    Trap 9 survives the pipe rewrite, for a different reason than before.
+def test_the_cram_filter_no_longer_needs_bash_for_itself():
+    """This builder stopped being a reason for trap 9 (#262).
 
-    ``run_command`` uses ``shell=True`` with ``executable="/bin/bash"``. That was
-    justified by the process substitution; with the substitution gone, the reason
-    is ``set -o pipefail``, which is not POSIX and is what makes a failure in the
-    reading stage fail the whole command instead of being masked by the writer's
-    exit status.
+    Trap 9 pinned ``/bin/bash`` first for the process substitution, then for
+    ``set -o pipefail``. With the pipe collapsed into one process this command needs
+    neither: its exit status is samtools' own, and there is no non-POSIX syntax in it
+    at all.
+
+    **Trap 9 itself still holds** -- ``build_bam_to_fastq_command`` and
+    ``build_bwa_align_sort_command`` are still pipes and still require pipefail, which
+    ``test_every_multi_stage_pipe_sets_pipefail`` enforces over the whole inventory.
+    What has changed is only which commands are the reason.
     """
     command = build_cram_unmapped_filter_command(
         samtools_path=SAMTOOLS,
@@ -686,7 +693,9 @@ def test_the_cram_filter_still_requires_bash():
         threads=4,
     )
 
-    assert command.startswith("set -o pipefail; "), "pipefail is why this still cannot run under plain sh"
+    assert not command.startswith(PIPEFAIL_PREFIX), "no pipeline means no stage whose status can be masked"
+    assert "|" not in command
+    assert ">(" not in command
 
 
 # ---------------------------------------------------------------------------
@@ -794,12 +803,63 @@ def test_the_bwa_align_sort_command_accepts_one_fastq_without_a_none_operand():
                 threads=1,
             ),
         ),
+        (
+            "cram_unmapped_indexed",
+            build_cram_unmapped_indexed_command(
+                samtools_path=SAMTOOLS,
+                in_bam="/s.cram",
+                unmapped_bam="/u.bam",
+                threads=1,
+            ),
+        ),
+        (
+            "samtools_slice",
+            build_samtools_slice_command(
+                samtools_path=SAMTOOLS,
+                in_bam="/s.cram",
+                output_bam="/o.bam",
+                region="chr1:1-2",
+            ),
+        ),
+        (
+            "samtools_merge",
+            build_samtools_merge_command(
+                samtools_path=SAMTOOLS,
+                merged_bam="/m.bam",
+                sliced_bam="/s.bam",
+                unmapped_bam="/u.bam",
+                threads=1,
+            ),
+        ),
+        (
+            "samtools_depth",
+            build_samtools_depth_command(
+                samtools_path=SAMTOOLS,
+                threads=1,
+                region="chr1:1-2",
+                bam_file="/b.bam",
+                coverage_output="/d.txt",
+            ),
+        ),
     ],
 )
-def test_every_multi_stage_pipe_sets_pipefail(name, command):
-    """Any command containing a ``|`` must opt into pipefail. No exceptions."""
-    assert "|" in command, f"{name} is supposed to be a pipe; this test is checking the wrong thing"
-    assert command.startswith(PIPEFAIL_PREFIX), f"{name} pipes without pipefail: an upstream failure exits 0"
+def test_pipefail_is_set_on_exactly_the_commands_that_pipe(name, command):
+    """A command pipes if and only if it opts into pipefail. No exceptions either way.
+
+    This used to enumerate the three builders that were pipes and assert each one
+    carried the prefix, which meant the inventory had to be edited by hand whenever a
+    builder stopped being a pipe -- and an entry left behind would fail while an entry
+    *removed* would silently stop checking anything.
+
+    Stating it as a biconditional over every shell-producing builder covers both
+    directions at once: a new pipe without pipefail fails, and a prefix left on a
+    command that no longer pipes fails too. `cram_unmapped_filter` is now the second
+    kind (#262), and is deliberately still in this list rather than deleted from it.
+    """
+    assert ("|" in command) == command.startswith(PIPEFAIL_PREFIX), (
+        f"{name}: pipefail and piping must agree, got pipe={'|' in command} "
+        f"prefix={command.startswith(PIPEFAIL_PREFIX)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1110,11 +1170,78 @@ def test_both_unmapped_builders_are_compressed_by_default(builder):
     assert "-u" not in _tokens(command)
 
 
+# ---------------------------------------------------------------------------
+# One process, not a decode-to-SAM-text-and-reparse pipe (#262)
+# ---------------------------------------------------------------------------
+
+
+def test_unmapped_stream_extraction_is_a_single_process():
+    """One samtools view replaces the decode-to-SAM-text-and-reparse pipe.
+
+    The old shape decoded the whole alignment to SAM **text**, piped it, and re-parsed
+    it. Measured on the 963,549-read 7a61 fixture with a warm page cache, three runs
+    each: 0.12 s to 0.08 s at -@4 and 0.13 s to 0.08 s at -@8, peak RSS 10.6 MB to
+    6.1 MB and 16.5 MB to 8.2 MB. The pipe gains nothing from the extra threads --
+    SAM serialise and parse are each single-threaded per stage -- while the single
+    view holds 0.08 s at both.
+    """
+    command = build_cram_unmapped_filter_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=4,
+        reference_path="/r/g.fa",
+        uncompressed=True,
+    )
+
+    assert command == "samtools view -b -f 4 -u -T /r/g.fa -@ 4 /o/view.cram -o /o/unmapped.bam"
+
+
+def test_the_collapsed_extraction_needs_no_pipefail():
+    """With no pipe there is no masked stage: the exit status is samtools' own.
+
+    The `tee >(...)` flush hazard this builder used to document cannot occur either --
+    it needed a writer the shell does not wait for, and there is no longer a second
+    process at all.
+    """
+    command = build_cram_unmapped_filter_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=4,
+    )
+
+    assert "|" not in command
+    assert PIPEFAIL_PREFIX not in command
+    assert command.count("samtools") == 1
+
+
+def test_the_collapsed_extraction_still_reads_the_whole_file():
+    """It must not acquire a region or an index query: that would change the read set.
+
+    A `'*'` query returns only *unplaced* unmapped reads and drops placed ones -- flag
+    4 parked at a mapped mate's coordinate -- which is measurably wrong on this data:
+    329, 3,732 and 129 reads on the b178, 6449 and 7a61 fixtures respectively --
+    measured directly as `samtools view -c -f 4 <bam>` against
+    `samtools view -c -f 4 <bam> '*'`, and as high as 5,806 on 6c28.
+    """
+    command = build_cram_unmapped_filter_command(
+        samtools_path=SAMTOOLS,
+        in_bam="/o/view.cram",
+        unmapped_bam="/o/unmapped.bam",
+        threads=4,
+    )
+
+    assert "'*'" not in command
+    assert "-X" not in _tokens(command)
+    assert "chr" not in command
+
+
 def test_the_merged_bam_can_never_be_written_uncompressed():
     """It is renamed to <name>_sliced.bam, survives the run, and is shipped to users.
 
-    An earlier draft of this work applied `-u` to the merge, worth 0.821s -> 0.151s and
-    the largest single saving available. It is forfeited deliberately: the merge is
+    An earlier draft of this work applied `-u` to the merge, which was the largest
+    single saving available here. It is forfeited deliberately: the merge is
     renamed to `<name>_sliced.bam`; the intermediate cleanup removes only
     `<name>_unmapped.bam`, and only when `delete_intermediates` is true, whose CLI
     default is False; `<name>_sliced.bam` is an enumerated artifact in

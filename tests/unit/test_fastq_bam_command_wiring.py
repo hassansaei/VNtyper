@@ -472,15 +472,21 @@ def _cram_unmapped_command(tmp_path, **overrides):
     return filters[0]
 
 
-def test_the_cram_unmapped_command_is_pinned_as_a_plain_pipe(tmp_path):
+def test_the_cram_unmapped_command_is_pinned_as_a_single_process(tmp_path):
     """
     The whole command, byte for byte.
 
     With no resolved reference yet, the optional ``-T`` fragment is omitted.
+
+    The expectation moved from a two-stage pipe to one process (#262) because the
+    command genuinely changed: the old form decoded the whole CRAM to SAM **text**,
+    piped it and re-parsed it. The read set is identical -- the reading stage applied
+    no filter and no region, so both forms select flag 4 over every record in the
+    file, which was verified as identical name/flag/sequence digests over all eight
+    registered CRAM fixtures, with and without an explicit ``-T``.
     """
     assert _cram_unmapped_command(tmp_path) == (
-        f"set -o pipefail; /envs/vntyper/bin/samtools view -@ 4 -h /data/sample.cram | "
-        f"/envs/vntyper/bin/samtools view -b -f 4 -u -@ 4 - -o {tmp_path}/output_unmapped.bam"
+        f"/envs/vntyper/bin/samtools view -b -f 4 -u -@ 4 /data/sample.cram -o {tmp_path}/output_unmapped.bam"
     )
 
 
@@ -526,52 +532,51 @@ def test_the_cram_unmapped_command_has_no_process_substitution(tmp_path):
     assert "/dev/null" not in command, "nothing is discarded any more; the writer consumes the whole stream"
 
 
-def test_the_cram_unmapped_writer_is_a_pipeline_stage(tmp_path):
+def test_the_cram_unmapped_extraction_is_one_process_that_writes_the_output(tmp_path):
     """
-    The writing samtools must be a **stage**, which is what makes bash wait for it.
+    The writer must be the process the shell itself waits for.
 
-    Two stages joined by one ``|``: the reader streams the CRAM, the writer filters
-    flag 4 into the output BAM. Because the writer is in the pipeline, the shell
-    does not return until it has exited, and ``pipefail`` covers its exit status.
-    """
-    command = _cram_unmapped_command(tmp_path)
-    stages = command.removeprefix("set -o pipefail; ").split(" | ")
-
-    assert len(stages) == 2, f"expected a two-stage pipeline, got {len(stages)}: {stages}"
-    reader, writer = stages
-    assert reader.endswith("-h /data/sample.cram"), f"the reader must end at the CRAM input: {reader}"
-    assert writer.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"the writer is not stage two: {writer}"
-    assert writer.endswith(f"- -o {tmp_path}/output_unmapped.bam"), (
-        f"the writer must read stdin and write the unmapped BAM: {writer}"
-    )
-
-
-def test_the_cram_unmapped_command_sets_pipefail(tmp_path):
-    """
-    ``pipefail`` is only meaningful now that the writer is in the pipeline.
-
-    Under the substitution it bought nothing: a writer that consumed its whole input
-    and then failed never made ``tee`` see EPIPE, so the command exited 0 and the
-    stage carried on with a BAM that was never finished.
+    This is the property the two-stage pipe existed to guarantee, and one process
+    guarantees it outright rather than by construction: there is no second process
+    that could still be flushing when ``run_command`` returns, so the ``samtools
+    merge`` on the next line cannot race it (#262).
     """
     command = _cram_unmapped_command(tmp_path)
 
-    assert "|" in command, "this test is checking the wrong command if there is no pipe in it"
-    assert command.startswith("set -o pipefail; "), "without pipefail a failed writer exits 0"
+    assert "|" not in command, f"expected a single process, got a pipeline: {command}"
+    assert ">(" not in command, "a process substitution is not waited for; the merge would race it"
+    assert command.startswith("/envs/vntyper/bin/samtools view -b -f 4"), f"not a flag-4 extraction: {command}"
+    assert command.endswith(f"-o {tmp_path}/output_unmapped.bam"), f"must write the unmapped BAM: {command}"
 
 
-def test_the_cram_unmapped_command_uses_the_configured_samtools_in_both_stages(tmp_path):
+def test_the_cram_unmapped_command_does_not_set_pipefail(tmp_path):
+    """
+    With no pipeline there is no stage whose exit status can be masked.
+
+    ``pipefail`` was worth having while this was a pipe: a reading stage that died
+    half-way would otherwise be hidden behind the writer's exit status. One process
+    reports its own status, so the prefix would now be decoration -- and decoration on
+    a command that does not pipe is exactly what
+    ``test_pipefail_is_set_on_exactly_the_commands_that_pipe`` now forbids.
+    """
+    command = _cram_unmapped_command(tmp_path)
+
+    assert "set -o pipefail" not in command
+
+
+def test_the_cram_unmapped_command_uses_the_configured_samtools(tmp_path):
     """
     D2 through the real call site.
 
-    The stage passes ``config["tools"]["samtools"]`` to the builder for both stages.
-    A bare ``samtools`` in either would resolve against whatever PATH ``mamba run``
-    set up, so the unmapped reads would be extracted by a different build - or by
-    nothing at all, while the pipeline reported success.
+    The stage passes ``config["tools"]["samtools"]`` to the builder. A bare
+    ``samtools`` would resolve against whatever PATH ``mamba run`` set up, so the
+    unmapped reads would be extracted by a different build - or by nothing at all,
+    while the pipeline reported success. There is one invocation rather than two
+    since the pipe collapsed (#262), so the count moves with it.
     """
     command = _cram_unmapped_command(tmp_path)
 
-    assert command.count("/envs/vntyper/bin/samtools") == 2, f"both stages must use the configured samtools: {command}"
+    assert command.count("/envs/vntyper/bin/samtools") == 1, f"must use the configured samtools: {command}"
     assert [token for token in command.split() if token == "samtools"] == [], (
         f"a bare `samtools` token means the mismatch is back: {command}"
     )
@@ -1110,7 +1115,7 @@ def test_the_non_fast_slice_is_uncompressed_because_the_merge_replaces_it(tmp_pa
 
 
 def test_the_unmapped_extraction_is_uncompressed(tmp_path):
-    """It is merged and then deleted; measured 0.869s -> 0.081s on a 963,549-read BAM."""
+    """It is merged on the next line and then deleted, so deflating it is pure cost."""
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
 
     unmapped_command = next(command for command in commands if " -f 4 " in command)

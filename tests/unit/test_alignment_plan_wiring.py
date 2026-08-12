@@ -141,21 +141,32 @@ def test_non_fast_indexed_bam_uses_the_plan_view_and_htslib_star_fetch(tmp_path:
 
 
 def test_bam_with_placed_unmapped_evidence_uses_the_complete_stream_scan(tmp_path: Path) -> None:
-    """A placed unmapped record can occur before the BAI tail offset."""
+    """A placed unmapped record can occur before the BAI tail offset.
+
+    What makes the scan *complete* is the absence of the ``'*'`` index query, not the
+    shell pipe the mode used to be implemented with (#262). A ``'*'`` fetch returns
+    only unplaced unmapped reads and silently drops placed ones -- measured as 329,
+    3,732 and 129 reads on the b178, 6449 and 7a61 fixtures, and 5,806 on 6c28 -- so
+    that is the property to assert.
+    """
     plan = _plan(tmp_path, "bam", unmapped_scan="stream")
 
     commands = _run_conversion(tmp_path, plan, fast_mode=False)
 
     (unmapped_command,) = [command for command in commands if "-f 4" in command]
-    assert "set -o pipefail" in unmapped_command
+    assert " '*'" not in unmapped_command
+    assert " -X " not in unmapped_command
     assert plan.view_path in unmapped_command
 
 
 @pytest.mark.parametrize(
     ("scan", "expected_fragment", "unexpected_fragment"),
     [
-        ("indexed", "'*' -o", "set -o pipefail"),
-        ("stream", "set -o pipefail", " '*' -o"),
+        # The distinguishing property is the index query, not the shell shape. The
+        # stream mode used to be identifiable by `set -o pipefail`; that was incidental
+        # to how it was implemented and stopped being true when it became one process.
+        ("indexed", "'*' -o", " -o /dev/null"),
+        ("stream", " -o ", " '*' -o"),
     ],
 )
 def test_cram_unmapped_command_is_selected_by_the_proven_plan(
@@ -171,6 +182,7 @@ def test_cram_unmapped_command_is_selected_by_the_proven_plan(
     assert plan.view_path in unmapped_command
     assert f"-T '{plan.reference_path}'" in unmapped_command
     assert (" -X " in unmapped_command) is (scan == "indexed")
+    assert ("|" in unmapped_command) is False
 
 
 def test_coverage_passes_the_proven_reference_to_samtools_depth(tmp_path: Path) -> None:

@@ -74,10 +74,19 @@ def observe_unmapped_scan(commands_log: Path, output_bam: Path) -> tuple[str | N
         filters_unmapped = any(tokens[index : index + 2] == ["-f", "4"] for index in range(len(tokens) - 1))
         if not writes_target or not filters_unmapped:
             continue
-        if tokens.count("|") == 1 and tokens[:3] == ["set", "-o", "pipefail;"] and "*" not in tokens:
-            observed.append(("stream", command))
-        elif "|" not in tokens and "*" in tokens and "set" not in tokens:
+        # What distinguishes the two modes is the `'*'` index query, not the shape of
+        # the shell command. `'*'` fetches only the *unplaced* unmapped reads through
+        # the index; its absence means a whole-file decode. Keying `stream` on the
+        # presence of a shell pipe was incidental to how the stream mode happened to be
+        # implemented, and stopped classifying it the moment that became one process.
+        #
+        # Widening `stream` to "anything that is not indexed" is only safe because the
+        # `writes_target` and `filters_unmapped` guards above have already excluded
+        # every command that is not an extraction into this exact file.
+        if "*" in tokens:
             observed.append(("indexed", command))
+        else:
+            observed.append(("stream", command))
 
     modes = sorted({mode for mode, _command in observed})
     if not modes:
