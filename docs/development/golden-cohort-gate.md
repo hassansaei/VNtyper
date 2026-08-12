@@ -1141,6 +1141,15 @@ and read the same `reference/` set. So this gate is not a comparison of adVNTR 1
 pristine `05fd98a` kernel, and seven of eight whole-BAM `genotype -fs` runs with identical VCF
 and `-aln` sidecars).
 
+The branch ships a pin to **2.0.3**, one release later than the gate ran, and that is stated
+rather than glossed. 2.0.3 is code-review follow-up whose diff against 2.0.2 changes **no
+executable line under `advntr/` or `hmm/`** — `git diff v2.0.2..v2.0.3 -- advntr/ hmm/`
+touches one file, `advntr/read_selection.py`, and only inside a docstring. Everything else is
+`scripts/`, `advntr_harness/`, `tests/`, CI and prose, none of which is on the genotype path
+or even shipped in the installed egg. Tier 1 byte-equivalence and the Tier 3 selection digest
+`3d4d3ec6…` are unchanged. Re-running the cohort would therefore re-measure an identical
+binary; it was not re-run, and this paragraph is the reason.
+
 What this gate isolates is the VNtyper-side change, and it isolates it exactly: the baseline's
 `advntr_config.json` pins `"threads": 1`, the candidate's sets `"threads": null`, meaning
 *inherit*. The three adVNTR cases therefore ran adVNTR at **`-t 1` on the baseline and `-t 8`
