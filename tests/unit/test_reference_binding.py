@@ -254,19 +254,30 @@ def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: P
     """
     reference = _reference(tmp_path / "reference.fa")
     observed_bound_state: list[tuple[int, bytes]] = []
+    order: list[str] = []
+    unbound_binder = ReferenceBinding.bind_generated_sidecars
+
+    def spy_bind(binding: ReferenceBinding) -> None:
+        order.append("bind")
+        unbound_binder(binding)
 
     def capture(command: str, *_args: object, **_kwargs: object) -> tuple[bool, str]:
         arguments = shlex.split(command)
         if "-T" in arguments:
+            order.append("target-probe")
             candidate = Path(arguments[arguments.index("-T") + 1])
             Path(f"{candidate}.fai").write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
         if "--reference" in arguments:
+            order.append("coverage-probe")
             candidate = Path(arguments[arguments.index("--reference") + 1])
             index = Path(f"{candidate}.fai")
             observed_bound_state.append((index.stat(follow_symlinks=False).st_nlink, index.read_bytes()))
         return True, "decoded"
 
-    with patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=capture):
+    with (
+        patch("vntyper.scripts.alignment_preflight.capture_command", side_effect=capture),
+        patch.object(ReferenceBinding, "bind_generated_sidecars", spy_bind),
+    ):
         resolved, source, uncovered, binding = resolve_reference(
             "/run/view.cram",
             (("cli", str(reference)),),
@@ -284,6 +295,7 @@ def test_generated_fai_is_bound_before_the_coverage_probe_reopens_it(tmp_path: P
     try:
         assert resolved is not None
         assert (source, uncovered) == ("cli", ())
+        assert order == ["target-probe", "bind", "coverage-probe"]
         assert observed_bound_state == [(1, b"chr1\t4\t6\t4\t5\n")]
     finally:
         assert binding is not None
@@ -400,3 +412,27 @@ def test_generated_sidecar_keeps_its_name_instead_of_linking_to_its_own_descript
     finally:
         binding.close()
     assert not os.path.lexists(output / ".sample_reference_1")
+
+
+def test_a_reference_view_replaced_while_being_proven_is_never_removed(tmp_path: Path) -> None:
+    """The reachability fallback must not unlink an entry this binding did not install."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    intruder = tmp_path / "intruder"
+    intruder.write_bytes(b"not ours")
+
+    def replace_then_report_unreachable(path: str | Path) -> tuple[None, str]:
+        os.replace(intruder, path)
+        return None, "Too many levels of symbolic links (errno 40)"
+
+    with (
+        patch(
+            "vntyper.scripts.reference_binding.consumer_reachable_identity",
+            side_effect=replace_then_report_unreachable,
+        ),
+        pytest.raises(RuntimeError, match="Refusing to remove a replaced CRAM reference view"),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    assert (output / ".sample_reference_1" / "reference.fa").read_bytes() == b"not ours"

@@ -728,3 +728,32 @@ def test_unreachable_proc_view_falls_back_to_a_hardlink(tmp_path: Path) -> None:
     finally:
         binding.close()
     assert not os.path.lexists(view)
+
+
+def test_an_alignment_view_replaced_while_being_proven_is_not_handed_to_the_fallback(tmp_path: Path) -> None:
+    """The hardlink install must never atomically replace somebody else's entry."""
+    alignment = tmp_path / "input.cram"
+    alignment.write_bytes(b"CRAM input")
+    intruder = tmp_path / "intruder"
+    intruder.write_bytes(b"not ours")
+    view = tmp_path / "run" / "input.cram"
+    view.parent.mkdir()
+    binding = AlignmentBinding(str(alignment))
+
+    def replace_then_report_unreachable(path: str | Path) -> tuple[None, str]:
+        os.replace(intruder, path)
+        return None, "Too many levels of symbolic links (errno 40)"
+
+    try:
+        with (
+            patch(
+                "vntyper.scripts.alignment_binding.consumer_reachable_identity",
+                side_effect=replace_then_report_unreachable,
+            ),
+            pytest.raises(RuntimeError, match="changed while it was being proven"),
+        ):
+            binding.install_view(view)
+
+        assert view.read_bytes() == b"not ours"
+    finally:
+        binding.close()

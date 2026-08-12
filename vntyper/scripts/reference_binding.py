@@ -143,6 +143,11 @@ class _InodeView:
             message = f"Unable to retain CRAM reference input {source}: {error}"
             logger.error(message)
             raise RuntimeError(message) from error
+        except BaseException:
+            # A refusal to touch a replaced entry is not an OSError, and it must not
+            # leave this descriptor retained by a half-built view.
+            self._close_descriptor()
+            raise
 
     @property
     def is_open(self) -> bool:
@@ -169,10 +174,38 @@ class _InodeView:
         self._destination_identity = (metadata.st_dev, metadata.st_ino)
         self._destination_kind = kind
 
-    def _remove_own_symlink(self) -> None:
+    def _remove_own_symlink(self, installed_stat: os.stat_result) -> None:
+        """Remove only the exact symlink installed here, never a replacement.
+
+        Args:
+            installed_stat: ``lstat`` of the entry taken immediately after installation.
+
+        Raises:
+            RuntimeError: If the entry is no longer the exact symlink installed here.
+        """
+        try:
+            current_stat = os.lstat(self._destination)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            message = f"Unable to inspect an unreachable CRAM reference view {self._destination}: {error}"
+            logger.error(message)
+            raise RuntimeError(message) from error
+        unchanged = (current_stat.st_dev, current_stat.st_ino, current_stat.st_ctime_ns) == (
+            installed_stat.st_dev,
+            installed_stat.st_ino,
+            installed_stat.st_ctime_ns,
+        )
+        if (
+            not unchanged
+            or not stat.S_ISLNK(current_stat.st_mode)
+            or os.readlink(self._destination) != self._proc_target
+        ):
+            message = f"Refusing to remove a replaced CRAM reference view: {self._destination}"
+            logger.error(message)
+            raise RuntimeError(message)
         with suppress(OSError):
-            if os.readlink(self._destination) == self._proc_target:
-                os.unlink(self._destination)
+            os.unlink(self._destination)
 
     def _install_proc_link(self) -> bool:
         if not self._proc_target_is_exact():
@@ -180,6 +213,7 @@ class _InodeView:
         assert self._proc_target is not None
         try:
             os.symlink(self._proc_target, self._destination)
+            installed_stat = os.lstat(self._destination)
         except OSError:
             return False
         reachable, reason = consumer_reachable_identity(self._destination)
@@ -188,7 +222,7 @@ class _InodeView:
                 f"Run-local reference view {self._destination} does not reach the bound reference "
                 f"through its own pathname ({reason or 'identity mismatch'}); using a hardlink view instead."
             )
-            self._remove_own_symlink()
+            self._remove_own_symlink(installed_stat)
             return False
         self._record_destination("symlink")
         return True
