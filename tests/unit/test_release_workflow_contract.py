@@ -761,7 +761,10 @@ def test_current_container_commands_use_a_published_release_alias() -> None:
     )
     active_kinds: set[str] = set()
     unsupported = re.compile(r"(?<![A-Za-z0-9_.-])(?:docker://)?saei/vntyper")
-    published = re.compile(r"ghcr\.io/hassansaei/vntyper:(?:latest|v?\d+(?:\.\d+){0,2})(?![A-Za-z0-9._-])")
+    # Every reference is checked, not just one per block, and only the alias the
+    # examples actually use is accepted: a syntactically valid tag is not evidence that
+    # the release workflow publishes it.
+    reference = re.compile(r"ghcr\.io/hassansaei/vntyper:([A-Za-z0-9._-]+)")
     for path in surfaces:
         text = path.read_text(encoding="utf-8")
         normalized = " ".join(text.lower().split())
@@ -778,8 +781,9 @@ def test_current_container_commands_use_a_published_release_alias() -> None:
             if not kinds:
                 continue
             active_kinds.update(kinds)
-            assert published.search(block) is not None
-            assert "ghcr.io/hassansaei/vntyper:main" not in block
+            tags = reference.findall(block)
+            assert tags, block
+            assert set(tags) == {"latest"}, block
             assert unsupported.search(block) is None
     assert active_kinds == {"docker pull", "docker run", "apptainer pull"}
 

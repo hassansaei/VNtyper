@@ -196,10 +196,20 @@ class _InodeView:
             return False
         assert self._proc_target is not None
         try:
+            # Exclusive create: a colliding entry is preserved, never replaced.
             os.symlink(self._proc_target, self._destination)
-            installed_stat = os.lstat(self._destination)
         except OSError:
             return False
+        try:
+            installed_stat = os.lstat(self._destination)
+        except OSError as error:
+            # The entry is already published but its identity cannot be proven, so it
+            # cannot be recorded as owned. Remove exactly what was created here and fail
+            # closed rather than leave an unowned entry behind.
+            with suppress(OSError):
+                if os.readlink(self._destination) == self._proc_target:
+                    os.unlink(self._destination)
+            raise OSError(f"published run-local reference view could not be identified: {error}") from error
         reachable, reason = consumer_reachable_identity(self._destination)
         if reachable != self._identity:
             logger.warning(
@@ -228,14 +238,15 @@ class _InodeView:
             if not stat.S_ISREG(metadata.st_mode) or (metadata.st_dev, metadata.st_ino) != self._identity:
                 raise OSError("hardlink does not identify the already-open reference input")
             os.link(temporary, self._destination, follow_symlinks=False)
+            # Own it before the next fallible call. `metadata` is the verified hardlink's
+            # stat and the destination shares that inode, so re-reading the pathname here
+            # would only risk recording whatever replaced it.
+            self._record_destination("regular", metadata)
             os.unlink(temporary)
         except OSError:
             with suppress(OSError):
                 os.unlink(temporary)
             raise
-        # `metadata` is the verified hardlink's stat, and the destination shares its
-        # inode. Re-reading the pathname here would record whatever replaced it.
-        self._record_destination("regular", metadata)
 
     def _retain_generated_entry(self) -> None:
         # The entry already *is* the retained inode, so it is only recorded, never

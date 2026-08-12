@@ -503,3 +503,50 @@ def test_a_failed_install_still_has_an_owner_that_retries_its_removal(tmp_path: 
 
     assert failures["count"] == 1
     assert not os.path.lexists(output / ".sample_reference_1")
+
+
+def test_a_published_symlink_that_cannot_be_identified_is_withdrawn(tmp_path: Path) -> None:
+    """Ownership cannot be recorded without an identity, so the entry must not survive."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    consumer_path = output / ".sample_reference_1" / "reference.fa"
+    real_lstat = os.lstat
+
+    def fail_on_the_published_entry(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(path) == str(consumer_path):
+            raise OSError(errno.EIO, "transient I/O error")
+        return real_lstat(path, *args, **kwargs)
+
+    with (
+        patch("vntyper.scripts.reference_binding.os.lstat", side_effect=fail_on_the_published_entry),
+        pytest.raises(RuntimeError, match="published run-local reference view could not be identified"),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    assert not os.path.lexists(consumer_path)
+    assert not os.path.lexists(output / ".sample_reference_1")
+
+
+def test_a_published_hardlink_is_owned_before_its_temporary_name_is_removed(tmp_path: Path) -> None:
+    """The destination is published by os.link, so a later failure must find it owned."""
+    reference = _reference(tmp_path / "reference.fa")
+    output = tmp_path / "run"
+    output.mkdir()
+    consumer_path = output / ".sample_reference_1" / "reference.fa"
+    real_unlink = os.unlink
+
+    def fail_the_temporary_unlink(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if ".tmp" in str(path):
+            raise OSError(errno.EIO, "transient I/O error")
+        return real_unlink(path, *args, **kwargs)
+
+    with (
+        patch("vntyper.scripts.reference_binding.consumer_reachable_identity", return_value=(None, "unreachable")),
+        patch("vntyper.scripts.reference_binding.os.unlink", side_effect=fail_the_temporary_unlink),
+        pytest.raises(RuntimeError, match="Unable to retain CRAM reference input"),
+    ):
+        ReferenceBinding(str(reference), str(output), "sample", 1)
+
+    # Owned before the failing unlink, so teardown removed it rather than stranding it.
+    assert not os.path.lexists(consumer_path)
