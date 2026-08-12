@@ -285,11 +285,18 @@ def run_kestrel(
             )
             # Every k-mer size writes to the same `vcf_path` *and* the same `output.sam`, so a
             # discarded attempt must leave neither behind. A stale VCF would be re-examined by
-            # the next iteration and reported against the wrong k-mer size; a stale SAM is
-            # worse, because a *later* successful attempt converts whatever occupies that path
-            # into `output.bam` -- the alignment the report's IGV track shows. The genotype
-            # comes from the VCF and is unaffected, but a reader would be inspecting one k-mer
-            # size's alignment beside another's call (#255).
+            # the next iteration and reported against the wrong k-mer size.
+            #
+            # The SAM is narrower than it first looks, and the honest statement is worth having
+            # here. The pinned Kestrel opens its haplotype output through Java's truncating
+            # `FileOutputStream`, so an attempt that *does* initialise SAM output rewrites the
+            # file rather than appending to it -- the common case cleans up after itself. What
+            # remains is an attempt that exits 0 and never reaches that initialisation: its
+            # predecessor's SAM then survives, and a later successful attempt converts whatever
+            # occupies the path into `output.bam`, the alignment the report's IGV track shows.
+            # The genotype comes from the VCF and is unaffected either way. Removing it is
+            # attempt isolation -- the same reason the VCF is removed -- not a fix for a
+            # demonstrated conversion of stale data (#255).
             #
             # Both removals are guarded because neither may become a *new* way to leave the
             # loop: an unhandled OSError would escape as a bare filesystem error, skipping the

@@ -375,13 +375,16 @@ def test_a_failed_removal_still_raises_the_terminal_error_type(tmp_path, monkeyp
 
 
 def test_a_discarded_attempt_leaves_no_sam_for_a_later_one_to_convert(tmp_path, monkeypatch):
-    """Every k-mer size writes the same `output.sam`, and a *successful* attempt converts
-    whatever occupies that path into `output.bam` -- the alignment the report's IGV track
-    shows.
+    """Attempt isolation: a discarded attempt must leave no artefact for a later one.
 
-    So a discarded attempt's SAM surviving into a later successful one means the reader
-    inspects one k-mer size's alignment beside another's call. The genotype comes from the
-    VCF and is unaffected, which is exactly why this is easy to miss.
+    Scoped honestly. The pinned Kestrel opens its haplotype output with Java's truncating
+    `FileOutputStream`, so an attempt that reaches SAM initialisation overwrites the file --
+    the common case is self-cleaning. The gap is an attempt that exits 0 *before* reaching
+    it: the predecessor's SAM survives, and a later successful attempt converts whatever
+    occupies that path into `output.bam`, the alignment the report's IGV track shows.
+
+    The genotype comes from the VCF and is unaffected either way, which is why this is easy
+    to miss. This test pins the isolation, not a claim about how often it matters.
     """
     monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
     vcf = tmp_path / "output.vcf"
