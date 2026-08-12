@@ -184,13 +184,18 @@ def test_process_fastq_emits_the_single_input_fastp_form(tmp_path):
 
 
 def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
-    """Fast mode skips unmapped-read extraction entirely: two commands, in order."""
+    """Fast mode skips unmapped-read extraction entirely: two commands, in order.
+
+    The slice index is gone from this expectation because ``needs_advntr`` defaults to
+    False (#262). The index's only consumers are ``run_advntr`` and
+    ``downsample_bam_if_needed``, and coverage reads the alignment plan's own view, so
+    in a Kestrel-only fast-mode run it had no reader at all. The adVNTR case still
+    emits it -- see ``test_fast_mode_still_indexes_the_slice_for_advntr``.
+    """
     commands = _run_bam_to_fastq(tmp_path)
 
     assert commands == [
-        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
-        f"-o {tmp_path}/output_sliced.bam && "
-        f"samtools index -@ 4 {tmp_path}/output_sliced.bam",
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} -o {tmp_path}/output_sliced.bam",
         f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
         f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
         f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
@@ -198,15 +203,34 @@ def test_the_bam_fast_mode_path_slices_then_converts(tmp_path):
     ]
 
 
-def test_the_bam_normal_path_indexes_extracts_merges_and_reindexes(tmp_path):
+def test_the_bam_normal_path_extracts_merges_and_converts(tmp_path):
     """
-    The full BAM path, in order.
+    The full BAM path in a Kestrel-only run, in order.
 
-    Preflight has already proved and supplied the input index. The temporary slice
-    is not indexed because the merge immediately replaces it; the merged BAM is
-    indexed once before conversion.
+    Preflight has already proved and supplied the input index. The temporary slice is
+    not indexed because the merge immediately replaces it, and the merged BAM is no
+    longer indexed either: ``needs_advntr`` defaults to False and the index has no
+    other reader (#262). The adVNTR ordering is
+    ``test_the_bam_normal_path_indexes_the_merge_for_advntr`` below.
     """
     commands = _run_bam_to_fastq(tmp_path, fast_mode=False)
+
+    assert commands == [
+        f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
+        f"-o {tmp_path}/output_sliced.bam",
+        f"samtools view -b -f 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai '*' -o {tmp_path}/output_unmapped.bam",
+        f"samtools merge -f -@ 4 {tmp_path}/output_sliced_unmapped.bam "
+        f"{tmp_path}/output_sliced.bam {tmp_path}/output_unmapped.bam",
+        f"set -o pipefail; samtools sort -n -@ 4 {tmp_path}/output_sliced.bam | "
+        f"samtools fastq -@ 4 - -1 {tmp_path}/output_R1.fastq.gz "
+        f"-2 {tmp_path}/output_R2.fastq.gz -0 {tmp_path}/output_other.fastq.gz "
+        f"-s {tmp_path}/output_single.fastq.gz",
+    ]
+
+
+def test_the_bam_normal_path_indexes_the_merge_for_advntr(tmp_path):
+    """The same path with adVNTR: the merged BAM is indexed once, before conversion."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=True)
 
     assert commands == [
         f"samtools view -P -b -F 4 -@ 4 -X /data/sample.bam /data/sample.bam.bai {REGION} "
@@ -601,9 +625,7 @@ def test_the_bed_file_branch_passes_minus_l_instead_of_a_region(tmp_path):
     commands = _run_bam_to_fastq(tmp_path, bed_file=bed)
 
     assert commands[0] == (
-        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} "
-        f"-o {tmp_path}/output_sliced.bam && "
-        f"samtools index -@ 4 {tmp_path}/output_sliced.bam"
+        f"samtools view -P -b -@ 4 -X /data/sample.bam /data/sample.bam.bai -L {bed} -o {tmp_path}/output_sliced.bam"
     )
     assert REGION not in commands[0]
 
@@ -1005,3 +1027,78 @@ def test_an_operator_supplied_region_records_not_measured_rather_than_a_wrong_fi
     assert stats["vntr_array_depth_sum"] is None
     assert stats["vntr_flank_mean_depth"] is None
     assert stats["mean"] == pytest.approx(5.0)
+
+
+# ---------------------------------------------------------------------------
+# The slice index has exactly one consumer, and it is optional (#262)
+# ---------------------------------------------------------------------------
+#
+# A complete consumer trace of `output_sliced.bam.bai` finds `run_advntr`
+# (--alignment_file) and `downsample_bam_if_needed`, both reachable only inside
+# pipeline.py's `if "advntr" in extra_modules:` block. Coverage does not use it:
+# pipeline_coverage.py passes `bam_file=plan.view_path` with
+# `index_path=plan.stable_index_path`, which is the run-local view of the original
+# input. artifact_names.py's "sliced_bam" entry has no consumer at all.
+
+
+def _indexes(commands):
+    """Return the ``samtools index`` commands among ``commands``.
+
+    Args:
+        commands: The issued command strings.
+
+    Returns:
+        list[str]: Every command that indexes something.
+    """
+    return [command for command in commands if "samtools index" in command]
+
+
+def test_the_merged_bam_is_not_indexed_without_advntr(tmp_path):
+    """In Kestrel-only mode the merged-BAM index has no consumer.
+
+    Measured 58 ms at --threads 4 and 244 ms at --threads 1 on the largest fixture.
+    """
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=False)
+
+    assert _indexes(commands) == []
+
+
+def test_the_merged_bam_is_indexed_when_advntr_is_requested(tmp_path):
+    """adVNTR reads output_sliced.bam through its index, so the gate is not "never"."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=False, needs_advntr=True)
+
+    assert _indexes(commands) == [f"samtools index -@ 4 {tmp_path}/output_sliced.bam"]
+
+
+def test_fast_mode_also_skips_the_slice_index_without_advntr(tmp_path):
+    """build_plan_slice_command passed index_output=fast_mode, indexing for nobody.
+
+    In fast mode the slice *is* output_sliced.bam, so its index has exactly the same
+    single consumer as the merged one -- and coverage still reads the alignment plan's
+    own view either way.
+    """
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=True, needs_advntr=False)
+
+    assert _indexes(commands) == []
+
+
+def test_fast_mode_still_indexes_the_slice_for_advntr(tmp_path):
+    """The gate is needs_advntr, not fast_mode."""
+    commands = _run_bam_to_fastq(tmp_path, fast_mode=True, needs_advntr=True)
+
+    assert any(" && samtools index " in command for command in commands)
+
+
+def test_the_conversion_stage_takes_a_boolean_not_the_module_list(tmp_path):
+    """A Sequence[str] parameter invites the stage to grow more module knowledge.
+
+    The conversion stage has no business knowing about module state beyond the one
+    question "will anything read this index?", so it is given the answer, not the list.
+    """
+    import inspect
+
+    parameters = inspect.signature(fastq_bam_processing.process_bam_to_fastq).parameters
+
+    assert parameters["needs_advntr"].annotation == "bool"
+    assert parameters["needs_advntr"].default is False
+    assert "extra_modules" not in parameters

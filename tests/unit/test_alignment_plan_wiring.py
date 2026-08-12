@@ -55,13 +55,16 @@ def _run_conversion(
     *,
     fast_mode: bool,
     keep_intermediates: bool = False,
+    needs_advntr: bool = False,
 ) -> list[str]:
     """Run conversion with shell and filesystem effects recorded.
 
     Args:
         tmp_path: Test directory receiving generated output names.
         plan: Proven alignment plan consumed by the stage.
-        fast_mode: Whether the slice is final and therefore needs an index.
+        fast_mode: Whether the slice is the run's final alignment.
+        keep_intermediates: Whether intermediates survive the run.
+        needs_advntr: Whether adVNTR will read the produced alignment's index.
 
     Returns:
         Emitted commands.
@@ -86,6 +89,7 @@ def _run_conversion(
             config=CONFIG,
             fast_mode=fast_mode,
             keep_intermediates=keep_intermediates,
+            needs_advntr=needs_advntr,
             plan=plan,
         )
     return commands
@@ -95,13 +99,24 @@ def test_conversion_api_has_one_authoritative_alignment_input() -> None:
     assert "in_bam" not in inspect.signature(fastq_bam_processing.process_bam_to_fastq).parameters
 
 
-@pytest.mark.parametrize(("fast_mode", "expects_index"), [(False, False), (True, True)])
-def test_slice_uses_the_view_reference_threads_and_mode_specific_indexing(
-    tmp_path: Path, fast_mode: bool, expects_index: bool
+@pytest.mark.parametrize(
+    ("fast_mode", "needs_advntr", "expects_index"),
+    [
+        # The slice only survives the run in fast mode, so only fast mode can index it
+        # at all -- and even then its single consumer is adVNTR (#262). Coverage reads
+        # the alignment plan's own view, never this file.
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_slice_uses_the_view_reference_threads_and_consumer_specific_indexing(
+    tmp_path: Path, fast_mode: bool, needs_advntr: bool, expects_index: bool
 ) -> None:
     plan = _plan(tmp_path, "cram")
 
-    commands = _run_conversion(tmp_path, plan, fast_mode=fast_mode)
+    commands = _run_conversion(tmp_path, plan, fast_mode=fast_mode, needs_advntr=needs_advntr)
 
     slice_command = commands[0]
     assert plan.view_path in slice_command

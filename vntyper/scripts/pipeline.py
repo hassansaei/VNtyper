@@ -249,6 +249,11 @@ def run_pipeline(
         # path and are never invoked for BAM or CRAM, which `extra_modules` cannot say.
         # A requested module is named only when the config declares a tool of that name,
         # so this cannot assert the existence of an entry it has not read (trap 2).
+        # Whether anything will read `<name>_sliced.bam.bai`. The conversion stage is
+        # given the answer rather than `extra_modules`, so it cannot grow further
+        # dependencies on module state it has no business knowing.
+        needs_advntr = "advntr" in extra_modules
+
         tools_in_use = {"samtools", "kestrel", "java_path"}
         if input_type == "FASTQ":
             tools_in_use |= {"fastp", "bwa"}
@@ -300,6 +305,7 @@ def run_pipeline(
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
+                needs_advntr=needs_advntr,
             )
             kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
             if not kestrel_fastq_files:
@@ -448,6 +454,7 @@ def run_pipeline(
                 delete_intermediates=delete_intermediates,
                 keep_intermediates=keep_intermediates,
                 bed_file=bed_file_path,
+                needs_advntr=needs_advntr,
             )
             kestrel_fastq_files = route_converted_fastqs(produced_fastqs, config)
             if not kestrel_fastq_files:

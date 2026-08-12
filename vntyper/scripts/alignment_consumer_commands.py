@@ -21,6 +21,7 @@ def build_plan_slice_command(
     bed_file: str | Path | None,
     threads: int,
     fast_mode: bool,
+    needs_advntr: bool = False,
 ) -> str:
     """Build a target slice that selects the plan's retained index.
 
@@ -31,7 +32,13 @@ def build_plan_slice_command(
         region: Region string when no BED file is supplied.
         bed_file: Optional target BED file.
         threads: Samtools thread count.
-        fast_mode: Whether the slice is immediately indexed.
+        fast_mode: Whether this slice is the run's final alignment. In fast mode there
+            is no unmapped recovery and no merge, so the slice survives as
+            ``<name>_sliced.bam`` rather than being replaced.
+        needs_advntr: Whether adVNTR will read that alignment. The slice index is only
+            written in fast mode, and even there its only consumers are ``run_advntr``
+            and ``downsample_bam_if_needed``; coverage reads the plan's own view. So
+            indexing is gated on both.
 
     Returns:
         The complete samtools slice command.
@@ -45,7 +52,7 @@ def build_plan_slice_command(
         reference_path=plan.reference_path,
         index_path=plan.stable_index_path,
         threads=threads,
-        index_output=fast_mode,
+        index_output=fast_mode and needs_advntr,
         exclude_unmapped=not fast_mode,
     )
 

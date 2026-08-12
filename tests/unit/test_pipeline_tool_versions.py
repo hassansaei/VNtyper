@@ -103,3 +103,36 @@ def test_the_declared_set_never_contains_kanalyze(tmp_path: Path) -> None:
     harness = run_pipeline_under_harness(tmp_path / "out")
 
     assert "kanalyze" not in _tools_in_use(harness)
+
+
+# ---------------------------------------------------------------------------
+# The conversion stage learns whether adVNTR will read its output (#262)
+# ---------------------------------------------------------------------------
+
+
+def test_the_bam_conversion_is_told_adVNTR_is_off(tmp_path: Path) -> None:
+    """The gate is decided in run_pipeline, which is the only place that knows."""
+    harness = run_pipeline_under_harness(tmp_path / "out")
+
+    assert harness.kwargs("process_bam_to_fastq")["needs_advntr"] is False
+
+
+def test_the_bam_conversion_is_told_adVNTR_is_on(tmp_path: Path) -> None:
+    harness = run_pipeline_under_harness(tmp_path / "out", extra_modules=["advntr"])
+
+    assert harness.kwargs("process_bam_to_fastq")["needs_advntr"] is True
+
+
+def test_the_post_alignment_conversion_is_told_too(tmp_path: Path) -> None:
+    """The FASTQ path converts through the same stage and has the same consumer."""
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+    fastq1, fastq2 = input_root / "r1.fastq.gz", input_root / "r2.fastq.gz"
+    fastq1.touch()
+    fastq2.touch()
+
+    harness = run_pipeline_under_harness(
+        tmp_path / "out", fastq1=str(fastq1), fastq2=str(fastq2), extra_modules=["advntr"]
+    )
+
+    assert harness.kwargs("process_bam_to_fastq")["needs_advntr"] is True
