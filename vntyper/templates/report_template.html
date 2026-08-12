@@ -258,6 +258,21 @@
                         <td>{{ percent_vntr_uncovered }}% {{ percent_vntr_uncovered_icon|safe }}</td>
                     </tr>
                     <tr>
+                        <td>Flank depth (comparable between assemblies)</td>
+                        <td>{{ vntr_flank_mean_depth }} &mdash; mean over {{ vntr_flank_bases }} bp
+                            of unique sequence either side of the repeat array</td>
+                    </tr>
+                    <tr>
+                        <td>VNTR array depth sum</td>
+                        <td>{{ vntr_array_depth_sum }} over {{ vntr_array_length }} bp of array
+                            as this assembly represents it</td>
+                    </tr>
+                    <tr>
+                        <td>VNTR array depth per {{ depth_sum_reference_length }} bp</td>
+                        <td>{{ vntr_array_depth_sum_per_unit_length }} &mdash; comparable between
+                            assemblies only under counting policy {{ depth_counting_policy }}</td>
+                    </tr>
+                    <tr>
                         <td>Coverage QC</td>
                         <td>{{ coverage_qc }}</td>
                     </tr>
