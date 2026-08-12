@@ -258,6 +258,56 @@ git commit   # conventional commit naming the mechanism and closing #238
 
 ---
 
+### Task 4: Clear the second assertion that pinned the defect
+
+The unit suite is not enough: `make check-all` gates on the unit tier only, and a second
+assertion in the integration tier also required the sidecar to be a symlink. It is only
+visible by running the CRAM integration tier and comparing the failure set against `main`.
+
+**Files:**
+- Modify: `tests/integration/test_read_only_alignment_preflight.py:326`
+
+- [x] **Step 1: Run the CRAM integration tier on the branch and on `main`, and diff the failures**
+
+```bash
+export PATH="$(conda info --base)/envs/vntyper/bin:$PATH"
+make cram-fixtures
+T="tests/integration/test_cram_pipeline.py tests/integration/test_cram_reference_pipeline_contract.py tests/integration/test_read_only_alignment_preflight.py"
+python -m pytest $T -m integration -q -p no:warnings | grep '^FAILED tests/' | sort -u
+```
+
+Compare against the same command on `main`. Only a difference is a regression: this
+machine has 11 pre-existing failures because `reference/All_Pairwise_and_Self_Merged_MUC1_motifs_filtered.fa`
+is absent after the milestone-5 reference externalisation, so Kestrel writes no VCF.
+
+Expected before the fix: one extra failure,
+`test_unindexed_read_only_reference_uses_a_run_local_index_for_every_consumer`, at
+`assert Path(f"{plan.reference_path}.fai").is_symlink()`.
+
+- [x] **Step 2: Assert the test's real subject instead**
+
+The test's subject is that an unindexed read-only reference gets a run-local index every
+consumer can use while the operator tree stays untouched — not that the entry is a link.
+Keep line 325 (`Path(plan.reference_path).is_symlink()`): the reference FASTA view has a
+different source and destination, so it stays a proc link.
+
+```python
+        # The generated index is retained under its own name, not replaced by a link to
+        # this process's descriptor for it, which would point the entry at itself (#238).
+        generated_index = Path(f"{plan.reference_path}.fai")
+        assert not generated_index.is_symlink()
+        assert generated_index.stat(follow_symlinks=False).st_nlink == 1
+        assert generated_index.read_text(encoding="utf-8").startswith("chr1\t")
+        assert not Path(f"{reference}.fai").exists()
+```
+
+- [x] **Step 3: Re-run both tiers and confirm the failure sets are identical**
+
+Expected: 11 failures on each side, `comm` reporting no regressions, and
+`make check-all` still `✓ All checks passed (full suite)`.
+
+---
+
 ## Self-review
 
 **Spec coverage.** Spec §3.1 (stop self-replacing) is Task 1; §3.2 (prove every installed view) is Task 2; §2 (measured evidence) is Task 3 Step 2; §4 is explicitly out of scope and filed separately.
