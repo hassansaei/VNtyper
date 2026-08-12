@@ -362,7 +362,6 @@ class TestConfigLoading:
         assert advntr.load_advntr_config(str(path)) == {"advntr_settings": {"vid": 1}}
 
 
-
 class TestThreadsInheritThePipelineValue:
     """``"threads": null`` means inherit ``--threads``; an integer overrides it.
 
@@ -377,28 +376,22 @@ class TestThreadsInheritThePipelineValue:
         monkeypatch.setattr(
             advntr,
             "advntr_settings",
-            {"threads": None, "output_format": "vcf", "vid": 25561,
-             "additional_commands": "-aln"},
+            {"threads": None, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
         )
 
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output",
-                          MAIN_CONFIG, pipeline_threads=12)
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=12)
 
         assert captured_command[0]["command"].endswith("-t 12 -aln")
 
-    def test_an_explicit_thread_count_overrides_the_pipeline_value(
-        self, inputs, captured_command, monkeypatch
-    ):
+    def test_an_explicit_thread_count_overrides_the_pipeline_value(self, inputs, captured_command, monkeypatch):
         db_file, sorted_bam, output = inputs
         monkeypatch.setattr(
             advntr,
             "advntr_settings",
-            {"threads": 3, "output_format": "vcf", "vid": 25561,
-             "additional_commands": "-aln"},
+            {"threads": 3, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
         )
 
-        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output",
-                          MAIN_CONFIG, pipeline_threads=12)
+        advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=12)
 
         assert captured_command[0]["command"].endswith("-t 3 -aln")
 
@@ -412,8 +405,7 @@ class TestThreadsInheritThePipelineValue:
         )
 
         with pytest.raises(KeyError):
-            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output",
-                              MAIN_CONFIG, pipeline_threads=4)
+            advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG, pipeline_threads=4)
 
     def test_the_shipped_config_uses_null_so_the_cli_wins(self):
         """If this becomes an integer again, ``--threads`` silently stops reaching adVNTR."""
@@ -428,8 +420,7 @@ class TestThreadsInheritThePipelineValue:
         monkeypatch.setattr(
             advntr,
             "advntr_settings",
-            {"threads": None, "output_format": "vcf", "vid": 25561,
-             "additional_commands": "-aln"},
+            {"threads": None, "output_format": "vcf", "vid": 25561, "additional_commands": "-aln"},
         )
 
         advntr.run_advntr(str(db_file), str(sorted_bam), str(output), "output", MAIN_CONFIG)

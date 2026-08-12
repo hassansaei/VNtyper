@@ -108,8 +108,7 @@ def advntr_output_extension(settings: dict) -> str:
     return ".vcf" if settings["output_format"] == "vcf" else ".tsv"
 
 
-def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None,
-               pipeline_threads=1):
+def run_advntr(db_file, sorted_bam, output, output_name, config, cwd=None, pipeline_threads=1):
     """
     Run adVNTR genotyping using the specified database file and BAM file, fetching settings from advntr_config.
 
