@@ -7,7 +7,8 @@ All notable changes to VNtyper 2 are documented on this page.
 ### Added
 
 - **Coverage figures that can be compared between assemblies (#222).** Mean coverage over the
-  VNTR region is about **4.3x higher on GRCh37 than GRCh38 for the same sample**, because the
+  VNTR region is about **2.7x higher on GRCh37 than GRCh38 for the same sample** -- and about
+  **4.3x** over the repeat array alone -- because the
   two assemblies represent different amounts of the repeat array -- roughly 13.5 60-bp units
   against roughly 58 -- and the same reads pile onto whichever copies exist. Nothing in the
   output said so, and harmonising the configured windows would not have fixed it: the

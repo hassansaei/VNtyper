@@ -924,8 +924,9 @@ def test_the_build_comparable_columns_are_sliced_from_the_right_intervals(tmp_pa
     different depths, so a slice taken from the wrong interval - or shifted by
     one base - changes the arithmetic instead of passing by luck.
     """
-    stats = _run_coverage(tmp_path, _depth_rows(default=1, array_depth=7, flank_depth=3),
-                          "chr1:155160500-155162000", GRCH37_ASSEMBLY)
+    stats = _run_coverage(
+        tmp_path, _depth_rows(default=1, array_depth=7, flank_depth=3), "chr1:155160500-155162000", GRCH37_ASSEMBLY
+    )
 
     assert stats["vntr_array_length"] == 811
     assert stats["vntr_array_depth_sum"] == 811 * 7
@@ -977,8 +978,17 @@ def test_the_eight_original_statistics_are_unchanged_by_the_new_columns(tmp_path
     without = _run_coverage(tmp_path / "a", depth_text, "chr1:155160500-155162000", None)
     with_extra = _run_coverage(tmp_path / "b", depth_text, "chr1:155160500-155162000", GRCH37_ASSEMBLY)
 
-    for column in ("mean", "median", "stdev", "min", "max", "region_length", "uncovered_bases",
-                   "percent_uncovered", "coverage_qc"):
+    for column in (
+        "mean",
+        "median",
+        "stdev",
+        "min",
+        "max",
+        "region_length",
+        "uncovered_bases",
+        "percent_uncovered",
+        "coverage_qc",
+    ):
         assert without[column] == with_extra[column], column
 
 

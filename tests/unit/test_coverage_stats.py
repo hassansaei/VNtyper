@@ -79,7 +79,7 @@ def test_the_coverage_columns_are_the_frozen_lowercase_schema():
         "region_length",
         "uncovered_bases",
         "percent_uncovered",
-        # Appended by #222. Mean depth over the window is ~4.3x higher on GRCh37 than
+        # Appended by #222. Mean depth over the window is ~2.7x higher on GRCh37 than
         # GRCh38 for the same sample, because the assemblies represent different amounts
         # of the repeat array; these are what let a reader compare anything across builds.
         # `coverage_qc` stays last: it is a verdict, not a measurement.
@@ -577,26 +577,29 @@ class TestVntrGeometry:
         assert geometry.span[0] <= min(geometry.window[0], geometry.flank[0][0])
         assert geometry.span[1] >= max(geometry.window[1], geometry.flank[1][1])
 
-    @pytest.mark.parametrize(
-        "assembly,expected",
-        [
-            ("GRCh37", ("155158000-155163000", "155160500-155162000", "155161000-155161810")),
-            ("GRCh38", ("155184000-155194000", "155188000-155192500", "155188530-155192010")),
-        ],
-    )
-    def test_the_shipped_geometry_fits_inside_the_extracted_region(self, assembly, expected):
-        """The flank must be inside `bam_region_coords`, because that is all the BAM holds.
+    @pytest.mark.parametrize("assembly", ["GRCh37", "GRCh38"])
+    def test_the_shipped_geometry_resolves_and_stays_inside_its_window(self, assembly):
+        """Read out of the shipped `config.json`, not a fixture copy of it.
 
-        Asserted against the shipped config rather than a fixture, so shrinking
-        `bam_region_coords` or moving an array bound fails here rather than
-        silently producing a flank of zero-depth padding.
+        Adversarial review of the PR caught this asserting hardcoded tuples, which
+        meant editing `config.json` alone could not fail it. Every figure is a slice
+        of the window's depth table, so a flank outside the window would silently be
+        zero-depth padding rather than sequence.
         """
-        bam, window, array = expected
-        geometry = vntr_geometry(self._assembly(bam=bam, window=window, array=array))
+        import json
+        from pathlib import Path
 
-        bam_start, bam_end = (int(part) for part in bam.split("-"))
-        assert bam_start <= geometry.flank[0][0]
-        assert geometry.flank[1][1] <= bam_end
+        shipped = json.loads(Path("vntyper/config.json").read_text(encoding="utf-8"))
+        entry = shipped["bam_processing"]["assemblies"][assembly]
+
+        geometry = vntr_geometry(entry)
+
+        assert geometry is not None, f"{assembly} carries no vntr_array_coords"
+        window_start, window_end = (int(part) for part in entry["vntr_region_coords"].split("-"))
+        bam_start, bam_end = (int(part) for part in entry["bam_region_coords"].split("-"))
+        assert window_start <= geometry.flank[0][0]
+        assert geometry.flank[1][1] <= window_end
+        assert bam_start <= geometry.flank[0][0] and geometry.flank[1][1] <= bam_end
 
     def test_an_array_outside_the_window_is_refused(self):
         """A configuration error must stop the run, not produce a plausible number."""
@@ -623,7 +626,7 @@ class TestVntrGeometry:
 class TestBuildComparableColumns:
     """The array sum and flank mean, and the guarantee that adding them moved nothing.
 
-    Mean depth over the configured window is about 4.3x higher on GRCh37 than
+    Mean depth over the configured window is about 2.7x higher on GRCh37 than
     GRCh38 for the same sample, because GRCh37's assembly represents roughly 13.5
     repeat units against GRCh38's 58 and the same reads pile onto whichever copies
     exist (#222). These columns are what let a reader compare anything at all.
