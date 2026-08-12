@@ -6,7 +6,58 @@ All notable changes to VNtyper 2 are documented on this page.
 
 No unreleased changes.
 
-## 2.0.17 (Current)
+## 2.0.18 (Current)
+
+**`--threads` reaches adVNTR, and adVNTR can use it.**
+
+### Changed
+
+- **adVNTR genotyping is threaded (#215, #259).** VNtyper now installs a hard fork of adVNTR,
+  pinned at [v2.0.3](https://github.com/berntpopp/adVNTR/releases/tag/v2.0.3), in which the
+  Viterbi decoder releases the GIL and the read-selection loop is parallelised. `--threads`
+  reaches it: `advntr_config.json` sets `"threads": null`, which means *inherit the pipeline's
+  `--threads`*, and an explicit integer still overrides.
+
+  Measured on `example_7a61_hg19_subset.bam`: **61.1 → 3.12 ms per decode attempt** serially
+  (19.6x), and end to end **203.3 s → 1.71 s at `-t 16`** (119x). Threading plateaus at 16 and
+  regresses at 32, because roughly 6.2 MB of numpy allocation per call still runs under the
+  GIL.
+
+  Before this, `-t` set only `settings.CORES`, which nothing on the `genotype -fs` short-read
+  path read — so passing it changed the command without changing the runtime. That is why #215
+  was previously closed as resolved-by-investigation.
+
+  **This changes no genotype.** The decoder is byte-identical to the pristine upstream kernel
+  over 2,000 stratified fixtures in two model contexts (4,000 decode-attempt rows), and seven
+  of eight whole-BAM `genotype -fs` runs reproduce the pristine VCF and `-aln` sidecar exactly.
+  Golden-cohort gate run 8 compares the two sides of this change across 78 pipeline cases,
+  three probes and four cohorts: **every genotype-bearing artefact is identical**, and the only
+  substantive command difference is `-t 1` becoming `-t 8` on the three adVNTR cases. See
+  `docs/development/golden-cohort-gate.md`.
+
+### Fixed
+
+- **Extra adVNTR flags can no longer override an option VNtyper sets (#259).**
+  `advntr_settings.additional_commands` is appended after every option `run_advntr` builds, and
+  adVNTR parses with argparse, where the last occurrence wins. A fragment repeating a managed
+  option therefore replaced a validated value in silence — `--threads 0` reached adVNTR even
+  though the thread count is checked, and `-o` redirected the genotype artefact to a path
+  `pipeline.py` does not read back. Every such spelling is now refused with a message naming
+  the option and the setting that owns it, including abbreviations (`--thr`, `-v`), attached
+  values (`-t3`) and single-dash flag groups (`-pt3`, `-po`).
+
+- **The thread count is validated where it is configured (#259).** A non-integer, zero,
+  negative or boolean `threads` now fails with a message naming the key and the file, instead
+  of adVNTR's `threads cannot be less than 1` from inside a subprocess.
+
+### Internal
+
+- The golden-cohort gate accepts a `module:attribute` marker, so a branch that only modifies
+  files can still prove each side ran its own tree. A branch that adds no module previously had
+  no marker that distinguished the sides, and the harness refuses two sides that expected the
+  same marker state.
+
+## 2.0.17
 
 **Say which coverage number can be compared, and which cannot.**
 
