@@ -17,7 +17,8 @@ INSTALL_DIR=${INSTALL_DIR:-"$PWD/adVNTR"}
 OVERWRITE=false
 CONDA_ENV=${CONDA_ENV:-""}
 GIT_REPO=${GIT_REPO:-"https://github.com/berntpopp/adVNTR.git"}
-GIT_BRANCH=${GIT_BRANCH:-"enhanced_hmm"}
+GIT_BRANCH=${GIT_BRANCH:-"main"}
+GIT_COMMIT=${GIT_COMMIT:-""}
 
 # Function to display help message
 function display_help() {
@@ -118,6 +119,26 @@ echo "Cloning adVNTR repository from $GIT_REPO (branch: $GIT_BRANCH) into $INSTA
 git clone "$GIT_REPO" --branch "$GIT_BRANCH" "$INSTALL_DIR"
 
 cd "$INSTALL_DIR"
+
+# Check out the pinned revision, if one is configured.
+#
+# The branch above is only a clone hint; this is what determines the tree. VNtyper records
+# upstream line numbers as evidence for why adVNTR runs at `-t 1`, so "whatever the branch
+# points at today" is not good enough (#254).
+#
+# A configured commit that is not present must abort. Silently continuing would leave the
+# branch tip checked out while the build reported success -- exactly the mutable-pin
+# failure this exists to prevent.
+if [ -n "$GIT_COMMIT" ]; then
+    echo "Checking out pinned revision $GIT_COMMIT..."
+    if ! git checkout --quiet "$GIT_COMMIT"; then
+        echo "ERROR: pinned revision $GIT_COMMIT is not present in $GIT_REPO (branch $GIT_BRANCH)." >&2
+        echo "       Refusing to build against the branch tip instead: the pin exists because" >&2
+        echo "       VNtyper cites exact line numbers from this revision." >&2
+        exit 1
+    fi
+    echo "adVNTR revision: $(git rev-parse HEAD)"
+fi
 
 # Install adVNTR
 # Note: CFLAGS workaround for GCC 14+ which treats -Wincompatible-pointer-types

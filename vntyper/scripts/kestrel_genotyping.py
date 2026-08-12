@@ -126,21 +126,31 @@ def convert_sam_to_bam_and_index(sam_file, output_dir):
     bam_file = os.path.join(output_dir, "output.bam")
     bam_index = bam_file + ".bai"
 
-    # Convert SAM to BAM using samtools
+    # Both results are checked. They used to be discarded, and success was then inferred
+    # from `os.path.exists` on the two outputs -- which conflates "samtools succeeded" with
+    # "a file is present". A failed `view` still leaves a truncated BAM behind, so the SAM
+    # was deleted and the truncated BAM kept, and the only record of the failure was a log
+    # file nobody reads. This BAM is what the report's IGV track shows (#255).
     logger.info(f"Converting SAM to BAM: {sam_file} -> {bam_file}")
-    run_command(
+    if not run_command(
         f"samtools view -Sb {quote_path(sam_file)} > {quote_path(bam_file)}",
         log_file=os.path.join(output_dir, "samtools_view.log"),
-    )
+    ):
+        msg = f"Converting Kestrel's SAM to BAM failed: {sam_file} -> {bam_file}."
+        logger.error(msg)
+        raise RuntimeError(msg)
 
-    # Index the BAM file
     logger.info(f"Indexing BAM file: {bam_file}")
-    run_command(
+    if not run_command(
         f"samtools index {quote_path(bam_file)}",
         log_file=os.path.join(output_dir, "samtools_index.log"),
-    )
+    ):
+        msg = f"Indexing Kestrel's BAM failed: {bam_file}."
+        logger.error(msg)
+        raise RuntimeError(msg)
 
-    # Delete the SAM file if indexing succeeds
+    # Only now is deleting the SAM safe. The existence test is kept as a belt-and-braces
+    # check on what samtools claims to have written, not as the success signal it used to be.
     if os.path.exists(bam_file) and os.path.exists(bam_index):
         os.remove(sam_file)
         logger.info(f"Deleted SAM file: {sam_file}")
@@ -273,21 +283,31 @@ def run_kestrel(
                 f"Kestrel exited successfully for k-mer size {kmer_size} and wrote {vcf_path}, but "
                 f"{problem}. Removing it and trying the next configured k-mer size."
             )
-            # `vcf_path` is the same path for every k-mer size, so a stale unusable file would
-            # be re-examined by the next iteration and reported against the wrong k-mer size.
-            # The removal is guarded because it must not become a *new* way to leave the loop:
-            # an unhandled OSError here would escape as a bare filesystem error, skipping the
+            # Every k-mer size writes to the same `vcf_path` *and* the same `output.sam`, so a
+            # discarded attempt must leave neither behind. A stale VCF would be re-examined by
+            # the next iteration and reported against the wrong k-mer size; a stale SAM is
+            # worse, because a *later* successful attempt converts whatever occupies that path
+            # into `output.bam` -- the alignment the report's IGV track shows. The genotype
+            # comes from the VCF and is unaffected, but a reader would be inspecting one k-mer
+            # size's alignment beside another's call (#255).
+            #
+            # Both removals are guarded because neither may become a *new* way to leave the
+            # loop: an unhandled OSError would escape as a bare filesystem error, skipping the
             # terminal RuntimeError that is this function's whole contract.
-            try:
-                vcf_path.unlink()
-            except OSError as exc:
-                msg = (
-                    f"Kestrel wrote an unusable VCF to {vcf_path} for k-mer size {kmer_size} ({problem}), "
-                    f"and it could not be removed ({exc}). Continuing would test the same unusable file "
-                    "against the next k-mer size and report the result against the wrong one."
-                )
-                logger.error(msg)
-                raise RuntimeError(msg) from exc
+            for stale in (vcf_path, Path(output_dir) / "output.sam"):
+                try:
+                    stale.unlink()
+                except FileNotFoundError:
+                    # Kestrel need not have written a SAM at all. Absent is the desired state.
+                    continue
+                except OSError as exc:
+                    msg = (
+                        f"Kestrel wrote an unusable VCF to {vcf_path} for k-mer size {kmer_size} "
+                        f"({problem}), and {stale} could not be removed ({exc}). Continuing would carry "
+                        "that file into the next k-mer size and report it against the wrong one."
+                    )
+                    logger.error(msg)
+                    raise RuntimeError(msg) from exc
             continue
 
         # Exit status 0 with no VCF is the silent path #212 is about. Say so, then let the

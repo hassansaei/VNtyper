@@ -367,3 +367,125 @@ def test_a_failed_removal_still_raises_the_terminal_error_type(tmp_path, monkeyp
 
     with pytest.raises(RuntimeError, match="could not be removed"):
         _run(vcf, tmp_path)
+
+
+# --------------------------------------------------------------------------------------
+# #255 -- retry attempts must not leave artefacts for a later attempt to pick up
+# --------------------------------------------------------------------------------------
+
+
+def test_a_discarded_attempt_leaves_no_sam_for_a_later_one_to_convert(tmp_path, monkeypatch):
+    """Every k-mer size writes the same `output.sam`, and a *successful* attempt converts
+    whatever occupies that path into `output.bam` -- the alignment the report's IGV track
+    shows.
+
+    So a discarded attempt's SAM surviving into a later successful one means the reader
+    inspects one k-mer size's alignment beside another's call. The genotype comes from the
+    VCF and is unaffected, which is exactly why this is easy to miss.
+    """
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+    sam = tmp_path / "output.sam"
+    launches = []
+    converted = []
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        launches.append(command)
+        if len(launches) == 1:
+            # exits 0, writes an unusable VCF and a SAM -- the attempt that gets discarded
+            vcf.write_text("##fileformat=VCFv4.2\n", encoding="utf-8")
+            sam.write_text("@HD\tVN:1.6\nFIRST-ATTEMPT\n", encoding="utf-8")
+        else:
+            vcf.write_text(USABLE_VCF, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda s, o: converted.append(Path(s).exists()))
+    monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
+
+    _run(vcf, tmp_path)
+
+    assert len(launches) == 2, "the unusable attempt did not fall through to the next k-mer size"
+    assert converted == [False], "the discarded attempt's SAM survived into the successful one"
+
+
+def test_an_absent_sam_is_not_an_error_when_an_attempt_is_discarded(tmp_path, monkeypatch):
+    """Kestrel need not have written a SAM at all. Absent is the desired state, so removing
+    it must not turn a normal discard into a RuntimeError."""
+    monkeypatch.setattr(kg, "kestrel_config", {"kestrel_settings": {"kmer_sizes": [20, 25]}})
+    vcf = tmp_path / "output.vcf"
+    launches = []
+
+    def fake_run_command(command, log_file=None, **kwargs):
+        launches.append(command)
+        vcf.write_text("##fileformat=VCFv4.2\n" if len(launches) == 1 else USABLE_VCF, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", fake_run_command)
+    monkeypatch.setattr(kg, "convert_sam_to_bam_and_index", lambda *a, **k: None)
+    monkeypatch.setattr(kg, "process_kestrel_output", lambda *a, **k: None)
+
+    _run(vcf, tmp_path)  # must not raise
+
+    assert len(launches) == 2
+
+
+# --------------------------------------------------------------------------------------
+# #255 -- samtools' exit status is a result, not something to infer from a path test
+# --------------------------------------------------------------------------------------
+
+
+def test_a_failed_sam_to_bam_conversion_raises_instead_of_being_inferred(tmp_path, monkeypatch):
+    """Success used to be inferred from `os.path.exists` on the two outputs. A failed
+    `samtools view` still leaves a truncated BAM, so the SAM was deleted, the truncated BAM
+    kept, and the only record was a log file nobody reads."""
+    sam = tmp_path / "output.sam"
+    sam.write_text("@HD\tVN:1.6\n", encoding="utf-8")
+
+    def failing_view(command, log_file=None, **kwargs):
+        (tmp_path / "output.bam").write_text("truncated", encoding="utf-8")
+        return False
+
+    monkeypatch.setattr(kg, "run_command", failing_view)
+
+    with pytest.raises(RuntimeError, match="SAM to BAM"):
+        kg.convert_sam_to_bam_and_index(str(sam), str(tmp_path))
+
+    assert sam.exists(), "the SAM must survive a failed conversion - it is the only copy of the data"
+
+
+def test_a_failed_bam_index_raises(tmp_path, monkeypatch):
+    sam = tmp_path / "output.sam"
+    sam.write_text("@HD\tVN:1.6\n", encoding="utf-8")
+    calls = []
+
+    def run(command, log_file=None, **kwargs):
+        calls.append(command)
+        (tmp_path / "output.bam").write_text("bam", encoding="utf-8")
+        # Keyed off the samtools subcommand, not a substring of the whole line: pytest's
+        # tmp_path embeds the test name, which contains "index", so a naive `in` test made
+        # the *view* command look like the index one.
+        return not command.startswith("samtools index")
+
+    monkeypatch.setattr(kg, "run_command", run)
+
+    with pytest.raises(RuntimeError, match="Indexing"):
+        kg.convert_sam_to_bam_and_index(str(sam), str(tmp_path))
+
+    assert sam.exists()
+
+
+def test_a_successful_conversion_still_deletes_the_sam(tmp_path, monkeypatch):
+    """The behaviour that must not regress: on success the SAM is cleaned up."""
+    sam = tmp_path / "output.sam"
+    sam.write_text("@HD\tVN:1.6\n", encoding="utf-8")
+
+    def run(command, log_file=None, **kwargs):
+        (tmp_path / "output.bam").write_text("bam", encoding="utf-8")
+        (tmp_path / "output.bam.bai").write_text("bai", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(kg, "run_command", run)
+
+    assert kg.convert_sam_to_bam_and_index(str(sam), str(tmp_path)) == str(tmp_path / "output.bam")
+    assert not sam.exists()
